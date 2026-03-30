@@ -1,13 +1,23 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use serde_json::{json, Value};
 use std::fs;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use tempfile::TempDir;
 
 fn suite_cmd() -> Command {
     assert_cmd::cargo::cargo_bin_cmd!("Packet28")
+}
+
+#[cfg(unix)]
+fn mcp_cmd() -> std::process::Command {
+    std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
 }
 
 #[cfg(unix)]
@@ -46,6 +56,84 @@ exit 0\n",
     let mut perms = fs::metadata(path).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(unix)]
+fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
+    let body = serde_json::to_vec(value).unwrap();
+    write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
+    stdin.write_all(&body).unwrap();
+    stdin.flush().unwrap();
+}
+
+#[cfg(unix)]
+fn read_mcp_message(stdout: &mut BufReader<ChildStdout>) -> Value {
+    let mut content_length = None::<usize>;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        stdout.read_line(&mut line).unwrap();
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = Some(value.trim().parse::<usize>().unwrap());
+            }
+        }
+    }
+    let mut body = vec![0_u8; content_length.unwrap()];
+    std::io::Read::read_exact(stdout, &mut body).unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[cfg(unix)]
+fn read_mcp_message_for_id(stdout: &mut BufReader<ChildStdout>, expected_id: u64) -> Value {
+    loop {
+        let value = read_mcp_message(stdout);
+        if value.get("id").and_then(Value::as_u64) == Some(expected_id) {
+            return value;
+        }
+    }
+}
+
+#[cfg(unix)]
+fn start_mcp_server(root: &Path) -> (Child, ChildStdin, BufReader<ChildStdout>) {
+    let mut child = mcp_cmd()
+        .current_dir(root)
+        .args(["mcp", "serve", "--root", root.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    (child, stdin, stdout)
+}
+
+#[cfg(unix)]
+fn initialize_mcp_session(stdin: &mut ChildStdin, stdout: &mut BufReader<ChildStdout>) {
+    write_mcp_message(
+        stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}
+        }),
+    );
+    let _ = read_mcp_message_for_id(stdout, 1);
+}
+
+#[cfg(unix)]
+fn write_repo_fixture(root: &Path) {
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub struct AlphaUniqueToken;\npub fn alpha_unique_token() -> &'static str { \"AlphaUniqueToken\" }\n",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -115,6 +203,36 @@ fn test_setup_refuses_to_overwrite_invalid_mcp_json() {
 
 #[test]
 #[cfg(unix)]
+fn test_setup_refuses_to_overwrite_invalid_codex_toml() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let codex_config = home.path().join(".codex").join("config.toml");
+    fs::create_dir_all(codex_config.parent().unwrap()).unwrap();
+    fs::write(&codex_config, "[features").unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "codex",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "refusing to overwrite invalid TOML",
+        ));
+
+    assert_eq!(fs::read_to_string(&codex_config).unwrap(), "[features");
+}
+
+#[test]
+#[cfg(unix)]
 fn test_setup_cursor_writes_rules_hooks_and_mcp_without_legacy_cursorrules() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
@@ -143,6 +261,64 @@ fn test_setup_cursor_writes_rules_hooks_and_mcp_without_legacy_cursorrules() {
         .join("packet28.mdc")
         .exists());
     assert!(!root.path().join(".cursorrules").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_setup_cursor_is_idempotent() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    for _ in 0..2 {
+        suite_cmd()
+            .current_dir(root.path())
+            .env("HOME", home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .args([
+                "setup",
+                "--root",
+                root.path().to_str().unwrap(),
+                "--runtime",
+                "cursor",
+                "--yes",
+            ])
+            .assert()
+            .success();
+    }
+
+    let hooks: Value = serde_json::from_str(
+        &fs::read_to_string(root.path().join(".cursor").join("hooks.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        hooks["hooks"]["beforeSubmitPrompt"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        hooks["hooks"]["beforeShellExecution"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        hooks["hooks"]["afterShellExecution"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(hooks["hooks"]["stop"].as_array().unwrap().len(), 1);
+
+    let mcp: Value = serde_json::from_str(
+        &fs::read_to_string(root.path().join(".cursor").join("mcp.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(mcp["mcpServers"]["packet28"].is_object());
+    assert_eq!(mcp["mcpServers"].as_object().unwrap().len(), 1);
 }
 
 #[test]
@@ -217,4 +393,104 @@ fn test_setup_windsurf_writes_rules_hooks_and_mcp() {
         .join("windsurf")
         .join("mcp_config.json")
         .exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_setup_builds_regex_index_and_search_uses_indexed_backend() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    write_repo_fixture(root.path());
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "cursor",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("index ready"));
+
+    assert!(root
+        .path()
+        .join(".packet28")
+        .join("index")
+        .join("regex-v1")
+        .join("manifest.json")
+        .exists());
+
+    let status_output = suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "daemon",
+            "index",
+            "status",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status: Value = serde_json::from_slice(&status_output).unwrap();
+    assert_eq!(status.get("ready").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        status
+            .get("manifest")
+            .and_then(|manifest| manifest.get("regex_status"))
+            .and_then(Value::as_str),
+        Some("ready")
+    );
+
+    let (mut child, mut stdin, mut stdout) = start_mcp_server(root.path());
+    initialize_mcp_session(&mut stdin, &mut stdout);
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.search",
+                "arguments":{
+                    "task_id":"task-setup-regex-index",
+                    "query":"AlphaUniqueToken",
+                    "fixed_string":true,
+                    "response_mode":"full"
+                }
+            }
+        }),
+    );
+    let search = read_mcp_message_for_id(&mut stdout, 2);
+    assert_eq!(
+        search["result"]["structuredContent"]["engine"]["engine"].as_str(),
+        Some("indexed_regex")
+    );
+    assert!(
+        search["result"]["structuredContent"]["match_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
+        .assert()
+        .success();
 }
