@@ -26,6 +26,7 @@ pub struct HookArgs {
 #[derive(Subcommand)]
 pub enum HookCommands {
     Claude(ClaudeHookArgs),
+    Codex(ClaudeHookArgs),
     Cursor(RuntimeHookArgs),
     ReducerRunner(ReducerRunnerArgs),
     ReduceFixture(ReduceFixtureArgs),
@@ -91,6 +92,7 @@ pub struct ReduceFixtureArgs {
 pub fn run(args: HookArgs) -> Result<i32> {
     match args.command {
         HookCommands::Claude(args) => run_claude(args),
+        HookCommands::Codex(args) => run_claude(args),
         HookCommands::Cursor(args) => run_runtime_hook(args, ExternalHookRuntime::Cursor),
         HookCommands::ReducerRunner(args) => run_reducer_runner(args),
         HookCommands::ReduceFixture(args) => run_reduce_fixture(args),

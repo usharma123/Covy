@@ -10,6 +10,7 @@ use packet28_daemon_core::{
     RelaunchPreference,
 };
 use serde_json::{json, Value};
+use toml::value::Table as TomlTable;
 
 use crate::agent_surface;
 
@@ -464,11 +465,17 @@ fn find_cursor_mcp_config(root: &Path) -> Option<PathBuf> {
 }
 
 fn runtime_supports_mcp(kind: RuntimeKind) -> bool {
-    matches!(kind, RuntimeKind::Claude | RuntimeKind::Cursor)
+    matches!(
+        kind,
+        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex
+    )
 }
 
 fn runtime_supports_hooks(kind: RuntimeKind) -> bool {
-    matches!(kind, RuntimeKind::Claude | RuntimeKind::Cursor)
+    matches!(
+        kind,
+        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex
+    )
 }
 
 fn runtime_needs_hook_runtime_config(kind: RuntimeKind) -> bool {
@@ -503,7 +510,8 @@ fn configure_runtime_mcp(
         RuntimeKind::Claude | RuntimeKind::Cursor => {
             write_mcp_config(&mcp_config_path(runtime.kind, root), root, auto_yes)
         }
-        RuntimeKind::Codex | RuntimeKind::Windsurf => Ok(McpConfigStatus::Declined),
+        RuntimeKind::Codex => configure_codex_mcp(root, auto_yes),
+        RuntimeKind::Windsurf => Ok(McpConfigStatus::Declined),
     }
 }
 
@@ -519,7 +527,8 @@ fn configure_runtime_hooks(
         RuntimeKind::Cursor => {
             write_cursor_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
-        RuntimeKind::Codex | RuntimeKind::Windsurf => Ok(McpConfigStatus::Declined),
+        RuntimeKind::Codex => configure_codex_hooks(root, auto_yes),
+        RuntimeKind::Windsurf => Ok(McpConfigStatus::Declined),
     }
 }
 
@@ -535,16 +544,21 @@ fn runtime_mcp_status(runtime: &RuntimeInfo, root: &Path) -> String {
             runtime.name,
             mcp_config_path(runtime.kind, root).display()
         ),
-        RuntimeKind::Codex | RuntimeKind::Windsurf => runtime.name.to_string(),
+        RuntimeKind::Codex => format!(
+            "{} → {}",
+            runtime.name,
+            mcp_config_path(runtime.kind, root).display()
+        ),
+        RuntimeKind::Windsurf => runtime.name.to_string(),
     }
 }
 
 fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
     match runtime.kind {
-        RuntimeKind::Claude | RuntimeKind::Cursor => {
+        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex => {
             hook_config_path(runtime.kind, root).display().to_string()
         }
-        RuntimeKind::Codex | RuntimeKind::Windsurf => runtime.name.to_string(),
+        RuntimeKind::Windsurf => runtime.name.to_string(),
     }
 }
 
@@ -552,7 +566,8 @@ fn mcp_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
     match kind {
         RuntimeKind::Claude => find_claude_mcp_config(&dirs_home(), root).expect("claude mcp path"),
         RuntimeKind::Cursor => find_cursor_mcp_config(root).expect("cursor mcp path"),
-        RuntimeKind::Codex | RuntimeKind::Windsurf => {
+        RuntimeKind::Codex => codex_config_path(&dirs_home()),
+        RuntimeKind::Windsurf => {
             panic!("runtime does not use a project MCP config")
         }
     }
@@ -562,10 +577,15 @@ fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
     match kind {
         RuntimeKind::Claude => root.join(".claude").join("settings.json"),
         RuntimeKind::Cursor => root.join(".cursor").join("hooks.json"),
-        RuntimeKind::Codex | RuntimeKind::Windsurf => {
+        RuntimeKind::Codex => root.join(".codex").join("hooks.json"),
+        RuntimeKind::Windsurf => {
             panic!("runtime does not use a local hook config here")
         }
     }
+}
+
+fn codex_config_path(home: &Path) -> PathBuf {
+    home.join(".codex").join("config.toml")
 }
 
 fn cursor_prompt_targets(root: &Path) -> Vec<PromptTarget> {
@@ -846,6 +866,296 @@ fn write_cursor_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
     Ok(McpConfigStatus::Written)
 }
 
+fn configure_codex_mcp(root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+    let config_path = codex_config_path(&dirs_home());
+    if codex_mcp_entry_matches(&config_path, root)? {
+        return Ok(McpConfigStatus::AlreadyConfigured);
+    }
+    if !auto_yes {
+        eprint!(
+            "    Register Packet28 MCP in Codex via {}? [Y/n] ",
+            config_path.display().to_string().dimmed()
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
+            return Ok(McpConfigStatus::Declined);
+        }
+    }
+    if which_exists("codex") && run_codex_mcp_add(root).unwrap_or(false) {
+        return Ok(McpConfigStatus::Written);
+    }
+    write_codex_mcp_config(&config_path, root)
+}
+
+fn configure_codex_hooks(root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+    let hook_status = write_codex_hook_config(&hook_config_path(RuntimeKind::Codex, root), root, auto_yes)?;
+    let feature_status = write_codex_feature_flag(&codex_config_path(&dirs_home()), auto_yes)?;
+    Ok(merge_statuses(hook_status, feature_status))
+}
+
+fn merge_statuses(left: McpConfigStatus, right: McpConfigStatus) -> McpConfigStatus {
+    match (left, right) {
+        (McpConfigStatus::Written, _) | (_, McpConfigStatus::Written) => McpConfigStatus::Written,
+        (McpConfigStatus::AlreadyConfigured, McpConfigStatus::AlreadyConfigured) => {
+            McpConfigStatus::AlreadyConfigured
+        }
+        (McpConfigStatus::Declined, McpConfigStatus::Declined) => McpConfigStatus::Declined,
+        (McpConfigStatus::Declined, McpConfigStatus::AlreadyConfigured)
+        | (McpConfigStatus::AlreadyConfigured, McpConfigStatus::Declined) => {
+            McpConfigStatus::AlreadyConfigured
+        }
+    }
+}
+
+fn codex_mcp_entry_matches(path: &Path, root: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let config = read_toml_config(path)?;
+    let Some(server) = config
+        .get("mcp_servers")
+        .and_then(toml::Value::as_table)
+        .and_then(|servers| servers.get("packet28"))
+        .and_then(toml::Value::as_table)
+    else {
+        return Ok(false);
+    };
+    let command_matches = server
+        .get("command")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        == Some(resolve_packet28_mcp_command().as_str());
+    let expected_root = root.display().to_string();
+    let args_matches = server
+        .get("args")
+        .and_then(toml::Value::as_array)
+        .map(|args| {
+            args.iter()
+                .filter_map(toml::Value::as_str)
+                .collect::<Vec<_>>()
+                == vec!["--root", expected_root.as_str()]
+        })
+        .unwrap_or(false);
+    Ok(command_matches && args_matches)
+}
+
+fn run_codex_mcp_add(root: &Path) -> Result<bool> {
+    let status = std::process::Command::new("codex")
+        .args([
+            "mcp",
+            "add",
+            "packet28",
+            "--",
+            &resolve_packet28_mcp_command(),
+            "--root",
+            &root.display().to_string(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("failed to run `codex mcp add`")?;
+    Ok(status.success())
+}
+
+fn write_codex_mcp_config(path: &Path, root: &Path) -> Result<McpConfigStatus> {
+    let mut config = read_toml_config_or_default(path)?;
+    let table = config
+        .as_table_mut()
+        .context("Codex config must be a TOML table")?;
+    let servers = toml_table_entry(table, "mcp_servers", path)?;
+    let desired_command = resolve_packet28_mcp_command();
+    let desired_root = root.display().to_string();
+    let desired_args = vec![
+        toml::Value::String("--root".to_string()),
+        toml::Value::String(desired_root.clone()),
+    ];
+    let already_configured = servers
+        .get("packet28")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|packet28| {
+            packet28
+                .get("command")
+                .and_then(toml::Value::as_str)
+                .map(str::trim)
+                == Some(desired_command.as_str())
+                && packet28.get("args").and_then(toml::Value::as_array)
+                    == Some(&desired_args)
+        });
+    if already_configured {
+        return Ok(McpConfigStatus::AlreadyConfigured);
+    }
+    let mut packet28 = TomlTable::new();
+    packet28.insert("command".to_string(), toml::Value::String(desired_command));
+    packet28.insert("args".to_string(), toml::Value::Array(desired_args));
+    servers.insert("packet28".to_string(), toml::Value::Table(packet28));
+    write_toml_config(path, &config)?;
+    Ok(McpConfigStatus::Written)
+}
+
+fn write_codex_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+    let command = resolve_packet28_cli_command();
+    let root_arg = shell_escape(root.display().to_string());
+    let hook_command = format!("{command} hook codex --root \"{root_arg}\"");
+    let packet28_hooks = json!({
+        "SessionStart": [{
+            "matcher": "startup|resume|clear",
+            "hooks": [{"type": "command", "command": hook_command}]
+        }],
+        "UserPromptSubmit": [{
+            "hooks": [{"type": "command", "command": hook_command}]
+        }],
+        "PreToolUse": [{
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": hook_command}]
+        }],
+        "PostToolUse": [{
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": hook_command}]
+        }],
+        "Stop": [{
+            "hooks": [{"type": "command", "command": hook_command}]
+        }]
+    });
+    let mut config: BTreeMap<String, Value> = if path.exists() {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "refusing to overwrite invalid JSON in '{}'; fix the file and rerun setup",
+                path.display()
+            )
+        })?
+    } else {
+        BTreeMap::new()
+    };
+    if !auto_yes {
+        eprint!(
+            "    Write Codex hook config to {}? [Y/n] ",
+            path.display().to_string().dimmed()
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
+            return Ok(McpConfigStatus::Declined);
+        }
+    }
+    let mut hooks = config
+        .get("hooks")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let packet28_events = packet28_hooks.as_object().cloned().unwrap_or_default();
+    let mut already_configured = true;
+    for (event_name, entries) in &packet28_events {
+        let existing = hooks
+            .get(event_name)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let new_entries = entries.as_array().cloned().unwrap_or_default();
+        let hook_present = new_entries
+            .iter()
+            .all(|new_entry| existing.iter().any(|entry| entry == new_entry));
+        if hook_present {
+            continue;
+        }
+        already_configured = false;
+        let mut merged = existing;
+        merged.extend(new_entries);
+        hooks.insert(event_name.clone(), Value::Array(merged));
+    }
+    if already_configured {
+        return Ok(McpConfigStatus::AlreadyConfigured);
+    }
+    config.insert("hooks".to_string(), Value::Object(hooks));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&config)?),
+    )?;
+    Ok(McpConfigStatus::Written)
+}
+
+fn write_codex_feature_flag(path: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+    let mut config = read_toml_config_or_default(path)?;
+    let table = config
+        .as_table_mut()
+        .context("Codex config must be a TOML table")?;
+    let features = toml_table_entry(table, "features", path)?;
+    if features
+        .get("codex_hooks")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(McpConfigStatus::AlreadyConfigured);
+    }
+    if !auto_yes {
+        eprint!(
+            "    Enable Codex hooks in {}? [Y/n] ",
+            path.display().to_string().dimmed()
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
+            return Ok(McpConfigStatus::Declined);
+        }
+    }
+    features.insert("codex_hooks".to_string(), toml::Value::Boolean(true));
+    write_toml_config(path, &config)?;
+    Ok(McpConfigStatus::Written)
+}
+
+fn read_toml_config(path: &Path) -> Result<toml::Value> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read '{}'", path.display()))?;
+    toml::from_str(&content).with_context(|| {
+        format!(
+            "refusing to overwrite invalid TOML in '{}'; fix the file and rerun setup",
+            path.display()
+        )
+    })
+}
+
+fn read_toml_config_or_default(path: &Path) -> Result<toml::Value> {
+    if path.exists() {
+        read_toml_config(path)
+    } else {
+        Ok(toml::Value::Table(TomlTable::new()))
+    }
+}
+
+fn toml_table_entry<'a>(
+    table: &'a mut TomlTable,
+    key: &str,
+    path: &Path,
+) -> Result<&'a mut TomlTable> {
+    let value = table
+        .entry(key.to_string())
+        .or_insert_with(|| toml::Value::Table(TomlTable::new()));
+    value.as_table_mut().with_context(|| {
+        format!(
+            "refusing to overwrite '{}' in '{}'; expected a TOML table",
+            key,
+            path.display()
+        )
+    })
+}
+
+fn write_toml_config(path: &Path, config: &toml::Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let rendered = toml::to_string_pretty(config)?;
+    fs::write(path, format!("{rendered}\n"))?;
+    Ok(())
+}
+
 fn write_hook_runtime_config(root: &Path, any_hooks_configured: bool) -> Result<McpConfigStatus> {
     if !any_hooks_configured {
         return Ok(McpConfigStatus::Declined);
@@ -1112,6 +1422,37 @@ mod tests {
         assert!(value["hooks"]["beforeShellExecution"].is_array());
         assert!(value["hooks"]["afterShellExecution"].is_array());
         assert!(value["hooks"]["stop"].is_array());
+    }
+
+    #[test]
+    fn write_codex_hook_config_installs_packet28_hooks() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".codex").join("hooks.json");
+        let status = write_codex_hook_config(&path, dir.path(), true).unwrap();
+        assert!(matches!(status, McpConfigStatus::Written));
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value["hooks"]["SessionStart"].is_array());
+        assert!(value["hooks"]["UserPromptSubmit"].is_array());
+        assert!(value["hooks"]["PreToolUse"].is_array());
+        assert!(value["hooks"]["PostToolUse"].is_array());
+        assert!(value["hooks"]["Stop"].is_array());
+    }
+
+    #[test]
+    fn write_codex_feature_flag_enables_hooks() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".codex").join("config.toml");
+        let status = write_codex_feature_flag(&path, true).unwrap();
+        assert!(matches!(status, McpConfigStatus::Written));
+        let value = read_toml_config(&path).unwrap();
+        assert_eq!(
+            value
+                .get("features")
+                .and_then(toml::Value::as_table)
+                .and_then(|features| features.get("codex_hooks"))
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]
