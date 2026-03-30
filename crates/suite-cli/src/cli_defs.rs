@@ -62,13 +62,13 @@ pub enum Commands {
     AgentPrompt(cmd_agent_prompt::AgentPromptArgs),
     /// Run Packet28 as an MCP stdio server
     Mcp(cmd_mcp::McpArgs),
-    /// Run Packet28-managed Claude hook handlers
+    /// Run Packet28-managed runtime hook handlers
     Hook(cmd_hook::HookArgs),
     /// Daemon lifecycle and task commands
     Daemon(cmd_daemon::DaemonArgs),
     /// Verify Packet28 daemon, index, MCP, notifications, and broker round-trip health
     Doctor(cmd_doctor::DoctorArgs),
-    /// Configure Packet28 for your agent runtimes (Claude Code, Cursor, Codex)
+    /// Configure Packet28 for your agent runtimes (Claude Code, Cursor, Codex, Windsurf)
     Setup(cmd_setup::SetupArgs),
     /// Scan sessions for command patterns and savings opportunities
     Discover(cmd_discover::DiscoverArgs),

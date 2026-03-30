@@ -289,7 +289,7 @@ Packet28 packet fetch         Retrieve persisted artifact by handle
 Packet28 agent-prompt         Generate agent instruction fragments
 Packet28 mcp serve|proxy      Expose Packet28 as an MCP server or proxy upstream MCP servers
 Packet28 daemon               Daemon lifecycle and task management
-Packet28 setup                Configure Claude/Cursor/Codex integration files
+Packet28 setup                Configure Claude/Cursor/Codex/Windsurf integration files
 ```
 
 Reducer, packet, and context commands emit `suite.packet.v1` JSON wrappers. Three output profiles:
@@ -360,7 +360,7 @@ Three entry points for agent integration:
 Packet28 setup --runtime all --yes
 ```
 
-It updates project-local MCP config where supported (`.mcp.json`, `.cursor/mcp.json`), writes fallback prompt fragments for Claude/Cursor/Codex, and prepares the daemon index. Existing MCP config is preserved: setup refuses to overwrite invalid JSON so users can fix the file explicitly instead of silently losing configuration.
+It updates runtime config where supported (`.mcp.json`, `.cursor/mcp.json`, `~/.codex/config.toml`, `~/.codeium/windsurf/mcp_config.json`), installs repo-local hooks for Claude/Cursor/Codex/Windsurf, writes runtime instruction fragments, and verifies the daemon plus regex trigram index state. Existing JSON/TOML config is preserved: setup refuses to overwrite invalid config so users can fix the file explicitly instead of silently losing configuration.
 
 Packet28's MCP surface includes:
 
@@ -373,7 +373,7 @@ Packet28's MCP surface includes:
 ```bash
 Packet28 agent-prompt --format claude    # CLAUDE.md fragment
 Packet28 agent-prompt --format agents    # AGENTS.md fragment
-Packet28 agent-prompt --format cursor    # .cursorrules fragment
+Packet28 agent-prompt --format cursor    # Cursor rule fragment
 ```
 
 Output tells the agent how to use Packet28's slim reducer loop and checkpointed handoff flow before broad file reads, while still falling back to direct reads for trivial edits or broker failures.
@@ -410,7 +410,7 @@ flowchart LR
 
 Operationally:
 
-1. Claude hooks keep reducer traffic out of the visible MCP loop.
+1. Runtime hooks keep reducer traffic out of the visible MCP loop.
 2. The worker writes intent only when the objective or next step changes materially.
 3. The daemon assembles a denoised handoff packet after threshold or stop boundaries.
 4. A fresh worker resumes from that handoff packet instead of growing the original session indefinitely.
@@ -577,7 +577,7 @@ Prefer Packet28 as an MCP proxy when you want upstream tool usage to become part
 
 Example reducer-plus-handoff loop:
 
-1. Install Claude hooks with `Packet28 setup --runtime claude`.
+1. Install runtime hooks with `Packet28 setup --runtime all --yes`.
 2. Let hooks persist reducer packets into the daemon automatically during the turn.
 3. Call `packet28.write_intention` only for semantic objective changes.
 4. Call `packet28.prepare_handoff` only for explicit bootstrap or inspection.

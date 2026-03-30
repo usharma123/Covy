@@ -16,7 +16,7 @@ All Packet28 machine-mode commands emit `suite.packet.v1` JSON wrappers. Parse p
 Packet28 is intended to sit alongside the live agent loop as a hooks-first reducer plus handoff broker. The normal loop is:
 
 1. Start `Packet28 mcp serve`
-2. Install Claude hooks with `Packet28 setup --runtime claude`
+2. Install runtime hooks with `Packet28 setup --runtime all --yes`
 3. Let hooks persist slim reducer packets during the active turn
 4. Use `packet28.write_intention` only when the task objective changes materially
 5. Fetch full context artifacts only when explicit inspection is needed.
@@ -90,7 +90,7 @@ Packet28 agent-prompt --format claude >> CLAUDE.md
 # Generate AGENTS.md fragment
 Packet28 agent-prompt --format agents
 
-# Generate .cursorrules fragment
+# Generate a Cursor rule fragment
 Packet28 agent-prompt --format cursor
 ```
 
@@ -109,16 +109,24 @@ Packet28 agent-prompt --format cursor
 
 - Use `Packet28 agent-prompt --format agents` to seed the runtime instructions
 - Keep one mutable Packet28 block in the prompt and replace it when a newer brief supersedes the old one
-- Let hooks rewrite supported shell commands and capture routine tool activity without visible MCP reducer calls
+- Let Codex hooks rewrite supported shell commands and capture routine tool activity without visible MCP reducer calls
 - Use `packet28.write_intention` for semantic resume breadcrumbs and `packet28.prepare_handoff` only for explicit bootstrap or inspection
 
 #### Cursor
 
 - Start MCP once per workspace
 - Replace the prior Packet28 context block instead of appending Packet28 history
-- Let hooks rewrite supported shell commands and capture reducer packets in the turn, then relaunch from handoff after threshold or stop boundaries
+- Let Cursor hooks rewrite supported shell commands and capture reducer packets in the turn, then relaunch from handoff after threshold or stop boundaries
 - Keep `.packet28/task/<task_id>/brief.md` only as a fallback bridge
 - Treat `verbosity` as a compatibility alias; prefer explicit section limits
+
+#### Windsurf
+
+- Start MCP once per workspace
+- Use `.windsurf/rules/packet28.md` as the persistent runtime instruction surface
+- Let Windsurf hooks rewrite supported shell commands and capture reducer packets in the turn
+- Keep one mutable Packet28 context block instead of appending historical Packet28 briefs
+- Use `.packet28/task/<task_id>/brief.md` only as a fallback bridge when MCP is unavailable
 
 ### Wrapper Binary
 

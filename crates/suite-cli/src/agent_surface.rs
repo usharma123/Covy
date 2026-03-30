@@ -75,7 +75,7 @@ When the task is substantial, use Packet28 as a hooks-first reducer runtime with
 \n\
 - MCP command: `{mcp}`\n\
 - Preferred MCP endpoint when available: `{proxy}`\n\
-- Claude hooks, not MCP reducer tools, should rewrite supported shell commands and capture routine tool activity into Packet28.\n\
+- Use runtime hooks installed by `Packet28 setup`, not visible MCP reducer calls, to rewrite supported shell commands and capture routine tool activity into Packet28.\n\
 - Prefer `packet28.search`, `packet28.read_regions`, and `packet28.glob` for compact native search/read workflows.\n\
 - Use `packet28.write_intention` only for semantic task intent; avoid repeated generic state writes in the loop.\n\
 - Let the daemon prepare handoff context after threshold or stop boundaries, then resume from the latest handoff packet.\n\
