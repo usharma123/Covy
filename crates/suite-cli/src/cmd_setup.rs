@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
 use packet28_daemon_core::{
-    DaemonIndexRebuildRequest, DaemonIndexStatusRequest, DaemonRequest, DaemonResponse,
-    RelaunchPreference,
+    DaemonIndexRebuildRequest, DaemonIndexStatusRequest, DaemonIndexStatusResponse, DaemonRequest,
+    DaemonResponse, RelaunchPreference,
 };
 use serde_json::{json, Value};
 use toml::value::Table as TomlTable;
@@ -61,6 +62,21 @@ enum McpConfigStatus {
     Declined,
 }
 
+#[derive(Debug)]
+enum SetupIndexVerification {
+    Ready(DaemonIndexStatusResponse),
+    Building(DaemonIndexStatusResponse),
+    Failed {
+        response: Option<DaemonIndexStatusResponse>,
+        reason: String,
+    },
+}
+
+const SETUP_INDEX_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
+const SETUP_INDEX_VERIFY_POLL: Duration = Duration::from_millis(100);
+const REGEX_INDEX_DIR_NAME: &str = "regex-v1";
+const REGEX_INDEX_MANIFEST_FILE: &str = "manifest.json";
+
 pub fn run(args: SetupArgs) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
     let root_display = root.display().to_string();
@@ -105,6 +121,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     let mut hook_configured = false;
     let mut any_hook_runtime_configs_written = false;
     let mut agent_files_ready = false;
+    let mut exit_code = 0;
 
     // Phase 1: MCP config
     if !args.fallback_only {
@@ -300,32 +317,55 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                     },
                 },
             ) {
-                Ok(DaemonResponse::DaemonIndexRebuild { .. }) => {
-                    match crate::cmd_daemon::send_request(
-                        &root,
-                        &DaemonRequest::DaemonIndexStatus {
-                            request: DaemonIndexStatusRequest {
-                                root: root.display().to_string(),
-                            },
-                        },
-                    ) {
-                        Ok(DaemonResponse::DaemonIndexStatus { response }) => {
+                Ok(DaemonResponse::DaemonIndexRebuild { response }) => {
+                    if response.accepted {
+                        println!("    {} rebuild queued", "✓".green().bold());
+                    } else {
+                        println!("    {} rebuild request was not accepted", "✗".red().bold());
+                        exit_code = 1;
+                    }
+                    match verify_setup_index(&root)? {
+                        SetupIndexVerification::Ready(response) => {
                             println!(
-                                "    {} index {} (generation={}, ready={})",
+                                "    {} index ready (generation={}, regex_generation={}, files={}, regex_files={})",
                                 "✓".green().bold(),
-                                response.manifest.status,
                                 response.manifest.generation,
-                                response.ready
+                                response.manifest.regex_generation.unwrap_or_default(),
+                                response.manifest.indexed_files,
+                                response.manifest.regex_indexed_files
                             );
                         }
-                        Ok(other) => {
+                        SetupIndexVerification::Building(response) => {
                             println!(
-                                "    {} unexpected index status response: {other:?}",
-                                "·".dimmed()
+                                "    {} index still building (status={}, regex_status={}, generation={}, regex_generation={})",
+                                "·".yellow().bold(),
+                                response.manifest.status,
+                                response.manifest.regex_status.as_deref().unwrap_or("missing"),
+                                response.manifest.generation,
+                                response.manifest.regex_generation.unwrap_or_default()
                             );
                         }
-                        Err(err) => {
-                            println!("    {} index status unavailable: {}", "·".dimmed(), err);
+                        SetupIndexVerification::Failed { response, reason } => {
+                            if let Some(response) = response {
+                                println!(
+                                    "    {} index failed: {} (status={}, regex_status={}, generation={}, regex_generation={})",
+                                    "✗".red().bold(),
+                                    reason,
+                                    response.manifest.status,
+                                    response.manifest.regex_status.as_deref().unwrap_or("missing"),
+                                    response.manifest.generation,
+                                    response.manifest.regex_generation.unwrap_or_default()
+                                );
+                            } else {
+                                println!("    {} index failed: {}", "✗".red().bold(), reason);
+                            }
+                            println!(
+                                "    {} run `Packet28 daemon index rebuild --root {}` and inspect `Packet28 daemon index status --root {} --json`",
+                                "hint:".cyan().bold(),
+                                root_display,
+                                root_display
+                            );
+                            exit_code = 1;
                         }
                     }
                 }
@@ -334,9 +374,15 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                         "    {} unexpected index rebuild response: {other:?}",
                         "·".dimmed()
                     );
+                    exit_code = 1;
                 }
                 Err(err) => {
-                    println!("    {} failed to queue index build: {}", "·".dimmed(), err);
+                    println!(
+                        "    {} failed to queue index build: {}",
+                        "✗".red().bold(),
+                        err
+                    );
+                    exit_code = 1;
                 }
             }
         }
@@ -347,19 +393,26 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                 "hint:".cyan().bold(),
                 root_display
             );
+            exit_code = 1;
         }
     }
     println!();
 
     // Done
-    println!("  {}", "Setup complete!".green().bold());
+    if exit_code == 0 {
+        println!("  {}", "Setup complete!".green().bold());
+    } else {
+        println!("  {}", "Setup finished with errors.".red().bold());
+    }
     println!();
     println!("  {}", "Quick start:".bold());
 
     if mcp_configured && !args.fallback_only {
         println!("    Your agent runtimes are configured to use Packet28 control-plane MCP tools.");
         if hook_configured {
-            println!("    Claude hooks will capture tool activity directly into Packet28.");
+            println!(
+                "    Selected runtime hooks will capture tool activity directly into Packet28."
+            );
         }
         println!("    Start a new session and Packet28 intent/handoff tools will be available.");
     } else if agent_files_ready {
@@ -377,7 +430,132 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     println!("    packet28 doctor --root {root_display}");
     println!();
 
-    Ok(0)
+    Ok(exit_code)
+}
+
+fn verify_setup_index(root: &Path) -> Result<SetupIndexVerification> {
+    let start = Instant::now();
+    let first_response = fetch_index_status(root)?;
+    match classify_setup_index_status(root, &first_response, false) {
+        SetupIndexVerification::Ready(_) | SetupIndexVerification::Failed { .. } => {
+            return Ok(classify_setup_index_status(root, &first_response, false));
+        }
+        SetupIndexVerification::Building(_) => {}
+    }
+    let mut last_response = first_response;
+    loop {
+        if start.elapsed() >= SETUP_INDEX_VERIFY_TIMEOUT {
+            break;
+        }
+        std::thread::sleep(SETUP_INDEX_VERIFY_POLL);
+        let response = fetch_index_status(root)?;
+        match classify_setup_index_status(root, &response, false) {
+            SetupIndexVerification::Ready(_) | SetupIndexVerification::Failed { .. } => {
+                return Ok(classify_setup_index_status(root, &response, false));
+            }
+            SetupIndexVerification::Building(_) => {
+                last_response = response;
+            }
+        }
+    }
+
+    Ok(classify_setup_index_status(root, &last_response, true))
+}
+
+fn fetch_index_status(root: &Path) -> Result<DaemonIndexStatusResponse> {
+    match crate::cmd_daemon::send_request(
+        root,
+        &DaemonRequest::DaemonIndexStatus {
+            request: DaemonIndexStatusRequest {
+                root: root.display().to_string(),
+            },
+        },
+    )? {
+        DaemonResponse::DaemonIndexStatus { response } => Ok(response),
+        DaemonResponse::Error { message } => anyhow::bail!(message),
+        other => anyhow::bail!("unexpected index status response: {other:?}"),
+    }
+}
+
+fn classify_setup_index_status(
+    root: &Path,
+    response: &DaemonIndexStatusResponse,
+    timed_out: bool,
+) -> SetupIndexVerification {
+    if setup_index_ready(root, response) {
+        return SetupIndexVerification::Ready(response.clone());
+    }
+
+    if let Some(reason) = setup_index_failure_reason(root, response, timed_out) {
+        return SetupIndexVerification::Failed {
+            response: Some(response.clone()),
+            reason,
+        };
+    }
+
+    SetupIndexVerification::Building(response.clone())
+}
+
+fn setup_index_ready(root: &Path, response: &DaemonIndexStatusResponse) -> bool {
+    response.ready
+        && response.manifest.status == "ready"
+        && response.manifest.regex_status.as_deref() == Some("ready")
+        && response.manifest.regex_generation.is_some()
+        && response
+            .manifest
+            .regex_weight_table_version
+            .unwrap_or_default()
+            > 0
+        && regex_index_artifacts_present(root)
+}
+
+fn setup_index_failure_reason(
+    root: &Path,
+    response: &DaemonIndexStatusResponse,
+    timed_out: bool,
+) -> Option<String> {
+    let manifest = &response.manifest;
+    if manifest.status == "corrupt" {
+        return Some(
+            manifest
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "repo index manifest is corrupt".to_string()),
+        );
+    }
+    if manifest.regex_status.as_deref() == Some("corrupt") {
+        return Some(
+            manifest
+                .regex_stale_reason
+                .clone()
+                .or_else(|| manifest.last_error.clone())
+                .unwrap_or_else(|| "regex trigram index is corrupt".to_string()),
+        );
+    }
+    if manifest.status == "ready" && manifest.regex_status.as_deref() != Some("ready") {
+        return Some(
+            manifest
+                .regex_stale_reason
+                .clone()
+                .or_else(|| manifest.last_error.clone())
+                .unwrap_or_else(|| "regex trigram index is not ready".to_string()),
+        );
+    }
+    if timed_out && !regex_index_artifacts_present(root) {
+        return Some("regex trigram index artifacts are missing".to_string());
+    }
+    if timed_out && manifest.status == "missing" && manifest.regex_status.is_none() {
+        return Some("setup did not create the repo or regex search index".to_string());
+    }
+    None
+}
+
+fn regex_index_artifacts_present(root: &Path) -> bool {
+    let dir = root
+        .join(".packet28")
+        .join("index")
+        .join(REGEX_INDEX_DIR_NAME);
+    dir.join(REGEX_INDEX_MANIFEST_FILE).is_file()
 }
 
 fn detect_runtimes(root: &Path) -> Vec<RuntimeInfo> {
@@ -592,7 +770,9 @@ fn codex_config_path(home: &Path) -> PathBuf {
 }
 
 fn windsurf_mcp_config_path(home: &Path) -> PathBuf {
-    home.join(".codeium").join("windsurf").join("mcp_config.json")
+    home.join(".codeium")
+        .join("windsurf")
+        .join("mcp_config.json")
 }
 
 fn cursor_prompt_targets(root: &Path) -> Vec<PromptTarget> {
@@ -904,7 +1084,8 @@ fn configure_codex_mcp(root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
 }
 
 fn configure_codex_hooks(root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let hook_status = write_codex_hook_config(&hook_config_path(RuntimeKind::Codex, root), root, auto_yes)?;
+    let hook_status =
+        write_codex_hook_config(&hook_config_path(RuntimeKind::Codex, root), root, auto_yes)?;
     let feature_status = write_codex_feature_flag(&codex_config_path(&dirs_home()), auto_yes)?;
     Ok(merge_statuses(hook_status, feature_status))
 }
@@ -994,8 +1175,7 @@ fn write_codex_mcp_config(path: &Path, root: &Path) -> Result<McpConfigStatus> {
                 .and_then(toml::Value::as_str)
                 .map(str::trim)
                 == Some(desired_command.as_str())
-                && packet28.get("args").and_then(toml::Value::as_array)
-                    == Some(&desired_args)
+                && packet28.get("args").and_then(toml::Value::as_array) == Some(&desired_args)
         });
     if already_configured {
         return Ok(McpConfigStatus::AlreadyConfigured);
@@ -1176,11 +1356,7 @@ fn write_windsurf_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result
     Ok(McpConfigStatus::Written)
 }
 
-fn write_windsurf_hook_config(
-    path: &Path,
-    root: &Path,
-    auto_yes: bool,
-) -> Result<McpConfigStatus> {
+fn write_windsurf_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
     let command = resolve_packet28_cli_command();
     let root_arg = shell_escape(root.display().to_string());
     let hook_command = format!("{command} hook windsurf --root \"{root_arg}\"");
@@ -1494,6 +1670,7 @@ fn write_agent_file(path: &Path, content: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use packet28_daemon_core::{DaemonIndexManifest, DaemonIndexStatusResponse};
     use tempfile::tempdir;
 
     fn runtime(
@@ -1664,5 +1841,76 @@ mod tests {
             config.relaunch_command,
             generated_relaunch_command("/usr/local/bin/packet28-agent", Path::new("/tmp/repo"))
         );
+    }
+
+    fn setup_index_status(
+        status: &str,
+        regex_status: Option<&str>,
+        ready: bool,
+    ) -> DaemonIndexStatusResponse {
+        DaemonIndexStatusResponse {
+            manifest: DaemonIndexManifest {
+                status: status.to_string(),
+                generation: 7,
+                regex_generation: regex_status.map(|_| 7),
+                regex_status: regex_status.map(str::to_string),
+                regex_weight_table_version: regex_status.map(|_| 1),
+                ..DaemonIndexManifest::default()
+            },
+            ready,
+            ..DaemonIndexStatusResponse::default()
+        }
+    }
+
+    #[test]
+    fn classify_setup_index_status_reports_ready_when_regex_index_is_usable() {
+        let dir = tempdir().unwrap();
+        let regex_dir = dir.path().join(".packet28").join("index").join("regex-v1");
+        fs::create_dir_all(&regex_dir).unwrap();
+        fs::write(regex_dir.join("manifest.json"), "{}").unwrap();
+        let response = setup_index_status("ready", Some("ready"), true);
+
+        assert!(matches!(
+            classify_setup_index_status(dir.path(), &response, false),
+            SetupIndexVerification::Ready(_)
+        ));
+    }
+
+    #[test]
+    fn classify_setup_index_status_reports_building_while_index_is_in_progress() {
+        let dir = tempdir().unwrap();
+        let response = setup_index_status("building", Some("building"), false);
+
+        assert!(matches!(
+            classify_setup_index_status(dir.path(), &response, false),
+            SetupIndexVerification::Building(_)
+        ));
+    }
+
+    #[test]
+    fn classify_setup_index_status_reports_failure_when_regex_artifacts_are_missing_after_timeout()
+    {
+        let dir = tempdir().unwrap();
+        let response = setup_index_status("building", Some("building"), false);
+
+        match classify_setup_index_status(dir.path(), &response, true) {
+            SetupIndexVerification::Failed { reason, .. } => {
+                assert!(reason.contains("regex trigram index artifacts are missing"));
+            }
+            other => panic!("expected failed setup classification, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_setup_index_status_reports_failure_when_repo_index_claims_ready_without_regex() {
+        let dir = tempdir().unwrap();
+        let response = setup_index_status("ready", Some("building"), false);
+
+        match classify_setup_index_status(dir.path(), &response, false) {
+            SetupIndexVerification::Failed { reason, .. } => {
+                assert!(reason.contains("regex trigram index is not ready"));
+            }
+            other => panic!("expected failed setup classification, got {other:?}"),
+        }
     }
 }
