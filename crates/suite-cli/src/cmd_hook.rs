@@ -26,6 +26,7 @@ pub struct HookArgs {
 #[derive(Subcommand)]
 pub enum HookCommands {
     Claude(ClaudeHookArgs),
+    Cursor(RuntimeHookArgs),
     ReducerRunner(ReducerRunnerArgs),
     ReduceFixture(ReduceFixtureArgs),
 }
@@ -36,6 +37,19 @@ pub struct ClaudeHookArgs {
     pub root: String,
     #[arg(long)]
     pub event: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct RuntimeHookArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long)]
+    pub event: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum ExternalHookRuntime {
+    Cursor,
 }
 
 #[derive(Args, Clone)]
@@ -77,6 +91,7 @@ pub struct ReduceFixtureArgs {
 pub fn run(args: HookArgs) -> Result<i32> {
     match args.command {
         HookCommands::Claude(args) => run_claude(args),
+        HookCommands::Cursor(args) => run_runtime_hook(args, ExternalHookRuntime::Cursor),
         HookCommands::ReducerRunner(args) => run_reducer_runner(args),
         HookCommands::ReduceFixture(args) => run_reduce_fixture(args),
     }
@@ -132,6 +147,46 @@ fn run_claude(args: ClaudeHookArgs) -> Result<i32> {
 
     emit_hook_output(event_kind, rewrite, &response)?;
     Ok(if response.block_stop { 2 } else { 0 })
+}
+
+fn run_runtime_hook(args: RuntimeHookArgs, runtime: ExternalHookRuntime) -> Result<i32> {
+    let mut buffer = String::new();
+    io::stdin().read_to_string(&mut buffer)?;
+    let payload = if buffer.trim().is_empty() {
+        Value::Object(Default::default())
+    } else {
+        serde_json::from_str(&buffer)?
+    };
+    let root = resolve_runtime_hook_root(&args, &payload);
+    crate::broker_client::ensure_daemon(&root)?;
+
+    let event_kind = args
+        .event
+        .as_deref()
+        .map(|value| parse_runtime_event_kind(runtime, Some(value)))
+        .unwrap_or_else(|| {
+            parse_runtime_event_kind(runtime, json_string(&payload, "hook_event_name").as_deref())
+        });
+    let session_id = runtime_session_id(runtime, &payload);
+    let task_id = resolve_runtime_task_id(&root, &payload, session_id.as_deref(), runtime)?;
+    let matcher = runtime_matcher(runtime, &payload, event_kind);
+    let reducer_packet = build_runtime_reducer_packet(runtime, &payload, event_kind);
+
+    let _response = crate::broker_client::hook_ingest(
+        &root,
+        HookIngestRequest {
+            task_id,
+            session_id,
+            event_kind,
+            matcher,
+            source: Some(runtime_source(runtime).to_string()),
+            boundary_kind: boundary_for_event(event_kind),
+            lifecycle_event: None,
+            reducer_packet,
+            host_context_budget_tokens: None,
+        },
+    )?;
+    Ok(0)
 }
 
 fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
@@ -545,6 +600,146 @@ fn resolve_task_id(root: &Path, payload: &Value, session_id: Option<&str>) -> Re
         },
     )?;
     Ok(task_id)
+}
+
+fn resolve_runtime_task_id(
+    root: &Path,
+    payload: &Value,
+    session_id: Option<&str>,
+    runtime: ExternalHookRuntime,
+) -> Result<String> {
+    if let Some(task_id) = json_string(payload, "task_id").filter(|value| !value.trim().is_empty())
+    {
+        crate::task_runtime::store_active_task(
+            root,
+            &ActiveTaskRecord {
+                task_id: task_id.clone(),
+                session_id: session_id.map(ToOwned::to_owned),
+                updated_at_unix: now_unix(),
+            },
+        )?;
+        return Ok(task_id);
+    }
+    if let Some(active) = crate::task_runtime::load_active_task(root) {
+        return Ok(active.task_id);
+    }
+    let seed = match runtime {
+        ExternalHookRuntime::Cursor => "cursor-project",
+    };
+    let task_id = session_id
+        .map(crate::task_runtime::derive_claude_task_id)
+        .unwrap_or_else(|| crate::broker_client::derive_task_id(seed));
+    crate::task_runtime::store_active_task(
+        root,
+        &ActiveTaskRecord {
+            task_id: task_id.clone(),
+            session_id: session_id.map(ToOwned::to_owned),
+            updated_at_unix: now_unix(),
+        },
+    )?;
+    Ok(task_id)
+}
+
+fn resolve_runtime_hook_root(args: &RuntimeHookArgs, payload: &Value) -> PathBuf {
+    if args.root.trim() != "." {
+        return crate::broker_client::resolve_root(&args.root);
+    }
+    if let Some(root) = json_string(payload, "cwd")
+        .or_else(|| json_nested_string(payload, &["tool_info", "cwd"]))
+        .or_else(|| json_nested_string(payload, &["workspace_root"]))
+    {
+        return crate::broker_client::resolve_root(&root);
+    }
+    if let Some(root) = payload
+        .get("workspace_roots")
+        .and_then(Value::as_array)
+        .and_then(|roots| roots.first())
+        .and_then(Value::as_str)
+    {
+        return crate::broker_client::resolve_root(root);
+    }
+    crate::broker_client::resolve_root(".")
+}
+
+fn parse_runtime_event_kind(runtime: ExternalHookRuntime, value: Option<&str>) -> HookEventKind {
+    match runtime {
+        ExternalHookRuntime::Cursor => match value.unwrap_or_default().trim() {
+            "beforeSubmitPrompt" => HookEventKind::UserPromptSubmit,
+            "beforeShellExecution" => HookEventKind::PreToolUse,
+            "afterShellExecution" => HookEventKind::PostToolUse,
+            "stop" | "afterAgentResponse" => HookEventKind::Stop,
+            _ => HookEventKind::Unknown,
+        },
+    }
+}
+
+fn runtime_session_id(runtime: ExternalHookRuntime, payload: &Value) -> Option<String> {
+    match runtime {
+        ExternalHookRuntime::Cursor => {
+            json_string(payload, "conversation_id").or_else(|| json_string(payload, "session_id"))
+        }
+    }
+}
+
+fn runtime_matcher(
+    runtime: ExternalHookRuntime,
+    payload: &Value,
+    event_kind: HookEventKind,
+) -> Option<String> {
+    match runtime {
+        ExternalHookRuntime::Cursor => match event_kind {
+            HookEventKind::PreToolUse | HookEventKind::PostToolUse => Some("Bash".to_string()),
+            _ => json_string(payload, "hook_event_name"),
+        },
+    }
+}
+
+fn build_runtime_reducer_packet(
+    runtime: ExternalHookRuntime,
+    payload: &Value,
+    event_kind: HookEventKind,
+) -> Option<HookReducerPacket> {
+    match runtime {
+        ExternalHookRuntime::Cursor => build_cursor_reducer_packet(payload, event_kind),
+    }
+}
+
+fn build_cursor_reducer_packet(
+    payload: &Value,
+    event_kind: HookEventKind,
+) -> Option<HookReducerPacket> {
+    if !matches!(event_kind, HookEventKind::PostToolUse) {
+        return None;
+    }
+    let command = json_string(payload, "command")
+        .or_else(|| json_string(payload, "command_line"))
+        .or_else(|| json_string(payload, "shell_command"))?;
+    let output = json_string(payload, "output")
+        .or_else(|| json_string(payload, "result"))
+        .or_else(|| json_string(payload, "stderr"))
+        .or_else(|| json_string(payload, "stdout"))
+        .unwrap_or_default();
+    let summary = first_nonempty_line(&output)
+        .unwrap_or_else(|| format!("command completed: {}", compact_text(&command, 100)));
+    let paths = extract_command_paths(&command);
+    Some(packet_from_parts(
+        "packet28.hook.cursor.command.v1",
+        "Bash",
+        suite_packet_core::ToolOperationKind::Generic,
+        Some("cursor_native".to_string()),
+        Some("shell".to_string()),
+        summary,
+        Some(command),
+        None,
+        paths,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        Some(false),
+        payload.clone(),
+        false,
+    ))
 }
 
 fn parse_event_kind(value: Option<&str>) -> HookEventKind {
@@ -1017,6 +1212,18 @@ fn json_string(value: &Value, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn json_nested_string(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn json_array_strings(value: &Value, key: &str) -> Vec<String> {
     value
         .get(key)
@@ -1064,6 +1271,12 @@ fn compact_text(value: &str, limit: usize) -> String {
             .take(limit.saturating_sub(3))
             .collect::<String>();
         format!("{shortened}...")
+    }
+}
+
+fn runtime_source(runtime: ExternalHookRuntime) -> &'static str {
+    match runtime {
+        ExternalHookRuntime::Cursor => "packet28.cursor.hook",
     }
 }
 

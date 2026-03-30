@@ -102,7 +102,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     let mut prompt_targets = Vec::new();
     let mut mcp_configured = false;
     let mut hook_configured = false;
-    let mut any_hooks_configured = false;
+    let mut any_hook_runtime_configs_written = false;
     let mut agent_files_ready = false;
 
     // Phase 1: MCP config
@@ -152,7 +152,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         .copied()
         .any(|runtime| runtime_supports_hooks(runtime.kind))
     {
-        println!("  {}", "Installing Claude hooks:".bold());
+        println!("  {}", "Installing runtime hooks:".bold());
         for rt in &selected_runtimes {
             if !runtime_supports_hooks(rt.kind) {
                 continue;
@@ -160,7 +160,9 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             match configure_runtime_hooks(rt, &root, args.yes)? {
                 McpConfigStatus::Written => {
                     hook_configured = true;
-                    any_hooks_configured = true;
+                    if runtime_needs_hook_runtime_config(rt.kind) {
+                        any_hook_runtime_configs_written = true;
+                    }
                     println!(
                         "    {} {} hooks → {}",
                         "✓".green().bold(),
@@ -170,7 +172,9 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                 }
                 McpConfigStatus::AlreadyConfigured => {
                     hook_configured = true;
-                    any_hooks_configured = true;
+                    if runtime_needs_hook_runtime_config(rt.kind) {
+                        any_hook_runtime_configs_written = true;
+                    }
                     println!(
                         "    {} {} hooks (already configured)",
                         "·".dimmed(),
@@ -183,7 +187,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             }
         }
         if matches!(
-            write_hook_runtime_config(&root, any_hooks_configured)?,
+            write_hook_runtime_config(&root, any_hook_runtime_configs_written)?,
             McpConfigStatus::Written
         ) {
             println!(
@@ -195,7 +199,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                     .dimmed()
             );
         }
-        if any_hooks_configured {
+        if any_hook_runtime_configs_written {
             match crate::cmd_daemon::restart_daemon(&root) {
                 Ok(_) => {
                     println!(
@@ -392,10 +396,7 @@ fn detect_runtimes(root: &Path) -> Vec<RuntimeInfo> {
             kind: RuntimeKind::Cursor,
             name: "Cursor",
             slug: "cursor",
-            prompt_targets: vec![PromptTarget {
-                path: root.join(".cursorrules"),
-                format: agent_surface::AgentPromptFormat::Cursor,
-            }],
+            prompt_targets: cursor_prompt_targets(root),
             detected: detect_cursor(&home),
         },
         RuntimeInfo {
@@ -467,6 +468,10 @@ fn runtime_supports_mcp(kind: RuntimeKind) -> bool {
 }
 
 fn runtime_supports_hooks(kind: RuntimeKind) -> bool {
+    matches!(kind, RuntimeKind::Claude | RuntimeKind::Cursor)
+}
+
+fn runtime_needs_hook_runtime_config(kind: RuntimeKind) -> bool {
     matches!(kind, RuntimeKind::Claude)
 }
 
@@ -511,9 +516,10 @@ fn configure_runtime_hooks(
         RuntimeKind::Claude => {
             write_claude_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
-        RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf => {
-            Ok(McpConfigStatus::Declined)
+        RuntimeKind::Cursor => {
+            write_cursor_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
+        RuntimeKind::Codex | RuntimeKind::Windsurf => Ok(McpConfigStatus::Declined),
     }
 }
 
@@ -535,10 +541,10 @@ fn runtime_mcp_status(runtime: &RuntimeInfo, root: &Path) -> String {
 
 fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
     match runtime.kind {
-        RuntimeKind::Claude => hook_config_path(runtime.kind, root).display().to_string(),
-        RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf => {
-            runtime.name.to_string()
+        RuntimeKind::Claude | RuntimeKind::Cursor => {
+            hook_config_path(runtime.kind, root).display().to_string()
         }
+        RuntimeKind::Codex | RuntimeKind::Windsurf => runtime.name.to_string(),
     }
 }
 
@@ -555,10 +561,25 @@ fn mcp_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
 fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
     match kind {
         RuntimeKind::Claude => root.join(".claude").join("settings.json"),
-        RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf => {
-            panic!("runtime does not use a claude-style hook config")
+        RuntimeKind::Cursor => root.join(".cursor").join("hooks.json"),
+        RuntimeKind::Codex | RuntimeKind::Windsurf => {
+            panic!("runtime does not use a local hook config here")
         }
     }
+}
+
+fn cursor_prompt_targets(root: &Path) -> Vec<PromptTarget> {
+    let mut targets = vec![PromptTarget {
+        path: root.join(".cursor").join("rules").join("packet28.mdc"),
+        format: agent_surface::AgentPromptFormat::CursorRule,
+    }];
+    if root.join(".cursorrules").exists() {
+        targets.push(PromptTarget {
+            path: root.join(".cursorrules"),
+            format: agent_surface::AgentPromptFormat::Cursor,
+        });
+    }
+    targets
 }
 
 fn prompt_target_label(target: &PromptTarget) -> String {
@@ -729,6 +750,87 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
     if hooks.contains_key("packet28") {
         hooks.remove("packet28");
         already_configured = false;
+    }
+    if already_configured {
+        return Ok(McpConfigStatus::AlreadyConfigured);
+    }
+    config.insert("hooks".to_string(), Value::Object(hooks));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&config)?),
+    )?;
+    Ok(McpConfigStatus::Written)
+}
+
+fn write_cursor_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+    let command = resolve_packet28_cli_command();
+    let root_arg = shell_escape(root.display().to_string());
+    let hook_command = format!("{command} hook cursor --root \"{root_arg}\"");
+    let packet28_hooks = json!({
+        "beforeSubmitPrompt": [{
+            "command": hook_command
+        }],
+        "beforeShellExecution": [{
+            "command": hook_command
+        }],
+        "afterShellExecution": [{
+            "command": hook_command
+        }],
+        "stop": [{
+            "command": hook_command
+        }]
+    });
+    let mut config: BTreeMap<String, Value> = if path.exists() {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "refusing to overwrite invalid JSON in '{}'; fix the file and rerun setup",
+                path.display()
+            )
+        })?
+    } else {
+        BTreeMap::new()
+    };
+    if !auto_yes {
+        eprint!(
+            "    Write Cursor hook config to {}? [Y/n] ",
+            path.display().to_string().dimmed()
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
+            return Ok(McpConfigStatus::Declined);
+        }
+    }
+    let mut hooks = config
+        .get("hooks")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let packet28_events = packet28_hooks.as_object().cloned().unwrap_or_default();
+    let mut already_configured = true;
+    for (event_name, entries) in &packet28_events {
+        let existing = hooks
+            .get(event_name)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let new_entries = entries.as_array().cloned().unwrap_or_default();
+        let hook_present = new_entries
+            .iter()
+            .all(|new_entry| existing.iter().any(|entry| entry == new_entry));
+        if hook_present {
+            continue;
+        }
+        already_configured = false;
+        let mut merged = existing;
+        merged.extend(new_entries);
+        hooks.insert(event_name.clone(), Value::Array(merged));
     }
     if already_configured {
         return Ok(McpConfigStatus::AlreadyConfigured);
@@ -997,6 +1099,19 @@ mod tests {
         assert!(value["hooks"]["SessionStart"].is_array());
         assert!(value["hooks"]["PostToolUse"].is_array());
         assert!(value["hooks"].get("packet28").is_none());
+    }
+
+    #[test]
+    fn write_cursor_hook_config_installs_packet28_hooks() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".cursor").join("hooks.json");
+        let status = write_cursor_hook_config(&path, dir.path(), true).unwrap();
+        assert!(matches!(status, McpConfigStatus::Written));
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value["hooks"]["beforeSubmitPrompt"].is_array());
+        assert!(value["hooks"]["beforeShellExecution"].is_array());
+        assert!(value["hooks"]["afterShellExecution"].is_array());
+        assert!(value["hooks"]["stop"].is_array());
     }
 
     #[test]

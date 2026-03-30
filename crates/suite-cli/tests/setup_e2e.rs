@@ -80,3 +80,35 @@ fn test_setup_refuses_to_overwrite_invalid_mcp_json() {
         "{ invalid json"
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn test_setup_cursor_writes_rules_hooks_and_mcp_without_legacy_cursorrules() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "cursor",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    assert!(root.path().join(".cursor").join("mcp.json").exists());
+    assert!(root.path().join(".cursor").join("hooks.json").exists());
+    assert!(root
+        .path()
+        .join(".cursor")
+        .join("rules")
+        .join("packet28.mdc")
+        .exists());
+    assert!(!root.path().join(".cursorrules").exists());
+}

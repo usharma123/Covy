@@ -10,6 +10,7 @@ pub enum AgentPromptFormat {
     Claude,
     Agents,
     Cursor,
+    CursorRule,
 }
 
 pub fn latest_bootstrap_path(root: &Path) -> PathBuf {
@@ -104,6 +105,30 @@ When the task is substantial, use Packet28 as a hooks-first reducer runtime with
 - Do not force handoff/bootstrap orchestration for trivial chat or isolated single-file edits.\n\
 - {root_note}\n"
         ),
+        AgentPromptFormat::CursorRule => format!(
+            "---\n\
+description: Packet28 runtime guidance\n\
+globs:\n\
+alwaysApply: true\n\
+---\n\
+\n\
+# Packet28 Integration\n\
+\n\
+- Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
+- Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
+- Prefer `packet28.search`, `packet28.read_regions`, and `packet28.glob` when compact native search/read output matters in-turn.\n\
+- Use `packet28.write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
+- For checkpointed relaunch flows, use `packet28.prepare_handoff` to seed the next worker.\n\
+- Keep one mutable Packet28 context block and replace it whenever a newer brief supersedes the old one.\n\
+- Use `packet28.fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
+- Prefer relaunching a fresh worker after checkpointed handoff assembly instead of keeping one session hot.\n\
+- Respect the supersession header in each brief and use it to discard older Packet28 reasoning context.\n\
+- Prefer explicit section filters and section-item limits; use `verbosity` only as a compatibility alias.\n\
+- Use `.packet28/task/<task_id>/brief.md` only as a fallback bridge when MCP is unavailable.\n\
+- If Packet28 is unavailable, fails, or returns insufficient context, fall back to direct file reads and commands.\n\
+- Do not force handoff/bootstrap orchestration for trivial chat or isolated single-file edits.\n\
+- {root_note}\n"
+        ),
     }
 }
 
@@ -146,5 +171,13 @@ mod tests {
         assert!(rendered.contains("packet28.glob"));
         assert!(rendered.contains("Packet28 mcp serve"));
         assert!(rendered.contains("single-file edits"));
+    }
+
+    #[test]
+    fn cursor_rule_fragment_has_frontmatter() {
+        let rendered = render_prompt_fragment(AgentPromptFormat::CursorRule, None);
+        assert!(rendered.starts_with("---\n"));
+        assert!(rendered.contains("alwaysApply: true"));
+        assert!(rendered.contains("# Packet28 Integration"));
     }
 }
