@@ -33,13 +33,25 @@ pub struct SetupArgs {
 }
 
 struct RuntimeInfo {
+    kind: RuntimeKind,
     name: &'static str,
     slug: &'static str,
-    mcp_config_path: Option<PathBuf>,
-    hook_config_path: Option<PathBuf>,
-    agent_file_path: PathBuf,
-    agent_format: agent_surface::AgentPromptFormat,
+    prompt_targets: Vec<PromptTarget>,
     detected: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeKind {
+    Claude,
+    Cursor,
+    Codex,
+    Windsurf,
+}
+
+#[derive(Clone, Debug)]
+struct PromptTarget {
+    path: PathBuf,
+    format: agent_surface::AgentPromptFormat,
 }
 
 enum McpConfigStatus {
@@ -66,7 +78,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         runtimes.retain(|r| r.slug == args.runtime);
         if runtimes.is_empty() {
             eprintln!(
-                "{} unknown runtime '{}'. Use: claude, cursor, codex, or all",
+                "{} unknown runtime '{}'. Use: claude, cursor, codex, windsurf, or all",
                 "error:".red().bold(),
                 args.runtime
             );
@@ -87,7 +99,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     println!();
 
     let selected_runtimes = select_setup_runtimes(&runtimes, args.runtime != "all");
-    let mut agent_targets = Vec::new();
+    let mut prompt_targets = Vec::new();
     let mut mcp_configured = false;
     let mut hook_configured = false;
     let mut any_hooks_configured = false;
@@ -95,13 +107,11 @@ pub fn run(args: SetupArgs) -> Result<i32> {
 
     // Phase 1: MCP config
     if !args.fallback_only {
-        let mcp_targets: Vec<&RuntimeInfo> = selected_runtimes
+        if !selected_runtimes
             .iter()
             .copied()
-            .filter(|r| r.mcp_config_path.is_some())
-            .collect();
-
-        if mcp_targets.is_empty() {
+            .any(|runtime| runtime_supports_mcp(runtime.kind))
+        {
             println!(
                 "  {} No MCP-capable runtimes selected. Generating fallback files.",
                 "→".yellow()
@@ -109,22 +119,23 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             println!();
         } else {
             println!("  {}", "Configuring MCP servers:".bold());
-            for rt in &mcp_targets {
-                let config_path = rt.mcp_config_path.as_ref().unwrap();
-                match write_mcp_config(config_path, &root, args.yes)? {
+            for rt in &selected_runtimes {
+                if !runtime_supports_mcp(rt.kind) {
+                    continue;
+                }
+                match configure_runtime_mcp(rt, &root, args.yes)? {
                     McpConfigStatus::Written => {
                         mcp_configured = true;
-                        push_unique_runtime(&mut agent_targets, rt);
+                        push_prompt_targets(&mut prompt_targets, &rt.prompt_targets);
                         println!(
-                            "    {} {} → {}",
+                            "    {} {}",
                             "✓".green().bold(),
-                            rt.name,
-                            config_path.display().to_string().dimmed()
+                            runtime_mcp_status(rt, &root).dimmed()
                         );
                     }
                     McpConfigStatus::AlreadyConfigured => {
                         mcp_configured = true;
-                        push_unique_runtime(&mut agent_targets, rt);
+                        push_prompt_targets(&mut prompt_targets, &rt.prompt_targets);
                         println!("    {} {} (already configured)", "·".dimmed(), rt.name,);
                     }
                     McpConfigStatus::Declined => {
@@ -136,16 +147,17 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         }
     }
 
-    let hook_targets: Vec<&RuntimeInfo> = selected_runtimes
+    if selected_runtimes
         .iter()
         .copied()
-        .filter(|runtime| runtime.hook_config_path.is_some())
-        .collect();
-    if !hook_targets.is_empty() {
+        .any(|runtime| runtime_supports_hooks(runtime.kind))
+    {
         println!("  {}", "Installing Claude hooks:".bold());
-        for rt in &hook_targets {
-            let config_path = rt.hook_config_path.as_ref().unwrap();
-            match write_claude_hook_config(config_path, &root, args.yes)? {
+        for rt in &selected_runtimes {
+            if !runtime_supports_hooks(rt.kind) {
+                continue;
+            }
+            match configure_runtime_hooks(rt, &root, args.yes)? {
                 McpConfigStatus::Written => {
                     hook_configured = true;
                     any_hooks_configured = true;
@@ -153,7 +165,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                         "    {} {} hooks → {}",
                         "✓".green().bold(),
                         rt.name,
-                        config_path.display().to_string().dimmed()
+                        runtime_hook_status(rt, &root).dimmed()
                     );
                 }
                 McpConfigStatus::AlreadyConfigured => {
@@ -206,9 +218,9 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     for rt in selected_runtimes
         .iter()
         .copied()
-        .filter(|r| args.fallback_only || r.mcp_config_path.is_none())
+        .filter(|runtime| args.fallback_only || !runtime_supports_mcp(runtime.kind))
     {
-        push_unique_runtime(&mut agent_targets, rt);
+        push_prompt_targets(&mut prompt_targets, &rt.prompt_targets);
     }
 
     // Phase 2: Agent fallback files
@@ -219,9 +231,9 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         Some(root_display.as_str())
     };
 
-    for rt in &agent_targets {
-        let content = agent_surface::render_prompt_fragment(rt.agent_format, root_str);
-        let path = &rt.agent_file_path;
+    for target in &prompt_targets {
+        let content = agent_surface::render_prompt_fragment(target.format, root_str);
+        let path = &target.path;
 
         let wrote = write_agent_file(path, &content)?;
         agent_files_ready = true;
@@ -229,16 +241,20 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             println!(
                 "    {} {} → {}",
                 "✓".green().bold(),
-                rt.name,
+                prompt_target_label(target),
                 path.display().to_string().dimmed()
             );
         } else {
-            println!("    {} {} (already up to date)", "·".dimmed(), rt.name,);
+            println!(
+                "    {} {} (already up to date)",
+                "·".dimmed(),
+                prompt_target_label(target),
+            );
         }
     }
 
     // Write a generic fallback only when no runtime-specific target was selected.
-    if agent_targets.is_empty() {
+    if prompt_targets.is_empty() {
         if selected_runtimes.is_empty() {
             let generic_path = root.join("agent.md");
             let content = agent_surface::render_prompt_fragment(
@@ -363,31 +379,41 @@ fn detect_runtimes(root: &Path) -> Vec<RuntimeInfo> {
     let home = dirs_home();
     vec![
         RuntimeInfo {
+            kind: RuntimeKind::Claude,
             name: "Claude Code",
             slug: "claude",
-            mcp_config_path: find_claude_mcp_config(&home, root),
-            hook_config_path: Some(root.join(".claude").join("settings.json")),
-            agent_file_path: root.join("CLAUDE.md"),
-            agent_format: agent_surface::AgentPromptFormat::Claude,
+            prompt_targets: vec![PromptTarget {
+                path: root.join("CLAUDE.md"),
+                format: agent_surface::AgentPromptFormat::Claude,
+            }],
             detected: detect_claude(&home),
         },
         RuntimeInfo {
+            kind: RuntimeKind::Cursor,
             name: "Cursor",
             slug: "cursor",
-            mcp_config_path: find_cursor_mcp_config(root),
-            hook_config_path: None,
-            agent_file_path: root.join(".cursorrules"),
-            agent_format: agent_surface::AgentPromptFormat::Cursor,
+            prompt_targets: vec![PromptTarget {
+                path: root.join(".cursorrules"),
+                format: agent_surface::AgentPromptFormat::Cursor,
+            }],
             detected: detect_cursor(&home),
         },
         RuntimeInfo {
+            kind: RuntimeKind::Codex,
             name: "Codex",
             slug: "codex",
-            mcp_config_path: None, // Codex doesn't have MCP config yet
-            hook_config_path: None,
-            agent_file_path: root.join("AGENTS.md"),
-            agent_format: agent_surface::AgentPromptFormat::Agents,
+            prompt_targets: vec![PromptTarget {
+                path: root.join("AGENTS.md"),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
             detected: detect_codex(),
+        },
+        RuntimeInfo {
+            kind: RuntimeKind::Windsurf,
+            name: "Windsurf",
+            slug: "windsurf",
+            prompt_targets: Vec::new(),
+            detected: detect_windsurf(&home),
         },
     ]
 }
@@ -412,6 +438,10 @@ fn detect_codex() -> bool {
     which_exists("codex")
 }
 
+fn detect_windsurf(home: &Path) -> bool {
+    home.join(".codeium").join("windsurf").is_dir() || which_exists("windsurf")
+}
+
 fn which_exists(name: &str) -> bool {
     std::process::Command::new("which")
         .arg(name)
@@ -432,6 +462,14 @@ fn find_cursor_mcp_config(root: &Path) -> Option<PathBuf> {
     Some(root.join(".cursor").join("mcp.json"))
 }
 
+fn runtime_supports_mcp(kind: RuntimeKind) -> bool {
+    matches!(kind, RuntimeKind::Claude | RuntimeKind::Cursor)
+}
+
+fn runtime_supports_hooks(kind: RuntimeKind) -> bool {
+    matches!(kind, RuntimeKind::Claude)
+}
+
 fn select_setup_runtimes<'a>(
     runtimes: &'a [RuntimeInfo],
     explicit_runtime_selection: bool,
@@ -442,14 +480,94 @@ fn select_setup_runtimes<'a>(
     runtimes.iter().filter(|runtime| runtime.detected).collect()
 }
 
-fn push_unique_runtime<'a>(targets: &mut Vec<&'a RuntimeInfo>, runtime: &'a RuntimeInfo) {
-    if targets
-        .iter()
-        .any(|candidate| candidate.slug == runtime.slug)
-    {
-        return;
+fn push_prompt_targets(targets: &mut Vec<PromptTarget>, additions: &[PromptTarget]) {
+    for addition in additions {
+        if targets.iter().any(|target| target.path == addition.path) {
+            continue;
+        }
+        targets.push(addition.clone());
     }
-    targets.push(runtime);
+}
+
+fn configure_runtime_mcp(
+    runtime: &RuntimeInfo,
+    root: &Path,
+    auto_yes: bool,
+) -> Result<McpConfigStatus> {
+    match runtime.kind {
+        RuntimeKind::Claude | RuntimeKind::Cursor => {
+            write_mcp_config(&mcp_config_path(runtime.kind, root), root, auto_yes)
+        }
+        RuntimeKind::Codex | RuntimeKind::Windsurf => Ok(McpConfigStatus::Declined),
+    }
+}
+
+fn configure_runtime_hooks(
+    runtime: &RuntimeInfo,
+    root: &Path,
+    auto_yes: bool,
+) -> Result<McpConfigStatus> {
+    match runtime.kind {
+        RuntimeKind::Claude => {
+            write_claude_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
+        }
+        RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf => {
+            Ok(McpConfigStatus::Declined)
+        }
+    }
+}
+
+fn runtime_mcp_status(runtime: &RuntimeInfo, root: &Path) -> String {
+    match runtime.kind {
+        RuntimeKind::Claude => format!(
+            "{} → {}",
+            runtime.name,
+            mcp_config_path(runtime.kind, root).display()
+        ),
+        RuntimeKind::Cursor => format!(
+            "{} → {}",
+            runtime.name,
+            mcp_config_path(runtime.kind, root).display()
+        ),
+        RuntimeKind::Codex | RuntimeKind::Windsurf => runtime.name.to_string(),
+    }
+}
+
+fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
+    match runtime.kind {
+        RuntimeKind::Claude => hook_config_path(runtime.kind, root).display().to_string(),
+        RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf => {
+            runtime.name.to_string()
+        }
+    }
+}
+
+fn mcp_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
+    match kind {
+        RuntimeKind::Claude => find_claude_mcp_config(&dirs_home(), root).expect("claude mcp path"),
+        RuntimeKind::Cursor => find_cursor_mcp_config(root).expect("cursor mcp path"),
+        RuntimeKind::Codex | RuntimeKind::Windsurf => {
+            panic!("runtime does not use a project MCP config")
+        }
+    }
+}
+
+fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
+    match kind {
+        RuntimeKind::Claude => root.join(".claude").join("settings.json"),
+        RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf => {
+            panic!("runtime does not use a claude-style hook config")
+        }
+    }
+}
+
+fn prompt_target_label(target: &PromptTarget) -> String {
+    target
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_else(|| target.path.to_str().unwrap_or("prompt"))
+        .to_string()
 }
 
 fn write_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
@@ -823,12 +941,22 @@ mod tests {
         has_mcp: bool,
     ) -> RuntimeInfo {
         RuntimeInfo {
+            kind: match slug {
+                "claude" => RuntimeKind::Claude,
+                "cursor" => RuntimeKind::Cursor,
+                "codex" => RuntimeKind::Codex,
+                "windsurf" => RuntimeKind::Windsurf,
+                other => panic!("unknown runtime slug: {other}"),
+            },
             name,
             slug,
-            mcp_config_path: has_mcp.then(|| PathBuf::from(format!("{slug}.json"))),
-            hook_config_path: (slug == "claude").then(|| PathBuf::from(".claude/settings.json")),
-            agent_file_path: PathBuf::from(format!("{slug}.md")),
-            agent_format: agent_surface::AgentPromptFormat::Agents,
+            prompt_targets: has_mcp
+                .then(|| PromptTarget {
+                    path: PathBuf::from(format!("{slug}.md")),
+                    format: agent_surface::AgentPromptFormat::Agents,
+                })
+                .into_iter()
+                .collect(),
             detected,
         }
     }
@@ -839,12 +967,13 @@ mod tests {
             runtime("Claude Code", "claude", false, true),
             runtime("Cursor", "cursor", false, true),
             runtime("Codex", "codex", true, false),
+            runtime("Windsurf", "windsurf", true, false),
         ];
 
         let selected = select_setup_runtimes(&runtimes, false);
         let slugs: Vec<&str> = selected.iter().map(|runtime| runtime.slug).collect();
 
-        assert_eq!(slugs, vec!["codex"]);
+        assert_eq!(slugs, vec!["codex", "windsurf"]);
     }
 
     #[test]
