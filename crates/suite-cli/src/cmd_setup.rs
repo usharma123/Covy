@@ -414,7 +414,7 @@ fn detect_runtimes(root: &Path) -> Vec<RuntimeInfo> {
             kind: RuntimeKind::Windsurf,
             name: "Windsurf",
             slug: "windsurf",
-            prompt_targets: Vec::new(),
+            prompt_targets: windsurf_prompt_targets(root),
             detected: detect_windsurf(&home),
         },
     ]
@@ -467,14 +467,14 @@ fn find_cursor_mcp_config(root: &Path) -> Option<PathBuf> {
 fn runtime_supports_mcp(kind: RuntimeKind) -> bool {
     matches!(
         kind,
-        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex
+        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf
     )
 }
 
 fn runtime_supports_hooks(kind: RuntimeKind) -> bool {
     matches!(
         kind,
-        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex
+        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf
     )
 }
 
@@ -511,7 +511,9 @@ fn configure_runtime_mcp(
             write_mcp_config(&mcp_config_path(runtime.kind, root), root, auto_yes)
         }
         RuntimeKind::Codex => configure_codex_mcp(root, auto_yes),
-        RuntimeKind::Windsurf => Ok(McpConfigStatus::Declined),
+        RuntimeKind::Windsurf => {
+            write_windsurf_mcp_config(&mcp_config_path(runtime.kind, root), root, auto_yes)
+        }
     }
 }
 
@@ -528,7 +530,9 @@ fn configure_runtime_hooks(
             write_cursor_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
         RuntimeKind::Codex => configure_codex_hooks(root, auto_yes),
-        RuntimeKind::Windsurf => Ok(McpConfigStatus::Declined),
+        RuntimeKind::Windsurf => {
+            write_windsurf_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
+        }
     }
 }
 
@@ -549,16 +553,19 @@ fn runtime_mcp_status(runtime: &RuntimeInfo, root: &Path) -> String {
             runtime.name,
             mcp_config_path(runtime.kind, root).display()
         ),
-        RuntimeKind::Windsurf => runtime.name.to_string(),
+        RuntimeKind::Windsurf => format!(
+            "{} → {}",
+            runtime.name,
+            mcp_config_path(runtime.kind, root).display()
+        ),
     }
 }
 
 fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
     match runtime.kind {
-        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex => {
+        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf => {
             hook_config_path(runtime.kind, root).display().to_string()
         }
-        RuntimeKind::Windsurf => runtime.name.to_string(),
     }
 }
 
@@ -567,9 +574,7 @@ fn mcp_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
         RuntimeKind::Claude => find_claude_mcp_config(&dirs_home(), root).expect("claude mcp path"),
         RuntimeKind::Cursor => find_cursor_mcp_config(root).expect("cursor mcp path"),
         RuntimeKind::Codex => codex_config_path(&dirs_home()),
-        RuntimeKind::Windsurf => {
-            panic!("runtime does not use a project MCP config")
-        }
+        RuntimeKind::Windsurf => windsurf_mcp_config_path(&dirs_home()),
     }
 }
 
@@ -578,14 +583,16 @@ fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
         RuntimeKind::Claude => root.join(".claude").join("settings.json"),
         RuntimeKind::Cursor => root.join(".cursor").join("hooks.json"),
         RuntimeKind::Codex => root.join(".codex").join("hooks.json"),
-        RuntimeKind::Windsurf => {
-            panic!("runtime does not use a local hook config here")
-        }
+        RuntimeKind::Windsurf => root.join(".windsurf").join("hooks.json"),
     }
 }
 
 fn codex_config_path(home: &Path) -> PathBuf {
     home.join(".codex").join("config.toml")
+}
+
+fn windsurf_mcp_config_path(home: &Path) -> PathBuf {
+    home.join(".codeium").join("windsurf").join("mcp_config.json")
 }
 
 fn cursor_prompt_targets(root: &Path) -> Vec<PromptTarget> {
@@ -600,6 +607,13 @@ fn cursor_prompt_targets(root: &Path) -> Vec<PromptTarget> {
         });
     }
     targets
+}
+
+fn windsurf_prompt_targets(root: &Path) -> Vec<PromptTarget> {
+    vec![PromptTarget {
+        path: root.join(".windsurf").join("rules").join("packet28.md"),
+        format: agent_surface::AgentPromptFormat::WindsurfRule,
+    }]
 }
 
 fn prompt_target_label(target: &PromptTarget) -> String {
@@ -1111,6 +1125,142 @@ fn write_codex_feature_flag(path: &Path, auto_yes: bool) -> Result<McpConfigStat
     Ok(McpConfigStatus::Written)
 }
 
+fn write_windsurf_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+    let root_arg = root.display().to_string();
+    let packet28_entry = json!({
+        "command": resolve_packet28_mcp_command(),
+        "args": ["--root", root_arg]
+    });
+    let mut config: BTreeMap<String, Value> = if path.exists() {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "refusing to overwrite invalid JSON in '{}'; fix the file and rerun setup",
+                path.display()
+            )
+        })?
+    } else {
+        BTreeMap::new()
+    };
+    let servers = config
+        .entry("mcpServers".to_string())
+        .or_insert_with(|| json!({}));
+
+    if !auto_yes {
+        eprint!(
+            "    Write Windsurf MCP config to {}? [Y/n] ",
+            path.display().to_string().dimmed()
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
+            return Ok(McpConfigStatus::Declined);
+        }
+    }
+
+    if let Some(obj) = servers.as_object_mut() {
+        let needs_write = obj.get("packet28") != Some(&packet28_entry);
+        if !needs_write {
+            return Ok(McpConfigStatus::AlreadyConfigured);
+        }
+        obj.insert("packet28".to_string(), packet28_entry);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(&config)?;
+    fs::write(path, format!("{content}\n"))?;
+    Ok(McpConfigStatus::Written)
+}
+
+fn write_windsurf_hook_config(
+    path: &Path,
+    root: &Path,
+    auto_yes: bool,
+) -> Result<McpConfigStatus> {
+    let command = resolve_packet28_cli_command();
+    let root_arg = shell_escape(root.display().to_string());
+    let hook_command = format!("{command} hook windsurf --root \"{root_arg}\"");
+    let packet28_hooks = json!({
+        "pre_user_prompt": [{
+            "command": hook_command
+        }],
+        "pre_run_command": [{
+            "command": hook_command
+        }],
+        "post_run_command": [{
+            "command": hook_command
+        }],
+        "post_cascade_response": [{
+            "command": hook_command
+        }]
+    });
+    let mut config: BTreeMap<String, Value> = if path.exists() {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "refusing to overwrite invalid JSON in '{}'; fix the file and rerun setup",
+                path.display()
+            )
+        })?
+    } else {
+        BTreeMap::new()
+    };
+    if !auto_yes {
+        eprint!(
+            "    Write Windsurf hook config to {}? [Y/n] ",
+            path.display().to_string().dimmed()
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
+            return Ok(McpConfigStatus::Declined);
+        }
+    }
+    let mut hooks = config
+        .get("hooks")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let packet28_events = packet28_hooks.as_object().cloned().unwrap_or_default();
+    let mut already_configured = true;
+    for (event_name, entries) in &packet28_events {
+        let existing = hooks
+            .get(event_name)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let new_entries = entries.as_array().cloned().unwrap_or_default();
+        let hook_present = new_entries
+            .iter()
+            .all(|new_entry| existing.iter().any(|entry| entry == new_entry));
+        if hook_present {
+            continue;
+        }
+        already_configured = false;
+        let mut merged = existing;
+        merged.extend(new_entries);
+        hooks.insert(event_name.clone(), Value::Array(merged));
+    }
+    if already_configured {
+        return Ok(McpConfigStatus::AlreadyConfigured);
+    }
+    config.insert("hooks".to_string(), Value::Object(hooks));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&config)?),
+    )?;
+    Ok(McpConfigStatus::Written)
+}
+
 fn read_toml_config(path: &Path) -> Result<toml::Value> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read '{}'", path.display()))?;
@@ -1453,6 +1603,19 @@ mod tests {
                 .and_then(toml::Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn write_windsurf_hook_config_installs_packet28_hooks() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".windsurf").join("hooks.json");
+        let status = write_windsurf_hook_config(&path, dir.path(), true).unwrap();
+        assert!(matches!(status, McpConfigStatus::Written));
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value["hooks"]["pre_user_prompt"].is_array());
+        assert!(value["hooks"]["pre_run_command"].is_array());
+        assert!(value["hooks"]["post_run_command"].is_array());
+        assert!(value["hooks"]["post_cascade_response"].is_array());
     }
 
     #[test]

@@ -181,3 +181,40 @@ fn test_setup_codex_writes_hooks_agents_and_feature_flag() {
         .unwrap()
         .contains("mcp add packet28 -- packet28-mcp --root"));
 }
+
+#[test]
+#[cfg(unix)]
+fn test_setup_windsurf_writes_rules_hooks_and_mcp() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    fs::create_dir_all(home.path().join(".codeium").join("windsurf")).unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "windsurf",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    assert!(root.path().join(".windsurf").join("hooks.json").exists());
+    assert!(root
+        .path()
+        .join(".windsurf")
+        .join("rules")
+        .join("packet28.md")
+        .exists());
+    assert!(home
+        .path()
+        .join(".codeium")
+        .join("windsurf")
+        .join("mcp_config.json")
+        .exists());
+}

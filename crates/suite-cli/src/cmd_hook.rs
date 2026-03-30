@@ -28,6 +28,7 @@ pub enum HookCommands {
     Claude(ClaudeHookArgs),
     Codex(ClaudeHookArgs),
     Cursor(RuntimeHookArgs),
+    Windsurf(RuntimeHookArgs),
     ReducerRunner(ReducerRunnerArgs),
     ReduceFixture(ReduceFixtureArgs),
 }
@@ -51,6 +52,7 @@ pub struct RuntimeHookArgs {
 #[derive(Clone, Copy)]
 enum ExternalHookRuntime {
     Cursor,
+    Windsurf,
 }
 
 #[derive(Args, Clone)]
@@ -94,6 +96,7 @@ pub fn run(args: HookArgs) -> Result<i32> {
         HookCommands::Claude(args) => run_claude(args),
         HookCommands::Codex(args) => run_claude(args),
         HookCommands::Cursor(args) => run_runtime_hook(args, ExternalHookRuntime::Cursor),
+        HookCommands::Windsurf(args) => run_runtime_hook(args, ExternalHookRuntime::Windsurf),
         HookCommands::ReducerRunner(args) => run_reducer_runner(args),
         HookCommands::ReduceFixture(args) => run_reduce_fixture(args),
     }
@@ -627,6 +630,7 @@ fn resolve_runtime_task_id(
     }
     let seed = match runtime {
         ExternalHookRuntime::Cursor => "cursor-project",
+        ExternalHookRuntime::Windsurf => "windsurf-project",
     };
     let task_id = session_id
         .map(crate::task_runtime::derive_claude_task_id)
@@ -672,6 +676,15 @@ fn parse_runtime_event_kind(runtime: ExternalHookRuntime, value: Option<&str>) -
             "stop" | "afterAgentResponse" => HookEventKind::Stop,
             _ => HookEventKind::Unknown,
         },
+        ExternalHookRuntime::Windsurf => match value.unwrap_or_default().trim() {
+            "pre_user_prompt" => HookEventKind::UserPromptSubmit,
+            "pre_run_command" => HookEventKind::PreToolUse,
+            "post_run_command" => HookEventKind::PostToolUse,
+            "post_cascade_response" | "post_cascade_response_with_transcript" => {
+                HookEventKind::Stop
+            }
+            _ => HookEventKind::Unknown,
+        },
     }
 }
 
@@ -679,6 +692,9 @@ fn runtime_session_id(runtime: ExternalHookRuntime, payload: &Value) -> Option<S
     match runtime {
         ExternalHookRuntime::Cursor => {
             json_string(payload, "conversation_id").or_else(|| json_string(payload, "session_id"))
+        }
+        ExternalHookRuntime::Windsurf => {
+            json_string(payload, "trajectory_id").or_else(|| json_string(payload, "execution_id"))
         }
     }
 }
@@ -693,6 +709,10 @@ fn runtime_matcher(
             HookEventKind::PreToolUse | HookEventKind::PostToolUse => Some("Bash".to_string()),
             _ => json_string(payload, "hook_event_name"),
         },
+        ExternalHookRuntime::Windsurf => match event_kind {
+            HookEventKind::PreToolUse | HookEventKind::PostToolUse => Some("Bash".to_string()),
+            _ => json_string(payload, "agent_action_name"),
+        },
     }
 }
 
@@ -703,6 +723,7 @@ fn build_runtime_reducer_packet(
 ) -> Option<HookReducerPacket> {
     match runtime {
         ExternalHookRuntime::Cursor => build_cursor_reducer_packet(payload, event_kind),
+        ExternalHookRuntime::Windsurf => build_windsurf_reducer_packet(payload, event_kind),
     }
 }
 
@@ -729,6 +750,36 @@ fn build_cursor_reducer_packet(
         "Bash",
         suite_packet_core::ToolOperationKind::Generic,
         Some("cursor_native".to_string()),
+        Some("shell".to_string()),
+        summary,
+        Some(command),
+        None,
+        paths,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        Some(false),
+        payload.clone(),
+        false,
+    ))
+}
+
+fn build_windsurf_reducer_packet(
+    payload: &Value,
+    event_kind: HookEventKind,
+) -> Option<HookReducerPacket> {
+    if !matches!(event_kind, HookEventKind::PostToolUse) {
+        return None;
+    }
+    let command = json_nested_string(payload, &["tool_info", "command_line"])?;
+    let summary = format!("command completed: {}", compact_text(&command, 100));
+    let paths = extract_command_paths(&command);
+    Some(packet_from_parts(
+        "packet28.hook.windsurf.command.v1",
+        "Bash",
+        suite_packet_core::ToolOperationKind::Generic,
+        Some("windsurf_native".to_string()),
         Some("shell".to_string()),
         summary,
         Some(command),
@@ -1279,6 +1330,7 @@ fn compact_text(value: &str, limit: usize) -> String {
 fn runtime_source(runtime: ExternalHookRuntime) -> &'static str {
     match runtime {
         ExternalHookRuntime::Cursor => "packet28.cursor.hook",
+        ExternalHookRuntime::Windsurf => "packet28.windsurf.hook",
     }
 }
 
