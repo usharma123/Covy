@@ -81,6 +81,7 @@ const SETUP_INDEX_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 const SETUP_INDEX_VERIFY_POLL: Duration = Duration::from_millis(100);
 const REGEX_INDEX_DIR_NAME: &str = "regex-v1";
 const REGEX_INDEX_MANIFEST_FILE: &str = "manifest.json";
+const SETUP_BANNER_MIN_WIDTH: usize = 58;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SetupMode {
@@ -101,6 +102,14 @@ struct SetupPlanChoice {
     mode: SetupMode,
     runtime_scope: SetupRuntimeScope,
     fallback_only: bool,
+}
+
+#[derive(Clone, Copy)]
+enum SetupBadgeStyle {
+    Primary,
+    Success,
+    Warning,
+    Muted,
 }
 
 pub fn run(args: SetupArgs) -> Result<i32> {
@@ -138,7 +147,12 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     let mut agent_files_ready = false;
     let mut exit_code = 0;
 
-    println!("  {}", "Step 1/4 Configure Runtime Integrations".bold());
+    render_setup_step(
+        1,
+        4,
+        "Configure Runtime Integrations",
+        "Wire up MCP and hooks for the runtimes you selected.",
+    );
     if !setup_choice.fallback_only {
         if !selected_runtimes
             .iter()
@@ -146,12 +160,12 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             .any(|runtime| runtime_supports_mcp(runtime.kind))
         {
             println!(
-                "  {} No MCP-capable runtimes selected. Generating fallback files.",
-                "→".yellow()
+                "  {} No MCP-capable runtimes selected. Falling back to instruction files.",
+                format_setup_badge("note", SetupBadgeStyle::Warning)
             );
             println!();
         } else {
-            println!("    {}", "MCP servers:".bold());
+            render_setup_section("MCP servers");
             for rt in &selected_runtimes {
                 if !runtime_supports_mcp(rt.kind) {
                     continue;
@@ -185,7 +199,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         .copied()
         .any(|runtime| runtime_supports_hooks(runtime.kind))
     {
-        println!("    {}", "Runtime hooks:".bold());
+        render_setup_section("Runtime hooks");
         for rt in &selected_runtimes {
             if !runtime_supports_hooks(rt.kind) {
                 continue;
@@ -260,7 +274,12 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         push_prompt_targets(&mut prompt_targets, &rt.prompt_targets);
     }
 
-    println!("  {}", "Step 2/4 Write Instruction Files".bold());
+    render_setup_step(
+        2,
+        4,
+        "Write Instruction Files",
+        "Refresh the prompt fragments each runtime reads from this repo.",
+    );
     let root_str = if root_display == "." {
         None
     } else {
@@ -314,12 +333,17 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     }
     println!();
 
-    println!("  {}", "Step 3/4 Start Daemon And Build Indexes".bold());
-    println!("    {}", "Daemon:".bold());
+    render_setup_step(
+        3,
+        4,
+        "Start Daemon And Build Indexes",
+        "Bring packet28d online, then verify both indexes are healthy.",
+    );
+    render_setup_section("Daemon");
     match crate::cmd_daemon::ensure_daemon(&root) {
         Ok(_) => {
             println!("    {} daemon running", "✓".green().bold());
-            println!("    {}", "Repo index:".bold());
+            render_setup_section("Repo index");
             match crate::cmd_daemon::send_request(
                 &root,
                 &DaemonRequest::DaemonIndexRebuild {
@@ -408,14 +432,19 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     }
     println!();
 
-    println!("  {}", "Step 4/4 Summary".bold());
+    render_setup_step(
+        4,
+        4,
+        "Summary",
+        "A quick recap of what changed and how to verify the install.",
+    );
     if exit_code == 0 {
         println!("    {}", "Setup complete.".green().bold());
     } else {
         println!("    {}", "Setup finished with errors.".red().bold());
     }
     println!();
-    println!("  {}", "What Changed".bold());
+    render_setup_section("What changed");
 
     if mcp_configured && !setup_choice.fallback_only {
         println!("    Your agent runtimes are configured to use Packet28 control-plane MCP tools.");
@@ -434,7 +463,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     }
 
     println!();
-    println!("  {}", "Verify With".dimmed().bold());
+    render_setup_section("Verify with");
     println!("    packet28 --version");
     println!("    packet28 daemon status --root {root_display}");
     println!("    packet28 doctor --root {root_display}");
@@ -487,6 +516,7 @@ fn prompt_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoic
         "Packet28 Setup Wizard",
         "Choose how much Packet28 should configure for this workspace.",
     );
+    render_setup_detection_overview(runtimes);
     render_setup_menu_option(
         1,
         "Recommended",
@@ -541,6 +571,7 @@ fn prompt_advanced_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<Setup
         "Advanced Runtime Scope",
         "Choose exactly which runtimes Packet28 should target.",
     );
+    render_setup_detection_overview(runtimes);
     render_setup_menu_option(
         1,
         "Detected runtimes",
@@ -591,14 +622,14 @@ fn prompt_single_runtime_scope(runtimes: &[RuntimeInfo]) -> Result<SetupRuntimeS
     );
     for (idx, runtime) in runtimes.iter().enumerate() {
         let availability = format_runtime_detection_badge(runtime.detected);
-        let capability = runtime_capability_summary(runtime).dimmed();
+        let capability = runtime_capability_summary(runtime);
         println!(
-            "    {} {} {}",
+            "    {} {}",
             setup_menu_index_badge(idx + 1),
-            format!("{:<12}", runtime.name).bold(),
-            availability
+            runtime.name.bold()
         );
-        println!("        {}", capability);
+        println!("        {}  {}", availability, capability.dimmed());
+        println!();
     }
     render_setup_menu_hint();
     println!();
@@ -635,7 +666,7 @@ fn prompt_menu_selection(prompt: &str, max: usize, default: usize) -> Result<Opt
             }
         }
         println!(
-            "  {} choose a number between 1 and {max}, press Enter for {default}, or type 'q' to cancel.",
+            "  {} Choose 1-{max}, press Enter for {default}, or type 'q' to cancel.",
             "hint:".cyan().bold()
         );
     }
@@ -662,33 +693,51 @@ fn render_setup_intro(
         "Scope",
         setup_runtime_scope_label(setup_choice).bold().to_string(),
     );
+    render_setup_summary_row(
+        "Detected",
+        format!(
+            "{}/{} runtimes on this machine",
+            runtimes.iter().filter(|runtime| runtime.detected).count(),
+            runtimes.len()
+        )
+        .to_string(),
+    );
     println!("  {}", setup_mode_summary(setup_choice).dimmed());
     println!();
 
-    println!("  {}", "Runtime Status".bold());
+    render_setup_section("Runtime status");
     for rt in runtimes {
         let availability = format_runtime_detection_badge(rt.detected);
         let selection = if selected_runtimes
             .iter()
             .any(|candidate| candidate.slug == rt.slug)
         {
-            Some("selected".cyan().bold().to_string())
+            Some(format_setup_badge("selected", SetupBadgeStyle::Primary))
         } else if rt.detected {
-            Some("detected".dimmed().to_string())
+            Some(format_setup_badge("detected", SetupBadgeStyle::Muted))
         } else {
             None
         };
         let detail = runtime_capability_summary(rt).dimmed();
-        println!("    {:<12} {}  {}", rt.name.bold(), availability, detail);
+        let mut status_bits = vec![availability];
         if let Some(selection) = selection {
-            println!("                 {}", selection);
+            status_bits.push(selection);
         }
+        println!(
+            "    {:<12} {}  {}",
+            rt.name.bold(),
+            status_bits.join(" "),
+            detail
+        );
     }
     println!();
 
-    println!("  {}", "Planned Changes".bold());
-    for item in build_setup_plan(selected_runtimes, setup_choice.fallback_only) {
-        println!("    {} {item}", "•".cyan().bold());
+    render_setup_section("Planned changes");
+    for (idx, item) in build_setup_plan(selected_runtimes, setup_choice.fallback_only)
+        .into_iter()
+        .enumerate()
+    {
+        println!("    {}. {item}", idx + 1);
     }
     println!();
 
@@ -711,10 +760,23 @@ fn render_setup_intro(
 }
 
 fn render_setup_banner(title: &str, subtitle: &str) {
+    let brand = "Packet28 Setup";
+    let content_width = [
+        brand.len(),
+        title.len(),
+        subtitle.len(),
+        SETUP_BANNER_MIN_WIDTH,
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(SETUP_BANNER_MIN_WIDTH);
+    let border = format!("  +{}+", "-".repeat(content_width + 2)).cyan();
     println!();
-    println!("{}", "  Packet28  ".bold().white().on_bright_blue());
-    println!("  {}", title.bold());
-    println!("  {}", subtitle.dimmed());
+    println!("{border}");
+    render_setup_box_line(brand, content_width, Some("brand"));
+    render_setup_box_line(title, content_width, None);
+    render_setup_box_line(subtitle, content_width, Some("subtitle"));
+    println!("{border}");
 }
 
 fn render_setup_menu_option(
@@ -724,18 +786,14 @@ fn render_setup_menu_option(
     description: &str,
     is_default: bool,
 ) {
-    let mut meta = badge.yellow().bold().to_string();
+    let mut meta = vec![format_setup_badge(badge, SetupBadgeStyle::Warning)];
     if is_default {
-        meta.push_str("  ");
-        meta.push_str(&"default".green().bold().to_string());
+        meta.push(format_setup_badge("default", SetupBadgeStyle::Success));
     }
-    println!(
-        "    {} {}  {}",
-        setup_menu_index_badge(index),
-        title.bold(),
-        meta
-    );
+    println!("    {} {}", setup_menu_index_badge(index), title.bold());
+    println!("        {}", meta.join(" "));
     println!("        {}", description.dimmed());
+    println!();
 }
 
 fn render_setup_menu_hint() {
@@ -746,18 +804,86 @@ fn render_setup_menu_hint() {
 }
 
 fn setup_menu_index_badge(index: usize) -> String {
-    format!("[{index}]").cyan().bold().to_string()
+    format_setup_badge(&index.to_string(), SetupBadgeStyle::Primary)
 }
 
 fn render_setup_summary_row(label: &str, value: String) {
-    println!("  {:<10} {}", label.bold(), value);
+    println!("  {:<10} {}", format!("{label}:").bold(), value);
 }
 
 fn format_runtime_detection_badge(detected: bool) -> String {
     if detected {
-        "detected".green().bold().to_string()
+        format_setup_badge("detected", SetupBadgeStyle::Success)
     } else {
-        "not found".dimmed().to_string()
+        format_setup_badge("not found", SetupBadgeStyle::Muted)
+    }
+}
+
+fn render_setup_box_line(text: &str, width: usize, tone: Option<&str>) {
+    let padding = " ".repeat(width.saturating_sub(text.len()));
+    let styled = match tone {
+        Some("brand") => text.bold().white().on_bright_blue().to_string(),
+        Some("subtitle") => text.dimmed().to_string(),
+        _ => text.bold().to_string(),
+    };
+    println!("  | {}{} |", styled, padding);
+}
+
+fn render_setup_detection_overview(runtimes: &[RuntimeInfo]) {
+    let detected: Vec<&str> = runtimes
+        .iter()
+        .filter(|runtime| runtime.detected)
+        .map(|runtime| runtime.name)
+        .collect();
+    let missing_count = runtimes.len().saturating_sub(detected.len());
+    println!(
+        "  {} {}",
+        format_setup_badge(
+            &format!("{} detected", detected.len()),
+            if detected.is_empty() {
+                SetupBadgeStyle::Muted
+            } else {
+                SetupBadgeStyle::Success
+            }
+        ),
+        format_setup_badge(
+            &format!("{missing_count} not found"),
+            if missing_count == 0 {
+                SetupBadgeStyle::Muted
+            } else {
+                SetupBadgeStyle::Warning
+            }
+        )
+    );
+    if !detected.is_empty() {
+        println!(
+            "  {}",
+            format!("Available now: {}", detected.join(", ")).dimmed()
+        );
+    }
+    println!();
+}
+
+fn render_setup_step(step: usize, total: usize, title: &str, subtitle: &str) {
+    println!(
+        "  {} {}",
+        format_setup_badge(&format!("{step}/{total}"), SetupBadgeStyle::Primary),
+        title.bold()
+    );
+    println!("      {}", subtitle.dimmed());
+}
+
+fn render_setup_section(title: &str) {
+    println!("    {}", title.bold());
+}
+
+fn format_setup_badge(label: &str, style: SetupBadgeStyle) -> String {
+    let badge = format!("[{label}]");
+    match style {
+        SetupBadgeStyle::Primary => badge.cyan().bold().to_string(),
+        SetupBadgeStyle::Success => badge.green().bold().to_string(),
+        SetupBadgeStyle::Warning => badge.yellow().bold().to_string(),
+        SetupBadgeStyle::Muted => badge.dimmed().to_string(),
     }
 }
 
@@ -916,7 +1042,7 @@ fn render_setup_index_progress_line(
 ) -> Result<()> {
     let line = format!(
         "    {} {}",
-        "·".yellow().bold(),
+        format_setup_badge("indexing", SetupBadgeStyle::Warning),
         render_setup_index_progress(response)
     );
     if rendered_progress.as_deref() == Some(line.as_str()) {
