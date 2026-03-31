@@ -7,7 +7,7 @@ use suite_packet_core::{BudgetCost, CovyError, EnvelopeV1, FileRef, Provenance, 
 
 use crate::scan::{
     extract_index_metadata, is_generated_or_vendor_path, is_source_file, is_test_path,
-    load_scan_cache, metadata_mtime_secs, scan_repo,
+    load_scan_cache, metadata_mtime_secs, scan_repo, scan_repo_with_progress,
 };
 use crate::types::{
     FocusHit, FocusHitRich, IndexedSymbolDef, RankedFile, RankedFileRich, RankedSymbol,
@@ -709,13 +709,24 @@ fn build_repo_map_from_scans(
 }
 
 pub fn build_repo_index(root: &Path, include_tests: bool) -> Result<RepoIndexSnapshot, CovyError> {
+    build_repo_index_with_progress(root, include_tests, |_, _| {})
+}
+
+pub fn build_repo_index_with_progress<F>(
+    root: &Path,
+    include_tests: bool,
+    on_progress: F,
+) -> Result<RepoIndexSnapshot, CovyError>
+where
+    F: FnMut(usize, usize),
+{
     if !root.exists() {
         return Err(CovyError::Other(format!(
             "repo_root does not exist: {}",
             root.display()
         )));
     }
-    let files = scan_repo(root, include_tests)?;
+    let files = scan_repo_with_progress(root, include_tests, on_progress)?;
     Ok(repo_index_from_scans(files, include_tests))
 }
 

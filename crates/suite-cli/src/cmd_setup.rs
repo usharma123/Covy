@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -77,45 +78,55 @@ const SETUP_INDEX_VERIFY_POLL: Duration = Duration::from_millis(100);
 const REGEX_INDEX_DIR_NAME: &str = "regex-v1";
 const REGEX_INDEX_MANIFEST_FILE: &str = "manifest.json";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SetupMode {
+    Recommended,
+    Custom,
+    GuidanceOnly,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SetupRuntimeScope {
+    Detected,
+    All,
+    Single(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SetupPlanChoice {
+    mode: SetupMode,
+    runtime_scope: SetupRuntimeScope,
+    fallback_only: bool,
+}
+
 pub fn run(args: SetupArgs) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
     let root_display = root.display().to_string();
 
-    println!();
-    println!("{}", "  Packet28 Setup  ".bold().white().on_bright_blue());
-    println!();
-    println!("  Workspace: {}", root_display.cyan());
-    println!();
-
     // Detect runtimes
-    let mut runtimes = detect_runtimes(&root);
-
-    // Filter by --runtime flag
-    if args.runtime != "all" {
-        runtimes.retain(|r| r.slug == args.runtime);
-        if runtimes.is_empty() {
-            eprintln!(
-                "{} unknown runtime '{}'. Use: claude, cursor, codex, windsurf, or all",
-                "error:".red().bold(),
-                args.runtime
-            );
-            return Ok(1);
+    let runtimes = detect_runtimes(&root);
+    let setup_choice = match resolve_setup_choice(&args, &runtimes)? {
+        Some(choice) => choice,
+        None => {
+            println!("  {}", "Setup canceled.".yellow().bold());
+            println!();
+            return Ok(0);
         }
+    };
+    let selected_runtimes = select_setup_runtimes(&runtimes, &setup_choice);
+    let auto_apply = render_setup_intro(
+        &root_display,
+        &runtimes,
+        &selected_runtimes,
+        &setup_choice,
+        args.yes,
+    )?;
+    if !auto_apply {
+        println!("  {}", "Setup canceled.".yellow().bold());
+        println!();
+        return Ok(0);
     }
 
-    // Print detection results
-    println!("  {}", "Detected runtimes:".bold());
-    for rt in &runtimes {
-        let status = if rt.detected {
-            "found".green().bold()
-        } else {
-            "not found".dimmed()
-        };
-        println!("    {} {}", rt.name, status);
-    }
-    println!();
-
-    let selected_runtimes = select_setup_runtimes(&runtimes, args.runtime != "all");
     let mut prompt_targets = Vec::new();
     let mut mcp_configured = false;
     let mut hook_configured = false;
@@ -123,8 +134,8 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     let mut agent_files_ready = false;
     let mut exit_code = 0;
 
-    // Phase 1: MCP config
-    if !args.fallback_only {
+    println!("  {}", "Step 1/4 Configure Runtime Integrations".bold());
+    if !setup_choice.fallback_only {
         if !selected_runtimes
             .iter()
             .copied()
@@ -136,12 +147,12 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             );
             println!();
         } else {
-            println!("  {}", "Configuring MCP servers:".bold());
+            println!("    {}", "MCP servers:".bold());
             for rt in &selected_runtimes {
                 if !runtime_supports_mcp(rt.kind) {
                     continue;
                 }
-                match configure_runtime_mcp(rt, &root, args.yes)? {
+                match configure_runtime_mcp(rt, &root, auto_apply)? {
                     McpConfigStatus::Written => {
                         mcp_configured = true;
                         push_prompt_targets(&mut prompt_targets, &rt.prompt_targets);
@@ -170,12 +181,12 @@ pub fn run(args: SetupArgs) -> Result<i32> {
         .copied()
         .any(|runtime| runtime_supports_hooks(runtime.kind))
     {
-        println!("  {}", "Installing runtime hooks:".bold());
+        println!("    {}", "Runtime hooks:".bold());
         for rt in &selected_runtimes {
             if !runtime_supports_hooks(rt.kind) {
                 continue;
             }
-            match configure_runtime_hooks(rt, &root, args.yes)? {
+            match configure_runtime_hooks(rt, &root, auto_apply)? {
                 McpConfigStatus::Written => {
                     hook_configured = true;
                     if runtime_needs_hook_runtime_config(rt.kind) {
@@ -240,13 +251,12 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     for rt in selected_runtimes
         .iter()
         .copied()
-        .filter(|runtime| args.fallback_only || !runtime_supports_mcp(runtime.kind))
+        .filter(|runtime| setup_choice.fallback_only || !runtime_supports_mcp(runtime.kind))
     {
         push_prompt_targets(&mut prompt_targets, &rt.prompt_targets);
     }
 
-    // Phase 2: Agent fallback files
-    println!("  {}", "Generating agent instruction files:".bold());
+    println!("  {}", "Step 2/4 Write Instruction Files".bold());
     let root_str = if root_display == "." {
         None
     } else {
@@ -301,12 +311,12 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     }
     println!();
 
-    // Phase 3: Verify daemon
-    println!("  {}", "Verifying daemon:".bold());
+    println!("  {}", "Step 3/4 Start Daemon And Build Indexes".bold());
+    println!("    {}", "Daemon:".bold());
     match crate::cmd_daemon::ensure_daemon(&root) {
         Ok(_) => {
             println!("    {} daemon running", "✓".green().bold());
-            println!("  {}", "Preparing repo index:".bold());
+            println!("    {}", "Repo index:".bold());
             match crate::cmd_daemon::send_request(
                 &root,
                 &DaemonRequest::DaemonIndexRebuild {
@@ -337,12 +347,9 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                         }
                         SetupIndexVerification::Building(response) => {
                             println!(
-                                "    {} index still building (status={}, regex_status={}, generation={}, regex_generation={})",
+                                "    {} index still building ({})",
                                 "·".yellow().bold(),
-                                response.manifest.status,
-                                response.manifest.regex_status.as_deref().unwrap_or("missing"),
-                                response.manifest.generation,
-                                response.manifest.regex_generation.unwrap_or_default()
+                                render_setup_index_progress(&response)
                             );
                         }
                         SetupIndexVerification::Failed { response, reason } => {
@@ -398,16 +405,16 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     }
     println!();
 
-    // Done
+    println!("  {}", "Step 4/4 Summary".bold());
     if exit_code == 0 {
-        println!("  {}", "Setup complete!".green().bold());
+        println!("    {}", "Setup complete.".green().bold());
     } else {
-        println!("  {}", "Setup finished with errors.".red().bold());
+        println!("    {}", "Setup finished with errors.".red().bold());
     }
     println!();
-    println!("  {}", "Quick start:".bold());
+    println!("  {}", "What Changed".bold());
 
-    if mcp_configured && !args.fallback_only {
+    if mcp_configured && !setup_choice.fallback_only {
         println!("    Your agent runtimes are configured to use Packet28 control-plane MCP tools.");
         if hook_configured {
             println!(
@@ -424,7 +431,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     }
 
     println!();
-    println!("  {}", "Verify with:".dimmed());
+    println!("  {}", "Verify With".dimmed().bold());
     println!("    packet28 --version");
     println!("    packet28 daemon status --root {root_display}");
     println!("    packet28 doctor --root {root_display}");
@@ -433,14 +440,348 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     Ok(exit_code)
 }
 
+fn resolve_setup_choice(
+    args: &SetupArgs,
+    runtimes: &[RuntimeInfo],
+) -> Result<Option<SetupPlanChoice>> {
+    if args.yes || has_explicit_setup_overrides(args) {
+        return explicit_setup_choice(args, runtimes).map(Some);
+    }
+    prompt_setup_choice(runtimes)
+}
+
+fn has_explicit_setup_overrides(args: &SetupArgs) -> bool {
+    args.fallback_only || args.runtime != "all"
+}
+
+fn explicit_setup_choice(args: &SetupArgs, runtimes: &[RuntimeInfo]) -> Result<SetupPlanChoice> {
+    let runtime_scope = if args.runtime == "all" {
+        SetupRuntimeScope::Detected
+    } else if runtimes.iter().any(|runtime| runtime.slug == args.runtime) {
+        SetupRuntimeScope::Single(args.runtime.clone())
+    } else {
+        anyhow::bail!(
+            "unknown runtime '{}'. Use: claude, cursor, codex, windsurf, or all",
+            args.runtime
+        );
+    };
+    let mode = if args.fallback_only {
+        SetupMode::GuidanceOnly
+    } else if args.runtime == "all" {
+        SetupMode::Recommended
+    } else {
+        SetupMode::Custom
+    };
+    Ok(SetupPlanChoice {
+        mode,
+        runtime_scope,
+        fallback_only: args.fallback_only,
+    })
+}
+
+fn prompt_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoice>> {
+    println!("  {}", "Choose Setup Path".bold());
+    println!("    1. Recommended   Configure detected runtimes with Packet28 defaults.");
+    println!("    2. Advanced      Pick the runtime scope before applying setup.");
+    println!("    3. Guidance only Write instruction files without MCP integration.");
+    println!();
+
+    let selection = prompt_menu_selection("  Select a setup path [1]: ", 3, 1)?;
+    let Some(selection) = selection else {
+        return Ok(None);
+    };
+
+    let choice = match selection {
+        1 => SetupPlanChoice {
+            mode: SetupMode::Recommended,
+            runtime_scope: SetupRuntimeScope::Detected,
+            fallback_only: false,
+        },
+        2 => match prompt_advanced_setup_choice(runtimes)? {
+            Some(choice) => choice,
+            None => return Ok(None),
+        },
+        3 => SetupPlanChoice {
+            mode: SetupMode::GuidanceOnly,
+            runtime_scope: SetupRuntimeScope::Detected,
+            fallback_only: true,
+        },
+        _ => unreachable!("validated menu choice"),
+    };
+    Ok(Some(choice))
+}
+
+fn prompt_advanced_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoice>> {
+    println!("  {}", "Advanced Runtime Scope".bold());
+    println!("    1. Detected runtimes only");
+    println!("    2. All supported runtimes");
+    println!("    3. Single runtime");
+    println!();
+
+    let selection = prompt_menu_selection("  Select a runtime scope [1]: ", 3, 1)?;
+    let Some(selection) = selection else {
+        return Ok(None);
+    };
+
+    let runtime_scope = match selection {
+        1 => SetupRuntimeScope::Detected,
+        2 => SetupRuntimeScope::All,
+        3 => prompt_single_runtime_scope(runtimes)?,
+        _ => unreachable!("validated menu choice"),
+    };
+
+    Ok(Some(SetupPlanChoice {
+        mode: SetupMode::Custom,
+        runtime_scope,
+        fallback_only: false,
+    }))
+}
+
+fn prompt_single_runtime_scope(runtimes: &[RuntimeInfo]) -> Result<SetupRuntimeScope> {
+    println!("  {}", "Choose A Runtime".bold());
+    for (idx, runtime) in runtimes.iter().enumerate() {
+        let availability = if runtime.detected {
+            "detected".green().bold()
+        } else {
+            "not found".dimmed()
+        };
+        println!("    {}. {:<12} {}", idx + 1, runtime.name, availability);
+    }
+    println!();
+
+    let selection =
+        prompt_menu_selection("  Select a runtime [1]: ", runtimes.len(), 1)?.unwrap_or(1);
+    Ok(SetupRuntimeScope::Single(
+        runtimes
+            .get(selection - 1)
+            .map(|runtime| runtime.slug.to_string())
+            .unwrap_or_else(|| runtimes[0].slug.to_string()),
+    ))
+}
+
+fn prompt_menu_selection(prompt: &str, max: usize, default: usize) -> Result<Option<usize>> {
+    loop {
+        eprint!("{prompt}");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if trimmed == "q" || trimmed == "quit" || trimmed == "cancel" {
+            println!();
+            return Ok(None);
+        }
+        if trimmed.is_empty() {
+            println!();
+            return Ok(Some(default));
+        }
+        if let Ok(value) = trimmed.parse::<usize>() {
+            if (1..=max).contains(&value) {
+                println!();
+                return Ok(Some(value));
+            }
+        }
+        println!(
+            "  {} enter a number between 1 and {max}, or 'q' to cancel.",
+            "hint:".cyan().bold()
+        );
+    }
+}
+
+fn render_setup_intro(
+    root_display: &str,
+    runtimes: &[RuntimeInfo],
+    selected_runtimes: &[&RuntimeInfo],
+    setup_choice: &SetupPlanChoice,
+    auto_yes: bool,
+) -> Result<bool> {
+    println!();
+    println!(
+        "{}",
+        "  Packet28 Setup Wizard  ".bold().white().on_bright_blue()
+    );
+    println!();
+    println!("  Workspace  {}", root_display.cyan());
+    println!(
+        "  Mode       {}",
+        setup_mode_title(setup_choice.mode).bold()
+    );
+    println!(
+        "  Scope      {}",
+        setup_runtime_scope_label(setup_choice).bold()
+    );
+    println!("  {}", setup_mode_summary(setup_choice).dimmed());
+    println!();
+
+    println!("  {}", "Detected Agents".bold());
+    for rt in runtimes {
+        let availability = if rt.detected {
+            "detected".green().bold()
+        } else {
+            "not found".dimmed()
+        };
+        let selection = if selected_runtimes
+            .iter()
+            .any(|candidate| candidate.slug == rt.slug)
+        {
+            Some("selected".cyan().bold())
+        } else if rt.detected {
+            Some("available".dimmed())
+        } else {
+            None
+        };
+        if let Some(selection) = selection {
+            println!("    {:<12} {}  {}", rt.name, availability, selection);
+        } else {
+            println!("    {:<12} {}", rt.name, availability);
+        }
+    }
+    println!();
+
+    println!("  {}", "This Setup Will".bold());
+    for item in build_setup_plan(selected_runtimes, setup_choice.fallback_only) {
+        println!("    {item}");
+    }
+    println!();
+
+    if auto_yes {
+        println!(
+            "  {}",
+            "Running non-interactively with the planned defaults.".dimmed()
+        );
+        println!();
+        return Ok(true);
+    }
+
+    eprint!("  {} ", setup_mode_prompt(setup_choice.mode));
+    io::stdout().flush()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).ok();
+    let trimmed = input.trim().to_lowercase();
+    println!();
+    Ok(trimmed.is_empty() || trimmed == "y" || trimmed == "yes")
+}
+
+fn setup_mode_title(mode: SetupMode) -> &'static str {
+    match mode {
+        SetupMode::Recommended => "Recommended",
+        SetupMode::Custom => "Custom",
+        SetupMode::GuidanceOnly => "Guidance Only",
+    }
+}
+
+fn setup_mode_summary(choice: &SetupPlanChoice) -> &'static str {
+    match choice.mode {
+        SetupMode::Recommended => {
+            "Opinionated default setup for the detected runtimes in this workspace."
+        }
+        SetupMode::Custom => {
+            "Advanced path with explicit runtime targeting before Packet28 writes any files."
+        }
+        SetupMode::GuidanceOnly => {
+            "Skip MCP integration and only write the instruction files needed for manual setup."
+        }
+    }
+}
+
+fn setup_runtime_scope_label(choice: &SetupPlanChoice) -> String {
+    match &choice.runtime_scope {
+        SetupRuntimeScope::Detected => "Detected runtimes".to_string(),
+        SetupRuntimeScope::All => "All supported runtimes".to_string(),
+        SetupRuntimeScope::Single(slug) => format!("Single runtime ({slug})"),
+    }
+}
+
+fn setup_mode_prompt(mode: SetupMode) -> &'static str {
+    match mode {
+        SetupMode::Recommended => {
+            "Continue with the recommended setup for detected runtimes? [Y/n]"
+        }
+        SetupMode::Custom => "Continue with this custom setup plan? [Y/n]",
+        SetupMode::GuidanceOnly => "Continue with the guidance-only setup plan? [Y/n]",
+    }
+}
+
+fn build_setup_plan(selected_runtimes: &[&RuntimeInfo], fallback_only: bool) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut step_number = 1usize;
+    let mcp_targets = selected_runtimes
+        .iter()
+        .copied()
+        .filter(|runtime| runtime_supports_mcp(runtime.kind))
+        .collect::<Vec<_>>();
+    let hook_targets = selected_runtimes
+        .iter()
+        .copied()
+        .filter(|runtime| runtime_supports_hooks(runtime.kind))
+        .collect::<Vec<_>>();
+
+    if fallback_only {
+        items.push(format!("{step_number}. Skip MCP and hook writes."));
+    } else if mcp_targets.is_empty() {
+        items.push(format!(
+            "{step_number}. No MCP-capable runtimes are selected, so setup will fall back to agent files."
+        ));
+    } else {
+        items.push(format!(
+            "{step_number}. Configure Packet28 MCP for {}.",
+            format_runtime_names(&mcp_targets)
+        ));
+    }
+    step_number += 1;
+
+    if !fallback_only {
+        if hook_targets.is_empty() {
+            items.push(format!(
+                "{step_number}. Skip runtime hook installation because no supported runtimes are selected."
+            ));
+        } else {
+            items.push(format!(
+                "{step_number}. Install Packet28 runtime hooks for {}.",
+                format_runtime_names(&hook_targets)
+            ));
+        }
+        step_number += 1;
+    }
+
+    if selected_runtimes.is_empty() {
+        items.push(format!(
+            "{step_number}. Write a generic agent instruction file into the workspace."
+        ));
+    } else {
+        items.push(format!(
+            "{step_number}. Write agent instruction files for {}.",
+            format_runtime_names(selected_runtimes)
+        ));
+    }
+    step_number += 1;
+    items.push(format!(
+        "{step_number}. Ensure packet28d is running and build the repo and regex indexes."
+    ));
+    items
+}
+
+fn format_runtime_names(runtimes: &[&RuntimeInfo]) -> String {
+    if runtimes.is_empty() {
+        return "no runtimes".to_string();
+    }
+    runtimes
+        .iter()
+        .map(|runtime| runtime.name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn verify_setup_index(root: &Path) -> Result<SetupIndexVerification> {
     let start = Instant::now();
+    let mut rendered_progress = None::<String>;
     let first_response = fetch_index_status(root)?;
     match classify_setup_index_status(root, &first_response, false) {
         SetupIndexVerification::Ready(_) | SetupIndexVerification::Failed { .. } => {
             return Ok(classify_setup_index_status(root, &first_response, false));
         }
-        SetupIndexVerification::Building(_) => {}
+        SetupIndexVerification::Building(_) => {
+            render_setup_index_progress_line(&first_response, &mut rendered_progress)?;
+        }
     }
     let mut last_response = first_response;
     loop {
@@ -451,15 +792,112 @@ fn verify_setup_index(root: &Path) -> Result<SetupIndexVerification> {
         let response = fetch_index_status(root)?;
         match classify_setup_index_status(root, &response, false) {
             SetupIndexVerification::Ready(_) | SetupIndexVerification::Failed { .. } => {
+                finish_setup_index_progress_line(&mut rendered_progress)?;
                 return Ok(classify_setup_index_status(root, &response, false));
             }
             SetupIndexVerification::Building(_) => {
+                render_setup_index_progress_line(&response, &mut rendered_progress)?;
                 last_response = response;
             }
         }
     }
 
+    finish_setup_index_progress_line(&mut rendered_progress)?;
     Ok(classify_setup_index_status(root, &last_response, true))
+}
+
+fn render_setup_index_progress_line(
+    response: &DaemonIndexStatusResponse,
+    rendered_progress: &mut Option<String>,
+) -> Result<()> {
+    let line = format!(
+        "    {} {}",
+        "·".yellow().bold(),
+        render_setup_index_progress(response)
+    );
+    if rendered_progress.as_deref() == Some(line.as_str()) {
+        return Ok(());
+    }
+
+    let padding = rendered_progress
+        .as_ref()
+        .map(|previous| " ".repeat(previous.len().saturating_sub(line.len())))
+        .unwrap_or_default();
+    print!("\r{line}{padding}");
+    io::stdout().flush()?;
+    *rendered_progress = Some(line);
+    Ok(())
+}
+
+fn finish_setup_index_progress_line(rendered_progress: &mut Option<String>) -> Result<()> {
+    if rendered_progress.is_some() {
+        println!();
+        io::stdout().flush()?;
+    }
+    *rendered_progress = None;
+    Ok(())
+}
+
+fn render_setup_index_progress(response: &DaemonIndexStatusResponse) -> String {
+    format!(
+        "repo {}  regex {}",
+        render_index_stage(
+            response.manifest.status.as_str(),
+            response.manifest.indexed_files,
+            response.manifest.total_files,
+        ),
+        render_index_stage(
+            response
+                .manifest
+                .regex_status
+                .as_deref()
+                .unwrap_or("missing"),
+            response.manifest.regex_indexed_files,
+            response.manifest.regex_total_files,
+        ),
+    )
+}
+
+fn render_index_stage(status: &str, indexed_files: usize, total_files: usize) -> String {
+    match status {
+        "queued" => "queued".to_string(),
+        "missing" => "missing".to_string(),
+        "ready" => {
+            if total_files > 0 {
+                format!("ready {}", render_progress_bar(total_files, total_files))
+            } else {
+                "ready".to_string()
+            }
+        }
+        other => {
+            if total_files > 0 {
+                format!(
+                    "{other} {}",
+                    render_progress_bar(indexed_files.min(total_files), total_files)
+                )
+            } else {
+                other.to_string()
+            }
+        }
+    }
+}
+
+fn render_progress_bar(indexed_files: usize, total_files: usize) -> String {
+    if total_files == 0 {
+        return "[----------------] --% (0/0)".to_string();
+    }
+    let width = 16usize;
+    let completed = indexed_files.min(total_files);
+    let filled = completed.saturating_mul(width) / total_files;
+    let percent = completed.saturating_mul(100) / total_files;
+    format!(
+        "[{}{}] {:>3}% ({}/{})",
+        "#".repeat(filled),
+        "-".repeat(width.saturating_sub(filled)),
+        percent,
+        completed,
+        total_files
+    )
 }
 
 fn fetch_index_status(root: &Path) -> Result<DaemonIndexStatusResponse> {
@@ -652,7 +1090,7 @@ fn runtime_supports_mcp(kind: RuntimeKind) -> bool {
 fn runtime_supports_hooks(kind: RuntimeKind) -> bool {
     matches!(
         kind,
-        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf
+        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Windsurf
     )
 }
 
@@ -662,12 +1100,16 @@ fn runtime_needs_hook_runtime_config(kind: RuntimeKind) -> bool {
 
 fn select_setup_runtimes<'a>(
     runtimes: &'a [RuntimeInfo],
-    explicit_runtime_selection: bool,
+    choice: &SetupPlanChoice,
 ) -> Vec<&'a RuntimeInfo> {
-    if explicit_runtime_selection {
-        return runtimes.iter().collect();
+    match &choice.runtime_scope {
+        SetupRuntimeScope::Detected => runtimes.iter().filter(|runtime| runtime.detected).collect(),
+        SetupRuntimeScope::All => runtimes.iter().collect(),
+        SetupRuntimeScope::Single(slug) => runtimes
+            .iter()
+            .filter(|runtime| runtime.slug == slug)
+            .collect(),
     }
-    runtimes.iter().filter(|runtime| runtime.detected).collect()
 }
 
 fn push_prompt_targets(targets: &mut Vec<PromptTarget>, additions: &[PromptTarget]) {
@@ -707,10 +1149,10 @@ fn configure_runtime_hooks(
         RuntimeKind::Cursor => {
             write_cursor_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
-        RuntimeKind::Codex => configure_codex_hooks(root, auto_yes),
         RuntimeKind::Windsurf => {
             write_windsurf_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
+        RuntimeKind::Codex => unreachable!("codex hooks are disabled in packet28 setup"),
     }
 }
 
@@ -741,9 +1183,10 @@ fn runtime_mcp_status(runtime: &RuntimeInfo, root: &Path) -> String {
 
 fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
     match runtime.kind {
-        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Codex | RuntimeKind::Windsurf => {
+        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Windsurf => {
             hook_config_path(runtime.kind, root).display().to_string()
         }
+        RuntimeKind::Codex => unreachable!("codex hooks are disabled in packet28 setup"),
     }
 }
 
@@ -760,8 +1203,8 @@ fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
     match kind {
         RuntimeKind::Claude => root.join(".claude").join("settings.json"),
         RuntimeKind::Cursor => root.join(".cursor").join("hooks.json"),
-        RuntimeKind::Codex => root.join(".codex").join("hooks.json"),
         RuntimeKind::Windsurf => root.join(".windsurf").join("hooks.json"),
+        RuntimeKind::Codex => unreachable!("codex hooks are disabled in packet28 setup"),
     }
 }
 
@@ -1083,27 +1526,6 @@ fn configure_codex_mcp(root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
     write_codex_mcp_config(&config_path, root)
 }
 
-fn configure_codex_hooks(root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let hook_status =
-        write_codex_hook_config(&hook_config_path(RuntimeKind::Codex, root), root, auto_yes)?;
-    let feature_status = write_codex_feature_flag(&codex_config_path(&dirs_home()), auto_yes)?;
-    Ok(merge_statuses(hook_status, feature_status))
-}
-
-fn merge_statuses(left: McpConfigStatus, right: McpConfigStatus) -> McpConfigStatus {
-    match (left, right) {
-        (McpConfigStatus::Written, _) | (_, McpConfigStatus::Written) => McpConfigStatus::Written,
-        (McpConfigStatus::AlreadyConfigured, McpConfigStatus::AlreadyConfigured) => {
-            McpConfigStatus::AlreadyConfigured
-        }
-        (McpConfigStatus::Declined, McpConfigStatus::Declined) => McpConfigStatus::Declined,
-        (McpConfigStatus::Declined, McpConfigStatus::AlreadyConfigured)
-        | (McpConfigStatus::AlreadyConfigured, McpConfigStatus::Declined) => {
-            McpConfigStatus::AlreadyConfigured
-        }
-    }
-}
-
 fn codex_mcp_entry_matches(path: &Path, root: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
@@ -1184,123 +1606,6 @@ fn write_codex_mcp_config(path: &Path, root: &Path) -> Result<McpConfigStatus> {
     packet28.insert("command".to_string(), toml::Value::String(desired_command));
     packet28.insert("args".to_string(), toml::Value::Array(desired_args));
     servers.insert("packet28".to_string(), toml::Value::Table(packet28));
-    write_toml_config(path, &config)?;
-    Ok(McpConfigStatus::Written)
-}
-
-fn write_codex_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let command = resolve_packet28_cli_command();
-    let root_arg = shell_escape(root.display().to_string());
-    let hook_command = format!("{command} hook codex --root \"{root_arg}\"");
-    let packet28_hooks = json!({
-        "SessionStart": [{
-            "matcher": "startup|resume|clear",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "UserPromptSubmit": [{
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "PreToolUse": [{
-            "matcher": "Bash",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "PostToolUse": [{
-            "matcher": "Bash",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "Stop": [{
-            "hooks": [{"type": "command", "command": hook_command}]
-        }]
-    });
-    let mut config: BTreeMap<String, Value> = if path.exists() {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("failed to read '{}'", path.display()))?;
-        serde_json::from_str(&content).with_context(|| {
-            format!(
-                "refusing to overwrite invalid JSON in '{}'; fix the file and rerun setup",
-                path.display()
-            )
-        })?
-    } else {
-        BTreeMap::new()
-    };
-    if !auto_yes {
-        eprint!(
-            "    Write Codex hook config to {}? [Y/n] ",
-            path.display().to_string().dimmed()
-        );
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        let trimmed = input.trim().to_lowercase();
-        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
-            return Ok(McpConfigStatus::Declined);
-        }
-    }
-    let mut hooks = config
-        .get("hooks")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let packet28_events = packet28_hooks.as_object().cloned().unwrap_or_default();
-    let mut already_configured = true;
-    for (event_name, entries) in &packet28_events {
-        let existing = hooks
-            .get(event_name)
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let new_entries = entries.as_array().cloned().unwrap_or_default();
-        let hook_present = new_entries
-            .iter()
-            .all(|new_entry| existing.iter().any(|entry| entry == new_entry));
-        if hook_present {
-            continue;
-        }
-        already_configured = false;
-        let mut merged = existing;
-        merged.extend(new_entries);
-        hooks.insert(event_name.clone(), Value::Array(merged));
-    }
-    if already_configured {
-        return Ok(McpConfigStatus::AlreadyConfigured);
-    }
-    config.insert("hooks".to_string(), Value::Object(hooks));
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(
-        path,
-        format!("{}\n", serde_json::to_string_pretty(&config)?),
-    )?;
-    Ok(McpConfigStatus::Written)
-}
-
-fn write_codex_feature_flag(path: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let mut config = read_toml_config_or_default(path)?;
-    let table = config
-        .as_table_mut()
-        .context("Codex config must be a TOML table")?;
-    let features = toml_table_entry(table, "features", path)?;
-    if features
-        .get("codex_hooks")
-        .and_then(toml::Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Ok(McpConfigStatus::AlreadyConfigured);
-    }
-    if !auto_yes {
-        eprint!(
-            "    Enable Codex hooks in {}? [Y/n] ",
-            path.display().to_string().dimmed()
-        );
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        let trimmed = input.trim().to_lowercase();
-        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
-            return Ok(McpConfigStatus::Declined);
-        }
-    }
-    features.insert("codex_hooks".to_string(), toml::Value::Boolean(true));
     write_toml_config(path, &config)?;
     Ok(McpConfigStatus::Written)
 }
@@ -1708,21 +2013,89 @@ mod tests {
             runtime("Codex", "codex", true, false),
             runtime("Windsurf", "windsurf", true, false),
         ];
+        let choice = SetupPlanChoice {
+            mode: SetupMode::Recommended,
+            runtime_scope: SetupRuntimeScope::Detected,
+            fallback_only: false,
+        };
 
-        let selected = select_setup_runtimes(&runtimes, false);
+        let selected = select_setup_runtimes(&runtimes, &choice);
         let slugs: Vec<&str> = selected.iter().map(|runtime| runtime.slug).collect();
 
         assert_eq!(slugs, vec!["codex", "windsurf"]);
     }
 
     #[test]
-    fn select_setup_runtimes_keeps_explicit_runtime_requests() {
+    fn select_setup_runtimes_supports_all_and_single_scopes() {
+        let runtimes = vec![
+            runtime("Claude Code", "claude", false, true),
+            runtime("Cursor", "cursor", true, true),
+        ];
+        let all_choice = SetupPlanChoice {
+            mode: SetupMode::Custom,
+            runtime_scope: SetupRuntimeScope::All,
+            fallback_only: false,
+        };
+        let single_choice = SetupPlanChoice {
+            mode: SetupMode::Custom,
+            runtime_scope: SetupRuntimeScope::Single("claude".to_string()),
+            fallback_only: false,
+        };
+
+        let all_selected = select_setup_runtimes(&runtimes, &all_choice);
+        let all_slugs: Vec<&str> = all_selected.iter().map(|runtime| runtime.slug).collect();
+        let single_selected = select_setup_runtimes(&runtimes, &single_choice);
+        let single_slugs: Vec<&str> = single_selected.iter().map(|runtime| runtime.slug).collect();
+
+        assert_eq!(all_slugs, vec!["claude", "cursor"]);
+        assert_eq!(single_slugs, vec!["claude"]);
+    }
+
+    #[test]
+    fn explicit_setup_choice_maps_default_flags_to_recommended() {
+        let runtimes = vec![
+            runtime("Claude Code", "claude", true, true),
+            runtime("Codex", "codex", true, true),
+        ];
+        let args = SetupArgs {
+            root: ".".to_string(),
+            yes: true,
+            fallback_only: false,
+            runtime: "all".to_string(),
+        };
+
+        let choice = explicit_setup_choice(&args, &runtimes).unwrap();
+
+        assert_eq!(
+            choice,
+            SetupPlanChoice {
+                mode: SetupMode::Recommended,
+                runtime_scope: SetupRuntimeScope::Detected,
+                fallback_only: false,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_setup_choice_maps_runtime_override_to_custom_single_scope() {
         let runtimes = vec![runtime("Claude Code", "claude", false, true)];
+        let args = SetupArgs {
+            root: ".".to_string(),
+            yes: false,
+            fallback_only: false,
+            runtime: "claude".to_string(),
+        };
 
-        let selected = select_setup_runtimes(&runtimes, true);
-        let slugs: Vec<&str> = selected.iter().map(|runtime| runtime.slug).collect();
+        let choice = explicit_setup_choice(&args, &runtimes).unwrap();
 
-        assert_eq!(slugs, vec!["claude"]);
+        assert_eq!(
+            choice,
+            SetupPlanChoice {
+                mode: SetupMode::Custom,
+                runtime_scope: SetupRuntimeScope::Single("claude".to_string()),
+                fallback_only: false,
+            }
+        );
     }
 
     #[test]
@@ -1749,37 +2122,6 @@ mod tests {
         assert!(value["hooks"]["beforeShellExecution"].is_array());
         assert!(value["hooks"]["afterShellExecution"].is_array());
         assert!(value["hooks"]["stop"].is_array());
-    }
-
-    #[test]
-    fn write_codex_hook_config_installs_packet28_hooks() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join(".codex").join("hooks.json");
-        let status = write_codex_hook_config(&path, dir.path(), true).unwrap();
-        assert!(matches!(status, McpConfigStatus::Written));
-        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(value["hooks"]["SessionStart"].is_array());
-        assert!(value["hooks"]["UserPromptSubmit"].is_array());
-        assert!(value["hooks"]["PreToolUse"].is_array());
-        assert!(value["hooks"]["PostToolUse"].is_array());
-        assert!(value["hooks"]["Stop"].is_array());
-    }
-
-    #[test]
-    fn write_codex_feature_flag_enables_hooks() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join(".codex").join("config.toml");
-        let status = write_codex_feature_flag(&path, true).unwrap();
-        assert!(matches!(status, McpConfigStatus::Written));
-        let value = read_toml_config(&path).unwrap();
-        assert_eq!(
-            value
-                .get("features")
-                .and_then(toml::Value::as_table)
-                .and_then(|features| features.get("codex_hooks"))
-                .and_then(toml::Value::as_bool),
-            Some(true)
-        );
     }
 
     #[test]

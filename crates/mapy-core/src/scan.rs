@@ -8,11 +8,103 @@ use ignore::WalkBuilder;
 use suite_packet_core::CovyError;
 
 pub(crate) fn scan_repo(root: &Path, include_tests: bool) -> Result<Vec<FileScan>, CovyError> {
+    scan_repo_with_progress(root, include_tests, |_, _| {})
+}
+
+pub(crate) fn scan_repo_with_progress<F>(
+    root: &Path,
+    include_tests: bool,
+    mut on_progress: F,
+) -> Result<Vec<FileScan>, CovyError>
+where
+    F: FnMut(usize, usize),
+{
     let mut out = Vec::new();
     let mut cache = load_scan_cache(root);
     let mut cache_dirty = false;
-    let mut seen = BTreeSet::<String>::new();
+    let source_paths = discover_source_paths(root, include_tests)?;
+    let seen = source_paths.iter().cloned().collect::<BTreeSet<_>>();
+    let total_files = source_paths.len();
+    on_progress(0, total_files);
 
+    for (idx, rel) in source_paths.iter().enumerate() {
+        let path = root.join(rel);
+
+        let metadata = match std::fs::metadata(&path) {
+            Ok(value) => value,
+            Err(_) => {
+                on_progress(idx + 1, total_files);
+                continue;
+            }
+        };
+        let size = metadata.len();
+        let mtime_secs = metadata_mtime_secs(&metadata);
+        if let Some(entry) = cache.files.get(rel) {
+            if entry.size == size && entry.mtime_secs == mtime_secs {
+                out.push(FileScan {
+                    path: rel.clone(),
+                    size,
+                    symbols: entry.symbols.clone(),
+                    symbol_defs: entry.symbol_defs.clone(),
+                    imports: entry.imports.clone(),
+                    token_lines: entry.token_lines.clone(),
+                    mtime_secs,
+                });
+                on_progress(idx + 1, total_files);
+                continue;
+            }
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(v) => v,
+            Err(_) => {
+                on_progress(idx + 1, total_files);
+                continue;
+            }
+        };
+
+        let (symbol_defs, imports, token_lines) = extract_index_metadata(rel, &content);
+        let symbols = symbol_defs
+            .iter()
+            .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
+            .collect::<Vec<_>>();
+        cache.files.insert(
+            rel.clone(),
+            CacheEntry {
+                size,
+                mtime_secs,
+                symbols: symbols.clone(),
+                symbol_defs: symbol_defs.clone(),
+                imports: imports.clone(),
+                token_lines: token_lines.clone(),
+            },
+        );
+        cache_dirty = true;
+
+        out.push(FileScan {
+            path: rel.clone(),
+            size,
+            symbols,
+            symbol_defs,
+            imports,
+            token_lines,
+            mtime_secs,
+        });
+        on_progress(idx + 1, total_files);
+    }
+
+    let original_cache_len = cache.files.len();
+    cache.files.retain(|path, _| seen.contains(path));
+    cache_dirty |= cache.files.len() != original_cache_len;
+    if cache_dirty {
+        write_scan_cache(root, &cache);
+    }
+
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+fn discover_source_paths(root: &Path, include_tests: bool) -> Result<Vec<String>, CovyError> {
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(false)
@@ -33,6 +125,7 @@ pub(crate) fn scan_repo(root: &Path, include_tests: bool) -> Result<Vec<FileScan
         !is_generated_or_vendor_path(&rel)
     });
 
+    let mut out = Vec::new();
     for entry in builder.build() {
         let entry = entry.map_err(|source| {
             CovyError::Other(format!(
@@ -42,11 +135,7 @@ pub(crate) fn scan_repo(root: &Path, include_tests: bool) -> Result<Vec<FileScan
         })?;
 
         let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        if !is_source_file(path) {
+        if !path.is_file() || !is_source_file(path) {
             continue;
         }
 
@@ -55,75 +144,12 @@ pub(crate) fn scan_repo(root: &Path, include_tests: bool) -> Result<Vec<FileScan
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        seen.insert(rel.clone());
-
         if !include_tests && is_test_path(&rel) {
             continue;
         }
-
-        let metadata = match std::fs::metadata(path) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let size = metadata.len();
-        let mtime_secs = metadata_mtime_secs(&metadata);
-        if let Some(entry) = cache.files.get(&rel) {
-            if entry.size == size && entry.mtime_secs == mtime_secs {
-                out.push(FileScan {
-                    path: rel,
-                    size,
-                    symbols: entry.symbols.clone(),
-                    symbol_defs: entry.symbol_defs.clone(),
-                    imports: entry.imports.clone(),
-                    token_lines: entry.token_lines.clone(),
-                    mtime_secs,
-                });
-                continue;
-            }
-        }
-
-        let content = match std::fs::read_to_string(path) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let (symbol_defs, imports, token_lines) = extract_index_metadata(&rel, &content);
-        let symbols = symbol_defs
-            .iter()
-            .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
-            .collect::<Vec<_>>();
-        cache.files.insert(
-            rel.clone(),
-            CacheEntry {
-                size,
-                mtime_secs,
-                symbols: symbols.clone(),
-                symbol_defs: symbol_defs.clone(),
-                imports: imports.clone(),
-                token_lines: token_lines.clone(),
-            },
-        );
-        cache_dirty = true;
-
-        out.push(FileScan {
-            path: rel,
-            size,
-            symbols,
-            symbol_defs,
-            imports,
-            token_lines,
-            mtime_secs,
-        });
+        out.push(rel);
     }
-
-    let original_cache_len = cache.files.len();
-    cache.files.retain(|path, _| seen.contains(path));
-    cache_dirty |= cache.files.len() != original_cache_len;
-    if cache_dirty {
-        write_scan_cache(root, &cache);
-    }
-
-    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out.sort();
     Ok(out)
 }
 

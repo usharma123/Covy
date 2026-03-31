@@ -41,6 +41,11 @@ pub(crate) fn enqueue_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Res
     {
         let mut guard = state.lock().map_err(lock_err)?;
         guard.interactive_index.manifest.status = "queued".to_string();
+        guard.interactive_index.manifest.total_files = 0;
+        guard.interactive_index.manifest.indexed_files = 0;
+        guard.interactive_index.manifest.regex_status = Some("queued".to_string());
+        guard.interactive_index.manifest.regex_total_files = 0;
+        guard.interactive_index.manifest.regex_indexed_files = 0;
         guard.interactive_index.manifest.last_error = None;
         guard.interactive_index.manifest.regex_stale_reason = None;
         guard.interactive_index.manifest.queued_paths.clear();
@@ -140,6 +145,11 @@ fn perform_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
     let root = {
         let mut guard = state.lock().map_err(lock_err)?;
         guard.interactive_index.manifest.status = "building".to_string();
+        guard.interactive_index.manifest.total_files = 0;
+        guard.interactive_index.manifest.indexed_files = 0;
+        guard.interactive_index.manifest.regex_status = Some("queued".to_string());
+        guard.interactive_index.manifest.regex_total_files = 0;
+        guard.interactive_index.manifest.regex_indexed_files = 0;
         guard.interactive_index.manifest.last_build_started_at_unix = Some(now_unix());
         guard.interactive_index.manifest.last_error = None;
         guard.interactive_index.manifest.regex_stale_reason = None;
@@ -147,10 +157,23 @@ fn perform_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
         save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)?;
         guard.root.clone()
     };
-    let snapshot = mapy_core::build_repo_index(&root, true)
-        .map_err(|err| anyhow!("failed to build repo index: {err}"))?;
+    let mut last_repo_progress = None::<(usize, std::time::Instant)>;
+    let snapshot = mapy_core::build_repo_index_with_progress(&root, true, |indexed, total| {
+        if should_persist_progress(indexed, total, &mut last_repo_progress) {
+            let _ = update_repo_build_progress(state, indexed, total);
+        }
+    })
+    .map_err(|err| anyhow!("failed to build repo index: {err}"))?;
+    update_repo_build_progress(state, snapshot.files.len(), snapshot.files.len())?;
     save_index_snapshot_file(&root, &snapshot)?;
-    let regex_runtime = packet28_search_core::rebuild_full_index(&root, true)
+    mark_regex_build_started(state)?;
+    let mut last_regex_progress = None::<(usize, std::time::Instant)>;
+    let regex_runtime =
+        packet28_search_core::rebuild_full_index_with_progress(&root, true, |indexed, total| {
+            if should_persist_progress(indexed, total, &mut last_regex_progress) {
+                let _ = update_regex_build_progress(state, "building", indexed, total);
+            }
+        })
         .map_err(|err| anyhow!("failed to build regex search index: {err}"))?;
     let mut guard = state.lock().map_err(lock_err)?;
     guard.interactive_index.snapshot = Some(Arc::new(snapshot.clone()));
@@ -377,8 +400,63 @@ fn apply_regex_manifest_status(
 ) {
     manifest.regex_generation = Some(runtime.manifest.generation);
     manifest.regex_status = Some(runtime.manifest.status.clone());
+    manifest.regex_total_files = runtime.manifest.total_files;
     manifest.regex_base_commit = runtime.manifest.base_commit.clone();
     manifest.regex_weight_table_version = Some(runtime.manifest.weight_table_version);
     manifest.regex_stale_reason = runtime.manifest.stale_reason.clone();
     manifest.regex_indexed_files = runtime.manifest.indexed_files;
+}
+
+fn should_persist_progress(
+    indexed: usize,
+    total: usize,
+    checkpoint: &mut Option<(usize, std::time::Instant)>,
+) -> bool {
+    let now = std::time::Instant::now();
+    let should_emit = match checkpoint {
+        None => true,
+        Some((last_indexed, last_at)) => {
+            indexed == total
+                || indexed == 0
+                || indexed >= last_indexed.saturating_add(32)
+                || now.duration_since(*last_at) >= std::time::Duration::from_millis(250)
+        }
+    };
+    if should_emit {
+        *checkpoint = Some((indexed, now));
+    }
+    should_emit
+}
+
+fn update_repo_build_progress(
+    state: &Arc<Mutex<DaemonState>>,
+    indexed_files: usize,
+    total_files: usize,
+) -> Result<()> {
+    let mut guard = state.lock().map_err(lock_err)?;
+    guard.interactive_index.manifest.status = "building".to_string();
+    guard.interactive_index.manifest.total_files = total_files;
+    guard.interactive_index.manifest.indexed_files = indexed_files.min(total_files);
+    save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)
+}
+
+fn mark_regex_build_started(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
+    let mut guard = state.lock().map_err(lock_err)?;
+    guard.interactive_index.manifest.regex_status = Some("building".to_string());
+    guard.interactive_index.manifest.regex_total_files = 0;
+    guard.interactive_index.manifest.regex_indexed_files = 0;
+    save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)
+}
+
+fn update_regex_build_progress(
+    state: &Arc<Mutex<DaemonState>>,
+    status: &str,
+    indexed_files: usize,
+    total_files: usize,
+) -> Result<()> {
+    let mut guard = state.lock().map_err(lock_err)?;
+    guard.interactive_index.manifest.regex_status = Some(status.to_string());
+    guard.interactive_index.manifest.regex_total_files = total_files;
+    guard.interactive_index.manifest.regex_indexed_files = indexed_files.min(total_files);
+    save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)
 }

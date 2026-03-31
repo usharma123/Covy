@@ -13,6 +13,7 @@ pub(crate) fn default_index_manifest(root: &Path) -> DaemonIndexManifest {
         indexed_files: 0,
         regex_generation: None,
         regex_status: None,
+        regex_total_files: 0,
         regex_base_commit: None,
         regex_weight_table_version: None,
         regex_stale_reason: None,

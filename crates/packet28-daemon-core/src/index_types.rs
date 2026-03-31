@@ -14,6 +14,7 @@ pub struct DaemonIndexManifest {
     pub indexed_files: usize,
     pub regex_generation: Option<u64>,
     pub regex_status: Option<String>,
+    pub regex_total_files: usize,
     pub regex_base_commit: Option<String>,
     pub regex_weight_table_version: Option<u32>,
     pub regex_stale_reason: Option<String>,

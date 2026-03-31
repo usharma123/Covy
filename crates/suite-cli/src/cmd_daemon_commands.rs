@@ -96,6 +96,19 @@ pub(crate) fn run_index(args: IndexArgs) -> Result<i32> {
                         println!("queued_files={}", response.queued_file_count);
                         println!("indexed_files={}", response.manifest.indexed_files);
                         println!("total_files={}", response.manifest.total_files);
+                        println!(
+                            "regex_status={}",
+                            response
+                                .manifest
+                                .regex_status
+                                .as_deref()
+                                .unwrap_or("missing")
+                        );
+                        println!(
+                            "regex_indexed_files={}",
+                            response.manifest.regex_indexed_files
+                        );
+                        println!("regex_total_files={}", response.manifest.regex_total_files);
                         if let Some(err) = response.manifest.last_error {
                             println!("last_error={err}");
                         }

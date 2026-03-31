@@ -355,6 +355,17 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
 }
 
 pub fn rebuild_full_index(root: &Path, include_tests: bool) -> Result<RegexIndexRuntime> {
+    rebuild_full_index_with_progress(root, include_tests, |_, _| {})
+}
+
+pub fn rebuild_full_index_with_progress<F>(
+    root: &Path,
+    include_tests: bool,
+    mut on_progress: F,
+) -> Result<RegexIndexRuntime>
+where
+    F: FnMut(usize, usize),
+{
     let started = now_unix();
     let mut manifest = load_manifest(root);
     manifest.schema_version = REGEX_INDEX_SCHEMA_VERSION;
@@ -366,7 +377,7 @@ pub fn rebuild_full_index(root: &Path, include_tests: bool) -> Result<RegexIndex
     manifest.last_error = None;
     save_manifest(root, &manifest)?;
 
-    let docs = scan_documents(root)?;
+    let docs = scan_documents_with_progress(root, &mut on_progress)?;
     let base_layer = build_layer(
         root,
         &docs,
@@ -1086,16 +1097,13 @@ fn candidate_paths_for_plan(
                 });
                 selected_hashes.push(candidate.hash);
                 let coverage_end = candidate.end.min(covered.len());
-                for slot in covered
-                    .iter_mut()
-                    .take(coverage_end)
-                    .skip(candidate.start)
-                {
+                for slot in covered.iter_mut().take(coverage_end).skip(candidate.start) {
                     *slot = true;
                 }
                 let covered_all = covered.iter().all(|covered_byte| *covered_byte);
                 let current_size = literal_paths.as_ref().map_or(0, BTreeSet::len);
-                let materially_reduced = current_size.saturating_mul(10) < previous_size.saturating_mul(9);
+                let materially_reduced =
+                    current_size.saturating_mul(10) < previous_size.saturating_mul(9);
                 if should_stop_literal_refinement(
                     current_size,
                     all_paths.len(),
@@ -1111,11 +1119,12 @@ fn candidate_paths_for_plan(
             cache
                 .literal_candidates
                 .insert(literal.clone(), resolved.clone());
-            cache.literal_hashes.insert(literal.clone(), selected_hashes);
-            cache.literal_repeat_requirements.insert(
-                literal.clone(),
-                repeat_requirements_for_literal(literal),
-            );
+            cache
+                .literal_hashes
+                .insert(literal.clone(), selected_hashes);
+            cache
+                .literal_repeat_requirements
+                .insert(literal.clone(), repeat_requirements_for_literal(literal));
             Ok(resolved)
         }
         SearchPlan::And(children) => {
@@ -1263,11 +1272,7 @@ fn select_covering_candidates(loaded: &LoadedIndex, literal: &[u8]) -> Vec<Spars
             .any(|(_idx, slot)| !*slot);
         if adds_new_coverage || selected.len() < SHORT_GRAM_BYTES {
             let coverage_end = candidate.end.min(covered.len());
-            for slot in covered
-                .iter_mut()
-                .take(coverage_end)
-                .skip(candidate.start)
-            {
+            for slot in covered.iter_mut().take(coverage_end).skip(candidate.start) {
                 *slot = true;
             }
             selected.push(candidate);
@@ -1465,8 +1470,29 @@ fn contains_fixed_bytes(bytes: &[u8], needle: &[u8], case_insensitive: bool) -> 
     }
 }
 
-fn scan_documents(root: &Path) -> Result<Vec<IndexedDocument>> {
+fn scan_documents_with_progress<F>(root: &Path, mut on_progress: F) -> Result<Vec<IndexedDocument>>
+where
+    F: FnMut(usize, usize),
+{
     let mut docs = Vec::new();
+    let paths = discover_document_paths(root)?;
+    let total_files = paths.len();
+    on_progress(0, total_files);
+    for (idx, path) in paths.iter().enumerate() {
+        if let Some(indexed) = index_document(root, path)? {
+            docs.push(indexed);
+        }
+        on_progress(idx + 1, total_files);
+    }
+    docs.sort_by(|left, right| left.path.cmp(&right.path));
+    for (idx, doc) in docs.iter_mut().enumerate() {
+        doc.doc_id = idx as u32;
+    }
+    Ok(docs)
+}
+
+fn discover_document_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
     let mut walker = WalkBuilder::new(root);
     walker
         .hidden(false)
@@ -1478,19 +1504,25 @@ fn scan_documents(root: &Path) -> Result<Vec<IndexedDocument>> {
             Ok(entry) => entry,
             Err(_) => continue,
         };
-        let path = entry.path();
+        let path = entry.into_path();
         if path.is_dir() {
             continue;
         }
-        if let Some(indexed) = index_document(root, path)? {
-            docs.push(indexed);
+        let Some(relative) = path.strip_prefix(root).ok() else {
+            continue;
+        };
+        let normalized = relative.to_string_lossy().replace('\\', "/");
+        if normalized.starts_with(".git/")
+            || normalized.starts_with(".packet28/")
+            || normalized.starts_with("target/")
+            || normalized.starts_with("node_modules/")
+        {
+            continue;
         }
+        out.push(path);
     }
-    docs.sort_by(|left, right| left.path.cmp(&right.path));
-    for (idx, doc) in docs.iter_mut().enumerate() {
-        doc.doc_id = idx as u32;
-    }
-    Ok(docs)
+    out.sort();
+    Ok(out)
 }
 
 struct IndexedDocument {
