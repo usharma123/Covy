@@ -8,6 +8,7 @@ pub enum HookEventKind {
     UserPromptSubmit,
     PreToolUse,
     PostToolUse,
+    PostToolUseFailure,
     CommandStarted,
     CommandProgress,
     CommandFinished,
@@ -164,6 +165,12 @@ pub struct HookRuntimeConfig {
     pub hooks_enabled: bool,
     pub rewrite_enabled: bool,
     pub fallback_post_tool_capture: bool,
+    /// Loopback TCP port for the long-lived Claude HTTP hook server.
+    #[serde(default)]
+    pub http_hook_port: Option<u16>,
+    /// Shared token required by the local Claude HTTP hook server.
+    #[serde(default)]
+    pub http_hook_token: Option<String>,
     /// Base context budget in tokens. Overridden at runtime when the host
     /// passes `host_context_budget_tokens` in the ingest request.
     pub context_budget_tokens: u64,
@@ -283,6 +290,8 @@ impl Default for HookRuntimeConfig {
             hooks_enabled: true,
             rewrite_enabled: true,
             fallback_post_tool_capture: true,
+            http_hook_port: None,
+            http_hook_token: None,
             context_budget_tokens: 200_000,
             soft_threshold_fraction: 0.5,
             warn_threshold_fraction: default_warn_fraction(),

@@ -194,13 +194,8 @@ pub(crate) fn broker_write_to_event(
         BrokerWriteOp::ToolInvocationFailed => (
             suite_packet_core::AgentStateEventKind::ToolInvocationFailed,
             suite_packet_core::AgentStateEventData::ToolInvocationFailed {
-                invocation_id: request
-                    .invocation_id
-                    .clone()
-                    .ok_or_else(|| anyhow!("tool_invocation_failed requires invocation_id"))?,
-                sequence: request
-                    .sequence
-                    .ok_or_else(|| anyhow!("tool_invocation_failed requires sequence"))?,
+                invocation_id: derived_tool_invocation_id(request),
+                sequence: derived_tool_sequence(request),
                 tool_name: request
                     .tool_name
                     .clone()

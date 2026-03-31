@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -15,6 +16,9 @@ use serde_json::{json, Value};
 use toml::value::Table as TomlTable;
 
 use crate::agent_surface;
+
+const PACKET28_CLAUDE_HTTP_HOOK_PATH: &str = "/packet28/claude-hook";
+const PACKET28_CLAUDE_HTTP_TOKEN_HEADER: &str = "X-Packet28-Hook-Token";
 
 #[derive(Args)]
 pub struct SetupArgs {
@@ -480,10 +484,32 @@ fn explicit_setup_choice(args: &SetupArgs, runtimes: &[RuntimeInfo]) -> Result<S
 }
 
 fn prompt_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoice>> {
-    println!("  {}", "Choose Setup Path".bold());
-    println!("    1. Recommended   Configure detected runtimes with Packet28 defaults.");
-    println!("    2. Advanced      Pick the runtime scope before applying setup.");
-    println!("    3. Guidance only Write instruction files without MCP integration.");
+    render_setup_banner(
+        "Packet28 Setup Wizard",
+        "Choose how much Packet28 should configure for this workspace.",
+    );
+    render_setup_menu_option(
+        1,
+        "Recommended",
+        "Detected runtimes",
+        "Configure the runtimes Packet28 found and keep the rest untouched.",
+        true,
+    );
+    render_setup_menu_option(
+        2,
+        "Advanced",
+        "Choose scope",
+        "Pick detected, all supported, or a single runtime before anything is written.",
+        false,
+    );
+    render_setup_menu_option(
+        3,
+        "Guidance only",
+        "Instruction files only",
+        "Skip MCP integration and only write the prompt files needed for manual setup.",
+        false,
+    );
+    render_setup_menu_hint();
     println!();
 
     let selection = prompt_menu_selection("  Select a setup path [1]: ", 3, 1)?;
@@ -512,10 +538,32 @@ fn prompt_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoic
 }
 
 fn prompt_advanced_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoice>> {
-    println!("  {}", "Advanced Runtime Scope".bold());
-    println!("    1. Detected runtimes only");
-    println!("    2. All supported runtimes");
-    println!("    3. Single runtime");
+    render_setup_banner(
+        "Advanced Runtime Scope",
+        "Choose exactly which runtimes Packet28 should target.",
+    );
+    render_setup_menu_option(
+        1,
+        "Detected runtimes",
+        "Low risk",
+        "Only touch runtimes that already appear to be installed on this machine.",
+        true,
+    );
+    render_setup_menu_option(
+        2,
+        "All supported runtimes",
+        "Broader coverage",
+        "Write setup for every supported runtime so this repo is ready across editors.",
+        false,
+    );
+    render_setup_menu_option(
+        3,
+        "Single runtime",
+        "Most precise",
+        "Target one runtime explicitly and leave every other integration alone.",
+        false,
+    );
+    render_setup_menu_hint();
     println!();
 
     let selection = prompt_menu_selection("  Select a runtime scope [1]: ", 3, 1)?;
@@ -538,15 +586,22 @@ fn prompt_advanced_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<Setup
 }
 
 fn prompt_single_runtime_scope(runtimes: &[RuntimeInfo]) -> Result<SetupRuntimeScope> {
-    println!("  {}", "Choose A Runtime".bold());
+    render_setup_banner(
+        "Choose A Runtime",
+        "Pick the single runtime Packet28 should configure in this workspace.",
+    );
     for (idx, runtime) in runtimes.iter().enumerate() {
-        let availability = if runtime.detected {
-            "detected".green().bold()
-        } else {
-            "not found".dimmed()
-        };
-        println!("    {}. {:<12} {}", idx + 1, runtime.name, availability);
+        let availability = format_runtime_detection_badge(runtime.detected);
+        let capability = runtime_capability_summary(runtime).dimmed();
+        println!(
+            "    {} {} {}",
+            setup_menu_index_badge(idx + 1),
+            format!("{:<12}", runtime.name).bold(),
+            availability
+        );
+        println!("        {}", capability);
     }
+    render_setup_menu_hint();
     println!();
 
     let selection =
@@ -581,7 +636,7 @@ fn prompt_menu_selection(prompt: &str, max: usize, default: usize) -> Result<Opt
             }
         }
         println!(
-            "  {} enter a number between 1 and {max}, or 'q' to cancel.",
+            "  {} choose a number between 1 and {max}, press Enter for {default}, or type 'q' to cancel.",
             "hint:".cyan().bold()
         );
     }
@@ -594,52 +649,47 @@ fn render_setup_intro(
     setup_choice: &SetupPlanChoice,
     auto_yes: bool,
 ) -> Result<bool> {
-    println!();
-    println!(
-        "{}",
-        "  Packet28 Setup Wizard  ".bold().white().on_bright_blue()
+    render_setup_banner(
+        "Packet28 Setup Plan",
+        "Review the detected runtimes and the changes Packet28 is about to make.",
     );
     println!();
-    println!("  Workspace  {}", root_display.cyan());
-    println!(
-        "  Mode       {}",
-        setup_mode_title(setup_choice.mode).bold()
+    render_setup_summary_row("Workspace", root_display.cyan().to_string());
+    render_setup_summary_row(
+        "Mode",
+        setup_mode_title(setup_choice.mode).bold().to_string(),
     );
-    println!(
-        "  Scope      {}",
-        setup_runtime_scope_label(setup_choice).bold()
+    render_setup_summary_row(
+        "Scope",
+        setup_runtime_scope_label(setup_choice).bold().to_string(),
     );
     println!("  {}", setup_mode_summary(setup_choice).dimmed());
     println!();
 
-    println!("  {}", "Detected Agents".bold());
+    println!("  {}", "Runtime Status".bold());
     for rt in runtimes {
-        let availability = if rt.detected {
-            "detected".green().bold()
-        } else {
-            "not found".dimmed()
-        };
+        let availability = format_runtime_detection_badge(rt.detected);
         let selection = if selected_runtimes
             .iter()
             .any(|candidate| candidate.slug == rt.slug)
         {
-            Some("selected".cyan().bold())
+            Some("selected".cyan().bold().to_string())
         } else if rt.detected {
-            Some("available".dimmed())
+            Some("detected".dimmed().to_string())
         } else {
             None
         };
+        let detail = runtime_capability_summary(rt).dimmed();
+        println!("    {:<12} {}  {}", rt.name.bold(), availability, detail);
         if let Some(selection) = selection {
-            println!("    {:<12} {}  {}", rt.name, availability, selection);
-        } else {
-            println!("    {:<12} {}", rt.name, availability);
+            println!("                 {}", selection);
         }
     }
     println!();
 
-    println!("  {}", "This Setup Will".bold());
+    println!("  {}", "Planned Changes".bold());
     for item in build_setup_plan(selected_runtimes, setup_choice.fallback_only) {
-        println!("    {item}");
+        println!("    {} {item}", "•".cyan().bold());
     }
     println!();
 
@@ -659,6 +709,57 @@ fn render_setup_intro(
     let trimmed = input.trim().to_lowercase();
     println!();
     Ok(trimmed.is_empty() || trimmed == "y" || trimmed == "yes")
+}
+
+fn render_setup_banner(title: &str, subtitle: &str) {
+    println!();
+    println!("{}", "  Packet28  ".bold().white().on_bright_blue());
+    println!("  {}", title.bold());
+    println!("  {}", subtitle.dimmed());
+}
+
+fn render_setup_menu_option(
+    index: usize,
+    title: &str,
+    badge: &str,
+    description: &str,
+    is_default: bool,
+) {
+    let mut meta = badge.yellow().bold().to_string();
+    if is_default {
+        meta.push_str("  ");
+        meta.push_str(&"default".green().bold().to_string());
+    }
+    println!(
+        "    {} {}  {}",
+        setup_menu_index_badge(index),
+        title.bold(),
+        meta
+    );
+    println!("        {}", description.dimmed());
+}
+
+fn render_setup_menu_hint() {
+    println!(
+        "  {}",
+        "Press Enter to accept the default option, or type 'q' to cancel.".dimmed()
+    );
+}
+
+fn setup_menu_index_badge(index: usize) -> String {
+    format!("[{index}]").cyan().bold().to_string()
+}
+
+fn render_setup_summary_row(label: &str, value: String) {
+    println!("  {:<10} {}", label.bold(), value);
+}
+
+fn format_runtime_detection_badge(detected: bool) -> String {
+    if detected {
+        "detected".green().bold().to_string()
+    } else {
+        "not found".dimmed().to_string()
+    }
 }
 
 fn setup_mode_title(mode: SetupMode) -> &'static str {
@@ -693,17 +794,14 @@ fn setup_runtime_scope_label(choice: &SetupPlanChoice) -> String {
 
 fn setup_mode_prompt(mode: SetupMode) -> &'static str {
     match mode {
-        SetupMode::Recommended => {
-            "Continue with the recommended setup for detected runtimes? [Y/n]"
-        }
-        SetupMode::Custom => "Continue with this custom setup plan? [Y/n]",
-        SetupMode::GuidanceOnly => "Continue with the guidance-only setup plan? [Y/n]",
+        SetupMode::Recommended => "Apply the recommended setup plan? [Y/n]",
+        SetupMode::Custom => "Apply this custom setup plan? [Y/n]",
+        SetupMode::GuidanceOnly => "Apply this guidance-only setup plan? [Y/n]",
     }
 }
 
 fn build_setup_plan(selected_runtimes: &[&RuntimeInfo], fallback_only: bool) -> Vec<String> {
     let mut items = Vec::new();
-    let mut step_number = 1usize;
     let mcp_targets = selected_runtimes
         .iter()
         .copied()
@@ -716,47 +814,42 @@ fn build_setup_plan(selected_runtimes: &[&RuntimeInfo], fallback_only: bool) -> 
         .collect::<Vec<_>>();
 
     if fallback_only {
-        items.push(format!("{step_number}. Skip MCP and hook writes."));
+        items.push("Skip MCP server configuration and runtime hook installation.".to_string());
     } else if mcp_targets.is_empty() {
-        items.push(format!(
-            "{step_number}. No MCP-capable runtimes are selected, so setup will fall back to agent files."
-        ));
+        items.push(
+            "No MCP-capable runtimes are selected, so setup will fall back to instruction files."
+                .to_string(),
+        );
     } else {
         items.push(format!(
-            "{step_number}. Configure Packet28 MCP for {}.",
+            "Configure Packet28 MCP for {}.",
             format_runtime_names(&mcp_targets)
         ));
     }
-    step_number += 1;
 
     if !fallback_only {
         if hook_targets.is_empty() {
-            items.push(format!(
-                "{step_number}. Skip runtime hook installation because no supported runtimes are selected."
-            ));
+            items.push(
+                "Skip runtime hook installation because no supported runtimes were selected."
+                    .to_string(),
+            );
         } else {
             items.push(format!(
-                "{step_number}. Install Packet28 runtime hooks for {}.",
+                "Install Packet28 runtime hooks for {}.",
                 format_runtime_names(&hook_targets)
             ));
         }
-        step_number += 1;
     }
 
     if selected_runtimes.is_empty() {
-        items.push(format!(
-            "{step_number}. Write a generic agent instruction file into the workspace."
-        ));
+        items.push("Write a generic agent instruction file into the workspace.".to_string());
     } else {
         items.push(format!(
-            "{step_number}. Write agent instruction files for {}.",
+            "Write agent instruction files for {}.",
             format_runtime_names(selected_runtimes)
         ));
     }
-    step_number += 1;
-    items.push(format!(
-        "{step_number}. Ensure packet28d is running and build the repo and regex indexes."
-    ));
+    items.push("Ensure packet28d is running and build the repo and regex indexes.".to_string());
     items
 }
 
@@ -769,6 +862,18 @@ fn format_runtime_names(runtimes: &[&RuntimeInfo]) -> String {
         .map(|runtime| runtime.name)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn runtime_capability_summary(runtime: &RuntimeInfo) -> String {
+    match (
+        runtime_supports_mcp(runtime.kind),
+        runtime_supports_hooks(runtime.kind),
+    ) {
+        (true, true) => "MCP + runtime hooks".to_string(),
+        (true, false) => "MCP only".to_string(),
+        (false, true) => "runtime hooks only".to_string(),
+        (false, false) => "instruction files only".to_string(),
+    }
 }
 
 fn verify_setup_index(root: &Path) -> Result<SetupIndexVerification> {
@@ -1316,40 +1421,6 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
     let command = resolve_packet28_cli_command();
     let root_arg = shell_escape(root.display().to_string());
     let hook_command = format!("{command} hook claude --root \"{root_arg}\"");
-    let packet28_hooks = json!({
-        "SessionStart": [{
-            "matcher": "startup|resume|clear|compact",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "UserPromptSubmit": [{
-            "matcher": ".*",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "PreToolUse": [{
-            "matcher": ".*",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "PostToolUse": [{
-            "matcher": ".*",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "Stop": [{
-            "matcher": ".*",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "SubagentStop": [{
-            "matcher": ".*",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "PreCompact": [{
-            "matcher": "manual|auto",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }],
-        "SessionEnd": [{
-            "matcher": ".*",
-            "hooks": [{"type": "command", "command": hook_command}]
-        }]
-    });
     let mut config: BTreeMap<String, Value> = if path.exists() {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;
@@ -1374,6 +1445,15 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
             return Ok(McpConfigStatus::Declined);
         }
     }
+    let runtime_config = ensure_hook_http_settings_written(root)?;
+    let http_url = claude_http_hook_url(&runtime_config)
+        .context("Packet28 Claude HTTP hook settings are incomplete after initialization")?;
+    let http_token = runtime_config
+        .http_hook_token
+        .as_deref()
+        .context("Packet28 Claude HTTP hook token is missing after initialization")?;
+    let packet28_hooks = build_claude_packet28_hooks(&hook_command, &http_url, http_token);
+    let legacy_packet28_hooks = build_legacy_claude_packet28_hooks(&hook_command);
     let mut hooks = config
         .get("hooks")
         .and_then(Value::as_object)
@@ -1383,6 +1463,10 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
     // direct keys under `hooks`. Merge our entries into each event key
     // rather than nesting under a "packet28" grouping key.
     let packet28_events = packet28_hooks.as_object().cloned().unwrap_or_default();
+    let legacy_events = legacy_packet28_hooks
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
     let mut already_configured = true;
     for (event_name, entries) in &packet28_events {
         let existing = hooks
@@ -1391,21 +1475,28 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
             .cloned()
             .unwrap_or_default();
         let new_entries = entries.as_array().cloned().unwrap_or_default();
-        // Check if our hook command is already present in this event.
-        let hook_present = new_entries
+        let legacy_entries = legacy_events
+            .get(event_name)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut merged = existing
             .iter()
-            .all(|new_entry| existing.iter().any(|ex| ex == new_entry));
-        if !hook_present {
+            .filter(|entry| !new_entries.contains(entry) && !legacy_entries.contains(entry))
+            .cloned()
+            .collect::<Vec<_>>();
+        merged.extend(new_entries);
+        if merged != existing {
             already_configured = false;
-            // Append our entries (don't overwrite user's existing hooks).
-            let mut merged = existing;
-            merged.extend(new_entries);
             hooks.insert(event_name.clone(), Value::Array(merged));
         }
     }
     // Remove legacy "packet28" grouping key if present.
     if hooks.contains_key("packet28") {
         hooks.remove("packet28");
+        already_configured = false;
+    }
+    if merge_claude_allowed_http_hook_url(&mut config, &http_url) {
         already_configured = false;
     }
     if already_configured {
@@ -1420,6 +1511,152 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
         format!("{}\n", serde_json::to_string_pretty(&config)?),
     )?;
     Ok(McpConfigStatus::Written)
+}
+
+fn build_claude_packet28_hooks(command: &str, http_url: &str, http_token: &str) -> Value {
+    json!({
+        "SessionStart": [claude_command_hook_entry("startup|resume|clear|compact", command)],
+        "UserPromptSubmit": [claude_command_hook_entry(".*", command)],
+        "PreToolUse": [claude_http_hook_entry(".*", http_url, http_token)],
+        "PostToolUse": [claude_http_hook_entry(".*", http_url, http_token)],
+        "PostToolUseFailure": [claude_http_hook_entry(".*", http_url, http_token)],
+        "Stop": [claude_http_hook_entry(".*", http_url, http_token)],
+        "SubagentStop": [claude_http_hook_entry(".*", http_url, http_token)],
+        "PreCompact": [claude_http_hook_entry("manual|auto", http_url, http_token)],
+        "SessionEnd": [claude_http_hook_entry(".*", http_url, http_token)]
+    })
+}
+
+fn build_legacy_claude_packet28_hooks(command: &str) -> Value {
+    json!({
+        "SessionStart": [claude_command_hook_entry("startup|resume|clear|compact", command)],
+        "UserPromptSubmit": [claude_command_hook_entry(".*", command)],
+        "PreToolUse": [claude_command_hook_entry(".*", command)],
+        "PostToolUse": [claude_command_hook_entry(".*", command)],
+        "PostToolUseFailure": [claude_command_hook_entry(".*", command)],
+        "Stop": [claude_command_hook_entry(".*", command)],
+        "SubagentStop": [claude_command_hook_entry(".*", command)],
+        "PreCompact": [claude_command_hook_entry("manual|auto", command)],
+        "SessionEnd": [claude_command_hook_entry(".*", command)]
+    })
+}
+
+fn claude_command_hook_entry(matcher: &str, command: &str) -> Value {
+    json!({
+        "matcher": matcher,
+        "hooks": [{"type": "command", "command": command}]
+    })
+}
+
+fn claude_http_hook_entry(matcher: &str, http_url: &str, http_token: &str) -> Value {
+    json!({
+        "matcher": matcher,
+        "hooks": [{
+            "type": "http",
+            "url": http_url,
+            "headers": {
+                (PACKET28_CLAUDE_HTTP_TOKEN_HEADER): http_token
+            }
+        }]
+    })
+}
+
+fn ensure_hook_http_settings_written(
+    root: &Path,
+) -> Result<packet28_daemon_core::HookRuntimeConfig> {
+    let path = packet28_daemon_core::hook_runtime_config_path(root);
+    let existed = path.exists();
+    let mut config = if existed {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        serde_json::from_str::<packet28_daemon_core::HookRuntimeConfig>(&content).with_context(
+            || format!("refusing to overwrite invalid JSON in '{}'", path.display()),
+        )?
+    } else {
+        packet28_daemon_core::HookRuntimeConfig::default()
+    };
+    let changed = apply_generated_http_hook_settings(&mut config, root);
+    if !existed || changed {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&config)?),
+        )?;
+    }
+    Ok(config)
+}
+
+fn apply_generated_http_hook_settings(
+    config: &mut packet28_daemon_core::HookRuntimeConfig,
+    root: &Path,
+) -> bool {
+    let mut changed = false;
+    if config.http_hook_port.is_none() {
+        config.http_hook_port = Some(select_loopback_port().unwrap_or(45123));
+        changed = true;
+    }
+    let token_missing = config
+        .http_hook_token
+        .as_deref()
+        .map(str::trim)
+        .map(str::is_empty)
+        .unwrap_or(true);
+    if token_missing {
+        config.http_hook_token = Some(generate_http_hook_token(root));
+        changed = true;
+    }
+    changed
+}
+
+fn select_loopback_port() -> Option<u16> {
+    TcpListener::bind(("127.0.0.1", 0))
+        .ok()
+        .and_then(|listener| listener.local_addr().ok().map(|addr| addr.port()))
+        .filter(|port| *port != 0)
+}
+
+fn generate_http_hook_token(root: &Path) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let seed = format!("{}:{}:{}", root.display(), std::process::id(), now_nanos);
+    blake3::hash(seed.as_bytes()).to_hex().to_string()
+}
+
+fn claude_http_hook_url(config: &packet28_daemon_core::HookRuntimeConfig) -> Option<String> {
+    config
+        .http_hook_port
+        .map(|port| format!("http://127.0.0.1:{port}{PACKET28_CLAUDE_HTTP_HOOK_PATH}"))
+}
+
+fn merge_claude_allowed_http_hook_url(
+    config: &mut BTreeMap<String, Value>,
+    http_url: &str,
+) -> bool {
+    let mut urls = config
+        .get("allowedHttpHookUrls")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if urls.iter().any(|entry| entry == http_url) {
+        return false;
+    }
+    urls.push(http_url.to_string());
+    config.insert(
+        "allowedHttpHookUrls".to_string(),
+        Value::Array(urls.into_iter().map(Value::String).collect()),
+    );
+    true
 }
 
 fn write_cursor_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
@@ -1802,7 +2039,8 @@ fn write_hook_runtime_config(root: &Path, any_hooks_configured: bool) -> Result<
     } else {
         packet28_daemon_core::HookRuntimeConfig::default()
     };
-    let changed =
+    let mut changed = apply_generated_http_hook_settings(&mut config, root);
+    changed |=
         apply_generated_relaunch_command(&mut config, root, resolve_packet28_agent_command());
     if existed && !changed {
         return Ok(McpConfigStatus::AlreadyConfigured);
@@ -2108,7 +2346,67 @@ mod tests {
         // Hooks should be at top-level event keys, not nested under "packet28".
         assert!(value["hooks"]["SessionStart"].is_array());
         assert!(value["hooks"]["PostToolUse"].is_array());
+        assert!(value["hooks"]["PostToolUseFailure"].is_array());
         assert!(value["hooks"].get("packet28").is_none());
+        assert_eq!(
+            value["hooks"]["SessionStart"][0]["hooks"][0]["type"].as_str(),
+            Some("command")
+        );
+        assert_eq!(
+            value["hooks"]["UserPromptSubmit"][0]["hooks"][0]["type"].as_str(),
+            Some("command")
+        );
+        assert_eq!(
+            value["hooks"]["PreToolUse"][0]["hooks"][0]["type"].as_str(),
+            Some("http")
+        );
+        assert_eq!(
+            value["hooks"]["Stop"][0]["hooks"][0]["type"].as_str(),
+            Some("http")
+        );
+        let http_url = value["hooks"]["PreToolUse"][0]["hooks"][0]["url"]
+            .as_str()
+            .unwrap();
+        assert!(http_url.starts_with("http://127.0.0.1:"));
+        assert_eq!(
+            value["allowedHttpHookUrls"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+            vec![http_url]
+        );
+    }
+
+    #[test]
+    fn write_claude_hook_config_replaces_legacy_command_hooks() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".claude").join("settings.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let command = resolve_packet28_cli_command();
+        let root_arg = shell_escape(dir.path().display().to_string());
+        let hook_command = format!("{command} hook claude --root \"{root_arg}\"");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": ".*",
+                        "hooks": [{"type": "command", "command": hook_command}]
+                    }]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let status = write_claude_hook_config(&path, dir.path(), true).unwrap();
+        assert!(matches!(status, McpConfigStatus::Written));
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let entries = value["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["hooks"][0]["type"].as_str(), Some("http"));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -8,9 +9,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 use packet28_daemon_core::{
-    hook_runtime_config_path, load_task_registry, now_unix, task_artifact_dir, ActiveTaskRecord,
-    HookBoundaryKind, HookEventKind, HookIngestRequest, HookLifecycleEvent, HookLifecycleKind,
-    HookReducerCacheEntry, HookReducerPacket, HookRuntimeConfig, TaskRecord,
+    daemon_dir, hook_runtime_config_path, load_task_registry, now_unix, task_artifact_dir,
+    ActiveTaskRecord, HookBoundaryKind, HookEventKind, HookIngestRequest, HookLifecycleEvent,
+    HookLifecycleKind, HookReducerCacheEntry, HookReducerPacket, HookRuntimeConfig, TaskRecord,
 };
 use packet28_reducer_core::{
     classify_command, classify_command_argv, reduce_command_output, CommandReducerSpec,
@@ -29,6 +30,7 @@ pub enum HookCommands {
     Codex(ClaudeHookArgs),
     Cursor(RuntimeHookArgs),
     Windsurf(RuntimeHookArgs),
+    ServeHttp(HookHttpServerArgs),
     ReducerRunner(ReducerRunnerArgs),
     ReduceFixture(ReduceFixtureArgs),
 }
@@ -49,11 +51,27 @@ pub struct RuntimeHookArgs {
     pub event: Option<String>,
 }
 
+#[derive(Args, Clone)]
+pub struct HookHttpServerArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long)]
+    pub port: u16,
+    #[arg(long)]
+    pub token: String,
+}
+
 #[derive(Clone, Copy)]
 enum ExternalHookRuntime {
     Cursor,
     Windsurf,
 }
+
+const CLAUDE_HTTP_HOOK_PATH: &str = "/packet28/claude-hook";
+const CLAUDE_HTTP_HEALTH_PATH: &str = "/packet28/health";
+const CLAUDE_HTTP_TOKEN_HEADER: &str = "x-packet28-hook-token";
+const HOOK_HTTP_START_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_HTTP_HOOK_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Args, Clone)]
 pub struct ReducerRunnerArgs {
@@ -97,9 +115,15 @@ pub fn run(args: HookArgs) -> Result<i32> {
         HookCommands::Codex(args) => run_claude(args),
         HookCommands::Cursor(args) => run_runtime_hook(args, ExternalHookRuntime::Cursor),
         HookCommands::Windsurf(args) => run_runtime_hook(args, ExternalHookRuntime::Windsurf),
+        HookCommands::ServeHttp(args) => run_hook_http_server(args),
         HookCommands::ReducerRunner(args) => run_reducer_runner(args),
         HookCommands::ReduceFixture(args) => run_reduce_fixture(args),
     }
+}
+
+struct ClaudeHookOutcome {
+    exit_code: i32,
+    body: Option<String>,
 }
 
 fn run_claude(args: ClaudeHookArgs) -> Result<i32> {
@@ -111,30 +135,48 @@ fn run_claude(args: ClaudeHookArgs) -> Result<i32> {
         serde_json::from_str(&buffer)?
     };
     let root = resolve_hook_root(&args, &payload);
-    crate::broker_client::ensure_daemon(&root)?;
+    let outcome = process_claude_hook_payload(&root, args.event.as_deref(), &payload, true)?;
+    if let Some(body) = outcome.body {
+        println!("{body}");
+    }
+    Ok(outcome.exit_code)
+}
 
-    let runtime_config = load_hook_runtime_config(&root);
-    let event_kind = args
-        .event
-        .as_deref()
+fn process_claude_hook_payload(
+    root: &Path,
+    event_override: Option<&str>,
+    payload: &Value,
+    bootstrap_http_server: bool,
+) -> Result<ClaudeHookOutcome> {
+    let runtime_config = load_hook_runtime_config(root);
+    let event_kind = event_override
         .map(|value| parse_event_kind(Some(value)))
-        .unwrap_or_else(|| parse_event_kind(json_string(&payload, "hook_event_name").as_deref()));
-    let session_id = json_string(&payload, "session_id");
-    let task_id = resolve_task_id(&root, &payload, session_id.as_deref())?;
-    let matcher = json_string(&payload, "matcher");
-    let source = json_string(&payload, "source");
+        .unwrap_or_else(|| parse_event_kind(json_string(payload, "hook_event_name").as_deref()));
+    if bootstrap_http_server
+        && matches!(
+            event_kind,
+            HookEventKind::SessionStart | HookEventKind::UserPromptSubmit
+        )
+    {
+        ensure_hook_http_server(root, &runtime_config)?;
+    }
+    crate::broker_client::ensure_daemon(root)?;
 
+    let session_id = json_string(payload, "session_id");
+    let task_id = resolve_task_id(root, payload, session_id.as_deref())?;
+    let matcher = json_string(payload, "matcher");
+    let source = json_string(payload, "source");
     let rewrite = build_pretool_rewrite(
         &runtime_config,
-        &root,
-        &payload,
+        root,
+        payload,
         event_kind,
         &task_id,
         session_id.as_deref(),
     )?;
-    let reducer_packet = build_reducer_packet(&runtime_config, &payload, event_kind);
+    let reducer_packet = build_reducer_packet(&runtime_config, payload, event_kind);
     let response = crate::broker_client::hook_ingest(
-        &root,
+        root,
         HookIngestRequest {
             task_id,
             session_id,
@@ -149,9 +191,10 @@ fn run_claude(args: ClaudeHookArgs) -> Result<i32> {
                 .and_then(|v| v.parse().ok()),
         },
     )?;
-
-    emit_hook_output(event_kind, rewrite, &response)?;
-    Ok(if response.block_stop { 2 } else { 0 })
+    Ok(ClaudeHookOutcome {
+        exit_code: if response.block_stop { 2 } else { 0 },
+        body: render_hook_output(event_kind, rewrite, &response)?,
+    })
 }
 
 fn run_runtime_hook(args: RuntimeHookArgs, runtime: ExternalHookRuntime) -> Result<i32> {
@@ -192,6 +235,360 @@ fn run_runtime_hook(args: RuntimeHookArgs, runtime: ExternalHookRuntime) -> Resu
         },
     )?;
     Ok(0)
+}
+
+#[derive(Clone)]
+struct HookHttpSettings {
+    port: u16,
+    token: String,
+}
+
+#[derive(Debug)]
+struct HttpHookRequest {
+    method: String,
+    path: String,
+    headers: std::collections::HashMap<String, String>,
+    body: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct HttpClientResponse {
+    status_code: u16,
+    body: String,
+}
+
+fn run_hook_http_server(args: HookHttpServerArgs) -> Result<i32> {
+    let root = crate::broker_client::resolve_root(&args.root);
+    let listener = TcpListener::bind(("127.0.0.1", args.port))
+        .with_context(|| format!("failed to bind Packet28 hook server on port {}", args.port))?;
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                let root = root.clone();
+                let token = args.token.clone();
+                thread::spawn(move || {
+                    if let Err(err) = handle_hook_http_connection(stream, &root, &token) {
+                        eprintln!("packet28 hook http request failed: {err:#}");
+                    }
+                });
+            }
+            Err(err) => return Err(anyhow!(err)).context("Packet28 hook HTTP listener failed"),
+        }
+    }
+    Ok(0)
+}
+
+fn ensure_hook_http_server(root: &Path, runtime_config: &HookRuntimeConfig) -> Result<()> {
+    let Some(settings) = hook_http_settings(runtime_config) else {
+        return Ok(());
+    };
+    if hook_http_server_healthy(root, &settings).unwrap_or(false) {
+        return Ok(());
+    }
+    start_hook_http_server(root, &settings)?;
+    wait_for_hook_http_server(root, &settings, HOOK_HTTP_START_TIMEOUT)
+}
+
+fn hook_http_settings(runtime_config: &HookRuntimeConfig) -> Option<HookHttpSettings> {
+    let token = runtime_config
+        .http_hook_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    Some(HookHttpSettings {
+        port: runtime_config.http_hook_port?,
+        token,
+    })
+}
+
+fn start_hook_http_server(root: &Path, settings: &HookHttpSettings) -> Result<()> {
+    let exe = std::env::current_exe().context("failed to resolve current Packet28 binary")?;
+    let log_path = daemon_dir(root).join("packet28-hook-http.log");
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create hook log dir '{}'", parent.display()))?;
+    }
+    let stdout = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open hook log '{}'", log_path.display()))?;
+    let stderr = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open hook log '{}'", log_path.display()))?;
+    Command::new(exe)
+        .arg("hook")
+        .arg("serve-http")
+        .arg("--root")
+        .arg(root.display().to_string())
+        .arg("--port")
+        .arg(settings.port.to_string())
+        .arg("--token")
+        .arg(&settings.token)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .context("failed to spawn Packet28 hook HTTP server")?;
+    Ok(())
+}
+
+fn wait_for_hook_http_server(
+    root: &Path,
+    settings: &HookHttpSettings,
+    timeout: Duration,
+) -> Result<()> {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if hook_http_server_healthy(root, settings).unwrap_or(false) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    Err(anyhow!(
+        "Packet28 hook HTTP server did not become ready at {}",
+        hook_http_health_url(settings)
+    ))
+}
+
+fn hook_http_server_healthy(root: &Path, settings: &HookHttpSettings) -> Result<bool> {
+    let response = send_http_request(
+        settings.port,
+        "GET",
+        CLAUDE_HTTP_HEALTH_PATH,
+        &[(CLAUDE_HTTP_TOKEN_HEADER, settings.token.as_str())],
+        None,
+    )?;
+    if response.status_code != 200 {
+        return Ok(false);
+    }
+    let value: Value = serde_json::from_str(&response.body)?;
+    Ok(value["service"] == json!("packet28-hook-http")
+        && value["workspace_root"] == json!(root.display().to_string()))
+}
+
+fn hook_http_health_url(settings: &HookHttpSettings) -> String {
+    format!(
+        "http://127.0.0.1:{}{}",
+        settings.port, CLAUDE_HTTP_HEALTH_PATH
+    )
+}
+
+fn handle_hook_http_connection(stream: TcpStream, root: &Path, token: &str) -> Result<()> {
+    let request = read_http_request(&stream)?;
+    let mut stream = stream;
+    match (request.method.as_str(), request.path.as_str()) {
+        ("GET", CLAUDE_HTTP_HEALTH_PATH) => {
+            let supplied_token = request
+                .headers
+                .get(CLAUDE_HTTP_TOKEN_HEADER)
+                .map(String::as_str)
+                .unwrap_or_default();
+            if supplied_token != token {
+                write_http_response(&mut stream, 401, "text/plain", "unauthorized")?;
+                return Ok(());
+            }
+            write_http_response(
+                &mut stream,
+                200,
+                "application/json",
+                &serde_json::to_string(&json!({
+                    "service": "packet28-hook-http",
+                    "workspace_root": root.display().to_string(),
+                }))?,
+            )?;
+        }
+        ("POST", CLAUDE_HTTP_HOOK_PATH) => {
+            let supplied_token = request
+                .headers
+                .get(CLAUDE_HTTP_TOKEN_HEADER)
+                .map(String::as_str)
+                .unwrap_or_default();
+            if supplied_token != token {
+                write_http_response(&mut stream, 401, "text/plain", "unauthorized")?;
+                return Ok(());
+            }
+            let payload: Value = if request.body.is_empty() {
+                Value::Object(Default::default())
+            } else {
+                match serde_json::from_slice(&request.body) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        write_http_response(
+                            &mut stream,
+                            500,
+                            "text/plain",
+                            &format!("invalid JSON payload: {err}"),
+                        )?;
+                        return Ok(());
+                    }
+                }
+            };
+            let outcome = match process_claude_hook_payload(root, None, &payload, false) {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    write_http_response(
+                        &mut stream,
+                        500,
+                        "text/plain",
+                        &format!("Packet28 hook processing failed: {err}"),
+                    )?;
+                    return Ok(());
+                }
+            };
+            let body = outcome.body.unwrap_or_else(|| "{}".to_string());
+            write_http_response(&mut stream, 200, "application/json", &body)?;
+        }
+        _ => {
+            write_http_response(&mut stream, 404, "text/plain", "not found")?;
+        }
+    }
+    Ok(())
+}
+
+fn read_http_request(stream: &TcpStream) -> Result<HttpHookRequest> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut request_line = String::new();
+    reader
+        .read_line(&mut request_line)
+        .context("failed to read HTTP request line")?;
+    let request_line = request_line.trim_end_matches(['\r', '\n']);
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
+    if method.is_empty() || path.is_empty() {
+        return Err(anyhow!("malformed HTTP request line"));
+    }
+    let mut headers = std::collections::HashMap::new();
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .context("failed to read HTTP request headers")?;
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+    let content_length = headers
+        .get("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    if content_length > MAX_HTTP_HOOK_BODY_BYTES {
+        return Err(anyhow!(
+            "HTTP hook payload exceeded {MAX_HTTP_HOOK_BODY_BYTES} bytes"
+        ));
+    }
+    let mut body = vec![0; content_length];
+    if content_length > 0 {
+        reader
+            .read_exact(&mut body)
+            .context("failed to read HTTP hook body")?;
+    }
+    Ok(HttpHookRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
+}
+
+fn write_http_response(
+    stream: &mut TcpStream,
+    status_code: u16,
+    content_type: &str,
+    body: &str,
+) -> Result<()> {
+    let reason = match status_code {
+        200 => "OK",
+        401 => "Unauthorized",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+    let response = format!(
+        "HTTP/1.1 {status_code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream
+        .write_all(response.as_bytes())
+        .context("failed to write HTTP response")?;
+    stream.flush().context("failed to flush HTTP response")
+}
+
+fn send_http_request(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<&str>,
+) -> Result<HttpClientResponse> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .with_context(|| format!("failed to connect to Packet28 hook server on port {port}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .context("failed to set hook health read timeout")?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(1)))
+        .context("failed to set hook health write timeout")?;
+    let payload = body.unwrap_or_default();
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        payload.len()
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+    request.push_str(payload);
+    stream
+        .write_all(request.as_bytes())
+        .context("failed to send HTTP request")?;
+    stream.flush().context("failed to flush HTTP request")?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader
+        .read_line(&mut status_line)
+        .context("failed to read HTTP status line")?;
+    let status_code = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| anyhow!("invalid HTTP status line"))?;
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .context("failed to read HTTP response headers")?;
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse::<usize>().unwrap_or(0);
+            }
+        }
+    }
+    let mut body = vec![0; content_length];
+    if content_length > 0 {
+        reader
+            .read_exact(&mut body)
+            .context("failed to read HTTP response body")?;
+    }
+    Ok(HttpClientResponse {
+        status_code,
+        body: String::from_utf8(body).context("invalid UTF-8 in HTTP response body")?,
+    })
 }
 
 fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
@@ -801,6 +1198,7 @@ fn parse_event_kind(value: Option<&str>) -> HookEventKind {
         "UserPromptSubmit" => HookEventKind::UserPromptSubmit,
         "PreToolUse" => HookEventKind::PreToolUse,
         "PostToolUse" => HookEventKind::PostToolUse,
+        "PostToolUseFailure" => HookEventKind::PostToolUseFailure,
         "CommandStarted" => HookEventKind::CommandStarted,
         "CommandProgress" => HookEventKind::CommandProgress,
         "CommandFinished" => HookEventKind::CommandFinished,
@@ -822,37 +1220,31 @@ fn boundary_for_event(kind: HookEventKind) -> HookBoundaryKind {
     }
 }
 
-fn emit_hook_output(
+fn render_hook_output(
     event_kind: HookEventKind,
     rewrite: Option<Value>,
     response: &packet28_daemon_core::HookIngestResponse,
-) -> Result<()> {
+) -> Result<Option<String>> {
     match event_kind {
         HookEventKind::SessionStart => {
             if let Some(additional_context) = response.additional_context.as_ref() {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "hookSpecificOutput": {
-                            "hookEventName": "SessionStart",
-                            "additionalContext": additional_context,
-                        }
-                    }))?
-                );
+                return Ok(Some(serde_json::to_string(&json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": additional_context,
+                    }
+                }))?));
             }
         }
         HookEventKind::PreToolUse => {
             if let Some(updated_input) = rewrite {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "allow",
-                            "updatedInput": updated_input,
-                        }
-                    }))?
-                );
+                return Ok(Some(serde_json::to_string(&json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "updatedInput": updated_input,
+                    }
+                }))?));
             }
         }
         HookEventKind::Stop | HookEventKind::SubagentStop => {
@@ -867,18 +1259,19 @@ fn emit_hook_output(
                         .unwrap_or("pending")
                 );
             } else if response.block_stop {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "decision": "block",
-                        "reason": response.stop_reason.clone().unwrap_or_else(|| "Packet28 requires an intention before stop".to_string()),
-                    }))?
-                );
+                return Ok(Some(serde_json::to_string(&json!({
+                    "decision": "block",
+                    "reason": response.stop_reason.clone().unwrap_or_else(|| "Packet28 requires an intention before stop".to_string()),
+                }))?));
+            } else if let Some(stop_reason) = response.stop_reason.as_ref() {
+                return Ok(Some(serde_json::to_string(&json!({
+                    "systemMessage": stop_reason,
+                }))?));
             }
         }
         _ => {}
     }
-    Ok(())
+    Ok(None)
 }
 
 fn build_pretool_rewrite(
@@ -960,14 +1353,15 @@ fn build_reducer_packet(
     payload: &Value,
     event_kind: HookEventKind,
 ) -> Option<HookReducerPacket> {
-    if !matches!(event_kind, HookEventKind::PostToolUse)
-        || !runtime_config.fallback_post_tool_capture
+    if !matches!(
+        event_kind,
+        HookEventKind::PostToolUse | HookEventKind::PostToolUseFailure
+    ) || !runtime_config.fallback_post_tool_capture
     {
         return None;
     }
     let tool_name = json_string(payload, "tool_name")?;
     let input = payload.get("tool_input").cloned().unwrap_or(Value::Null);
-    let response = payload.get("tool_response").cloned().unwrap_or(Value::Null);
     if tool_name == "Bash"
         && json_string(&input, "command")
             .as_deref()
@@ -975,13 +1369,25 @@ fn build_reducer_packet(
     {
         return None;
     }
-    match tool_name.as_str() {
-        "Bash" => build_bash_packet(&input, &response),
-        "Read" => build_read_packet(&input, &response),
-        "Grep" => build_grep_packet(&input, &response),
-        "Glob" => build_glob_packet(&input, &response),
-        "Edit" | "MultiEdit" | "Write" => build_edit_packet(&tool_name, &input, &response),
-        _ => Some(build_generic_packet(&tool_name, &input, &response)),
+    match event_kind {
+        HookEventKind::PostToolUse => {
+            let response = payload.get("tool_response").cloned().unwrap_or(Value::Null);
+            match tool_name.as_str() {
+                "Bash" => build_bash_packet(&input, &response),
+                "Read" => build_read_packet(&input, &response),
+                "Grep" => build_grep_packet(&input, &response),
+                "Glob" => build_glob_packet(&input, &response),
+                "Edit" | "MultiEdit" | "Write" => build_edit_packet(&tool_name, &input, &response),
+                _ => Some(build_generic_packet(&tool_name, &input, &response)),
+            }
+        }
+        HookEventKind::PostToolUseFailure => {
+            let error = json_string(payload, "error").unwrap_or_else(|| hook_output_text(payload));
+            Some(build_failed_tool_packet(
+                &tool_name, &input, payload, &error,
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -1125,6 +1531,228 @@ fn build_glob_packet(input: &Value, response: &Value) -> Option<HookReducerPacke
         response.clone(),
         response_failed(response),
     ))
+}
+
+fn build_failed_tool_packet(
+    tool_name: &str,
+    input: &Value,
+    payload: &Value,
+    error: &str,
+) -> HookReducerPacket {
+    match tool_name {
+        "Bash" => build_bash_failure_packet(input, payload, error)
+            .unwrap_or_else(|| build_generic_failure_packet(tool_name, input, payload, error)),
+        "Read" => build_read_failure_packet(input, payload, error)
+            .unwrap_or_else(|| build_generic_failure_packet(tool_name, input, payload, error)),
+        "Grep" => build_grep_failure_packet(input, payload, error)
+            .unwrap_or_else(|| build_generic_failure_packet(tool_name, input, payload, error)),
+        "Glob" => build_glob_failure_packet(input, payload, error)
+            .unwrap_or_else(|| build_generic_failure_packet(tool_name, input, payload, error)),
+        "Edit" | "MultiEdit" | "Write" => {
+            build_edit_failure_packet(tool_name, input, payload, error)
+                .unwrap_or_else(|| build_generic_failure_packet(tool_name, input, payload, error))
+        }
+        _ => build_generic_failure_packet(tool_name, input, payload, error),
+    }
+}
+
+fn build_bash_failure_packet(
+    input: &Value,
+    payload: &Value,
+    error: &str,
+) -> Option<HookReducerPacket> {
+    let command = json_string(input, "command")?;
+    let spec = classify_command(&command);
+    let summary = first_nonempty_line(error)
+        .unwrap_or_else(|| format!("command failed: {}", compact_text(&command, 100)));
+    let (packet_type, operation_kind, family, canonical_kind, paths, equivalence_key) =
+        if let Some(spec) = spec {
+            (
+                format!("packet28.hook.fallback.{}.failure.v1", spec.family),
+                spec.operation_kind,
+                Some(spec.family),
+                Some(spec.canonical_kind),
+                spec.paths,
+                spec.equivalence_key,
+            )
+        } else {
+            (
+                "packet28.hook.command.failure.v1".to_string(),
+                suite_packet_core::ToolOperationKind::Generic,
+                Some("generic".to_string()),
+                None,
+                extract_command_paths(&command),
+                None,
+            )
+        };
+    Some(packet_from_parts(
+        &packet_type,
+        "Bash",
+        operation_kind,
+        family,
+        canonical_kind,
+        summary,
+        Some(command),
+        None,
+        paths,
+        Vec::new(),
+        Vec::new(),
+        equivalence_key,
+        None,
+        Some(false),
+        payload.clone(),
+        true,
+    ))
+}
+
+fn build_read_failure_packet(
+    input: &Value,
+    payload: &Value,
+    error: &str,
+) -> Option<HookReducerPacket> {
+    let path = json_string(input, "file_path")
+        .or_else(|| json_string(input, "path"))
+        .or_else(|| json_string(input, "target"))?;
+    let line_start = input.get("offset").and_then(Value::as_u64).unwrap_or(1);
+    let count = input.get("limit").and_then(Value::as_u64).unwrap_or(1);
+    let line_end = line_start.saturating_add(count.saturating_sub(1));
+    Some(packet_from_parts(
+        "packet28.hook.read.failure.v1",
+        "Read",
+        suite_packet_core::ToolOperationKind::Read,
+        Some("claude_native".to_string()),
+        Some("read".to_string()),
+        format!("Read failed for {}: {}", path, compact_text(error, 140)),
+        None,
+        None,
+        vec![path.clone()],
+        vec![format!("{path}:{line_start}-{line_end}")],
+        Vec::new(),
+        Some(format!("read:{path}")),
+        None,
+        Some(false),
+        payload.clone(),
+        true,
+    ))
+}
+
+fn build_grep_failure_packet(
+    input: &Value,
+    payload: &Value,
+    error: &str,
+) -> Option<HookReducerPacket> {
+    let query = json_string(input, "pattern")
+        .or_else(|| json_string(input, "query"))
+        .or_else(|| json_string(input, "search"))?;
+    let paths = json_array_strings(input, "include");
+    Some(packet_from_parts(
+        "packet28.hook.grep.failure.v1",
+        "Grep",
+        suite_packet_core::ToolOperationKind::Search,
+        Some("claude_native".to_string()),
+        Some("grep".to_string()),
+        format!("Grep failed for '{}': {}", query, compact_text(error, 140)),
+        None,
+        Some(query.clone()),
+        paths.clone(),
+        Vec::new(),
+        Vec::new(),
+        Some(format!("grep:{}:{}", query, paths.join(","))),
+        None,
+        Some(false),
+        payload.clone(),
+        true,
+    ))
+}
+
+fn build_glob_failure_packet(
+    input: &Value,
+    payload: &Value,
+    error: &str,
+) -> Option<HookReducerPacket> {
+    let pattern = json_string(input, "pattern")?;
+    Some(packet_from_parts(
+        "packet28.hook.glob.failure.v1",
+        "Glob",
+        suite_packet_core::ToolOperationKind::Search,
+        Some("claude_native".to_string()),
+        Some("glob".to_string()),
+        format!(
+            "Glob failed for '{}': {}",
+            pattern,
+            compact_text(error, 140)
+        ),
+        None,
+        Some(pattern.clone()),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Some(format!("glob:{pattern}")),
+        None,
+        Some(false),
+        payload.clone(),
+        true,
+    ))
+}
+
+fn build_edit_failure_packet(
+    tool_name: &str,
+    input: &Value,
+    payload: &Value,
+    error: &str,
+) -> Option<HookReducerPacket> {
+    let path = json_string(input, "file_path")
+        .or_else(|| json_string(input, "path"))
+        .or_else(|| json_string(input, "target"))?;
+    Some(packet_from_parts(
+        "packet28.hook.edit.failure.v1",
+        tool_name,
+        suite_packet_core::ToolOperationKind::Edit,
+        Some("claude_native".to_string()),
+        Some("edit".to_string()),
+        format!(
+            "{} failed for {}: {}",
+            tool_name,
+            path,
+            compact_text(error, 140)
+        ),
+        None,
+        None,
+        vec![path],
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        Some(false),
+        payload.clone(),
+        true,
+    ))
+}
+
+fn build_generic_failure_packet(
+    tool_name: &str,
+    input: &Value,
+    payload: &Value,
+    error: &str,
+) -> HookReducerPacket {
+    packet_from_parts(
+        "packet28.hook.generic.failure.v1",
+        tool_name,
+        suite_packet_core::ToolOperationKind::Generic,
+        Some("claude_native".to_string()),
+        None,
+        format!("{tool_name} failed: {}", compact_text(error, 140)),
+        json_string(input, "command"),
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        Some(false),
+        payload.clone(),
+        true,
+    )
 }
 
 fn build_edit_packet(
@@ -1295,7 +1923,7 @@ fn hook_output_text(value: &Value) -> String {
     if let Some(text) = value.as_str() {
         return text.to_string();
     }
-    for key in ["stdout", "stderr", "output", "text", "content"] {
+    for key in ["stdout", "stderr", "output", "text", "content", "error"] {
         if let Some(text) = json_string(value, key) {
             return text;
         }
@@ -1742,6 +2370,24 @@ mod tests {
             HookEventKind::PostToolUse,
         );
         assert!(packet.is_none());
+    }
+
+    #[test]
+    fn post_tool_failure_captures_failed_bash_packet() {
+        let packet = build_reducer_packet(
+            &HookRuntimeConfig::default(),
+            &json!({
+                "tool_name":"Bash",
+                "tool_input":{"command":"git status --short src/lib.rs"},
+                "error":"fatal: not a git repository"
+            }),
+            HookEventKind::PostToolUseFailure,
+        )
+        .unwrap();
+        assert!(packet.failed);
+        assert_eq!(packet.reducer_family.as_deref(), Some("git"));
+        assert_eq!(packet.canonical_command_kind.as_deref(), Some("git_status"));
+        assert!(packet.summary.contains("fatal: not a git repository"));
     }
 
     #[test]

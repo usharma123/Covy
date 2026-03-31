@@ -281,6 +281,9 @@ fn invalidate_epochs_for_packet(
     task: &mut TaskRecord,
     packet: &packet28_daemon_core::HookReducerPacket,
 ) {
+    if packet.failed {
+        return;
+    }
     match packet_family(packet) {
         Some("git") if packet_is_mutation(packet) => {
             task.hook_git_epoch = task.hook_git_epoch.saturating_add(1);
@@ -502,7 +505,8 @@ pub(crate) fn hook_ingest(
                 refresh_context: Some(false),
                 ..BrokerWriteStateRequest::default()
             }];
-            if packet.operation_kind == suite_packet_core::ToolOperationKind::Read {
+            if !packet.failed && packet.operation_kind == suite_packet_core::ToolOperationKind::Read
+            {
                 requests.push(BrokerWriteStateRequest {
                     task_id: task_id.to_string(),
                     op: Some(BrokerWriteOp::FileRead),
@@ -513,11 +517,13 @@ pub(crate) fn hook_ingest(
                     ..BrokerWriteStateRequest::default()
                 });
             }
-            if matches!(
-                packet.operation_kind,
-                suite_packet_core::ToolOperationKind::Edit
-                    | suite_packet_core::ToolOperationKind::Diff
-            ) {
+            if !packet.failed
+                && matches!(
+                    packet.operation_kind,
+                    suite_packet_core::ToolOperationKind::Edit
+                        | suite_packet_core::ToolOperationKind::Diff
+                )
+            {
                 requests.push(BrokerWriteStateRequest {
                     task_id: task_id.to_string(),
                     op: Some(BrokerWriteOp::FileEdit),
@@ -728,6 +734,83 @@ mod tests {
         )
         .unwrap();
         assert!(!after_edit.cache_hit);
+    }
+
+    #[test]
+    fn failed_edit_does_not_bust_fs_cache() {
+        let state = test_state();
+        let _ = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-failed-edit".to_string(),
+                reducer_packet: Some(packet("first read")),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        let cached = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-failed-edit".to_string(),
+                reducer_packet: Some(packet("first read")),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(cached.cache_hit);
+
+        let _ = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-failed-edit".to_string(),
+                reducer_packet: Some(packet28_daemon_core::HookReducerPacket {
+                    packet_type: "packet28.hook.edit.failure.v1".to_string(),
+                    tool_name: "Edit".to_string(),
+                    operation_kind: suite_packet_core::ToolOperationKind::Edit,
+                    reducer_family: Some("claude_native".to_string()),
+                    canonical_command_kind: Some("edit".to_string()),
+                    summary: "edit failed for src/lib.rs: permission denied".to_string(),
+                    compact_preview: None,
+                    command: None,
+                    search_query: None,
+                    compact_path: Some("native_tool".to_string()),
+                    passthrough_reason: None,
+                    raw_est_tokens: Some(5),
+                    reduced_est_tokens: Some(5),
+                    paths: vec!["src/lib.rs".to_string()],
+                    regions: Vec::new(),
+                    symbols: Vec::new(),
+                    equivalence_key: None,
+                    est_tokens: 5,
+                    est_bytes: 20,
+                    failed: true,
+                    error_class: Some("tool_error".to_string()),
+                    error_message: Some("permission denied".to_string()),
+                    retryable: Some(false),
+                    duration_ms: Some(5),
+                    exit_code: Some(1),
+                    cache_fingerprint: None,
+                    cacheable: Some(false),
+                    mutation: Some(false),
+                    raw_artifact_handle: None,
+                    raw_artifact_available: false,
+                    artifact: None,
+                }),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+
+        let after_failed_edit = hook_ingest(
+            state,
+            HookIngestRequest {
+                task_id: "task-failed-edit".to_string(),
+                reducer_packet: Some(packet("first read")),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(after_failed_edit.cache_hit);
     }
 
     #[test]

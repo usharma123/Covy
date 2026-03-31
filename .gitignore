@@ -16,6 +16,7 @@ Cargo.lock
 *.swo
 *~
 node_modules/
+claude-code-main/
 
 # Agent/runtime local instructions
 AGENTS.md
