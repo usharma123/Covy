@@ -127,9 +127,9 @@ struct Packet28SearchExecution {
     notes: Vec<String>,
 }
 
-const SLIM_PATH_LIMIT: usize = 8;
-const SLIM_REGION_LIMIT: usize = 12;
-const SLIM_SYMBOL_LIMIT: usize = 8;
+const SLIM_PATH_LIMIT: usize = 6;
+const SLIM_REGION_LIMIT: usize = 8;
+const SLIM_SYMBOL_LIMIT: usize = 4;
 const SLIM_DIAGNOSTIC_LIMIT: usize = 4;
 
 fn json_array_strings(value: &Value, key: &str) -> Vec<String> {
@@ -430,26 +430,137 @@ fn build_search_execution_value(execution: &Packet28SearchExecution) -> Value {
     })
 }
 
+fn build_search_slim_engine_value(
+    engine: Option<&packet28_reducer_core::SearchEngineStats>,
+) -> Option<Value> {
+    let engine = engine?;
+    let mut value = serde_json::Map::new();
+    value.insert("engine".to_string(), json!(engine.engine));
+    if let Some(plan_kind) = &engine.plan_kind {
+        value.insert("plan_kind".to_string(), json!(plan_kind));
+    }
+    if let Some(planner_fallback) = &engine.planner_fallback {
+        value.insert("planner_fallback".to_string(), json!(planner_fallback));
+    }
+    if let Some(stale_reason) = &engine.stale_reason {
+        value.insert("stale_reason".to_string(), json!(stale_reason));
+    }
+    if let Some(fallback_reason) = &engine.fallback_reason {
+        value.insert("fallback_reason".to_string(), json!(fallback_reason));
+    }
+    Some(Value::Object(value))
+}
+
+fn build_search_slim_execution_value(execution: &Packet28SearchExecution) -> Value {
+    let mut value = serde_json::Map::new();
+    value.insert(
+        "primary_backend".to_string(),
+        json!(execution.primary_backend),
+    );
+    if let Some(secondary_backend) = &execution.secondary_backend {
+        value.insert("secondary_backend".to_string(), json!(secondary_backend));
+    }
+    if execution.shadowed {
+        value.insert("shadowed".to_string(), json!(true));
+    }
+    if execution.added_displayed_matches > 0 {
+        value.insert(
+            "added_displayed_matches".to_string(),
+            json!(execution.added_displayed_matches),
+        );
+    }
+    if execution.added_paths > 0 {
+        value.insert("added_paths".to_string(), json!(execution.added_paths));
+    }
+    let include_notes = execution.shadowed
+        || execution.added_displayed_matches > 0
+        || execution.added_paths > 0
+        || execution.notes.iter().any(|note| note.contains("failed"));
+    if include_notes && !execution.notes.is_empty() {
+        value.insert("notes".to_string(), json!(execution.notes));
+    }
+    Value::Object(value)
+}
+
+fn build_search_slim_preview(search_result: &packet28_reducer_core::SearchResult) -> String {
+    search_result
+        .compact_preview
+        .lines()
+        .next()
+        .unwrap_or("Search completed")
+        .to_string()
+}
+
 fn build_search_slim_payload(
     search_result: &packet28_reducer_core::SearchResult,
     artifact_id: Option<String>,
     execution: &Packet28SearchExecution,
 ) -> Value {
-    json!({
-        "match_count": search_result.match_count,
-        "returned_match_count": search_result.returned_match_count,
-        "truncated": search_result.truncated,
-        "paths": search_result.paths.iter().take(SLIM_PATH_LIMIT).cloned().collect::<Vec<_>>(),
-        "regions": search_result.regions.iter().take(SLIM_REGION_LIMIT).cloned().collect::<Vec<_>>(),
-        "symbols": search_result.symbols.iter().take(SLIM_SYMBOL_LIMIT).cloned().collect::<Vec<_>>(),
-        "diagnostics": search_result.diagnostics.iter().take(SLIM_DIAGNOSTIC_LIMIT).cloned().collect::<Vec<_>>(),
-        "compact_preview": search_result.compact_preview,
-        "engine": search_result.engine,
-        "search_strategy": execution.strategy.as_str(),
-        "hybrid": build_search_execution_value(execution),
-        "artifact_id": artifact_id,
-        "response_mode": "slim",
-    })
+    let mut payload = serde_json::Map::new();
+    payload.insert("match_count".to_string(), json!(search_result.match_count));
+    if search_result.returned_match_count != search_result.match_count {
+        payload.insert(
+            "returned_match_count".to_string(),
+            json!(search_result.returned_match_count),
+        );
+    }
+    if search_result.truncated {
+        payload.insert("truncated".to_string(), json!(true));
+    }
+    let paths = search_result
+        .paths
+        .iter()
+        .take(SLIM_PATH_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !paths.is_empty() {
+        payload.insert("paths".to_string(), json!(paths));
+    }
+    let regions = search_result
+        .regions
+        .iter()
+        .take(SLIM_REGION_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !regions.is_empty() {
+        payload.insert("regions".to_string(), json!(regions));
+    }
+    let symbols = search_result
+        .symbols
+        .iter()
+        .take(SLIM_SYMBOL_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !symbols.is_empty() {
+        payload.insert("symbols".to_string(), json!(symbols));
+    }
+    let diagnostics = search_result
+        .diagnostics
+        .iter()
+        .take(SLIM_DIAGNOSTIC_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !diagnostics.is_empty() {
+        payload.insert("diagnostics".to_string(), json!(diagnostics));
+    }
+    payload.insert(
+        "compact_preview".to_string(),
+        json!(build_search_slim_preview(search_result)),
+    );
+    if let Some(engine) = build_search_slim_engine_value(search_result.engine.as_ref()) {
+        payload.insert("engine".to_string(), engine);
+    }
+    payload.insert(
+        "search_strategy".to_string(),
+        json!(execution.strategy.as_str()),
+    );
+    payload.insert(
+        "hybrid".to_string(),
+        build_search_slim_execution_value(execution),
+    );
+    payload.insert("artifact_id".to_string(), json!(artifact_id));
+    payload.insert("response_mode".to_string(), json!("slim"));
+    Value::Object(payload)
 }
 
 fn execute_search_primary(
@@ -1398,7 +1509,35 @@ mod tests {
         assert_eq!(payload["search_strategy"], "hybrid");
         assert_eq!(payload["paths"][0], "src/alpha.rs");
         assert_eq!(payload["regions"][0], "src/alpha.rs:4-4");
+        assert_eq!(
+            payload["compact_preview"],
+            "Search found 1 matches in 1 files."
+        );
         assert!(payload["engine"].is_object());
         assert!(payload["hybrid"].is_object());
+    }
+
+    #[test]
+    fn slim_payload_omits_empty_search_metadata() {
+        let result = sample_result("indexed_regex", "src/alpha.rs", 4, "struct Alpha;");
+        let execution = Packet28SearchExecution {
+            strategy: Packet28SearchStrategy::Hybrid,
+            primary_backend: "indexed_regex".to_string(),
+            secondary_backend: None,
+            shadowed: false,
+            added_displayed_matches: 0,
+            added_paths: 0,
+            notes: Vec::new(),
+        };
+        let payload =
+            build_search_slim_payload(&result, Some("artifact-1".to_string()), &execution);
+
+        assert_eq!(payload["engine"]["engine"], "indexed_regex");
+        assert!(payload["engine"].get("fallback_reason").is_none());
+        assert_eq!(payload["hybrid"]["primary_backend"], "indexed_regex");
+        assert!(payload["hybrid"].get("secondary_backend").is_none());
+        assert!(payload["hybrid"].get("notes").is_none());
+        assert!(payload.get("returned_match_count").is_none());
+        assert!(payload.get("truncated").is_none());
     }
 }
