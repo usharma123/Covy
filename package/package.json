@@ -1,6 +1,6 @@
 {
   "name": "@packet28/darwin-arm64",
-  "version": "0.2.40",
+  "version": "0.2.41",
   "description": "Platform-specific binaries for packet28 (darwin-arm64)",
   "license": "MIT",
   "repository": {
