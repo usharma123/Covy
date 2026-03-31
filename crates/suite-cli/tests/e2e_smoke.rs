@@ -3638,6 +3638,21 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
     assert_eq!(search_payload["response_mode"], "slim");
     assert!(search_payload["artifact_id"].as_str().is_some());
     assert!(search_payload["match_count"].as_u64().unwrap() >= 1);
+    assert_eq!(search_payload["search_strategy"], "hybrid");
+    assert!(search_payload["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|path| path == "src/alpha.rs"));
+    assert!(search_payload["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|region| region
+            .as_str()
+            .is_some_and(|value| value.starts_with("src/alpha.rs:"))));
+    assert!(search_payload["engine"].is_object());
+    assert!(search_payload["hybrid"].is_object());
     let search_artifact = search_payload["artifact_id"].as_str().unwrap().to_string();
 
     write_mcp_message(
@@ -3659,8 +3674,10 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
     let search_full_payload = &search_full["result"]["structuredContent"];
     assert_eq!(search_full_payload["response_mode"], "full");
     assert_eq!(search_full_payload["query"], "Alpha");
+    assert_eq!(search_full_payload["search_strategy"], "hybrid");
     assert!(search_full_payload["groups"].as_array().unwrap().len() >= 1);
     assert!(search_full_payload["engine"].is_object());
+    assert!(search_full_payload["hybrid"].is_object());
 
     write_mcp_message(
         &mut stdin,

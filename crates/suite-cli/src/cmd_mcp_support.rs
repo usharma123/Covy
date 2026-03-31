@@ -431,13 +431,22 @@ pub(crate) fn packet28_search_via_session(
     session: &Arc<Mutex<McpSessionState>>,
     request: packet28_reducer_core::SearchRequest,
 ) -> Result<packet28_reducer_core::SearchResult> {
+    packet28_search_via_session_with_force(root, session, request, false)
+}
+
+pub(crate) fn packet28_search_via_session_with_force(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    request: packet28_reducer_core::SearchRequest,
+    force_indexed: bool,
+) -> Result<packet28_reducer_core::SearchResult> {
     match send_daemon_request_via_session(
         root,
         session,
         &DaemonRequest::Packet28Search {
             request: packet28_daemon_core::Packet28SearchRequest {
                 request,
-                force_indexed: false,
+                force_indexed,
             },
         },
     )? {

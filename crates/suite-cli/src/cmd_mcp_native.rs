@@ -1,7 +1,8 @@
 use super::*;
 use crate::cmd_mcp::support::{
     load_raw_output_artifact, load_tool_result_artifact, next_task_invocation,
-    packet28_search_via_session, store_result_artifact, write_auto_capture_state_batch_via_session,
+    packet28_search_via_session, packet28_search_via_session_with_force, store_result_artifact,
+    write_auto_capture_state_batch_via_session,
 };
 use glob::Pattern;
 
@@ -11,6 +12,27 @@ pub(crate) enum Packet28SearchResponseMode {
     #[default]
     Slim,
     Full,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Packet28SearchStrategy {
+    Indexed,
+    Native,
+    Recall,
+    #[default]
+    Hybrid,
+}
+
+impl Packet28SearchStrategy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hybrid => "hybrid",
+            Self::Recall => "recall",
+            Self::Indexed => "indexed",
+            Self::Native => "native",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -25,6 +47,7 @@ pub(crate) struct Packet28SearchArgs {
     pub(crate) context_lines: Option<usize>,
     pub(crate) max_matches_per_file: Option<usize>,
     pub(crate) max_total_matches: Option<usize>,
+    pub(crate) search_strategy: Packet28SearchStrategy,
     pub(crate) response_mode: Packet28SearchResponseMode,
 }
 
@@ -93,6 +116,22 @@ pub(crate) struct Packet28WriteIntentionArgs {
     pub(crate) symbols: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct Packet28SearchExecution {
+    strategy: Packet28SearchStrategy,
+    primary_backend: String,
+    secondary_backend: Option<String>,
+    shadowed: bool,
+    added_displayed_matches: usize,
+    added_paths: usize,
+    notes: Vec<String>,
+}
+
+const SLIM_PATH_LIMIT: usize = 8;
+const SLIM_REGION_LIMIT: usize = 12;
+const SLIM_SYMBOL_LIMIT: usize = 8;
+const SLIM_DIAGNOSTIC_LIMIT: usize = 4;
+
 fn json_array_strings(value: &Value, key: &str) -> Vec<String> {
     value
         .get(key)
@@ -104,7 +143,7 @@ fn json_array_strings(value: &Value, key: &str) -> Vec<String> {
 }
 
 fn search_request_summary(args: &Packet28SearchArgs) -> String {
-    if args.paths.is_empty() {
+    let scope = if args.paths.is_empty() {
         format!(
             "search '{}' across repo ({:?})",
             args.query, args.response_mode
@@ -116,6 +155,11 @@ fn search_request_summary(args: &Packet28SearchArgs) -> String {
             args.paths.len(),
             args.response_mode
         )
+    };
+    if matches!(args.search_strategy, Packet28SearchStrategy::Hybrid) {
+        scope
+    } else {
+        format!("{scope} via {}", args.search_strategy.as_str())
     }
 }
 
@@ -155,6 +199,376 @@ fn glob_request_summary(args: &Packet28GlobArgs) -> String {
 fn estimate_tokens_for_value(value: &Value) -> u64 {
     let bytes = serde_json::to_vec(value).unwrap_or_default().len() as f64;
     (bytes / 4.0).ceil() as u64
+}
+
+fn append_unique(items: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    if !value.is_empty() && !items.iter().any(|existing| existing == &value) {
+        items.push(value);
+    }
+}
+
+fn merge_string_lists<'a>(lists: impl IntoIterator<Item = &'a [String]>) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut merged = Vec::new();
+    for list in lists {
+        for item in list {
+            if seen.insert(item.clone()) {
+                merged.push(item.clone());
+            }
+        }
+    }
+    merged
+}
+
+fn query_uses_regex_features(query: &str) -> bool {
+    let mut escaped = false;
+    for ch in query.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' => {
+                return true
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn search_backend_name(result: &packet28_reducer_core::SearchResult) -> String {
+    result
+        .engine
+        .as_ref()
+        .map(|engine| engine.engine.clone())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn should_shadow_with_native(
+    request: &packet28_reducer_core::SearchRequest,
+    result: &packet28_reducer_core::SearchResult,
+    strategy: Packet28SearchStrategy,
+) -> bool {
+    if search_backend_name(result) != "indexed_regex" {
+        return false;
+    }
+    if matches!(strategy, Packet28SearchStrategy::Recall) {
+        return true;
+    }
+    if result.match_count == 0 || request.context_lines.unwrap_or(0) > 0 {
+        return true;
+    }
+    if request.fixed_string {
+        return false;
+    }
+    request.whole_word
+        || matches!(request.case_sensitive, Some(false))
+        || query_uses_regex_features(&request.query)
+}
+
+fn run_search_preview(result: &packet28_reducer_core::SearchResult) -> String {
+    if result.match_count == 0 {
+        return "Search found 0 matches.".to_string();
+    }
+    let mut lines = vec![format!(
+        "Search found {} matches in {} files.",
+        result.match_count,
+        result.groups.len()
+    )];
+    for group in result.groups.iter().take(12) {
+        lines.push(format!("- {} ({})", group.path, group.match_count));
+    }
+    if result.groups.len() > 12 {
+        lines.push(format!("+{} more files", result.groups.len() - 12));
+    }
+    lines.join("\n")
+}
+
+fn merge_search_results(
+    request: &packet28_reducer_core::SearchRequest,
+    mut primary: packet28_reducer_core::SearchResult,
+    secondary: &packet28_reducer_core::SearchResult,
+) -> (packet28_reducer_core::SearchResult, usize, usize) {
+    let mut group_matches = std::collections::BTreeMap::<
+        String,
+        std::collections::BTreeMap<(usize, String), packet28_reducer_core::SearchMatch>,
+    >::new();
+    let mut group_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut primary_displayed = std::collections::BTreeSet::<(String, usize, String)>::new();
+
+    for group in &primary.groups {
+        let entry = group_matches.entry(group.path.clone()).or_default();
+        for item in &group.matches {
+            primary_displayed.insert((item.path.clone(), item.line, item.text.clone()));
+            entry
+                .entry((item.line, item.text.clone()))
+                .or_insert_with(|| item.clone());
+        }
+        group_counts.insert(
+            group.path.clone(),
+            group.match_count.max(group.displayed_match_count),
+        );
+    }
+
+    let primary_paths = primary
+        .paths
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut added_displayed_matches = 0usize;
+    let mut added_paths = 0usize;
+    for group in &secondary.groups {
+        if !primary_paths.contains(&group.path) {
+            added_paths = added_paths.saturating_add(1);
+        }
+        let entry = group_matches.entry(group.path.clone()).or_default();
+        for item in &group.matches {
+            if primary_displayed.insert((item.path.clone(), item.line, item.text.clone())) {
+                added_displayed_matches = added_displayed_matches.saturating_add(1);
+            }
+            entry
+                .entry((item.line, item.text.clone()))
+                .or_insert_with(|| item.clone());
+        }
+        let displayed_unique = entry.len();
+        let merged_count = group
+            .match_count
+            .max(group.displayed_match_count)
+            .max(displayed_unique);
+        group_counts
+            .entry(group.path.clone())
+            .and_modify(|count| *count = (*count).max(merged_count))
+            .or_insert(merged_count);
+    }
+
+    let mut groups = Vec::new();
+    let mut total_match_count = 0usize;
+    let mut returned_matches = Vec::new();
+    let max_total_matches = request.max_total_matches.unwrap_or(50).clamp(1, 200);
+
+    for (path, matches) in group_matches {
+        let mut displayed = matches.into_values().collect::<Vec<_>>();
+        displayed.sort_by(|left, right| {
+            left.line
+                .cmp(&right.line)
+                .then_with(|| left.text.cmp(&right.text))
+        });
+        if displayed.len() > 12 {
+            displayed.truncate(12);
+        }
+        let match_count = group_counts
+            .get(&path)
+            .copied()
+            .unwrap_or(displayed.len())
+            .max(displayed.len());
+        total_match_count = total_match_count.saturating_add(match_count);
+        for item in displayed.iter().cloned() {
+            if returned_matches.len() >= max_total_matches {
+                break;
+            }
+            returned_matches.push(item);
+        }
+        groups.push(packet28_reducer_core::SearchGroup {
+            path,
+            match_count,
+            displayed_match_count: displayed.len(),
+            truncated: match_count > displayed.len(),
+            matches: displayed,
+        });
+    }
+
+    groups.sort_by(|left, right| left.path.cmp(&right.path));
+    primary.requested_paths = merge_string_lists([
+        primary.requested_paths.as_slice(),
+        secondary.requested_paths.as_slice(),
+    ]);
+    primary.resolved_paths = merge_string_lists([
+        primary.resolved_paths.as_slice(),
+        secondary.resolved_paths.as_slice(),
+    ]);
+    primary.paths = groups.iter().map(|group| group.path.clone()).collect();
+    primary.regions = groups
+        .iter()
+        .flat_map(|group| {
+            group
+                .matches
+                .iter()
+                .map(|item| packet28_reducer_core::format_region(&item.path, item.line, item.line))
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    primary.symbols =
+        merge_string_lists([primary.symbols.as_slice(), secondary.symbols.as_slice()]);
+    primary.groups = groups;
+    primary.match_count = total_match_count
+        .max(primary.match_count)
+        .max(secondary.match_count);
+    primary.returned_match_count = returned_matches.len();
+    primary.truncated = primary.match_count > primary.returned_match_count;
+    primary.compact_preview = run_search_preview(&primary);
+    primary.diagnostics = merge_string_lists([
+        primary.diagnostics.as_slice(),
+        secondary.diagnostics.as_slice(),
+    ]);
+
+    (primary, added_displayed_matches, added_paths)
+}
+
+fn build_search_execution_value(execution: &Packet28SearchExecution) -> Value {
+    json!({
+        "strategy": execution.strategy.as_str(),
+        "primary_backend": execution.primary_backend,
+        "secondary_backend": execution.secondary_backend,
+        "shadowed": execution.shadowed,
+        "added_displayed_matches": execution.added_displayed_matches,
+        "added_paths": execution.added_paths,
+        "notes": execution.notes,
+    })
+}
+
+fn build_search_slim_payload(
+    search_result: &packet28_reducer_core::SearchResult,
+    artifact_id: Option<String>,
+    execution: &Packet28SearchExecution,
+) -> Value {
+    json!({
+        "match_count": search_result.match_count,
+        "returned_match_count": search_result.returned_match_count,
+        "truncated": search_result.truncated,
+        "paths": search_result.paths.iter().take(SLIM_PATH_LIMIT).cloned().collect::<Vec<_>>(),
+        "regions": search_result.regions.iter().take(SLIM_REGION_LIMIT).cloned().collect::<Vec<_>>(),
+        "symbols": search_result.symbols.iter().take(SLIM_SYMBOL_LIMIT).cloned().collect::<Vec<_>>(),
+        "diagnostics": search_result.diagnostics.iter().take(SLIM_DIAGNOSTIC_LIMIT).cloned().collect::<Vec<_>>(),
+        "compact_preview": search_result.compact_preview,
+        "engine": search_result.engine,
+        "search_strategy": execution.strategy.as_str(),
+        "hybrid": build_search_execution_value(execution),
+        "artifact_id": artifact_id,
+        "response_mode": "slim",
+    })
+}
+
+fn execute_search_primary(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    request: &packet28_reducer_core::SearchRequest,
+) -> Result<packet28_reducer_core::SearchResult> {
+    match packet28_search_via_session(root, session, request.clone()) {
+        Ok(result) => Ok(result),
+        Err(daemon_error) => {
+            let mut fallback = packet28_reducer_core::search(root, request)?;
+            if let Some(engine) = fallback.engine.as_mut() {
+                engine.fallback_reason = Some(daemon_error.to_string());
+            }
+            Ok(fallback)
+        }
+    }
+}
+
+fn execute_search_with_strategy(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    request: &packet28_reducer_core::SearchRequest,
+    strategy: Packet28SearchStrategy,
+) -> Result<(packet28_reducer_core::SearchResult, Packet28SearchExecution)> {
+    match strategy {
+        Packet28SearchStrategy::Native => {
+            let result = packet28_reducer_core::search(root, request)?;
+            let execution = Packet28SearchExecution {
+                strategy,
+                primary_backend: search_backend_name(&result),
+                secondary_backend: None,
+                shadowed: false,
+                added_displayed_matches: 0,
+                added_paths: 0,
+                notes: vec!["used native search backend directly".to_string()],
+            };
+            Ok((result, execution))
+        }
+        Packet28SearchStrategy::Indexed => {
+            let result =
+                packet28_search_via_session_with_force(root, session, request.clone(), true)?;
+            let execution = Packet28SearchExecution {
+                strategy,
+                primary_backend: search_backend_name(&result),
+                secondary_backend: None,
+                shadowed: false,
+                added_displayed_matches: 0,
+                added_paths: 0,
+                notes: vec!["forced indexed search backend".to_string()],
+            };
+            Ok((result, execution))
+        }
+        Packet28SearchStrategy::Hybrid | Packet28SearchStrategy::Recall => {
+            let mut primary = execute_search_primary(root, session, request)?;
+            let primary_backend = search_backend_name(&primary);
+            let mut execution = Packet28SearchExecution {
+                strategy,
+                primary_backend: primary_backend.clone(),
+                secondary_backend: None,
+                shadowed: false,
+                added_displayed_matches: 0,
+                added_paths: 0,
+                notes: Vec::new(),
+            };
+            if should_shadow_with_native(request, &primary, strategy) {
+                match packet28_reducer_core::search(root, request) {
+                    Ok(secondary) => {
+                        execution.secondary_backend = Some(search_backend_name(&secondary));
+                        execution.shadowed = true;
+                        let (mut merged, added_displayed_matches, added_paths) =
+                            merge_search_results(request, primary, &secondary);
+                        execution.added_displayed_matches = added_displayed_matches;
+                        execution.added_paths = added_paths;
+                        if added_displayed_matches > 0 || added_paths > 0 {
+                            append_unique(
+                                &mut merged.diagnostics,
+                                format!(
+                                    "native recall verification added {added_displayed_matches} displayed matches across {added_paths} new paths"
+                                ),
+                            );
+                            execution.notes.push(format!(
+                                "native recall verification added {added_displayed_matches} displayed matches across {added_paths} new paths"
+                            ));
+                        } else {
+                            append_unique(
+                                &mut merged.diagnostics,
+                                "native recall verification confirmed the indexed result",
+                            );
+                            execution.notes.push(
+                                "native recall verification confirmed the indexed result"
+                                    .to_string(),
+                            );
+                        }
+                        primary = merged;
+                    }
+                    Err(error) => {
+                        append_unique(
+                            &mut primary.diagnostics,
+                            format!("native recall verification failed: {error}"),
+                        );
+                        execution
+                            .notes
+                            .push(format!("native recall verification failed: {error}"));
+                    }
+                }
+            } else if primary_backend == "indexed_regex" {
+                execution.notes.push(
+                    "indexed search was selective enough to skip native recall verification"
+                        .to_string(),
+                );
+            } else {
+                execution
+                    .notes
+                    .push(format!("primary backend already used {}", primary_backend));
+            }
+            Ok((primary, execution))
+        }
+    }
 }
 
 fn write_native_tool_result(
@@ -280,15 +694,9 @@ pub(crate) fn handle_packet28_search(
         max_total_matches: args.max_total_matches,
     };
     let started_at = Instant::now();
-    let search_result = match packet28_search_via_session(root, session, request.clone()) {
-        Ok(result) => result,
-        Err(daemon_error) => match packet28_reducer_core::search(root, &request) {
-            Ok(mut fallback) => {
-                if let Some(engine) = fallback.engine.as_mut() {
-                    engine.fallback_reason = Some(daemon_error.to_string());
-                }
-                fallback
-            }
+    let (search_result, execution) =
+        match execute_search_with_strategy(root, session, &request, args.search_strategy) {
+            Ok(result) => result,
             Err(error) => {
                 let duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
                 write_native_tool_failure(
@@ -310,8 +718,7 @@ pub(crate) fn handle_packet28_search(
                 )?;
                 return Err(error);
             }
-        },
-    };
+        };
     let duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let groups = search_result
         .groups
@@ -374,6 +781,8 @@ pub(crate) fn handle_packet28_search(
         "compact_preview": compact_preview,
         "diagnostics": diagnostics,
         "engine": search_result.engine,
+        "search_strategy": execution.strategy.as_str(),
+        "hybrid": build_search_execution_value(&execution),
         "response_mode": "full",
     });
     let artifact_id = Some(store_result_artifact(
@@ -388,12 +797,9 @@ pub(crate) fn handle_packet28_search(
             payload["artifact_id"] = json!(artifact_id.clone());
             payload
         }
-        Packet28SearchResponseMode::Slim => json!({
-            "match_count": search_result.match_count,
-            "compact_preview": full_payload["compact_preview"].clone(),
-            "artifact_id": artifact_id.clone(),
-            "response_mode": "slim",
-        }),
+        Packet28SearchResponseMode::Slim => {
+            build_search_slim_payload(&search_result, artifact_id.clone(), &execution)
+        }
     };
     let raw_est_tokens = Some(estimate_tokens_for_value(&full_payload));
     let reduced_est_tokens = Some(estimate_tokens_for_value(&payload));
@@ -850,4 +1256,129 @@ pub(crate) fn handle_packet28_glob(
         duration_ms,
     )?;
     Ok(payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_request(query: &str) -> packet28_reducer_core::SearchRequest {
+        packet28_reducer_core::SearchRequest {
+            query: query.to_string(),
+            ..packet28_reducer_core::SearchRequest::default()
+        }
+    }
+
+    fn sample_match(path: &str, line: usize, text: &str) -> packet28_reducer_core::SearchMatch {
+        packet28_reducer_core::SearchMatch {
+            path: path.to_string(),
+            line,
+            text: text.to_string(),
+        }
+    }
+
+    fn sample_result(
+        backend: &str,
+        path: &str,
+        line: usize,
+        text: &str,
+    ) -> packet28_reducer_core::SearchResult {
+        let item = sample_match(path, line, text);
+        packet28_reducer_core::SearchResult {
+            query: "Alpha".to_string(),
+            match_count: 1,
+            returned_match_count: 1,
+            paths: vec![path.to_string()],
+            regions: vec![packet28_reducer_core::format_region(path, line, line)],
+            symbols: vec!["Alpha".to_string()],
+            groups: vec![packet28_reducer_core::SearchGroup {
+                path: path.to_string(),
+                match_count: 1,
+                displayed_match_count: 1,
+                truncated: false,
+                matches: vec![item],
+            }],
+            compact_preview: format!("Search found 1 matches in 1 files.\n- {path} (1)"),
+            engine: Some(packet28_reducer_core::SearchEngineStats {
+                engine: backend.to_string(),
+                ..packet28_reducer_core::SearchEngineStats::default()
+            }),
+            ..packet28_reducer_core::SearchResult::default()
+        }
+    }
+
+    #[test]
+    fn hybrid_shadowing_triggers_for_zero_hit_regex() {
+        let request = sample_request(r"Alpha|Beta");
+        let result = packet28_reducer_core::SearchResult {
+            query: request.query.clone(),
+            engine: Some(packet28_reducer_core::SearchEngineStats {
+                engine: "indexed_regex".to_string(),
+                ..packet28_reducer_core::SearchEngineStats::default()
+            }),
+            ..packet28_reducer_core::SearchResult::default()
+        };
+        assert!(should_shadow_with_native(
+            &request,
+            &result,
+            Packet28SearchStrategy::Hybrid
+        ));
+    }
+
+    #[test]
+    fn hybrid_shadowing_skips_successful_fixed_string_hits() {
+        let request = packet28_reducer_core::SearchRequest {
+            query: "AlphaUniqueToken".to_string(),
+            fixed_string: true,
+            ..packet28_reducer_core::SearchRequest::default()
+        };
+        let result = sample_result("indexed_regex", "src/alpha.rs", 4, "struct Alpha;");
+        assert!(!should_shadow_with_native(
+            &request,
+            &result,
+            Packet28SearchStrategy::Hybrid
+        ));
+    }
+
+    #[test]
+    fn merge_search_results_unions_new_paths_and_matches() {
+        let request = sample_request("Alpha");
+        let primary = sample_result("indexed_regex", "src/alpha.rs", 4, "struct Alpha;");
+        let secondary = sample_result("legacy_rg", "src/beta.rs", 2, "fn beta_alpha() {}");
+        let (merged, added_displayed_matches, added_paths) =
+            merge_search_results(&request, primary, &secondary);
+
+        assert_eq!(added_displayed_matches, 1);
+        assert_eq!(added_paths, 1);
+        assert!(merged.paths.iter().any(|path| path == "src/alpha.rs"));
+        assert!(merged.paths.iter().any(|path| path == "src/beta.rs"));
+        assert!(merged
+            .regions
+            .iter()
+            .any(|region| region == "src/beta.rs:2-2"));
+        assert_eq!(merged.groups.len(), 2);
+    }
+
+    #[test]
+    fn slim_payload_exposes_navigation_fields() {
+        let result = sample_result("indexed_regex", "src/alpha.rs", 4, "struct Alpha;");
+        let execution = Packet28SearchExecution {
+            strategy: Packet28SearchStrategy::Hybrid,
+            primary_backend: "indexed_regex".to_string(),
+            secondary_backend: Some("legacy_rg".to_string()),
+            shadowed: true,
+            added_displayed_matches: 1,
+            added_paths: 0,
+            notes: vec!["native recall verification confirmed the indexed result".to_string()],
+        };
+        let payload =
+            build_search_slim_payload(&result, Some("artifact-1".to_string()), &execution);
+
+        assert_eq!(payload["response_mode"], "slim");
+        assert_eq!(payload["search_strategy"], "hybrid");
+        assert_eq!(payload["paths"][0], "src/alpha.rs");
+        assert_eq!(payload["regions"][0], "src/alpha.rs:4-4");
+        assert!(payload["engine"].is_object());
+        assert!(payload["hybrid"].is_object());
+    }
 }
