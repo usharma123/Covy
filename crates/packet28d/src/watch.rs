@@ -267,16 +267,12 @@ pub(crate) fn remove_watch(
 ) -> Result<Option<WatchRegistration>> {
     let mut guard = state.lock().map_err(lock_err)?;
     guard.watcher_handles.remove(watch_id);
-    let removed = if let Some(index) = guard
+    let removed = guard
         .watches
         .watches
         .iter()
         .position(|watch| watch.watch_id == watch_id)
-    {
-        Some(guard.watches.watches.remove(index))
-    } else {
-        None
-    };
+        .map(|index| guard.watches.watches.remove(index));
     for task in guard.tasks.tasks.values_mut() {
         task.watch_ids.retain(|candidate| candidate != watch_id);
     }

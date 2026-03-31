@@ -102,7 +102,7 @@ pub fn append_task_event(root: &Path, frame: &DaemonEventFrame) -> Result<()> {
         .with_context(|| format!("failed to lock task event log '{}'", path.display()))?;
     file.write_all(&bytes)
         .with_context(|| format!("failed to append task event log '{}'", path.display()))?;
-    file.unlock()
+    FileExt::unlock(&file)
         .with_context(|| format!("failed to unlock task event log '{}'", path.display()))?;
     Ok(())
 }

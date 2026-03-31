@@ -244,7 +244,16 @@ fn run_search_execution_for_query(
         ..BrokerGetContextRequest::default()
     };
     let query_focus = derive_query_focus(Some(query));
-    build_reducer_search_execution(None, root, &snapshot, &request, &query_focus, action, 8, 8)
+    build_reducer_search_execution(SearchExecutionArgs {
+        state: None,
+        root,
+        snapshot: &snapshot,
+        request: &request,
+        query_focus: &query_focus,
+        action,
+        max_files: 8,
+        max_evidence_lines: 8,
+    })
 }
 
 #[test]

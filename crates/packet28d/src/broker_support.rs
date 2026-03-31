@@ -238,7 +238,7 @@ pub(crate) fn update_broker_link_state(
                 } else {
                     task.resolved_questions
                         .entry(question_id.clone())
-                        .or_insert_with(String::new);
+                        .or_default();
                 }
                 changed = true;
             }

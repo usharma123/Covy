@@ -151,7 +151,7 @@ pub(crate) fn compute_handoff_state(
             );
         }
         if latest_hook_boundary_at.is_some_and(|boundary_at| {
-            latest_handoff_at.is_none_or(|handoff_at| boundary_at > handoff_at)
+            latest_handoff_at.map_or(true, |handoff_at| boundary_at > handoff_at)
         }) {
             let reason = latest_hook_boundary_kind.unwrap_or("boundary");
             return (
@@ -177,11 +177,11 @@ pub(crate) fn compute_handoff_state(
         .or_else(|| task.and_then(|task| task.latest_handoff_checkpoint_id.as_ref()));
     let has_newer_intention = snapshot.latest_intention.as_ref().is_some_and(|intention| {
         let intention_at = normalize_timestamp_millis(intention.occurred_at_unix);
-        latest_handoff_at.is_none_or(|handoff_at| intention_at > handoff_at)
+        latest_handoff_at.map_or(true, |handoff_at| intention_at > handoff_at)
     });
     let has_state_delta = !snapshot.changed_paths_since_checkpoint.is_empty()
         || !snapshot.changed_symbols_since_checkpoint.is_empty()
-        || latest_handoff_checkpoint_id.is_none_or(|previous| previous != checkpoint_id);
+        || (latest_handoff_checkpoint_id != Some(checkpoint_id));
     if latest_handoff_at.is_none() {
         return (
             true,

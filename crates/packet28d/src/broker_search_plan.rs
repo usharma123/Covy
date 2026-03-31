@@ -504,6 +504,17 @@ pub(crate) struct SearchExecution {
     pub(crate) used_fallback: bool,
 }
 
+pub(crate) struct SearchExecutionArgs<'a> {
+    pub(crate) state: Option<&'a Arc<Mutex<DaemonState>>>,
+    pub(crate) root: &'a Path,
+    pub(crate) snapshot: &'a suite_packet_core::AgentSnapshotPayload,
+    pub(crate) request: &'a BrokerGetContextRequest,
+    pub(crate) query_focus: &'a QueryFocus,
+    pub(crate) action: BrokerAction,
+    pub(crate) max_files: usize,
+    pub(crate) max_evidence_lines: usize,
+}
+
 fn collect_tool_result_provenance(
     snapshot: &suite_packet_core::AgentSnapshotPayload,
     path: &str,
@@ -871,16 +882,17 @@ pub(crate) fn preferred_search_regions(file: &ReducerSearchFile) -> Vec<String> 
     file.regions.iter().cloned().collect()
 }
 
-pub(crate) fn build_reducer_search_execution(
-    state: Option<&Arc<Mutex<DaemonState>>>,
-    root: &Path,
-    snapshot: &suite_packet_core::AgentSnapshotPayload,
-    request: &BrokerGetContextRequest,
-    query_focus: &QueryFocus,
-    action: BrokerAction,
-    max_files: usize,
-    max_evidence_lines: usize,
-) -> SearchExecution {
+pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> SearchExecution {
+    let SearchExecutionArgs {
+        state,
+        root,
+        snapshot,
+        request,
+        query_focus,
+        action,
+        max_files,
+        max_evidence_lines,
+    } = args;
     let requested_paths = requested_search_paths(snapshot, request, query_focus);
     let plan = build_search_plan(query_focus);
     let mut files_by_path = BTreeMap::<String, ReducerSearchFile>::new();

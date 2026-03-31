@@ -14,12 +14,13 @@ fn truncate_evidence_line(line: &str, max_len: usize) -> String {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum EvidenceMatchKind {
     DefinesSymbol,
     CallsSymbol,
     ReferencesSymbol,
     Signature,
+    #[default]
     Fallback,
 }
 
@@ -32,12 +33,6 @@ impl EvidenceMatchKind {
             EvidenceMatchKind::Signature => 2,
             EvidenceMatchKind::Fallback => 1,
         }
-    }
-}
-
-impl Default for EvidenceMatchKind {
-    fn default() -> Self {
-        Self::Fallback
     }
 }
 

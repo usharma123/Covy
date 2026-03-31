@@ -22,7 +22,9 @@ pub(crate) fn task_await_handoff(
         let is_newer_than_after = request
             .after_context_version
             .as_ref()
-            .is_none_or(|after| status.latest_context_version.as_deref() != Some(after.as_str()));
+            .map_or(true, |after| {
+                status.latest_context_version.as_deref() != Some(after.as_str())
+            });
         if status.handoff_ready && is_newer_than_after {
             return Ok(TaskAwaitHandoffResponse {
                 task_status: status,

@@ -590,16 +590,16 @@ pub(crate) fn build_broker_sections(
     }
 
     if should_run_reducer_search(&allowed_sections) {
-        let search_execution = build_reducer_search_execution(
-            Some(state),
+        let search_execution = build_reducer_search_execution(SearchExecutionArgs {
+            state: Some(state),
             root,
             snapshot,
             request,
-            &query_focus,
+            query_focus: &query_focus,
             action,
-            section_item_limit(&effective_limits, "search_evidence").max(8),
-            section_item_limit(&effective_limits, "code_evidence").min(15),
-        );
+            max_files: section_item_limit(&effective_limits, "search_evidence").max(8),
+            max_evidence_lines: section_item_limit(&effective_limits, "code_evidence").min(15),
+        });
         let reducer_files = search_execution.files;
         if !reducer_files.is_empty() {
             let evidence_by_file = search_execution.evidence_by_file;
@@ -747,7 +747,7 @@ pub(crate) fn build_broker_sections(
     }
 
     if matches!(action, BrokerAction::Summarize) {
-        let progress = vec![
+        let progress = [
             format!("- completed steps: {}", snapshot.completed_steps.len()),
             format!("- files read: {}", snapshot.files_read.len()),
             format!("- files edited: {}", snapshot.files_edited.len()),
