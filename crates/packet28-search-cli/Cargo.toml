@@ -8,12 +8,17 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[[bin]]
+name = "p28"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
 packet28-daemon-core = { version = "0.2.0", path = "../packet28-daemon-core" }
 packet28-reducer-core = { version = "0.2.0", path = "../packet28-reducer-core" }
 packet28-search-core = { version = "0.2.0", path = "../packet28-search-core" }
+serde_json.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true

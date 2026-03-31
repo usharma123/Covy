@@ -29,7 +29,7 @@ class Scenario:
 
 
 WORKSPACE = Path(__file__).resolve().parent.parent
-PACKET28_BIN = WORKSPACE / "target" / "release" / "packet28-search-cli"
+PACKET28_BIN = WORKSPACE / "target" / "release" / "p28"
 PACKET28D_BIN = WORKSPACE / "target" / "release" / "packet28d"
 REPORT_PATH = WORKSPACE / "benchmarks" / "packet28_search_tool_benchmark.md"
 DAEMON_READY = WORKSPACE / ".packet28" / "daemon" / "ready"
@@ -80,9 +80,9 @@ SCENARIOS = [
         name="Alternation-Heavy Regex",
         description="Alternation over three standalone CLI command handlers.",
         root_rel="crates/packet28-search-cli",
-        packet28_query=r"fn\s+(?:run_query|run_guard|run_bench)\(",
-        rg_pattern=r"fn\s+(?:run_query|run_guard|run_bench)\(",
-        grep_pattern=r"fn[[:space:]]+(run_query|run_guard|run_bench)\(",
+        packet28_query=r"fn\s+(?:run_search|run_guard|run_bench)\(",
+        rg_pattern=r"fn\s+(?:run_search|run_guard|run_bench)\(",
+        grep_pattern=r"fn[[:space:]]+(run_search|run_guard|run_bench)\(",
     ),
     Scenario(
         slug="packet28_handler_family",
@@ -157,7 +157,7 @@ def shutil_which(tool: str) -> str | None:
 
 
 def build_index(root: Path) -> float:
-    output = run([str(PACKET28_BIN), "build", str(root)])
+    output = run([str(PACKET28_BIN), "debug", "build", str(root)])
     match = re.search(r"build_ms=([0-9.]+)", output)
     if not match:
         raise RuntimeError(f"unexpected build output: {output}")
@@ -193,12 +193,12 @@ def stop_daemon(proc: subprocess.Popen[str]) -> None:
 
 
 def packet28_command(scenario: Scenario, transport: str, compact: bool) -> str:
-    root = shlex.quote(str((WORKSPACE / scenario.root_rel).resolve()))
     query = shlex.quote(scenario.packet28_query)
     parts = [
+        "cd",
+        shlex.quote(str((WORKSPACE / scenario.root_rel).resolve())),
+        "&&",
         shlex.quote(str(PACKET28_BIN)),
-        "query",
-        root,
         query,
         "--engine",
         "auto",
@@ -208,6 +208,7 @@ def packet28_command(scenario: Scenario, transport: str, compact: bool) -> str:
         "1000",
         "--max-total-matches",
         "1000",
+        "--stats",
     ]
     if compact:
         parts.append("--compact")
@@ -260,11 +261,9 @@ def parse_line_or_block_matches(output: str, scenario: Scenario) -> list[str]:
     return matches
 
 
-def parse_packet28_output(
-    output: str,
+def parse_packet28_stats(
+    stderr: str,
 ) -> tuple[list[str], int | None, str | None, str | None, str | None]:
-    hit_re = re.compile(r"^hit=(?P<path>.+?)#L(?P<line>\d+)\b")
-    region_re = re.compile(r"^region=(?P<path>.+?):(?P<start>\d+)-(?P<end>\d+)$")
     count_re = re.compile(r"\bmatches=(\d+)\b")
     backend_re = re.compile(r"\bbackend=([a-z_]+)\b")
     transport_re = re.compile(r"\btransport=([a-z_]+)\b")
@@ -273,7 +272,7 @@ def parse_packet28_output(
     backend = None
     transport = None
     fallback_reason = None
-    first_line = output.splitlines()[0] if output.splitlines() else ""
+    first_line = stderr.splitlines()[0] if stderr.splitlines() else ""
     count_match = count_re.search(first_line)
     if count_match:
         total = int(count_match.group(1))
@@ -283,21 +282,11 @@ def parse_packet28_output(
     transport_match = transport_re.search(first_line)
     if transport_match:
         transport = transport_match.group(1)
-    matches = []
-    for line in output.splitlines():
+    for line in stderr.splitlines():
         fallback_match = fallback_re.match(line)
         if fallback_match:
             fallback_reason = fallback_match.group(1)
-        region = region_re.match(line)
-        if region:
-            path = region.group("path")
-            start = int(region.group("start"))
-            end = int(region.group("end"))
-            matches.extend(f"{path}:{line_no}" for line_no in range(start, end + 1))
-        hit = hit_re.match(line)
-        if hit:
-            matches.append(f"{hit.group('path')}:{hit.group('line')}")
-    return sorted(set(matches)), total, backend, transport, fallback_reason
+    return [], total, backend, transport, fallback_reason
 
 
 def approx_tokens(text: str) -> int:
@@ -383,7 +372,7 @@ def main() -> None:
     daemon = start_daemon()
     try:
         versions = {
-            "packet28-search-cli": f"git {run(['git', 'rev-parse', '--short', 'HEAD']).strip()}",
+            "p28": f"git {run(['git', 'rev-parse', '--short', 'HEAD']).strip()}",
             "packet28d": tool_version([str(PACKET28D_BIN), "--version"])
             if PACKET28D_BIN.exists()
             else "packet28d (local build)",
@@ -418,29 +407,41 @@ def main() -> None:
                 display_commands["ast-grep"] = ast_cmd
 
             outputs = {
-                name: run(["bash", "-lc", command], cwd=WORKSPACE)
+                name: subprocess.run(
+                    ["bash", "-lc", command],
+                    cwd=WORKSPACE,
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                )
                 for name, command in display_commands.items()
             }
-            daemon_matches, daemon_total, daemon_backend, daemon_transport, daemon_fallback = parse_packet28_output(
-                outputs["packet28-daemon"]
+            _, daemon_total, daemon_backend, daemon_transport, daemon_fallback = parse_packet28_stats(
+                outputs["packet28-daemon"].stderr
             )
             (
-                inproc_matches,
+                _inproc_unused,
                 inproc_total,
                 inproc_backend,
                 inproc_transport,
                 inproc_fallback,
-            ) = parse_packet28_output(
-                outputs["packet28-inproc"]
+            ) = parse_packet28_stats(
+                outputs["packet28-inproc"].stderr
             )
             tool_matches = {
-                "packet28-daemon": daemon_matches,
-                "packet28-inproc": inproc_matches,
-                "ripgrep": parse_line_or_block_matches(outputs["ripgrep"], scenario),
-                "grep": parse_line_or_block_matches(outputs["grep"], scenario),
+                "packet28-daemon": parse_line_or_block_matches(
+                    outputs["packet28-daemon"].stdout, scenario
+                ),
+                "packet28-inproc": parse_line_or_block_matches(
+                    outputs["packet28-inproc"].stdout, scenario
+                ),
+                "ripgrep": parse_line_or_block_matches(outputs["ripgrep"].stdout, scenario),
+                "grep": parse_line_or_block_matches(outputs["grep"].stdout, scenario),
             }
             if "ast-grep" in outputs:
-                tool_matches["ast-grep"] = parse_line_or_block_matches(outputs["ast-grep"], scenario)
+                tool_matches["ast-grep"] = parse_line_or_block_matches(
+                    outputs["ast-grep"].stdout, scenario
+                )
             expected_matches = scenario.expected_matches or tuple(tool_matches["ripgrep"])
             speeds = measure_speeds(speed_commands)
 
@@ -517,7 +518,7 @@ def main() -> None:
         lines.append(f"- Workspace: `{WORKSPACE}`")
         lines.append("- Packet28 in-process indexes were pre-built per search root before timing.")
         lines.append("- Packet28 daemon transport was measured against a resident `packet28d` running at the workspace root, with subtree searches mapped into requested-path filters.")
-        lines.append("- Speed was measured with `hyperfine` using 2 warmups and 8 measured runs, with stdout redirected to `/dev/null`.")
+        lines.append("- Speed was measured with `hyperfine` using 2 warmups and 8 measured runs, with stdout and stderr redirected to `/dev/null`.")
         lines.append("- Token efficiency is measured against a normalized compact Packet28-style packet derived from each tool's match set.")
         lines.append("- Packet28 accuracy is collected from full query output; Packet28 timing is measured on compact mode so speed and token costs reflect the reduced interface boundary.")
         lines.append("- Accuracy is exact match-set parity against the canonical `ripgrep` `path:line` hit set for each regex scenario.")

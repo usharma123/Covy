@@ -1,20 +1,24 @@
 use std::fs;
 use std::io::Read;
-use std::path::Path;
-use std::process::{Child, Command as ProcessCommand, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command as ProcessCommand, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
-use packet28_daemon_core::{ready_path, socket_path};
+use packet28_daemon_core::{
+    read_socket_message, ready_path, socket_path, write_socket_message, DaemonRequest,
+    DaemonResponse,
+};
 use predicates::prelude::*;
+use std::os::unix::net::UnixStream;
 
 fn cli() -> Command {
-    Command::new(assert_cmd::cargo::cargo_bin!("packet28-search-cli"))
+    Command::new(assert_cmd::cargo::cargo_bin!("p28"))
 }
 
-fn daemon_bin() -> std::path::PathBuf {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+fn daemon_bin() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest_dir
         .parent()
         .and_then(|path| path.parent())
@@ -26,6 +30,12 @@ fn daemon_bin() -> std::path::PathBuf {
         .expect("build packet28d");
     assert!(status.success(), "packet28d build failed");
     workspace.join("target/debug/packet28d")
+}
+
+fn cli_with_daemon_env() -> Command {
+    let mut command = cli();
+    command.env("CARGO_BIN_EXE_packet28d", daemon_bin());
+    command
 }
 
 fn write_fixture(root: &Path) {
@@ -94,14 +104,39 @@ fn start_daemon(root: &Path) -> Child {
     );
 }
 
+fn stop_daemon(root: &Path) {
+    let socket = socket_path(root);
+    if !socket.exists() {
+        return;
+    }
+    if let Ok(stream) = UnixStream::connect(&socket) {
+        let reader_stream = stream.try_clone().unwrap();
+        let mut writer = std::io::BufWriter::new(stream);
+        let mut reader = std::io::BufReader::new(reader_stream);
+        let _ = write_socket_message(&mut writer, &DaemonRequest::Stop);
+        let _ = read_socket_message::<_, DaemonResponse>(&mut reader);
+    }
+}
+
+fn output(mut command: Command) -> Output {
+    command.output().expect("command output")
+}
+
+fn stdout_text(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn stderr_text(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).to_string()
+}
+
 #[test]
-fn build_command_prints_generation_and_file_count() {
+fn debug_build_prints_generation_and_file_count() {
     let dir = tempfile::tempdir().unwrap();
     write_fixture(dir.path());
 
-    let mut command = cli();
-    command
-        .args(["build", dir.path().to_str().unwrap()])
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("build_ms="))
@@ -110,49 +145,64 @@ fn build_command_prints_generation_and_file_count() {
 }
 
 #[test]
-fn query_and_guard_commands_report_expected_results() {
+fn p28_searches_from_repo_root_with_rg_style_output() {
     let dir = tempfile::tempdir().unwrap();
     write_fixture(dir.path());
 
     cli()
-        .args(["build", dir.path().to_str().unwrap()])
-        .assert()
-        .success();
-
-    cli()
-        .args([
-            "query",
-            dir.path().to_str().unwrap(),
-            "Alpha",
-            "--fixed-string",
-        ])
+        .current_dir(dir.path())
+        .args(["Alpha", "--fixed-strings"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("packet28_ms="))
-        .stdout(predicate::str::contains("transport=inproc"))
-        .stdout(predicate::str::contains("backend=indexed_regex"))
-        .stdout(predicate::str::contains("hit=src/lib.rs#L1 pub struct Alpha;"));
-
-    cli()
-        .args([
-            "guard",
-            dir.path().to_str().unwrap(),
-            "Alpha",
-            "--fixed-string",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("mode=index"));
-
-    cli()
-        .args(["guard", dir.path().to_str().unwrap(), ".+"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("mode=fallback"));
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"));
 }
 
 #[test]
-fn query_command_handles_anchored_line_start_regexes() {
+fn p28_filters_paths_from_current_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+
+    cli()
+        .current_dir(dir.path())
+        .args(["handle_value", "src/nested/mod.rs", "--fixed-strings"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "src/nested/mod.rs:2:fn handle_value() { println!(\"beta\"); }",
+        ))
+        .stdout(predicate::str::contains("src/lib.rs").not());
+}
+
+#[test]
+fn p28_stats_go_to_stderr_while_hits_stay_on_stdout() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let output = output({
+        let mut command = cli();
+        command
+            .current_dir(dir.path())
+            .args(["Alpha", "--fixed-strings", "--stats"]);
+        command
+    });
+
+    assert!(output.status.success());
+    let stdout = stdout_text(&output);
+    let stderr = stderr_text(&output);
+    assert!(stdout.contains("src/lib.rs:1:pub struct Alpha;"));
+    assert!(!stdout.contains("backend="));
+    assert!(stderr.contains("p28_ms="));
+    assert!(stderr.contains("transport="));
+    assert!(stderr.contains("backend="));
+}
+
+#[test]
+fn p28_handles_anchored_line_start_regexes() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(
@@ -162,49 +212,51 @@ fn query_command_handles_anchored_line_start_regexes() {
     .unwrap();
 
     cli()
-        .args(["build", dir.path().to_str().unwrap()])
+        .args(["debug", "build", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     cli()
-        .args([
-            "query",
-            dir.path().to_str().unwrap(),
-            r"^\s*SearchRequest\s*\{",
-        ])
+        .current_dir(dir.path())
+        .args([r"^\s*SearchRequest\s*\{", "--stats"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("backend="))
-        .stdout(predicate::str::contains("hit=src/main.rs#L2 SearchRequest {"));
+        .stdout(predicate::str::contains(
+            "src/main.rs:2:    SearchRequest {",
+        ))
+        .stderr(predicate::str::contains("backend="));
 }
 
 #[test]
-fn bench_command_prints_packet28_and_legacy_timings() {
+fn debug_bench_prints_packet28_and_legacy_timings() {
     let dir = tempfile::tempdir().unwrap();
     write_fixture(dir.path());
 
     cli()
-        .args(["build", dir.path().to_str().unwrap()])
+        .args(["debug", "build", dir.path().to_str().unwrap()])
         .assert()
         .success();
 
     cli()
         .args([
+            "debug",
             "bench",
             dir.path().to_str().unwrap(),
             "Alpha",
-            "--fixed-string",
+            "--fixed-strings",
+            "--transport",
+            "inproc",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("guard=index"))
         .stdout(predicate::str::contains("parity=exact"))
-        .stdout(predicate::str::contains("packet28_ms="))
+        .stdout(predicate::str::contains("p28_ms="))
         .stdout(predicate::str::contains("legacy_rg_ms="));
 }
 
 #[test]
-fn query_command_supports_daemon_transport_for_subtree_roots() {
+fn p28_supports_daemon_transport_for_subtree_roots() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     fs::create_dir_all(workspace.join(".git")).unwrap();
@@ -212,26 +264,26 @@ fn query_command_supports_daemon_transport_for_subtree_roots() {
     write_fixture(&subtree);
 
     cli()
-        .args(["build", workspace.to_str().unwrap()])
+        .args(["debug", "build", workspace.to_str().unwrap()])
         .assert()
         .success();
 
     let mut daemon = start_daemon(workspace);
 
     cli()
+        .current_dir(&subtree)
         .args([
-            "query",
-            subtree.to_str().unwrap(),
             "Alpha",
-            "--fixed-string",
+            "--fixed-strings",
             "--transport",
             "daemon",
+            "--stats",
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("transport=daemon"))
-        .stdout(predicate::str::contains("backend=indexed_regex"))
-        .stdout(predicate::str::contains("hit=src/lib.rs#L1 pub struct Alpha;"));
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"))
+        .stderr(predicate::str::contains("transport=daemon"))
+        .stderr(predicate::str::contains("backend=indexed_regex"));
 
     let _ = daemon.kill();
     let _ = daemon.wait();
@@ -246,22 +298,15 @@ fn indexed_engine_mode_is_enforced_over_daemon_transport() {
     write_fixture(&subtree);
 
     cli()
-        .args(["build", workspace.to_str().unwrap()])
+        .args(["debug", "build", workspace.to_str().unwrap()])
         .assert()
         .success();
 
     let mut daemon = start_daemon(workspace);
 
     cli()
-        .args([
-            "query",
-            subtree.to_str().unwrap(),
-            ".+",
-            "--engine",
-            "indexed",
-            "--transport",
-            "daemon",
-        ])
+        .current_dir(&subtree)
+        .args([".+", "--engine", "indexed", "--transport", "daemon"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("planner could not derive"));
@@ -271,7 +316,7 @@ fn indexed_engine_mode_is_enforced_over_daemon_transport() {
 }
 
 #[test]
-fn guard_reports_daemon_fallback_reasons() {
+fn debug_guard_reports_daemon_fallback_reasons() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     fs::create_dir_all(workspace.join(".git")).unwrap();
@@ -279,7 +324,7 @@ fn guard_reports_daemon_fallback_reasons() {
     write_fixture(&subtree);
 
     cli()
-        .args(["build", workspace.to_str().unwrap()])
+        .args(["debug", "build", workspace.to_str().unwrap()])
         .assert()
         .success();
 
@@ -287,6 +332,7 @@ fn guard_reports_daemon_fallback_reasons() {
 
     cli()
         .args([
+            "debug",
             "guard",
             subtree.to_str().unwrap(),
             ".+",
@@ -300,4 +346,50 @@ fn guard_reports_daemon_fallback_reasons() {
 
     let _ = daemon.kill();
     let _ = daemon.wait();
+}
+
+#[test]
+fn p28_auto_starts_daemon_and_eventually_uses_indexed_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    fs::create_dir_all(workspace.join(".git")).unwrap();
+    let subtree = workspace.join("crates/search-sample");
+    write_fixture(&subtree);
+
+    let first = output({
+        let mut command = cli_with_daemon_env();
+        command
+            .current_dir(&subtree)
+            .args(["Alpha", "--fixed-strings", "--stats"]);
+        command
+    });
+
+    assert!(first.status.success());
+    assert!(stdout_text(&first).contains("src/lib.rs:1:pub struct Alpha;"));
+    let first_stderr = stderr_text(&first);
+    assert!(first_stderr.contains("transport="));
+    assert!(first_stderr.contains("backend="));
+
+    let start = Instant::now();
+    loop {
+        let output = output({
+            let mut command = cli_with_daemon_env();
+            command
+                .current_dir(&subtree)
+                .args(["Alpha", "--fixed-strings", "--stats"]);
+            command
+        });
+        assert!(output.status.success());
+        if stderr_text(&output).contains("backend=indexed_regex") {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "timed out waiting for indexed backend; stderr={}",
+            stderr_text(&output)
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    stop_daemon(workspace);
 }
