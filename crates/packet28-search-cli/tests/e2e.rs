@@ -59,7 +59,19 @@ fn write_fixture(root: &Path) {
     }
 }
 
-fn start_daemon(root: &Path) -> Child {
+struct DaemonHandle {
+    child: Child,
+}
+
+impl Drop for DaemonHandle {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[allow(clippy::zombie_processes)]
+fn start_daemon(root: &Path) -> DaemonHandle {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut child = ProcessCommand::new(daemon_bin())
         .args(["serve", "--root", canonical_root.to_str().unwrap()])
@@ -71,7 +83,7 @@ fn start_daemon(root: &Path) -> Child {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(20) {
         if ready_path(&canonical_root).exists() && socket_path(&canonical_root).exists() {
-            return child;
+            return DaemonHandle { child };
         }
         if let Some(status) = child.try_wait().unwrap() {
             let mut stderr = String::new();
@@ -268,7 +280,7 @@ fn p28_supports_daemon_transport_for_subtree_roots() {
         .assert()
         .success();
 
-    let mut daemon = start_daemon(workspace);
+    let daemon = start_daemon(workspace);
 
     cli()
         .current_dir(&subtree)
@@ -285,8 +297,7 @@ fn p28_supports_daemon_transport_for_subtree_roots() {
         .stderr(predicate::str::contains("transport=daemon"))
         .stderr(predicate::str::contains("backend=indexed_regex"));
 
-    let _ = daemon.kill();
-    let _ = daemon.wait();
+    drop(daemon);
 }
 
 #[test]
@@ -302,7 +313,7 @@ fn indexed_engine_mode_is_enforced_over_daemon_transport() {
         .assert()
         .success();
 
-    let mut daemon = start_daemon(workspace);
+    let daemon = start_daemon(workspace);
 
     cli()
         .current_dir(&subtree)
@@ -311,8 +322,7 @@ fn indexed_engine_mode_is_enforced_over_daemon_transport() {
         .failure()
         .stderr(predicate::str::contains("planner could not derive"));
 
-    let _ = daemon.kill();
-    let _ = daemon.wait();
+    drop(daemon);
 }
 
 #[test]
@@ -328,7 +338,7 @@ fn debug_guard_reports_daemon_fallback_reasons() {
         .assert()
         .success();
 
-    let mut daemon = start_daemon(workspace);
+    let daemon = start_daemon(workspace);
 
     cli()
         .args([
@@ -344,8 +354,7 @@ fn debug_guard_reports_daemon_fallback_reasons() {
         .stdout(predicate::str::contains("mode=fallback"))
         .stdout(predicate::str::contains("reason="));
 
-    let _ = daemon.kill();
-    let _ = daemon.wait();
+    drop(daemon);
 }
 
 #[test]

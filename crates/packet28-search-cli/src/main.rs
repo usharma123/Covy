@@ -323,7 +323,7 @@ fn search_request(pattern: &str, paths: &[String], options: SearchOptions) -> Se
 }
 
 fn execute_search(
-    root: &PathBuf,
+    root: &Path,
     request: &SearchRequest,
     engine: EngineMode,
     transport: TransportMode,
@@ -343,7 +343,7 @@ fn execute_search(
 
 #[cfg(unix)]
 fn execute_search_auto(
-    root: &PathBuf,
+    root: &Path,
     request: &SearchRequest,
     engine: EngineMode,
 ) -> Result<(SearchResult, TransportMode)> {
@@ -370,7 +370,7 @@ fn execute_search_auto(
 
 #[cfg(not(unix))]
 fn execute_search_auto(
-    root: &PathBuf,
+    root: &Path,
     request: &SearchRequest,
     engine: EngineMode,
 ) -> Result<(SearchResult, TransportMode)> {
@@ -378,7 +378,7 @@ fn execute_search_auto(
 }
 
 fn execute_search_inproc(
-    root: &PathBuf,
+    root: &Path,
     request: &SearchRequest,
     engine: EngineMode,
 ) -> Result<SearchResult> {
@@ -411,11 +411,11 @@ fn execute_search_inproc(
 }
 
 fn execute_search_daemon(
-    root: &PathBuf,
+    root: &Path,
     request: &SearchRequest,
     engine: EngineMode,
 ) -> Result<SearchResult> {
-    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let workspace_root = resolve_workspace_root(&canonical_root);
     let daemon_request = daemon_search_request(&canonical_root, &workspace_root, request)?;
     match engine {
@@ -436,7 +436,7 @@ fn execute_search_daemon(
 }
 
 fn guard_reason(
-    root: &PathBuf,
+    root: &Path,
     request: &SearchRequest,
     transport: TransportMode,
 ) -> Result<Option<String>> {
@@ -457,7 +457,7 @@ fn guard_reason(
 }
 
 #[cfg(unix)]
-fn guard_reason_auto(root: &PathBuf, request: &SearchRequest) -> Result<Option<String>> {
+fn guard_reason_auto(root: &Path, request: &SearchRequest) -> Result<Option<String>> {
     let workspace_root = resolve_workspace_root(root);
     if let Err(err) = ensure_daemon(&workspace_root) {
         let runtime = load_runtime(root)?;
@@ -468,14 +468,14 @@ fn guard_reason_auto(root: &PathBuf, request: &SearchRequest) -> Result<Option<S
 }
 
 #[cfg(not(unix))]
-fn guard_reason_auto(root: &PathBuf, request: &SearchRequest) -> Result<Option<String>> {
+fn guard_reason_auto(root: &Path, request: &SearchRequest) -> Result<Option<String>> {
     let runtime = load_runtime(root)?;
     guarded_fallback_reason(root, &runtime, request)
 }
 
 fn daemon_search_request(
-    root: &PathBuf,
-    workspace_root: &PathBuf,
+    root: &Path,
+    workspace_root: &Path,
     request: &SearchRequest,
 ) -> Result<SearchRequest> {
     if root == workspace_root {
@@ -506,8 +506,8 @@ fn daemon_search_request(
 }
 
 fn normalize_daemon_result(
-    root: &PathBuf,
-    workspace_root: &PathBuf,
+    root: &Path,
+    workspace_root: &Path,
     mut result: SearchResult,
 ) -> Result<SearchResult> {
     if root == workspace_root {
@@ -545,8 +545,8 @@ fn normalize_daemon_result(
 }
 
 #[cfg(unix)]
-fn daemon_guard_reason(root: &PathBuf, request: &SearchRequest) -> Result<Option<String>> {
-    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+fn daemon_guard_reason(root: &Path, request: &SearchRequest) -> Result<Option<String>> {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let workspace_root = resolve_workspace_root(&canonical_root);
     let daemon_request = daemon_search_request(&canonical_root, &workspace_root, request)?;
     let response = send_daemon_guard(&workspace_root, daemon_request)?;
@@ -554,7 +554,7 @@ fn daemon_guard_reason(root: &PathBuf, request: &SearchRequest) -> Result<Option
 }
 
 #[cfg(not(unix))]
-fn daemon_guard_reason(_root: &PathBuf, _request: &SearchRequest) -> Result<Option<String>> {
+fn daemon_guard_reason(_root: &Path, _request: &SearchRequest) -> Result<Option<String>> {
     Err(anyhow!(
         "daemon transport is only supported on unix platforms"
     ))
@@ -562,7 +562,7 @@ fn daemon_guard_reason(_root: &PathBuf, _request: &SearchRequest) -> Result<Opti
 
 #[cfg(unix)]
 fn send_daemon_search(
-    root: &PathBuf,
+    root: &Path,
     request: SearchRequest,
     force_indexed: bool,
 ) -> Result<SearchResult> {
@@ -588,7 +588,7 @@ fn send_daemon_search(
 
 #[cfg(not(unix))]
 fn send_daemon_search(
-    _root: &PathBuf,
+    _root: &Path,
     _request: SearchRequest,
     _force_indexed: bool,
 ) -> Result<SearchResult> {
@@ -598,10 +598,7 @@ fn send_daemon_search(
 }
 
 #[cfg(unix)]
-fn send_daemon_guard(
-    root: &PathBuf,
-    request: SearchRequest,
-) -> Result<Packet28SearchGuardResponse> {
+fn send_daemon_guard(root: &Path, request: SearchRequest) -> Result<Packet28SearchGuardResponse> {
     let mut stream = connect_daemon_socket(&socket_path(root))?;
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(&mut stream);
@@ -623,10 +620,7 @@ fn send_daemon_guard(
 }
 
 #[cfg(not(unix))]
-fn send_daemon_guard(
-    _root: &PathBuf,
-    _request: SearchRequest,
-) -> Result<Packet28SearchGuardResponse> {
+fn send_daemon_guard(_root: &Path, _request: SearchRequest) -> Result<Packet28SearchGuardResponse> {
     Err(anyhow!(
         "daemon transport is only supported on unix platforms"
     ))
@@ -724,7 +718,7 @@ fn annotate_fallback(result: &mut SearchResult, reason: String) {
 }
 
 fn compact_token_estimate(result: &SearchResult) -> usize {
-    result.compact_preview.as_bytes().len().div_ceil(4)
+    result.compact_preview.len().div_ceil(4)
 }
 
 fn collect_hits(result: &SearchResult) -> Vec<String> {
