@@ -388,6 +388,7 @@ fn handle_method(
                             "context_lines": {"type":"integer","minimum":0},
                             "max_matches_per_file": {"type":"integer","minimum":1},
                             "max_total_matches": {"type":"integer","minimum":1},
+                            "search_strategy": {"type":"string","enum":["hybrid","recall","indexed","native"]},
                             "response_mode": {"type":"string","enum":["slim","full"]}
                         }
                     }
