@@ -235,7 +235,7 @@ pub(crate) fn handle_resources_list(
     // linear resource list growth from bloating context on every MCP init.
     // Only expose brief resources for non-current tasks (events/state on demand).
     let mut tasks_by_recency = status.tasks.clone();
-    tasks_by_recency.sort_by(|a, b| task_recency_key(b).cmp(&task_recency_key(a)));
+    tasks_by_recency.sort_by_key(|task| std::cmp::Reverse(task_recency_key(task)));
     for task in tasks_by_recency
         .iter()
         .filter(|t| t.task_id != current_task_id_str)

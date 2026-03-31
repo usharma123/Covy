@@ -301,13 +301,12 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             agent_files_ready = true;
             if wrote {
                 println!(
-                    "    {} {} → {}",
+                    "    {} generic → {}",
                     "✓".green().bold(),
-                    "generic",
                     generic_path.display().to_string().dimmed()
                 );
             } else {
-                println!("    {} {} (already up to date)", "·".dimmed(), "generic");
+                println!("    {} generic (already up to date)", "·".dimmed());
             }
         } else {
             println!("    {} no runtime instruction files selected", "·".dimmed());

@@ -103,12 +103,9 @@ pub struct RunArgs {
 pub fn run(args: RunArgs) -> Result<i32> {
     let persist_root = persistence_root(&args)?;
     let caller_cwd = crate::cmd_common::caller_cwd()?;
-    let machine_profile = args
-        .json
-        .map(|profile| suite_packet_core::JsonProfile::from(profile))
-        .or(args
-            .legacy_json
-            .then_some(suite_packet_core::JsonProfile::Compact));
+    let machine_profile = args.json.map(suite_packet_core::JsonProfile::from).or(args
+        .legacy_json
+        .then_some(suite_packet_core::JsonProfile::Compact));
     let resolved_cwd = Some(match args.cwd.as_deref() {
         Some(path) => crate::cmd_common::resolve_path_from_cwd(path, &caller_cwd),
         None => caller_cwd.to_string_lossy().into_owned(),
@@ -300,12 +297,9 @@ fn handle_kernel_response(
     response: context_kernel_core::KernelResponse,
     governed_response: Option<context_kernel_core::KernelResponse>,
 ) -> Result<i32> {
-    let machine_profile = args
-        .json
-        .map(|profile| suite_packet_core::JsonProfile::from(profile))
-        .or(args
-            .legacy_json
-            .then_some(suite_packet_core::JsonProfile::Compact));
+    let machine_profile = args.json.map(suite_packet_core::JsonProfile::from).or(args
+        .legacy_json
+        .then_some(suite_packet_core::JsonProfile::Compact));
     let output_packet = response
         .output_packets
         .first()

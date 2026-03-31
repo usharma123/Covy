@@ -309,18 +309,18 @@ fn run_tree(args: TreeArgs) -> Result<i32> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let mut rendered = Vec::<String>::new();
     let mut paths = Vec::<String>::new();
-    for raw_path in &args.paths {
-        for resolved in expand_repo_paths(&root, &cwd, raw_path)? {
-            walk_tree(
-                &root,
-                &resolved,
-                0,
-                args.max_depth,
-                args.max_entries,
-                args.hidden,
-                &mut rendered,
-                &mut paths,
-            )?;
+    {
+        let mut walk_state = TreeWalkState {
+            max_depth: args.max_depth,
+            max_entries: args.max_entries,
+            hidden: args.hidden,
+            rendered: &mut rendered,
+            paths: &mut paths,
+        };
+        for raw_path in &args.paths {
+            for resolved in expand_repo_paths(&root, &cwd, raw_path)? {
+                walk_tree(&root, &resolved, 0, &mut walk_state)?;
+            }
         }
     }
     paths.sort();
@@ -334,15 +334,17 @@ fn run_tree(args: TreeArgs) -> Result<i32> {
     emit_or_print(&payload, &preview, args.json, args.pretty)?;
     record_tool_result(
         &root,
-        args.task_id.as_deref(),
-        "packet28.compact.tree",
-        "native_tool",
-        "tree".to_string(),
-        preview.clone(),
-        Some(estimate_tokens_for_strings(&paths)),
-        Some(estimate_tokens_str(&preview)),
-        paths.clone(),
-        Vec::new(),
+        CompactToolResultRecord {
+            task_id: args.task_id.as_deref(),
+            tool_name: "packet28.compact.tree",
+            compact_path: "native_tool",
+            request_summary: "tree".to_string(),
+            result_summary: preview.clone(),
+            raw_est_tokens: Some(estimate_tokens_for_strings(&paths)),
+            reduced_est_tokens: Some(estimate_tokens_str(&preview)),
+            paths: paths.clone(),
+            symbols: Vec::new(),
+        },
     )?;
     Ok(0)
 }
@@ -374,15 +376,17 @@ fn run_read(args: ReadArgs) -> Result<i32> {
     emit_or_print(&payload, &preview, args.json, args.pretty)?;
     record_tool_result(
         &root,
-        args.task_id.as_deref(),
-        "packet28.compact.read",
-        "native_tool",
-        format!("read {}", relative),
-        preview.clone(),
-        Some(estimate_tokens_str(&text)),
-        Some(estimate_tokens_str(&preview)),
-        vec![relative],
-        Vec::new(),
+        CompactToolResultRecord {
+            task_id: args.task_id.as_deref(),
+            tool_name: "packet28.compact.read",
+            compact_path: "native_tool",
+            request_summary: format!("read {}", relative),
+            result_summary: preview.clone(),
+            raw_est_tokens: Some(estimate_tokens_str(&text)),
+            reduced_est_tokens: Some(estimate_tokens_str(&preview)),
+            paths: vec![relative],
+            symbols: Vec::new(),
+        },
     )?;
     Ok(0)
 }
@@ -426,15 +430,17 @@ fn run_grep(args: GrepArgs) -> Result<i32> {
     emit_or_print(&payload, &preview, args.json, args.pretty)?;
     record_tool_result(
         &root,
-        args.task_id.as_deref(),
-        "packet28.compact.grep",
-        "native_tool",
-        format!("grep {}", args.query),
-        preview.clone(),
-        Some(estimate_tokens_for_value(&payload)),
-        Some(estimate_tokens_str(&preview)),
-        result.paths,
-        result.symbols,
+        CompactToolResultRecord {
+            task_id: args.task_id.as_deref(),
+            tool_name: "packet28.compact.grep",
+            compact_path: "native_tool",
+            request_summary: format!("grep {}", args.query),
+            result_summary: preview.clone(),
+            raw_est_tokens: Some(estimate_tokens_for_value(&payload)),
+            reduced_est_tokens: Some(estimate_tokens_str(&preview)),
+            paths: result.paths,
+            symbols: result.symbols,
+        },
     )?;
     Ok(0)
 }
@@ -459,15 +465,17 @@ fn run_json(args: JsonArgs) -> Result<i32> {
     emit_or_print(&payload, &preview, args.json, args.pretty)?;
     record_tool_result(
         &root,
-        args.task_id.as_deref(),
-        "packet28.compact.json",
-        "native_tool",
-        format!("json {}", relative),
-        preview.clone(),
-        Some(estimate_tokens_str(&raw)),
-        Some(estimate_tokens_str(&preview)),
-        vec![relative],
-        Vec::new(),
+        CompactToolResultRecord {
+            task_id: args.task_id.as_deref(),
+            tool_name: "packet28.compact.json",
+            compact_path: "native_tool",
+            request_summary: format!("json {}", relative),
+            result_summary: preview.clone(),
+            raw_est_tokens: Some(estimate_tokens_str(&raw)),
+            reduced_est_tokens: Some(estimate_tokens_str(&preview)),
+            paths: vec![relative],
+            symbols: Vec::new(),
+        },
     )?;
     Ok(0)
 }
@@ -498,19 +506,21 @@ fn run_env(args: EnvArgs) -> Result<i32> {
     emit_or_print(&payload, &preview, args.json, args.pretty)?;
     record_tool_result(
         &root,
-        args.task_id.as_deref(),
-        "packet28.compact.env",
-        "native_tool",
-        if prefix.is_empty() {
-            "env".to_string()
-        } else {
-            format!("env prefix={prefix}")
+        CompactToolResultRecord {
+            task_id: args.task_id.as_deref(),
+            tool_name: "packet28.compact.env",
+            compact_path: "native_tool",
+            request_summary: if prefix.is_empty() {
+                "env".to_string()
+            } else {
+                format!("env prefix={prefix}")
+            },
+            result_summary: preview.clone(),
+            raw_est_tokens: None,
+            reduced_est_tokens: Some(estimate_tokens_str(&preview)),
+            paths: Vec::new(),
+            symbols: Vec::new(),
         },
-        preview.clone(),
-        None,
-        Some(estimate_tokens_str(&preview)),
-        Vec::new(),
-        Vec::new(),
     )?;
     Ok(0)
 }
@@ -535,20 +545,25 @@ fn run_deps(args: DepsArgs) -> Result<i32> {
     emit_or_print(&payload, &preview, args.json, args.pretty)?;
     record_tool_result(
         &root,
-        args.task_id.as_deref(),
-        "packet28.compact.deps",
-        "native_tool",
-        "deps".to_string(),
-        preview.clone(),
-        None,
-        Some(estimate_tokens_str(&preview)),
-        manifests
-            .iter()
-            .map(|path| {
-                packet28_reducer_core::normalize_capture_path(&root, &path.display().to_string())
-            })
-            .collect(),
-        Vec::new(),
+        CompactToolResultRecord {
+            task_id: args.task_id.as_deref(),
+            tool_name: "packet28.compact.deps",
+            compact_path: "native_tool",
+            request_summary: "deps".to_string(),
+            result_summary: preview.clone(),
+            raw_est_tokens: None,
+            reduced_est_tokens: Some(estimate_tokens_str(&preview)),
+            paths: manifests
+                .iter()
+                .map(|path| {
+                    packet28_reducer_core::normalize_capture_path(
+                        &root,
+                        &path.display().to_string(),
+                    )
+                })
+                .collect(),
+            symbols: Vec::new(),
+        },
     )?;
     Ok(0)
 }
@@ -594,15 +609,17 @@ fn run_log(args: LogArgs) -> Result<i32> {
     emit_or_print(&payload, &preview, args.json, args.pretty)?;
     record_tool_result(
         &root,
-        args.task_id.as_deref(),
-        "packet28.compact.log",
-        "native_tool",
-        format!("log {}", relative),
-        preview.clone(),
-        Some(estimate_tokens_str(&raw)),
-        Some(estimate_tokens_str(&preview)),
-        vec![relative],
-        Vec::new(),
+        CompactToolResultRecord {
+            task_id: args.task_id.as_deref(),
+            tool_name: "packet28.compact.log",
+            compact_path: "native_tool",
+            request_summary: format!("log {}", relative),
+            result_summary: preview.clone(),
+            raw_est_tokens: Some(estimate_tokens_str(&raw)),
+            reduced_est_tokens: Some(estimate_tokens_str(&preview)),
+            paths: vec![relative],
+            symbols: Vec::new(),
+        },
     )?;
     Ok(0)
 }
@@ -627,19 +644,23 @@ fn run_summary(args: SummaryArgs, label: &str) -> Result<i32> {
             }
             record_tool_result(
                 &root,
-                args.task_id.as_deref(),
-                &format!("packet28.compact.{label}"),
-                "proxy_passthrough",
-                args.command_argv.join(" "),
-                envelope.summary.clone(),
-                Some(((envelope.payload.bytes_in as f64) / 4.0).ceil() as u64),
-                Some(((envelope.payload.bytes_out as f64) / 4.0).ceil() as u64),
-                envelope
-                    .files
-                    .iter()
-                    .map(|file| file.path.clone())
-                    .collect(),
-                Vec::new(),
+                CompactToolResultRecord {
+                    task_id: args.task_id.as_deref(),
+                    tool_name: &format!("packet28.compact.{label}"),
+                    compact_path: "proxy_passthrough",
+                    request_summary: args.command_argv.join(" "),
+                    result_summary: envelope.summary.clone(),
+                    raw_est_tokens: Some(((envelope.payload.bytes_in as f64) / 4.0).ceil() as u64),
+                    reduced_est_tokens: Some(
+                        ((envelope.payload.bytes_out as f64) / 4.0).ceil() as u64
+                    ),
+                    paths: envelope
+                        .files
+                        .iter()
+                        .map(|file| file.path.clone())
+                        .collect(),
+                    symbols: Vec::new(),
+                },
             )?;
             Ok(if envelope.payload.exit_code == 0 {
                 0
@@ -711,8 +732,10 @@ fn run_rewrite(args: RewriteArgs) -> Result<i32> {
 fn run_gain(args: AnalyticsArgs) -> Result<i32> {
     let root = resolve_root(&args.root)?;
     let states = load_task_states(&root, args.task_id.as_deref(), args.limit)?;
-    let mut summary = GainSummary::default();
-    summary.task_count = states.len();
+    let mut summary = GainSummary {
+        task_count: states.len(),
+        ..GainSummary::default()
+    };
     for (_, state) in states {
         for invocation in state.recent_tool_invocations {
             summary.invocation_count += 1;
@@ -940,17 +963,16 @@ fn looks_like_glob_pattern(value: &str) -> bool {
     value.contains('*') || value.contains('?') || value.contains('[')
 }
 
-fn walk_tree(
-    root: &Path,
-    path: &Path,
-    depth: usize,
+struct TreeWalkState<'a> {
     max_depth: usize,
     max_entries: usize,
     hidden: bool,
-    rendered: &mut Vec<String>,
-    paths: &mut Vec<String>,
-) -> Result<()> {
-    if rendered.len() >= max_entries {
+    rendered: &'a mut Vec<String>,
+    paths: &'a mut Vec<String>,
+}
+
+fn walk_tree(root: &Path, path: &Path, depth: usize, state: &mut TreeWalkState<'_>) -> Result<()> {
+    if state.rendered.len() >= state.max_entries {
         return Ok(());
     }
     let relative = packet28_reducer_core::normalize_capture_path(root, &path.display().to_string());
@@ -960,10 +982,10 @@ fn walk_tree(
         } else {
             format!("{}{}", "  ".repeat(depth), relative)
         };
-        rendered.push(name);
-        paths.push(relative.clone());
+        state.rendered.push(name);
+        state.paths.push(relative.clone());
     }
-    if depth >= max_depth || !path.is_dir() {
+    if depth >= state.max_depth || !path.is_dir() {
         return Ok(());
     }
     let mut children = fs::read_dir(path)
@@ -977,20 +999,11 @@ fn walk_tree(
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
-        if (!hidden && name.starts_with('.')) || name == ".git" || name == ".packet28" {
+        if (!state.hidden && name.starts_with('.')) || name == ".git" || name == ".packet28" {
             continue;
         }
-        walk_tree(
-            root,
-            &child,
-            depth + 1,
-            max_depth,
-            max_entries,
-            hidden,
-            rendered,
-            paths,
-        )?;
-        if rendered.len() >= max_entries {
+        walk_tree(root, &child, depth + 1, state)?;
+        if state.rendered.len() >= state.max_entries {
             break;
         }
     }
@@ -1165,19 +1178,20 @@ fn load_task_states(
     Ok(states)
 }
 
-fn record_tool_result(
-    root: &Path,
-    task_id: Option<&str>,
-    tool_name: &str,
-    compact_path: &str,
+struct CompactToolResultRecord<'a> {
+    task_id: Option<&'a str>,
+    tool_name: &'a str,
+    compact_path: &'a str,
     request_summary: String,
     result_summary: String,
     raw_est_tokens: Option<u64>,
     reduced_est_tokens: Option<u64>,
     paths: Vec<String>,
     symbols: Vec<String>,
-) -> Result<()> {
-    let Some(task_id) = task_id.filter(|value| !value.trim().is_empty()) else {
+}
+
+fn record_tool_result(root: &Path, record: CompactToolResultRecord<'_>) -> Result<()> {
+    let Some(task_id) = record.task_id.filter(|value| !value.trim().is_empty()) else {
         return Ok(());
     };
     crate::broker_client::write_state(
@@ -1185,14 +1199,14 @@ fn record_tool_result(
         BrokerWriteStateRequest {
             task_id: task_id.to_string(),
             op: Some(BrokerWriteOp::ToolResult),
-            tool_name: Some(tool_name.to_string()),
-            request_summary: Some(request_summary),
-            result_summary: Some(result_summary),
-            compact_path: Some(compact_path.to_string()),
-            raw_est_tokens,
-            reduced_est_tokens,
-            paths,
-            symbols,
+            tool_name: Some(record.tool_name.to_string()),
+            request_summary: Some(record.request_summary),
+            result_summary: Some(record.result_summary),
+            compact_path: Some(record.compact_path.to_string()),
+            raw_est_tokens: record.raw_est_tokens,
+            reduced_est_tokens: record.reduced_est_tokens,
+            paths: record.paths,
+            symbols: record.symbols,
             raw_artifact_available: Some(false),
             refresh_context: Some(false),
             ..BrokerWriteStateRequest::default()

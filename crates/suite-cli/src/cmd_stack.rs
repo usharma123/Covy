@@ -188,44 +188,42 @@ pub fn run(args: SliceArgs) -> Result<i32> {
                     })),
                 )?;
             }
+        } else if args.legacy_json {
+            crate::cmd_common::emit_json(
+                &json!({
+                    "schema_version": "suite.stack.slice.v1",
+                    "packet": packet,
+                    "kernel_audit": {
+                        "stack": response.audit,
+                    },
+                    "kernel_metadata": {
+                        "stack": response.metadata,
+                    },
+                    "cache": {
+                        "stack": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
+                    },
+                }),
+                args.pretty,
+            )?;
         } else {
-            if args.legacy_json {
-                crate::cmd_common::emit_json(
-                    &json!({
-                        "schema_version": "suite.stack.slice.v1",
-                        "packet": packet,
-                        "kernel_audit": {
-                            "stack": response.audit,
-                        },
-                        "kernel_metadata": {
-                            "stack": response.metadata,
-                        },
-                        "cache": {
-                            "stack": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
-                        },
-                    }),
-                    args.pretty,
-                )?;
-            } else {
-                crate::cmd_common::emit_machine_envelope(
-                    suite_packet_core::PACKET_TYPE_STACK_SLICE,
-                    &packet,
-                    profile,
-                    args.pretty,
-                    &crate::cmd_common::resolve_artifact_root(None),
-                    Some(json!({
-                        "kernel_audit": {
-                            "stack": response.audit,
-                        },
-                        "kernel_metadata": {
-                            "stack": response.metadata,
-                        },
-                        "cache": {
-                            "stack": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
-                        },
-                    })),
-                )?;
-            }
+            crate::cmd_common::emit_machine_envelope(
+                suite_packet_core::PACKET_TYPE_STACK_SLICE,
+                &packet,
+                profile,
+                args.pretty,
+                &crate::cmd_common::resolve_artifact_root(None),
+                Some(json!({
+                    "kernel_audit": {
+                        "stack": response.audit,
+                    },
+                    "kernel_metadata": {
+                        "stack": response.metadata,
+                    },
+                    "cache": {
+                        "stack": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
+                    },
+                })),
+            )?;
         }
         return Ok(0);
     }

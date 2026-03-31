@@ -89,6 +89,7 @@ pub struct McpProxyArgs {
     pub task_id: Option<String>,
 }
 
+#[derive(Default)]
 struct McpSessionState {
     initialized: bool,
     shutdown: bool,
@@ -110,44 +111,12 @@ struct McpSessionState {
     daemon_client: Option<crate::cmd_daemon::PersistentDaemonClient>,
 }
 
-impl Default for McpSessionState {
-    fn default() -> Self {
-        Self {
-            initialized: false,
-            shutdown: false,
-            tracked_tasks: BTreeMap::new(),
-            current_task_id: None,
-            framing: None,
-            tool_owners: BTreeMap::new(),
-            tool_forward_names: BTreeMap::new(),
-            upstream_tools_cache: Vec::new(),
-            upstream_tools_loaded: false,
-            resource_owners: BTreeMap::new(),
-            upstream_resources_cache: Vec::new(),
-            upstream_resources_loaded: false,
-            upstream_resource_templates_cache: Vec::new(),
-            upstream_resource_templates_loaded: false,
-            proxy_task_id: None,
-            next_invocation_seq: 0,
-            #[cfg(unix)]
-            daemon_client: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 struct McpProxyConfig {
     #[serde(rename = "mcpServers")]
     mcp_servers: BTreeMap<String, McpProxyServerConfig>,
-}
-
-impl Default for McpProxyConfig {
-    fn default() -> Self {
-        Self {
-            mcp_servers: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]

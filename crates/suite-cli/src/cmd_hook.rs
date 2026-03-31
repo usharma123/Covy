@@ -1477,7 +1477,7 @@ fn build_grep_packet(input: &Value, response: &Value) -> Option<HookReducerPacke
         .or_else(|| json_string(input, "search"))?;
     let paths = json_array_strings(response, "files")
         .into_iter()
-        .chain(json_array_strings(input, "include").into_iter())
+        .chain(json_array_strings(input, "include"))
         .collect::<Vec<_>>();
     let count = json_array_len(response, "matches")
         .unwrap_or_else(|| hook_output_text(response).lines().count());
@@ -2014,7 +2014,7 @@ fn estimate_text_tokens(text: &str) -> u64 {
     if bytes == 0 {
         0
     } else {
-        (bytes + 3) / 4
+        bytes.div_ceil(4)
     }
 }
 

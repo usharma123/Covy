@@ -604,10 +604,10 @@ fn contains_unsupported_glob_tokens(argv: &[String], native_tool: Option<&Native
     if !argv.iter().any(|arg| contains_glob_chars(arg)) {
         return false;
     }
-    match native_tool.map(|plan| &plan.kind) {
-        Some(NativeToolKind::Tree) | Some(NativeToolKind::Grep) => false,
-        _ => true,
-    }
+    !matches!(
+        native_tool.map(|plan| &plan.kind),
+        Some(NativeToolKind::Tree) | Some(NativeToolKind::Grep)
+    )
 }
 
 fn contains_glob_chars(value: &str) -> bool {
@@ -767,13 +767,14 @@ fn find_last_top_level_pipe(command: &str) -> Option<usize> {
             in_single = !in_single;
         } else if ch == '"' && !in_single {
             in_double = !in_double;
-        } else if ch == '|' && !in_single && !in_double {
-            if bytes.get(idx + 1).map(|next| *next != b'|').unwrap_or(true)
-                && idx > 0
-                && bytes[idx - 1] != b'|'
-            {
-                last_pipe = Some(idx);
-            }
+        } else if ch == '|'
+            && !in_single
+            && !in_double
+            && bytes.get(idx + 1).map(|next| *next != b'|').unwrap_or(true)
+            && idx > 0
+            && bytes[idx - 1] != b'|'
+        {
+            last_pipe = Some(idx);
         }
         idx += 1;
     }

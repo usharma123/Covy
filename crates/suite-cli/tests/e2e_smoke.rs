@@ -577,7 +577,7 @@ fn parse_broker_response(output: &[u8]) -> Value {
     value
 }
 
-fn packet_payload<'a>(wrapper: &'a Value) -> &'a Value {
+fn packet_payload(wrapper: &Value) -> &Value {
     wrapper
         .get("packet")
         .and_then(|packet| packet.get("payload"))
@@ -3675,7 +3675,7 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
     assert_eq!(search_full_payload["response_mode"], "full");
     assert_eq!(search_full_payload["query"], "Alpha");
     assert_eq!(search_full_payload["search_strategy"], "hybrid");
-    assert!(search_full_payload["groups"].as_array().unwrap().len() >= 1);
+    assert!(!search_full_payload["groups"].as_array().unwrap().is_empty());
     assert!(search_full_payload["engine"].is_object());
     assert!(search_full_payload["hybrid"].is_object());
 

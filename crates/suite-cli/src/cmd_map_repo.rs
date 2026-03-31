@@ -78,9 +78,7 @@ pub struct RepoArgs {
 }
 
 pub fn run(args: RepoArgs) -> Result<i32> {
-    let machine_profile = args
-        .json
-        .map(|profile| suite_packet_core::JsonProfile::from(profile));
+    let machine_profile = args.json.map(suite_packet_core::JsonProfile::from);
     let detail_mode = if matches!(
         machine_profile,
         Some(suite_packet_core::JsonProfile::Full | suite_packet_core::JsonProfile::Handle)
@@ -278,32 +276,30 @@ pub fn run(args: RepoArgs) -> Result<i32> {
                     })),
                 )?;
             }
+        } else if args.legacy_json {
+            crate::cmd_common::emit_json(
+                &json!({
+                    "schema_version": "suite.map.repo.v1",
+                    "packet": packet,
+                    "cache": {
+                        "map": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
+                    },
+                }),
+                args.pretty,
+            )?;
         } else {
-            if args.legacy_json {
-                crate::cmd_common::emit_json(
-                    &json!({
-                        "schema_version": "suite.map.repo.v1",
-                        "packet": packet,
-                        "cache": {
-                            "map": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
-                        },
-                    }),
-                    args.pretty,
-                )?;
-            } else {
-                crate::cmd_common::emit_machine_envelope(
-                    suite_packet_core::PACKET_TYPE_MAP_REPO,
-                    &envelope,
-                    profile,
-                    args.pretty,
-                    &PathBuf::from(&args.repo_root),
-                    Some(json!({
-                        "cache": {
-                            "map": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
-                        },
-                    })),
-                )?;
-            }
+            crate::cmd_common::emit_machine_envelope(
+                suite_packet_core::PACKET_TYPE_MAP_REPO,
+                &envelope,
+                profile,
+                args.pretty,
+                &PathBuf::from(&args.repo_root),
+                Some(json!({
+                    "cache": {
+                        "map": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
+                    },
+                })),
+            )?;
         }
 
         return Ok(0);
@@ -361,12 +357,9 @@ pub fn run_remote(args: RepoArgs, daemon_root: &Path) -> Result<i32> {
         args.context_config.as_deref(),
         &caller_cwd,
     );
-    let machine_profile = args
-        .json
-        .map(|profile| suite_packet_core::JsonProfile::from(profile))
-        .or(args
-            .legacy_json
-            .then_some(suite_packet_core::JsonProfile::Compact));
+    let machine_profile = args.json.map(suite_packet_core::JsonProfile::from).or(args
+        .legacy_json
+        .then_some(suite_packet_core::JsonProfile::Compact));
     let detail_mode = if matches!(
         machine_profile,
         Some(suite_packet_core::JsonProfile::Full | suite_packet_core::JsonProfile::Handle)

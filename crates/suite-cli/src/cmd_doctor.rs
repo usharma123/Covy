@@ -583,7 +583,7 @@ fn check_mcp_round_trip(root: &Path) -> McpRoundTripChecks {
             "packet28.prepare_handoff",
             "packet28.fetch_context",
         ] {
-            if !tool_names.iter().any(|name| *name == required_tool) {
+            if !tool_names.contains(&required_tool) {
                 return Err(anyhow!("{required_tool} missing from tools/list"));
             }
         }

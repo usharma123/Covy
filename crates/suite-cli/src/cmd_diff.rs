@@ -278,42 +278,40 @@ pub fn run(args: AnalyzeArgs, config_path: &str) -> Result<i32> {
                         })),
                     )?;
                 }
-            } else {
-                if args.legacy_json {
-                    let mut value: Value = serde_json::to_value(&output.gate_result)
-                        .map_err(|source| anyhow!("failed to serialize gate json: {source}"))?;
-                    if let Some(obj) = value.as_object_mut() {
-                        obj.insert(
-                            "kernel_metadata".to_string(),
-                            json!({
-                                "diff": response.metadata,
-                            }),
-                        );
-                        obj.insert(
-                            "cache".to_string(),
-                            json!({
-                                "diff": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
-                            }),
-                        );
-                    }
-                    crate::cmd_common::emit_json(&value, args.pretty)?;
-                } else {
-                    crate::cmd_common::emit_machine_envelope(
-                        suite_packet_core::PACKET_TYPE_DIFF_ANALYZE,
-                        &envelope,
-                        profile,
-                        args.pretty,
-                        &crate::cmd_common::resolve_artifact_root(None),
-                        Some(json!({
-                            "cache": {
-                                "diff": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
-                            },
-                            "kernel_metadata": {
-                                "diff": response.metadata,
-                            },
-                        })),
-                    )?;
+            } else if args.legacy_json {
+                let mut value: Value = serde_json::to_value(&output.gate_result)
+                    .map_err(|source| anyhow!("failed to serialize gate json: {source}"))?;
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert(
+                        "kernel_metadata".to_string(),
+                        json!({
+                            "diff": response.metadata,
+                        }),
+                    );
+                    obj.insert(
+                        "cache".to_string(),
+                        json!({
+                            "diff": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
+                        }),
+                    );
                 }
+                crate::cmd_common::emit_json(&value, args.pretty)?;
+            } else {
+                crate::cmd_common::emit_machine_envelope(
+                    suite_packet_core::PACKET_TYPE_DIFF_ANALYZE,
+                    &envelope,
+                    profile,
+                    args.pretty,
+                    &crate::cmd_common::resolve_artifact_root(None),
+                    Some(json!({
+                        "cache": {
+                            "diff": response.metadata.get("cache").cloned().unwrap_or(Value::Null),
+                        },
+                        "kernel_metadata": {
+                            "diff": response.metadata,
+                        },
+                    })),
+                )?;
             }
         }
         _ => {

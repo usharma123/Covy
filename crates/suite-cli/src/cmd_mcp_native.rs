@@ -574,14 +574,47 @@ fn execute_search_with_strategy(
 fn write_native_tool_result(
     root: &Path,
     session: &Arc<Mutex<McpSessionState>>,
-    task_id: &str,
-    invocation_id: &str,
+    record: NativeToolResultRecord<'_>,
+) -> Result<()> {
+    write_auto_capture_state_batch_via_session(
+        root,
+        session,
+        vec![BrokerWriteStateRequest {
+            task_id: record.task_id.to_string(),
+            op: Some(BrokerWriteOp::ToolResult),
+            invocation_id: Some(record.invocation_id.to_string()),
+            tool_name: Some(record.tool_name.to_string()),
+            operation_kind: Some(record.operation_kind),
+            request_summary: Some(record.request_summary),
+            result_summary: Some(record.result_summary),
+            compact_path: Some(record.compact_path.to_string()),
+            raw_est_tokens: record.raw_est_tokens,
+            reduced_est_tokens: record.reduced_est_tokens,
+            search_query: record.search_query,
+            command: record.command,
+            sequence: Some(record.sequence),
+            duration_ms: Some(record.duration_ms),
+            paths: record.paths,
+            regions: record.regions,
+            symbols: record.symbols,
+            artifact_id: record.artifact_id,
+            raw_artifact_handle: record.raw_artifact_handle.clone(),
+            raw_artifact_available: Some(record.raw_artifact_handle.is_some()),
+            refresh_context: Some(false),
+            ..BrokerWriteStateRequest::default()
+        }],
+    )
+}
+
+struct NativeToolResultRecord<'a> {
+    task_id: &'a str,
+    invocation_id: &'a str,
     sequence: u64,
-    tool_name: &str,
+    tool_name: &'a str,
     operation_kind: suite_packet_core::ToolOperationKind,
     request_summary: String,
     result_summary: String,
-    compact_path: &str,
+    compact_path: &'a str,
     raw_est_tokens: Option<u64>,
     reduced_est_tokens: Option<u64>,
     search_query: Option<String>,
@@ -592,79 +625,54 @@ fn write_native_tool_result(
     artifact_id: Option<String>,
     raw_artifact_handle: Option<String>,
     duration_ms: u64,
+}
+
+fn write_native_tool_failure(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    record: NativeToolFailureRecord<'_>,
 ) -> Result<()> {
     write_auto_capture_state_batch_via_session(
         root,
         session,
         vec![BrokerWriteStateRequest {
-            task_id: task_id.to_string(),
-            op: Some(BrokerWriteOp::ToolResult),
-            invocation_id: Some(invocation_id.to_string()),
-            tool_name: Some(tool_name.to_string()),
-            operation_kind: Some(operation_kind),
-            request_summary: Some(request_summary),
-            result_summary: Some(result_summary),
-            compact_path: Some(compact_path.to_string()),
-            raw_est_tokens,
-            reduced_est_tokens,
-            search_query,
-            command,
-            sequence: Some(sequence),
-            duration_ms: Some(duration_ms),
-            paths,
-            regions,
-            symbols,
-            artifact_id,
-            raw_artifact_handle: raw_artifact_handle.clone(),
-            raw_artifact_available: Some(raw_artifact_handle.is_some()),
+            task_id: record.task_id.to_string(),
+            op: Some(BrokerWriteOp::ToolInvocationFailed),
+            invocation_id: Some(record.invocation_id.to_string()),
+            tool_name: Some(record.tool_name.to_string()),
+            operation_kind: Some(record.operation_kind),
+            request_summary: Some(record.request_summary),
+            compact_path: Some(record.compact_path.to_string()),
+            error_class: Some(classify_error_message(&record.error_message)),
+            error_message: Some(record.error_message.clone()),
+            raw_est_tokens: record.raw_est_tokens,
+            reduced_est_tokens: record.reduced_est_tokens,
+            retryable: Some(is_retryable_error(&record.error_message)),
+            sequence: Some(record.sequence),
+            duration_ms: Some(record.duration_ms),
+            command: record.command,
+            raw_artifact_handle: record.raw_artifact_handle.clone(),
+            raw_artifact_available: Some(record.raw_artifact_handle.is_some()),
             refresh_context: Some(false),
             ..BrokerWriteStateRequest::default()
         }],
     )
 }
 
-fn write_native_tool_failure(
-    root: &Path,
-    session: &Arc<Mutex<McpSessionState>>,
-    task_id: &str,
-    invocation_id: &str,
+struct NativeToolFailureRecord<'a> {
+    task_id: &'a str,
+    invocation_id: &'a str,
     sequence: u64,
-    tool_name: &str,
+    tool_name: &'a str,
     operation_kind: suite_packet_core::ToolOperationKind,
     request_summary: String,
     error_message: String,
-    compact_path: &str,
+    compact_path: &'a str,
     raw_est_tokens: Option<u64>,
     reduced_est_tokens: Option<u64>,
     command: Option<String>,
     raw_artifact_handle: Option<String>,
     duration_ms: u64,
-) -> Result<()> {
-    write_auto_capture_state_batch_via_session(
-        root,
-        session,
-        vec![BrokerWriteStateRequest {
-            task_id: task_id.to_string(),
-            op: Some(BrokerWriteOp::ToolInvocationFailed),
-            invocation_id: Some(invocation_id.to_string()),
-            tool_name: Some(tool_name.to_string()),
-            operation_kind: Some(operation_kind),
-            request_summary: Some(request_summary),
-            compact_path: Some(compact_path.to_string()),
-            error_class: Some(classify_error_message(&error_message)),
-            error_message: Some(error_message.clone()),
-            raw_est_tokens,
-            reduced_est_tokens,
-            retryable: Some(is_retryable_error(&error_message)),
-            sequence: Some(sequence),
-            duration_ms: Some(duration_ms),
-            command,
-            raw_artifact_handle: raw_artifact_handle.clone(),
-            raw_artifact_available: Some(raw_artifact_handle.is_some()),
-            refresh_context: Some(false),
-            ..BrokerWriteStateRequest::default()
-        }],
-    )
 }
 
 pub(crate) fn handle_packet28_search(
@@ -702,19 +710,21 @@ pub(crate) fn handle_packet28_search(
                 write_native_tool_failure(
                     root,
                     session,
-                    task_id,
-                    &invocation_id,
-                    sequence,
-                    "packet28.search",
-                    suite_packet_core::ToolOperationKind::Search,
-                    request_summary,
-                    error.to_string(),
-                    "native_tool",
-                    None,
-                    None,
-                    None,
-                    None,
-                    duration_ms,
+                    NativeToolFailureRecord {
+                        task_id,
+                        invocation_id: &invocation_id,
+                        sequence,
+                        tool_name: "packet28.search",
+                        operation_kind: suite_packet_core::ToolOperationKind::Search,
+                        request_summary,
+                        error_message: error.to_string(),
+                        compact_path: "native_tool",
+                        raw_est_tokens: None,
+                        reduced_est_tokens: None,
+                        command: None,
+                        raw_artifact_handle: None,
+                        duration_ms,
+                    },
                 )?;
                 return Err(error);
             }
@@ -806,24 +816,26 @@ pub(crate) fn handle_packet28_search(
     write_native_tool_result(
         root,
         session,
-        task_id,
-        &invocation_id,
-        sequence,
-        "packet28.search",
-        suite_packet_core::ToolOperationKind::Search,
-        request_summary,
-        result_summary,
-        "native_tool",
-        raw_est_tokens,
-        reduced_est_tokens,
-        Some(query.to_string()),
-        None,
-        search_result.paths.clone(),
-        search_result.regions.clone(),
-        search_result.symbols.clone(),
-        artifact_id,
-        None,
-        duration_ms,
+        NativeToolResultRecord {
+            task_id,
+            invocation_id: &invocation_id,
+            sequence,
+            tool_name: "packet28.search",
+            operation_kind: suite_packet_core::ToolOperationKind::Search,
+            request_summary,
+            result_summary,
+            compact_path: "native_tool",
+            raw_est_tokens,
+            reduced_est_tokens,
+            search_query: Some(query.to_string()),
+            command: None,
+            paths: search_result.paths.clone(),
+            regions: search_result.regions.clone(),
+            symbols: search_result.symbols.clone(),
+            artifact_id,
+            raw_artifact_handle: None,
+            duration_ms,
+        },
     )?;
     Ok(payload)
 }
@@ -895,13 +907,13 @@ pub(crate) fn handle_packet28_fetch_context(
     // Honour response_mode: when slim is requested, strip heavy section
     // data and keep only the metadata the agent needs to decide next steps.
     if matches!(args.response_mode, Some(BrokerResponseMode::Slim)) {
-        payload.as_object_mut().map(|obj| {
+        if let Some(obj) = payload.as_object_mut() {
             obj.remove("sections");
             obj.remove("delta");
             obj.remove("evidence_cache");
             obj.remove("search_evidence");
             obj.remove("code_evidence");
-        });
+        }
         payload["response_mode"] = json!("slim");
     } else if payload.get("response_mode").is_none() {
         payload["response_mode"] = json!("full");
@@ -983,19 +995,21 @@ pub(crate) fn handle_packet28_read_regions(
             write_native_tool_failure(
                 root,
                 session,
-                task_id,
-                &invocation_id,
-                sequence,
-                "packet28.read_regions",
-                suite_packet_core::ToolOperationKind::Read,
-                request_summary,
-                error.to_string(),
-                "native_tool",
-                None,
-                None,
-                None,
-                None,
-                duration_ms,
+                NativeToolFailureRecord {
+                    task_id,
+                    invocation_id: &invocation_id,
+                    sequence,
+                    tool_name: "packet28.read_regions",
+                    operation_kind: suite_packet_core::ToolOperationKind::Read,
+                    request_summary,
+                    error_message: error.to_string(),
+                    compact_path: "native_tool",
+                    raw_est_tokens: None,
+                    reduced_est_tokens: None,
+                    command: None,
+                    raw_artifact_handle: None,
+                    duration_ms,
+                },
             )?;
             return Err(error);
         }
@@ -1044,24 +1058,26 @@ pub(crate) fn handle_packet28_read_regions(
     write_native_tool_result(
         root,
         session,
-        task_id,
-        payload["invocation_id"].as_str().unwrap_or_default(),
-        sequence,
-        "packet28.read_regions",
-        suite_packet_core::ToolOperationKind::Read,
-        request_summary,
-        result_summary,
-        "native_tool",
-        raw_est_tokens,
-        reduced_est_tokens,
-        None,
-        None,
-        vec![payload["path"].as_str().unwrap_or_default().to_string()],
-        json_array_strings(&full_payload, "regions"),
-        json_array_strings(&full_payload, "symbols"),
-        artifact_id,
-        None,
-        duration_ms,
+        NativeToolResultRecord {
+            task_id,
+            invocation_id: payload["invocation_id"].as_str().unwrap_or_default(),
+            sequence,
+            tool_name: "packet28.read_regions",
+            operation_kind: suite_packet_core::ToolOperationKind::Read,
+            request_summary,
+            result_summary,
+            compact_path: "native_tool",
+            raw_est_tokens,
+            reduced_est_tokens,
+            search_query: None,
+            command: None,
+            paths: vec![payload["path"].as_str().unwrap_or_default().to_string()],
+            regions: json_array_strings(&full_payload, "regions"),
+            symbols: json_array_strings(&full_payload, "symbols"),
+            artifact_id,
+            raw_artifact_handle: None,
+            duration_ms,
+        },
     )?;
     Ok(payload)
 }
@@ -1166,19 +1182,21 @@ pub(crate) fn handle_packet28_glob(
             write_native_tool_failure(
                 root,
                 session,
-                task_id,
-                &invocation_id,
-                sequence,
-                "packet28.glob",
-                suite_packet_core::ToolOperationKind::Search,
-                request_summary,
-                error.to_string(),
-                "native_tool",
-                None,
-                None,
-                None,
-                None,
-                duration_ms,
+                NativeToolFailureRecord {
+                    task_id,
+                    invocation_id: &invocation_id,
+                    sequence,
+                    tool_name: "packet28.glob",
+                    operation_kind: suite_packet_core::ToolOperationKind::Search,
+                    request_summary,
+                    error_message: error.to_string(),
+                    compact_path: "native_tool",
+                    raw_est_tokens: None,
+                    reduced_est_tokens: None,
+                    command: None,
+                    raw_artifact_handle: None,
+                    duration_ms,
+                },
             )?;
             return Err(error);
         }
@@ -1236,24 +1254,26 @@ pub(crate) fn handle_packet28_glob(
     write_native_tool_result(
         root,
         session,
-        task_id,
-        &invocation_id,
-        sequence,
-        "packet28.glob",
-        suite_packet_core::ToolOperationKind::Search,
-        request_summary,
-        result_summary,
-        "native_tool",
-        raw_est_tokens,
-        reduced_est_tokens,
-        Some(pattern.to_string()),
-        None,
-        matched_paths,
-        Vec::new(),
-        symbols,
-        artifact_id,
-        None,
-        duration_ms,
+        NativeToolResultRecord {
+            task_id,
+            invocation_id: &invocation_id,
+            sequence,
+            tool_name: "packet28.glob",
+            operation_kind: suite_packet_core::ToolOperationKind::Search,
+            request_summary,
+            result_summary,
+            compact_path: "native_tool",
+            raw_est_tokens,
+            reduced_est_tokens,
+            search_query: Some(pattern.to_string()),
+            command: None,
+            paths: matched_paths,
+            regions: Vec::new(),
+            symbols,
+            artifact_id,
+            raw_artifact_handle: None,
+            duration_ms,
+        },
     )?;
     Ok(payload)
 }
