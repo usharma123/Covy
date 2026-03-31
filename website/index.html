@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Packet28 — Context Broker for AI Coding Agents</title>
-<meta name="description" content="Packet28 manages your agent's context window so it conserves tokens. 164x fewer tokens on large codebases.">
-<meta property="og:title" content="Packet28 — Context Broker for AI Coding Agents">
-<meta property="og:description" content="Hook reducers keep your agent's turns slim. Handoff packets compress cross-turn memory. 164x fewer tokens on large codebases.">
+<title>Packet28 — Your AI Agent Reads Too Much</title>
+<meta name="description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see. 164x fewer tokens on large codebases.">
+<meta property="og:title" content="Packet28 — Your AI Agent Reads Too Much">
+<meta property="og:description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see. 164x fewer tokens on large codebases.">
 <meta property="og:image" content="og-image.png">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Packet28 — Context Broker for AI Coding Agents">
-<meta name="twitter:description" content="Hook reducers keep your agent's turns slim. Handoff packets compress cross-turn memory. 164x fewer tokens on large codebases.">
+<meta name="twitter:title" content="Packet28 — Your AI Agent Reads Too Much">
+<meta name="twitter:description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see. 164x fewer tokens on large codebases.">
 <meta name="twitter:image" content="og-image.png">
 <link rel="icon" type="image/svg+xml" href="logo.svg">
 <style>
@@ -23,8 +23,8 @@
   --bg: #000000;
   --bg-raised: #060606;
   --fg: #e0e0e0;
-  --dim: #8a8a8a;
-  --muted: #555555;
+  --dim: #aaaaaa;
+  --muted: #777777;
   --border: #333333;
   --border-hi: #444444;
   --highlight: #ffffff;
@@ -41,6 +41,7 @@ body {
   line-height: 1.6;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  padding-top: 28px;
 }
 
 ::selection {
@@ -74,6 +75,91 @@ body::after {
   );
 }
 
+/* ═══ TUI MENU BAR ═══ */
+.tui-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  background: var(--fg);
+  color: var(--bg);
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 0 2px;
+  gap: 0;
+}
+
+.tui-bar-item {
+  padding: 0 12px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  cursor: default;
+  letter-spacing: 0.3px;
+  transition: background 0.08s;
+}
+
+.tui-bar-item:hover {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.tui-bar-item .hotkey {
+  color: var(--bg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.tui-bar-item:hover .hotkey {
+  color: var(--fg);
+}
+
+.tui-bar-right {
+  margin-left: auto;
+  padding: 0 14px;
+  font-weight: 400;
+  opacity: 0.4;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+/* ═══ STATUS BAR (bottom) ═══ */
+.tui-status {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  height: 24px;
+  background: var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-family: var(--font);
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.5px;
+  gap: 20px;
+}
+
+.tui-status-key {
+  background: var(--muted);
+  color: var(--bg);
+  padding: 0 5px;
+  font-weight: 600;
+  margin-right: 4px;
+  font-size: 9px;
+}
+
+.tui-status-right {
+  margin-left: auto;
+}
+
 /* ═══ CONTAINER ═══ */
 .container {
   max-width: 920px;
@@ -83,11 +169,11 @@ body::after {
 
 /* ═══ HERO ═══ */
 .hero {
-  min-height: 100vh;
+  min-height: calc(100vh - 28px);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 80px 32px;
+  padding: 80px 32px 60px;
   position: relative;
   text-align: center;
 }
@@ -121,12 +207,10 @@ body::after {
   visibility: hidden;
 }
 
-/* revealed — character visible behind the block */
 .hero-logo-char.revealed {
   visibility: visible;
 }
 
-/* solid block overlay that sits on top of the char cell */
 .hero-logo-char .block {
   position: absolute;
   inset: 0;
@@ -134,14 +218,12 @@ body::after {
   z-index: 1;
 }
 
-/* "28" — hollow outlined */
 .hero-logo-char.num {
   font-weight: 700;
   color: transparent;
   -webkit-text-stroke: 1.5px var(--dim);
 }
 
-/* settled glow on packet portion */
 .hero-logo.settled .hero-logo-char:not(.num) {
   text-shadow: 0 0 50px rgba(255, 255, 255, 0.10);
   transition: text-shadow 0.6s ease-out;
@@ -164,9 +246,9 @@ body::after {
 .hero-sub {
   font-size: 14px;
   color: var(--dim);
-  max-width: 520px;
-  margin-bottom: 40px;
-  line-height: 1.8;
+  max-width: 540px;
+  margin-bottom: 32px;
+  line-height: 1.9;
   font-weight: 300;
 }
 
@@ -188,6 +270,18 @@ body::after {
 @keyframes cursorBlink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
+}
+
+/* ═══ TOOLS INLINE ═══ */
+.tools-inline {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 32px;
+  letter-spacing: 0.3px;
+}
+
+.tools-inline span {
+  color: var(--dim);
 }
 
 .install-row {
@@ -354,114 +448,6 @@ body::after {
   font-weight: 400;
 }
 
-/* ═══ TOOLS ═══ */
-.tools-grid {
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 0;
-}
-
-.tool-item {
-  padding: 14px 24px;
-  border: 1px solid var(--border);
-  margin-right: -1px;
-  margin-bottom: -1px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  transition: all 0.1s;
-  cursor: default;
-}
-
-.tool-item:hover {
-  background: rgba(255, 255, 255, 0.025);
-  border-color: var(--border-hi);
-  z-index: 1;
-}
-
-.tool-check { font-size: 12px; color: var(--dim); flex-shrink: 0; }
-.tool-name  { font-size: 13px; color: var(--fg); }
-.tool-item:hover .tool-check { color: var(--highlight); }
-.tool-item:hover .tool-name  { color: var(--highlight); }
-
-/* ═══ PIPELINE ═══ */
-.pipeline {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr auto 1fr;
-  align-items: stretch;
-  gap: 0;
-}
-
-.pipe-step {
-  border: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-}
-
-.pipe-step-header {
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-raised);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.pipe-num {
-  font-size: 10px;
-  color: var(--bg);
-  background: var(--dim);
-  padding: 0 6px;
-  font-weight: 700;
-  letter-spacing: 1px;
-}
-
-.pipe-step-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--highlight);
-  letter-spacing: 0.3px;
-}
-
-.pipe-step-body {
-  padding: 20px 16px;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.pipe-desc {
-  font-size: 12px;
-  color: var(--dim);
-  line-height: 1.7;
-  margin-bottom: 16px;
-  flex: 1;
-  min-height: 0;
-}
-
-.pipe-code {
-  font-size: 11px;
-  color: var(--fg);
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  margin-top: auto;
-  flex-shrink: 0;
-}
-
-.pipe-arrow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 12px;
-  color: var(--muted);
-  font-size: 13px;
-  align-self: center;
-  white-space: nowrap;
-}
-
 /* ═══ FEATURES ═══ */
 .features-grid {
   display: grid;
@@ -477,7 +463,7 @@ body::after {
 }
 
 .feature-item:hover {
-  background: rgba(255, 255, 255, 0.015);
+  background: rgba(255, 255, 255, 0.02);
   border-color: var(--border-hi);
   z-index: 1;
 }
@@ -501,24 +487,24 @@ body::after {
 }
 
 .feature-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--highlight);
 }
 
 .feature-body {
-  padding: 16px 20px;
+  padding: 22px 24px;
 }
 
 .feature-desc {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--dim);
-  line-height: 1.7;
+  line-height: 1.8;
 }
 
 .feature-desc code {
   font-family: var(--font);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--fg);
   background: rgba(255, 255, 255, 0.04);
   padding: 1px 5px;
@@ -694,186 +680,6 @@ body::after {
 .t-flag    { color: var(--dim); }
 .t-success { color: var(--fg); }
 
-/* ═══ ARCHITECTURE DIAGRAM (CSS) ═══ */
-.diagram {
-  display: grid;
-  grid-template-columns: 1fr auto 1.3fr auto 1fr;
-  align-items: stretch;
-  gap: 0;
-}
-
-.diagram-node {
-  border: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-}
-
-.diagram-node--primary {
-  border-color: var(--border-hi);
-}
-
-.diagram-node-header {
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-raised);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  color: var(--highlight);
-  text-align: center;
-  text-transform: uppercase;
-}
-
-.diagram-node--primary .diagram-node-header {
-  background: var(--highlight);
-  color: var(--bg);
-  border-color: var(--border-hi);
-}
-
-.diagram-node-body {
-  padding: 16px;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.diagram-item {
-  font-size: 12px;
-  color: var(--dim);
-  padding: 2px 0;
-}
-
-.diagram-item::before {
-  content: '·';
-  color: var(--muted);
-  margin-right: 8px;
-}
-
-.diagram-sub {
-  margin-top: 12px;
-  border: 1px solid var(--border);
-}
-
-.diagram-sub-header {
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 1.5px;
-  color: var(--dim);
-  text-transform: uppercase;
-  background: var(--bg);
-}
-
-.diagram-sub-body {
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.diagram-sub-body .diagram-item {
-  font-size: 11px;
-}
-
-.diagram-arrows {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 14px;
-  padding: 20px 0;
-  min-width: 70px;
-}
-
-.diagram-arrow {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-}
-
-.diagram-arrow-label {
-  font-size: 9px;
-  color: var(--muted);
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  font-weight: 500;
-}
-
-.diagram-arrow-line {
-  width: 100%;
-  height: 1px;
-  position: relative;
-  overflow: visible;
-}
-
-.diagram-arrow-line-inner {
-  width: 100%;
-  height: 1px;
-  background: repeating-linear-gradient(
-    90deg,
-    var(--muted) 0, var(--muted) 3px,
-    transparent 3px, transparent 7px
-  );
-  background-size: 7px 1px;
-  animation: dashFlow 0.6s linear infinite;
-}
-
-.diagram-arrow--reverse .diagram-arrow-line-inner {
-  animation: dashFlowReverse 0.6s linear infinite;
-}
-
-@keyframes dashFlow {
-  from { background-position: 0 0; }
-  to   { background-position: 7px 0; }
-}
-
-@keyframes dashFlowReverse {
-  from { background-position: 7px 0; }
-  to   { background-position: 0 0; }
-}
-
-.diagram-arrow-line::after {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 8px;
-  color: var(--muted);
-}
-
-.diagram-arrow:not(.diagram-arrow--reverse) .diagram-arrow-line::after {
-  content: '▶';
-  right: -2px;
-}
-
-.diagram-arrow--reverse .diagram-arrow-line::after {
-  content: '◀';
-  left: -2px;
-}
-
-.diagram-arrow-sublabel {
-  font-size: 8px;
-  color: var(--border-hi);
-  letter-spacing: 0.5px;
-}
-
-.diagram-stats {
-  margin-top: 24px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--dim);
-  padding: 14px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  letter-spacing: 0.5px;
-}
-
-.diagram-stats strong {
-  color: var(--highlight);
-  font-weight: 600;
-}
-
 /* ═══ FOUNDER ═══ */
 .founder-card {
   border: 1px solid var(--border);
@@ -918,7 +724,7 @@ body::after {
 
 /* ═══ FOOTER ═══ */
 .site-footer {
-  padding: 40px 0;
+  padding: 40px 0 64px;
   text-align: center;
 }
 
@@ -962,22 +768,7 @@ body::after {
 @media (max-width: 768px) {
   .container { padding: 0 20px; }
 
-  .pipeline { grid-template-columns: 1fr; }
-  .pipe-arrow { transform: rotate(90deg); padding: 8px; }
-
   .features-grid { grid-template-columns: 1fr; }
-
-  .diagram {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
-  .diagram-arrows {
-    flex-direction: row;
-    justify-content: center;
-    min-width: auto;
-    padding: 12px 0;
-  }
-  .diagram-arrow-line { width: 40px; }
 
   .bench-row { flex-direction: column; }
   .bench-label { width: 100%; }
@@ -992,6 +783,11 @@ body::after {
   .section-header { margin-bottom: 36px; }
 
   .section-rule { padding: 0 20px; }
+
+  .tui-bar { font-size: 10px; }
+  .tui-bar-item { padding: 0 8px; }
+
+  .tui-status { font-size: 9px; padding: 0 10px; gap: 12px; }
 }
 
 @media (max-width: 480px) {
@@ -1006,6 +802,15 @@ body::after {
 
 <div class="crt-vignette"></div>
 
+<!-- ═══ TUI MENU BAR ═══ -->
+<nav class="tui-bar">
+  <span class="tui-bar-item"><span class="hotkey">F</span>ile</span>
+  <span class="tui-bar-item"><span class="hotkey">V</span>iew</span>
+  <span class="tui-bar-item"><span class="hotkey">S</span>etup</span>
+  <span class="tui-bar-item"><span class="hotkey">H</span>elp</span>
+  <span class="tui-bar-right">packet28</span>
+</nav>
+
 <!-- ═══ HERO ═══ -->
 <section class="hero" id="hero">
   <canvas id="matrix"></canvas>
@@ -1013,11 +818,16 @@ body::after {
     <div class="hero-logo" id="hero-logo">
       <span class="hero-logo-char">p<span class="block"></span></span><span class="hero-logo-char">a<span class="block"></span></span><span class="hero-logo-char">c<span class="block"></span></span><span class="hero-logo-char">k<span class="block"></span></span><span class="hero-logo-char">e<span class="block"></span></span><span class="hero-logo-char">t<span class="block"></span></span><span class="hero-logo-char num">2<span class="block"></span></span><span class="hero-logo-char num">8<span class="block"></span></span>
     </div>
-    <h1>Context broker for<br>AI coding agents</h1>
+    <h1>Your AI agent reads<br>too much. We fix that.</h1>
     <p class="hero-sub">
-      Hook reducers keep your agent's turns slim. Handoff packets compress cross-turn memory.
-      <strong>164x fewer tokens</strong> on large codebases.<span class="cursor-blink"></span>
+      AI coding agents waste tokens reading entire files.
+      Packet28 compresses what your agent sees &mdash; a 9,243-line file becomes
+      <strong>~40 relevant lines</strong>.
+      Result: <strong>164x fewer tokens</strong> on large codebases.<span class="cursor-blink"></span>
     </p>
+    <div class="tools-inline">
+      <span>Works with:</span> Claude Code &middot; Cursor &middot; Codex &middot; Copilot &middot; Windsurf
+    </div>
     <div class="install-row">
       <div class="install-cmd" id="install-box" onclick="copyCmd()">
         <span class="prompt">$</span>
@@ -1037,106 +847,29 @@ body::after {
   </div>
 </section>
 
-<!-- ═══ INTEGRATIONS ═══ -->
-<div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">integrations</span></div></div>
-<section class="section" id="tools">
-  <div class="container">
-    <div class="section-header reveal">
-      <h2 class="section-title">Works with your tools</h2>
-      <p class="section-desc">Auto-detects your runtime. One command to configure MCP servers.</p>
-    </div>
-    <div class="tools-grid reveal">
-      <div class="tool-item"><span class="tool-check">[■]</span><span class="tool-name">Claude Code</span></div>
-      <div class="tool-item"><span class="tool-check">[■]</span><span class="tool-name">Cursor</span></div>
-      <div class="tool-item"><span class="tool-check">[■]</span><span class="tool-name">Codex</span></div>
-      <div class="tool-item"><span class="tool-check">[■]</span><span class="tool-name">GitHub Copilot</span></div>
-      <div class="tool-item"><span class="tool-check">[■]</span><span class="tool-name">Windsurf</span></div>
-    </div>
-  </div>
-</section>
-
-<!-- ═══ PIPELINE ═══ -->
-<div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">pipeline</span></div></div>
-<section class="section" id="how">
-  <div class="container">
-    <div class="section-header reveal">
-      <h2 class="section-title">Three steps to focused context</h2>
-    </div>
-    <div class="pipeline reveal">
-      <div class="pipe-step">
-        <div class="pipe-step-header"><span class="pipe-num">01</span><span class="pipe-step-title">Setup + Hooks</span></div>
-        <div class="pipe-step-body">
-          <p class="pipe-desc">Auto-detects runtimes, installs Claude hooks, configures MCP servers, starts the daemon.</p>
-          <div class="pipe-code">$ packet28 setup --root .</div>
-        </div>
-      </div>
-      <div class="pipe-arrow">───▶</div>
-      <div class="pipe-step">
-        <div class="pipe-step-header"><span class="pipe-num">02</span><span class="pipe-step-title">Hooks reduce, MCP controls</span></div>
-        <div class="pipe-step-body">
-          <p class="pipe-desc">PreToolUse hooks rewrite commands through reducers. MCP handles intent, handoff, and context inspection.</p>
-          <div class="pipe-code">hooks → reducers | MCP → write_intention</div>
-        </div>
-      </div>
-      <div class="pipe-arrow">───▶</div>
-      <div class="pipe-step">
-        <div class="pipe-step-header"><span class="pipe-num">03</span><span class="pipe-step-title">Handoff &amp; relaunch</span></div>
-        <div class="pipe-step-body">
-          <p class="pipe-desc">Daemon assembles a denoised handoff packet. Fresh worker relaunches from compressed context.</p>
-          <div class="pipe-code">~849 tokens (not ~139,000)</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- ═══ FEATURES ═══ -->
 <div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">capabilities</span></div></div>
 <section class="section" id="features">
   <div class="container">
     <div class="section-header reveal">
-      <h2 class="section-title">Everything your agent needs</h2>
+      <h2 class="section-title">What it does</h2>
     </div>
     <div class="features-grid reveal-stagger">
       <div class="feature-item reveal" style="--i:0">
-        <div class="feature-head"><span class="feature-tag">MAP</span><span class="feature-title">Repo Mapping</span></div>
-        <div class="feature-body"><p class="feature-desc">Builds a structural map of your codebase &mdash; files, symbols, dependencies &mdash; so the agent navigates directly to what matters.</p></div>
+        <div class="feature-head"><span class="feature-tag">READ</span><span class="feature-title">Compresses file reads</span></div>
+        <div class="feature-body"><p class="feature-desc">Your agent tries to read a 9,243-line file. Packet28 intercepts it and returns only the ~40 lines that matter for the current task. No wasted tokens on irrelevant code.</p></div>
       </div>
       <div class="feature-item reveal" style="--i:1">
-        <div class="feature-head"><span class="feature-tag">COV</span><span class="feature-title">Coverage-Aware</span></div>
-        <div class="feature-body"><p class="feature-desc">Ingests test coverage data to show which lines are tested vs untested. Agents know exactly where to add tests.</p></div>
+        <div class="feature-head"><span class="feature-tag">MAP</span><span class="feature-title">Maps your repo</span></div>
+        <div class="feature-body"><p class="feature-desc">Builds a structural map of your codebase &mdash; files, symbols, dependencies &mdash; so the agent navigates directly to relevant code instead of exploring blindly.</p></div>
       </div>
       <div class="feature-item reveal" style="--i:2">
-        <div class="feature-head"><span class="feature-tag">BUD</span><span class="feature-title">Token Budgeting</span></div>
-        <div class="feature-body"><p class="feature-desc">Each response stays within a configurable token budget. No more blowing through context windows on a single file read.</p></div>
+        <div class="feature-head"><span class="feature-tag">MEM</span><span class="feature-title">Remembers across sessions</span></div>
+        <div class="feature-body"><p class="feature-desc">A background daemon persists context between agent restarts. Pick up where you left off without the agent re-reading your entire project from scratch.</p></div>
       </div>
       <div class="feature-item reveal" style="--i:3">
-        <div class="feature-head"><span class="feature-tag">HOK</span><span class="feature-title">Hook Reducers</span></div>
-        <div class="feature-body"><p class="feature-desc">Claude PreToolUse hooks rewrite commands through reducers automatically. Reducer traffic stays out of the MCP loop.</p></div>
-      </div>
-      <div class="feature-item reveal" style="--i:4">
-        <div class="feature-head"><span class="feature-tag">DIS</span><span class="feature-title">Discover &amp; Learn</span></div>
-        <div class="feature-body"><p class="feature-desc">Scans session history for command patterns and savings opportunities. Learns error→correction patterns to auto-generate rules.</p></div>
-      </div>
-      <div class="feature-item reveal" style="--i:5">
-        <div class="feature-head"><span class="feature-tag">FOC</span><span class="feature-title">Focus Sets</span></div>
-        <div class="feature-body"><p class="feature-desc">Agents mark files and symbols as "in focus." Packet28 tracks what the agent cares about across tool calls.</p></div>
-      </div>
-      <div class="feature-item reveal" style="--i:6">
-        <div class="feature-head"><span class="feature-tag">DMN</span><span class="feature-title">Daemon State</span></div>
-        <div class="feature-body"><p class="feature-desc">The packet28d daemon persists state across agent sessions. Start, stop, resume &mdash; your context survives restarts.</p></div>
-      </div>
-      <div class="feature-item reveal" style="--i:7">
-        <div class="feature-head"><span class="feature-tag">DOC</span><span class="feature-title">Doctor</span></div>
-        <div class="feature-body"><p class="feature-desc">Verifies daemon, index, MCP servers, notifications, and broker round-trip health in a single command.</p></div>
-      </div>
-      <div class="feature-item reveal" style="--i:8">
-        <div class="feature-head"><span class="feature-tag">MRT</span><span class="feature-title">Multi-Runtime</span></div>
-        <div class="feature-body"><p class="feature-desc">One setup command detects Claude Code, Cursor, Codex, and more. Configures MCP servers for each automatically.</p></div>
-      </div>
-      <div class="feature-item reveal" style="--i:9">
-        <div class="feature-head"><span class="feature-tag">GLB</span><span class="feature-title">Path Glob Routing</span></div>
-        <div class="feature-body"><p class="feature-desc">Glob expansion and cwd-aware routing lets agents target files with patterns like <code>src/**/*.rs</code> instead of listing every path.</p></div>
+        <div class="feature-head"><span class="feature-tag">SET</span><span class="feature-title">One command setup</span></div>
+        <div class="feature-body"><p class="feature-desc">Auto-detects Claude Code, Cursor, Codex, Copilot, or Windsurf and configures everything. One command: <code>packet28 setup --root .</code></p></div>
       </div>
     </div>
   </div>
@@ -1148,7 +881,7 @@ body::after {
   <div class="container">
     <div class="section-header reveal">
       <h2 class="section-title">The numbers</h2>
-      <p class="section-desc">Tested on Apache Commons Lang &mdash; 534 Java files, 12MB.</p>
+      <p class="section-desc">Real benchmark on a 12MB Java codebase (534 files).</p>
     </div>
     <div class="bench-display reveal">
       <div class="bench-row">
@@ -1185,9 +918,9 @@ body::after {
     <div class="term reveal" id="terminal">
       <div class="term-bar">
         <div class="term-bar-dots">
-          <div class="term-bar-dot">─</div>
-          <div class="term-bar-dot">□</div>
-          <div class="term-bar-dot">×</div>
+          <div class="term-bar-dot">&mdash;</div>
+          <div class="term-bar-dot">&square;</div>
+          <div class="term-bar-dot">&times;</div>
         </div>
         <span class="term-bar-title">terminal</span>
         <div style="width:42px"></div>
@@ -1198,89 +931,12 @@ body::after {
         <div class="term-line">&nbsp;</div>
         <div class="term-line"><span class="t-comment"># set up hooks + MCP in your project</span></div>
         <div class="term-line"><span class="t-prompt">$</span> <span class="t-cmd">packet28 setup <span class="t-flag">--root</span> .</span></div>
-        <div class="term-line"><span class="t-output">  ✓ Detected runtimes: Claude Code, Cursor</span></div>
-        <div class="term-line"><span class="t-output">  ✓ Hooks installed. MCP servers configured.</span></div>
+        <div class="term-line"><span class="t-output">  &#10003; Detected runtimes: Claude Code, Cursor</span></div>
+        <div class="term-line"><span class="t-output">  &#10003; Hooks installed. MCP servers configured.</span></div>
         <div class="term-line">&nbsp;</div>
         <div class="term-line"><span class="t-comment"># verify everything works</span></div>
         <div class="term-line"><span class="t-prompt">$</span> <span class="t-cmd">packet28 doctor <span class="t-flag">--root</span> .</span></div>
-        <div class="term-line"><span class="t-success">  ✓ All checks passed.</span><span class="cursor-blink"></span></div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ═══ ARCHITECTURE ═══ -->
-<div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">architecture</span></div></div>
-<section class="section" id="architecture">
-  <div class="container">
-    <div class="section-header reveal">
-      <h2 class="section-title">How the pieces fit</h2>
-    </div>
-    <div class="reveal">
-      <div class="diagram">
-        <div class="diagram-node">
-          <div class="diagram-node-header">AI Agent</div>
-          <div class="diagram-node-body">
-            <div class="diagram-item">Claude Code</div>
-            <div class="diagram-item">Cursor</div>
-            <div class="diagram-item">Codex</div>
-            <div class="diagram-item">GitHub Copilot</div>
-            <div class="diagram-item">Windsurf</div>
-          </div>
-        </div>
-        <div class="diagram-arrows">
-          <div class="diagram-arrow">
-            <span class="diagram-arrow-label">hooks</span>
-            <div class="diagram-arrow-line"><div class="diagram-arrow-line-inner"></div></div>
-            <span class="diagram-arrow-sublabel">PreToolUse</span>
-          </div>
-          <div class="diagram-arrow">
-            <span class="diagram-arrow-label">mcp</span>
-            <div class="diagram-arrow-line"><div class="diagram-arrow-line-inner"></div></div>
-            <span class="diagram-arrow-sublabel">stdio</span>
-          </div>
-          <div class="diagram-arrow diagram-arrow--reverse">
-            <span class="diagram-arrow-label">context</span>
-            <div class="diagram-arrow-line"><div class="diagram-arrow-line-inner"></div></div>
-          </div>
-        </div>
-        <div class="diagram-node diagram-node--primary">
-          <div class="diagram-node-header">Packet28 Broker</div>
-          <div class="diagram-node-body">
-            <div class="diagram-item">diffy · mapy</div>
-            <div class="diagram-item">stacky · buildy</div>
-            <div class="diagram-item">testy · proxy</div>
-            <div class="diagram-sub">
-              <div class="diagram-sub-header">MCP Surface</div>
-              <div class="diagram-sub-body">
-                <div class="diagram-item">intent · handoff</div>
-                <div class="diagram-item">search · inspect</div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="diagram-arrows">
-          <div class="diagram-arrow">
-            <span class="diagram-arrow-label">daemon</span>
-            <div class="diagram-arrow-line"><div class="diagram-arrow-line-inner"></div></div>
-            <span class="diagram-arrow-sublabel">packet28d</span>
-          </div>
-          <div class="diagram-arrow diagram-arrow--reverse">
-            <span class="diagram-arrow-label">maps</span>
-            <div class="diagram-arrow-line"><div class="diagram-arrow-line-inner"></div></div>
-          </div>
-        </div>
-        <div class="diagram-node">
-          <div class="diagram-node-header">Codebase</div>
-          <div class="diagram-node-body">
-            <div class="diagram-item">repo + coverage</div>
-            <div class="diagram-item">file system</div>
-            <div class="diagram-item">test results</div>
-          </div>
-        </div>
-      </div>
-      <div class="diagram-stats">
-        <strong>25</strong> crates &nbsp;·&nbsp; <strong>7</strong> reducers &nbsp;·&nbsp; hooks + MCP &nbsp;·&nbsp; daemon persistence &nbsp;·&nbsp; handoff relaunch
+        <div class="term-line"><span class="t-success">  &#10003; All checks passed.</span><span class="cursor-blink"></span></div>
       </div>
     </div>
   </div>
@@ -1297,31 +953,38 @@ body::after {
       <div class="founder-card">
         <div class="founder-name">Utsav Sharma</div>
         <div class="founder-role">Founder</div>
-        <a href="https://www.linkedin.com/in/usharma124" target="_blank" class="founder-link">linkedin →</a>
+        <a href="https://www.linkedin.com/in/usharma124" target="_blank" class="founder-link">linkedin &rarr;</a>
       </div>
     </div>
   </div>
 </section>
 
 <!-- ═══ FOOTER ═══ -->
-<div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">·</span></div></div>
+<div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">&middot;</span></div></div>
 <footer class="site-footer">
   <div class="container">
     <div class="footer-inner">
       <span>packet28</span>
-      <span class="footer-sep">·</span>
+      <span class="footer-sep">&middot;</span>
       <span>MIT License</span>
-      <span class="footer-sep">·</span>
+      <span class="footer-sep">&middot;</span>
       <span>2026</span>
-      <span class="footer-sep">│</span>
+      <span class="footer-sep">&vert;</span>
       <a href="https://github.com/usharma123/Packet28" target="_blank">github</a>
-      <span class="footer-sep">·</span>
+      <span class="footer-sep">&middot;</span>
       <a href="https://www.npmjs.com/package/packet28" target="_blank">npm</a>
-      <span class="footer-sep">·</span>
+      <span class="footer-sep">&middot;</span>
       <a href="https://deepwiki.com/usharma123/Packet28" target="_blank">docs</a>
     </div>
   </div>
 </footer>
+
+<!-- ═══ TUI STATUS BAR ═══ -->
+<nav class="tui-status">
+  <span><span class="tui-status-key">1-4</span> navigate</span>
+  <span><span class="tui-status-key">C</span> copy install</span>
+  <span class="tui-status-right">packet28 &mdash; MIT</span>
+</nav>
 
 <script>
 (function() {
@@ -1335,7 +998,7 @@ body::after {
     setTimeout(function() { btn.textContent = 'COPY'; btn.classList.remove('copied'); }, 1500);
   };
 
-  // Logo scan — solid block slides left-to-right, revealing each char as it passes
+  // Logo scan — solid block slides left-to-right, revealing each char
   (function() {
     var chars = document.querySelectorAll('.hero-logo-char');
     var blocks = document.querySelectorAll('.hero-logo-char .block');
@@ -1343,21 +1006,13 @@ body::after {
     var startDelay = 400;
     var step = 80;
 
-    // all blocks start hidden, we show one at a time
     blocks.forEach(function(b) { b.style.display = 'none'; });
 
     chars.forEach(function(ch, i) {
       setTimeout(function() {
-        // show this char's cell (still hidden behind block)
         ch.classList.add('revealed');
-
-        // show block on this cell
         blocks[i].style.display = 'block';
-
-        // hide block on previous cell (revealing the letter)
         if (i > 0) blocks[i - 1].style.display = 'none';
-
-        // last char — remove final block after a beat
         if (i === chars.length - 1) {
           setTimeout(function() {
             blocks[i].style.display = 'none';
@@ -1445,6 +1100,19 @@ body::after {
   }, { threshold: 0.3 });
   var termEl = document.getElementById('terminal');
   if (termEl) termObs.observe(termEl);
+
+  // Keyboard navigation — hero links
+  document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    var links = document.querySelectorAll('.hero-links a');
+    var idx = parseInt(e.key) - 1;
+    if (idx >= 0 && idx < links.length) {
+      links[idx].click();
+    }
+    if (e.key === 'c' || e.key === 'C') {
+      window.copyCmd();
+    }
+  });
 
 })();
 </script>
