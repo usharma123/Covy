@@ -29,7 +29,7 @@ pub fn read_regions(root: &Path, request: &ReadRegionsRequest) -> Result<ReadReg
             }
             (Some(start), None) if start > 0 => ranges.push((start, start)),
             (None, Some(end)) if end > 0 => ranges.push((end, end)),
-            _ => ranges.push((1, all_lines.len().min(120).max(1))),
+            _ => ranges.push((1, all_lines.len().clamp(1, 120))),
         }
     }
     let mut rendered = Vec::new();

@@ -1229,11 +1229,11 @@ fn shortlist_pattern_files(
                 .collect::<BTreeSet<_>>();
             let score = literals.iter().fold(0usize, |acc, token| {
                 let symbol_boost = usize::from(symbol_hits.contains(token)) * 4;
-                let token_boost = entry
-                    .token_lines
-                    .contains_key(token)
-                    .then_some(2usize)
-                    .unwrap_or(0);
+                let token_boost = if entry.token_lines.contains_key(token) {
+                    2usize
+                } else {
+                    0
+                };
                 acc + symbol_boost + token_boost
             });
             (entry.path.clone(), score)

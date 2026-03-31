@@ -156,13 +156,14 @@ fn find_last_top_level_pipe(command: &str) -> Option<usize> {
             in_single = !in_single;
         } else if ch == '"' && !in_single {
             in_double = !in_double;
-        } else if ch == '|' && !in_single && !in_double {
-            if bytes.get(idx + 1).map(|next| *next != b'|').unwrap_or(true)
-                && idx > 0
-                && bytes[idx - 1] != b'|'
-            {
-                last_pipe = Some(idx);
-            }
+        } else if ch == '|'
+            && !in_single
+            && !in_double
+            && bytes.get(idx + 1).map(|next| *next != b'|').unwrap_or(true)
+            && idx > 0
+            && bytes[idx - 1] != b'|'
+        {
+            last_pipe = Some(idx);
         }
         idx += 1;
     }

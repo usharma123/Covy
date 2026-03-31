@@ -212,15 +212,9 @@ impl PacketCache {
             }
         }
 
-        for needle in options
-            .path_filters
-            .iter()
-            .chain(query_path_terms.iter())
-            .cloned()
-        {
+        for needle in options.path_filters.iter().chain(query_path_terms.iter()) {
             let normalized_needle = needle.to_ascii_lowercase();
-            if let Some(path_ref) = normalize_context_path(&needle, self.workspace_root.as_deref())
-            {
+            if let Some(path_ref) = normalize_context_path(needle, self.workspace_root.as_deref()) {
                 if let Some(cache_keys) = self.file_ref_index.get(&path_ref.canonical) {
                     for cache_key in cache_keys {
                         candidate_scores.entry(cache_key.clone()).or_insert(0.0);

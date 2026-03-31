@@ -231,7 +231,7 @@ pub fn reduce_to_packet(request: BuildReduceRequest) -> BuildPacket {
         }
     }
 
-    refs.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+    refs.sort_by_key(|value| value.to_string());
     refs.dedup_by(|a, b| a == b);
 
     let summary = format!(

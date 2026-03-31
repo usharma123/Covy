@@ -191,7 +191,7 @@ pub fn slice_to_packet(request: StackSliceRequest) -> StackPacket {
         }
     }
 
-    refs.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+    refs.sort_by_key(|value| value.to_string());
     refs.dedup_by(|a, b| a == b);
 
     let summary = format!(

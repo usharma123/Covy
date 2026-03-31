@@ -146,9 +146,9 @@ fn apply_aggressive_filter(lines: &[String], language: Language) -> Vec<String> 
             }
         }
         if let Some(block_start) = patterns.block_start {
-            if trimmed.starts_with(block_start) {
+            if let Some(stripped) = trimmed.strip_prefix(block_start) {
                 if let Some(block_end) = patterns.block_end {
-                    if !trimmed[block_start.len()..].contains(block_end) {
+                    if !stripped.contains(block_end) {
                         in_block_comment = true;
                     }
                 }

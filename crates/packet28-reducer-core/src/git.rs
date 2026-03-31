@@ -199,11 +199,9 @@ fn compact_diff(diff: &str, max_lines: usize) -> String {
                     result.push(format!("  {}", line));
                     hunk_lines += 1;
                 }
-            } else if hunk_lines < max_hunk_lines && !line.starts_with('\\') {
-                if hunk_lines > 0 {
-                    result.push(format!("  {}", line));
-                    hunk_lines += 1;
-                }
+            } else if hunk_lines < max_hunk_lines && !line.starts_with('\\') && hunk_lines > 0 {
+                result.push(format!("  {}", line));
+                hunk_lines += 1;
             }
 
             if hunk_lines == max_hunk_lines {

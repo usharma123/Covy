@@ -137,11 +137,12 @@ pub struct ToolKindSuccess {
     pub invocation_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStateEventKind {
     FocusSet,
     FocusCleared,
+    #[default]
     FileRead,
     FileEdited,
     CheckpointSaved,
@@ -156,12 +157,6 @@ pub enum AgentStateEventKind {
     FocusInferred,
     EvidenceCaptured,
     IntentionRecorded,
-}
-
-impl Default for AgentStateEventKind {
-    fn default() -> Self {
-        Self::FileRead
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

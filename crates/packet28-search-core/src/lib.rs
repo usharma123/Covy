@@ -222,6 +222,8 @@ struct LookupPostingMeta {
     doc_count: u32,
 }
 
+type PostingRow = (u64, u64, u32, u32);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LiteralWindow {
     earliest_bucket: u8,
@@ -1639,7 +1641,7 @@ fn write_segment_file(path: &Path, pairs: &[(u64, u32, PositionSummary)]) -> Res
     Ok(())
 }
 
-fn merge_segment_files(segment_paths: &[PathBuf]) -> Result<(Vec<(u64, u64, u32, u32)>, Vec<u8>)> {
+fn merge_segment_files(segment_paths: &[PathBuf]) -> Result<(Vec<PostingRow>, Vec<u8>)> {
     let mut readers = Vec::new();
     let mut heap = BinaryHeap::<Reverse<HeapItem>>::new();
     for (segment_idx, path) in segment_paths.iter().enumerate() {
@@ -1655,7 +1657,7 @@ fn merge_segment_files(segment_paths: &[PathBuf]) -> Result<(Vec<(u64, u64, u32,
         readers.push(reader);
     }
 
-    let mut rows = Vec::<(u64, u64, u32, u32)>::new();
+    let mut rows = Vec::<PostingRow>::new();
     let mut postings = Vec::new();
     let mut current_hash = None::<u64>;
     let mut current_docs = Vec::<PostingEntry>::new();
@@ -1703,7 +1705,7 @@ fn read_segment_pair(reader: &mut BufReader<File>) -> Result<Option<(u64, u32, P
 }
 
 fn flush_posting_group(
-    rows: &mut Vec<(u64, u64, u32, u32)>,
+    rows: &mut Vec<PostingRow>,
     postings: &mut Vec<u8>,
     current_hash: Option<u64>,
     current_docs: &[PostingEntry],

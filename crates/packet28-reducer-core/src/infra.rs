@@ -244,13 +244,12 @@ fn summarize_kubectl_get(spec: &CommandReducerSpec, lines: &[String]) -> String 
     let pending_rows = lines
         .iter()
         .skip(1)
-        .filter_map(|line| {
-            (line.contains(" Pending ") || line.ends_with(" Pending")).then(|| {
-                line.split_whitespace()
-                    .next()
-                    .unwrap_or_default()
-                    .to_string()
-            })
+        .filter(|line| line.contains(" Pending ") || line.ends_with(" Pending"))
+        .map(|line| {
+            line.split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string()
         })
         .collect::<Vec<_>>();
     if let Some(first_pending) = pending_rows.first() {

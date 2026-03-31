@@ -16,25 +16,13 @@ pub const PACKET_TYPE_PROXY_RUN: &str = "suite.proxy.run.v1";
 pub const PACKET_TYPE_CONTEXT_ASSEMBLE: &str = "suite.context.assemble.v1";
 pub const PACKET_TYPE_GUARD_CHECK: &str = "suite.guard.check.v1";
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct PacketTypeContract {
     pub packet_type: &'static str,
     pub required_payload_fields: &'static [&'static str],
     pub optional_payload_fields: &'static [&'static str],
     pub boundedness_rules: &'static [&'static str],
     pub compatibility_notes: &'static [&'static str],
-}
-
-impl Default for PacketTypeContract {
-    fn default() -> Self {
-        Self {
-            packet_type: "",
-            required_payload_fields: &[],
-            optional_payload_fields: &[],
-            boundedness_rules: &[],
-            compatibility_notes: &[],
-        }
-    }
 }
 
 static CONTRACTS: &[PacketTypeContract] = &[
