@@ -25,6 +25,7 @@ CLAUDE.md
 # OS
 .DS_Store
 Thumbs.db
+*.txt
 
 # Packet28 JavaTest benchmark workspace
 JavaTest/.packet28-bench-repo/

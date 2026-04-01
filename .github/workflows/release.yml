@@ -58,9 +58,9 @@ jobs:
       - name: Build release binaries
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            cross build --release --target ${{ matrix.target }}
+            cross build --release --target ${{ matrix.target }} --bin Packet28 --bin packet28d
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target ${{ matrix.target }} --bin Packet28 --bin packet28d
           fi
 
       - name: Stage platform package
