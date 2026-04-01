@@ -7,9 +7,9 @@ use serde_json::{json, Value};
 use crate::{
     cmd_agent_prompt, cmd_build, cmd_common, cmd_compact, cmd_context, cmd_cover, cmd_daemon,
     cmd_diff, cmd_discover, cmd_doctor, cmd_guard, cmd_hook, cmd_impact, cmd_learn, cmd_map,
-    cmd_map_query, cmd_map_repo, cmd_mcp, cmd_packet, cmd_proxy, cmd_setup, cmd_shard, cmd_stack,
-    BuildCommands, Cli, Commands, ContextCommands, CoverCommands, DiffCommands, GuardCommands,
-    MapCommands, StackCommands, TestCommands,
+    cmd_map_query, cmd_map_repo, cmd_mcp, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard,
+    cmd_shell, cmd_stack, BuildCommands, Cli, Commands, ContextCommands, CoverCommands,
+    DiffCommands, GuardCommands, MapCommands, StackCommands, TestCommands,
 };
 
 pub fn main_entry() {
@@ -102,6 +102,8 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Commands::Daemon(daemon) => cmd_daemon::run(daemon),
         Commands::Doctor(args) => cmd_doctor::run(args),
         Commands::Setup(args) => cmd_setup::run(args),
+        Commands::Run(args) => cmd_run::run(args),
+        Commands::Shell(args) => cmd_shell::run(args),
         Commands::Discover(args) => cmd_discover::run(args),
         Commands::Learn(args) => cmd_learn::run(args),
     }
@@ -353,6 +355,8 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Commands::Mcp(_)
         | Commands::Hook(_)
         | Commands::Setup(_)
+        | Commands::Run(_)
+        | Commands::Shell(_)
         | Commands::Doctor(_) => None,
     }
 }

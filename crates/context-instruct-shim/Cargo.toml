@@ -1,0 +1,17 @@
+[package]
+name = "context-instruct-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+packet28-daemon-core = { version = "0.2.0", path = "../packet28-daemon-core" }
+sha2.workspace = true
+libc = "0.2"
