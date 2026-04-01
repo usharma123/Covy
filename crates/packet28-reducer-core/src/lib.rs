@@ -24,5 +24,5 @@ pub use search::{
     parse_region_for_path, search,
 };
 #[cfg(test)]
-pub(crate) use search::{parse_grep_output_line, render_search_compact_preview};
+pub(crate) use search::{parse_grep_output_line, render_search_compact_preview, search_without_rg};
 pub use types::*;

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use regex::RegexBuilder;
 
 use crate::types::{SearchEngineStats, SearchGroup, SearchMatch, SearchRequest, SearchResult};
 
@@ -106,122 +107,40 @@ pub fn infer_symbols_from_lines(lines: &[String]) -> Vec<String> {
 }
 
 pub fn search(root: &Path, request: &SearchRequest) -> Result<SearchResult> {
+    search_with_rg_binary(root, request, "rg")
+}
+
+fn search_with_rg_binary(
+    root: &Path,
+    request: &SearchRequest,
+    rg_binary: &str,
+) -> Result<SearchResult> {
     let query = request.query.trim();
     anyhow::ensure!(!query.is_empty(), "search query cannot be empty");
 
     let (resolved_paths, mut diagnostics) = resolve_requested_paths(root, &request.requested_paths);
-    let mut command = Command::new("rg");
-    command
-        .current_dir(root)
-        .arg("--line-number")
-        .arg("--no-heading")
-        .arg("--color")
-        .arg("never");
-    if request.fixed_string {
-        command.arg("-F");
-    }
-    if matches!(request.case_sensitive, Some(false)) {
-        command.arg("-i");
-    }
-    if request.whole_word {
-        command.arg("-w");
-    }
-    if let Some(context_lines) = request.context_lines {
-        command.arg("-C").arg(context_lines.to_string());
-    }
-    if let Some(max_matches_per_file) = request.max_matches_per_file {
-        command
-            .arg("--max-count")
-            .arg(max_matches_per_file.to_string());
-    }
-    command.arg(query);
-    for path in &resolved_paths {
-        command.arg(path);
-    }
-
-    let output = if !request.requested_paths.is_empty() && resolved_paths.is_empty() {
-        None
+    let output = collect_matches_with_rg(
+        root,
+        request,
+        query,
+        &resolved_paths,
+        &mut diagnostics,
+        rg_binary,
+    )?;
+    let matches = if !request.requested_paths.is_empty() && resolved_paths.is_empty() {
+        Vec::new()
+    } else if let Some(output) = output {
+        output
     } else {
-        let output = match command.output() {
-            Ok(output) => Ok(output),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let mut fallback = Command::new("grep");
-                fallback
-                    .current_dir(root)
-                    .arg("-R")
-                    .arg("-n")
-                    .arg("-H")
-                    .arg("--binary-files=without-match");
-                if request.fixed_string {
-                    fallback.arg("-F");
-                }
-                if matches!(request.case_sensitive, Some(false)) {
-                    fallback.arg("-i");
-                }
-                if request.whole_word {
-                    fallback.arg("-w");
-                }
-                if let Some(context_lines) = request.context_lines {
-                    fallback.arg("-C").arg(context_lines.to_string());
-                }
-                if let Some(max_matches_per_file) = request.max_matches_per_file {
-                    fallback.arg("-m").arg(max_matches_per_file.to_string());
-                }
-                fallback.arg(query);
-                if resolved_paths.is_empty() {
-                    fallback.arg(".");
-                } else {
-                    for path in &resolved_paths {
-                        fallback.arg(path);
-                    }
-                }
-                fallback.output()
-            }
-            Err(error) => Err(error),
-        };
-        let output = output.context("search command failed")?;
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if !stderr.is_empty() {
-            diagnostics.push(stderr);
-        }
-        anyhow::ensure!(
-            matches!(output.status.code(), Some(0 | 1)),
-            "search command exited with status {}",
-            output.status
-        );
-        Some(output)
+        collect_matches_without_rg(root, request, query, &resolved_paths)?
     };
-
-    let max_total_matches = request
-        .max_total_matches
-        .unwrap_or(DEFAULT_MAX_TOTAL_MATCHES)
-        .clamp(1, MAX_TOTAL_MATCHES_LIMIT);
-    let single_resolved_path = (resolved_paths.len() == 1
-        && root.join(&resolved_paths[0]).is_file())
-    .then(|| resolved_paths[0].clone());
+    let resolved_path_count = resolved_paths.len();
     let mut groups = BTreeMap::<String, Vec<SearchMatch>>::new();
-    let mut total_match_count = 0_usize;
-    if let Some(output) = output.as_ref() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            if line.trim().is_empty() || line == "--" {
-                continue;
-            }
-            let Some((path, line_no, text)) =
-                parse_grep_output_line(root, line, single_resolved_path.as_deref())
-            else {
-                continue;
-            };
-            total_match_count = total_match_count.saturating_add(1);
-            groups.entry(path.clone()).or_default().push(SearchMatch {
-                path,
-                line: line_no,
-                text,
-            });
-        }
+    let total_match_count = matches.len();
+    for item in matches {
+        groups.entry(item.path.clone()).or_default().push(item);
     }
 
-    let resolved_path_count = resolved_paths.len();
     let paths = groups.keys().cloned().collect::<Vec<_>>();
     let regions = groups
         .values()
@@ -233,6 +152,10 @@ pub fn search(root: &Path, request: &SearchRequest) -> Result<SearchResult> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
+    let max_total_matches = request
+        .max_total_matches
+        .unwrap_or(DEFAULT_MAX_TOTAL_MATCHES)
+        .clamp(1, MAX_TOTAL_MATCHES_LIMIT);
     let mut returned_matches = Vec::new();
     let grouped = groups
         .into_iter()
@@ -292,6 +215,163 @@ pub fn search(root: &Path, request: &SearchRequest) -> Result<SearchResult> {
             fallback_reason: Some("daemon indexed search unavailable".to_string()),
         }),
     })
+}
+
+fn collect_matches_with_rg(
+    root: &Path,
+    request: &SearchRequest,
+    query: &str,
+    resolved_paths: &[String],
+    diagnostics: &mut Vec<String>,
+    rg_binary: &str,
+) -> Result<Option<Vec<SearchMatch>>> {
+    let mut command = Command::new(rg_binary);
+    command
+        .current_dir(root)
+        .arg("--line-number")
+        .arg("--no-heading")
+        .arg("--color")
+        .arg("never");
+    if request.fixed_string {
+        command.arg("-F");
+    }
+    if matches!(request.case_sensitive, Some(false)) {
+        command.arg("-i");
+    }
+    if request.whole_word {
+        command.arg("-w");
+    }
+    if let Some(context_lines) = request.context_lines {
+        command.arg("-C").arg(context_lines.to_string());
+    }
+    if let Some(max_matches_per_file) = request.max_matches_per_file {
+        command
+            .arg("--max-count")
+            .arg(max_matches_per_file.to_string());
+    }
+    command.arg(query);
+    for path in resolved_paths {
+        command.arg(path);
+    }
+
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("search command failed"),
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        diagnostics.push(stderr);
+    }
+    anyhow::ensure!(
+        matches!(output.status.code(), Some(0 | 1)),
+        "search command exited with status {}",
+        output.status
+    );
+    let single_resolved_path = (resolved_paths.len() == 1
+        && root.join(&resolved_paths[0]).is_file())
+    .then(|| resolved_paths[0].clone());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut matches = Vec::new();
+    for line in stdout.lines() {
+        if line.trim().is_empty() || line == "--" {
+            continue;
+        }
+        let Some((path, line_no, text)) =
+            parse_grep_output_line(root, line, single_resolved_path.as_deref())
+        else {
+            continue;
+        };
+        matches.push(SearchMatch {
+            path,
+            line: line_no,
+            text,
+        });
+    }
+    Ok(Some(matches))
+}
+
+fn collect_matches_without_rg(
+    root: &Path,
+    request: &SearchRequest,
+    query: &str,
+    resolved_paths: &[String],
+) -> Result<Vec<SearchMatch>> {
+    let matcher = compile_fallback_matcher(request, query)?;
+    let max_matches_per_file = request.max_matches_per_file;
+    let mut matches = Vec::new();
+    for path in fallback_file_paths(root, resolved_paths)? {
+        let bytes = fs::read(root.join(&path))
+            .with_context(|| format!("failed to read '{}'", root.join(&path).display()))?;
+        if bytes.contains(&0) {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        let mut matches_in_file = 0usize;
+        for (line_idx, line) in text.lines().enumerate() {
+            if !matcher.is_match(line) {
+                continue;
+            }
+            matches.push(SearchMatch {
+                path: path.clone(),
+                line: line_idx + 1,
+                text: line.to_string(),
+            });
+            matches_in_file = matches_in_file.saturating_add(1);
+            if max_matches_per_file.is_some_and(|limit| matches_in_file >= limit) {
+                break;
+            }
+        }
+    }
+    Ok(matches)
+}
+
+fn compile_fallback_matcher(request: &SearchRequest, query: &str) -> Result<regex::Regex> {
+    let pattern = if request.fixed_string {
+        regex::escape(query)
+    } else {
+        query.to_string()
+    };
+    let pattern = if request.whole_word {
+        format!(r"\b(?:{})\b", pattern)
+    } else {
+        pattern
+    };
+    RegexBuilder::new(&pattern)
+        .case_insensitive(matches!(request.case_sensitive, Some(false)))
+        .build()
+        .with_context(|| format!("unsupported regex syntax for fallback search: {query}"))
+}
+
+fn fallback_file_paths(root: &Path, resolved_paths: &[String]) -> Result<Vec<String>> {
+    let mut files = BTreeSet::new();
+    if resolved_paths.is_empty() {
+        collect_walk_files(root, root, &mut files)?;
+    } else {
+        for path in resolved_paths {
+            collect_walk_files(root, &root.join(path), &mut files)?;
+        }
+    }
+    Ok(files.into_iter().collect())
+}
+
+fn collect_walk_files(root: &Path, target: &Path, files: &mut BTreeSet<String>) -> Result<()> {
+    let walker = ignore::WalkBuilder::new(target).build();
+    for entry in walker {
+        let entry = entry?;
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        if let Ok(relative) = entry.path().strip_prefix(root) {
+            files.insert(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn search_without_rg(root: &Path, request: &SearchRequest) -> Result<SearchResult> {
+    search_with_rg_binary(root, request, "__packet28_missing_rg_binary__")
 }
 
 pub(crate) fn render_search_compact_preview(

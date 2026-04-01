@@ -10,6 +10,8 @@ homepage.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+ignore.workspace = true
+regex.workspace = true
 serde.workspace = true
 shell-words.workspace = true
 serde_json.workspace = true
