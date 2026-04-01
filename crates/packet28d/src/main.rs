@@ -63,6 +63,7 @@ mod broker_support;
 mod commands;
 mod hooks;
 mod index;
+mod instruction_files;
 mod launch;
 mod planning;
 mod runtime_files;
@@ -92,6 +93,7 @@ use crate::index::{
     daemon_packet28_search, enqueue_full_index_rebuild, enqueue_incremental_index_paths,
     spawn_index_worker,
 };
+use crate::instruction_files::resolve_instruction_file;
 use crate::launch::{task_await_handoff, task_launch_agent};
 use crate::planning::*;
 use crate::runtime_files::{

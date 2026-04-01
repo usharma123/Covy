@@ -1,4 +1,5 @@
 use super::*;
+use crate::instruction_files::resolve_context;
 use packet28_daemon_core::TaskMarkHandoffConsumedResponse;
 
 pub(crate) fn handle_connection(
@@ -311,6 +312,14 @@ fn handle_request(
         DaemonRequest::BrokerTaskStatus { request } => {
             let response = broker_task_status(state, request)?;
             Ok(DaemonResponse::BrokerTaskStatus { response })
+        }
+        DaemonRequest::ContextResolve { request } => {
+            let response = resolve_context(state, request)?;
+            Ok(DaemonResponse::ContextResolve { response })
+        }
+        DaemonRequest::InstructionFileResolve { request } => {
+            let response = resolve_instruction_file(state, request)?;
+            Ok(DaemonResponse::InstructionFileResolve { response })
         }
         DaemonRequest::HookIngest { request } => {
             let response = hook_ingest(state, request)?;

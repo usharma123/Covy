@@ -87,6 +87,12 @@ pub enum DaemonRequest {
     BrokerTaskStatus {
         request: BrokerTaskStatusRequest,
     },
+    ContextResolve {
+        request: ContextResolveRequest,
+    },
+    InstructionFileResolve {
+        request: InstructionFileResolveRequest,
+    },
     HookIngest {
         request: HookIngestRequest,
     },
@@ -118,6 +124,110 @@ pub struct Packet28SearchRequest {
 #[serde(default)]
 pub struct Packet28SearchGuardResponse {
     pub fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextSourceKind {
+    #[default]
+    InstructionFile,
+    SystemPromptFragment,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextBackendKind {
+    #[default]
+    LinuxPreload,
+    LinuxOci,
+    MacosFuse,
+    WindowsFuse,
+    ProxyOnly,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ContextResolveRequest {
+    pub workspace_root: String,
+    pub source_kind: ContextSourceKind,
+    pub source_path: Option<String>,
+    pub source_sha256: String,
+    pub source_content: String,
+    pub task_id: Option<String>,
+    pub task_label: Option<String>,
+    pub budget_tokens: Option<u64>,
+    pub schema_version: u32,
+    pub agent_family: Option<String>,
+    pub backend_kind: ContextBackendKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum ContextResolveOutcome {
+    Rewrite {
+        content: String,
+        content_sha256: String,
+        task_label: String,
+        original_bytes: usize,
+        rewritten_bytes: usize,
+        cache_hit: bool,
+        matched_terms: Vec<String>,
+        section_titles: Vec<String>,
+        schema_version: u32,
+    },
+    Passthrough {
+        reason: String,
+        content_sha256: Option<String>,
+        task_label: Option<String>,
+        original_bytes: Option<usize>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextResolveResponse {
+    pub source_kind: ContextSourceKind,
+    pub source_path: Option<String>,
+    pub outcome: ContextResolveOutcome,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct InstructionFileResolveRequest {
+    pub workspace_root: String,
+    pub path: String,
+    pub content_sha256: String,
+    pub content: String,
+    pub task_id: Option<String>,
+    pub budget_tokens: Option<u64>,
+    pub schema_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum InstructionFileResolveOutcome {
+    Rewrite {
+        content: String,
+        content_sha256: String,
+        task_label: String,
+        original_bytes: usize,
+        rewritten_bytes: usize,
+        cache_hit: bool,
+        matched_terms: Vec<String>,
+        section_titles: Vec<String>,
+    },
+    Passthrough {
+        reason: String,
+        content_sha256: Option<String>,
+        task_label: Option<String>,
+        original_bytes: Option<usize>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstructionFileResolveResponse {
+    pub path: String,
+    pub outcome: InstructionFileResolveOutcome,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +323,12 @@ pub enum DaemonResponse {
     },
     BrokerTaskStatus {
         response: BrokerTaskStatusResponse,
+    },
+    ContextResolve {
+        response: ContextResolveResponse,
+    },
+    InstructionFileResolve {
+        response: InstructionFileResolveResponse,
     },
     HookIngest {
         response: HookIngestResponse,
