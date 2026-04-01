@@ -2288,3 +2288,82 @@ fn loads_packet_file() {
     let packet = load_packet_file(&packet_path).unwrap();
     assert_eq!(packet.packet_id.as_deref(), Some("a"));
 }
+
+#[test]
+fn instruction_summary_reducer_emits_virtual_header_and_reuses_cache() {
+    let dir = tempdir().unwrap();
+    let kernel =
+        Kernel::with_v1_reducers_and_persistence(PersistConfig::new(dir.path().to_path_buf()));
+    let request = KernelRequest {
+        target: "packet28.instruction.summarize".to_string(),
+        reducer_input: json!({
+            "path": "AGENTS.md",
+            "content": "# Coverage\n\n- Prefer deterministic reducers.\n- Keep tool activity compact.\n\n## Auth\nTouch src/auth.rs carefully and preserve cache keys.\n",
+            "content_sha256": "",
+            "task_id": "task-auth",
+            "budget_tokens": 128,
+            "schema_version": 1,
+        }),
+        policy_context: json!({
+            "task_id": "task-auth",
+        }),
+        ..KernelRequest::default()
+    };
+
+    let first = kernel.execute(request.clone()).unwrap();
+    let first_packet = first.output_packets.first().unwrap();
+    let first_envelope: suite_packet_core::EnvelopeV1<InstructionSummaryPayload> =
+        serde_json::from_value(first_packet.body.clone()).unwrap();
+    assert!(first_envelope
+        .payload
+        .summary_text
+        .starts_with("# [p28:virtual] sha256:"));
+    assert!(first_envelope
+        .payload
+        .summary_text
+        .contains("task:task-auth"));
+    assert_eq!(first.metadata["cache"]["hit"].as_bool(), Some(false));
+
+    let second = kernel.execute(request).unwrap();
+    assert_eq!(second.metadata["cache"]["hit"].as_bool(), Some(true));
+}
+
+#[test]
+fn instruction_summary_cache_key_changes_with_schema_version() {
+    let dir = tempdir().unwrap();
+    let kernel =
+        Kernel::with_v1_reducers_and_persistence(PersistConfig::new(dir.path().to_path_buf()));
+    let base_request = KernelRequest {
+        target: "packet28.instruction.summarize".to_string(),
+        reducer_input: json!({
+            "path": "AGENTS.md",
+            "content": "# Coverage\n\n## Testing\nAlways keep reducer caches deterministic.\n",
+            "content_sha256": "",
+            "task_id": "task-one",
+            "budget_tokens": 128,
+            "schema_version": 1,
+        }),
+        policy_context: json!({
+            "task_id": "task-one",
+        }),
+        ..KernelRequest::default()
+    };
+
+    let first = kernel.execute(base_request.clone()).unwrap();
+    assert_eq!(first.metadata["cache"]["hit"].as_bool(), Some(false));
+
+    let second = kernel
+        .execute(KernelRequest {
+            reducer_input: json!({
+                "path": "AGENTS.md",
+                "content": "# Coverage\n\n## Testing\nAlways keep reducer caches deterministic.\n",
+                "content_sha256": "",
+                "task_id": "task-one",
+                "budget_tokens": 128,
+                "schema_version": 2,
+            }),
+            ..base_request
+        })
+        .unwrap();
+    assert_eq!(second.metadata["cache"]["hit"].as_bool(), Some(false));
+}
