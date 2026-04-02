@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use anyhow::{anyhow, Result};
+
 #[cfg(target_os = "macos")]
 use std::collections::HashSet;
 #[cfg(target_os = "macos")]
@@ -22,7 +24,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
-use anyhow::{anyhow, Context, Result};
+use anyhow::Context;
 #[cfg(target_os = "macos")]
 use context_kernel_core::INSTRUCTION_SUMMARY_SCHEMA_VERSION;
 #[cfg(target_os = "macos")]
