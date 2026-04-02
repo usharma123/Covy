@@ -6,11 +6,11 @@ use crate::cmd_daemon_client::daemon_not_supported;
 #[cfg(unix)]
 pub(crate) use crate::cmd_daemon_client::subscribe_task;
 pub use crate::cmd_daemon_client::{
-    daemon_root_env, daemon_workspace_root, execute_context_recall, execute_context_store_get,
-    execute_context_store_list, execute_context_store_prune, execute_context_store_stats,
-    execute_cover_check, execute_kernel_request, execute_packet_fetch, execute_sequence,
-    execute_test_map, execute_test_shard, send_cover_check, send_kernel_request, send_packet_fetch,
-    send_request, via_daemon_env_enabled, PersistentDaemonClient,
+    daemon_root_env, daemon_workspace_root, execute_context_recall, execute_context_resolve,
+    execute_context_store_get, execute_context_store_list, execute_context_store_prune,
+    execute_context_store_stats, execute_cover_check, execute_kernel_request, execute_packet_fetch,
+    execute_sequence, execute_test_map, execute_test_shard, send_cover_check, send_kernel_request,
+    send_packet_fetch, send_request, via_daemon_env_enabled, PersistentDaemonClient,
 };
 pub(crate) use crate::cmd_daemon_client::{ensure_daemon, resolve_root_arg, restart_daemon};
 pub(crate) use crate::cmd_daemon_commands::{

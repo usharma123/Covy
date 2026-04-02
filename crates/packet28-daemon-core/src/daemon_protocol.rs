@@ -140,6 +140,7 @@ pub enum ContextBackendKind {
     #[default]
     LinuxPreload,
     LinuxOci,
+    MacosSwap,
     MacosFuse,
     WindowsFuse,
     ProxyOnly,

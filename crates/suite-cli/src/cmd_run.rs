@@ -10,6 +10,7 @@ pub enum RuntimeBackend {
     Auto,
     LinuxPreload,
     LinuxOci,
+    MacosSwap,
     MacosFuse,
     WindowsFuse,
     ProxyOnly,
@@ -21,6 +22,7 @@ impl RuntimeBackend {
             RuntimeBackend::Auto => "auto",
             RuntimeBackend::LinuxPreload => "linux_preload",
             RuntimeBackend::LinuxOci => "linux_oci",
+            RuntimeBackend::MacosSwap => "macos_swap",
             RuntimeBackend::MacosFuse => "macos_fuse",
             RuntimeBackend::WindowsFuse => "windows_fuse",
             RuntimeBackend::ProxyOnly => "proxy_only",
@@ -51,6 +53,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
     match backend {
         RuntimeBackend::LinuxPreload => run_linux_preload(&root, &args.command),
         RuntimeBackend::LinuxOci => run_linux_oci(&root, &args.command),
+        RuntimeBackend::MacosSwap => run_macos_swap(&root, &args.command),
         RuntimeBackend::MacosFuse => run_macos_fuse(&root, &args.command),
         RuntimeBackend::WindowsFuse => run_windows_fuse(&root, &args.command),
         RuntimeBackend::ProxyOnly => run_proxy_only(&root, &args.command),
@@ -65,7 +68,7 @@ fn auto_backend() -> RuntimeBackend {
 
 #[cfg(target_os = "macos")]
 fn auto_backend() -> RuntimeBackend {
-    RuntimeBackend::LinuxOci
+    RuntimeBackend::MacosSwap
 }
 
 #[cfg(target_os = "windows")]
@@ -90,6 +93,18 @@ fn run_linux_preload(_root: &std::path::Path, _argv: &[String]) -> Result<i32> {
     ))
 }
 
+#[cfg(target_os = "macos")]
+fn run_macos_swap(root: &std::path::Path, argv: &[String]) -> Result<i32> {
+    crate::cmd_macos_swap::launch_macos_swap(root, argv, RuntimeBackend::MacosSwap.as_env_value())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_macos_swap(_root: &std::path::Path, _argv: &[String]) -> Result<i32> {
+    Err(anyhow!(
+        "Packet28 run --backend macos-swap is only available on macOS"
+    ))
+}
+
 fn run_linux_oci(root: &std::path::Path, argv: &[String]) -> Result<i32> {
     crate::cmd_daemon::ensure_daemon(root)?;
     if std::env::var_os("PACKET28_ENABLE_EXPERIMENTAL_OCI").is_none() {
@@ -104,7 +119,7 @@ fn run_macos_fuse(root: &std::path::Path, argv: &[String]) -> Result<i32> {
     crate::cmd_daemon::ensure_daemon(root)?;
     if std::env::var_os("PACKET28_ENABLE_EXPERIMENTAL_MACOS_FUSE").is_none() {
         return Err(anyhow!(
-            "Packet28 run --backend macos-fuse is not implemented yet; use --backend linux-oci as the current macOS fallback"
+            "Packet28 run --backend macos-fuse is not implemented yet; use --backend macos-swap as the current macOS backend"
         ));
     }
     run_passthrough(root, argv, RuntimeBackend::MacosFuse)

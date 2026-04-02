@@ -247,6 +247,7 @@ fn format_backend_kind(kind: ContextBackendKind) -> &'static str {
     match kind {
         ContextBackendKind::LinuxPreload => "linux_preload",
         ContextBackendKind::LinuxOci => "linux_oci",
+        ContextBackendKind::MacosSwap => "macos_swap",
         ContextBackendKind::MacosFuse => "macos_fuse",
         ContextBackendKind::WindowsFuse => "windows_fuse",
         ContextBackendKind::ProxyOnly => "proxy_only",

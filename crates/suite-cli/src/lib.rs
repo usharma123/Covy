@@ -28,6 +28,7 @@ pub mod cmd_guard;
 pub mod cmd_hook;
 pub mod cmd_impact;
 pub mod cmd_learn;
+pub mod cmd_macos_swap;
 pub mod cmd_map;
 pub mod cmd_map_query;
 pub mod cmd_map_repo;

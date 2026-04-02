@@ -4,11 +4,12 @@ use anyhow::{anyhow, Context, Result};
 use packet28_daemon_core::{
     log_path, read_runtime_info, read_socket_message, ready_path, resolve_workspace_root,
     socket_path, write_socket_message, ContextRecallRequest, ContextRecallResponse,
-    ContextStoreGetRequest, ContextStoreGetResponse, ContextStoreListRequest,
-    ContextStoreListResponse, ContextStorePruneDaemonRequest, ContextStorePruneResponse,
-    ContextStoreStatsRequest, ContextStoreStatsResponse, CoverCheckRequest, CoverCheckResponse,
-    DaemonRequest, DaemonResponse, PacketFetchRequest, PacketFetchResponse, TaskSubmitSpec,
-    TestMapRequest, TestMapResponse, TestShardRequest, TestShardResponse,
+    ContextResolveRequest, ContextResolveResponse, ContextStoreGetRequest, ContextStoreGetResponse,
+    ContextStoreListRequest, ContextStoreListResponse, ContextStorePruneDaemonRequest,
+    ContextStorePruneResponse, ContextStoreStatsRequest, ContextStoreStatsResponse,
+    CoverCheckRequest, CoverCheckResponse, DaemonRequest, DaemonResponse, PacketFetchRequest,
+    PacketFetchResponse, TaskSubmitSpec, TestMapRequest, TestMapResponse, TestShardRequest,
+    TestShardResponse,
 };
 
 #[cfg(unix)]
@@ -208,6 +209,17 @@ pub fn execute_context_recall(
     ensure_daemon(root)?;
     match send_request(root, &DaemonRequest::ContextRecall { request })? {
         DaemonResponse::ContextRecall { response } => Ok(response),
+        DaemonResponse::Error { message } => Err(anyhow!(message)),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+}
+
+pub fn execute_context_resolve(
+    root: &Path,
+    request: ContextResolveRequest,
+) -> Result<ContextResolveResponse> {
+    match send_request(root, &DaemonRequest::ContextResolve { request })? {
+        DaemonResponse::ContextResolve { response } => Ok(response),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
