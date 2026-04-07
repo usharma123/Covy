@@ -58,9 +58,9 @@ jobs:
       - name: Build release binaries
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            cross build --release --target ${{ matrix.target }} --bin Packet28 --bin packet28d
+            cross build --release --target ${{ matrix.target }} --bin Packet28 --bin packet28d --bin p28
           else
-            cargo build --release --target ${{ matrix.target }} --bin Packet28 --bin packet28d
+            cargo build --release --target ${{ matrix.target }} --bin Packet28 --bin packet28d --bin p28
           fi
 
       - name: Stage platform package
@@ -70,13 +70,14 @@ jobs:
 
           cp target/${{ matrix.target }}/release/Packet28 "$PKG_DIR/bin/"
           cp target/${{ matrix.target }}/release/packet28d "$PKG_DIR/bin/"
+          cp target/${{ matrix.target }}/release/p28 "$PKG_DIR/bin/"
 
           # Ensure binaries are executable
-          chmod +x "$PKG_DIR/bin/Packet28" "$PKG_DIR/bin/packet28d"
+          chmod +x "$PKG_DIR/bin/Packet28" "$PKG_DIR/bin/packet28d" "$PKG_DIR/bin/p28"
 
           # Strip binaries to reduce size
           if command -v strip &> /dev/null; then
-            strip "$PKG_DIR/bin/Packet28" "$PKG_DIR/bin/packet28d" 2>/dev/null || true
+            strip "$PKG_DIR/bin/Packet28" "$PKG_DIR/bin/packet28d" "$PKG_DIR/bin/p28" 2>/dev/null || true
           fi
 
           # Generate package.json from template
@@ -167,7 +168,7 @@ jobs:
           }
           fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
-          chmod +x "$ROOT_DIR/bin/packet28.js" "$ROOT_DIR/bin/packet28-mcp.js"
+          chmod +x "$ROOT_DIR/bin/packet28.js" "$ROOT_DIR/bin/packet28-mcp.js" "$ROOT_DIR/bin/p28.js"
 
           if npm view "packet28@${VERSION}" version --registry="$REGISTRY" >/dev/null 2>&1; then
             echo "packet28@${VERSION} already published, skipping"

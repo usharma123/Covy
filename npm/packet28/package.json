@@ -1,6 +1,6 @@
 {
   "name": "packet28",
-  "version": "0.2.49",
+  "version": "0.2.50",
   "description": "Context broker for AI coding agents — manages your agent's context window so it conserves tokens",
   "license": "MIT",
   "repository": {
@@ -10,7 +10,8 @@
   "homepage": "https://github.com/usharma123/Packet28",
   "bin": {
     "packet28": "bin/packet28.js",
-    "packet28-mcp": "bin/packet28-mcp.js"
+    "packet28-mcp": "bin/packet28-mcp.js",
+    "p28": "bin/p28.js"
   },
   "type": "module",
   "engines": {
@@ -21,10 +22,10 @@
     "vendor"
   ],
   "optionalDependencies": {
-    "@packet28/darwin-arm64": "0.2.46",
-    "@packet28/darwin-x64": "0.2.46",
-    "@packet28/linux-x64": "0.2.46",
-    "@packet28/linux-arm64": "0.2.46"
+    "@packet28/darwin-arm64": "0.2.50",
+    "@packet28/darwin-x64": "0.2.50",
+    "@packet28/linux-x64": "0.2.50",
+    "@packet28/linux-arm64": "0.2.50"
   },
   "keywords": [
     "ai",

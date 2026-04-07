@@ -4969,8 +4969,9 @@ fn test_suite_agent_prompt_outputs_all_supported_fragments() {
         assert!(!rendered.trim().is_empty());
         assert!(rendered.contains("Packet28 mcp serve"));
         assert!(rendered.contains("packet28.write_intention"));
-        assert!(rendered.contains("packet28.search"));
+        assert!(rendered.contains("p28` instant grep"));
         assert!(rendered.contains("packet28.read_regions"));
+        assert!(!rendered.contains("packet28.search"));
         assert!(rendered.to_ascii_lowercase().contains("handoff"));
         assert!(rendered
             .to_ascii_lowercase()

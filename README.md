@@ -553,6 +553,7 @@ The npm package installs:
 
 - `packet28` for the main CLI
 - `packet28-mcp` for `Packet28 mcp serve`
+- `p28` for instant indexed regex search
 
 ## Quick Start
 

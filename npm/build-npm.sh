@@ -31,7 +31,7 @@ declare -A PLATFORMS=(
   ["linux-arm64"]="aarch64-unknown-linux-musl|linux|arm64"
 )
 
-BINARIES=("Packet28" "packet28d")
+BINARIES=("Packet28" "packet28d" "p28")
 
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
@@ -89,7 +89,7 @@ node -e '
   }
   fs.writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
 ' "$root_dir/package.json" "$VERSION"
-chmod +x "$root_dir/bin/packet28.js" "$root_dir/bin/packet28-mcp.js"
+chmod +x "$root_dir/bin/packet28.js" "$root_dir/bin/packet28-mcp.js" "$root_dir/bin/p28.js"
 
 # Also stage vendor/ with native platform binary as fallback
 native_key=""
