@@ -53,6 +53,21 @@ pub(crate) struct Packet28SearchArgs {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
+pub(crate) struct Packet28SearchFastArgs {
+    pub(crate) query: String,
+    pub(crate) paths: Vec<String>,
+    pub(crate) fixed_string: bool,
+    pub(crate) case_sensitive: Option<bool>,
+    pub(crate) whole_word: bool,
+    pub(crate) context_lines: Option<usize>,
+    pub(crate) max_matches_per_file: Option<usize>,
+    pub(crate) max_total_matches: Option<usize>,
+    pub(crate) search_strategy: Packet28SearchStrategy,
+    pub(crate) response_mode: Packet28SearchResponseMode,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
 pub(crate) struct Packet28ReadRegionsArgs {
     pub(crate) task_id: String,
     pub(crate) path: String,
@@ -143,23 +158,34 @@ fn json_array_strings(value: &Value, key: &str) -> Vec<String> {
 }
 
 fn search_request_summary(args: &Packet28SearchArgs) -> String {
-    let scope = if args.paths.is_empty() {
-        format!(
-            "search '{}' across repo ({:?})",
-            args.query, args.response_mode
-        )
+    search_request_summary_parts(
+        &args.query,
+        &args.paths,
+        &args.response_mode,
+        args.search_strategy,
+    )
+}
+
+fn search_request_summary_parts(
+    query: &str,
+    paths: &[String],
+    response_mode: &Packet28SearchResponseMode,
+    strategy: Packet28SearchStrategy,
+) -> String {
+    let scope = if paths.is_empty() {
+        format!("search '{}' across repo ({:?})", query, response_mode)
     } else {
         format!(
             "search '{}' in {} path(s) ({:?})",
-            args.query,
-            args.paths.len(),
-            args.response_mode
+            query,
+            paths.len(),
+            response_mode
         )
     };
-    if matches!(args.search_strategy, Packet28SearchStrategy::Hybrid) {
+    if matches!(strategy, Packet28SearchStrategy::Hybrid) {
         scope
     } else {
-        format!("{scope} via {}", args.search_strategy.as_str())
+        format!("{scope} via {}", strategy.as_str())
     }
 }
 
@@ -558,9 +584,91 @@ fn build_search_slim_payload(
         "hybrid".to_string(),
         build_search_slim_execution_value(execution),
     );
-    payload.insert("artifact_id".to_string(), json!(artifact_id));
+    if let Some(artifact_id) = artifact_id {
+        payload.insert("artifact_id".to_string(), json!(artifact_id));
+    }
     payload.insert("response_mode".to_string(), json!("slim"));
     Value::Object(payload)
+}
+
+fn build_search_request(
+    query: &str,
+    paths: Vec<String>,
+    fixed_string: bool,
+    case_sensitive: Option<bool>,
+    whole_word: bool,
+    context_lines: Option<usize>,
+    max_matches_per_file: Option<usize>,
+    max_total_matches: Option<usize>,
+) -> packet28_reducer_core::SearchRequest {
+    packet28_reducer_core::SearchRequest {
+        query: query.to_string(),
+        requested_paths: paths,
+        fixed_string,
+        case_sensitive,
+        whole_word,
+        context_lines,
+        max_matches_per_file,
+        max_total_matches,
+    }
+}
+
+fn build_search_full_payload(
+    search_result: &packet28_reducer_core::SearchResult,
+    execution: &Packet28SearchExecution,
+) -> Value {
+    let groups = search_result
+        .groups
+        .iter()
+        .map(|group| {
+            json!({
+                "path": group.path,
+                "match_count": group.match_count,
+                "displayed_match_count": group.displayed_match_count,
+                "truncated": group.truncated,
+                "matches": group.matches,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "query": search_result.query,
+        "match_count": search_result.match_count,
+        "returned_match_count": search_result.returned_match_count,
+        "truncated": search_result.truncated,
+        "requested_paths": search_result.requested_paths,
+        "resolved_paths": search_result.resolved_paths,
+        "paths": search_result.paths,
+        "regions": search_result.regions,
+        "symbols": search_result.symbols,
+        "groups": groups,
+        "compact_preview": search_result.compact_preview,
+        "diagnostics": search_result.diagnostics,
+        "engine": search_result.engine,
+        "search_strategy": execution.strategy.as_str(),
+        "hybrid": build_search_execution_value(execution),
+        "response_mode": "full",
+    })
+}
+
+fn build_search_response_payload(
+    search_result: &packet28_reducer_core::SearchResult,
+    execution: &Packet28SearchExecution,
+    response_mode: &Packet28SearchResponseMode,
+    artifact_id: Option<String>,
+) -> Value {
+    let full_payload = build_search_full_payload(search_result, execution);
+    match response_mode {
+        Packet28SearchResponseMode::Full => {
+            let mut payload = full_payload;
+            if let Some(artifact_id) = artifact_id {
+                payload["artifact_id"] = json!(artifact_id);
+            }
+            payload
+        }
+        Packet28SearchResponseMode::Slim => {
+            build_search_slim_payload(search_result, artifact_id, execution)
+        }
+    }
 }
 
 fn execute_search_primary(
@@ -802,16 +910,16 @@ pub(crate) fn handle_packet28_search(
     let (sequence, invocation_id) = next_task_invocation(session, task_id)?;
     let request_summary = search_request_summary(&args);
 
-    let request = packet28_reducer_core::SearchRequest {
-        query: query.to_string(),
-        requested_paths: args.paths.clone(),
-        fixed_string: args.fixed_string,
-        case_sensitive: args.case_sensitive,
-        whole_word: args.whole_word,
-        context_lines: args.context_lines,
-        max_matches_per_file: args.max_matches_per_file,
-        max_total_matches: args.max_total_matches,
-    };
+    let request = build_search_request(
+        query,
+        args.paths.clone(),
+        args.fixed_string,
+        args.case_sensitive,
+        args.whole_word,
+        args.context_lines,
+        args.max_matches_per_file,
+        args.max_total_matches,
+    );
     let started_at = Instant::now();
     let (search_result, execution) =
         match execute_search_with_strategy(root, session, &request, args.search_strategy) {
@@ -841,19 +949,6 @@ pub(crate) fn handle_packet28_search(
             }
         };
     let duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-    let groups = search_result
-        .groups
-        .iter()
-        .map(|group| {
-            json!({
-                "path": group.path,
-                "match_count": group.match_count,
-                "displayed_match_count": group.displayed_match_count,
-                "truncated": group.truncated,
-                "matches": group.matches,
-            })
-        })
-        .collect::<Vec<_>>();
     let result_summary = if search_result.match_count == 0 {
         if !args.paths.is_empty() && search_result.resolved_paths.is_empty() {
             format!(
@@ -878,50 +973,22 @@ pub(crate) fn handle_packet28_search(
             .unwrap_or("Search completed")
             .to_string()
     };
-    let requested_paths = search_result.requested_paths.clone();
-    let resolved_paths = search_result.resolved_paths.clone();
-    let paths = search_result.paths.clone();
-    let regions = search_result.regions.clone();
-    let symbols = search_result.symbols.clone();
-    let compact_preview = search_result.compact_preview.clone();
-    let diagnostics = search_result.diagnostics.clone();
-    let full_payload = json!({
-        "task_id": task_id,
-        "invocation_id": invocation_id,
-        "sequence": sequence,
-        "query": query,
-        "match_count": search_result.match_count,
-        "returned_match_count": search_result.returned_match_count,
-        "truncated": search_result.truncated,
-        "requested_paths": requested_paths,
-        "resolved_paths": resolved_paths,
-        "paths": paths.clone(),
-        "regions": regions.clone(),
-        "symbols": symbols.clone(),
-        "groups": groups,
-        "compact_preview": compact_preview,
-        "diagnostics": diagnostics,
-        "engine": search_result.engine,
-        "search_strategy": execution.strategy.as_str(),
-        "hybrid": build_search_execution_value(&execution),
-        "response_mode": "full",
-    });
+    let mut full_payload = build_search_full_payload(&search_result, &execution);
+    full_payload["task_id"] = json!(task_id);
+    full_payload["invocation_id"] = json!(invocation_id);
+    full_payload["sequence"] = json!(sequence);
     let artifact_id = Some(store_result_artifact(
         root,
         task_id,
         full_payload["invocation_id"].as_str().unwrap_or_default(),
         &full_payload,
     )?);
-    let payload = match args.response_mode {
-        Packet28SearchResponseMode::Full => {
-            let mut payload = full_payload.clone();
-            payload["artifact_id"] = json!(artifact_id.clone());
-            payload
-        }
-        Packet28SearchResponseMode::Slim => {
-            build_search_slim_payload(&search_result, artifact_id.clone(), &execution)
-        }
-    };
+    let payload = build_search_response_payload(
+        &search_result,
+        &execution,
+        &args.response_mode,
+        artifact_id.clone(),
+    );
     let raw_est_tokens = Some(estimate_tokens_for_value(&full_payload));
     let reduced_est_tokens = Some(estimate_tokens_for_value(&payload));
     write_native_tool_result(
@@ -949,6 +1016,35 @@ pub(crate) fn handle_packet28_search(
         },
     )?;
     Ok(payload)
+}
+
+pub(crate) fn handle_packet28_search_fast(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    args: Packet28SearchFastArgs,
+) -> Result<Value> {
+    let query = args.query.trim();
+    if query.is_empty() {
+        return Err(anyhow!("packet28.search_fast requires query"));
+    }
+    let request = build_search_request(
+        query,
+        args.paths.clone(),
+        args.fixed_string,
+        args.case_sensitive,
+        args.whole_word,
+        args.context_lines,
+        args.max_matches_per_file,
+        args.max_total_matches,
+    );
+    let (search_result, execution) =
+        execute_search_with_strategy(root, session, &request, args.search_strategy)?;
+    Ok(build_search_response_payload(
+        &search_result,
+        &execution,
+        &args.response_mode,
+        None,
+    ))
 }
 
 pub(crate) fn handle_packet28_fetch_tool_result(
@@ -1518,6 +1614,24 @@ mod tests {
     }
 
     #[test]
+    fn slim_payload_can_omit_artifact_id() {
+        let result = sample_result("indexed_regex", "src/alpha.rs", 4, "struct Alpha;");
+        let execution = Packet28SearchExecution {
+            strategy: Packet28SearchStrategy::Hybrid,
+            primary_backend: "indexed_regex".to_string(),
+            secondary_backend: None,
+            shadowed: false,
+            added_displayed_matches: 0,
+            added_paths: 0,
+            notes: Vec::new(),
+        };
+        let payload = build_search_slim_payload(&result, None, &execution);
+
+        assert!(payload.get("artifact_id").is_none());
+        assert_eq!(payload["response_mode"], "slim");
+    }
+
+    #[test]
     fn slim_payload_omits_empty_search_metadata() {
         let result = sample_result("indexed_regex", "src/alpha.rs", 4, "struct Alpha;");
         let execution = Packet28SearchExecution {
@@ -1539,5 +1653,32 @@ mod tests {
         assert!(payload["hybrid"].get("notes").is_none());
         assert!(payload.get("returned_match_count").is_none());
         assert!(payload.get("truncated").is_none());
+    }
+
+    #[test]
+    fn search_fast_native_full_payload_omits_task_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("sample.txt");
+        fs::write(&file_path, "derive_agent_snapshot\n").unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+
+        let payload = handle_packet28_search_fast(
+            dir.path(),
+            &session,
+            Packet28SearchFastArgs {
+                query: "derive_agent_snapshot".to_string(),
+                search_strategy: Packet28SearchStrategy::Native,
+                response_mode: Packet28SearchResponseMode::Full,
+                ..Packet28SearchFastArgs::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload["response_mode"], "full");
+        assert!(payload.get("artifact_id").is_none());
+        assert!(payload.get("task_id").is_none());
+        assert!(payload.get("invocation_id").is_none());
+        assert!(payload.get("sequence").is_none());
+        assert_eq!(payload["match_count"], 1);
     }
 }

@@ -38,9 +38,10 @@ mod transport;
 use crate::cmd_mcp::native_tools::{
     handle_packet28_fetch_context, handle_packet28_fetch_raw_output,
     handle_packet28_fetch_tool_result, handle_packet28_glob, handle_packet28_prepare_handoff,
-    handle_packet28_read_regions, handle_packet28_search, handle_packet28_write_intention,
-    Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
-    Packet28GlobArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs, Packet28SearchArgs,
+    handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
+    handle_packet28_write_intention, Packet28FetchContextArgs, Packet28FetchRawOutputArgs,
+    Packet28FetchToolResultArgs, Packet28GlobArgs, Packet28PrepareHandoffArgs,
+    Packet28ReadRegionsArgs, Packet28SearchArgs, Packet28SearchFastArgs,
     Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
@@ -363,6 +364,26 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.search_fast",
+                    "description": "Run compact code/text search over the persistent daemon socket without storing artifacts or broker state.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": {"type":"string"},
+                            "paths": {"type":"array","items":{"type":"string"}},
+                            "fixed_string": {"type":"boolean"},
+                            "case_sensitive": {"type":"boolean"},
+                            "whole_word": {"type":"boolean"},
+                            "context_lines": {"type":"integer","minimum":0},
+                            "max_matches_per_file": {"type":"integer","minimum":1},
+                            "max_total_matches": {"type":"integer","minimum":1},
+                            "search_strategy": {"type":"string","enum":["hybrid","recall","indexed","native"]},
+                            "response_mode": {"type":"string","enum":["slim","full"]}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.read_regions",
                     "description": "Read targeted file regions and return a slim preview plus a fetchable full artifact.",
                     "inputSchema": {
@@ -536,6 +557,10 @@ fn handle_tool_call(
             track_task(session, root, &request.task_id)?;
             handle_packet28_search(root, session, request)?
         }
+        "packet28.search_fast" => {
+            let request: Packet28SearchFastArgs = serde_json::from_value(arguments)?;
+            handle_packet28_search_fast(root, session, request)?
+        }
         "packet28.read_regions" => {
             let mut request: Packet28ReadRegionsArgs = serde_json::from_value(arguments)?;
             request.task_id = resolve_session_task_id(
@@ -673,7 +698,7 @@ fn capabilities_payload() -> Value {
 
 fn summarize_tool_payload(name: &str, payload: &Value) -> String {
     match name {
-        "packet28.search" | "packet28.read_regions" | "packet28.glob" => payload
+        "packet28.search" | "packet28.search_fast" | "packet28.read_regions" | "packet28.glob" => payload
             .get("compact_preview")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
@@ -717,5 +742,27 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
         "packet28.task_status" => "Packet28 task status.".to_string(),
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),
         _ => "Packet28 response.".to_string(),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tools_list_exposes_search_fast_without_task_id() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let payload = handle_method(root.path(), &session, "tools/list", Value::Null).unwrap();
+        let tools = payload["tools"].as_array().unwrap();
+        let search_fast = tools
+            .iter()
+            .find(|tool| tool["name"] == "packet28.search_fast")
+            .unwrap();
+        let props = search_fast["inputSchema"]["properties"].as_object().unwrap();
+
+        assert!(props.contains_key("query"));
+        assert!(!props.contains_key("task_id"));
     }
 }
