@@ -34,7 +34,6 @@ pub enum CompactCommands {
     Err(SummaryArgs),
     Test(SummaryArgs),
     Rewrite(RewriteArgs),
-    Gain(AnalyticsArgs),
     Discover(AnalyticsArgs),
     Session(SessionArgs),
     FetchRaw(FetchRawArgs),
@@ -297,11 +296,14 @@ pub fn run(args: CompactArgs) -> Result<i32> {
         CompactCommands::Err(args) => run_summary(args, "err"),
         CompactCommands::Test(args) => run_summary(args, "test"),
         CompactCommands::Rewrite(args) => run_rewrite(args),
-        CompactCommands::Gain(args) => run_gain(args),
         CompactCommands::Discover(args) => run_discover(args),
         CompactCommands::Session(args) => run_session(args),
         CompactCommands::FetchRaw(args) => run_fetch_raw(args),
     }
+}
+
+pub fn run_gain_command(args: AnalyticsArgs) -> Result<i32> {
+    run_gain(args)
 }
 
 fn run_tree(args: TreeArgs) -> Result<i32> {

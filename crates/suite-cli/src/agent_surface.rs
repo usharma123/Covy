@@ -58,7 +58,7 @@ Use Packet28 as a hooks-first reducer-plus-handoff runtime for non-trivial codin
 \n\
 - Start with `{mcp}` and install Claude hooks with `Packet28 setup`.\n\
 - Let Claude hooks rewrite supported shell reads/searches and auto-capture routine tool activity; keep reducer traffic out of the visible MCP loop.\n\
-- Prefer `packet28.search`, `packet28.read_regions`, and `packet28.glob` for compact in-turn exploration, then use `packet28.fetch_tool_result` only when you need the stored full artifact.\n\
+- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` for compact in-turn exploration, then `packet28.fetch_tool_result` only when you need the stored full artifact.\n\
 - Use `packet28.write_intention` only when the task objective, current decision, or next step changes materially.\n\
 - Use `packet28.task_status` only when you need to inspect handoff readiness or the latest artifact IDs for a task.\n\
 - Use `packet28.prepare_handoff` and `packet28.fetch_context` only at checkpoint, resume, or explicit artifact-inspection boundaries.\n\
@@ -78,7 +78,7 @@ When the task is substantial, use Packet28 as a hooks-first reducer-plus-handoff
 - MCP command: `{mcp}`\n\
 - Preferred MCP endpoint when available: `{proxy}`\n\
 - Use runtime hooks installed by `Packet28 setup`, not visible reducer MCP calls, to rewrite supported shell commands and capture routine tool activity into Packet28.\n\
-- Prefer `packet28.search`, `packet28.read_regions`, and `packet28.glob` for compact exploration; use `packet28.fetch_tool_result` only when you need the stored full artifact.\n\
+- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` for compact exploration, then `packet28.fetch_tool_result` only when you need the stored full artifact.\n\
 - Use `packet28.write_intention` only when the task objective, current decision, or next step changes materially.\n\
 - Use `packet28.task_status` only when you need to inspect handoff readiness or the latest artifact IDs.\n\
 - Use `packet28.prepare_handoff` only at checkpoint or handoff boundaries, not as a normal exploration step.\n\
@@ -95,7 +95,7 @@ When the task is substantial, use Packet28 as a hooks-first reducer-plus-handoff
             "Packet28 integration:\n\
 - Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
 - Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
-- Prefer `packet28.search`, `packet28.read_regions`, and `packet28.glob` when compact native search/read output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
+- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` when compact native read/list output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
 - Use `packet28.write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
 - Use `packet28.task_status` only when you need handoff readiness or artifact IDs.\n\
 - For checkpointed relaunch flows, use `packet28.prepare_handoff` to seed the next worker.\n\
@@ -119,7 +119,7 @@ alwaysApply: true\n\
 \n\
 - Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
 - Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
-- Prefer `packet28.search`, `packet28.read_regions`, and `packet28.glob` when compact native search/read output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
+- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` when compact native read/list output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
 - Use `packet28.write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
 - Use `packet28.task_status` only when you need handoff readiness or artifact IDs.\n\
 - For checkpointed relaunch flows, use `packet28.prepare_handoff` to seed the next worker.\n\
@@ -142,7 +142,7 @@ trigger: always_on\n\
 \n\
 - Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
 - Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
-- Prefer `packet28.search`, `packet28.read_regions`, and `packet28.glob` when compact native search/read output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
+- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` when compact native read/list output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
 - Use `packet28.write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
 - Use `packet28.task_status` only when you need handoff readiness or artifact IDs.\n\
 - For checkpointed relaunch flows, use `packet28.prepare_handoff` to seed the next worker.\n\
@@ -181,7 +181,7 @@ mod tests {
     fn claude_fragment_contains_required_guidance() {
         let rendered = render_prompt_fragment(AgentPromptFormat::Claude, None);
         assert!(rendered.contains("hooks-first reducer-plus-handoff runtime"));
-        assert!(rendered.contains("packet28.search"));
+        assert!(rendered.contains("p28` instant grep"));
         assert!(rendered.contains("packet28.read_regions"));
         assert!(rendered.contains("packet28.write_intention"));
         assert!(rendered.contains("packet28.prepare_handoff"));
@@ -189,12 +189,15 @@ mod tests {
         assert!(rendered.contains("packet28.fetch_tool_result"));
         assert!(rendered.contains("fall back to direct file reads and commands"));
         assert!(rendered.contains("brief.md"));
+        assert!(!rendered.contains("packet28.search"));
     }
 
     #[test]
     fn agents_fragment_tracks_current_workflow() {
         let rendered = render_prompt_fragment(AgentPromptFormat::Agents, None);
         assert!(rendered.contains("hooks-first reducer-plus-handoff runtime"));
+        assert!(rendered.contains("p28` instant grep"));
+        assert!(rendered.contains("packet28.read_regions"));
         assert!(rendered.contains("packet28.fetch_tool_result"));
         assert!(rendered.contains("packet28.task_status"));
         assert!(rendered.contains("packet28.prepare_handoff"));
@@ -202,6 +205,7 @@ mod tests {
         assert!(rendered.contains("packet28-agent --task-id <task-id>"));
         assert!(!rendered.contains("write_state"));
         assert!(!rendered.contains("get_context"));
+        assert!(!rendered.contains("packet28.search"));
     }
 
     #[test]

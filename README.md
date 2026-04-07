@@ -277,6 +277,7 @@ Packet28 stack slice          Stack trace reduction
 Packet28 build reduce         Build diagnostic reduction
 Packet28 map repo             Repo structure mapping
 Packet28 proxy run            Safe command execution
+Packet28 gain                 Aggregate estimated token savings
 Packet28 context assemble     Merge packets into bounded context
 Packet28 context correlate    Cross-packet insight synthesis
 Packet28 context manage       Budget-aware context guidance

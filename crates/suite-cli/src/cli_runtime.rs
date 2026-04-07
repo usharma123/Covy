@@ -92,6 +92,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Commands::Proxy(proxy) => match proxy.command {
             cmd_proxy::ProxyCommands::Run(args) => cmd_proxy::run(args),
         },
+        Commands::Gain(args) => cmd_compact::run_gain_command(args),
         Commands::Compact(args) => cmd_compact::run(args),
         Commands::Packet(packet) => match packet.command {
             cmd_packet::PacketCommands::Fetch(args) => cmd_packet::run_fetch(args),
@@ -348,7 +349,9 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
                 _ => None,
             }
         }
-        Commands::Compact(_) | Commands::Discover(_) | Commands::Learn(_) => None,
+        Commands::Gain(_) | Commands::Compact(_) | Commands::Discover(_) | Commands::Learn(_) => {
+            None
+        }
         Commands::Daemon(_)
         | Commands::Guard(_)
         | Commands::AgentPrompt(_)

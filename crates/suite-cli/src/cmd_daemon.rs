@@ -294,6 +294,7 @@ pub fn run_via_daemon(cli: crate::Cli, _raw_args: &[String]) -> Result<i32> {
                 crate::cmd_proxy::run_remote(args, &daemon_root)
             }
         },
+        crate::Commands::Gain(args) => crate::cmd_compact::run_gain_command(args),
         crate::Commands::Compact(args) => crate::cmd_compact::run(args),
         crate::Commands::Packet(packet) => match packet.command {
             crate::cmd_packet::PacketCommands::Fetch(args) => {
