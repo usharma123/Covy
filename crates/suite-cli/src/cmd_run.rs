@@ -77,7 +77,7 @@ fn run_reducer_aware(
     let Some(spec) = classify_command_argv(&command_text, &args.command) else {
         return run_plain_command(&args.command, args.json, args.pretty, "unsupported");
     };
-    if spec.family != "git" {
+    if !matches!(spec.family.as_str(), "git" | "rust") {
         return run_plain_command(&args.command, args.json, args.pretty, "unsupported_family");
     }
 

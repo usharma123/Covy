@@ -130,6 +130,41 @@ fn test_run_reduces_git_status() {
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 
+#[test]
+fn test_run_reduces_cargo_check() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"p28-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(
+        root.path().join("src/lib.rs"),
+        "pub fn ok() -> bool { true }\n",
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "cargo",
+            "check",
+            "--quiet",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"rust\""))
+        .stdout(predicate::str::contains(
+            "\"canonical_kind\":\"rust_check\"",
+        ))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
