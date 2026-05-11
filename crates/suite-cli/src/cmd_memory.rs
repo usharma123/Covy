@@ -556,6 +556,7 @@ fn run_prune(args: MemoryPruneArgs) -> Result<i32> {
         println!("dry_run={}", report.dry_run);
         println!("candidate_count={}", report.candidate_count);
         println!("deleted_count={}", report.deleted_count);
+        println!("skipped_protected_count={}", report.skipped_protected_count);
     }
     Ok(0)
 }

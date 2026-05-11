@@ -287,6 +287,7 @@ pub(crate) struct MemoryPruneReport {
     pub(crate) dry_run: bool,
     pub(crate) candidate_count: usize,
     pub(crate) deleted_count: usize,
+    pub(crate) skipped_protected_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -835,7 +836,7 @@ pub(crate) fn prune_memories(threshold: f64, dry_run: bool) -> Result<MemoryPrun
     let conn = open_memory_db()?;
     let mut stmt = conn.prepare(
         "SELECT id FROM memories
-         WHERE weight < ?1 AND LOWER(importance) != 'critical'
+         WHERE weight < ?1 AND LOWER(importance) NOT IN ('critical', 'high')
          ORDER BY weight ASC, updated_at_unix_ms ASC",
     )?;
     let candidate_ids = stmt
@@ -853,11 +854,20 @@ pub(crate) fn prune_memories(threshold: f64, dry_run: bool) -> Result<MemoryPrun
             deleted_count += conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         }
     }
+    let skipped_protected_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM memories
+             WHERE weight < ?1 AND LOWER(importance) IN ('critical', 'high')",
+            params![threshold],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or_default() as usize;
     Ok(MemoryPruneReport {
         threshold,
         dry_run,
         candidate_count,
         deleted_count,
+        skipped_protected_count,
     })
 }
 

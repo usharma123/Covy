@@ -1140,10 +1140,24 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .success();
     suite_cmd()
         .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Packet28 preserves high-importance local context during prune",
+            "--topic",
+            "prune-test",
+            "--importance",
+            "high",
+            "--json",
+        ])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
         .args(["memory", "decay", "--factor", "0.1", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"decayed_count\":1"));
+        .stdout(predicate::str::contains("\"decayed_count\":2"));
     suite_cmd()
         .env("HOME", home.path())
         .args([
@@ -1157,14 +1171,22 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"candidate_count\":1"))
-        .stdout(predicate::str::contains("\"deleted_count\":0"));
+        .stdout(predicate::str::contains("\"deleted_count\":0"))
+        .stdout(predicate::str::contains("\"skipped_protected_count\":1"));
     suite_cmd()
         .env("HOME", home.path())
         .args(["memory", "prune", "--threshold", "0.5", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"candidate_count\":1"))
-        .stdout(predicate::str::contains("\"deleted_count\":1"));
+        .stdout(predicate::str::contains("\"deleted_count\":1"))
+        .stdout(predicate::str::contains("\"skipped_protected_count\":1"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "recall", "high-importance", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("preserves high-importance"));
 }
 
 #[test]
