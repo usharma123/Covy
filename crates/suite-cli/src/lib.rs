@@ -24,6 +24,8 @@ pub mod cmd_daemon_commands;
 pub mod cmd_diff;
 pub mod cmd_discover;
 pub mod cmd_doctor;
+pub mod cmd_feedback;
+pub mod cmd_graph;
 pub mod cmd_guard;
 pub mod cmd_hook;
 pub mod cmd_impact;

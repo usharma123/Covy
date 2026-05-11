@@ -406,6 +406,39 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         Some("MCP memory survives locally")
     );
 
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":4,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.feedback_record",
+                "arguments":{"subject":"mcp", "correction":"store feedback locally"}
+            }
+        }),
+    );
+    let feedback = read_mcp_message_for_id(&mut stdout, 4);
+    assert_eq!(
+        feedback["result"]["structuredContent"]["correction"].as_str(),
+        Some("store feedback locally")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":5,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_inspect",
+                "arguments":{"limit": 5}
+            }
+        }),
+    );
+    let graph = read_mcp_message_for_id(&mut stdout, 5);
+    assert!(graph["result"]["structuredContent"]["concepts"].is_array());
+
     let _ = child.kill();
     let _ = child.wait();
     suite_cmd()
@@ -414,6 +447,56 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
         .assert()
         .success();
+}
+
+#[test]
+fn test_feedback_and_graph_cli_use_sqlite() {
+    let home = TempDir::new().unwrap();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "feedback",
+            "record",
+            "test subject",
+            "prefer focused reducers",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("prefer focused reducers"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["feedback", "search", "focused", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("prefer focused reducers"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "add-concept", "Packet28", "--json"])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "graph",
+            "link",
+            "Packet28",
+            "Reducers",
+            "--relation",
+            "uses",
+            "--json",
+        ])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "inspect", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Packet28"))
+        .stdout(predicate::str::contains("Reducers"));
 }
 
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {

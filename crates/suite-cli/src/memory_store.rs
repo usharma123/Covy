@@ -13,6 +13,35 @@ pub(crate) struct MemoryRecord {
     pub(crate) created_at_unix_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct FeedbackRecord {
+    pub(crate) id: i64,
+    pub(crate) subject: String,
+    pub(crate) correction: String,
+    pub(crate) created_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphConcept {
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphRelation {
+    pub(crate) id: i64,
+    pub(crate) source: String,
+    pub(crate) target: String,
+    pub(crate) relation: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphInspect {
+    pub(crate) concepts: Vec<GraphConcept>,
+    pub(crate) relations: Vec<GraphRelation>,
+}
+
 pub(crate) fn store_memory(content: &str, tags: Option<&str>) -> Result<MemoryRecord> {
     let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
@@ -55,6 +84,118 @@ pub(crate) fn list_memories(limit: usize) -> Result<Vec<MemoryRecord>> {
          LIMIT ?1",
     )?;
     read_memory_rows(&mut stmt, params![limit.max(1) as i64])
+}
+
+pub(crate) fn record_feedback(subject: &str, correction: &str) -> Result<FeedbackRecord> {
+    let conn = open_memory_db()?;
+    let now = timestamp_unix_ms();
+    conn.execute(
+        "INSERT INTO feedback (subject, correction, created_at_unix_ms) VALUES (?1, ?2, ?3)",
+        params![subject, correction, now],
+    )?;
+    Ok(FeedbackRecord {
+        id: conn.last_insert_rowid(),
+        subject: subject.to_string(),
+        correction: correction.to_string(),
+        created_at_unix_ms: now,
+    })
+}
+
+pub(crate) fn search_feedback(query: &str, limit: usize) -> Result<Vec<FeedbackRecord>> {
+    let conn = open_memory_db()?;
+    let pattern = format!("%{}%", query.trim());
+    let mut stmt = conn.prepare(
+        "SELECT id, subject, correction, created_at_unix_ms
+         FROM feedback
+         WHERE subject LIKE ?1 OR correction LIKE ?1
+         ORDER BY created_at_unix_ms DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![pattern, limit.max(1) as i64], |row| {
+        Ok(FeedbackRecord {
+            id: row.get(0)?,
+            subject: row.get(1)?,
+            correction: row.get(2)?,
+            created_at_unix_ms: row.get(3)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+pub(crate) fn add_concept(name: &str, description: Option<&str>) -> Result<GraphConcept> {
+    let conn = open_memory_db()?;
+    let now = timestamp_unix_ms();
+    conn.execute(
+        "INSERT INTO concepts (name, description, created_at_unix_ms)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(name) DO UPDATE SET description=COALESCE(excluded.description, concepts.description)",
+        params![name, description, now],
+    )?;
+    let mut stmt = conn.prepare("SELECT id, name, description FROM concepts WHERE name = ?1")?;
+    let concept = stmt.query_row(params![name], |row| {
+        Ok(GraphConcept {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+        })
+    })?;
+    Ok(concept)
+}
+
+pub(crate) fn link_concepts(source: &str, target: &str, relation: &str) -> Result<GraphRelation> {
+    let source = add_concept(source, None)?;
+    let target = add_concept(target, None)?;
+    let conn = open_memory_db()?;
+    let now = timestamp_unix_ms();
+    conn.execute(
+        "INSERT INTO relations (source_concept_id, target_concept_id, relation, created_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![source.id, target.id, relation, now],
+    )?;
+    Ok(GraphRelation {
+        id: conn.last_insert_rowid(),
+        source: source.name,
+        target: target.name,
+        relation: relation.to_string(),
+    })
+}
+
+pub(crate) fn inspect_graph(limit: usize) -> Result<GraphInspect> {
+    let conn = open_memory_db()?;
+    let mut concepts_stmt =
+        conn.prepare("SELECT id, name, description FROM concepts ORDER BY name ASC LIMIT ?1")?;
+    let concepts = concepts_stmt
+        .query_map(params![limit.max(1) as i64], |row| {
+            Ok(GraphConcept {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut relations_stmt = conn.prepare(
+        "SELECT r.id, s.name, t.name, r.relation
+         FROM relations r
+         JOIN concepts s ON s.id = r.source_concept_id
+         JOIN concepts t ON t.id = r.target_concept_id
+         ORDER BY r.id DESC
+         LIMIT ?1",
+    )?;
+    let relations = relations_stmt
+        .query_map(params![limit.max(1) as i64], |row| {
+            Ok(GraphRelation {
+                id: row.get(0)?,
+                source: row.get(1)?,
+                target: row.get(2)?,
+                relation: row.get(3)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(GraphInspect {
+        concepts,
+        relations,
+    })
 }
 
 fn read_memory_rows<P: rusqlite::Params>(

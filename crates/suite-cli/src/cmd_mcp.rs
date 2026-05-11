@@ -58,7 +58,7 @@ use crate::cmd_mcp::support::{
 use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
-use crate::memory_store::{recall_memories, store_memory};
+use crate::memory_store::{inspect_graph, recall_memories, record_feedback, store_memory};
 use crate::runtime_integrations::windsurf;
 
 #[derive(Args)]
@@ -666,6 +666,28 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.feedback_record",
+                    "description": "Record a local feedback correction in ~/.packet28/packet28.db.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["subject", "correction"],
+                        "properties": {
+                            "subject": {"type":"string"},
+                            "correction": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.graph_inspect",
+                    "description": "Inspect local Packet28 graph concepts and relations.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.write_intention",
                     "description": "Persist the current task objective and worker intent into Packet28.",
                     "inputSchema": {
@@ -867,6 +889,14 @@ fn handle_tool_call(
                 request.limit.unwrap_or(10),
             )?)?
         }
+        "packet28.feedback_record" => {
+            let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(record_feedback(&request.subject, &request.correction)?)?
+        }
+        "packet28.graph_inspect" => {
+            let request: GraphInspectToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(inspect_graph(request.limit.unwrap_or(50))?)?
+        }
         "packet28.task_status" => {
             let task_id = resolve_session_task_id(
                 session,
@@ -904,6 +934,17 @@ struct MemoryStoreToolArgs {
 #[derive(Debug, Deserialize)]
 struct MemoryRecallToolArgs {
     query: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeedbackRecordToolArgs {
+    subject: String,
+    correction: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphInspectToolArgs {
     limit: Option<usize>,
 }
 
@@ -978,6 +1019,14 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             let count = payload.as_array().map(Vec::len).unwrap_or_default();
             format!("Packet28 recalled {count} memor(y/ies).")
         }
+        "packet28.feedback_record" => {
+            let id = payload
+                .get("id")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!("Packet28 recorded feedback {id}.")
+        }
+        "packet28.graph_inspect" => "Packet28 graph inspection.".to_string(),
         "packet28.task_status" => "Packet28 task status.".to_string(),
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),
         _ => "Packet28 response.".to_string(),
