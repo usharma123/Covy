@@ -4,8 +4,8 @@ use serde::Serialize;
 
 use crate::memory_store::{
     inspect_graph, list_memories_filtered, local_store_stats, recall_memories_filtered,
-    search_feedback, search_transcripts, FeedbackRecord, GraphInspect, LocalStoreStats,
-    MemoryListQuery, MemoryRecallQuery, MemoryRecord, TranscriptMessage,
+    search_feedback_filtered, search_transcripts_filtered, FeedbackRecord, GraphInspect,
+    LocalStoreStats, MemoryListQuery, MemoryRecallQuery, MemoryRecord, TranscriptMessage,
 };
 
 #[derive(Args)]
@@ -14,7 +14,7 @@ pub struct WakeupArgs {
     #[arg(long)]
     pub query: Option<String>,
 
-    /// Optional project filter for recalled memories
+    /// Optional project filter for recalled memories, feedback, and transcripts
     #[arg(long)]
     pub project: Option<String>,
 
@@ -103,8 +103,8 @@ pub(crate) fn build_wakeup_report_with_options(
             sort: "recent",
         })?,
     };
-    let feedback = search_feedback(query.unwrap_or_default(), limit)?;
-    let transcripts = search_transcripts(query.unwrap_or_default(), limit)?;
+    let feedback = search_feedback_filtered(query.unwrap_or_default(), project, limit)?;
+    let transcripts = search_transcripts_filtered(query.unwrap_or_default(), project, limit)?;
     let graph = inspect_graph(limit)?;
     let stats = local_store_stats()?;
     let (pack, included_items, estimated_tokens, truncated) = render_budgeted_pack(
@@ -251,9 +251,13 @@ fn wakeup_candidates(
             section: "Corrections",
             score: 35.0 + query_bonus(&item.correction, query) + query_bonus(&item.subject, query),
             text: format!(
-                "{} -> {}",
+                "{} -> {}{}",
                 one_line(&item.subject),
-                one_line(&item.correction)
+                one_line(&item.correction),
+                item.project
+                    .as_deref()
+                    .map(|project| format!(" [project={project}]"))
+                    .unwrap_or_default()
             ),
         });
     }
@@ -264,10 +268,15 @@ fn wakeup_candidates(
             section: "Recent transcript context",
             score: 25.0 + query_bonus(&transcript.content, query),
             text: format!(
-                "{} {}: {}",
+                "{} {}: {}{}",
                 one_line(&transcript.session_key),
                 one_line(&transcript.role),
-                one_line(&transcript.content)
+                one_line(&transcript.content),
+                transcript
+                    .project
+                    .as_deref()
+                    .map(|project| format!(" [project={project}]"))
+                    .unwrap_or_default()
             ),
         });
     }

@@ -36,6 +36,7 @@ pub(crate) struct FeedbackRecord {
     pub(crate) predicted: Option<String>,
     pub(crate) reason: Option<String>,
     pub(crate) source: Option<String>,
+    pub(crate) project: Option<String>,
     pub(crate) applied_count: i64,
     pub(crate) created_at_unix_ms: i64,
 }
@@ -59,6 +60,7 @@ pub(crate) struct TranscriptMessage {
     pub(crate) role: String,
     pub(crate) content: String,
     pub(crate) source: Option<String>,
+    pub(crate) project: Option<String>,
     pub(crate) created_at_unix_ms: i64,
 }
 
@@ -324,6 +326,7 @@ pub(crate) struct TranscriptAppendInput<'a> {
     pub(crate) role: Option<&'a str>,
     pub(crate) content: &'a str,
     pub(crate) source: Option<&'a str>,
+    pub(crate) project: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +338,7 @@ pub(crate) struct FeedbackInput<'a> {
     pub(crate) predicted: Option<&'a str>,
     pub(crate) reason: Option<&'a str>,
     pub(crate) source: Option<&'a str>,
+    pub(crate) project: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -1070,8 +1074,8 @@ pub(crate) fn record_feedback_with_metadata(input: FeedbackInput<'_>) -> Result<
     let topic = normalize_non_empty(input.topic, "general");
     conn.execute(
         "INSERT INTO feedback
-         (subject, correction, topic, context, predicted, reason, source, applied_count, created_at_unix_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
+         (subject, correction, topic, context, predicted, reason, source, project, applied_count, created_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)",
         params![
             input.subject,
             input.correction,
@@ -1080,6 +1084,7 @@ pub(crate) fn record_feedback_with_metadata(input: FeedbackInput<'_>) -> Result<
             input.predicted,
             input.reason,
             input.source,
+            input.project,
             now
         ],
     )?;
@@ -1096,9 +1101,16 @@ pub(crate) fn append_transcript_message(
     let session_id = ensure_transcript_session(&conn, &session_key, input.agent, now)?;
     conn.execute(
         "INSERT INTO transcript_messages
-         (session_id, role, content, source, created_at_unix_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![session_id, role, input.content, input.source, now],
+         (session_id, role, content, source, project, created_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            session_id,
+            role,
+            input.content,
+            input.source,
+            input.project,
+            now
+        ],
     )?;
     conn.execute(
         "UPDATE transcript_sessions
@@ -1136,7 +1148,7 @@ pub(crate) fn show_transcript_session(
     let conn = open_memory_db()?;
     let mut stmt = conn.prepare(
         "SELECT
-            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source,
+            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source, m.project,
             m.created_at_unix_ms
          FROM transcript_messages m
          JOIN transcript_sessions s ON s.id = m.session_id
@@ -1148,11 +1160,20 @@ pub(crate) fn show_transcript_session(
 }
 
 pub(crate) fn search_transcripts(query: &str, limit: usize) -> Result<Vec<TranscriptMessage>> {
+    search_transcripts_filtered(query, None, limit)
+}
+
+pub(crate) fn search_transcripts_filtered(
+    query: &str,
+    project: Option<&str>,
+    limit: usize,
+) -> Result<Vec<TranscriptMessage>> {
     let conn = open_memory_db()?;
+    let expanded_limit = expanded_filter_limit(limit, project.is_some());
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
             "SELECT
-                m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source,
+                m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source, m.project,
                 m.created_at_unix_ms
              FROM transcript_messages_fts f
              JOIN transcript_messages m ON m.rowid = f.rowid
@@ -1162,12 +1183,14 @@ pub(crate) fn search_transcripts(query: &str, limit: usize) -> Result<Vec<Transc
              LIMIT ?2",
         )?;
         let records =
-            read_transcript_message_rows(&mut stmt, params![match_query, limit.max(1) as i64])?;
+            read_transcript_message_rows(&mut stmt, params![match_query, expanded_limit as i64])?;
+        let records = filter_transcript_records(records, project, limit);
         if !records.is_empty() {
             return Ok(records);
         }
     }
-    search_transcripts_like(&conn, query, limit)
+    let records = search_transcripts_like(&conn, query, expanded_limit)?;
+    Ok(filter_transcript_records(records, project, limit))
 }
 
 pub(crate) fn transcript_stats() -> Result<TranscriptStats> {
@@ -1186,24 +1209,35 @@ pub(crate) fn transcript_stats() -> Result<TranscriptStats> {
 }
 
 pub(crate) fn search_feedback(query: &str, limit: usize) -> Result<Vec<FeedbackRecord>> {
+    search_feedback_filtered(query, None, limit)
+}
+
+pub(crate) fn search_feedback_filtered(
+    query: &str,
+    project: Option<&str>,
+    limit: usize,
+) -> Result<Vec<FeedbackRecord>> {
     let conn = open_memory_db()?;
+    let expanded_limit = expanded_filter_limit(limit, project.is_some());
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
             "SELECT
                 fb.id, fb.subject, fb.correction, fb.topic, fb.context, fb.predicted,
-                fb.reason, fb.source, fb.applied_count, fb.created_at_unix_ms
+                fb.reason, fb.source, fb.project, fb.applied_count, fb.created_at_unix_ms
              FROM feedback_fts_all f
              JOIN feedback fb ON fb.rowid = f.rowid
              WHERE feedback_fts_all MATCH ?1
              ORDER BY bm25(feedback_fts_all), fb.created_at_unix_ms DESC
              LIMIT ?2",
         )?;
-        let records = read_feedback_rows(&mut stmt, params![match_query, limit.max(1) as i64])?;
+        let records = read_feedback_rows(&mut stmt, params![match_query, expanded_limit as i64])?;
+        let records = filter_feedback_records(records, project, limit);
         if !records.is_empty() {
             return Ok(records);
         }
     }
-    search_feedback_like(&conn, query, limit)
+    let records = search_feedback_like(&conn, query, expanded_limit)?;
+    Ok(filter_feedback_records(records, project, limit))
 }
 
 fn search_feedback_like(
@@ -1214,7 +1248,7 @@ fn search_feedback_like(
     let pattern = format!("%{}%", query.trim());
     let mut stmt = conn.prepare(
         "SELECT
-            id, subject, correction, topic, context, predicted, reason, source,
+            id, subject, correction, topic, context, predicted, reason, source, project,
             applied_count, created_at_unix_ms
          FROM feedback
          WHERE subject LIKE ?1
@@ -1224,6 +1258,7 @@ fn search_feedback_like(
             OR IFNULL(predicted, '') LIKE ?1
             OR IFNULL(reason, '') LIKE ?1
             OR IFNULL(source, '') LIKE ?1
+            OR IFNULL(project, '') LIKE ?1
          ORDER BY created_at_unix_ms DESC
          LIMIT ?2",
     )?;
@@ -1236,7 +1271,7 @@ pub(crate) fn list_feedback(topic: Option<&str>, limit: usize) -> Result<Vec<Fee
         let topic = normalize_non_empty(Some(topic), "general");
         let mut stmt = conn.prepare(
             "SELECT
-                id, subject, correction, topic, context, predicted, reason, source,
+                id, subject, correction, topic, context, predicted, reason, source, project,
                 applied_count, created_at_unix_ms
              FROM feedback
              WHERE topic = ?1
@@ -1247,7 +1282,7 @@ pub(crate) fn list_feedback(topic: Option<&str>, limit: usize) -> Result<Vec<Fee
     } else {
         let mut stmt = conn.prepare(
             "SELECT
-                id, subject, correction, topic, context, predicted, reason, source,
+                id, subject, correction, topic, context, predicted, reason, source, project,
                 applied_count, created_at_unix_ms
              FROM feedback
              ORDER BY created_at_unix_ms DESC
@@ -1301,12 +1336,30 @@ fn read_feedback_rows<P: rusqlite::Params>(
             predicted: row.get(5)?,
             reason: row.get(6)?,
             source: row.get(7)?,
-            applied_count: row.get(8)?,
-            created_at_unix_ms: row.get(9)?,
+            project: row.get(8)?,
+            applied_count: row.get(9)?,
+            created_at_unix_ms: row.get(10)?,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+fn filter_feedback_records(
+    records: Vec<FeedbackRecord>,
+    project: Option<&str>,
+    limit: usize,
+) -> Vec<FeedbackRecord> {
+    let project = project.map(|project| normalize_non_empty(Some(project), "default"));
+    records
+        .into_iter()
+        .filter(|record| {
+            project
+                .as_deref()
+                .map_or(true, |wanted| record.project.as_deref() == Some(wanted))
+        })
+        .take(limit.max(1))
+        .collect()
 }
 
 fn search_transcripts_like(
@@ -1317,19 +1370,37 @@ fn search_transcripts_like(
     let pattern = format!("%{}%", query.trim());
     let mut stmt = conn.prepare(
         "SELECT
-            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source,
+            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source, m.project,
             m.created_at_unix_ms
          FROM transcript_messages m
          JOIN transcript_sessions s ON s.id = m.session_id
          WHERE m.content LIKE ?1
             OR m.role LIKE ?1
             OR IFNULL(m.source, '') LIKE ?1
+            OR IFNULL(m.project, '') LIKE ?1
             OR s.session_key LIKE ?1
             OR IFNULL(s.agent, '') LIKE ?1
          ORDER BY m.created_at_unix_ms DESC, m.id DESC
          LIMIT ?2",
     )?;
     read_transcript_message_rows(&mut stmt, params![pattern, limit.max(1) as i64])
+}
+
+fn filter_transcript_records(
+    records: Vec<TranscriptMessage>,
+    project: Option<&str>,
+    limit: usize,
+) -> Vec<TranscriptMessage> {
+    let project = project.map(|project| normalize_non_empty(Some(project), "default"));
+    records
+        .into_iter()
+        .filter(|record| {
+            project
+                .as_deref()
+                .map_or(true, |wanted| record.project.as_deref() == Some(wanted))
+        })
+        .take(limit.max(1))
+        .collect()
 }
 
 fn read_transcript_session_rows<P: rusqlite::Params>(
@@ -1363,7 +1434,8 @@ fn read_transcript_message_rows<P: rusqlite::Params>(
             role: row.get(4)?,
             content: row.get(5)?,
             source: row.get(6)?,
-            created_at_unix_ms: row.get(7)?,
+            project: row.get(7)?,
+            created_at_unix_ms: row.get(8)?,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -2792,7 +2864,7 @@ fn get_memory_embedding(
 fn get_feedback(conn: &Connection, id: i64) -> Result<FeedbackRecord> {
     conn.query_row(
         "SELECT
-            id, subject, correction, topic, context, predicted, reason, source,
+            id, subject, correction, topic, context, predicted, reason, source, project,
             applied_count, created_at_unix_ms
          FROM feedback
          WHERE id = ?1",
@@ -2807,8 +2879,9 @@ fn get_feedback(conn: &Connection, id: i64) -> Result<FeedbackRecord> {
                 predicted: row.get(5)?,
                 reason: row.get(6)?,
                 source: row.get(7)?,
-                applied_count: row.get(8)?,
-                created_at_unix_ms: row.get(9)?,
+                project: row.get(8)?,
+                applied_count: row.get(9)?,
+                created_at_unix_ms: row.get(10)?,
             })
         },
     )
@@ -2841,7 +2914,7 @@ fn ensure_transcript_session(
 fn get_transcript_message(conn: &Connection, id: i64) -> Result<TranscriptMessage> {
     conn.query_row(
         "SELECT
-            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source,
+            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source, m.project,
             m.created_at_unix_ms
          FROM transcript_messages m
          JOIN transcript_sessions s ON s.id = m.session_id
@@ -2856,7 +2929,8 @@ fn get_transcript_message(conn: &Connection, id: i64) -> Result<TranscriptMessag
                 role: row.get(4)?,
                 content: row.get(5)?,
                 source: row.get(6)?,
-                created_at_unix_ms: row.get(7)?,
+                project: row.get(7)?,
+                created_at_unix_ms: row.get(8)?,
             })
         },
     )
@@ -2964,6 +3038,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             predicted TEXT,
             reason TEXT,
             source TEXT,
+            project TEXT,
             applied_count INTEGER NOT NULL DEFAULT 0,
             created_at_unix_ms INTEGER NOT NULL
         );
@@ -2986,6 +3061,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             role TEXT NOT NULL DEFAULT 'assistant',
             content TEXT NOT NULL,
             source TEXT,
+            project TEXT,
             created_at_unix_ms INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS mcp_calls (
@@ -3169,6 +3245,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "feedback", "predicted", "TEXT")?;
     add_column_if_missing(conn, "feedback", "reason", "TEXT")?;
     add_column_if_missing(conn, "feedback", "source", "TEXT")?;
+    add_column_if_missing(conn, "feedback", "project", "TEXT")?;
     add_column_if_missing(
         conn,
         "feedback",
@@ -3204,6 +3281,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         END;
         ",
     )?;
+    add_column_if_missing(conn, "transcript_messages", "project", "TEXT")?;
     rebuild_fts_table(conn, "memories_fts")?;
     rebuild_fts_table(conn, "feedback_fts")?;
     rebuild_fts_table(conn, "feedback_fts_all")?;

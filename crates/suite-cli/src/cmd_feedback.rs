@@ -37,6 +37,8 @@ pub struct FeedbackRecordArgs {
     #[arg(long)]
     pub source: Option<String>,
     #[arg(long)]
+    pub project: Option<String>,
+    #[arg(long)]
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
@@ -102,6 +104,7 @@ pub fn run(args: FeedbackArgs) -> Result<i32> {
                 predicted: args.predicted.as_deref(),
                 reason: args.reason.as_deref(),
                 source: args.source.as_deref(),
+                project: args.project.as_deref(),
             })?;
             if args.json {
                 crate::cmd_common::emit_json(&serde_json::to_value(record)?, args.pretty)?;

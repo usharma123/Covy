@@ -38,6 +38,8 @@ pub struct TranscriptAppendArgs {
     #[arg(long)]
     pub source: Option<String>,
     #[arg(long)]
+    pub project: Option<String>,
+    #[arg(long)]
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
@@ -118,6 +120,7 @@ pub(crate) struct TranscriptImportMessage {
     role: String,
     content: String,
     source: Option<String>,
+    project: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,6 +137,7 @@ pub fn run(args: TranscriptArgs) -> Result<i32> {
                 role: Some(&args.role),
                 content: &args.content,
                 source: args.source.as_deref(),
+                project: args.project.as_deref(),
             })?;
             if args.json {
                 crate::cmd_common::emit_json(&serde_json::to_value(record)?, args.pretty)?;
@@ -231,6 +235,7 @@ pub(crate) fn export_transcripts(
                 role: message.role,
                 content: message.content,
                 source: message.source,
+                project: message.project,
             })
             .collect(),
     })
@@ -251,6 +256,7 @@ pub(crate) fn import_transcripts_from_str(content: &str) -> Result<TranscriptImp
             role: Some(&message.role),
             content: &message.content,
             source: message.source.as_deref(),
+            project: message.project.as_deref(),
         })?;
         imported_count += 1;
     }

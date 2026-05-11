@@ -395,12 +395,14 @@ fn capture_hook_output(
     })?;
     let fallback_session = json_string(payload, "task_id");
     let transcript_session = session_id.or(fallback_session.as_deref());
+    let project = hook_project_name(root, payload);
     append_transcript_message(TranscriptAppendInput {
         session: transcript_session,
         agent: Some(runtime),
         role: Some("tool"),
         content: &raw_output,
         source: Some("packet28-hook"),
+        project: Some(&project),
     })?;
     Ok(())
 }

@@ -69,10 +69,11 @@ use crate::memory_store::{
     link_concepts, list_feedback, list_graph_memoirs, list_memories_filtered,
     list_pending_extractions, list_transcript_sessions, local_store_stats, memory_health,
     memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
-    record_feedback_with_metadata, refine_concept, search_concepts_filtered, search_feedback,
-    search_transcripts, show_graph_memoir, show_transcript_session, store_memory_with_metadata,
-    transcript_stats, update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery,
-    MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput, TranscriptAppendInput,
+    record_feedback_with_metadata, refine_concept, search_concepts_filtered,
+    search_feedback_filtered, search_transcripts_filtered, show_graph_memoir,
+    show_transcript_session, store_memory_with_metadata, transcript_stats, update_memory,
+    FeedbackInput, MemoryListQuery, MemoryRecallQuery, MemoryStoreInput, MemoryUpdateInput,
+    PendingExtractionInput, TranscriptAppendInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
@@ -925,7 +926,8 @@ fn handle_method(
                             "context": {"type":"string"},
                             "predicted": {"type":"string"},
                             "reason": {"type":"string"},
-                            "source": {"type":"string"}
+                            "source": {"type":"string"},
+                            "project": {"type":"string"}
                         }
                     }
                 },
@@ -939,6 +941,7 @@ fn handle_method(
                             "query": {"type":"string"},
                             "memoir": {"type":"string"},
                             "label": {"type":"string"},
+                            "project": {"type":"string"},
                             "limit": {"type":"integer","minimum":1}
                         }
                     }
@@ -1022,7 +1025,8 @@ fn handle_method(
                             "session": {"type":"string"},
                             "agent": {"type":"string"},
                             "role": {"type":"string"},
-                            "source": {"type":"string"}
+                            "source": {"type":"string"},
+                            "project": {"type":"string"}
                         }
                     }
                 },
@@ -1058,6 +1062,7 @@ fn handle_method(
                             "query": {"type":"string"},
                             "memoir": {"type":"string"},
                             "label": {"type":"string"},
+                            "project": {"type":"string"},
                             "limit": {"type":"integer","minimum":1}
                         }
                     }
@@ -1568,12 +1573,14 @@ fn handle_tool_call(
                 predicted: request.predicted.as_deref(),
                 reason: request.reason.as_deref(),
                 source: request.source.as_deref(),
+                project: request.project.as_deref(),
             })?)?
         }
         "packet28.feedback_search" => {
             let request: FeedbackSearchToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(search_feedback(
+            serde_json::to_value(search_feedback_filtered(
                 &request.query,
+                request.project.as_deref(),
                 request.limit.unwrap_or(10),
             )?)?
         }
@@ -1623,6 +1630,7 @@ fn handle_tool_call(
                 role: request.role.as_deref(),
                 content: &request.content,
                 source: request.source.as_deref(),
+                project: request.project.as_deref(),
             })?)?
         }
         "packet28.transcript_list" => {
@@ -1638,8 +1646,9 @@ fn handle_tool_call(
         }
         "packet28.transcript_search" => {
             let request: TranscriptSearchToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(search_transcripts(
+            serde_json::to_value(search_transcripts_filtered(
                 &request.query,
+                request.project.as_deref(),
                 request.limit.unwrap_or(10),
             )?)?
         }
@@ -1875,12 +1884,14 @@ struct FeedbackRecordToolArgs {
     predicted: Option<String>,
     reason: Option<String>,
     source: Option<String>,
+    project: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct FeedbackSearchToolArgs {
     query: String,
     limit: Option<usize>,
+    project: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1918,6 +1929,7 @@ struct TranscriptAppendToolArgs {
     agent: Option<String>,
     role: Option<String>,
     source: Option<String>,
+    project: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1935,6 +1947,7 @@ struct TranscriptShowToolArgs {
 struct TranscriptSearchToolArgs {
     query: String,
     limit: Option<usize>,
+    project: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

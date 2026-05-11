@@ -1445,9 +1445,11 @@ fn test_memory_store_migrates_legacy_sqlite_schema() {
             "predicted",
             "reason",
             "source",
+            "project",
             "applied_count",
         ],
     );
+    assert_table_columns(&conn, "transcript_messages", &["source", "project"]);
     assert_table_columns(
         &conn,
         "concepts",
@@ -2083,7 +2085,8 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
                     "context":"MCP feedback context",
                     "predicted":"ignore feedback",
                     "reason":"user correction",
-                    "source":"mcp-test"
+                    "source":"mcp-test",
+                    "project":"mcp-project-b"
                 }
             }
         }),
@@ -2097,6 +2100,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         feedback["result"]["structuredContent"]["topic"].as_str(),
         Some("mcp-feedback")
     );
+    assert_eq!(
+        feedback["result"]["structuredContent"]["project"].as_str(),
+        Some("mcp-project-b")
+    );
 
     write_mcp_message(
         &mut stdin,
@@ -2106,7 +2113,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.feedback_search",
-                "arguments":{"query":"feedback", "limit": 3}
+                "arguments":{"query":"feedback", "project":"mcp-project-b", "limit": 3}
             }
         }),
     );
@@ -2114,6 +2121,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         feedback_search["result"]["structuredContent"][0]["correction"].as_str(),
         Some("store feedback locally")
+    );
+    assert_eq!(
+        feedback_search["result"]["structuredContent"][0]["project"].as_str(),
+        Some("mcp-project-b")
     );
 
     write_mcp_message(
@@ -2196,6 +2207,29 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":55,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.feedback_record",
+                "arguments":{
+                    "subject":"mcp wakeup",
+                    "correction":"wake-up feedback stays project scoped",
+                    "topic":"mcp-feedback",
+                    "project":"mcp-project-b"
+                }
+            }
+        }),
+    );
+    let wakeup_feedback = read_mcp_message_for_id(&mut stdout, 55);
+    assert_eq!(
+        wakeup_feedback["result"]["structuredContent"]["project"].as_str(),
+        Some("mcp-project-b")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":60,
             "method":"tools/call",
             "params":{
@@ -2205,7 +2239,8 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
                     "session":"mcp-session",
                     "agent":"codex",
                     "role":"assistant",
-                    "source":"mcp-test"
+                    "source":"mcp-test",
+                    "project":"mcp-project-b"
                 }
             }
         }),
@@ -2214,6 +2249,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         transcript["result"]["structuredContent"]["session_key"].as_str(),
         Some("mcp-session")
+    );
+    assert_eq!(
+        transcript["result"]["structuredContent"]["project"].as_str(),
+        Some("mcp-project-b")
     );
 
     write_mcp_message(
@@ -2224,7 +2263,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.transcript_search",
-                "arguments":{"query":"reducer", "limit": 3}
+                "arguments":{"query":"reducer", "project":"mcp-project-b", "limit": 3}
             }
         }),
     );
@@ -2232,6 +2271,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         transcript_search["result"]["structuredContent"][0]["content"].as_str(),
         Some("MCP transcript recall should find reducer notes")
+    );
+    assert_eq!(
+        transcript_search["result"]["structuredContent"][0]["project"].as_str(),
+        Some("mcp-project-b")
     );
 
     write_mcp_message(
@@ -2268,6 +2311,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         transcript_export["result"]["structuredContent"]["format"].as_str(),
         Some("packet28.transcript.export")
+    );
+    assert_eq!(
+        transcript_export["result"]["structuredContent"]["messages"][0]["project"].as_str(),
+        Some("mcp-project-b")
     );
     let exported_transcript =
         serde_json::to_string(&transcript_export["result"]["structuredContent"]).unwrap();
@@ -2325,6 +2372,14 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             .unwrap()
             .len()
             >= 1
+    );
+    assert_eq!(
+        wakeup["result"]["structuredContent"]["transcripts"][0]["project"].as_str(),
+        Some("mcp-project-b")
+    );
+    assert_eq!(
+        wakeup["result"]["structuredContent"]["feedback"][0]["project"].as_str(),
+        Some("mcp-project-b")
     );
     assert_eq!(
         wakeup["result"]["structuredContent"]["memories"][0]["project"].as_str(),
@@ -2842,12 +2897,15 @@ fn test_feedback_and_graph_cli_use_sqlite() {
             "too noisy",
             "--source",
             "cli-test",
+            "--project",
+            "coverage-b",
             "--json",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("prefer focused reducers"))
         .stdout(predicate::str::contains("\"topic\":\"reducers\""))
+        .stdout(predicate::str::contains("\"project\":\"coverage-b\""))
         .stdout(predicate::str::contains(
             "\"predicted\":\"verbose reducers\"",
         ));
@@ -2937,12 +2995,36 @@ fn test_feedback_and_graph_cli_use_sqlite() {
             "user",
             "--source",
             "cli-test",
+            "--project",
+            "coverage-b",
             "--json",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"session_key\":\"cli-session\""))
-        .stdout(predicate::str::contains("\"role\":\"user\""));
+        .stdout(predicate::str::contains("\"role\":\"user\""))
+        .stdout(predicate::str::contains("\"project\":\"coverage-b\""));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "transcript",
+            "append",
+            "Foreign transcript recall for reducers",
+            "--session",
+            "foreign-session",
+            "--agent",
+            "codex",
+            "--role",
+            "user",
+            "--source",
+            "cli-test",
+            "--project",
+            "coverage-foreign",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"project\":\"coverage-foreign\""));
     suite_cmd()
         .env("HOME", home.path())
         .args(["transcript", "search", "reducers", "--json"])
@@ -2966,14 +3048,16 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .args(["transcript", "stats", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"session_count\":1"))
-        .stdout(predicate::str::contains("\"message_count\":1"));
+        .stdout(predicate::str::contains("\"session_count\":2"))
+        .stdout(predicate::str::contains("\"message_count\":2"));
     suite_cmd()
         .env("HOME", home.path())
         .args([
             "wakeup",
             "--query",
             "reducers",
+            "--project",
+            "coverage-b",
             "--format",
             "plain",
             "--max-tokens",
@@ -2987,13 +3071,15 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .stdout(predicate::str::contains("\"estimated_tokens\""))
         .stdout(predicate::str::contains("\"transcripts\""))
         .stdout(predicate::str::contains("\"pack\""))
-        .stdout(predicate::str::contains("compact transcript recall"));
+        .stdout(predicate::str::contains("compact transcript recall"))
+        .stdout(predicate::str::contains("\"project\":\"coverage-b\""))
+        .stdout(predicate::str::contains("Foreign transcript recall").not());
     let transcript_fts_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM transcript_messages_fts", [], |row| {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(transcript_fts_rows, 1);
+    assert_eq!(transcript_fts_rows, 2);
 
     suite_cmd()
         .env("HOME", home.path())
