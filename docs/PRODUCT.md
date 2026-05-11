@@ -41,7 +41,7 @@ Packet28 session --root .
 Packet28 dashboard --root .
 ```
 
-Use local memory, feedback, and graph:
+Use local memory, feedback, transcripts, and graph:
 
 ```bash
 Packet28 memory store "Important local project fact" \
@@ -66,6 +66,12 @@ Packet28 feedback list --topic reducers
 Packet28 feedback apply 1
 Packet28 feedback delete 1
 Packet28 feedback stats
+Packet28 transcript append "Need compact transcript recall" \
+  --session project-session --agent codex --role user --source cli
+Packet28 transcript search "transcript recall"
+Packet28 transcript show project-session
+Packet28 transcript list
+Packet28 transcript stats
 Packet28 graph create
 Packet28 graph add-concept Packet28
 Packet28 graph refine Packet28 "local context runtime with reducers"
@@ -98,6 +104,11 @@ MCP tools exposed by the product slice:
 - `packet28.feedback_apply`
 - `packet28.feedback_delete`
 - `packet28.feedback_stats`
+- `packet28.transcript_append`
+- `packet28.transcript_list`
+- `packet28.transcript_show`
+- `packet28.transcript_search`
+- `packet28.transcript_stats`
 - `packet28.graph_add_concept`
 - `packet28.graph_refine`
 - `packet28.graph_link`
@@ -122,7 +133,7 @@ MCP tools exposed by the product slice:
 
 ## Local Storage
 
-Packet28 stores memory, feedback, and graph data locally at:
+Packet28 stores memory, feedback, transcript, and graph data locally at:
 
 ```text
 ~/.packet28/packet28.db
@@ -142,6 +153,9 @@ The SQLite schema includes:
 - `feedback`
 - `feedback_fts`
 - `agent_sessions`
+- `transcript_sessions`
+- `transcript_messages`
+- `transcript_messages_fts`
 - `mcp_calls`
 
 Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
@@ -149,5 +163,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Full ICM vector recall, concept/memoir FTS, wake-up extraction lifecycle, memoir export/search, transcript replay, cloud/import/upgrade, and web dashboard.
+- Full ICM vector recall, wake-up extraction lifecycle, richer memoir containers/stats, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.

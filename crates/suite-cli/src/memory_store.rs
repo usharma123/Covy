@@ -34,6 +34,35 @@ pub(crate) struct FeedbackRecord {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct TranscriptSession {
+    pub(crate) id: i64,
+    pub(crate) session_key: String,
+    pub(crate) agent: Option<String>,
+    pub(crate) message_count: i64,
+    pub(crate) started_at_unix_ms: i64,
+    pub(crate) updated_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TranscriptMessage {
+    pub(crate) id: i64,
+    pub(crate) session_id: i64,
+    pub(crate) session_key: String,
+    pub(crate) agent: Option<String>,
+    pub(crate) role: String,
+    pub(crate) content: String,
+    pub(crate) source: Option<String>,
+    pub(crate) created_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TranscriptStats {
+    pub(crate) session_count: i64,
+    pub(crate) message_count: i64,
+    pub(crate) agent_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct GraphConcept {
     pub(crate) id: i64,
     pub(crate) name: String,
@@ -72,6 +101,8 @@ pub(crate) struct LocalStoreStats {
     pub(crate) feedback_count: i64,
     pub(crate) concept_count: i64,
     pub(crate) relation_count: i64,
+    pub(crate) transcript_session_count: i64,
+    pub(crate) transcript_message_count: i64,
     pub(crate) mcp_call_count: i64,
 }
 
@@ -132,6 +163,15 @@ pub(crate) struct FeedbackStats {
     pub(crate) feedback_count: i64,
     pub(crate) applied_count: i64,
     pub(crate) topic_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TranscriptAppendInput<'a> {
+    pub(crate) session: Option<&'a str>,
+    pub(crate) agent: Option<&'a str>,
+    pub(crate) role: Option<&'a str>,
+    pub(crate) content: &'a str,
+    pub(crate) source: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -555,6 +595,105 @@ pub(crate) fn record_feedback_with_metadata(input: FeedbackInput<'_>) -> Result<
     get_feedback(&conn, conn.last_insert_rowid())
 }
 
+pub(crate) fn append_transcript_message(
+    input: TranscriptAppendInput<'_>,
+) -> Result<TranscriptMessage> {
+    let conn = open_memory_db()?;
+    let now = timestamp_unix_ms();
+    let session_key = normalize_non_empty(input.session, &format!("transcript-{now}"));
+    let role = normalize_non_empty(input.role, "assistant");
+    let session_id = ensure_transcript_session(&conn, &session_key, input.agent, now)?;
+    conn.execute(
+        "INSERT INTO transcript_messages
+         (session_id, role, content, source, created_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![session_id, role, input.content, input.source, now],
+    )?;
+    conn.execute(
+        "UPDATE transcript_sessions
+         SET agent = COALESCE(?1, agent),
+             updated_at_unix_ms = ?2
+         WHERE id = ?3",
+        params![input.agent, now, session_id],
+    )?;
+    get_transcript_message(&conn, conn.last_insert_rowid())
+}
+
+pub(crate) fn list_transcript_sessions(limit: usize) -> Result<Vec<TranscriptSession>> {
+    let conn = open_memory_db()?;
+    let mut stmt = conn.prepare(
+        "SELECT
+            s.id,
+            s.session_key,
+            s.agent,
+            COUNT(m.id) AS message_count,
+            s.started_at_unix_ms,
+            s.updated_at_unix_ms
+         FROM transcript_sessions s
+         LEFT JOIN transcript_messages m ON m.session_id = s.id
+         GROUP BY s.id
+         ORDER BY s.updated_at_unix_ms DESC, s.id DESC
+         LIMIT ?1",
+    )?;
+    read_transcript_session_rows(&mut stmt, params![limit.max(1) as i64])
+}
+
+pub(crate) fn show_transcript_session(
+    session_key: &str,
+    limit: usize,
+) -> Result<Vec<TranscriptMessage>> {
+    let conn = open_memory_db()?;
+    let mut stmt = conn.prepare(
+        "SELECT
+            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source,
+            m.created_at_unix_ms
+         FROM transcript_messages m
+         JOIN transcript_sessions s ON s.id = m.session_id
+         WHERE s.session_key = ?1
+         ORDER BY m.created_at_unix_ms ASC, m.id ASC
+         LIMIT ?2",
+    )?;
+    read_transcript_message_rows(&mut stmt, params![session_key, limit.max(1) as i64])
+}
+
+pub(crate) fn search_transcripts(query: &str, limit: usize) -> Result<Vec<TranscriptMessage>> {
+    let conn = open_memory_db()?;
+    if let Some(match_query) = fts_match_query(query) {
+        let mut stmt = conn.prepare(
+            "SELECT
+                m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source,
+                m.created_at_unix_ms
+             FROM transcript_messages_fts f
+             JOIN transcript_messages m ON m.rowid = f.rowid
+             JOIN transcript_sessions s ON s.id = m.session_id
+             WHERE transcript_messages_fts MATCH ?1
+             ORDER BY bm25(transcript_messages_fts), m.created_at_unix_ms DESC
+             LIMIT ?2",
+        )?;
+        let records =
+            read_transcript_message_rows(&mut stmt, params![match_query, limit.max(1) as i64])?;
+        if !records.is_empty() {
+            return Ok(records);
+        }
+    }
+    search_transcripts_like(&conn, query, limit)
+}
+
+pub(crate) fn transcript_stats() -> Result<TranscriptStats> {
+    let conn = open_memory_db()?;
+    Ok(TranscriptStats {
+        session_count: table_count(&conn, "transcript_sessions")?,
+        message_count: table_count(&conn, "transcript_messages")?,
+        agent_count: conn.query_row(
+            "SELECT COUNT(DISTINCT agent)
+             FROM transcript_sessions
+             WHERE agent IS NOT NULL AND TRIM(agent) != ''",
+            [],
+            |row| row.get(0),
+        )?,
+    })
+}
+
 pub(crate) fn search_feedback(query: &str, limit: usize) -> Result<Vec<FeedbackRecord>> {
     let conn = open_memory_db()?;
     if let Some(match_query) = fts_match_query(query) {
@@ -673,6 +812,67 @@ fn read_feedback_rows<P: rusqlite::Params>(
             source: row.get(7)?,
             applied_count: row.get(8)?,
             created_at_unix_ms: row.get(9)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn search_transcripts_like(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<TranscriptMessage>> {
+    let pattern = format!("%{}%", query.trim());
+    let mut stmt = conn.prepare(
+        "SELECT
+            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source,
+            m.created_at_unix_ms
+         FROM transcript_messages m
+         JOIN transcript_sessions s ON s.id = m.session_id
+         WHERE m.content LIKE ?1
+            OR m.role LIKE ?1
+            OR IFNULL(m.source, '') LIKE ?1
+            OR s.session_key LIKE ?1
+            OR IFNULL(s.agent, '') LIKE ?1
+         ORDER BY m.created_at_unix_ms DESC, m.id DESC
+         LIMIT ?2",
+    )?;
+    read_transcript_message_rows(&mut stmt, params![pattern, limit.max(1) as i64])
+}
+
+fn read_transcript_session_rows<P: rusqlite::Params>(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: P,
+) -> Result<Vec<TranscriptSession>> {
+    let rows = stmt.query_map(params, |row| {
+        Ok(TranscriptSession {
+            id: row.get(0)?,
+            session_key: row.get(1)?,
+            agent: row.get(2)?,
+            message_count: row.get(3)?,
+            started_at_unix_ms: row.get(4)?,
+            updated_at_unix_ms: row.get(5)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn read_transcript_message_rows<P: rusqlite::Params>(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: P,
+) -> Result<Vec<TranscriptMessage>> {
+    let rows = stmt.query_map(params, |row| {
+        Ok(TranscriptMessage {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            session_key: row.get(2)?,
+            agent: row.get(3)?,
+            role: row.get(4)?,
+            content: row.get(5)?,
+            source: row.get(6)?,
+            created_at_unix_ms: row.get(7)?,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -885,6 +1085,8 @@ pub(crate) fn local_store_stats() -> Result<LocalStoreStats> {
         feedback_count: table_count(&conn, "feedback")?,
         concept_count: table_count(&conn, "concepts")?,
         relation_count: table_count(&conn, "relations")?,
+        transcript_session_count: table_count(&conn, "transcript_sessions")?,
+        transcript_message_count: table_count(&conn, "transcript_messages")?,
         mcp_call_count: table_count(&conn, "mcp_calls")?,
     })
 }
@@ -1058,6 +1260,54 @@ fn get_feedback(conn: &Connection, id: i64) -> Result<FeedbackRecord> {
     .map_err(Into::into)
 }
 
+fn ensure_transcript_session(
+    conn: &Connection,
+    session_key: &str,
+    agent: Option<&str>,
+    now: i64,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO transcript_sessions
+         (session_key, agent, started_at_unix_ms, updated_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?3)
+         ON CONFLICT(session_key) DO UPDATE SET
+             agent = COALESCE(excluded.agent, transcript_sessions.agent),
+             updated_at_unix_ms = excluded.updated_at_unix_ms",
+        params![session_key, agent, now],
+    )?;
+    conn.query_row(
+        "SELECT id FROM transcript_sessions WHERE session_key = ?1",
+        params![session_key],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn get_transcript_message(conn: &Connection, id: i64) -> Result<TranscriptMessage> {
+    conn.query_row(
+        "SELECT
+            m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source,
+            m.created_at_unix_ms
+         FROM transcript_messages m
+         JOIN transcript_sessions s ON s.id = m.session_id
+         WHERE m.id = ?1",
+        params![id],
+        |row| {
+            Ok(TranscriptMessage {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                session_key: row.get(2)?,
+                agent: row.get(3)?,
+                role: row.get(4)?,
+                content: row.get(5)?,
+                source: row.get(6)?,
+                created_at_unix_ms: row.get(7)?,
+            })
+        },
+    )
+    .map_err(Into::into)
+}
+
 fn open_memory_db() -> Result<Connection> {
     let path = packet28_db_path();
     if let Some(parent) = path.parent() {
@@ -1143,6 +1393,21 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             started_at_unix_ms INTEGER NOT NULL,
             ended_at_unix_ms INTEGER
         );
+        CREATE TABLE IF NOT EXISTS transcript_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_key TEXT NOT NULL UNIQUE,
+            agent TEXT,
+            started_at_unix_ms INTEGER NOT NULL,
+            updated_at_unix_ms INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS transcript_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'assistant',
+            content TEXT NOT NULL,
+            source TEXT,
+            created_at_unix_ms INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS mcp_calls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tool_name TEXT NOT NULL,
@@ -1211,6 +1476,28 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             VALUES ('delete', old.id, old.subject, old.correction);
             INSERT INTO feedback_fts(rowid, subject, correction)
             VALUES (new.id, new.subject, new.correction);
+        END;
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_fts USING fts5(
+            role,
+            content,
+            source,
+            content='transcript_messages',
+            content_rowid='id'
+        );
+        CREATE TRIGGER IF NOT EXISTS transcript_messages_ai AFTER INSERT ON transcript_messages BEGIN
+            INSERT INTO transcript_messages_fts(rowid, role, content, source)
+            VALUES (new.id, new.role, new.content, new.source);
+        END;
+        CREATE TRIGGER IF NOT EXISTS transcript_messages_ad AFTER DELETE ON transcript_messages BEGIN
+            INSERT INTO transcript_messages_fts(transcript_messages_fts, rowid, role, content, source)
+            VALUES ('delete', old.id, old.role, old.content, old.source);
+        END;
+        CREATE TRIGGER IF NOT EXISTS transcript_messages_au AFTER UPDATE OF role, content, source ON transcript_messages BEGIN
+            INSERT INTO transcript_messages_fts(transcript_messages_fts, rowid, role, content, source)
+            VALUES ('delete', old.id, old.role, old.content, old.source);
+            INSERT INTO transcript_messages_fts(rowid, role, content, source)
+            VALUES (new.id, new.role, new.content, new.source);
         END;
         ",
     )?;
@@ -1296,6 +1583,12 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         "INSERT INTO concepts_fts(rowid, name, description)
          SELECT id, name, description FROM concepts
          WHERE id NOT IN (SELECT rowid FROM concepts_fts)",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO transcript_messages_fts(rowid, role, content, source)
+         SELECT id, role, content, source FROM transcript_messages
+         WHERE id NOT IN (SELECT rowid FROM transcript_messages_fts)",
         [],
     )?;
     Ok(())

@@ -4,7 +4,7 @@ use crate::{
     cmd_agent_prompt, cmd_build, cmd_compact, cmd_context, cmd_cover, cmd_daemon, cmd_dashboard,
     cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook, cmd_impact,
     cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet,
-    cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack, cmd_wakeup,
+    cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack, cmd_transcript, cmd_wakeup,
 };
 
 #[derive(Parser)]
@@ -71,6 +71,8 @@ pub enum Commands {
     Feedback(cmd_feedback::FeedbackArgs),
     /// Local concept graph commands
     Graph(cmd_graph::GraphArgs),
+    /// Local transcript session and message commands
+    Transcript(cmd_transcript::TranscriptArgs),
     /// Summarize local memory, feedback, graph, and store stats for a new agent turn
     Wakeup(cmd_wakeup::WakeupArgs),
     /// Show local Packet28 savings, memory, feedback, graph, and integration health

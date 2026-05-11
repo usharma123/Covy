@@ -841,6 +841,66 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":60,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.transcript_append",
+                "arguments":{
+                    "content":"MCP transcript recall should find reducer notes",
+                    "session":"mcp-session",
+                    "agent":"codex",
+                    "role":"assistant",
+                    "source":"mcp-test"
+                }
+            }
+        }),
+    );
+    let transcript = read_mcp_message_for_id(&mut stdout, 60);
+    assert_eq!(
+        transcript["result"]["structuredContent"]["session_key"].as_str(),
+        Some("mcp-session")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":61,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.transcript_search",
+                "arguments":{"query":"reducer", "limit": 3}
+            }
+        }),
+    );
+    let transcript_search = read_mcp_message_for_id(&mut stdout, 61);
+    assert_eq!(
+        transcript_search["result"]["structuredContent"][0]["content"].as_str(),
+        Some("MCP transcript recall should find reducer notes")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":62,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.transcript_stats",
+                "arguments":{}
+            }
+        }),
+    );
+    let transcript_stats = read_mcp_message_for_id(&mut stdout, 62);
+    assert_eq!(
+        transcript_stats["result"]["structuredContent"]["message_count"].as_i64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":55,
             "method":"tools/call",
             "params":{
@@ -1113,6 +1173,58 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"deleted\":1"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "transcript",
+            "append",
+            "Need compact transcript recall for reducers",
+            "--session",
+            "cli-session",
+            "--agent",
+            "codex",
+            "--role",
+            "user",
+            "--source",
+            "cli-test",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"session_key\":\"cli-session\""))
+        .stdout(predicate::str::contains("\"role\":\"user\""));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["transcript", "search", "reducers", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("compact transcript recall"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["transcript", "show", "cli-session", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"agent\":\"codex\""));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["transcript", "list", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"message_count\":1"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["transcript", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"session_count\":1"))
+        .stdout(predicate::str::contains("\"message_count\":1"));
+    let transcript_fts_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM transcript_messages_fts", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(transcript_fts_rows, 1);
 
     suite_cmd()
         .env("HOME", home.path())

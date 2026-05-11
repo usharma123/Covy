@@ -59,12 +59,14 @@ use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
 use crate::memory_store::{
-    add_concept, apply_feedback, consolidate_memories, decay_memories, delete_concept,
-    delete_feedback, export_graph, feedback_stats, forget_memories_by_topic, forget_memory,
-    inspect_graph, link_concepts, list_feedback, list_memories, local_store_stats, memory_health,
-    memory_topics, prune_memories, recall_memories, record_feedback_with_metadata, refine_concept,
-    search_concepts, search_feedback, store_memory_with_metadata, update_memory, FeedbackInput,
-    MemoryStoreInput, MemoryUpdateInput,
+    add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
+    delete_concept, delete_feedback, export_graph, feedback_stats, forget_memories_by_topic,
+    forget_memory, inspect_graph, link_concepts, list_feedback, list_memories,
+    list_transcript_sessions, local_store_stats, memory_health, memory_topics, prune_memories,
+    recall_memories, record_feedback_with_metadata, refine_concept, search_concepts,
+    search_feedback, search_transcripts, show_transcript_session, store_memory_with_metadata,
+    transcript_stats, update_memory, FeedbackInput, MemoryStoreInput, MemoryUpdateInput,
+    TranscriptAppendInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
@@ -898,6 +900,63 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.transcript_append",
+                    "description": "Append a local transcript message to ~/.packet28/packet28.db.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["content"],
+                        "properties": {
+                            "content": {"type":"string"},
+                            "session": {"type":"string"},
+                            "agent": {"type":"string"},
+                            "role": {"type":"string"},
+                            "source": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.transcript_list",
+                    "description": "List local transcript sessions.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.transcript_show",
+                    "description": "Show local transcript messages for a session.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["session"],
+                        "properties": {
+                            "session": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.transcript_search",
+                    "description": "Search local transcript messages with FTS and LIKE fallback.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.transcript_stats",
+                    "description": "Return local transcript session and message statistics.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
                     "name": "packet28.graph_add_concept",
                     "description": "Add or update a local Packet28 graph concept.",
                     "inputSchema": {
@@ -1281,6 +1340,35 @@ fn handle_tool_call(
             serde_json::json!({ "deleted": delete_feedback(request.id)? })
         }
         "packet28.feedback_stats" => serde_json::to_value(feedback_stats()?)?,
+        "packet28.transcript_append" => {
+            let request: TranscriptAppendToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(append_transcript_message(TranscriptAppendInput {
+                session: request.session.as_deref(),
+                agent: request.agent.as_deref(),
+                role: request.role.as_deref(),
+                content: &request.content,
+                source: request.source.as_deref(),
+            })?)?
+        }
+        "packet28.transcript_list" => {
+            let request: TranscriptListToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(list_transcript_sessions(request.limit.unwrap_or(20))?)?
+        }
+        "packet28.transcript_show" => {
+            let request: TranscriptShowToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(show_transcript_session(
+                &request.session,
+                request.limit.unwrap_or(100),
+            )?)?
+        }
+        "packet28.transcript_search" => {
+            let request: TranscriptSearchToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(search_transcripts(
+                &request.query,
+                request.limit.unwrap_or(10),
+            )?)?
+        }
+        "packet28.transcript_stats" => serde_json::to_value(transcript_stats()?)?,
         "packet28.graph_add_concept" => {
             let request: GraphConceptToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(add_concept(&request.name, request.description.as_deref())?)?
@@ -1435,6 +1523,32 @@ struct FeedbackListToolArgs {
 #[derive(Debug, Deserialize)]
 struct FeedbackIdToolArgs {
     id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptAppendToolArgs {
+    content: String,
+    session: Option<String>,
+    agent: Option<String>,
+    role: Option<String>,
+    source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptListToolArgs {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptShowToolArgs {
+    session: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptSearchToolArgs {
+    query: String,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1747,6 +1861,22 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!("Packet28 deleted {deleted} feedback correction(s).")
         }
         "packet28.feedback_stats" => "Packet28 feedback statistics.".to_string(),
+        "packet28.transcript_append" => {
+            let id = payload
+                .get("id")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!("Packet28 appended transcript message {id}.")
+        }
+        "packet28.transcript_list" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 listed {count} transcript session(s).")
+        }
+        "packet28.transcript_show" | "packet28.transcript_search" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 returned {count} transcript message(s).")
+        }
+        "packet28.transcript_stats" => "Packet28 transcript statistics.".to_string(),
         "packet28.graph_add_concept" | "packet28.graph_refine" => {
             let name = payload
                 .get("name")
@@ -1825,6 +1955,11 @@ mod tests {
             "packet28.feedback_apply",
             "packet28.feedback_delete",
             "packet28.feedback_stats",
+            "packet28.transcript_append",
+            "packet28.transcript_search",
+            "packet28.transcript_stats",
+            "packet28.graph_search",
+            "packet28.graph_export",
         ] {
             assert!(
                 tool_names.contains(&required),
