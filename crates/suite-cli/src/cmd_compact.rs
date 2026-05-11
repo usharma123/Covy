@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
 };
-use crate::savings_analytics::load_run_savings;
+use crate::savings_analytics::{load_run_savings, RunSavingsRecord};
 
 #[derive(Args)]
 pub struct CompactArgs {
@@ -218,7 +218,7 @@ pub struct AnalyticsArgs {
     pub task_id: Option<String>,
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
-    /// Output format for analytics commands (text, json, csv)
+    /// Output format for analytics commands (text, json, csv, history)
     #[arg(long, default_value = "text")]
     pub format: String,
     #[arg(long)]
@@ -777,11 +777,12 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
             *summary.by_route.entry(route).or_insert(0) += 1;
         }
     }
-    for record in load_run_savings(&root, args.limit)? {
+    let run_savings = load_run_savings(&root, args.limit)?;
+    for record in &run_savings {
         summary.invocation_count += 1;
         summary.raw_est_tokens += record.raw_est_tokens;
         summary.reduced_est_tokens += record.reduced_est_tokens;
-        let route = if let Some(reason) = record.fallback_reason {
+        let route = if let Some(reason) = &record.fallback_reason {
             format!("run_fallback:{reason}")
         } else {
             format!("run_reducer:{}", record.family)
@@ -797,6 +798,8 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         crate::cmd_common::emit_json(&serde_json::to_value(summary)?, args.pretty)?;
     } else if format == "csv" {
         print_gain_csv(&summary);
+    } else if format == "history" {
+        print_gain_history(&run_savings);
     } else {
         println!("tasks={}", summary.task_count);
         println!("invocations={}", summary.invocation_count);
@@ -809,6 +812,22 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+fn print_gain_history(records: &[RunSavingsRecord]) {
+    println!("timestamp_unix_ms,family,raw_est_tokens,reduced_est_tokens,savings_percent,exit_code,command");
+    for record in records {
+        println!(
+            "{},{},{},{},{:.1},{},{}",
+            record.timestamp_unix_ms,
+            csv_cell(&record.family),
+            record.raw_est_tokens,
+            record.reduced_est_tokens,
+            record.savings_percent,
+            record.exit_code,
+            csv_cell(&record.command)
+        );
+    }
 }
 
 fn print_gain_csv(summary: &GainSummary) {

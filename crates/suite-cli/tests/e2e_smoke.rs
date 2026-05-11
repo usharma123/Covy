@@ -177,6 +177,21 @@ fn test_run_reduces_git_status() {
         .stdout(predicate::str::contains("kind,name,value"))
         .stdout(predicate::str::contains("summary,invocation_count,1"))
         .stdout(predicate::str::contains("route,run_reducer:git,1"));
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "history",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "timestamp_unix_ms,family,raw_est_tokens",
+        ))
+        .stdout(predicate::str::contains("git status --short"));
 }
 
 #[test]
