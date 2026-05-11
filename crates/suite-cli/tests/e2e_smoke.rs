@@ -8350,24 +8350,64 @@ fn test_packet28_cursor_hook_pretool_rewrites_and_returns_empty_json_on_noop() {
     init_repo(dir.path());
     write_repo_fixture(dir.path());
 
+    let payloads = [
+        json!({
+            "hook_event_name":"beforeShellExecution",
+            "conversation_id":"cursor-session-rewrite",
+            "cwd":dir.path().to_str().unwrap(),
+            "command":"git status --short src/alpha.rs"
+        }),
+        json!({
+            "hook_event_name":"beforeShellExecution",
+            "conversation_id":"cursor-session-tool-input-rewrite",
+            "cwd":dir.path().to_str().unwrap(),
+            "tool_input":{"command":"git status --short src/alpha.rs"}
+        }),
+        json!({
+            "hook_event_name":"beforeShellExecution",
+            "conversation_id":"cursor-session-command-line-rewrite",
+            "cwd":dir.path().to_str().unwrap(),
+            "command_line":"git status --short src/alpha.rs"
+        }),
+        json!({
+            "hook_event_name":"beforeShellExecution",
+            "conversation_id":"cursor-session-shell-command-rewrite",
+            "cwd":dir.path().to_str().unwrap(),
+            "shell_command":"git status --short src/alpha.rs"
+        }),
+    ];
+    let mut first_rewritten = String::new();
+    for payload in payloads {
+        let (status, stdout, _stderr) = run_hook_raw(
+            "cursor",
+            dir.path(),
+            &serde_json::to_string(&payload).unwrap(),
+        );
+        assert_eq!(status, 0);
+        let rendered: Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(rendered["permission"].as_str(), Some("allow"));
+        let rewritten = rendered["updated_input"]["command"].as_str().unwrap();
+        assert!(rewritten.contains("hook reducer-runner"));
+        assert!(rewritten.contains("--family git"));
+        assert!(rewritten.contains("--kind git_status"));
+        if first_rewritten.is_empty() {
+            first_rewritten = rewritten.to_string();
+        }
+    }
+
     let (status, stdout, _stderr) = run_hook_raw(
         "cursor",
         dir.path(),
         &serde_json::to_string(&json!({
             "hook_event_name":"beforeShellExecution",
-            "conversation_id":"cursor-session-rewrite",
+            "conversation_id":"cursor-session-idempotent",
             "cwd":dir.path().to_str().unwrap(),
-            "command":"git status --short src/alpha.rs"
+            "command":first_rewritten
         }))
         .unwrap(),
     );
     assert_eq!(status, 0);
-    let rendered: Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(rendered["permission"].as_str(), Some("allow"));
-    let rewritten = rendered["updated_input"]["command"].as_str().unwrap();
-    assert!(rewritten.contains("hook reducer-runner"));
-    assert!(rewritten.contains("--family git"));
-    assert!(rewritten.contains("--kind git_status"));
+    assert_eq!(stdout.trim(), "{}");
 
     let (status, stdout, _stderr) = run_hook_raw(
         "cursor",
