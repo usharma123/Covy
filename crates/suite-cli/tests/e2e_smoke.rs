@@ -1164,7 +1164,7 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
             "memory",
             "prune",
             "--threshold",
-            "0.5",
+            "0.6",
             "--dry-run",
             "--json",
         ])
@@ -1175,7 +1175,7 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .stdout(predicate::str::contains("\"skipped_protected_count\":1"));
     suite_cmd()
         .env("HOME", home.path())
-        .args(["memory", "prune", "--threshold", "0.5", "--json"])
+        .args(["memory", "prune", "--threshold", "0.6", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"candidate_count\":1"))

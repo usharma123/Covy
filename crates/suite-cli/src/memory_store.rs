@@ -812,7 +812,16 @@ pub(crate) fn decay_memories(factor: f64) -> Result<MemoryDecayReport> {
     let conn = open_memory_db()?;
     let decayed_count = conn.execute(
         "UPDATE memories
-         SET weight = weight * ?1,
+         SET weight = weight * MAX(
+                 0.0,
+                 1.0 - ((1.0 - ?1) *
+                     CASE LOWER(importance)
+                         WHEN 'high' THEN 0.5
+                         WHEN 'low' THEN 2.0
+                         ELSE 1.0
+                     END
+                 )
+             ),
              updated_at_unix_ms = ?2
          WHERE LOWER(importance) != 'critical'",
         params![factor, timestamp_unix_ms()],
