@@ -1745,9 +1745,7 @@ fn write_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfi
 }
 
 fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let command = resolve_packet28_cli_command();
-    let root_arg = shell_escape(root.display().to_string());
-    let hook_command = format!("{command} hook claude --root \"{root_arg}\"");
+    let hook_command = generated_packet28_hook_command("claude", root);
     let mut config: BTreeMap<String, Value> = if path.exists() {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;
@@ -1980,9 +1978,7 @@ fn merge_claude_allowed_http_hook_url(
 }
 
 fn write_cursor_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let command = resolve_packet28_cli_command();
-    let root_arg = shell_escape(root.display().to_string());
-    let hook_command = format!("{command} hook cursor --root \"{root_arg}\"");
+    let hook_command = generated_packet28_hook_command("cursor", root);
     let packet28_hooks = json!({
         "beforeSubmitPrompt": [{
             "command": hook_command
@@ -2219,9 +2215,7 @@ fn write_windsurf_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result
 }
 
 fn write_windsurf_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
-    let command = resolve_packet28_cli_command();
-    let root_arg = shell_escape(root.display().to_string());
-    let hook_command = format!("{command} hook windsurf --root \"{root_arg}\"");
+    let hook_command = generated_packet28_hook_command("windsurf", root);
     let packet28_hooks = json!({
         "pre_user_prompt": [{
             "command": hook_command
@@ -2468,6 +2462,19 @@ fn shell_escape(value: String) -> String {
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('$', "\\$")
+        .replace('`', "\\`")
+}
+
+fn generated_packet28_hook_command(runtime: &str, root: &Path) -> String {
+    guarded_packet28_hook_command(&resolve_packet28_cli_command(), runtime, root)
+}
+
+fn guarded_packet28_hook_command(packet28_command: &str, runtime: &str, root: &Path) -> String {
+    let command_arg = shell_escape(packet28_command.to_string());
+    let root_arg = shell_escape(root.display().to_string());
+    format!(
+        "sh -c 'if [ -x \"$1\" ] || command -v \"$1\" >/dev/null 2>&1; then exec \"$1\" hook {runtime} --root \"$2\"; fi; exit 0' packet28-hook \"{command_arg}\" \"{root_arg}\""
+    )
 }
 
 fn resolve_packet28_mcp_command() -> String {
@@ -2760,6 +2767,30 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![http_url]
         );
+    }
+
+    #[test]
+    fn generated_packet28_hook_command_exits_zero_when_binary_is_missing() {
+        let dir = tempdir().unwrap();
+        for runtime in ["claude", "cursor", "windsurf"] {
+            let command = guarded_packet28_hook_command("/missing/Packet28", runtime, dir.path());
+            assert!(command.contains(&format!(" hook {runtime} ")));
+            assert!(command.contains("exit 0"));
+
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "generated {runtime} hook failed: status={:?} stderr={}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty());
+        }
     }
 
     #[test]
