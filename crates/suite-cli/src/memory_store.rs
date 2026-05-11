@@ -113,6 +113,7 @@ pub(crate) struct GraphStats {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct LocalStoreStats {
     pub(crate) memory_count: i64,
+    pub(crate) memory_embedding_count: i64,
     pub(crate) feedback_count: i64,
     pub(crate) concept_count: i64,
     pub(crate) relation_count: i64,
@@ -171,6 +172,23 @@ pub(crate) struct MemoryPruneReport {
     pub(crate) dry_run: bool,
     pub(crate) candidate_count: usize,
     pub(crate) deleted_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryEmbeddingRecord {
+    pub(crate) memory_id: i64,
+    pub(crate) model: String,
+    pub(crate) dimensions: usize,
+    pub(crate) embedding_json: String,
+    pub(crate) created_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryEmbedReport {
+    pub(crate) model: String,
+    pub(crate) dimensions: usize,
+    pub(crate) embedded_count: usize,
+    pub(crate) embeddings: Vec<MemoryEmbeddingRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -585,6 +603,52 @@ pub(crate) fn consolidate_memories(
         status: "consolidated".to_string(),
         keep_originals,
         consolidated_memory: Some(consolidated),
+    })
+}
+
+pub(crate) fn embed_memory(id: i64, dimensions: usize) -> Result<MemoryEmbeddingRecord> {
+    let conn = open_memory_db()?;
+    let memory = get_memory(&conn, id)?;
+    let embedding = deterministic_embedding(&memory.content, dimensions);
+    let embedding_json = serde_json::to_string(&embedding)?;
+    let now = timestamp_unix_ms();
+    let model = "packet28-local-hash-v1";
+    conn.execute(
+        "INSERT INTO memory_embeddings
+         (memory_id, model, dimensions, embedding_json, created_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(memory_id, model) DO UPDATE SET
+             dimensions = excluded.dimensions,
+             embedding_json = excluded.embedding_json,
+             created_at_unix_ms = excluded.created_at_unix_ms",
+        params![id, model, dimensions.max(1) as i64, embedding_json, now],
+    )?;
+    get_memory_embedding(&conn, id, model)
+}
+
+pub(crate) fn embed_memories(
+    id: Option<i64>,
+    all: bool,
+    dimensions: usize,
+) -> Result<MemoryEmbedReport> {
+    let dimensions = dimensions.clamp(8, 4096);
+    let embeddings = if let Some(id) = id {
+        vec![embed_memory(id, dimensions)?]
+    } else if all {
+        let memories = list_memories(10_000)?;
+        let mut records = Vec::with_capacity(memories.len());
+        for memory in memories {
+            records.push(embed_memory(memory.id, dimensions)?);
+        }
+        records
+    } else {
+        anyhow::bail!("pass a memory id or --all");
+    };
+    Ok(MemoryEmbedReport {
+        model: "packet28-local-hash-v1".to_string(),
+        dimensions,
+        embedded_count: embeddings.len(),
+        embeddings,
     })
 }
 
@@ -1133,6 +1197,7 @@ pub(crate) fn local_store_stats() -> Result<LocalStoreStats> {
     let conn = open_memory_db()?;
     Ok(LocalStoreStats {
         memory_count: table_count(&conn, "memories")?,
+        memory_embedding_count: table_count(&conn, "memory_embeddings")?,
         feedback_count: table_count(&conn, "feedback")?,
         concept_count: table_count(&conn, "concepts")?,
         relation_count: table_count(&conn, "relations")?,
@@ -1259,6 +1324,31 @@ fn merge_csv_field<'a>(values: impl Iterator<Item = &'a str>) -> Option<String> 
     (!merged.is_empty()).then(|| merged.join(","))
 }
 
+fn deterministic_embedding(content: &str, dimensions: usize) -> Vec<f64> {
+    let dimensions = dimensions.clamp(8, 4096);
+    let mut vector = vec![0.0_f64; dimensions];
+    for token in content
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        let mut hash = 14_695_981_039_346_656_037_u64;
+        for byte in token.to_ascii_lowercase().bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(1_099_511_628_211);
+        }
+        let index = (hash as usize) % dimensions;
+        vector[index] += 1.0;
+    }
+    let norm = vector.iter().map(|value| value * value).sum::<f64>().sqrt();
+    if norm > 0.0 {
+        for value in &mut vector {
+            *value /= norm;
+        }
+    }
+    vector
+}
+
 fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
     conn.query_row(
         "SELECT
@@ -1279,6 +1369,30 @@ fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
                 weight: row.get(7)?,
                 created_at_unix_ms: row.get(8)?,
                 updated_at_unix_ms: row.get(9)?,
+            })
+        },
+    )
+    .map_err(Into::into)
+}
+
+fn get_memory_embedding(
+    conn: &Connection,
+    memory_id: i64,
+    model: &str,
+) -> Result<MemoryEmbeddingRecord> {
+    conn.query_row(
+        "SELECT memory_id, model, dimensions, embedding_json, created_at_unix_ms
+         FROM memory_embeddings
+         WHERE memory_id = ?1 AND model = ?2",
+        params![memory_id, model],
+        |row| {
+            let dimensions: i64 = row.get(2)?;
+            Ok(MemoryEmbeddingRecord {
+                memory_id: row.get(0)?,
+                model: row.get(1)?,
+                dimensions: dimensions.max(0) as usize,
+                embedding_json: row.get(3)?,
+                created_at_unix_ms: row.get(4)?,
             })
         },
     )
@@ -1412,6 +1526,14 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             memory_id INTEGER NOT NULL,
             chunk_index INTEGER NOT NULL,
             content TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_embeddings (
+            memory_id INTEGER NOT NULL,
+            model TEXT NOT NULL,
+            dimensions INTEGER NOT NULL,
+            embedding_json TEXT NOT NULL,
+            created_at_unix_ms INTEGER NOT NULL,
+            PRIMARY KEY (memory_id, model)
         );
         CREATE TABLE IF NOT EXISTS concepts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

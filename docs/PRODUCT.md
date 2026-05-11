@@ -53,6 +53,7 @@ Packet28 memory topics
 Packet28 memory stats
 Packet28 memory health --topic project --consolidation-threshold 10
 Packet28 memory consolidate --topic project
+Packet28 memory embed --all --dimensions 384
 Packet28 memory decay --factor 0.95
 Packet28 memory prune --threshold 0.1 --dry-run
 Packet28 memory forget 1
@@ -97,6 +98,7 @@ MCP tools exposed by the product slice:
 - `packet28.memory_stats`
 - `packet28.memory_health`
 - `packet28.memory_consolidate`
+- `packet28.memory_embed`
 - `packet28.memory_decay`
 - `packet28.memory_prune`
 - `packet28.feedback_record`
@@ -149,6 +151,7 @@ The SQLite schema includes:
 - `reductions`
 - `memories`
 - `memory_chunks`
+- `memory_embeddings`
 - `memories_fts`
 - `concepts`
 - `concepts_fts`
@@ -166,5 +169,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Full ICM vector recall, wake-up extraction lifecycle automation, richer memoir containers/stats, cloud/import/upgrade, and web dashboard.
+- Full ICM vector hybrid recall, wake-up extraction lifecycle automation, richer memoir containers/stats, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.

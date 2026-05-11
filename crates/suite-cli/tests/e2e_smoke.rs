@@ -446,6 +446,23 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
 
     suite_cmd()
         .env("HOME", home.path())
+        .args(["memory", "embed", "--all", "--dimensions", "16", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"model\":\"packet28-local-hash-v1\"",
+        ))
+        .stdout(predicate::str::contains("\"dimensions\":16"))
+        .stdout(predicate::str::contains("\"embedded_count\":1"));
+    let embedding_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM memory_embeddings", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(embedding_rows, 1);
+
+    suite_cmd()
+        .env("HOME", home.path())
         .args([
             "memory",
             "health",
@@ -652,6 +669,24 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     let memory_stats = read_mcp_message_for_id(&mut stdout, 43);
     assert_eq!(
         memory_stats["result"]["structuredContent"]["memory_count"].as_i64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":65,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_embed",
+                "arguments":{"all":true, "dimensions":16}
+            }
+        }),
+    );
+    let memory_embed = read_mcp_message_for_id(&mut stdout, 65);
+    assert_eq!(
+        memory_embed["result"]["structuredContent"]["embedded_count"].as_u64(),
         Some(1)
     );
 

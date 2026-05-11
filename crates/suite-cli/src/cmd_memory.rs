@@ -2,9 +2,10 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::memory_store::{
-    consolidate_memories, decay_memories, forget_memories_by_topic, forget_memory, list_memories,
-    local_store_stats, memory_health, memory_topics, prune_memories, recall_memories,
-    store_memory_with_metadata, update_memory, MemoryStoreInput, MemoryUpdateInput,
+    consolidate_memories, decay_memories, embed_memories, forget_memories_by_topic, forget_memory,
+    list_memories, local_store_stats, memory_health, memory_topics, prune_memories,
+    recall_memories, store_memory_with_metadata, update_memory, MemoryStoreInput,
+    MemoryUpdateInput,
 };
 
 #[derive(Args)]
@@ -26,6 +27,7 @@ pub enum MemoryCommands {
     Decay(MemoryDecayArgs),
     Prune(MemoryPruneArgs),
     Consolidate(MemoryConsolidateArgs),
+    Embed(MemoryEmbedArgs),
 }
 
 #[derive(Args)]
@@ -164,6 +166,19 @@ pub struct MemoryConsolidateArgs {
     pub pretty: bool,
 }
 
+#[derive(Args)]
+pub struct MemoryEmbedArgs {
+    pub id: Option<i64>,
+    #[arg(long)]
+    pub all: bool,
+    #[arg(long, default_value_t = 384)]
+    pub dimensions: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
 pub fn run(args: MemoryArgs) -> Result<i32> {
     match args.command {
         MemoryCommands::Store(args) => run_store(args),
@@ -177,6 +192,7 @@ pub fn run(args: MemoryArgs) -> Result<i32> {
         MemoryCommands::Decay(args) => run_decay(args),
         MemoryCommands::Prune(args) => run_prune(args),
         MemoryCommands::Consolidate(args) => run_consolidate(args),
+        MemoryCommands::Embed(args) => run_embed(args),
     }
 }
 
@@ -342,6 +358,18 @@ fn run_consolidate(args: MemoryConsolidateArgs) -> Result<i32> {
         if let Some(memory) = report.consolidated_memory {
             println!("consolidated_memory={}", memory.id);
         }
+    }
+    Ok(0)
+}
+
+fn run_embed(args: MemoryEmbedArgs) -> Result<i32> {
+    let report = embed_memories(args.id, args.all, args.dimensions)?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+    } else {
+        println!("embedded_count={}", report.embedded_count);
+        println!("model={}", report.model);
+        println!("dimensions={}", report.dimensions);
     }
     Ok(0)
 }

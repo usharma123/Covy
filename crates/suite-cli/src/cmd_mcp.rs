@@ -61,13 +61,13 @@ use crate::cmd_mcp::transport::{
 use crate::cmd_wakeup::build_wakeup_report;
 use crate::memory_store::{
     add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
-    delete_concept, delete_feedback, export_graph, feedback_stats, forget_memories_by_topic,
-    forget_memory, graph_stats, inspect_graph, link_concepts, list_feedback, list_memories,
-    list_transcript_sessions, local_store_stats, memory_health, memory_topics, prune_memories,
-    recall_memories, record_feedback_with_metadata, refine_concept, search_concepts,
-    search_feedback, search_transcripts, show_transcript_session, store_memory_with_metadata,
-    transcript_stats, update_memory, FeedbackInput, MemoryStoreInput, MemoryUpdateInput,
-    TranscriptAppendInput,
+    delete_concept, delete_feedback, embed_memories, export_graph, feedback_stats,
+    forget_memories_by_topic, forget_memory, graph_stats, inspect_graph, link_concepts,
+    list_feedback, list_memories, list_transcript_sessions, local_store_stats, memory_health,
+    memory_topics, prune_memories, recall_memories, record_feedback_with_metadata, refine_concept,
+    search_concepts, search_feedback, search_transcripts, show_transcript_session,
+    store_memory_with_metadata, transcript_stats, update_memory, FeedbackInput, MemoryStoreInput,
+    MemoryUpdateInput, TranscriptAppendInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
@@ -831,6 +831,18 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.memory_embed",
+                    "description": "Create local deterministic memory embeddings in ~/.packet28/packet28.db.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type":"integer"},
+                            "all": {"type":"boolean"},
+                            "dimensions": {"type":"integer","minimum":8}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.feedback_record",
                     "description": "Record a local feedback correction in ~/.packet28/packet28.db.",
                     "inputSchema": {
@@ -1325,6 +1337,14 @@ fn handle_tool_call(
                 request.dry_run.unwrap_or(false),
             )?)?
         }
+        "packet28.memory_embed" => {
+            let request: MemoryEmbedToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(embed_memories(
+                request.id,
+                request.all.unwrap_or(false),
+                request.dimensions.unwrap_or(384),
+            )?)?
+        }
         "packet28.feedback_record" => {
             let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(record_feedback_with_metadata(FeedbackInput {
@@ -1523,6 +1543,13 @@ struct MemoryDecayToolArgs {
 struct MemoryPruneToolArgs {
     threshold: Option<f64>,
     dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryEmbedToolArgs {
+    id: Option<i64>,
+    all: Option<bool>,
+    dimensions: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1865,6 +1892,13 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 pruned {deleted} of {candidates} candidate memor(y/ies).")
         }
+        "packet28.memory_embed" => {
+            let count = payload
+                .get("embedded_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 embedded {count} memor(y/ies).")
+        }
         "packet28.feedback_record" => {
             let id = payload
                 .get("id")
@@ -1986,6 +2020,7 @@ mod tests {
             "packet28.handoff",
             "packet28.doctor",
             "packet28.memory_list",
+            "packet28.memory_embed",
             "packet28.feedback_search",
             "packet28.feedback_list",
             "packet28.feedback_apply",
