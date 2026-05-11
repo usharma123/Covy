@@ -30,6 +30,7 @@ pub mod cmd_graph;
 pub mod cmd_guard;
 pub mod cmd_hook;
 pub mod cmd_impact;
+pub mod cmd_init;
 pub mod cmd_learn;
 pub mod cmd_macos_swap;
 pub mod cmd_map;

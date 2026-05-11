@@ -68,3 +68,19 @@ Packet28 must not claim full Windsurf command interception until a test proves W
 2. Add `Packet28 doctor --agent windsurf --root .` with config, rules, daemon, index, and MCP handshake checks.
 3. Add top-level `rewrite` and `session` UX or aliases over the existing compact/rewrite/session implementation.
 4. Add additive SQLite memory, feedback, and graph storage without replacing the existing packet cache.
+
+## Implementation Status Update
+
+The product slice now covers the initial proof gaps above:
+
+- Windsurf setup writes `~/.codeium/windsurf/mcp_config.json`, and `Packet28 mcp smoke-test --from-config windsurf` verifies initialize plus `tools/list` from that generated config.
+- `Packet28 doctor --agent windsurf --root .` validates config shape, command resolution, root-preserving args, rules honesty, daemon/index health, and MCP smoke-test behavior.
+- Top-level `Packet28 rewrite ...` and `Packet28 session ...` alias the compact routing and session views.
+- `Packet28 init --agent windsurf --yes --root .` delegates to the existing setup path for the requested agent.
+- `Packet28 run` reduces git, cargo/Rust, npm/JavaScript, pytest/Python, file/search, Docker/infra, and GitHub CLI command output, then records local savings for `Packet28 gain`.
+- `Packet28 discover --root .` reports missed savings from fallback run records.
+- `Packet28 memory`, `Packet28 feedback`, and `Packet28 graph` use local SQLite at `~/.packet28/packet28.db`.
+- MCP exposes `packet28.reduce`, `packet28.rewrite`, `packet28.memory_store`, `packet28.memory_recall`, `packet28.feedback_record`, `packet28.graph_inspect`, `packet28.handoff`, and `packet28.doctor` in addition to the existing search, context, status, and capability tools.
+- `Packet28 dashboard --root .` summarizes local savings, missed savings, memory, feedback, graph, MCP calls, and integration health.
+
+Windsurf command interception remains unclaimed until a runtime-level hook test proves Windsurf invokes Packet28 around shell commands.

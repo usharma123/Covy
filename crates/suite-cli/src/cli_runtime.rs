@@ -7,10 +7,10 @@ use serde_json::{json, Value};
 use crate::{
     cmd_agent_prompt, cmd_build, cmd_common, cmd_compact, cmd_context, cmd_cover, cmd_daemon,
     cmd_dashboard, cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard,
-    cmd_hook, cmd_impact, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory,
-    cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack, BuildCommands, Cli,
-    Commands, ContextCommands, CoverCommands, DiffCommands, GuardCommands, MapCommands,
-    StackCommands, TestCommands,
+    cmd_hook, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp,
+    cmd_memory, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack,
+    BuildCommands, Cli, Commands, ContextCommands, CoverCommands, DiffCommands, GuardCommands,
+    MapCommands, StackCommands, TestCommands,
 };
 
 pub fn main_entry() {
@@ -96,6 +96,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Commands::Gain(args) => cmd_compact::run_gain_command(args),
         Commands::Compact(args) => cmd_compact::run(args),
         Commands::Rewrite(args) => cmd_compact::run_rewrite_command(args),
+        Commands::Session(args) => cmd_compact::run_session(args),
         Commands::Packet(packet) => match packet.command {
             cmd_packet::PacketCommands::Fetch(args) => cmd_packet::run_fetch(args),
         },
@@ -109,6 +110,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Commands::Daemon(daemon) => cmd_daemon::run(daemon),
         Commands::Doctor(args) => cmd_doctor::run(args),
         Commands::Setup(args) => cmd_setup::run(args),
+        Commands::Init(args) => cmd_init::run(args),
         Commands::Run(args) => cmd_run::run(args),
         Commands::Shell(args) => cmd_shell::run(args),
         Commands::Discover(args) => cmd_discover::run(args),
@@ -358,6 +360,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         Commands::Gain(_)
         | Commands::Compact(_)
         | Commands::Rewrite(_)
+        | Commands::Session(_)
         | Commands::Discover(_)
         | Commands::Learn(_) => None,
         Commands::Daemon(_)
@@ -370,6 +373,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Commands::Mcp(_)
         | Commands::Hook(_)
         | Commands::Setup(_)
+        | Commands::Init(_)
         | Commands::Run(_)
         | Commands::Shell(_)
         | Commands::Doctor(_) => None,

@@ -5,6 +5,7 @@
 Setup Windsurf:
 
 ```bash
+Packet28 init --agent windsurf --yes --root .
 Packet28 setup --runtime windsurf --yes --root .
 Packet28 doctor --agent windsurf --root .
 Packet28 mcp smoke-test --from-config windsurf
@@ -51,13 +52,15 @@ Packet28 graph inspect
 MCP tools exposed by the product slice:
 
 - `packet28.search`
-- `packet28.reduce` is represented by reducer-aware `Packet28 run` and will be added as a named MCP tool later.
-- `packet28.rewrite` is represented by `Packet28 rewrite` and will be added as a named MCP tool later.
+- `packet28.reduce`
+- `packet28.rewrite`
 - `packet28.memory_store`
 - `packet28.memory_recall`
 - `packet28.feedback_record`
 - `packet28.graph_inspect`
 - `packet28.prepare_handoff`
+- `packet28.handoff`
+- `packet28.doctor`
 - `packet28.task_status`
 - `packet28.capabilities`
 
@@ -97,5 +100,4 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 
 - Windsurf hook command interception is not guaranteed and is not claimed.
 - Memory recall is keyword/LIKE search for this MVP; vector search can be added later.
-- `packet28.reduce`, `packet28.rewrite`, `packet28.handoff`, and `packet28.doctor` named MCP tools remain follow-up aliases over existing CLI/MCP behavior.
 - No telemetry, cloud sync, signup, API key, Redis, Qdrant, or Postgres dependency is used.

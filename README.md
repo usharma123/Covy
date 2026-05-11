@@ -291,6 +291,7 @@ Packet28 agent-prompt         Generate agent instruction fragments
 Packet28 mcp serve|proxy      Expose Packet28 as an MCP server or proxy upstream MCP servers
 Packet28 daemon               Daemon lifecycle and task management
 Packet28 setup                Configure Claude/Cursor/Codex/Windsurf integration files
+Packet28 init --agent windsurf --yes --root .
 Packet28 doctor --agent windsurf --root .
 Packet28 mcp smoke-test --from-config windsurf
 Packet28 rewrite "git status --short" --json
@@ -367,6 +368,7 @@ Three entry points for agent integration:
 
 ```bash
 Packet28 setup --runtime all --yes
+Packet28 init --agent windsurf --yes --root .
 ```
 
 It updates runtime config where supported (`.mcp.json`, `.cursor/mcp.json`, `~/.codex/config.toml`, `~/.codeium/windsurf/mcp_config.json`), installs repo-local hooks for Claude/Cursor/Codex/Windsurf, writes runtime instruction fragments, and verifies the daemon plus regex trigram index state. Existing JSON/TOML config is preserved: setup refuses to overwrite invalid config so users can fix the file explicitly instead of silently losing configuration.
@@ -374,6 +376,8 @@ It updates runtime config where supported (`.mcp.json`, `.cursor/mcp.json`, `~/.
 Packet28's MCP surface includes:
 
 - Tools for slim reducer search, region reads, state writes, handoff assembly, and stored artifact fetches
+- Compatibility tools for command reduction, rewrite planning, handoff, and doctor checks: `packet28.reduce`, `packet28.rewrite`, `packet28.handoff`, and `packet28.doctor`
+- Local memory, feedback, and graph tools: `packet28.memory_store`, `packet28.memory_recall`, `packet28.feedback_record`, and `packet28.graph_inspect`
 - Prompt entry points such as `packet28.start_task`, `packet28.continue_task`, and `packet28.summarize_current_context`
 - Task resources plus ergonomic current-task aliases like `packet28://current/task` and `packet28://current/brief`
 

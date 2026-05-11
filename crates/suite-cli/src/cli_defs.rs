@@ -3,8 +3,8 @@ use clap::{Args, Parser, Subcommand};
 use crate::{
     cmd_agent_prompt, cmd_build, cmd_compact, cmd_context, cmd_cover, cmd_daemon, cmd_dashboard,
     cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook, cmd_impact,
-    cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet, cmd_proxy,
-    cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack,
+    cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet,
+    cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack,
 };
 
 #[derive(Parser)]
@@ -61,6 +61,8 @@ pub enum Commands {
     Compact(cmd_compact::CompactArgs),
     /// Plan how Packet28 would reduce or pass through a command
     Rewrite(cmd_compact::RewriteArgs),
+    /// Inspect Packet28 task sessions
+    Session(cmd_compact::SessionArgs),
     /// Packet artifact utilities
     Packet(cmd_packet::PacketArgs),
     /// Local SQLite memory commands
@@ -83,6 +85,8 @@ pub enum Commands {
     Doctor(cmd_doctor::DoctorArgs),
     /// Configure Packet28 for your agent runtimes (Claude Code, Cursor, Codex, Windsurf)
     Setup(cmd_setup::SetupArgs),
+    /// Initialize Packet28 for a specific agent runtime
+    Init(cmd_init::InitArgs),
     /// Launch an agent command through the Packet28 runtime backend
     Run(cmd_run::RunArgs),
     /// Launch a shell or command with the instruction virtualizer preloaded

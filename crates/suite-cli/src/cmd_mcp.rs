@@ -59,6 +59,9 @@ use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
 use crate::memory_store::{inspect_graph, recall_memories, record_feedback, store_memory};
+use crate::route_registry::{
+    build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
+};
 use crate::runtime_integrations::windsurf;
 
 #[derive(Args)]
@@ -642,6 +645,56 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.handoff",
+                    "description": "Compatibility alias for packet28.prepare_handoff.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "query": {"type":"string"},
+                            "response_mode": {"type":"string","enum":["slim","full"]}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.reduce",
+                    "description": "Reduce command stdout/stderr into a compact Packet28 packet without executing the command.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["command"],
+                        "properties": {
+                            "command": {"type":"string"},
+                            "stdout": {"type":"string"},
+                            "stderr": {"type":"string"},
+                            "exit_code": {"type":"integer"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.rewrite",
+                    "description": "Plan the Packet28 reducer/native-tool/proxy rewrite for a shell command.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["command"],
+                        "properties": {
+                            "command": {"type":"string"},
+                            "task_id": {"type":"string"},
+                            "session_id": {"type":"string"},
+                            "cwd": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.doctor",
+                    "description": "Run Packet28 doctor and return its JSON health report.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "agent": {"type":"string"}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.memory_store",
                     "description": "Store a local Packet28 memory in ~/.packet28/packet28.db.",
                     "inputSchema": {
@@ -846,17 +899,23 @@ fn handle_tool_call(
             track_task(session, root, &request.task_id)?;
             handle_packet28_fetch_context(root, request)?
         }
-        "packet28.prepare_handoff" => {
+        "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                None,
-                "packet28.prepare_handoff",
-            )?;
+            request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
             track_task(session, root, &request.task_id)?;
             handle_packet28_prepare_handoff(root, request)?
+        }
+        "packet28.reduce" => {
+            let request: ReduceToolArgs = serde_json::from_value(arguments)?;
+            handle_packet28_reduce(request)?
+        }
+        "packet28.rewrite" => {
+            let request: RewriteToolArgs = serde_json::from_value(arguments)?;
+            handle_packet28_rewrite(root, request)
+        }
+        "packet28.doctor" => {
+            let request: DoctorToolArgs = serde_json::from_value(arguments)?;
+            handle_packet28_doctor(root, request)?
         }
         "packet28.write_intention" => {
             let mut request: Packet28WriteIntentionArgs = serde_json::from_value(arguments)?;
@@ -948,6 +1007,100 @@ struct GraphInspectToolArgs {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReduceToolArgs {
+    command: String,
+    stdout: Option<String>,
+    stderr: Option<String>,
+    exit_code: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RewriteToolArgs {
+    command: String,
+    task_id: Option<String>,
+    session_id: Option<String>,
+    cwd: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoctorToolArgs {
+    agent: Option<String>,
+}
+
+fn handle_packet28_reduce(request: ReduceToolArgs) -> Result<Value> {
+    let spec = packet28_reducer_core::classify_command(&request.command)
+        .ok_or_else(|| anyhow!("unsupported command for packet28.reduce"))?;
+    let reduction = packet28_reducer_core::reduce_command_output(
+        &spec,
+        request.stdout.as_deref().unwrap_or_default(),
+        request.stderr.as_deref().unwrap_or_default(),
+        request.exit_code.unwrap_or(0),
+    )?;
+    Ok(json!({
+        "command": request.command,
+        "reduction": reduction,
+        "reducer_family": spec.family,
+        "reducer_kind": spec.canonical_kind,
+    }))
+}
+
+fn handle_packet28_rewrite(root: &Path, request: RewriteToolArgs) -> Value {
+    let cwd = request
+        .cwd
+        .clone()
+        .unwrap_or_else(|| root.display().to_string());
+    let decision = decide_command_route_with_cwd(&request.command, Path::new(&cwd));
+    let task_id = request.task_id.as_deref().unwrap_or("packet28-mcp-rewrite");
+    let rewritten = build_route_rewrite(
+        root,
+        task_id,
+        request.session_id.as_deref(),
+        &cwd,
+        &decision,
+    );
+    let native_tool = decision.native_tool.as_ref().map(|tool| match tool.kind {
+        NativeToolKind::Tree => "tree",
+        NativeToolKind::Read => "read",
+        NativeToolKind::Grep => "grep",
+        NativeToolKind::Env => "env",
+    });
+    json!({
+        "command": request.command,
+        "route": match decision.kind {
+            RouteKind::ReducerRewrite => "reducer_rewrite",
+            RouteKind::NativeTool => "native_tool",
+            RouteKind::ProxyPassthrough => "proxy_passthrough",
+            RouteKind::RawPassthrough => "raw_passthrough",
+        },
+        "reason": decision.reason,
+        "env_assignments": decision.env_assignments,
+        "native_tool": native_tool,
+        "rewritten_command": rewritten,
+        "reducer_family": decision.reducer_spec.as_ref().map(|spec| spec.family.clone()),
+        "reducer_kind": decision
+            .reducer_spec
+            .as_ref()
+            .map(|spec| spec.canonical_kind.clone()),
+    })
+}
+
+fn handle_packet28_doctor(root: &Path, request: DoctorToolArgs) -> Result<Value> {
+    let mut command = Command::new(std::env::current_exe()?);
+    command.arg("doctor").arg("--root").arg(root).arg("--json");
+    if let Some(agent) = request.agent {
+        command.arg("--agent").arg(agent);
+    }
+    let output = command.output().context("failed to run Packet28 doctor")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Packet28 doctor failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    serde_json::from_slice(&output.stdout).context("Packet28 doctor did not return JSON")
+}
+
 fn capabilities_payload() -> Value {
     // Keep this payload minimal — it is injected into every MCP init and
     // counts against the agent's context budget.  Only include fields the
@@ -993,7 +1146,7 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or("unknown");
             format!("Packet28 fetched broker context artifact {artifact_id}.")
         }
-        "packet28.prepare_handoff" => {
+        "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
                 .and_then(Value::as_bool)
@@ -1008,6 +1161,15 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 format!("Packet28 did not prepare a handoff: {reason}")
             }
         }
+        "packet28.reduce" => "Packet28 command reduction.".to_string(),
+        "packet28.rewrite" => {
+            let route = payload
+                .get("route")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!("Packet28 rewrite route: {route}.")
+        }
+        "packet28.doctor" => "Packet28 doctor report.".to_string(),
         "packet28.memory_store" => {
             let id = payload
                 .get("id")
@@ -1053,5 +1215,69 @@ mod tests {
 
         assert!(props.contains_key("query"));
         assert!(!props.contains_key("task_id"));
+    }
+
+    #[test]
+    fn tools_list_exposes_product_compatibility_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let payload = handle_method(root.path(), &session, "tools/list", Value::Null).unwrap();
+        let tool_names = payload["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        for required in [
+            "packet28.reduce",
+            "packet28.rewrite",
+            "packet28.handoff",
+            "packet28.doctor",
+        ] {
+            assert!(
+                tool_names.contains(&required),
+                "{required} missing from tools/list"
+            );
+        }
+    }
+
+    #[test]
+    fn reduce_and_rewrite_tools_return_structured_results() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let reduce = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.reduce",
+                "arguments": {
+                    "command": "git status --short",
+                    "stdout": " M src/lib.rs\n",
+                    "exit_code": 0
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            reduce["structuredContent"]["reducer_family"],
+            Value::String("git".to_string())
+        );
+
+        let rewrite = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.rewrite",
+                "arguments": {
+                    "command": "git status --short"
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            rewrite["structuredContent"]["route"],
+            Value::String("reducer_rewrite".to_string())
+        );
     }
 }

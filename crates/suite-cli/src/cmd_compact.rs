@@ -834,7 +834,7 @@ fn run_discover(args: AnalyticsArgs) -> Result<i32> {
     Ok(0)
 }
 
-fn run_session(args: SessionArgs) -> Result<i32> {
+pub fn run_session(args: SessionArgs) -> Result<i32> {
     let root = resolve_root(&args.root)?;
     let registry = load_task_registry(&root)?;
     let mut sessions = Vec::<SessionItem>::new();
