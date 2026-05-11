@@ -141,6 +141,7 @@ trigger: always_on\n\
 # Packet28 Integration\n\
 \n\
 - Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
+- Windsurf command rewrite is not guaranteed; use Packet28 MCP tools and rules as the verified integration surface unless `Packet28 doctor --agent windsurf` reports a stronger tier.\n\
 - Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
 - For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` when compact native read/list output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
 - Use `packet28.write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\

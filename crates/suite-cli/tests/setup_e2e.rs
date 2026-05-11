@@ -9,10 +9,18 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 #[cfg(unix)]
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+#[cfg(unix)]
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use tempfile::TempDir;
 
 fn suite_cmd() -> Command {
     assert_cmd::cargo::cargo_bin_cmd!("Packet28")
+}
+
+#[cfg(unix)]
+fn setup_e2e_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
 }
 
 #[cfg(unix)]
@@ -374,6 +382,7 @@ fn test_setup_codex_writes_mcp_and_agents_without_hooks() {
 #[test]
 #[cfg(unix)]
 fn test_setup_windsurf_writes_rules_hooks_and_mcp() {
+    let _guard = setup_e2e_lock();
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
     fs::create_dir_all(home.path().join(".codeium").join("windsurf")).unwrap();
@@ -406,11 +415,20 @@ fn test_setup_windsurf_writes_rules_hooks_and_mcp() {
         .join("windsurf")
         .join("mcp_config.json")
         .exists());
+    let rules = fs::read_to_string(
+        root.path()
+            .join(".windsurf")
+            .join("rules")
+            .join("packet28.md"),
+    )
+    .unwrap();
+    assert!(rules.contains("Windsurf command rewrite is not guaranteed"));
 }
 
 #[test]
 #[cfg(unix)]
 fn test_windsurf_generated_mcp_config_smoke_test() {
+    let _guard = setup_e2e_lock();
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
     let bin_dir = TempDir::new().unwrap();
@@ -446,6 +464,62 @@ fn test_windsurf_generated_mcp_config_smoke_test() {
         .assert()
         .success()
         .stdout(predicate::str::contains("MCP smoke test ok"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_windsurf_doctor_passes_with_generated_mcp_config() {
+    let _guard = setup_e2e_lock();
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    write_fake_packet28_mcp_binary(&bin_dir.path().join("packet28-mcp"));
+    fs::create_dir_all(home.path().join(".codeium").join("windsurf")).unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", bin_dir.path().display()),
+        )
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "windsurf",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", bin_dir.path().display()),
+        )
+        .args([
+            "doctor",
+            "--agent",
+            "windsurf",
+            "--root",
+            root.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("windsurf_mcp_smoke"))
+        .stdout(predicate::str::contains("windsurf_rewrite_support"));
 
     suite_cmd()
         .current_dir(root.path())

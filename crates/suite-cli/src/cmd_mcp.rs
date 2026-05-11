@@ -174,8 +174,7 @@ fn run_proxy(args: McpProxyArgs) -> Result<i32> {
 }
 
 fn run_smoke_test(args: McpSmokeTestArgs) -> Result<i32> {
-    let server = load_agent_mcp_server(&args.from_config)?;
-    let report = smoke_test_mcp_server(&server)?;
+    let report = smoke_test_agent_config(&args.from_config)?;
     println!(
         "MCP smoke test ok: server={} tools={}",
         report.server_name, report.tool_count
@@ -183,9 +182,14 @@ fn run_smoke_test(args: McpSmokeTestArgs) -> Result<i32> {
     Ok(0)
 }
 
-struct McpSmokeReport {
-    server_name: String,
-    tool_count: usize,
+pub(crate) struct McpSmokeReport {
+    pub(crate) server_name: String,
+    pub(crate) tool_count: usize,
+}
+
+pub(crate) fn smoke_test_agent_config(agent: &str) -> Result<McpSmokeReport> {
+    let server = load_agent_mcp_server(agent)?;
+    smoke_test_mcp_server(&server)
 }
 
 fn load_agent_mcp_server(agent: &str) -> Result<McpProxyServerConfig> {

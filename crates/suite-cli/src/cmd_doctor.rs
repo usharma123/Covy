@@ -19,6 +19,10 @@ pub struct DoctorArgs {
     #[arg(long, default_value = ".")]
     pub root: String,
 
+    /// Limit runtime-specific checks to one agent (currently: windsurf)
+    #[arg(long)]
+    pub agent: Option<String>,
+
     #[arg(long)]
     pub json: bool,
 
@@ -296,7 +300,7 @@ fn wait_for_handoff_ready(
 
 pub fn run(args: DoctorArgs) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
-    let report = build_report(&root);
+    let report = build_report(&root, args.agent.as_deref());
     if args.json {
         let text = if args.pretty {
             serde_json::to_string_pretty(&report)?
@@ -310,7 +314,10 @@ pub fn run(args: DoctorArgs) -> Result<i32> {
     Ok(if report.ok { 0 } else { 1 })
 }
 
-fn build_report(root: &Path) -> DoctorReport {
+fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
+    if matches!(agent, Some("windsurf")) {
+        return build_windsurf_report(root);
+    }
     let daemon = check_daemon(root);
     let index = check_index(root);
     let mcp_config = collect_mcp_config_checks(root);
@@ -339,6 +346,61 @@ fn build_report(root: &Path) -> DoctorReport {
         reducer_round_trip: mcp_round_trip.reducer_round_trip,
         push_notifications: mcp_round_trip.push_notifications,
         handoff_round_trip: mcp_round_trip.handoff_round_trip,
+        checks,
+    }
+}
+
+fn build_windsurf_report(root: &Path) -> DoctorReport {
+    let daemon = check_daemon(root);
+    let index = check_index(root);
+    let config_path = windsurf_mcp_config_path();
+    let mcp_config = vec![inspect_mcp_config(&config_path)];
+    let config_shape = check_windsurf_config_shape(root, &config_path);
+    let rules = check_windsurf_rules(root);
+    let handshake = check_windsurf_mcp_smoke();
+    let reducer_round_trip = DoctorCheck {
+        name: "windsurf_rewrite_support",
+        ok: true,
+        required: false,
+        detail: "guidance-only: Packet28 does not claim Windsurf command interception without a real interception test".to_string(),
+    };
+    let push_notifications = DoctorCheck {
+        name: "push_notifications",
+        ok: true,
+        required: false,
+        detail: "not required for Windsurf MCP config verification".to_string(),
+    };
+    let handoff_round_trip = DoctorCheck {
+        name: "handoff_round_trip",
+        ok: true,
+        required: false,
+        detail: "not required for Windsurf MCP config verification".to_string(),
+    };
+    let checks = vec![
+        daemon.clone(),
+        index.clone(),
+        summarize_mcp_config(root, &mcp_config),
+        config_shape,
+        rules,
+        handshake.clone(),
+        reducer_round_trip.clone(),
+        push_notifications.clone(),
+        handoff_round_trip.clone(),
+    ];
+    let ok = checks
+        .iter()
+        .filter(|check| check.required)
+        .all(|check| check.ok);
+    DoctorReport {
+        root: root.display().to_string(),
+        ok,
+        daemon,
+        index,
+        mcp_config,
+        handshake,
+        reducer_round_trip,
+        push_notifications,
+        handoff_round_trip,
         checks,
     }
 }
@@ -432,6 +494,144 @@ fn collect_mcp_config_checks(root: &Path) -> Vec<McpConfigCheck> {
         .into_iter()
         .map(|path| inspect_mcp_config(&path))
         .collect()
+}
+
+fn windsurf_mcp_config_path() -> std::path::PathBuf {
+    dirs_home()
+        .join(".codeium")
+        .join("windsurf")
+        .join("mcp_config.json")
+}
+
+fn dirs_home() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+}
+
+fn check_windsurf_config_shape(root: &Path, path: &Path) -> DoctorCheck {
+    let result = (|| -> Result<String> {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        let value: Value = serde_json::from_str(&content)
+            .with_context(|| format!("invalid MCP config '{}'", path.display()))?;
+        let server = value
+            .get("mcpServers")
+            .and_then(Value::as_object)
+            .and_then(|servers| servers.get("packet28"))
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("mcpServers.packet28 missing"))?;
+        let command = server
+            .get("command")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("mcpServers.packet28.command missing"))?;
+        if !command_resolves(command) {
+            return Err(anyhow!("MCP command '{command}' does not resolve"));
+        }
+        let args = server
+            .get("args")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("mcpServers.packet28.args missing"))?;
+        let arg_strings = args
+            .iter()
+            .map(|arg| {
+                arg.as_str()
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| anyhow!("mcpServers.packet28.args must be strings"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expected_root = root.display().to_string();
+        let root_arg_ok = arg_strings
+            .windows(2)
+            .any(|window| window[0] == "--root" && window[1] == expected_root);
+        if !root_arg_ok {
+            return Err(anyhow!(
+                "mcpServers.packet28.args must preserve `--root {expected_root}`"
+            ));
+        }
+        Ok(format!(
+            "command resolves and args preserve repo root ({})",
+            path.display()
+        ))
+    })();
+
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "windsurf_config_shape",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(err) => DoctorCheck {
+            name: "windsurf_config_shape",
+            ok: false,
+            required: true,
+            detail: err.to_string(),
+        },
+    }
+}
+
+fn command_resolves(command: &str) -> bool {
+    let path = Path::new(command);
+    if path.components().count() > 1 || path.is_absolute() {
+        return path.is_file();
+    }
+    std::process::Command::new("which")
+        .arg(command)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn check_windsurf_rules(root: &Path) -> DoctorCheck {
+    let path = root.join(".windsurf").join("rules").join("packet28.md");
+    let result = (|| -> Result<String> {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        if !content.contains("Windsurf command rewrite is not guaranteed") {
+            return Err(anyhow!(
+                "rules do not state Windsurf command rewrite limitations"
+            ));
+        }
+        Ok(format!("rules present at {}", path.display()))
+    })();
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "windsurf_rules",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(err) => DoctorCheck {
+            name: "windsurf_rules",
+            ok: false,
+            required: true,
+            detail: err.to_string(),
+        },
+    }
+}
+
+fn check_windsurf_mcp_smoke() -> DoctorCheck {
+    match crate::cmd_mcp::smoke_test_agent_config("windsurf") {
+        Ok(report) => DoctorCheck {
+            name: "windsurf_mcp_smoke",
+            ok: true,
+            required: true,
+            detail: format!(
+                "initialize/tools-list ok server={} tools={}",
+                report.server_name, report.tool_count
+            ),
+        },
+        Err(err) => DoctorCheck {
+            name: "windsurf_mcp_smoke",
+            ok: false,
+            required: true,
+            detail: err.to_string(),
+        },
+    }
 }
 
 fn inspect_mcp_config(path: &Path) -> McpConfigCheck {
