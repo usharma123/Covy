@@ -5,7 +5,11 @@ use clap::Args;
 use packet28_daemon_core::load_task_registry;
 use serde::Serialize;
 
-use crate::memory_store::{inspect_graph, list_memories, local_store_stats, search_feedback};
+use crate::memory_store::{
+    feedback_stats, graph_stats, list_memories, local_store_stats, memory_health, memory_topics,
+    transcript_stats, FeedbackStats, GraphStats, MemoryHealthReport, MemoryTopicStats,
+    TranscriptStats,
+};
 use crate::savings_analytics::load_run_savings;
 
 #[derive(Args)]
@@ -27,9 +31,14 @@ struct DashboardReport {
     missed_savings: Vec<String>,
     memory_count: i64,
     recent_memories: Vec<String>,
+    memory_topics: Vec<MemoryTopicStats>,
+    memory_health: MemoryHealthReport,
     graph_concepts: usize,
     graph_relations: usize,
+    graph_stats: GraphStats,
     feedback_corrections: i64,
+    feedback_stats: FeedbackStats,
+    transcript_stats: TranscriptStats,
     mcp_call_history: i64,
     hook_event_history: i64,
     pending_extractions: i64,
@@ -80,8 +89,11 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         .into_iter()
         .map(|memory| memory.content)
         .collect::<Vec<_>>();
-    let graph = inspect_graph(100)?;
-    let feedback_corrections = search_feedback("", 100)?.len() as i64;
+    let topics = memory_topics()?;
+    let health = memory_health(None, 30, 10)?;
+    let graph = graph_stats()?;
+    let feedback = feedback_stats()?;
+    let transcripts = transcript_stats()?;
     let windsurf_rules = root.join(".windsurf").join("rules").join("packet28.md");
     let windsurf_status = if windsurf_rules.exists() {
         "rules_present"
@@ -103,9 +115,14 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         missed_savings,
         memory_count: store_stats.memory_count,
         recent_memories,
-        graph_concepts: graph.concepts.len(),
-        graph_relations: graph.relations.len(),
-        feedback_corrections,
+        memory_topics: topics,
+        memory_health: health,
+        graph_concepts: graph.concept_count as usize,
+        graph_relations: graph.relation_count as usize,
+        graph_stats: graph,
+        feedback_corrections: feedback.feedback_count,
+        feedback_stats: feedback,
+        transcript_stats: transcripts,
         mcp_call_history: store_stats.mcp_call_count,
         hook_event_history: store_stats.hook_event_count,
         pending_extractions: store_stats.pending_extraction_count,
@@ -123,9 +140,18 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         println!("commands_reduced={}", report.commands_reduced);
         println!("sessions={}", report.sessions);
         println!("memory_count={}", report.memory_count);
+        println!("memory_topics={}", report.memory_topics.len());
+        println!(
+            "topics_needing_consolidation={}",
+            report.memory_health.topics_needing_consolidation
+        );
         println!("graph_concepts={}", report.graph_concepts);
         println!("graph_relations={}", report.graph_relations);
         println!("feedback_corrections={}", report.feedback_corrections);
+        println!(
+            "transcript_messages={}",
+            report.transcript_stats.message_count
+        );
         println!("mcp_call_history={}", report.mcp_call_history);
         println!("hook_event_history={}", report.hook_event_history);
         println!("pending_extractions={}", report.pending_extractions);

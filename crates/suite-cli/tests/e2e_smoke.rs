@@ -3440,6 +3440,11 @@ fn test_dashboard_shows_local_product_metrics() {
         .success();
     suite_cmd()
         .env("HOME", home.path())
+        .args(["transcript", "append", "dashboard transcript context"])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
         .args(["feedback", "record", "dashboard", "shows feedback"])
         .assert()
         .success();
@@ -3462,9 +3467,27 @@ fn test_dashboard_shows_local_product_metrics() {
         .success()
         .stdout(predicate::str::contains("\"commands_reduced\":1"))
         .stdout(predicate::str::contains("\"memory_count\":1"))
+        .stdout(predicate::str::contains("\"memory_topics\""))
+        .stdout(predicate::str::contains("\"topic\":\"general\""))
+        .stdout(predicate::str::contains("\"memory_health\""))
+        .stdout(predicate::str::contains("\"total_memories\":1"))
         .stdout(predicate::str::contains("\"feedback_corrections\":1"))
+        .stdout(predicate::str::contains("\"feedback_stats\""))
+        .stdout(predicate::str::contains("\"transcript_stats\""))
+        .stdout(predicate::str::contains("\"message_count\":1"))
         .stdout(predicate::str::contains("\"graph_concepts\""))
+        .stdout(predicate::str::contains("\"graph_stats\""))
         .stdout(predicate::str::contains("\"windsurf_doctor_status\""));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["dashboard", "--root", root.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("memory_topics=1"))
+        .stdout(predicate::str::contains("topics_needing_consolidation=0"))
+        .stdout(predicate::str::contains("transcript_messages=1"));
 }
 
 #[test]
