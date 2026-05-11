@@ -2021,10 +2021,11 @@ fn test_hook_records_local_event_log_stats_and_dashboard_count() {
         "hook_event_name":"PostToolUse",
         "task_id":"hook-telemetry-task",
         "session_id":"hook-telemetry-session",
+        "project":"coverage-hook",
         "matcher":"Bash",
         "tool_name":"Bash",
         "tool_input":{"command":"git status --short"},
-        "tool_response":{"stdout":" M src/lib.rs\n","stderr":"","exit_code":0}
+        "tool_response":{"stdout":"- Hook auto extraction stores post tool facts\n","stderr":"","exit_code":0}
     });
 
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
@@ -2075,6 +2076,38 @@ fn test_hook_records_local_event_log_stats_and_dashboard_count() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"hook_event_history\":1"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["memory", "pending", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"pending_extraction_count\":1"));
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["memory", "pending", "process", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"extracted_count\":1"))
+        .stdout(predicate::str::contains("\"deleted_count\":1"));
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "recall",
+            "post tool facts",
+            "--project",
+            "coverage-hook",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "auto extraction stores post tool facts",
+        ));
 
     suite_cmd()
         .current_dir(root.path())

@@ -18,7 +18,10 @@ use packet28_reducer_core::{
 };
 use serde_json::{json, Value};
 
-use crate::memory_store::{hook_event_stats, list_hook_events, record_hook_event, HookEventInput};
+use crate::memory_store::{
+    enqueue_pending_extraction, hook_event_stats, list_hook_events, record_hook_event,
+    HookEventInput, PendingExtractionInput,
+};
 
 #[derive(Args)]
 pub struct HookArgs {
@@ -223,6 +226,7 @@ fn process_claude_hook_payload(
         matcher: matcher.as_deref(),
         payload_json: &serde_json::to_string(payload)?,
     })?;
+    let _ = enqueue_hook_pending_extraction("claude", root, event_kind, payload);
     Ok(ClaudeHookOutcome {
         exit_code: if response.block_stop { 2 } else { 0 },
         body: render_hook_output(event_kind, rewrite, &response)?,
@@ -274,6 +278,12 @@ fn run_runtime_hook(args: RuntimeHookArgs, runtime: ExternalHookRuntime) -> Resu
         matcher: matcher.as_deref(),
         payload_json: &serde_json::to_string(&payload)?,
     })?;
+    let _ = enqueue_hook_pending_extraction(
+        external_runtime_name(runtime),
+        &root,
+        event_kind,
+        &payload,
+    );
     Ok(0)
 }
 
@@ -310,6 +320,73 @@ fn run_hook_stats(args: HookStatsArgs) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+fn enqueue_hook_pending_extraction(
+    runtime: &str,
+    root: &Path,
+    event_kind: HookEventKind,
+    payload: &Value,
+) -> Result<()> {
+    if !matches!(
+        event_kind,
+        HookEventKind::PostToolUse | HookEventKind::PostToolUseFailure
+    ) {
+        return Ok(());
+    }
+    let raw_output = hook_pending_raw_output(payload, event_kind);
+    let raw_output = raw_output.trim();
+    if raw_output.is_empty() {
+        return Ok(());
+    }
+    let raw_output = compact_text(raw_output, 8 * 1024);
+    enqueue_pending_extraction(PendingExtractionInput {
+        project: Some(&hook_project_name(root, payload)),
+        tool_name: hook_tool_name(runtime, payload).as_deref(),
+        raw_output: &raw_output,
+    })?;
+    Ok(())
+}
+
+fn hook_pending_raw_output(payload: &Value, event_kind: HookEventKind) -> String {
+    match event_kind {
+        HookEventKind::PostToolUse => payload
+            .get("tool_response")
+            .map(hook_output_text)
+            .or_else(|| json_string(payload, "output"))
+            .or_else(|| json_string(payload, "stdout"))
+            .or_else(|| json_string(payload, "result"))
+            .unwrap_or_default(),
+        HookEventKind::PostToolUseFailure => {
+            json_string(payload, "error").unwrap_or_else(|| hook_output_text(payload))
+        }
+        _ => String::new(),
+    }
+}
+
+fn hook_project_name(root: &Path, payload: &Value) -> String {
+    json_string(payload, "project")
+        .or_else(|| {
+            json_string(payload, "cwd").and_then(|cwd| {
+                Path::new(&cwd)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+        })
+        .or_else(|| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "project".to_string())
+}
+
+fn hook_tool_name(runtime: &str, payload: &Value) -> Option<String> {
+    json_string(payload, "tool_name")
+        .or_else(|| json_string(payload, "tool"))
+        .or_else(|| json_string(payload, "name"))
+        .or_else(|| json_string(payload, "command").map(|_| "Bash".to_string()))
+        .or_else(|| Some(runtime.to_string()))
 }
 
 #[derive(Clone)]
