@@ -162,6 +162,21 @@ fn test_run_reduces_git_status() {
         .success()
         .stdout(predicate::str::contains("\"invocation_count\":1"))
         .stdout(predicate::str::contains("run_reducer:git"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "csv",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kind,name,value"))
+        .stdout(predicate::str::contains("summary,invocation_count,1"))
+        .stdout(predicate::str::contains("route,run_reducer:git,1"));
 }
 
 #[test]

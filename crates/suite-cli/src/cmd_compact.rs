@@ -218,6 +218,9 @@ pub struct AnalyticsArgs {
     pub task_id: Option<String>,
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
+    /// Output format for analytics commands (text, json, csv)
+    #[arg(long, default_value = "text")]
+    pub format: String,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -789,8 +792,11 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         .raw_est_tokens
         .saturating_sub(summary.reduced_est_tokens);
     summary.savings_pct = pct_saved(summary.raw_est_tokens, summary.reduced_est_tokens);
-    if args.json {
+    let format = args.format.trim().to_ascii_lowercase();
+    if args.json || format == "json" {
         crate::cmd_common::emit_json(&serde_json::to_value(summary)?, args.pretty)?;
+    } else if format == "csv" {
+        print_gain_csv(&summary);
     } else {
         println!("tasks={}", summary.task_count);
         println!("invocations={}", summary.invocation_count);
@@ -803,6 +809,27 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+fn print_gain_csv(summary: &GainSummary) {
+    println!("kind,name,value");
+    println!("summary,task_count,{}", summary.task_count);
+    println!("summary,invocation_count,{}", summary.invocation_count);
+    println!("summary,raw_est_tokens,{}", summary.raw_est_tokens);
+    println!("summary,reduced_est_tokens,{}", summary.reduced_est_tokens);
+    println!("summary,saved_est_tokens,{}", summary.saved_est_tokens);
+    println!("summary,savings_pct,{:.1}", summary.savings_pct);
+    for (route, count) in &summary.by_route {
+        println!("route,{},{}", csv_cell(route), count);
+    }
+}
+
+fn csv_cell(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
 }
 
 fn run_discover(args: AnalyticsArgs) -> Result<i32> {
