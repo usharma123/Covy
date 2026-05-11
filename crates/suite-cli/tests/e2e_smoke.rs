@@ -103,6 +103,31 @@ fn test_top_level_rewrite_plans_supported_command() {
 }
 
 #[test]
+fn test_top_level_rewrite_respects_repo_exclude_config() {
+    let root = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("covy.toml"),
+        "[packet28.rewrite]\nexclude_commands = [\"git\"]\n",
+    )
+    .unwrap();
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "git",
+            "status",
+            "--short",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"route\":\"raw_passthrough\""))
+        .stdout(predicate::str::contains("\"reason\":\"config_excluded\""));
+}
+
+#[test]
 fn test_run_reduces_git_status() {
     let root = TempDir::new().unwrap();
     std::process::Command::new("git")

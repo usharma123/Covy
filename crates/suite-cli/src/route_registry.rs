@@ -44,14 +44,26 @@ enum Postprocess {
 }
 
 pub fn decide_command_route(command: &str) -> RouteDecision {
-    decide_command_route_inner(command, None)
+    decide_command_route_inner(command, None, None)
 }
 
 pub fn decide_command_route_with_cwd(command: &str, cwd: &Path) -> RouteDecision {
-    decide_command_route_inner(command, Some(cwd))
+    decide_command_route_inner(command, Some(cwd), None)
 }
 
-fn decide_command_route_inner(command: &str, cwd: Option<&Path>) -> RouteDecision {
+pub fn decide_command_route_with_cwd_and_root(
+    command: &str,
+    cwd: &Path,
+    root: &Path,
+) -> RouteDecision {
+    decide_command_route_inner(command, Some(cwd), Some(root))
+}
+
+fn decide_command_route_inner(
+    command: &str,
+    cwd: Option<&Path>,
+    policy_root: Option<&Path>,
+) -> RouteDecision {
     let sanitized = strip_supported_trailing_redirects(command.trim());
     let (normalized, postprocess) = strip_supported_postprocess(&sanitized);
     let trimmed = normalized.trim();
@@ -83,6 +95,9 @@ fn decide_command_route_inner(command: &str, cwd: Option<&Path>) -> RouteDecisio
     }
     if is_packet28_invocation(&argv) {
         return raw_passthrough("already_packet28");
+    }
+    if policy_excludes_command(trimmed, &argv, policy_root) {
+        return raw_passthrough("config_excluded");
     }
 
     let mut original_argv = None;
@@ -306,6 +321,78 @@ fn is_packet28_invocation(argv: &[String]) -> bool {
         .and_then(|name| name.to_str())
         .map(|name| matches!(name, "Packet28" | "packet28" | "covy"))
         .unwrap_or(false)
+}
+
+fn policy_excludes_command(command: &str, argv: &[String], root: Option<&Path>) -> bool {
+    let Some(root) = root else {
+        return false;
+    };
+    let excludes = load_policy_excludes(root);
+    if excludes.is_empty() {
+        return false;
+    }
+    let base = argv
+        .first()
+        .and_then(|arg| Path::new(arg).file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    excludes.iter().any(|exclude| {
+        let exclude = exclude.trim();
+        !exclude.is_empty()
+            && (base == exclude
+                || argv.first().map(String::as_str) == Some(exclude)
+                || command == exclude
+                || command.starts_with(&format!("{exclude} ")))
+    })
+}
+
+fn load_policy_excludes(root: &Path) -> Vec<String> {
+    for rel in ["covy.toml", "packet28.toml", ".packet28.toml"] {
+        let path = root.join(rel);
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = toml::from_str::<toml::Value>(&content) else {
+            continue;
+        };
+        let excludes = extract_policy_excludes(&value);
+        if !excludes.is_empty() {
+            return excludes;
+        }
+    }
+    Vec::new()
+}
+
+fn extract_policy_excludes(value: &toml::Value) -> Vec<String> {
+    let paths: &[&[&str]] = &[
+        &["packet28", "rewrite", "exclude_commands"],
+        &["rewrite", "exclude_commands"],
+        &["hooks", "exclude_commands"],
+        &["packet28", "hooks", "exclude_commands"],
+    ];
+    for path in paths {
+        if let Some(values) = toml_array_at_path(value, path) {
+            let excludes = values
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            if !excludes.is_empty() {
+                return excludes;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn toml_array_at_path<'a>(value: &'a toml::Value, path: &[&str]) -> Option<&'a Vec<toml::Value>> {
+    let mut current = value;
+    for key in &path[..path.len().saturating_sub(1)] {
+        current = current.get(*key)?;
+    }
+    current.get(*path.last()?)?.as_array()
 }
 
 fn normalize_git_global_options_for_classification(argv: &[String]) -> Option<Vec<String>> {
@@ -1050,6 +1137,33 @@ mod tests {
                 .map(|spec| spec.canonical_kind.as_str()),
             Some("git_status")
         );
+    }
+
+    #[test]
+    fn repo_config_excludes_commands_from_rewrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("covy.toml"),
+            "[packet28.rewrite]\nexclude_commands = [\"git\"]\n",
+        )
+        .unwrap();
+        let decision =
+            decide_command_route_with_cwd_and_root("git status --short", tmp.path(), tmp.path());
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("config_excluded"));
+    }
+
+    #[test]
+    fn hooks_config_excludes_commands_from_rewrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("covy.toml"),
+            "[hooks]\nexclude_commands = [\"cargo\"]\n",
+        )
+        .unwrap();
+        let decision = decide_command_route_with_cwd_and_root("cargo test", tmp.path(), tmp.path());
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("config_excluded"));
     }
 
     #[test]

@@ -32,6 +32,13 @@ Packet28 run --root . docker logs app
 Packet28 run --root . gh pr checks 1
 ```
 
+Repo-local rewrite exclusions can be configured in `covy.toml`:
+
+```toml
+[packet28.rewrite]
+exclude_commands = ["curl", "playwright"]
+```
+
 Inspect savings and missed savings:
 
 ```bash

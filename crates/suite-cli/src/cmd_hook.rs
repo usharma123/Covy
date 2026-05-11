@@ -1296,8 +1296,11 @@ fn build_pretool_rewrite(
     };
     let hook_cwd = json_string(payload, "cwd").unwrap_or_else(|| root.display().to_string());
     let hook_cwd_path = std::path::Path::new(&hook_cwd);
-    let mut decision =
-        crate::route_registry::decide_command_route_with_cwd(&command, hook_cwd_path);
+    let mut decision = crate::route_registry::decide_command_route_with_cwd_and_root(
+        &command,
+        hook_cwd_path,
+        root,
+    );
 
     // In hook context, promote NativeTool → ReducerRewrite when the reducer-core
     // also classifies the command (e.g. head/cat/sed → fs family).

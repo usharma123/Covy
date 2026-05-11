@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::route_registry::{
-    build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
+    build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
 };
 use crate::savings_analytics::load_run_savings;
 
@@ -689,7 +689,7 @@ pub fn run_rewrite_command(args: RewriteArgs) -> Result<i32> {
     let root = resolve_root(&args.root)?;
     let command = args.command_argv.join(" ");
     let cwd_path = std::path::Path::new(&args.cwd);
-    let decision = decide_command_route_with_cwd(&command, cwd_path);
+    let decision = decide_command_route_with_cwd_and_root(&command, cwd_path, &root);
     let rewritten = build_route_rewrite(
         &root,
         &args.task_id,

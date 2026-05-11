@@ -71,7 +71,7 @@ use crate::memory_store::{
     MemoryUpdateInput, TranscriptAppendInput,
 };
 use crate::route_registry::{
-    build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
+    build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
 };
 use crate::runtime_integrations::windsurf;
 
@@ -1753,7 +1753,7 @@ fn handle_packet28_rewrite(root: &Path, request: RewriteToolArgs) -> Value {
         .cwd
         .clone()
         .unwrap_or_else(|| root.display().to_string());
-    let decision = decide_command_route_with_cwd(&request.command, Path::new(&cwd));
+    let decision = decide_command_route_with_cwd_and_root(&request.command, Path::new(&cwd), root);
     let task_id = request.task_id.as_deref().unwrap_or("packet28-mcp-rewrite");
     let rewritten = build_route_rewrite(
         root,
