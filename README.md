@@ -295,7 +295,7 @@ Packet28 init --agent windsurf --yes --root .
 Packet28 init --mode all --yes --root .
 Packet28 doctor --agent windsurf --root .
 Packet28 mcp smoke-test --from-config windsurf
-Packet28 rewrite "git status --short" --json
+Packet28 rewrite --json "git status --short"
 Packet28 run --root . git status --short
 Packet28 memory store "Important local project fact"
 Packet28 wakeup --query project --json

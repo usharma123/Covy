@@ -15,7 +15,7 @@ Packet28 mcp smoke-test --from-config windsurf
 Plan and run reducer-aware commands:
 
 ```bash
-Packet28 rewrite "git status --short" --json
+Packet28 rewrite --json "git status --short"
 Packet28 run --root . git status --short
 Packet28 run --root . cargo check
 Packet28 run --root . npm test
