@@ -42,6 +42,9 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
             ("curl_fetch", suite_packet_core::ToolOperationKind::Fetch)
         }
         "aws" if classify_aws(argv) => ("aws_cli", suite_packet_core::ToolOperationKind::Fetch),
+        "psql" if classify_psql(argv) => {
+            ("psql_query", suite_packet_core::ToolOperationKind::Fetch)
+        }
         _ => return None,
     };
 
@@ -101,6 +104,13 @@ pub fn reduce_infra_command(
                 summarize_aws(stdout)
             }
         }
+        "psql_query" => {
+            if failed {
+                first_nonempty_line(&combined).unwrap_or_else(|| "psql failed".to_string())
+            } else {
+                summarize_psql(stdout)
+            }
+        }
         _ => {
             first_nonempty_line(&combined).unwrap_or_else(|| "infra command completed".to_string())
         }
@@ -121,6 +131,7 @@ pub fn reduce_infra_command(
                 compact_log_output(stdout, 50)
             }
             "curl_fetch" if !failed => compact_curl_response(stdout),
+            "psql_query" if !failed => compact_psql_output(stdout),
             _ => String::new(),
         },
         paths: spec.paths.clone(),
@@ -166,6 +177,27 @@ fn classify_curl(argv: &[String]) -> bool {
     }
     argv.iter()
         .any(|arg| arg.starts_with("http://") || arg.starts_with("https://"))
+}
+
+fn classify_psql(argv: &[String]) -> bool {
+    if contains_any(
+        argv,
+        &[
+            "-f",
+            "--file",
+            "-o",
+            "--output",
+            "--csv",
+            "-A",
+            "--tuples-only",
+            "-t",
+        ],
+    ) {
+        return false;
+    }
+    argv.iter().any(|arg| {
+        arg == "-c" || arg == "--command" || arg.starts_with("-c") || arg.starts_with("--command=")
+    })
 }
 
 fn contains_any(argv: &[String], denied: &[&str]) -> bool {
@@ -343,6 +375,74 @@ fn summarize_aws(stdout: &str) -> String {
     }
     let lines = nonempty_lines(stdout);
     format!("aws returned {} line(s)", lines.len())
+}
+
+fn summarize_psql(stdout: &str) -> String {
+    if stdout.trim().is_empty() {
+        return "psql returned empty output".to_string();
+    }
+    let compact = compact_psql_output(stdout);
+    let rows = compact
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+        .saturating_sub(1);
+    if let Some((_, footer_rows)) = parse_psql_footer(stdout) {
+        format!("psql returned {footer_rows} row(s)")
+    } else if rows > 0 {
+        format!("psql returned {rows} row(s)")
+    } else {
+        first_nonempty_line(stdout).unwrap_or_else(|| "psql completed".to_string())
+    }
+}
+
+fn compact_psql_output(stdout: &str) -> String {
+    let mut rows = Vec::new();
+    let mut data_rows = 0usize;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || is_psql_separator(trimmed) || parse_psql_footer(trimmed).is_some()
+        {
+            continue;
+        }
+        if trimmed.contains('|') {
+            if !rows.is_empty() {
+                data_rows += 1;
+            }
+            if data_rows <= 30 {
+                let cols = trimmed
+                    .split('|')
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
+                    .join("\t");
+                rows.push(cols);
+            }
+        } else {
+            rows.push(trimmed.to_string());
+        }
+    }
+    if data_rows > 30 {
+        rows.push(format!("... +{} more rows", data_rows - 30));
+    }
+    rows.join("\n")
+}
+
+fn is_psql_separator(line: &str) -> bool {
+    line.chars().all(|ch| matches!(ch, '-' | '+' | ' ' | '\t'))
+        && line.contains('-')
+        && line.contains('+')
+}
+
+fn parse_psql_footer(line: &str) -> Option<(&str, usize)> {
+    let trimmed = line.trim();
+    let inner = trimmed.strip_prefix('(')?.strip_suffix(')')?;
+    let count = inner
+        .strip_suffix(" rows")
+        .or_else(|| inner.strip_suffix(" row"))?
+        .trim()
+        .parse::<usize>()
+        .ok()?;
+    Some((trimmed, count))
 }
 
 fn compact_log_output(output: &str, max_lines: usize) -> String {
@@ -524,5 +624,18 @@ mod tests {
             reduction.summary,
             "kubectl describe: api in prod (2 event line(s))"
         );
+    }
+
+    #[test]
+    fn reduce_psql_table_summarizes_and_compacts_rows() {
+        let argv = vec!["psql", "-c", "select id, name from users"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("psql -c 'select id, name from users'", &argv).unwrap();
+        let output = " id | name \n----+------\n  1 | Ada\n  2 | Grace\n(2 rows)\n";
+        let reduction = reduce_infra_command(&spec, output, "", 0);
+        assert_eq!(reduction.summary, "psql returned 2 row(s)");
+        assert_eq!(reduction.compact_preview, "id\tname\n1\tAda\n2\tGrace");
     }
 }

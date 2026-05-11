@@ -733,6 +733,10 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
         &bin_dir.path().join("glab"),
         "#!/bin/sh\nprintf '42\\tFix reducer\\tmain\\topened\\n43\\tUpdate docs\\tmain\\topened\\n'\n",
     );
+    write_executable_script(
+        &bin_dir.path().join("psql"),
+        "#!/bin/sh\nprintf ' id | name \\n----+------\\n  1 | Ada\\n  2 | Grace\\n(2 rows)\\n'\n",
+    );
     let path_env = format!(
         "{}:{}",
         bin_dir.path().display(),
@@ -793,6 +797,27 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
         .stdout(predicate::str::contains(
             "\"canonical_kind\":\"glab_mr_list\"",
         ))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "psql",
+            "-c",
+            "select id, name from users",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"infra\""))
+        .stdout(predicate::str::contains(
+            "\"canonical_kind\":\"psql_query\"",
+        ))
+        .stdout(predicate::str::contains("psql returned 2 row(s)"))
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 

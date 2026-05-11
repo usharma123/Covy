@@ -37,7 +37,7 @@ pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandRe
         "cargo" => classify_rust_command(command, argv),
         "gh" | "glab" => classify_github_command(command, argv),
         "go" | "golangci-lint" => classify_go_command(command, argv),
-        "docker" | "kubectl" | "curl" | "aws" => classify_infra_command(command, argv),
+        "docker" | "kubectl" | "curl" | "aws" | "psql" => classify_infra_command(command, argv),
         "python" | "python3" | "pytest" | "ruff" | "pip" | "pip3" | "uv" | "mypy" => {
             classify_python_command(command, argv)
         }
