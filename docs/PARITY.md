@@ -29,11 +29,11 @@ Full upstream parity is broader than this slice. RTK includes a large filter cat
 | ICM area | Upstream evidence | Packet28 status |
 |---|---|---|
 | SQLite memory | ICM stores local memory in SQLite with FTS/vector support under `crates/icm-store`. | Implemented local SQLite at `~/.packet28/packet28.db` with required goal tables; vector/FTS is deferred. |
-| Memory CLI | ICM exposes store/recall/list/forget/update/health/topics/stats/decay/prune/consolidate/embed/wake-up and more in `crates/icm-cli/src/main.rs`. | Implemented goal slice: `memory store/recall/list/consolidate`; forget/update/health/topics/decay/prune/embed/wake-up are deferred. |
+| Memory CLI | ICM exposes store/recall/list/forget/update/health/topics/stats/decay/prune/consolidate/embed/wake-up and more in `crates/icm-cli/src/main.rs`. | Implemented goal slice: `memory store/recall/list/consolidate` plus Packet28-native `wakeup`; forget/update/health/topics/decay/prune/embed are deferred. |
 | MCP tools | ICM exposes memory, memoir, feedback, transcript, wake-up, learn, and embed tools in `crates/icm-mcp/src/tools.rs`. | Implemented goal-required Packet28 MCP: `search`, `reduce`, `rewrite`, `memory_store`, `memory_recall`, `memory_list`, `feedback_record`, `feedback_search`, `feedback_stats`, `graph_inspect`, `handoff`, `doctor`. Broader ICM tools are deferred. |
 | Memoir graph | ICM has memoirs, concepts, typed links, labels, FTS, BFS inspect, and exports. | Implemented simple Packet28 concepts/relations and inspect; full memoir graph is deferred. |
 | Feedback | ICM stores prediction/correction/reason/source and FTS search/stats. | Implemented feedback record/search/stats using local SQLite; richer ICM fields/FTS/applied counts are deferred. |
-| Wake-up/hooks | ICM has wake-up memory packs and hook extraction lifecycle. | Packet28’s equivalent is handoff/context assembly and runtime hooks; ICM-style wake-up CLI is deferred. |
+| Wake-up/hooks | ICM has wake-up memory packs and hook extraction lifecycle. | Packet28 implements `wakeup` as a local memory/feedback/graph summary and uses handoff/context assembly plus runtime hooks for agent continuity; ICM's full wake-up extraction lifecycle is deferred. |
 | Dashboard | ICM has an Axum/Svelte dashboard. | Implemented local CLI dashboard for acceptance slice; web UI is deferred. |
 
 ## Current Conclusion

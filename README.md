@@ -298,6 +298,7 @@ Packet28 mcp smoke-test --from-config windsurf
 Packet28 rewrite "git status --short" --json
 Packet28 run --root . git status --short
 Packet28 memory store "Important local project fact"
+Packet28 wakeup --query project --json
 Packet28 feedback record "subject" "correction"
 Packet28 graph inspect
 Packet28 dashboard --root .

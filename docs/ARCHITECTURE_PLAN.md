@@ -17,7 +17,7 @@ RTK’s core path is command proxy plus hook rewrite. Packet28 maps this to rout
 
 ## ICM Mapping
 
-ICM’s core path is local memory plus MCP and hooks. Packet28 maps this to SQLite memory/feedback/graph commands, MCP tools, dashboard, and handoff/context assembly. ICM’s vector/FTS/memoir/transcript/wake-up breadth is deferred.
+ICM’s core path is local memory plus MCP and hooks. Packet28 maps this to SQLite memory/feedback/graph commands, `wakeup`, MCP tools, dashboard, and handoff/context assembly. ICM’s vector/FTS/memoir/transcript breadth is deferred.
 
 ## Verification Strategy
 

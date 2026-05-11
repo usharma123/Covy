@@ -41,6 +41,7 @@ Packet28 memory store "Important local project fact" --tags project
 Packet28 memory recall "project fact"
 Packet28 memory list
 Packet28 memory consolidate
+Packet28 wakeup --query project --json
 Packet28 feedback record "bad reducer output" "prefer focused summaries"
 Packet28 feedback search reducer
 Packet28 feedback stats
@@ -103,5 +104,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Full ICM vector/FTS recall, wake-up CLI, memoir export/search, transcript replay, cloud/import/upgrade, and web dashboard.
+- Full ICM vector/FTS recall, wake-up extraction lifecycle, memoir export/search, transcript replay, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.

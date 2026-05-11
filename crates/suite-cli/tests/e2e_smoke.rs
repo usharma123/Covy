@@ -352,6 +352,14 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Packet28 remembers local context"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["wakeup", "--query", "local", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"kind\":\"packet28.wakeup.v1\""))
+        .stdout(predicate::str::contains("Packet28 remembers local context"));
 }
 
 #[test]

@@ -45,6 +45,7 @@ pub mod cmd_setup;
 pub mod cmd_shard;
 pub mod cmd_shell;
 pub mod cmd_stack;
+pub mod cmd_wakeup;
 pub mod economics;
 mod memory_store;
 pub mod packet28_agent;

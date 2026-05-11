@@ -9,8 +9,8 @@ use crate::{
     cmd_dashboard, cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard,
     cmd_hook, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp,
     cmd_memory, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack,
-    BuildCommands, Cli, Commands, ContextCommands, CoverCommands, DiffCommands, GuardCommands,
-    MapCommands, StackCommands, TestCommands,
+    cmd_wakeup, BuildCommands, Cli, Commands, ContextCommands, CoverCommands, DiffCommands,
+    GuardCommands, MapCommands, StackCommands, TestCommands,
 };
 
 pub fn main_entry() {
@@ -103,6 +103,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Commands::Memory(args) => cmd_memory::run(args),
         Commands::Feedback(args) => cmd_feedback::run(args),
         Commands::Graph(args) => cmd_graph::run(args),
+        Commands::Wakeup(args) => cmd_wakeup::run(args),
         Commands::Dashboard(args) => cmd_dashboard::run(args),
         Commands::AgentPrompt(args) => cmd_agent_prompt::run(args),
         Commands::Mcp(args) => cmd_mcp::run(args),
@@ -368,6 +369,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Commands::Memory(_)
         | Commands::Feedback(_)
         | Commands::Graph(_)
+        | Commands::Wakeup(_)
         | Commands::Dashboard(_)
         | Commands::AgentPrompt(_)
         | Commands::Mcp(_)
