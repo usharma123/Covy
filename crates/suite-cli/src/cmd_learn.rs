@@ -21,6 +21,10 @@ pub struct LearnArgs {
     #[arg(long)]
     pub project_name: Option<String>,
 
+    /// Memoir/graph container to write learned project concepts into
+    #[arg(long)]
+    pub memoir: Option<String>,
+
     /// Maximum dependencies/modules/entrypoints/configs to learn per category
     #[arg(long, default_value_t = 20)]
     pub project_limit: usize,
@@ -70,6 +74,7 @@ pub fn run(args: LearnArgs) -> Result<i32> {
         let report = learn_project_graph(
             Path::new(project_dir),
             args.project_name.as_deref(),
+            args.memoir.as_deref(),
             args.project_limit,
         )?;
         if args.json {

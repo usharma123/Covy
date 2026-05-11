@@ -1006,6 +1006,7 @@ fn handle_method(
                         "properties": {
                             "directory": {"type":"string"},
                             "name": {"type":"string"},
+                            "memoir": {"type":"string"},
                             "limit": {"type":"integer","minimum":1}
                         }
                     }
@@ -1610,6 +1611,7 @@ fn handle_tool_call(
             serde_json::to_value(learn_project_graph(
                 Path::new(&dir),
                 request.name.as_deref(),
+                request.memoir.as_deref(),
                 request.limit.unwrap_or(20),
             )?)?
         }
@@ -1905,6 +1907,7 @@ struct WakeupToolArgs {
 struct LearnProjectToolArgs {
     directory: Option<String>,
     name: Option<String>,
+    memoir: Option<String>,
     limit: Option<usize>,
 }
 

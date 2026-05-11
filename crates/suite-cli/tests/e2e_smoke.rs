@@ -2339,7 +2339,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.learn_project",
-                "arguments":{"directory":root.path().to_str().unwrap(), "name":"McpLearnFixture", "limit":5}
+                "arguments":{"directory":root.path().to_str().unwrap(), "name":"McpLearnFixture", "memoir":"McpLearnMemoir", "limit":5}
             }
         }),
     );
@@ -2347,6 +2347,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         learned["result"]["structuredContent"]["project_name"].as_str(),
         Some("McpLearnFixture")
+    );
+    assert_eq!(
+        learned["result"]["structuredContent"]["memoir_name"].as_str(),
+        Some("McpLearnMemoir")
     );
     assert!(
         learned["result"]["structuredContent"]["total_concepts"]
@@ -2895,6 +2899,8 @@ fn test_feedback_and_graph_cli_use_sqlite() {
             project.path().to_str().unwrap(),
             "--project-name",
             "CliLearnFixture",
+            "--memoir",
+            "CliLearnMemoir",
             "--project-limit",
             "5",
             "--json",
@@ -2904,7 +2910,17 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .stdout(predicate::str::contains(
             "\"project_name\":\"CliLearnFixture\"",
         ))
+        .stdout(predicate::str::contains(
+            "\"memoir_name\":\"CliLearnMemoir\"",
+        ))
         .stdout(predicate::str::contains("\"link_count\""))
+        .stdout(predicate::str::contains("serde_json"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "show", "CliLearnMemoir", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CliLearnFixture"))
         .stdout(predicate::str::contains("serde_json"));
 
     suite_cmd()

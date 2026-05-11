@@ -164,6 +164,7 @@ pub(crate) struct GraphStats {
 pub(crate) struct ProjectLearnReport {
     pub(crate) project_name: String,
     pub(crate) project_root: String,
+    pub(crate) memoir_name: String,
     pub(crate) total_concepts: usize,
     pub(crate) link_count: usize,
     pub(crate) concepts: Vec<GraphConcept>,
@@ -1754,6 +1755,7 @@ pub(crate) fn graph_stats() -> Result<GraphStats> {
 pub(crate) fn learn_project_graph(
     root: &Path,
     name: Option<&str>,
+    memoir: Option<&str>,
     limit: usize,
 ) -> Result<ProjectLearnReport> {
     if !root.is_dir() {
@@ -1770,28 +1772,68 @@ pub(crate) fn learn_project_graph(
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_else(|| "project".to_string());
+    let memoir_name = normalize_non_empty(memoir, DEFAULT_MEMOIR_NAME);
     let project_description = project_identity(root, &project_name);
-    let project = add_concept(&project_name, Some(&project_description))?;
+    create_graph_memoir(
+        Some(&memoir_name),
+        Some(&format!("Learned project graph for {project_name}")),
+    )?;
+    let project = add_concept_with_metadata(
+        &project_name,
+        Some(&project_description),
+        Some(&memoir_name),
+        &[],
+        None,
+        &[],
+    )?;
     let mut concepts = vec![project.clone()];
     let mut relations = Vec::new();
 
     for (name, description) in collect_project_dependencies(root).into_iter().take(limit) {
-        let concept = add_concept(&name, Some(&description))?;
+        let concept = add_concept_with_metadata(
+            &name,
+            Some(&description),
+            Some(&memoir_name),
+            &[],
+            None,
+            &[],
+        )?;
         relations.push(link_concepts(&project.name, &concept.name, "depends_on")?);
         concepts.push(concept);
     }
     for (name, description) in collect_project_modules(root).into_iter().take(limit) {
-        let concept = add_concept(&name, Some(&description))?;
+        let concept = add_concept_with_metadata(
+            &name,
+            Some(&description),
+            Some(&memoir_name),
+            &[],
+            None,
+            &[],
+        )?;
         relations.push(link_concepts(&concept.name, &project.name, "part_of")?);
         concepts.push(concept);
     }
     for (name, description) in collect_project_entrypoints(root).into_iter().take(limit) {
-        let concept = add_concept(&name, Some(&description))?;
+        let concept = add_concept_with_metadata(
+            &name,
+            Some(&description),
+            Some(&memoir_name),
+            &[],
+            None,
+            &[],
+        )?;
         relations.push(link_concepts(&concept.name, &project.name, "part_of")?);
         concepts.push(concept);
     }
     for (name, description) in collect_project_configs(root).into_iter().take(limit) {
-        let concept = add_concept(&name, Some(&description))?;
+        let concept = add_concept_with_metadata(
+            &name,
+            Some(&description),
+            Some(&memoir_name),
+            &[],
+            None,
+            &[],
+        )?;
         relations.push(link_concepts(&concept.name, &project.name, "related_to")?);
         concepts.push(concept);
     }
@@ -1799,6 +1841,7 @@ pub(crate) fn learn_project_graph(
     Ok(ProjectLearnReport {
         project_name,
         project_root: root.display().to_string(),
+        memoir_name,
         total_concepts: concepts.len(),
         link_count: relations.len(),
         concepts,
