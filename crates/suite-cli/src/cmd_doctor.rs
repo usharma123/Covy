@@ -14,14 +14,16 @@ use packet28_daemon_core::{DaemonIndexStatusRequest, DaemonRequest, DaemonRespon
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::runtime_integrations::windsurf;
+use crate::runtime_integrations::{
+    antigravity, cline, copilot, gemini, hermes, kilocode, opencode, roo, windsurf,
+};
 
 #[derive(Args)]
 pub struct DoctorArgs {
     #[arg(long, default_value = ".")]
     pub root: String,
 
-    /// Limit runtime-specific checks to one agent (currently: windsurf)
+    /// Limit runtime-specific checks to one agent
     #[arg(long)]
     pub agent: Option<String>,
 
@@ -320,6 +322,11 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
     if matches!(agent, Some("windsurf")) {
         return build_windsurf_report(root);
     }
+    if let Some(agent) = agent {
+        if let Some(target) = instruction_only_agent_target(root, agent) {
+            return build_instruction_only_agent_report(root, target);
+        }
+    }
     let daemon = check_daemon(root);
     let index = check_index(root);
     let mcp_config = collect_mcp_config_checks(root);
@@ -349,6 +356,175 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
         push_notifications: mcp_round_trip.push_notifications,
         handoff_round_trip: mcp_round_trip.handoff_round_trip,
         checks,
+    }
+}
+
+struct InstructionOnlyAgentTarget {
+    slug: &'static str,
+    name: &'static str,
+    path: std::path::PathBuf,
+}
+
+fn instruction_only_agent_target(root: &Path, agent: &str) -> Option<InstructionOnlyAgentTarget> {
+    match agent {
+        "copilot" => Some(InstructionOnlyAgentTarget {
+            slug: "copilot",
+            name: "GitHub Copilot",
+            path: copilot::instructions_path(root),
+        }),
+        "gemini" => Some(InstructionOnlyAgentTarget {
+            slug: "gemini",
+            name: "Gemini CLI",
+            path: gemini::prompt_path(root),
+        }),
+        "opencode" => Some(InstructionOnlyAgentTarget {
+            slug: "opencode",
+            name: "OpenCode",
+            path: opencode::prompt_path(root),
+        }),
+        "hermes" => Some(InstructionOnlyAgentTarget {
+            slug: "hermes",
+            name: "Hermes",
+            path: hermes::prompt_path(root),
+        }),
+        "cline" => Some(InstructionOnlyAgentTarget {
+            slug: "cline",
+            name: "Cline",
+            path: cline::rules_path(root),
+        }),
+        "roo" => Some(InstructionOnlyAgentTarget {
+            slug: "roo",
+            name: "Roo Code",
+            path: roo::rules_path(root),
+        }),
+        "kilocode" => Some(InstructionOnlyAgentTarget {
+            slug: "kilocode",
+            name: "Kilo Code",
+            path: kilocode::rules_path(root),
+        }),
+        "antigravity" => Some(InstructionOnlyAgentTarget {
+            slug: "antigravity",
+            name: "Google Antigravity",
+            path: antigravity::rules_path(root),
+        }),
+        _ => None,
+    }
+}
+
+fn build_instruction_only_agent_report(
+    root: &Path,
+    target: InstructionOnlyAgentTarget,
+) -> DoctorReport {
+    let daemon = DoctorCheck {
+        name: "daemon",
+        ok: true,
+        required: false,
+        detail: format!(
+            "not required for {} instruction-file verification",
+            target.name
+        ),
+    };
+    let index = DoctorCheck {
+        name: "index",
+        ok: true,
+        required: false,
+        detail: format!(
+            "not required for {} instruction-file verification",
+            target.name
+        ),
+    };
+    let mcp_config = Vec::new();
+    let handshake = DoctorCheck {
+        name: "mcp_handshake",
+        ok: true,
+        required: false,
+        detail: format!(
+            "{} is currently an instruction-file target; Packet28 does not claim MCP setup for this agent",
+            target.name
+        ),
+    };
+    let reducer_round_trip = DoctorCheck {
+        name: "runtime_rewrite_support",
+        ok: true,
+        required: false,
+        detail: format!(
+            "{} is currently guidance-only; no transparent runtime rewrite hook/plugin is claimed",
+            target.name
+        ),
+    };
+    let push_notifications = DoctorCheck {
+        name: "push_notifications",
+        ok: true,
+        required: false,
+        detail: format!(
+            "not required for {} instruction-file verification",
+            target.name
+        ),
+    };
+    let handoff_round_trip = DoctorCheck {
+        name: "handoff_round_trip",
+        ok: true,
+        required: false,
+        detail: format!(
+            "not required for {} instruction-file verification",
+            target.name
+        ),
+    };
+    let instruction_file = check_instruction_file(target.slug, target.name, &target.path);
+    let checks = vec![
+        daemon.clone(),
+        index.clone(),
+        instruction_file,
+        handshake.clone(),
+        reducer_round_trip.clone(),
+        push_notifications.clone(),
+        handoff_round_trip.clone(),
+    ];
+    let ok = checks
+        .iter()
+        .filter(|check| check.required)
+        .all(|check| check.ok);
+    DoctorReport {
+        root: root.display().to_string(),
+        ok,
+        daemon,
+        index,
+        mcp_config,
+        handshake,
+        reducer_round_trip,
+        push_notifications,
+        handoff_round_trip,
+        checks,
+    }
+}
+
+fn check_instruction_file(slug: &str, name: &str, path: &Path) -> DoctorCheck {
+    let result = (|| -> Result<String> {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        if !content.contains("Packet28 Guidance") && !content.contains("Packet28 Integration") {
+            return Err(anyhow!(
+                "instruction file does not contain Packet28 guidance"
+            ));
+        }
+        Ok(format!(
+            "{name} instruction file present at {}",
+            path.display()
+        ))
+    })();
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "instruction_file",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(err) => DoctorCheck {
+            name: "instruction_file",
+            ok: false,
+            required: true,
+            detail: format!("{slug}: {err}"),
+        },
     }
 }
 

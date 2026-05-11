@@ -456,6 +456,22 @@ fn test_setup_cline_writes_instruction_only_rules_without_mcp_or_hooks() {
     assert!(!root.path().join(".mcp.json").exists());
     assert!(!root.path().join(".claude").join("settings.json").exists());
     assert!(!root.path().join(".cursor").join("hooks.json").exists());
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "doctor",
+            "--agent",
+            "cline",
+            "--root",
+            root.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("instruction_file"))
+        .stdout(predicate::str::contains("guidance-only"));
 }
 
 #[test]
