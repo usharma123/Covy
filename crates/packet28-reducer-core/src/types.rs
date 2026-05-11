@@ -103,6 +103,8 @@ pub enum CommandReducerFamily {
     Javascript,
     Go,
     Infra,
+    Ruby,
+    Dotnet,
 }
 
 impl CommandReducerFamily {
@@ -116,6 +118,8 @@ impl CommandReducerFamily {
             Self::Javascript => "javascript",
             Self::Go => "go",
             Self::Infra => "infra",
+            Self::Ruby => "ruby",
+            Self::Dotnet => "dotnet",
         }
     }
 }

@@ -471,6 +471,14 @@ fn test_run_raw_artifact_available_across_reducer_families() {
         &bin_dir.path().join("gh"),
         "#!/bin/sh\nprintf 'build\\tpass\\t1s\\ngithub raw marker\\n'\n",
     );
+    write_executable_script(
+        &bin_dir.path().join("ruby"),
+        "#!/bin/sh\nprintf '1 runs, 1 assertions, 0 failures, 0 errors, 0 skips\\nruby raw marker\\n'\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("dotnet"),
+        "#!/bin/sh\nprintf 'Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 s\\ndotnet raw marker\\n'\n",
+    );
     let path_env = format!(
         "{}:{}",
         bin_dir.path().display(),
@@ -497,6 +505,12 @@ fn test_run_raw_artifact_available_across_reducer_families() {
             "github",
             vec!["gh", "pr", "checks", "1"],
             "github raw marker",
+        ),
+        ("ruby", vec!["ruby", "sample_test.rb"], "ruby raw marker"),
+        (
+            "dotnet",
+            vec!["dotnet", "test", "Packet28.Tests.csproj"],
+            "dotnet raw marker",
         ),
     ];
 
@@ -818,6 +832,72 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
             "\"canonical_kind\":\"psql_query\"",
         ))
         .stdout(predicate::str::contains("psql returned 2 row(s)"))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+}
+
+#[test]
+#[cfg(unix)]
+fn test_run_reduces_ruby_and_dotnet_commands() {
+    let root = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    write_executable_script(
+        &bin_dir.path().join("bundle"),
+        "#!/bin/sh\nprintf 'Failures:\\n  1) User validates email\\n     spec/models/user_spec.rb:12\\n\\n3 examples, 1 failure\\n'\nexit 1\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("dotnet"),
+        "#!/bin/sh\nprintf 'Passed!  - Failed: 0, Passed: 12, Skipped: 0, Total: 12, Duration: 1 s\\n'\n",
+    );
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "bundle",
+            "exec",
+            "rspec",
+            "spec/models/user_spec.rb",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("\"family\":\"ruby\""))
+        .stdout(predicate::str::contains(
+            "\"canonical_kind\":\"ruby_rspec\"",
+        ))
+        .stdout(predicate::str::contains("rspec: 3 examples, 1 failure"))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"))
+        .stdout(predicate::str::contains("\"failed\":true"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "dotnet",
+            "test",
+            "Packet28.Tests.csproj",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"dotnet\""))
+        .stdout(predicate::str::contains(
+            "\"canonical_kind\":\"dotnet_test\"",
+        ))
+        .stdout(predicate::str::contains(
+            "dotnet test: Passed!  - Failed: 0, Passed: 12",
+        ))
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 

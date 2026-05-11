@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::dotnet::{classify_dotnet_command, reduce_dotnet_command};
 use crate::fs::{classify_fs_command, reduce_fs_command};
 use crate::git::{classify_git_command, reduce_git_command};
 use crate::github::{classify_github_command, reduce_github_command};
@@ -7,6 +8,7 @@ use crate::go::{classify_go_command, reduce_go_command};
 use crate::infra::{classify_infra_command, reduce_infra_command};
 use crate::javascript::{classify_javascript_command, reduce_javascript_command};
 use crate::python::{classify_python_command, reduce_python_command};
+use crate::ruby::{classify_ruby_command, reduce_ruby_command};
 use crate::rust::{classify_rust_command, reduce_rust_command};
 use crate::types::{CommandReducerFamily, CommandReducerSpec, CommandReduction};
 
@@ -43,6 +45,8 @@ pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandRe
         }
         "npm" | "pnpm" | "yarn" | "npx" | "tsc" | "eslint" | "vitest" | "prettier" | "next"
         | "prisma" | "playwright" => classify_javascript_command(command, argv),
+        "bundle" | "rspec" | "rubocop" | "ruby" | "rails" => classify_ruby_command(command, argv),
+        "dotnet" => classify_dotnet_command(command, argv),
         _ => None,
     }
 }
@@ -61,6 +65,8 @@ pub fn reduce_command_output(
         CommandReducerFamily::Github => reduce_github_command(spec, stdout, stderr, exit_code),
         CommandReducerFamily::Go => reduce_go_command(spec, stdout, stderr, exit_code),
         CommandReducerFamily::Infra => reduce_infra_command(spec, stdout, stderr, exit_code),
+        CommandReducerFamily::Ruby => reduce_ruby_command(spec, stdout, stderr, exit_code),
+        CommandReducerFamily::Dotnet => reduce_dotnet_command(spec, stdout, stderr, exit_code),
         CommandReducerFamily::Python => reduce_python_command(spec, stdout, stderr, exit_code),
         CommandReducerFamily::Javascript => {
             reduce_javascript_command(spec, stdout, stderr, exit_code)
@@ -78,6 +84,8 @@ fn parse_family(value: &str) -> Result<CommandReducerFamily> {
         "infra" => CommandReducerFamily::Infra,
         "python" => CommandReducerFamily::Python,
         "javascript" => CommandReducerFamily::Javascript,
+        "ruby" => CommandReducerFamily::Ruby,
+        "dotnet" => CommandReducerFamily::Dotnet,
         other => anyhow::bail!("unsupported reducer family '{other}'"),
     })
 }

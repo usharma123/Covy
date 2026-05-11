@@ -1,4 +1,5 @@
 mod command;
+mod dotnet;
 pub mod filter;
 mod fs;
 pub(crate) mod git;
@@ -9,6 +10,7 @@ mod javascript;
 pub mod parser;
 mod python;
 mod read;
+mod ruby;
 mod rust;
 mod search;
 pub mod tee;
