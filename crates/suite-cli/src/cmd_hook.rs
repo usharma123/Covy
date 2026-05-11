@@ -159,14 +159,27 @@ fn run_claude(args: ClaudeHookArgs) -> Result<i32> {
     let payload = if buffer.trim().is_empty() {
         Value::Object(Default::default())
     } else {
-        serde_json::from_str(&buffer)?
+        match serde_json::from_str(&buffer) {
+            Ok(payload) => payload,
+            Err(err) => {
+                eprintln!("packet28 hook: ignoring malformed JSON payload: {err}");
+                return Ok(0);
+            }
+        }
     };
     let root = resolve_hook_root(&args, &payload);
-    let outcome = process_claude_hook_payload(&root, args.event.as_deref(), &payload, true)?;
-    if let Some(body) = outcome.body {
-        println!("{body}");
+    match process_claude_hook_payload(&root, args.event.as_deref(), &payload, true) {
+        Ok(outcome) => {
+            if let Some(body) = outcome.body {
+                println!("{body}");
+            }
+            Ok(outcome.exit_code)
+        }
+        Err(err) => {
+            eprintln!("packet28 hook: allowing runtime action after processing error: {err:#}");
+            Ok(0)
+        }
     }
-    Ok(outcome.exit_code)
 }
 
 fn process_claude_hook_payload(
@@ -239,8 +252,34 @@ fn run_runtime_hook(args: RuntimeHookArgs, runtime: ExternalHookRuntime) -> Resu
     let payload = if buffer.trim().is_empty() {
         Value::Object(Default::default())
     } else {
-        serde_json::from_str(&buffer)?
+        match serde_json::from_str(&buffer) {
+            Ok(payload) => payload,
+            Err(err) => {
+                eprintln!(
+                    "packet28 {} hook: ignoring malformed JSON payload: {err}",
+                    external_runtime_name(runtime)
+                );
+                return Ok(0);
+            }
+        }
     };
+    match process_runtime_hook_payload(args, runtime, payload) {
+        Ok(code) => Ok(code),
+        Err(err) => {
+            eprintln!(
+                "packet28 {} hook: allowing runtime action after processing error: {err:#}",
+                external_runtime_name(runtime)
+            );
+            Ok(0)
+        }
+    }
+}
+
+fn process_runtime_hook_payload(
+    args: RuntimeHookArgs,
+    runtime: ExternalHookRuntime,
+    payload: Value,
+) -> Result<i32> {
     let root = resolve_runtime_hook_root(&args, &payload);
     crate::broker_client::ensure_daemon(&root)?;
 

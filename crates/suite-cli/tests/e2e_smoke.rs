@@ -2470,9 +2470,15 @@ fn write_intention_via_mcp(
 }
 
 fn run_claude_hook(root: &Path, payload: &Value) -> (i32, String) {
+    let (status, stdout, _) =
+        run_hook_raw("claude", root, &serde_json::to_string(payload).unwrap());
+    (status, stdout)
+}
+
+fn run_hook_raw(runtime: &str, root: &Path, stdin_payload: &str) -> (i32, String, String) {
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
         .current_dir(root)
-        .args(["hook", "claude", "--root", root.to_str().unwrap()])
+        .args(["hook", runtime, "--root", root.to_str().unwrap()])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2482,12 +2488,13 @@ fn run_claude_hook(root: &Path, payload: &Value) -> (i32, String) {
         .stdin
         .as_mut()
         .unwrap()
-        .write_all(serde_json::to_string(payload).unwrap().as_bytes())
+        .write_all(stdin_payload.as_bytes())
         .unwrap();
     let output = child.wait_with_output().unwrap();
     (
         output.status.code().unwrap_or(1),
         String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
     )
 }
 
@@ -6413,6 +6420,43 @@ fn test_packet28_hook_reducer_runner_reuses_cached_summary_without_rerunning_com
     assert!(second.status.success());
     assert_eq!(first.stdout, second.stdout);
     assert_eq!(fs::read_to_string(&counter_path).unwrap().trim(), "1");
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_packet28_hooks_degrade_gracefully_on_bad_json_and_no_rewrite() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+
+    let (status, stdout, stderr) = run_hook_raw("claude", dir.path(), "{not json");
+    assert_eq!(status, 0);
+    assert!(stdout.trim().is_empty());
+    assert!(stderr.contains("malformed JSON"));
+
+    let (status, stdout, stderr) = run_hook_raw("cursor", dir.path(), "{not json");
+    assert_eq!(status, 0);
+    assert!(stdout.trim().is_empty());
+    assert!(stderr.contains("malformed JSON"));
+
+    let (status, stdout) = run_claude_hook(
+        dir.path(),
+        &json!({
+            "hook_event_name":"PreToolUse",
+            "task_id":"task-pretool-no-rewrite",
+            "session_id":"session-pretool-no-rewrite",
+            "cwd":dir.path().to_str().unwrap(),
+            "tool_name":"Bash",
+            "tool_input":{"command":"definitely-unsupported-packet28-tool --flag"}
+        }),
+    );
+    assert_eq!(status, 0);
+    assert!(stdout.trim().is_empty());
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
