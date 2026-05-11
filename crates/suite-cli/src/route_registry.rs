@@ -95,6 +95,9 @@ fn decide_command_route_inner(
     if argv.is_empty() {
         return raw_passthrough("empty_command");
     }
+    if has_rewrite_disabled_prefix(&env_assignments) {
+        return raw_passthrough("rewrite_disabled");
+    }
     if is_packet28_invocation(&argv) {
         return raw_passthrough("already_packet28");
     }
@@ -315,6 +318,13 @@ fn split_leading_env_assignments(argv: Vec<String>) -> (Vec<(String, String)>, V
         idx += 1;
     }
     (assignments, argv[idx..].to_vec())
+}
+
+fn has_rewrite_disabled_prefix(env_assignments: &[(String, String)]) -> bool {
+    env_assignments.iter().any(|(key, value)| {
+        matches!(key.as_str(), "PACKET28_DISABLED" | "RTK_DISABLED")
+            && !matches!(value.trim(), "" | "0" | "false" | "FALSE" | "False")
+    })
 }
 
 fn classify_native_tool(argv: &[String]) -> Option<NativeToolPlan> {
@@ -1134,6 +1144,26 @@ mod tests {
                 ("CARGO_TERM_COLOR".to_string(), "never".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn disabled_env_prefix_bypasses_rewrite() {
+        let decision = decide_command_route("PACKET28_DISABLED=1 git status --short");
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("rewrite_disabled"));
+    }
+
+    #[test]
+    fn rtk_disabled_env_prefix_bypasses_rewrite_for_compatibility() {
+        let decision = decide_command_route("FOO=1 RTK_DISABLED=true cargo test");
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("rewrite_disabled"));
+    }
+
+    #[test]
+    fn disabled_env_prefix_false_value_still_routes() {
+        let decision = decide_command_route("PACKET28_DISABLED=0 git status --short");
+        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
     }
 
     #[test]
