@@ -45,7 +45,8 @@ Use local memory, feedback, transcripts, and graph:
 
 ```bash
 Packet28 memory store "Important local project fact" \
-  --topic project --importance high --keywords project,decision --raw "verbatim source"
+  --topic project --importance high --keywords project,decision \
+  --source cli --raw "verbatim source"
 Packet28 memory recall "project fact" --topic project --keyword decision
 Packet28 memory list --topic project --sort importance --all
 Packet28 memory update 1 --content "Updated project fact" --topic project

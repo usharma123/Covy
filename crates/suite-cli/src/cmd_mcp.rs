@@ -717,6 +717,7 @@ fn handle_method(
                             "topic": {"type":"string"},
                             "importance": {"type":"string"},
                             "keywords": {"type":"string"},
+                            "source": {"type":"string"},
                             "raw_excerpt": {"type":"string"}
                         }
                     }
@@ -762,6 +763,7 @@ fn handle_method(
                             "topic": {"type":"string"},
                             "importance": {"type":"string"},
                             "keywords": {"type":"string"},
+                            "source": {"type":"string"},
                             "raw_excerpt": {"type":"string"}
                         }
                     }
@@ -1281,6 +1283,7 @@ fn handle_tool_call(
                 topic: request.topic.as_deref(),
                 importance: request.importance.as_deref(),
                 keywords: request.keywords.as_deref(),
+                source: request.source.as_deref(),
                 raw_excerpt: request.raw_excerpt.as_deref(),
             })?)?
         }
@@ -1312,6 +1315,7 @@ fn handle_tool_call(
                 topic: request.topic.as_deref(),
                 importance: request.importance.as_deref(),
                 keywords: request.keywords.as_deref(),
+                source: request.source.as_deref(),
                 raw_excerpt: request.raw_excerpt.as_deref(),
             })?)?
         }
@@ -1505,6 +1509,7 @@ struct MemoryStoreToolArgs {
     topic: Option<String>,
     importance: Option<String>,
     keywords: Option<String>,
+    source: Option<String>,
     raw_excerpt: Option<String>,
 }
 
@@ -1533,6 +1538,7 @@ struct MemoryUpdateToolArgs {
     topic: Option<String>,
     importance: Option<String>,
     keywords: Option<String>,
+    source: Option<String>,
     raw_excerpt: Option<String>,
 }
 

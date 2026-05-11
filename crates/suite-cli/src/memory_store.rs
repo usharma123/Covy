@@ -13,6 +13,7 @@ pub(crate) struct MemoryRecord {
     pub(crate) topic: String,
     pub(crate) importance: String,
     pub(crate) keywords: Option<String>,
+    pub(crate) source: Option<String>,
     pub(crate) raw_excerpt: Option<String>,
     pub(crate) weight: f64,
     pub(crate) created_at_unix_ms: i64,
@@ -225,6 +226,7 @@ pub(crate) struct MemoryStoreInput<'a> {
     pub(crate) topic: Option<&'a str>,
     pub(crate) importance: Option<&'a str>,
     pub(crate) keywords: Option<&'a str>,
+    pub(crate) source: Option<&'a str>,
     pub(crate) raw_excerpt: Option<&'a str>,
 }
 
@@ -236,6 +238,7 @@ pub(crate) struct MemoryUpdateInput<'a> {
     pub(crate) topic: Option<&'a str>,
     pub(crate) importance: Option<&'a str>,
     pub(crate) keywords: Option<&'a str>,
+    pub(crate) source: Option<&'a str>,
     pub(crate) raw_excerpt: Option<&'a str>,
 }
 
@@ -279,14 +282,15 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
     let importance = normalize_non_empty(input.importance, "medium");
     conn.execute(
         "INSERT INTO memories
-         (content, tags, topic, importance, keywords, raw_excerpt, weight, created_at_unix_ms, updated_at_unix_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+         (content, tags, topic, importance, keywords, source, raw_excerpt, weight, created_at_unix_ms, updated_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
         params![
             input.content,
             input.tags,
             topic,
             importance,
             input.keywords,
+            input.source,
             input.raw_excerpt,
             1.0_f64,
             now
@@ -316,7 +320,7 @@ pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<V
     if let Some(match_query) = fts_match_query(input.query) {
         let mut stmt = conn.prepare(
             "SELECT
-                m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.raw_excerpt, m.weight,
+                m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.source, m.raw_excerpt, m.weight,
                 m.created_at_unix_ms, m.updated_at_unix_ms
              FROM memories_fts f
              JOIN memories m ON m.rowid = f.rowid
@@ -341,13 +345,14 @@ fn recall_memories_like(conn: &Connection, query: &str, limit: usize) -> Result<
     let pattern = format!("%{}%", query.trim());
     let mut stmt = conn.prepare(
         "SELECT
-            id, content, tags, topic, importance, keywords, raw_excerpt, weight,
+            id, content, tags, topic, importance, keywords, source, raw_excerpt, weight,
             created_at_unix_ms, updated_at_unix_ms
          FROM memories
          WHERE content LIKE ?1
             OR IFNULL(tags, '') LIKE ?1
             OR IFNULL(topic, '') LIKE ?1
             OR IFNULL(keywords, '') LIKE ?1
+            OR IFNULL(source, '') LIKE ?1
             OR IFNULL(raw_excerpt, '') LIKE ?1
          ORDER BY created_at_unix_ms DESC
          LIMIT ?2",
@@ -386,7 +391,7 @@ pub(crate) fn list_memories_filtered(input: MemoryListQuery<'_>) -> Result<Vec<M
     let sql = if topic.is_some() {
         format!(
             "SELECT
-                id, content, tags, topic, importance, keywords, raw_excerpt, weight,
+                id, content, tags, topic, importance, keywords, source, raw_excerpt, weight,
                 created_at_unix_ms, updated_at_unix_ms
              FROM memories
              WHERE topic = ?1
@@ -396,7 +401,7 @@ pub(crate) fn list_memories_filtered(input: MemoryListQuery<'_>) -> Result<Vec<M
     } else {
         format!(
             "SELECT
-                id, content, tags, topic, importance, keywords, raw_excerpt, weight,
+                id, content, tags, topic, importance, keywords, source, raw_excerpt, weight,
                 created_at_unix_ms, updated_at_unix_ms
              FROM memories
              ORDER BY {order_by}
@@ -420,6 +425,7 @@ pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord
     let topic = input.topic.unwrap_or(&current.topic);
     let importance = input.importance.unwrap_or(&current.importance);
     let keywords = input.keywords.or(current.keywords.as_deref());
+    let source = input.source.or(current.source.as_deref());
     let raw_excerpt = input.raw_excerpt.or(current.raw_excerpt.as_deref());
     conn.execute(
         "UPDATE memories
@@ -428,15 +434,17 @@ pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord
              topic = ?3,
              importance = ?4,
              keywords = ?5,
-             raw_excerpt = ?6,
-             updated_at_unix_ms = ?7
-         WHERE id = ?8",
+             source = ?6,
+             raw_excerpt = ?7,
+             updated_at_unix_ms = ?8
+         WHERE id = ?9",
         params![
             content,
             tags,
             normalize_non_empty(Some(topic), "general"),
             normalize_non_empty(Some(importance), "medium"),
             keywords,
+            source,
             raw_excerpt,
             now,
             input.id
@@ -627,7 +635,7 @@ pub(crate) fn consolidate_memories(
     let conn = open_memory_db()?;
     let mut stmt = conn.prepare(
         "SELECT
-            id, content, tags, topic, importance, keywords, raw_excerpt, weight,
+            id, content, tags, topic, importance, keywords, source, raw_excerpt, weight,
             created_at_unix_ms, updated_at_unix_ms
          FROM memories
          WHERE topic = ?1
@@ -663,6 +671,11 @@ pub(crate) fn consolidate_memories(
             .iter()
             .filter_map(|memory| memory.keywords.as_deref()),
     );
+    let source = merge_csv_field(
+        memories
+            .iter()
+            .filter_map(|memory| memory.source.as_deref()),
+    );
     let raw_excerpt = render_consolidated_raw_excerpt(&memories);
     let importance = consolidated_importance(&memories);
     let source_ids: Vec<i64> = memories.iter().map(|memory| memory.id).collect();
@@ -687,6 +700,7 @@ pub(crate) fn consolidate_memories(
         topic: Some(&topic),
         importance: Some(&importance),
         keywords: keywords.as_deref(),
+        source: source.as_deref(),
         raw_excerpt: raw_excerpt.as_deref(),
     })?;
     Ok(MemoryConsolidationReport {
@@ -1317,10 +1331,11 @@ fn read_memory_rows<P: rusqlite::Params>(
             topic: row.get(3)?,
             importance: row.get(4)?,
             keywords: row.get(5)?,
-            raw_excerpt: row.get(6)?,
-            weight: row.get(7)?,
-            created_at_unix_ms: row.get(8)?,
-            updated_at_unix_ms: row.get(9)?,
+            source: row.get(6)?,
+            raw_excerpt: row.get(7)?,
+            weight: row.get(8)?,
+            created_at_unix_ms: row.get(9)?,
+            updated_at_unix_ms: row.get(10)?,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1493,7 +1508,7 @@ fn deterministic_embedding(content: &str, dimensions: usize) -> Vec<f64> {
 fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
     conn.query_row(
         "SELECT
-            id, content, tags, topic, importance, keywords, raw_excerpt, weight,
+            id, content, tags, topic, importance, keywords, source, raw_excerpt, weight,
             created_at_unix_ms, updated_at_unix_ms
          FROM memories
          WHERE id = ?1",
@@ -1506,10 +1521,11 @@ fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
                 topic: row.get(3)?,
                 importance: row.get(4)?,
                 keywords: row.get(5)?,
-                raw_excerpt: row.get(6)?,
-                weight: row.get(7)?,
-                created_at_unix_ms: row.get(8)?,
-                updated_at_unix_ms: row.get(9)?,
+                source: row.get(6)?,
+                raw_excerpt: row.get(7)?,
+                weight: row.get(8)?,
+                created_at_unix_ms: row.get(9)?,
+                updated_at_unix_ms: row.get(10)?,
             })
         },
     )
@@ -1657,6 +1673,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             topic TEXT NOT NULL DEFAULT 'general',
             importance TEXT NOT NULL DEFAULT 'medium',
             keywords TEXT,
+            source TEXT,
             raw_excerpt TEXT,
             weight REAL NOT NULL DEFAULT 1.0,
             created_at_unix_ms INTEGER NOT NULL,
@@ -1823,6 +1840,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         "TEXT NOT NULL DEFAULT 'medium'",
     )?;
     add_column_if_missing(conn, "memories", "keywords", "TEXT")?;
+    add_column_if_missing(conn, "memories", "source", "TEXT")?;
     add_column_if_missing(conn, "memories", "raw_excerpt", "TEXT")?;
     add_column_if_missing(conn, "memories", "weight", "REAL NOT NULL DEFAULT 1.0")?;
     add_column_if_missing(

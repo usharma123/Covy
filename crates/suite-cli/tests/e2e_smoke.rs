@@ -346,6 +346,8 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
             "high",
             "--keywords",
             "context,local",
+            "--source",
+            "cli-test",
             "--raw",
             "verbatim context",
             "--json",
@@ -354,7 +356,8 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .success()
         .stdout(predicate::str::contains("\"content\""))
         .stdout(predicate::str::contains("\"topic\":\"parity\""))
-        .stdout(predicate::str::contains("\"importance\":\"high\""));
+        .stdout(predicate::str::contains("\"importance\":\"high\""))
+        .stdout(predicate::str::contains("\"source\":\"cli-test\""));
 
     assert!(db_path.exists());
     let conn = Connection::open(&db_path).unwrap();
@@ -392,12 +395,15 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
             "Packet28 remembers updated local context",
             "--topic",
             "updated-parity",
+            "--source",
+            "cli-update",
             "--json",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("updated local context"))
-        .stdout(predicate::str::contains("\"topic\":\"updated-parity\""));
+        .stdout(predicate::str::contains("\"topic\":\"updated-parity\""))
+        .stdout(predicate::str::contains("\"source\":\"cli-update\""));
 
     suite_cmd()
         .env("HOME", home.path())
@@ -601,6 +607,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
                     "topic":"mcp-topic",
                     "importance":"high",
                     "keywords":"survives,locally",
+                    "source":"mcp-test",
                     "raw_excerpt":"verbatim mcp memory"
                 }
             }
@@ -614,6 +621,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         stored["result"]["structuredContent"]["topic"].as_str(),
         Some("mcp-topic")
+    );
+    assert_eq!(
+        stored["result"]["structuredContent"]["source"].as_str(),
+        Some("mcp-test")
     );
 
     write_mcp_message(
@@ -660,7 +671,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.memory_update",
-                "arguments":{"id":1, "content":"MCP memory updated locally", "topic":"mcp-updated"}
+                "arguments":{"id":1, "content":"MCP memory updated locally", "topic":"mcp-updated", "source":"mcp-update"}
             }
         }),
     );
@@ -672,6 +683,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         updated["result"]["structuredContent"]["topic"].as_str(),
         Some("mcp-updated")
+    );
+    assert_eq!(
+        updated["result"]["structuredContent"]["source"].as_str(),
+        Some("mcp-update")
     );
 
     write_mcp_message(

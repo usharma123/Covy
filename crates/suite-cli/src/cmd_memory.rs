@@ -42,6 +42,8 @@ pub struct MemoryStoreArgs {
     #[arg(long)]
     pub keywords: Option<String>,
     #[arg(long)]
+    pub source: Option<String>,
+    #[arg(long)]
     pub raw: Option<String>,
     #[arg(long)]
     pub json: bool,
@@ -95,6 +97,8 @@ pub struct MemoryUpdateArgs {
     pub importance: Option<String>,
     #[arg(long)]
     pub keywords: Option<String>,
+    #[arg(long)]
+    pub source: Option<String>,
     #[arg(long)]
     pub raw: Option<String>,
     #[arg(long)]
@@ -215,6 +219,7 @@ fn run_store(args: MemoryStoreArgs) -> Result<i32> {
         topic: args.topic.as_deref(),
         importance: args.importance.as_deref(),
         keywords: args.keywords.as_deref(),
+        source: args.source.as_deref(),
         raw_excerpt: args.raw.as_deref(),
     })?;
     if args.json {
@@ -268,6 +273,7 @@ fn run_update(args: MemoryUpdateArgs) -> Result<i32> {
         topic: args.topic.as_deref(),
         importance: args.importance.as_deref(),
         keywords: args.keywords.as_deref(),
+        source: args.source.as_deref(),
         raw_excerpt: args.raw.as_deref(),
     })?;
     if args.json {
