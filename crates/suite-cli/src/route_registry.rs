@@ -81,6 +81,9 @@ fn decide_command_route_inner(command: &str, cwd: Option<&Path>) -> RouteDecisio
     if argv.is_empty() {
         return raw_passthrough("empty_command");
     }
+    if is_packet28_invocation(&argv) {
+        return raw_passthrough("already_packet28");
+    }
 
     let mut original_argv = None;
     if let Some(cwd) = cwd {
@@ -115,7 +118,13 @@ fn decide_command_route_inner(command: &str, cwd: Option<&Path>) -> RouteDecisio
     }
 
     let normalized = shell_join(&argv);
-    if let Some(spec) = classify_command_argv(&normalized, &argv) {
+    let classification_argv = normalize_git_global_options_for_classification(&argv);
+    let classification_command = classification_argv
+        .as_ref()
+        .map(|argv| shell_join(argv))
+        .unwrap_or_else(|| normalized.clone());
+    let classification_argv = classification_argv.as_deref().unwrap_or(&argv);
+    if let Some(spec) = classify_command_argv(&classification_command, classification_argv) {
         return RouteDecision {
             kind: RouteKind::ReducerRewrite,
             reason: None,
@@ -289,6 +298,48 @@ fn classify_native_tool(argv: &[String]) -> Option<NativeToolPlan> {
         "env" | "printenv" => classify_env_tool(argv),
         _ => None,
     }
+}
+
+fn is_packet28_invocation(argv: &[String]) -> bool {
+    argv.first()
+        .and_then(|arg| Path::new(arg).file_name())
+        .and_then(|name| name.to_str())
+        .map(|name| matches!(name, "Packet28" | "packet28" | "covy"))
+        .unwrap_or(false)
+}
+
+fn normalize_git_global_options_for_classification(argv: &[String]) -> Option<Vec<String>> {
+    if argv.first().map(String::as_str) != Some("git") {
+        return None;
+    }
+    let mut normalized = vec!["git".to_string()];
+    let mut idx = 1usize;
+    let mut removed_any = false;
+    while idx < argv.len() {
+        match argv[idx].as_str() {
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
+                if idx + 1 >= argv.len() {
+                    return None;
+                }
+                idx += 2;
+                removed_any = true;
+            }
+            arg if arg.starts_with("--git-dir=")
+                || arg.starts_with("--work-tree=")
+                || arg.starts_with("--namespace=")
+                || arg.starts_with("-c") && arg.len() > 2 =>
+            {
+                idx += 1;
+                removed_any = true;
+            }
+            _ => break,
+        }
+    }
+    if !removed_any {
+        return None;
+    }
+    normalized.extend(argv[idx..].iter().cloned());
+    Some(normalized)
 }
 
 fn classify_tree_tool(argv: &[String]) -> Option<NativeToolPlan> {
@@ -916,6 +967,19 @@ mod tests {
     }
 
     #[test]
+    fn routes_multiple_env_prefixed_reducer_commands() {
+        let decision = decide_command_route("RUST_BACKTRACE=1 CARGO_TERM_COLOR=never cargo check");
+        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
+        assert_eq!(
+            decision.env_assignments,
+            vec![
+                ("RUST_BACKTRACE".to_string(), "1".to_string()),
+                ("CARGO_TERM_COLOR".to_string(), "never".to_string())
+            ]
+        );
+    }
+
+    #[test]
     fn routes_simple_reads_to_native_tool() {
         let decision = decide_command_route("head -n 20 README.md");
         assert_eq!(decision.kind, RouteKind::NativeTool);
@@ -944,6 +1008,47 @@ mod tests {
                 .as_ref()
                 .map(|spec| spec.canonical_kind.as_str()),
             Some("git_show")
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_compound_commands() {
+        let decision = decide_command_route("cargo check && cargo test");
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
+    }
+
+    #[test]
+    fn rejects_unsupported_heredoc_commands() {
+        let decision = decide_command_route("cat <<EOF\nhello\nEOF");
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
+    }
+
+    #[test]
+    fn rejects_unsupported_pipe_commands() {
+        let decision = decide_command_route("git status --short | wc -l");
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
+    }
+
+    #[test]
+    fn leaves_already_packet28_commands_alone() {
+        let decision = decide_command_route("Packet28 run git status --short");
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("already_packet28"));
+    }
+
+    #[test]
+    fn routes_git_global_options_to_reducer() {
+        let decision = decide_command_route("git -C crates/suite-cli status --short");
+        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
+        assert_eq!(
+            decision
+                .reducer_spec
+                .as_ref()
+                .map(|spec| spec.canonical_kind.as_str()),
+            Some("git_status")
         );
     }
 
