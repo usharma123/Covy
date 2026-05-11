@@ -44,10 +44,19 @@ Packet28 dashboard --root .
 Use local memory, feedback, and graph:
 
 ```bash
-Packet28 memory store "Important local project fact" --tags project
+Packet28 memory store "Important local project fact" \
+  --topic project --importance high --keywords project,decision --raw "verbatim source"
 Packet28 memory recall "project fact"
 Packet28 memory list
-Packet28 memory consolidate
+Packet28 memory update 1 --content "Updated project fact" --topic project
+Packet28 memory topics
+Packet28 memory stats
+Packet28 memory health --topic project --consolidation-threshold 10
+Packet28 memory consolidate --topic project
+Packet28 memory decay --factor 0.95
+Packet28 memory prune --threshold 0.1 --dry-run
+Packet28 memory forget 1
+Packet28 memory forget --topic obsolete-topic
 Packet28 wakeup --query project --json
 Packet28 feedback record "bad reducer output" "prefer focused summaries"
 Packet28 feedback search reducer
@@ -66,6 +75,14 @@ MCP tools exposed by the product slice:
 - `packet28.memory_store`
 - `packet28.memory_recall`
 - `packet28.memory_list`
+- `packet28.memory_update`
+- `packet28.memory_forget`
+- `packet28.memory_topics`
+- `packet28.memory_stats`
+- `packet28.memory_health`
+- `packet28.memory_consolidate`
+- `packet28.memory_decay`
+- `packet28.memory_prune`
 - `packet28.feedback_record`
 - `packet28.feedback_search`
 - `packet28.feedback_stats`
@@ -100,9 +117,11 @@ The SQLite schema includes:
 - `reductions`
 - `memories`
 - `memory_chunks`
+- `memories_fts`
 - `concepts`
 - `relations`
 - `feedback`
+- `feedback_fts`
 - `agent_sessions`
 - `mcp_calls`
 
@@ -111,5 +130,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Full ICM vector/FTS recall, wake-up extraction lifecycle, memoir export/search, transcript replay, cloud/import/upgrade, and web dashboard.
+- Full ICM vector recall, concept/memoir FTS, wake-up extraction lifecycle, memoir export/search, transcript replay, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.
