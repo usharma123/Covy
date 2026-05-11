@@ -624,12 +624,17 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
             "local",
             "--project",
             "coverage-a",
+            "--max-tokens",
+            "40",
             "--json",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"kind\":\"packet28.wakeup.v1\""))
         .stdout(predicate::str::contains("\"project\":\"coverage-a\""))
+        .stdout(predicate::str::contains("\"max_tokens\":40"))
+        .stdout(predicate::str::contains("\"pack\""))
+        .stdout(predicate::str::contains("\"included_items\""))
         .stdout(predicate::str::contains("Packet28 remembers local context"));
 
     suite_cmd()
@@ -741,7 +746,10 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"memories\":[]"));
+        .stdout(predicate::str::contains("\"memories\":[]"))
+        .stdout(predicate::str::contains(
+            "no Packet28 wake-up context matched",
+        ));
     suite_cmd()
         .env("HOME", home.path())
         .args(["memory", "forget", "3", "--json"])
@@ -1474,7 +1482,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.wakeup",
-                "arguments":{"project":"mcp-project-b", "limit": 5}
+                "arguments":{"project":"mcp-project-b", "limit": 5, "max_tokens": 60, "format":"plain"}
             }
         }),
     );
@@ -1483,6 +1491,18 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         wakeup["result"]["structuredContent"]["kind"].as_str(),
         Some("packet28.wakeup.v1")
     );
+    assert_eq!(
+        wakeup["result"]["structuredContent"]["format"].as_str(),
+        Some("plain")
+    );
+    assert_eq!(
+        wakeup["result"]["structuredContent"]["max_tokens"].as_u64(),
+        Some(60)
+    );
+    assert!(wakeup["result"]["structuredContent"]["pack"]
+        .as_str()
+        .unwrap()
+        .contains("mcp-project-b"));
     assert!(
         wakeup["result"]["structuredContent"]["transcripts"]
             .as_array()
@@ -2030,11 +2050,23 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .stdout(predicate::str::contains("\"message_count\":1"));
     suite_cmd()
         .env("HOME", home.path())
-        .args(["wakeup", "--query", "reducers", "--json"])
+        .args([
+            "wakeup",
+            "--query",
+            "reducers",
+            "--format",
+            "plain",
+            "--max-tokens",
+            "80",
+            "--json",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"kind\":\"packet28.wakeup.v1\""))
+        .stdout(predicate::str::contains("\"format\":\"plain\""))
+        .stdout(predicate::str::contains("\"estimated_tokens\""))
         .stdout(predicate::str::contains("\"transcripts\""))
+        .stdout(predicate::str::contains("\"pack\""))
         .stdout(predicate::str::contains("compact transcript recall"));
     let transcript_fts_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM transcript_messages_fts", [], |row| {

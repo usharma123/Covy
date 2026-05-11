@@ -72,7 +72,7 @@ Packet28 memory decay --factor 0.95
 Packet28 memory prune --threshold 0.1 --dry-run
 Packet28 memory forget 1
 Packet28 memory forget --topic obsolete-topic
-Packet28 wakeup --query project --json
+Packet28 wakeup --query project --max-tokens 500 --format markdown --json
 Packet28 feedback record "bad reducer output" "prefer focused summaries" \
   --topic reducers --context "test output was noisy" \
   --predicted "show everything" --reason "too many irrelevant lines" --source cli
@@ -187,5 +187,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Stronger ICM embedding backends, wake-up extraction lifecycle automation, memoir distillation/label search depth, cloud/import/upgrade, and web dashboard.
+- Stronger ICM embedding backends, wake-up hook injection/project metadata, memoir distillation/inspect-depth, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.
