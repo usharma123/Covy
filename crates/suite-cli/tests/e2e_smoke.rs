@@ -569,6 +569,20 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .stdout(predicate::str::contains("\"project\":\"coverage-a\""))
         .stdout(predicate::str::contains("\"source\":\"cli-test\""));
 
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "invalid importance should fail",
+            "--importance",
+            "urgent",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unsupported memory importance"));
+
     assert!(db_path.exists());
     let conn = Connection::open(&db_path).unwrap();
     let fts_tables: i64 = conn
@@ -630,6 +644,8 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
             "updated-parity",
             "--project",
             "coverage-b",
+            "--importance",
+            "CRITICAL",
             "--source",
             "cli-update",
             "--json",
@@ -638,6 +654,7 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .success()
         .stdout(predicate::str::contains("updated local context"))
         .stdout(predicate::str::contains("\"topic\":\"updated-parity\""))
+        .stdout(predicate::str::contains("\"importance\":\"critical\""))
         .stdout(predicate::str::contains("\"project\":\"coverage-b\""))
         .stdout(predicate::str::contains("\"source\":\"cli-update\""));
 

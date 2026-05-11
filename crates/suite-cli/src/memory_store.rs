@@ -356,7 +356,7 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
     let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
     let topic = normalize_non_empty(input.topic, "general");
-    let importance = normalize_non_empty(input.importance, "medium");
+    let importance = normalize_importance(input.importance)?;
     conn.execute(
         "INSERT INTO memories
          (content, tags, topic, importance, keywords, project, source, raw_excerpt, weight, created_at_unix_ms, updated_at_unix_ms)
@@ -593,7 +593,7 @@ pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord
             content,
             tags,
             normalize_non_empty(Some(topic), "general"),
-            normalize_non_empty(Some(importance), "medium"),
+            normalize_importance(Some(importance))?,
             keywords,
             project,
             source,
@@ -2050,6 +2050,18 @@ fn consolidated_importance(memories: &[MemoryRecord]) -> String {
         _ => "low",
     }
     .to_string()
+}
+
+fn normalize_importance(value: Option<&str>) -> Result<String> {
+    let normalized = normalize_non_empty(value, "medium")
+        .trim()
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "low" | "medium" | "high" | "critical" => Ok(normalized),
+        other => anyhow::bail!(
+            "unsupported memory importance '{other}' (expected low, medium, high, or critical)"
+        ),
+    }
 }
 
 fn importance_rank(importance: &str) -> i64 {
