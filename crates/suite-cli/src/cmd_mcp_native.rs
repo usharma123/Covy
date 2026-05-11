@@ -591,6 +591,7 @@ fn build_search_slim_payload(
     Value::Object(payload)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_search_request(
     query: &str,
     paths: Vec<String>,

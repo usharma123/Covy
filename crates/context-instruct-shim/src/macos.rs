@@ -47,6 +47,10 @@ struct InterceptCandidate {
 }
 
 #[unsafe(no_mangle)]
+/// # Safety
+///
+/// `path` must be a valid C string pointer accepted by `open(2)`, and the
+/// caller must uphold the platform ABI contract for `flags` and `mode`.
 pub unsafe extern "C" fn context_instruct_shim_open(
     path: *const c_char,
     flags: libc::c_int,
@@ -62,6 +66,11 @@ pub unsafe extern "C" fn context_instruct_shim_open(
 }
 
 #[unsafe(no_mangle)]
+/// # Safety
+///
+/// `path` must be a valid C string pointer accepted by `openat(2)`, `dirfd`
+/// must be a valid directory file descriptor or platform sentinel, and the
+/// caller must uphold the platform ABI contract for `flags` and `mode`.
 pub unsafe extern "C" fn context_instruct_shim_openat(
     dirfd: libc::c_int,
     path: *const c_char,
