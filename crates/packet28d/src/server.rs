@@ -7,6 +7,25 @@ pub(crate) fn handle_connection(
     watch_tx: Sender<WatchEventMsg>,
     stream: UnixStream,
 ) -> Result<()> {
+    handle_stream(state, watch_tx, stream)
+}
+
+pub(crate) fn handle_tcp_connection(
+    state: Arc<Mutex<DaemonState>>,
+    watch_tx: Sender<WatchEventMsg>,
+    stream: std::net::TcpStream,
+) -> Result<()> {
+    handle_stream(state, watch_tx, stream)
+}
+
+fn handle_stream<S>(
+    state: Arc<Mutex<DaemonState>>,
+    watch_tx: Sender<WatchEventMsg>,
+    stream: S,
+) -> Result<()>
+where
+    S: std::io::Read + std::io::Write + TryCloneStream + Send + 'static,
+{
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
     loop {
@@ -43,7 +62,7 @@ pub(crate) fn handle_connection(
 
 fn handle_task_subscribe(
     state: Arc<Mutex<DaemonState>>,
-    writer: &mut BufWriter<UnixStream>,
+    writer: &mut impl std::io::Write,
     task_id: String,
     replay_last: usize,
 ) -> Result<()> {
@@ -90,13 +109,29 @@ fn handle_task_subscribe(
 }
 
 fn write_socket_response(
-    writer: &mut BufWriter<UnixStream>,
+    writer: &mut impl std::io::Write,
     response: &DaemonResponse,
 ) -> Result<()> {
     match write_socket_message(writer, response) {
         Ok(()) => Ok(()),
         Err(err) if is_benign_disconnect_error(&err) => Ok(()),
         Err(err) => Err(err),
+    }
+}
+
+trait TryCloneStream: Sized {
+    fn try_clone(&self) -> std::io::Result<Self>;
+}
+
+impl TryCloneStream for UnixStream {
+    fn try_clone(&self) -> std::io::Result<Self> {
+        UnixStream::try_clone(self)
+    }
+}
+
+impl TryCloneStream for std::net::TcpStream {
+    fn try_clone(&self) -> std::io::Result<Self> {
+        std::net::TcpStream::try_clone(self)
     }
 }
 

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{BufReader, BufWriter, ErrorKind};
+use std::net::TcpListener;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -27,8 +28,8 @@ use packet28_daemon_core::{
     load_task_events, load_task_registry, load_watch_registry, log_path, now_unix,
     read_socket_message, ready_path, remove_runtime_files, save_task_registry, save_watch_registry,
     socket_path, task_artifact_dir, task_brief_json_path, task_brief_markdown_path,
-    task_event_log_path, task_state_json_path, task_version_json_path, write_runtime_info,
-    write_socket_message, BrokerAction, BrokerDecision, BrokerDecomposeIntent,
+    task_event_log_path, task_state_json_path, task_version_json_path, workspace_socket_path,
+    write_runtime_info, write_socket_message, BrokerAction, BrokerDecision, BrokerDecomposeIntent,
     BrokerDecomposeRequest, BrokerDecomposeResponse, BrokerDecomposedStep, BrokerDeltaResponse,
     BrokerEstimateContextRequest, BrokerEstimateContextResponse, BrokerEvictionCandidate,
     BrokerGetContextRequest, BrokerGetContextResponse, BrokerPacketRef, BrokerPlanStep,
@@ -100,7 +101,7 @@ use crate::runtime_files::{
     clear_index_files, default_index_manifest, load_index_manifest_file, load_index_snapshot_file,
     save_index_manifest_file, save_index_snapshot_file,
 };
-use crate::server::handle_connection;
+use crate::server::{handle_connection, handle_tcp_connection};
 use crate::state::{
     CachedSourceFile, DaemonState, IndexCommand, InteractiveIndexRuntime, PendingWatchEvent,
     TaskSequenceObserver, WatchEventMsg,
@@ -150,14 +151,13 @@ fn serve(root: PathBuf) -> Result<()> {
         .with_context(|| format!("failed to set daemon cwd to '{}'", root.display()))?;
     ensure_daemon_dir(&root)?;
     let daemon_log_path = log_path(&root);
-    let socket = socket_path(&root);
-    let listener = bind_listener(&socket)?;
+    let listener = bind_daemon_listener(&root)?;
 
     let runtime = DaemonRuntimeInfo {
         pid: std::process::id(),
         started_at_unix: now_unix(),
         ready_at_unix: None,
-        socket_path: socket.to_string_lossy().to_string(),
+        socket_path: listener.endpoint(),
         workspace_root: root.to_string_lossy().to_string(),
         log_path: daemon_log_path.to_string_lossy().to_string(),
     };
@@ -226,11 +226,20 @@ fn serve(root: PathBuf) -> Result<()> {
             break;
         }
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok(DaemonAcceptedStream::Unix(stream)) => {
                 let state = state.clone();
                 let watch_tx = watch_tx.clone();
                 thread::spawn(move || {
                     if let Err(err) = handle_connection(state, watch_tx, stream) {
+                        daemon_log(&format!("request handling failed: {err}"));
+                    }
+                });
+            }
+            Ok(DaemonAcceptedStream::Tcp(stream)) => {
+                let state = state.clone();
+                let watch_tx = watch_tx.clone();
+                thread::spawn(move || {
+                    if let Err(err) = handle_tcp_connection(state, watch_tx, stream) {
                         daemon_log(&format!("request handling failed: {err}"));
                     }
                 });
@@ -274,14 +283,15 @@ fn mark_ready(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
 }
 
 fn wake_listener(root: &Path) {
-    let _ = UnixStream::connect(socket_path(root));
+    let _ = UnixStream::connect(socket_path(root))
+        .or_else(|_| UnixStream::connect(workspace_socket_path(root)));
 }
 
 fn daemon_log(message: &str) {
     eprintln!("[packet28d {}] {message}", now_unix());
 }
 
-fn bind_listener(socket: &Path) -> Result<UnixListener> {
+fn cleanup_socket_before_bind(socket: &Path) -> Result<()> {
     if socket.exists() {
         match UnixStream::connect(socket) {
             Ok(_) => {
@@ -320,8 +330,103 @@ fn bind_listener(socket: &Path) -> Result<UnixListener> {
             }
         }
     }
+    Ok(())
+}
 
-    UnixListener::bind(socket).with_context(|| format!("failed to bind '{}'", socket.display()))
+enum DaemonListener {
+    Unix {
+        endpoint: PathBuf,
+        listener: UnixListener,
+    },
+    Tcp {
+        endpoint: String,
+        listener: TcpListener,
+    },
+}
+
+enum DaemonAcceptedStream {
+    Unix(UnixStream),
+    Tcp(std::net::TcpStream),
+}
+
+impl DaemonListener {
+    fn endpoint(&self) -> String {
+        match self {
+            DaemonListener::Unix { endpoint, .. } => endpoint.to_string_lossy().to_string(),
+            DaemonListener::Tcp { endpoint, .. } => endpoint.clone(),
+        }
+    }
+
+    fn accept(&self) -> std::io::Result<DaemonAcceptedStream> {
+        match self {
+            DaemonListener::Unix { listener, .. } => {
+                let (stream, _) = listener.accept()?;
+                Ok(DaemonAcceptedStream::Unix(stream))
+            }
+            DaemonListener::Tcp { listener, .. } => {
+                let (stream, _) = listener.accept()?;
+                Ok(DaemonAcceptedStream::Tcp(stream))
+            }
+        }
+    }
+}
+
+fn bind_daemon_listener(root: &Path) -> Result<DaemonListener> {
+    if std::env::var("PACKET28D_FORCE_TCP")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+    {
+        return bind_tcp_listener("PACKET28D_FORCE_TCP requested TCP daemon transport");
+    }
+    let primary = socket_path(root);
+    cleanup_socket_before_bind(&primary)?;
+    match UnixListener::bind(&primary) {
+        Ok(listener) => Ok(DaemonListener::Unix {
+            endpoint: primary,
+            listener,
+        }),
+        Err(primary_err) if bind_io_error_is_permission_denied(&primary_err) => {
+            let fallback = workspace_socket_path(root);
+            daemon_log(&format!(
+                "falling back to workspace socket '{}' after temp socket bind failed: {primary_err}",
+                fallback.display()
+            ));
+            cleanup_socket_before_bind(&fallback)?;
+            match UnixListener::bind(&fallback) {
+                Ok(listener) => Ok(DaemonListener::Unix {
+                    endpoint: fallback,
+                    listener,
+                }),
+                Err(fallback_err) => {
+                    daemon_log(&format!(
+                        "falling back to TCP after workspace socket bind failed: {fallback_err}"
+                    ));
+                    bind_tcp_listener(&format!(
+                        "Unix sockets '{}' and '{}' were denied",
+                        primary.display(),
+                        fallback.display()
+                    ))
+                }
+            }
+        }
+        Err(err) => Err(err).with_context(|| format!("failed to bind '{}'", primary.display())),
+    }
+}
+
+fn bind_io_error_is_permission_denied(err: &std::io::Error) -> bool {
+    err.kind() == ErrorKind::PermissionDenied
+        || err.raw_os_error() == Some(1)
+        || err.to_string().contains("Operation not permitted")
+}
+
+fn bind_tcp_listener(reason: &str) -> Result<DaemonListener> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .with_context(|| format!("failed to bind TCP fallback after {reason}"))?;
+    let endpoint = format!("tcp://{}", listener.local_addr()?);
+    daemon_log(&format!(
+        "using TCP daemon endpoint '{endpoint}' ({reason})"
+    ));
+    Ok(DaemonListener::Tcp { endpoint, listener })
 }
 
 fn resolve_root(path: &Path) -> PathBuf {

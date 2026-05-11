@@ -3,19 +3,21 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use packet28_daemon_core::{
     log_path, read_runtime_info, read_socket_message, ready_path, resolve_workspace_root,
-    socket_path, write_socket_message, ContextRecallRequest, ContextRecallResponse,
-    ContextResolveRequest, ContextResolveResponse, ContextStoreGetRequest, ContextStoreGetResponse,
-    ContextStoreListRequest, ContextStoreListResponse, ContextStorePruneDaemonRequest,
-    ContextStorePruneResponse, ContextStoreStatsRequest, ContextStoreStatsResponse,
-    CoverCheckRequest, CoverCheckResponse, DaemonRequest, DaemonResponse, PacketFetchRequest,
-    PacketFetchResponse, TaskSubmitSpec, TestMapRequest, TestMapResponse, TestShardRequest,
-    TestShardResponse,
+    socket_path, workspace_socket_path, write_socket_message, ContextRecallRequest,
+    ContextRecallResponse, ContextResolveRequest, ContextResolveResponse, ContextStoreGetRequest,
+    ContextStoreGetResponse, ContextStoreListRequest, ContextStoreListResponse,
+    ContextStorePruneDaemonRequest, ContextStorePruneResponse, ContextStoreStatsRequest,
+    ContextStoreStatsResponse, CoverCheckRequest, CoverCheckResponse, DaemonRequest,
+    DaemonResponse, PacketFetchRequest, PacketFetchResponse, TaskSubmitSpec, TestMapRequest,
+    TestMapResponse, TestShardRequest, TestShardResponse,
 };
 
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Read, Write};
+#[cfg(unix)]
+use std::net::TcpStream;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 #[cfg(unix)]
@@ -31,8 +33,51 @@ const DAEMON_SOCKET_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(unix)]
 pub struct PersistentDaemonClient {
     root: PathBuf,
-    reader: BufReader<UnixStream>,
-    writer: BufWriter<UnixStream>,
+    reader: BufReader<DaemonStream>,
+    writer: BufWriter<DaemonStream>,
+}
+
+#[cfg(unix)]
+pub(crate) enum DaemonStream {
+    Unix(UnixStream),
+    Tcp(TcpStream),
+}
+
+#[cfg(unix)]
+impl DaemonStream {
+    fn try_clone(&self) -> std::io::Result<Self> {
+        match self {
+            DaemonStream::Unix(stream) => stream.try_clone().map(DaemonStream::Unix),
+            DaemonStream::Tcp(stream) => stream.try_clone().map(DaemonStream::Tcp),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Read for DaemonStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            DaemonStream::Unix(stream) => stream.read(buf),
+            DaemonStream::Tcp(stream) => stream.read(buf),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Write for DaemonStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            DaemonStream::Unix(stream) => stream.write(buf),
+            DaemonStream::Tcp(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            DaemonStream::Unix(stream) => stream.flush(),
+            DaemonStream::Tcp(stream) => stream.flush(),
+        }
+    }
 }
 
 pub fn via_daemon_env_enabled() -> bool {
@@ -242,13 +287,8 @@ pub(crate) fn subscribe_task(
     root: &Path,
     task_id: &str,
     replay_last: usize,
-) -> Result<(UnixStream, usize)> {
-    let socket = socket_path(root);
-    let stream = UnixStream::connect(&socket)
-        .with_context(|| format!("failed to connect to daemon socket '{}'", socket.display()))?;
-    stream
-        .set_read_timeout(None)
-        .context("failed to configure subscribe read timeout")?;
+) -> Result<(DaemonStream, usize)> {
+    let stream = connect_daemon_endpoint(&daemon_endpoint(root))?;
     let mut writer = BufWriter::new(stream.try_clone()?);
     let mut reader = BufReader::new(stream.try_clone()?);
     write_socket_message(
@@ -275,8 +315,7 @@ impl PersistentDaemonClient {
     pub fn connect(root: &Path) -> Result<Self> {
         let root = normalize_daemon_root(root);
         ensure_daemon(&root)?;
-        let socket = socket_path(&root);
-        let stream = connect_daemon_socket(&socket)?;
+        let stream = connect_daemon_endpoint(&daemon_endpoint(&root))?;
         let reader_stream = stream.try_clone()?;
         Ok(Self {
             root,
@@ -301,7 +340,8 @@ pub(crate) fn ensure_daemon(root: &Path) -> Result<()> {
     if daemon_status_existing(&root).is_ok() {
         return Ok(());
     }
-    if socket_path(&root).exists() && connect_daemon_socket(&socket_path(&root)).is_err() {
+    let endpoint = daemon_endpoint(&root);
+    if endpoint_may_have_stale_socket(&endpoint) && connect_daemon_endpoint(&endpoint).is_err() {
         cleanup_unreachable_runtime_files(&root)?;
     }
     start_daemon(&root)?;
@@ -395,8 +435,7 @@ fn daemon_error_indicates_protocol_mismatch(message: &str) -> bool {
 
 #[cfg(unix)]
 fn send_request_existing_daemon(root: &Path, request: &DaemonRequest) -> Result<DaemonResponse> {
-    let socket = socket_path(root);
-    let stream = connect_daemon_socket(&socket)?;
+    let stream = connect_daemon_endpoint(&daemon_endpoint(root))?;
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(reader_stream);
@@ -415,7 +454,7 @@ fn daemon_status_existing(root: &Path) -> Result<packet28_daemon_core::DaemonSta
 }
 
 #[cfg(unix)]
-fn connect_daemon_socket(socket: &Path) -> Result<UnixStream> {
+fn connect_daemon_socket(socket: &Path) -> Result<DaemonStream> {
     let stream = UnixStream::connect(socket)
         .with_context(|| format!("failed to connect to '{}'", socket.display()))?;
     stream
@@ -434,19 +473,19 @@ fn connect_daemon_socket(socket: &Path) -> Result<UnixStream> {
                 socket.display()
             )
         })?;
-    Ok(stream)
+    Ok(DaemonStream::Unix(stream))
 }
 
 #[cfg(unix)]
 fn stop_daemon_if_running(root: &Path) -> Result<()> {
-    let socket = socket_path(root);
-    if !socket.exists() {
+    let endpoint = daemon_endpoint(root);
+    if !endpoint_may_have_stale_socket(&endpoint) {
         return Ok(());
     }
     match send_request_existing_daemon(root, &DaemonRequest::Stop) {
         Ok(_) => Ok(()),
         Err(err) => {
-            if socket.exists() && UnixStream::connect(&socket).is_ok() {
+            if connect_daemon_endpoint(&endpoint).is_ok() {
                 Err(err)
             } else {
                 Ok(())
@@ -457,7 +496,11 @@ fn stop_daemon_if_running(root: &Path) -> Result<()> {
 
 #[cfg(unix)]
 fn cleanup_unreachable_runtime_files(root: &Path) -> Result<()> {
-    for path in [socket_path(root), ready_path(root)] {
+    for path in [
+        socket_path(root),
+        workspace_socket_path(root),
+        ready_path(root),
+    ] {
         if path.exists() {
             std::fs::remove_file(&path).with_context(|| {
                 format!("failed to remove stale runtime file '{}'", path.display())
@@ -471,16 +514,50 @@ fn cleanup_unreachable_runtime_files(root: &Path) -> Result<()> {
 fn wait_for_daemon_shutdown(root: &Path, timeout: Duration) -> Result<()> {
     let start = Instant::now();
     while start.elapsed() < timeout {
-        let socket = socket_path(root);
-        if !socket.exists() || UnixStream::connect(&socket).is_err() {
+        let endpoint = daemon_endpoint(root);
+        if !endpoint_may_have_stale_socket(&endpoint) || connect_daemon_endpoint(&endpoint).is_err()
+        {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(10));
     }
     Err(anyhow!(
         "packet28d did not stop; socket still reachable at '{}'",
-        socket_path(root).display()
+        daemon_endpoint(root)
     ))
+}
+
+#[cfg(unix)]
+fn daemon_endpoint(root: &Path) -> String {
+    read_runtime_info(root)
+        .ok()
+        .map(|runtime| runtime.socket_path)
+        .filter(|endpoint| !endpoint.is_empty())
+        .unwrap_or_else(|| socket_path(root).to_string_lossy().to_string())
+}
+
+#[cfg(unix)]
+fn endpoint_may_have_stale_socket(endpoint: &str) -> bool {
+    endpoint
+        .strip_prefix("tcp://")
+        .map(|_| true)
+        .unwrap_or_else(|| Path::new(endpoint).exists())
+}
+
+#[cfg(unix)]
+fn connect_daemon_endpoint(endpoint: &str) -> Result<DaemonStream> {
+    if let Some(addr) = endpoint.strip_prefix("tcp://") {
+        let stream = TcpStream::connect(addr)
+            .with_context(|| format!("failed to connect to daemon endpoint '{endpoint}'"))?;
+        stream
+            .set_read_timeout(Some(DAEMON_SOCKET_TIMEOUT))
+            .with_context(|| format!("failed to configure read timeout for '{endpoint}'"))?;
+        stream
+            .set_write_timeout(Some(DAEMON_SOCKET_TIMEOUT))
+            .with_context(|| format!("failed to configure write timeout for '{endpoint}'"))?;
+        return Ok(DaemonStream::Tcp(stream));
+    }
+    connect_daemon_socket(Path::new(endpoint))
 }
 
 #[cfg(unix)]

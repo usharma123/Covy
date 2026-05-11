@@ -36,6 +36,7 @@ pub fn read_runtime_info(root: &Path) -> Result<DaemonRuntimeInfo> {
 pub fn remove_runtime_files(root: &Path) -> Result<()> {
     for path in [
         socket_path(root),
+        workspace_socket_path(root),
         pid_path(root),
         runtime_path(root),
         ready_path(root),

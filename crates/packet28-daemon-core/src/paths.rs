@@ -29,6 +29,10 @@ pub fn socket_path(root: &Path) -> PathBuf {
     socket_dir().join(socket_file_name(root))
 }
 
+pub fn workspace_socket_path(root: &Path) -> PathBuf {
+    daemon_dir(root).join(SOCKET_FILE_NAME)
+}
+
 pub fn pid_path(root: &Path) -> PathBuf {
     daemon_dir(root).join(PID_FILE_NAME)
 }
@@ -144,5 +148,13 @@ mod tests {
         );
         assert!(socket.to_string_lossy().len() < 104);
         assert_ne!(socket, daemon_dir(&root).join(SOCKET_FILE_NAME));
+    }
+
+    #[test]
+    fn workspace_socket_path_uses_daemon_dir() {
+        let dir = tempdir().unwrap();
+        let socket = workspace_socket_path(dir.path());
+
+        assert_eq!(socket, daemon_dir(dir.path()).join(SOCKET_FILE_NAME));
     }
 }
