@@ -73,27 +73,13 @@ pub fn run(args: RunArgs) -> Result<i32> {
 fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunArgs) -> Result<i32> {
     let command_text = command_text(&args.command);
     let Some(spec) = classify_command_argv(&command_text, &args.command) else {
-        return run_plain_command(
-            root,
-            cwd,
-            &args.command,
-            args.json,
-            args.pretty,
-            "unsupported",
-        );
+        return run_auto_fallback(root, cwd, args, "unsupported");
     };
     if !matches!(
         spec.family.as_str(),
         "git" | "rust" | "javascript" | "python" | "fs" | "infra" | "github"
     ) {
-        return run_plain_command(
-            root,
-            cwd,
-            &args.command,
-            args.json,
-            args.pretty,
-            "unsupported_family",
-        );
+        return run_auto_fallback(root, cwd, args, "unsupported_family");
     }
 
     let output = build_command(&args.command)?
@@ -156,6 +142,46 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
         );
     }
     Ok(exit_code)
+}
+
+fn run_auto_fallback(
+    root: &std::path::Path,
+    cwd: &std::path::Path,
+    args: &RunArgs,
+    fallback_reason: &str,
+) -> Result<i32> {
+    if should_use_agent_runtime_backend(&args.command) {
+        return run_platform_agent_backend(root, &args.command);
+    }
+    run_plain_command(
+        root,
+        cwd,
+        &args.command,
+        args.json,
+        args.pretty,
+        fallback_reason,
+    )
+}
+
+fn should_use_agent_runtime_backend(argv: &[String]) -> bool {
+    detect_agent_family(argv.first().map(String::as_str)) != "generic"
+}
+
+#[cfg(target_os = "macos")]
+fn run_platform_agent_backend(root: &std::path::Path, argv: &[String]) -> Result<i32> {
+    run_macos_swap(root, argv)
+}
+
+#[cfg(target_os = "linux")]
+fn run_platform_agent_backend(root: &std::path::Path, argv: &[String]) -> Result<i32> {
+    run_linux_preload(root, argv)
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "linux")))]
+fn run_platform_agent_backend(_root: &std::path::Path, _argv: &[String]) -> Result<i32> {
+    Err(anyhow!(
+        "Packet28 run auto backend is not implemented for this platform"
+    ))
 }
 
 fn run_plain_command(
