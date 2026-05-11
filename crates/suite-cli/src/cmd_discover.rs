@@ -9,8 +9,14 @@ use clap::Args;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::savings_analytics::load_run_savings;
+
 #[derive(Args, Clone)]
 pub struct DiscoverArgs {
+    /// Workspace root for local Packet28 run analytics
+    #[arg(long, default_value = ".")]
+    pub root: String,
+
     /// Path to Claude projects directory
     #[arg(long)]
     pub sessions_dir: Option<String>,
@@ -36,6 +42,7 @@ struct DiscoverReport {
     unsupported_commands: usize,
     by_category: BTreeMap<String, CategoryStats>,
     top_unsupported: Vec<UnsupportedCommand>,
+    missed_savings: Vec<MissedSavingsCommand>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -51,13 +58,24 @@ struct UnsupportedCommand {
     estimated_tokens: u64,
 }
 
+#[derive(Debug, Serialize)]
+struct MissedSavingsCommand {
+    command: String,
+    reason: String,
+    raw_est_tokens: u64,
+    reduced_est_tokens: u64,
+    savings_percent: f64,
+}
+
 pub fn run(args: DiscoverArgs) -> Result<i32> {
+    let root = crate::cmd_daemon::resolve_root_arg(&args.root);
     let sessions_dir = args
         .sessions_dir
         .map(PathBuf::from)
         .unwrap_or_else(default_sessions_dir);
 
     let mut report = DiscoverReport::default();
+    add_run_savings_misses(&root, args.limit, &mut report)?;
 
     if !sessions_dir.exists() {
         if args.json {
@@ -140,9 +158,41 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
                 );
             }
         }
+        if !report.missed_savings.is_empty() {
+            println!("Missed local savings:");
+            for item in &report.missed_savings {
+                println!(
+                    "  {} reason={} raw={} reduced={} savings={:.1}%",
+                    item.command,
+                    item.reason,
+                    item.raw_est_tokens,
+                    item.reduced_est_tokens,
+                    item.savings_percent
+                );
+            }
+        }
     }
 
     Ok(0)
+}
+
+fn add_run_savings_misses(root: &Path, limit: usize, report: &mut DiscoverReport) -> Result<()> {
+    for record in load_run_savings(root, limit)? {
+        let missed = record.fallback_reason.is_some()
+            || (record.raw_est_tokens > 0 && record.savings_percent < 10.0);
+        if missed {
+            report.missed_savings.push(MissedSavingsCommand {
+                command: record.command,
+                reason: record
+                    .fallback_reason
+                    .unwrap_or_else(|| "low_savings".to_string()),
+                raw_est_tokens: record.raw_est_tokens,
+                reduced_est_tokens: record.reduced_est_tokens,
+                savings_percent: record.savings_percent,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn default_sessions_dir() -> PathBuf {

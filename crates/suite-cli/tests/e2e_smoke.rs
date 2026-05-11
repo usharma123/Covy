@@ -558,6 +558,39 @@ fn test_dashboard_shows_local_product_metrics() {
         .stdout(predicate::str::contains("\"windsurf_doctor_status\""));
 }
 
+#[test]
+fn test_discover_reports_run_missed_savings() {
+    let root = TempDir::new().unwrap();
+    let missing_sessions = root.path().join("missing-sessions");
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "printf",
+            "hello",
+        ])
+        .assert()
+        .success();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "discover",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            missing_sessions.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"missed_savings\""))
+        .stdout(predicate::str::contains("\"command\":\"printf hello\""));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();

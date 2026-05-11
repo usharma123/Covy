@@ -73,13 +73,27 @@ pub fn run(args: RunArgs) -> Result<i32> {
 fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunArgs) -> Result<i32> {
     let command_text = command_text(&args.command);
     let Some(spec) = classify_command_argv(&command_text, &args.command) else {
-        return run_plain_command(&args.command, args.json, args.pretty, "unsupported");
+        return run_plain_command(
+            root,
+            cwd,
+            &args.command,
+            args.json,
+            args.pretty,
+            "unsupported",
+        );
     };
     if !matches!(
         spec.family.as_str(),
         "git" | "rust" | "javascript" | "python" | "fs" | "infra" | "github"
     ) {
-        return run_plain_command(&args.command, args.json, args.pretty, "unsupported_family");
+        return run_plain_command(
+            root,
+            cwd,
+            &args.command,
+            args.json,
+            args.pretty,
+            "unsupported_family",
+        );
     }
 
     let output = build_command(&args.command)?
@@ -145,6 +159,8 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
 }
 
 fn run_plain_command(
+    root: &std::path::Path,
+    cwd: &std::path::Path,
     argv: &[String],
     json: bool,
     pretty: bool,
@@ -157,6 +173,22 @@ fn run_plain_command(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let exit_code = output.status.code().unwrap_or(1);
+    let raw_est_tokens = estimate_tokens(&(stdout.clone() + &stderr));
+    record_run_savings(
+        root,
+        &RunSavingsRecord {
+            command: command_text.clone(),
+            cwd: cwd.display().to_string(),
+            family: "fallback".to_string(),
+            canonical_kind: "raw_passthrough".to_string(),
+            exit_code,
+            raw_est_tokens,
+            reduced_est_tokens: raw_est_tokens,
+            savings_percent: 0.0,
+            fallback_reason: Some(fallback_reason.to_string()),
+            timestamp_unix_ms: timestamp_unix_ms(),
+        },
+    )?;
     if json {
         crate::cmd_common::emit_json(
             &json!({
@@ -167,8 +199,8 @@ fn run_plain_command(
                 },
                 "stdout": stdout,
                 "stderr": stderr,
-                "raw_est_tokens": estimate_tokens(&(stdout.clone() + &stderr)),
-                "reduced_est_tokens": estimate_tokens(&(stdout.clone() + &stderr)),
+                "raw_est_tokens": raw_est_tokens,
+                "reduced_est_tokens": raw_est_tokens,
                 "savings_percent": 0.0,
                 "fallback_reason": fallback_reason,
             }),
