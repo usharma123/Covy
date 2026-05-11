@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 
 use crate::memory_store::{
     consolidate_memories, decay_memories, embed_memories, forget_memories_by_topic, forget_memory,
@@ -66,10 +66,24 @@ pub struct MemoryRecallArgs {
     pub tag: Option<String>,
     #[arg(long)]
     pub keyword: Option<String>,
+    #[arg(long, default_value = "simple")]
+    pub format: MemoryRecallFormat,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum MemoryRecallFormat {
+    /// Backwards-compatible one-line terminal output.
+    Simple,
+    /// Compact row-oriented output for prompt injection.
+    Toon,
+    /// Multi-line labelled output for human inspection.
+    Detail,
+    /// Machine-readable JSON array.
+    Json,
 }
 
 #[derive(Args)]
@@ -248,14 +262,100 @@ fn run_recall(args: MemoryRecallArgs) -> Result<i32> {
         tag: args.tag.as_deref(),
         keyword: args.keyword.as_deref(),
     })?;
-    if args.json {
+    if args.json || matches!(args.format, MemoryRecallFormat::Json) {
         crate::cmd_common::emit_json(&serde_json::to_value(records)?, args.pretty)?;
     } else {
-        for record in records {
-            println!("{} {}", record.id, record.content);
-        }
+        print!("{}", render_recall_records(&records, args.format));
     }
     Ok(0)
+}
+
+fn render_recall_records(
+    records: &[crate::memory_store::MemoryRecord],
+    format: MemoryRecallFormat,
+) -> String {
+    match format {
+        MemoryRecallFormat::Simple | MemoryRecallFormat::Json => {
+            let mut out = String::new();
+            for record in records {
+                out.push_str(&format!("{} {}\n", record.id, record.content));
+            }
+            out
+        }
+        MemoryRecallFormat::Toon => render_recall_toon(records),
+        MemoryRecallFormat::Detail => render_recall_detail(records),
+    }
+}
+
+fn render_recall_toon(records: &[crate::memory_store::MemoryRecord]) -> String {
+    let has_score = records.iter().any(|record| record.recall_score.is_some());
+    let cols: &[&str] = if has_score {
+        &["score", "id", "topic", "importance", "weight", "summary"]
+    } else {
+        &["id", "topic", "importance", "weight", "summary"]
+    };
+    let mut out = format!("memories[{}]{{{}}}:\n", records.len(), cols.join(","));
+    for record in records {
+        let mut row = Vec::with_capacity(cols.len());
+        if has_score {
+            row.push(
+                record
+                    .recall_score
+                    .map(|score| format!("{score:.3}"))
+                    .unwrap_or_else(|| "-".to_string()),
+            );
+        }
+        row.push(record.id.to_string());
+        row.push(record.topic.clone());
+        row.push(record.importance.clone());
+        row.push(format!("{:.3}", record.weight));
+        row.push(record.content.clone());
+        out.push_str("  ");
+        out.push_str(
+            &row.iter()
+                .map(|field| toon_escape(field))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        out.push('\n');
+    }
+    out
+}
+
+fn render_recall_detail(records: &[crate::memory_store::MemoryRecord]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    for record in records {
+        if let Some(score) = record.recall_score {
+            let _ = writeln!(&mut out, "--- {} [score: {:.3}] ---", record.id, score);
+        } else {
+            let _ = writeln!(&mut out, "--- {} ---", record.id);
+        }
+        let _ = writeln!(&mut out, "  topic:      {}", record.topic);
+        let _ = writeln!(&mut out, "  importance: {}", record.importance);
+        if let Some(project) = &record.project {
+            let _ = writeln!(&mut out, "  project:    {project}");
+        }
+        let _ = writeln!(&mut out, "  weight:     {:.3}", record.weight);
+        let _ = writeln!(&mut out, "  summary:    {}", record.content);
+        if let Some(keywords) = &record.keywords {
+            let _ = writeln!(&mut out, "  keywords:   {keywords}");
+        }
+        if let Some(raw_excerpt) = &record.raw_excerpt {
+            let _ = writeln!(&mut out, "  raw:        {raw_excerpt}");
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn toon_escape(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
 }
 
 fn run_list(args: MemoryListArgs) -> Result<i32> {

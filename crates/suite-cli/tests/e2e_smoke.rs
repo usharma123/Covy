@@ -464,7 +464,22 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .args(["memory", "recall", "local context", "--json"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("\"recall_score\""))
         .stdout(predicate::str::contains("Packet28 remembers local context"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "recall", "local context", "--format", "toon"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("memories[1]{score,id,topic"))
+        .stdout(predicate::str::contains("Packet28 remembers local context"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "recall", "local context", "--format", "detail"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[score:"))
+        .stdout(predicate::str::contains("topic:"));
 
     suite_cmd()
         .env("HOME", home.path())

@@ -18,6 +18,8 @@ pub(crate) struct MemoryRecord {
     pub(crate) source: Option<String>,
     pub(crate) raw_excerpt: Option<String>,
     pub(crate) weight: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) recall_score: Option<f64>,
     pub(crate) created_at_unix_ms: i64,
     pub(crate) updated_at_unix_ms: i64,
 }
@@ -361,11 +363,11 @@ pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<V
         let mut stmt = conn.prepare(
             "SELECT
                 m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.project, m.source, m.raw_excerpt, m.weight,
-                m.created_at_unix_ms, m.updated_at_unix_ms
+                m.created_at_unix_ms, m.updated_at_unix_ms, bm25(memories_fts) AS recall_score
              FROM memories_fts f
              JOIN memories m ON m.rowid = f.rowid
              WHERE memories_fts MATCH ?1
-             ORDER BY bm25(memories_fts), m.created_at_unix_ms DESC
+             ORDER BY recall_score, m.created_at_unix_ms DESC
              LIMIT ?2",
         )?;
         let records = read_memory_rows(&mut stmt, params![match_query, expanded_limit as i64])?;
@@ -1534,6 +1536,11 @@ fn read_memory_rows<P: rusqlite::Params>(
             source: row.get(7)?,
             raw_excerpt: row.get(8)?,
             weight: row.get(9)?,
+            recall_score: if row.as_ref().column_count() > 12 {
+                row.get(12)?
+            } else {
+                None
+            },
             created_at_unix_ms: row.get(10)?,
             updated_at_unix_ms: row.get(11)?,
         })
@@ -1882,6 +1889,7 @@ fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
                 source: row.get(7)?,
                 raw_excerpt: row.get(8)?,
                 weight: row.get(9)?,
+                recall_score: None,
                 created_at_unix_ms: row.get(10)?,
                 updated_at_unix_ms: row.get(11)?,
             })
