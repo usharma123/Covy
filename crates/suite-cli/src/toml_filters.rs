@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use packet28_daemon_core::trust::{
+    default_trust_store_path, load_trust_store, save_trust_store, trust_filter,
+    verify_project_filter, TrustStatus,
+};
 use regex::{Regex, RegexSet};
 use serde::Deserialize;
 
@@ -223,10 +227,34 @@ pub(crate) fn run_filter_tests(
     Ok(results)
 }
 
+pub(crate) fn trust_project_filters(root: &Path) -> Result<Vec<String>> {
+    let trust_store_path = default_trust_store_path();
+    let mut store = load_trust_store(&trust_store_path)?;
+    let mut trusted = Vec::new();
+    for path in project_filter_config_paths(root) {
+        if !path.exists() {
+            continue;
+        }
+        trust_filter(&mut store, &path)?;
+        trusted.push(path.display().to_string());
+    }
+    if !trusted.is_empty() {
+        save_trust_store(&trust_store_path, &store)?;
+    }
+    Ok(trusted)
+}
+
 fn load_filters(root: &Path) -> Result<Vec<CompiledFilter>> {
     let mut filters = Vec::new();
+    let trust_store_path = default_trust_store_path();
+    let trust_store = load_trust_store(&trust_store_path)?;
     for path in filter_config_paths(root) {
         if !path.exists() {
+            continue;
+        }
+        if is_project_filter_config(root, &path)
+            && verify_project_filter(&trust_store, &path)? != TrustStatus::Trusted
+        {
             continue;
         }
         let content = std::fs::read_to_string(&path)
@@ -237,15 +265,25 @@ fn load_filters(root: &Path) -> Result<Vec<CompiledFilter>> {
 }
 
 fn filter_config_paths(root: &Path) -> Vec<PathBuf> {
-    let mut paths = vec![
-        root.join(".packet28").join("filters.toml"),
-        root.join(".rtk").join("filters.toml"),
-    ];
+    let mut paths = project_filter_config_paths(root);
     if let Some(config_home) = config_home_dir() {
         paths.push(config_home.join("packet28").join("filters.toml"));
         paths.push(config_home.join("rtk").join("filters.toml"));
     }
     paths
+}
+
+fn project_filter_config_paths(root: &Path) -> Vec<PathBuf> {
+    vec![
+        root.join(".packet28").join("filters.toml"),
+        root.join(".rtk").join("filters.toml"),
+    ]
+}
+
+fn is_project_filter_config(root: &Path, path: &Path) -> bool {
+    project_filter_config_paths(root)
+        .iter()
+        .any(|project_path| project_path == path)
 }
 
 fn config_home_dir() -> Option<PathBuf> {

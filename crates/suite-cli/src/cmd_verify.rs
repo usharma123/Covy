@@ -23,6 +23,8 @@ pub struct FilterVerifyArgs {
     #[arg(long)]
     pub require_all: bool,
     #[arg(long)]
+    pub trust: bool,
+    #[arg(long)]
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
@@ -35,6 +37,10 @@ pub fn run(args: VerifyArgs) -> Result<i32> {
 }
 
 fn run_filters(args: FilterVerifyArgs) -> Result<i32> {
+    anyhow::ensure!(
+        !args.trust || args.filter.is_none(),
+        "--trust cannot be combined with --filter because trust applies to the whole filter file"
+    );
     let cwd = crate::cmd_common::caller_cwd()?;
     let root = std::path::PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
     let results = crate::toml_filters::run_filter_tests(&root, args.filter.as_deref())?;
@@ -47,6 +53,11 @@ fn run_filters(args: FilterVerifyArgs) -> Result<i32> {
     let failed = total.saturating_sub(passed);
     let missing = results.filters_without_tests.len();
     let success = failed == 0 && (!args.require_all || missing == 0);
+    let trusted_filters = if success && args.trust {
+        crate::toml_filters::trust_project_filters(&root)?
+    } else {
+        Vec::new()
+    };
 
     if args.json {
         let outcomes = results
@@ -70,6 +81,7 @@ fn run_filters(args: FilterVerifyArgs) -> Result<i32> {
                 "passed": passed,
                 "failed": failed,
                 "filters_without_tests": results.filters_without_tests,
+                "trusted_filters": trusted_filters,
                 "outcomes": outcomes,
             }),
             args.pretty,
@@ -96,6 +108,9 @@ fn run_filters(args: FilterVerifyArgs) -> Result<i32> {
             for name in &results.filters_without_tests {
                 eprintln!("MISSING tests for filter: {name}");
             }
+        }
+        for path in &trusted_filters {
+            println!("Trusted filter config: {path}");
         }
     }
 

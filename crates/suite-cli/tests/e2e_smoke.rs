@@ -391,6 +391,8 @@ fn test_run_fallback_command_exposes_fetchable_raw_artifact() {
 #[test]
 fn test_run_applies_project_toml_filter_to_fallback_command() {
     let root = TempDir::new().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(root.path().join(".packet28")).unwrap();
     fs::write(
         root.path().join(".packet28").join("filters.toml"),
@@ -407,12 +409,36 @@ filter_stderr = true
 [[filters.demo.replace]]
 pattern = "TOKEN=[A-Za-z0-9]+"
 replacement = "TOKEN=<redacted>"
+
+[[tests.demo]]
+name = "redacts and strips noise"
+input = """
+debug: noisy
+value TOKEN=abcdef
+"""
+expected = "value TOKEN=<redacted>"
 "#,
     )
     .unwrap();
 
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", &home)
+        .args([
+            "verify",
+            "filters",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--require-all",
+            "--trust",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Trusted filter config"));
+
     let output = suite_cmd()
         .current_dir(root.path())
+        .env("HOME", &home)
         .args([
             "run",
             "--root",
@@ -455,8 +481,48 @@ replacement = "TOKEN=<redacted>"
 }
 
 #[test]
+fn test_run_skips_untrusted_project_toml_filter() {
+    let root = TempDir::new().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(root.path().join(".packet28")).unwrap();
+    fs::write(
+        root.path().join(".packet28").join("filters.toml"),
+        r#"
+schema_version = 1
+
+[filters.demo]
+match_command = "^sh\\s+-c"
+keep_lines_matching = ["safe"]
+"#,
+    )
+    .unwrap();
+
+    let output = suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", &home)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "sh",
+            "-c",
+            "printf 'safe\\nnoise\\n'",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["fallback_reason"], "unsupported");
+    assert_eq!(value["stdout"], "safe\nnoise\n");
+}
+
+#[test]
 fn test_verify_filters_runs_inline_toml_tests() {
     let root = TempDir::new().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(root.path().join(".packet28")).unwrap();
     fs::write(
         root.path().join(".packet28").join("filters.toml"),
@@ -481,6 +547,7 @@ expected = "useful"
 
     suite_cmd()
         .current_dir(root.path())
+        .env("HOME", &home)
         .args([
             "verify",
             "filters",
@@ -488,11 +555,13 @@ expected = "useful"
             root.path().to_str().unwrap(),
             "--json",
             "--require-all",
+            "--trust",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"ok\":true"))
         .stdout(predicate::str::contains("\"passed\":1"))
+        .stdout(predicate::str::contains("\"trusted_filters\""))
         .stdout(predicate::str::contains("drops debug noise"));
 }
 
