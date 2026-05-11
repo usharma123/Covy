@@ -1,0 +1,9 @@
+# Generated search-backend experiment captures include cloned-repo command
+# output and machine-local stderr by default. Commit curated summaries only.
+*
+!.gitignore
+!*/
+!*.md
+!*.jsonl
+!*/summary.md
+!*/results.jsonl
