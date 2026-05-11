@@ -187,5 +187,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Stronger ICM embedding backends, wake-up hook injection/project metadata, memoir distillation/inspect-depth, cloud/import/upgrade, and web dashboard.
+- Stronger ICM embedding backends, broader wake-up project metadata and runtime fixtures, memoir distillation/inspect-depth, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.

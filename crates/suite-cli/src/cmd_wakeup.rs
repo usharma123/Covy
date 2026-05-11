@@ -134,6 +134,19 @@ pub(crate) fn build_wakeup_report_with_options(
     })
 }
 
+pub(crate) fn build_wakeup_pack_for_injection(
+    query: Option<&str>,
+    project: Option<&str>,
+    limit: usize,
+    max_tokens: usize,
+) -> Result<Option<String>> {
+    let report = build_wakeup_report_with_options(query, project, limit, max_tokens, "markdown")?;
+    if report.included_items.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(report.pack))
+}
+
 pub fn run(args: WakeupArgs) -> Result<i32> {
     let report = build_wakeup_report_with_options(
         args.query.as_deref(),

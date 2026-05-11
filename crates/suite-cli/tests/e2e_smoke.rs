@@ -2844,14 +2844,26 @@ fn run_claude_hook(root: &Path, payload: &Value) -> (i32, String) {
 }
 
 fn run_hook_raw(runtime: &str, root: &Path, stdin_payload: &str) -> (i32, String, String) {
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+    run_hook_raw_with_env(runtime, root, stdin_payload, &[])
+}
+
+fn run_hook_raw_with_env(
+    runtime: &str,
+    root: &Path,
+    stdin_payload: &str,
+    envs: &[(&str, &std::ffi::OsStr)],
+) -> (i32, String, String) {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command
         .current_dir(root)
         .args(["hook", runtime, "--root", root.to_str().unwrap()])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().unwrap();
     child
         .stdin
         .as_mut()
@@ -6342,6 +6354,65 @@ fn test_packet28_mcp_prepare_handoff_requires_checkpoint_and_persists_artifact()
 
     child.kill().unwrap();
     child.wait().unwrap();
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_packet28_hook_session_start_injects_wakeup_pack() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+    let project = dir
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Session start should inject this Packet28 wakeup fact",
+            "--project",
+            &project,
+            "--topic",
+            "session-start",
+            "--importance",
+            "critical",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let payload = json!({
+        "hook_event_name":"SessionStart",
+        "task_id":"task-wakeup-hook",
+        "session_id":"session-wakeup-hook",
+        "cwd": dir.path().display().to_string(),
+    });
+    let (status, stdout, stderr) = run_hook_raw_with_env(
+        "claude",
+        dir.path(),
+        &serde_json::to_string(&payload).unwrap(),
+        &[("HOME", home.path().as_os_str())],
+    );
+    assert_eq!(status, 0, "stderr={stderr}");
+    let rendered: Value = serde_json::from_str(&stdout).unwrap();
+    let additional_context = rendered["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(additional_context.contains("Packet28 Wake-Up Pack"));
+    assert!(additional_context.contains("Session start should inject this Packet28 wakeup fact"));
+    assert!(additional_context.contains("Critical memories"));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

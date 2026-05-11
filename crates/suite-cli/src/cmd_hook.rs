@@ -18,6 +18,7 @@ use packet28_reducer_core::{
 };
 use serde_json::{json, Value};
 
+use crate::cmd_wakeup::build_wakeup_pack_for_injection;
 use crate::memory_store::{
     append_transcript_message, enqueue_pending_extraction, hook_event_stats, list_hook_events,
     record_hook_event, HookEventInput, PendingExtractionInput, TranscriptAppendInput,
@@ -240,9 +241,15 @@ fn process_claude_hook_payload(
         payload_json: &serde_json::to_string(payload)?,
     })?;
     let _ = capture_hook_output("claude", root, event_kind, payload, session_id.as_deref());
+    let additional_context = build_session_start_additional_context(
+        root,
+        event_kind,
+        payload,
+        response.additional_context.as_deref(),
+    )?;
     Ok(ClaudeHookOutcome {
         exit_code: if response.block_stop { 2 } else { 0 },
-        body: render_hook_output(event_kind, rewrite, &response)?,
+        body: render_hook_output(event_kind, rewrite, &response, additional_context)?,
     })
 }
 
@@ -1451,10 +1458,11 @@ fn render_hook_output(
     event_kind: HookEventKind,
     rewrite: Option<Value>,
     response: &packet28_daemon_core::HookIngestResponse,
+    session_start_context: Option<String>,
 ) -> Result<Option<String>> {
     match event_kind {
         HookEventKind::SessionStart => {
-            if let Some(additional_context) = response.additional_context.as_ref() {
+            if let Some(additional_context) = session_start_context {
                 return Ok(Some(serde_json::to_string(&json!({
                     "hookSpecificOutput": {
                         "hookEventName": "SessionStart",
@@ -1499,6 +1507,32 @@ fn render_hook_output(
         _ => {}
     }
     Ok(None)
+}
+
+fn build_session_start_additional_context(
+    root: &Path,
+    event_kind: HookEventKind,
+    payload: &Value,
+    daemon_context: Option<&str>,
+) -> Result<Option<String>> {
+    if !matches!(event_kind, HookEventKind::SessionStart) {
+        return Ok(daemon_context.map(ToOwned::to_owned));
+    }
+    let project = hook_project_name(root, payload);
+    let max_tokens = std::env::var("PACKET28_HOOK_WAKEUP_TOKENS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(500);
+    let wakeup = build_wakeup_pack_for_injection(None, Some(&project), 8, max_tokens)?;
+    let context = match (daemon_context, wakeup) {
+        (Some(daemon), Some(wakeup)) if !daemon.trim().is_empty() => {
+            format!("{daemon}\n\n{wakeup}")
+        }
+        (Some(daemon), _) if !daemon.trim().is_empty() => daemon.to_string(),
+        (_, Some(wakeup)) => wakeup,
+        _ => return Ok(None),
+    };
+    Ok(Some(context))
 }
 
 fn build_pretool_rewrite(
