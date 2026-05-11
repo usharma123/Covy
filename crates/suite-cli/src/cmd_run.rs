@@ -7,6 +7,8 @@ use clap::{Args, ValueEnum};
 use packet28_reducer_core::{classify_command_argv, reduce_command_output};
 use serde_json::json;
 
+use crate::savings_analytics::{record_run_savings, RunSavingsRecord};
+
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq)]
 pub enum RuntimeBackend {
     #[default]
@@ -68,11 +70,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
     }
 }
 
-fn run_reducer_aware(
-    _root: &std::path::Path,
-    cwd: &std::path::Path,
-    args: &RunArgs,
-) -> Result<i32> {
+fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunArgs) -> Result<i32> {
     let command_text = command_text(&args.command);
     let Some(spec) = classify_command_argv(&command_text, &args.command) else {
         return run_plain_command(&args.command, args.json, args.pretty, "unsupported");
@@ -119,6 +117,21 @@ fn run_reducer_aware(
             "timestamp_unix_ms": timestamp_unix_ms(),
         }
     });
+    record_run_savings(
+        root,
+        &RunSavingsRecord {
+            command: command_text.clone(),
+            cwd: cwd.display().to_string(),
+            family: reduction.family.clone(),
+            canonical_kind: reduction.canonical_kind.clone(),
+            exit_code,
+            raw_est_tokens,
+            reduced_est_tokens,
+            savings_percent: savings_pct,
+            fallback_reason: None,
+            timestamp_unix_ms: timestamp_unix_ms(),
+        },
+    )?;
     if args.json {
         crate::cmd_common::emit_json(&payload, args.pretty)?;
     } else {

@@ -44,6 +44,7 @@ pub mod economics;
 pub mod packet28_agent;
 pub mod route_registry;
 mod runtime_integrations;
+mod savings_analytics;
 pub mod task_runtime;
 
 pub use cli_defs::*;

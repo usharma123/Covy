@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
 };
+use crate::savings_analytics::load_run_savings;
 
 #[derive(Args)]
 pub struct CompactArgs {
@@ -748,6 +749,17 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
                 .unwrap_or_else(|| "unknown".to_string());
             *summary.by_route.entry(route).or_insert(0) += 1;
         }
+    }
+    for record in load_run_savings(&root, args.limit)? {
+        summary.invocation_count += 1;
+        summary.raw_est_tokens += record.raw_est_tokens;
+        summary.reduced_est_tokens += record.reduced_est_tokens;
+        let route = if let Some(reason) = record.fallback_reason {
+            format!("run_fallback:{reason}")
+        } else {
+            format!("run_reducer:{}", record.family)
+        };
+        *summary.by_route.entry(route).or_insert(0) += 1;
     }
     summary.saved_est_tokens = summary
         .raw_est_tokens

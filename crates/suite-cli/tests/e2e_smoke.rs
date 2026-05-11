@@ -128,6 +128,14 @@ fn test_run_reduces_git_status() {
         .stdout(predicate::str::contains("\"raw_est_tokens\""))
         .stdout(predicate::str::contains("\"savings_percent\""))
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"invocation_count\":1"))
+        .stdout(predicate::str::contains("run_reducer:git"));
 }
 
 #[test]
