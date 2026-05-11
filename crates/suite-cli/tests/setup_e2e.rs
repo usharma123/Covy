@@ -381,6 +381,39 @@ fn test_setup_codex_writes_mcp_and_agents_without_hooks() {
 
 #[test]
 #[cfg(unix)]
+fn test_setup_gemini_writes_before_tool_hook_and_prompt() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "gemini",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    assert!(root.path().join("GEMINI.md").exists());
+    let settings_path = home.path().join(".gemini").join("settings.json");
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(settings_path).unwrap()).unwrap();
+    let hooks = settings["hooks"]["BeforeTool"].as_array().unwrap();
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0]["matcher"].as_str(), Some("run_shell_command"));
+    let command = hooks[0]["hooks"][0]["command"].as_str().unwrap();
+    assert!(command.contains(" hook gemini "));
+    assert!(command.contains(root.path().to_str().unwrap()));
+}
+
+#[test]
+#[cfg(unix)]
 fn test_setup_windsurf_writes_rules_hooks_and_mcp() {
     let _guard = setup_e2e_lock();
     let root = TempDir::new().unwrap();

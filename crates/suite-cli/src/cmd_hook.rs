@@ -35,6 +35,7 @@ pub enum HookCommands {
     Claude(ClaudeHookArgs),
     Codex(ClaudeHookArgs),
     Cursor(RuntimeHookArgs),
+    Gemini(RuntimeHookArgs),
     Windsurf(RuntimeHookArgs),
     Log(HookLogArgs),
     Stats(HookStatsArgs),
@@ -90,6 +91,7 @@ pub struct HookHttpServerArgs {
 #[derive(Clone, Copy)]
 enum ExternalHookRuntime {
     Cursor,
+    Gemini,
     Windsurf,
 }
 
@@ -140,6 +142,7 @@ pub fn run(args: HookArgs) -> Result<i32> {
         HookCommands::Claude(args) => run_claude(args),
         HookCommands::Codex(args) => run_claude(args),
         HookCommands::Cursor(args) => run_runtime_hook(args, ExternalHookRuntime::Cursor),
+        HookCommands::Gemini(args) => run_runtime_hook(args, ExternalHookRuntime::Gemini),
         HookCommands::Windsurf(args) => run_runtime_hook(args, ExternalHookRuntime::Windsurf),
         HookCommands::Log(args) => run_hook_log(args),
         HookCommands::Stats(args) => run_hook_stats(args),
@@ -1261,6 +1264,7 @@ fn resolve_runtime_task_id(
     }
     let seed = match runtime {
         ExternalHookRuntime::Cursor => "cursor-project",
+        ExternalHookRuntime::Gemini => "gemini-project",
         ExternalHookRuntime::Windsurf => "windsurf-project",
     };
     let task_id = session_id
@@ -1307,6 +1311,11 @@ fn parse_runtime_event_kind(runtime: ExternalHookRuntime, value: Option<&str>) -
             "stop" | "afterAgentResponse" => HookEventKind::Stop,
             _ => HookEventKind::Unknown,
         },
+        ExternalHookRuntime::Gemini => match value.unwrap_or_default().trim() {
+            "" | "BeforeTool" | "before_tool" => HookEventKind::PreToolUse,
+            "AfterTool" | "after_tool" => HookEventKind::PostToolUse,
+            _ => HookEventKind::Unknown,
+        },
         ExternalHookRuntime::Windsurf => match value.unwrap_or_default().trim() {
             "pre_user_prompt" => HookEventKind::UserPromptSubmit,
             "pre_run_command" => HookEventKind::PreToolUse,
@@ -1324,6 +1333,9 @@ fn runtime_session_id(runtime: ExternalHookRuntime, payload: &Value) -> Option<S
         ExternalHookRuntime::Cursor => {
             json_string(payload, "conversation_id").or_else(|| json_string(payload, "session_id"))
         }
+        ExternalHookRuntime::Gemini => {
+            json_string(payload, "session_id").or_else(|| json_string(payload, "conversation_id"))
+        }
         ExternalHookRuntime::Windsurf => {
             json_string(payload, "trajectory_id").or_else(|| json_string(payload, "execution_id"))
         }
@@ -1338,6 +1350,12 @@ fn runtime_matcher(
     match runtime {
         ExternalHookRuntime::Cursor => match event_kind {
             HookEventKind::PreToolUse | HookEventKind::PostToolUse => Some("Bash".to_string()),
+            _ => json_string(payload, "hook_event_name"),
+        },
+        ExternalHookRuntime::Gemini => match event_kind {
+            HookEventKind::PreToolUse | HookEventKind::PostToolUse => {
+                json_string(payload, "tool_name").or_else(|| Some("run_shell_command".to_string()))
+            }
             _ => json_string(payload, "hook_event_name"),
         },
         ExternalHookRuntime::Windsurf => match event_kind {
@@ -1361,6 +1379,7 @@ fn build_runtime_reducer_packet(
 ) -> Option<HookReducerPacket> {
     match runtime {
         ExternalHookRuntime::Cursor => build_cursor_reducer_packet(payload, event_kind),
+        ExternalHookRuntime::Gemini => build_gemini_reducer_packet(payload, event_kind),
         ExternalHookRuntime::Windsurf => build_windsurf_reducer_packet(payload, event_kind),
     }
 }
@@ -1374,10 +1393,18 @@ fn build_runtime_pretool_rewrite(
     task_id: &str,
     session_id: Option<&str>,
 ) -> Result<Option<Value>> {
-    if !matches!(runtime, ExternalHookRuntime::Cursor) {
+    if !matches!(
+        runtime,
+        ExternalHookRuntime::Cursor | ExternalHookRuntime::Gemini
+    ) {
         return Ok(None);
     }
     if !matches!(event_kind, HookEventKind::PreToolUse) {
+        return Ok(None);
+    }
+    if matches!(runtime, ExternalHookRuntime::Gemini)
+        && json_string(payload, "tool_name").as_deref() != Some("run_shell_command")
+    {
         return Ok(None);
     }
     let Some(command) = runtime_command(payload) else {
@@ -1418,6 +1445,19 @@ fn render_runtime_hook_output(
         (ExternalHookRuntime::Cursor, HookEventKind::PreToolUse, None) => {
             Ok(Some("{}".to_string()))
         }
+        (ExternalHookRuntime::Gemini, HookEventKind::PreToolUse, Some(updated_input)) => {
+            Ok(Some(serde_json::to_string(&json!({
+                "decision": "allow",
+                "hookSpecificOutput": {
+                    "tool_input": updated_input,
+                },
+            }))?))
+        }
+        (ExternalHookRuntime::Gemini, HookEventKind::PreToolUse, None) => {
+            Ok(Some(serde_json::to_string(&json!({
+                "decision": "allow",
+            }))?))
+        }
         _ => Ok(None),
     }
 }
@@ -1443,6 +1483,45 @@ fn build_cursor_reducer_packet(
         "Bash",
         suite_packet_core::ToolOperationKind::Generic,
         Some("cursor_native".to_string()),
+        Some("shell".to_string()),
+        summary,
+        Some(command),
+        None,
+        paths,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        Some(false),
+        payload.clone(),
+        false,
+    ))
+}
+
+fn build_gemini_reducer_packet(
+    payload: &Value,
+    event_kind: HookEventKind,
+) -> Option<HookReducerPacket> {
+    if !matches!(event_kind, HookEventKind::PostToolUse) {
+        return None;
+    }
+    if json_string(payload, "tool_name").as_deref() != Some("run_shell_command") {
+        return None;
+    }
+    let command = runtime_command(payload)?;
+    let output = json_string(payload, "output")
+        .or_else(|| json_string(payload, "result"))
+        .or_else(|| json_string(payload, "stderr"))
+        .or_else(|| json_string(payload, "stdout"))
+        .unwrap_or_default();
+    let summary = first_nonempty_line(&output)
+        .unwrap_or_else(|| format!("command completed: {}", compact_text(&command, 100)));
+    let paths = extract_command_paths(&command);
+    Some(packet_from_parts(
+        "packet28.hook.gemini.command.v1",
+        "run_shell_command",
+        suite_packet_core::ToolOperationKind::Generic,
+        Some("gemini_native".to_string()),
         Some("shell".to_string()),
         summary,
         Some(command),
@@ -1537,6 +1616,7 @@ fn hook_event_name(kind: HookEventKind) -> &'static str {
 fn external_runtime_name(runtime: ExternalHookRuntime) -> &'static str {
     match runtime {
         ExternalHookRuntime::Cursor => "cursor",
+        ExternalHookRuntime::Gemini => "gemini",
         ExternalHookRuntime::Windsurf => "windsurf",
     }
 }
@@ -2310,6 +2390,7 @@ fn compact_text(value: &str, limit: usize) -> String {
 fn runtime_source(runtime: ExternalHookRuntime) -> &'static str {
     match runtime {
         ExternalHookRuntime::Cursor => "packet28.cursor.hook",
+        ExternalHookRuntime::Gemini => "packet28.gemini.hook",
         ExternalHookRuntime::Windsurf => "packet28.windsurf.hook",
     }
 }

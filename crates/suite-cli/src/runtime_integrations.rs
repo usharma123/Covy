@@ -77,6 +77,10 @@ pub(crate) mod copilot {
 pub(crate) mod gemini {
     use super::*;
 
+    pub(crate) fn settings_path(home: &Path) -> PathBuf {
+        home.join(".gemini").join("settings.json")
+    }
+
     pub(crate) fn prompt_path(root: &Path) -> PathBuf {
         root.join("GEMINI.md")
     }
