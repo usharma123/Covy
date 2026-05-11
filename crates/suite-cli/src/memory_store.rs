@@ -354,17 +354,6 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
     get_memory(&conn, id)
 }
 
-pub(crate) fn recall_memories(query: &str, limit: usize) -> Result<Vec<MemoryRecord>> {
-    recall_memories_filtered(MemoryRecallQuery {
-        query,
-        limit,
-        topic: None,
-        project: None,
-        tag: None,
-        keyword: None,
-    })
-}
-
 pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<Vec<MemoryRecord>> {
     let conn = open_memory_db()?;
     let expanded_limit = expanded_filter_limit(input.limit, input.has_filters());

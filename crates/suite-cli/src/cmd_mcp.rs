@@ -931,6 +931,7 @@ fn handle_method(
                         "type": "object",
                         "properties": {
                             "query": {"type":"string"},
+                            "project": {"type":"string"},
                             "limit": {"type":"integer","minimum":1}
                         }
                     }
@@ -1422,6 +1423,7 @@ fn handle_tool_call(
             let request: WakeupToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(build_wakeup_report(
                 request.query.as_deref(),
+                request.project.as_deref(),
                 request.limit.unwrap_or(5),
             )?)?
         }
@@ -1644,6 +1646,7 @@ struct FeedbackIdToolArgs {
 #[derive(Debug, Deserialize)]
 struct WakeupToolArgs {
     query: Option<String>,
+    project: Option<String>,
     limit: Option<usize>,
 }
 

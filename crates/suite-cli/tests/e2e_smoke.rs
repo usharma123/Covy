@@ -468,10 +468,18 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
 
     suite_cmd()
         .env("HOME", home.path())
-        .args(["wakeup", "--query", "local", "--json"])
+        .args([
+            "wakeup",
+            "--query",
+            "local",
+            "--project",
+            "coverage-a",
+            "--json",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"kind\":\"packet28.wakeup.v1\""))
+        .stdout(predicate::str::contains("\"project\":\"coverage-a\""))
         .stdout(predicate::str::contains("Packet28 remembers local context"));
 
     suite_cmd()
@@ -568,6 +576,19 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .assert()
         .success()
         .stdout(predicate::eq("[]\n"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "wakeup",
+            "--query",
+            "Foreign",
+            "--project",
+            "coverage-b",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"memories\":[]"));
     suite_cmd()
         .env("HOME", home.path())
         .args(["memory", "forget", "3", "--json"])
@@ -1183,7 +1204,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.wakeup",
-                "arguments":{"query":"reducer", "limit": 5}
+                "arguments":{"project":"mcp-project-b", "limit": 5}
             }
         }),
     );
@@ -1198,6 +1219,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             .unwrap()
             .len()
             >= 1
+    );
+    assert_eq!(
+        wakeup["result"]["structuredContent"]["memories"][0]["project"].as_str(),
+        Some("mcp-project-b")
     );
 
     write_mcp_message(

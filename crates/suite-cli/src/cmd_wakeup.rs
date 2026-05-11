@@ -3,9 +3,9 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::memory_store::{
-    inspect_graph, list_memories, local_store_stats, recall_memories, search_feedback,
-    search_transcripts, FeedbackRecord, GraphInspect, LocalStoreStats, MemoryRecord,
-    TranscriptMessage,
+    inspect_graph, list_memories_filtered, local_store_stats, recall_memories_filtered,
+    search_feedback, search_transcripts, FeedbackRecord, GraphInspect, LocalStoreStats,
+    MemoryListQuery, MemoryRecallQuery, MemoryRecord, TranscriptMessage,
 };
 
 #[derive(Args)]
@@ -13,6 +13,10 @@ pub struct WakeupArgs {
     /// Optional focus query for recalled memories and feedback
     #[arg(long)]
     pub query: Option<String>,
+
+    /// Optional project filter for recalled memories
+    #[arg(long)]
+    pub project: Option<String>,
 
     /// Maximum memories, feedback records, concepts, and relations to include
     #[arg(long, default_value_t = 5)]
@@ -29,6 +33,7 @@ pub struct WakeupArgs {
 pub(crate) struct WakeupReport {
     kind: &'static str,
     query: Option<String>,
+    project: Option<String>,
     stats: LocalStoreStats,
     memories: Vec<MemoryRecord>,
     feedback: Vec<FeedbackRecord>,
@@ -36,12 +41,30 @@ pub(crate) struct WakeupReport {
     graph: GraphInspect,
 }
 
-pub(crate) fn build_wakeup_report(query: Option<&str>, limit: usize) -> Result<WakeupReport> {
+pub(crate) fn build_wakeup_report(
+    query: Option<&str>,
+    project: Option<&str>,
+    limit: usize,
+) -> Result<WakeupReport> {
     let limit = limit.max(1);
     let query = query.map(str::trim).filter(|q| !q.is_empty());
+    let project = project.map(str::trim).filter(|q| !q.is_empty());
     let memories = match query {
-        Some(query) => recall_memories(query, limit)?,
-        None => list_memories(limit)?,
+        Some(query) => recall_memories_filtered(MemoryRecallQuery {
+            query,
+            limit,
+            topic: None,
+            project,
+            tag: None,
+            keyword: None,
+        })?,
+        None => list_memories_filtered(MemoryListQuery {
+            limit,
+            topic: None,
+            project,
+            all: false,
+            sort: "recent",
+        })?,
     };
     let feedback = search_feedback(query.unwrap_or_default(), limit)?;
     let transcripts = search_transcripts(query.unwrap_or_default(), limit)?;
@@ -50,6 +73,7 @@ pub(crate) fn build_wakeup_report(query: Option<&str>, limit: usize) -> Result<W
     Ok(WakeupReport {
         kind: "packet28.wakeup.v1",
         query: query.map(ToOwned::to_owned),
+        project: project.map(ToOwned::to_owned),
         stats,
         memories,
         feedback,
@@ -59,7 +83,7 @@ pub(crate) fn build_wakeup_report(query: Option<&str>, limit: usize) -> Result<W
 }
 
 pub fn run(args: WakeupArgs) -> Result<i32> {
-    let report = build_wakeup_report(args.query.as_deref(), args.limit)?;
+    let report = build_wakeup_report(args.query.as_deref(), args.project.as_deref(), args.limit)?;
     if args.json {
         crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
     } else {
