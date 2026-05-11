@@ -14,6 +14,8 @@ pub fn classify_fs_command(command: &str, argv: &[String]) -> Option<CommandRedu
         }
         "sed" if classify_sed(argv) => ("fs_sed", suite_packet_core::ToolOperationKind::Read),
         "diff" if classify_diff(argv) => ("fs_diff", suite_packet_core::ToolOperationKind::Diff),
+        "grep" if classify_grep(argv) => ("fs_grep", suite_packet_core::ToolOperationKind::Search),
+        "rg" if classify_grep(argv) => ("fs_rg", suite_packet_core::ToolOperationKind::Search),
         _ => return None,
     };
     let paths = argv
@@ -132,6 +134,17 @@ pub fn reduce_fs_command(
                 "diff completed".to_string()
             }
         }
+        "fs_grep" | "fs_rg" => {
+            let program = spec.argv.first().map(String::as_str).unwrap_or("grep");
+            if failed {
+                first_nonempty_line(stderr).unwrap_or_else(|| format!("{program} failed"))
+            } else {
+                format!(
+                    "{program} matched {lines} line(s){}",
+                    preview_suffix(stdout)
+                )
+            }
+        }
         _ => {
             let command = spec
                 .argv
@@ -188,6 +201,10 @@ pub fn reduce_fs_command(
 
 fn classify_ls(argv: &[String]) -> bool {
     !contains_any(argv, &["-R", "--recursive", "--dired"])
+}
+
+fn classify_grep(argv: &[String]) -> bool {
+    argv.len() >= 2 && !contains_any(argv, &["--binary-files", "-z", "--null-data"])
 }
 
 fn classify_find(argv: &[String]) -> bool {

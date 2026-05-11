@@ -224,6 +224,45 @@ fn test_run_reduces_npm_test_and_pytest() {
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 
+#[test]
+fn test_run_reduces_file_and_search_commands() {
+    let root = TempDir::new().unwrap();
+    fs::write(root.path().join("sample.txt"), "alpha\nbeta\nalpha again\n").unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "cat",
+            "sample.txt",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"fs\""))
+        .stdout(predicate::str::contains("\"canonical_kind\":\"fs_cat\""))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "grep",
+            "alpha",
+            "sample.txt",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"fs\""))
+        .stdout(predicate::str::contains("\"canonical_kind\":\"fs_grep\""))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();

@@ -79,7 +79,7 @@ fn run_reducer_aware(
     };
     if !matches!(
         spec.family.as_str(),
-        "git" | "rust" | "javascript" | "python"
+        "git" | "rust" | "javascript" | "python" | "fs"
     ) {
         return run_plain_command(&args.command, args.json, args.pretty, "unsupported_family");
     }
