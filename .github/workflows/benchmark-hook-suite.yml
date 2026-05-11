@@ -12,6 +12,8 @@ on:
       - "scripts/benchmark_common.py"
       - "scripts/hook_benchmark_thresholds.py"
       - "crates/packet28-reducer-core/**"
+      - "crates/packet28-search-cli/**"
+      - "crates/packet28-search-core/**"
       - "crates/suite-cli/**"
       - "crates/packet28d/**"
       - "crates/packet28-daemon-core/**"
@@ -30,6 +32,8 @@ on:
       - "scripts/benchmark_common.py"
       - "scripts/hook_benchmark_thresholds.py"
       - "crates/packet28-reducer-core/**"
+      - "crates/packet28-search-cli/**"
+      - "crates/packet28-search-core/**"
       - "crates/suite-cli/**"
       - "crates/packet28d/**"
       - "crates/packet28-daemon-core/**"
@@ -56,7 +60,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build benchmark dependencies
-        run: cargo build -p suite-cli -p packet28d -p packet28-reducer-core
+        run: cargo build -p suite-cli -p packet28d -p packet28-reducer-core -p packet28-search-cli
+
+      - name: Run p28 search CLI tests
+        run: cargo test -p packet28-search-cli --tests
 
       - name: Run hook benchmark suite
         env:
