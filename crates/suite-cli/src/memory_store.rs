@@ -3081,36 +3081,11 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         END;
         ",
     )?;
-    conn.execute(
-        "INSERT INTO memories_fts(rowid, content, tags)
-         SELECT id, content, tags FROM memories
-         WHERE id NOT IN (SELECT rowid FROM memories_fts)",
-        [],
-    )?;
-    conn.execute(
-        "INSERT INTO feedback_fts(rowid, subject, correction)
-         SELECT id, subject, correction FROM feedback
-         WHERE id NOT IN (SELECT rowid FROM feedback_fts)",
-        [],
-    )?;
-    conn.execute(
-        "INSERT INTO feedback_fts_all(rowid, subject, correction, topic, context, predicted, reason, source)
-         SELECT id, subject, correction, topic, context, predicted, reason, source FROM feedback
-         WHERE id NOT IN (SELECT rowid FROM feedback_fts_all)",
-        [],
-    )?;
-    conn.execute(
-        "INSERT INTO concepts_fts(rowid, name, description)
-         SELECT id, name, description FROM concepts
-         WHERE id NOT IN (SELECT rowid FROM concepts_fts)",
-        [],
-    )?;
-    conn.execute(
-        "INSERT INTO transcript_messages_fts(rowid, role, content, source)
-         SELECT id, role, content, source FROM transcript_messages
-         WHERE id NOT IN (SELECT rowid FROM transcript_messages_fts)",
-        [],
-    )?;
+    rebuild_fts_table(conn, "memories_fts")?;
+    rebuild_fts_table(conn, "feedback_fts")?;
+    rebuild_fts_table(conn, "feedback_fts_all")?;
+    rebuild_fts_table(conn, "concepts_fts")?;
+    rebuild_fts_table(conn, "transcript_messages_fts")?;
     Ok(())
 }
 
@@ -3141,6 +3116,14 @@ fn add_column_if_missing(
     }
     conn.execute(
         &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )?;
+    Ok(())
+}
+
+fn rebuild_fts_table(conn: &Connection, table: &str) -> Result<()> {
+    conn.execute(
+        &format!("INSERT INTO {table}({table}) VALUES('rebuild')"),
         [],
     )?;
     Ok(())
