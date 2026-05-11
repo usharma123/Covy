@@ -9,8 +9,22 @@ use clap::Args;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::memory_store::learn_project_graph;
+
 #[derive(Args, Clone)]
 pub struct LearnArgs {
+    /// Learn a project directory into the local Packet28 concept graph
+    #[arg(long)]
+    pub project_dir: Option<String>,
+
+    /// Project name to use for graph learning
+    #[arg(long)]
+    pub project_name: Option<String>,
+
+    /// Maximum dependencies/modules/entrypoints/configs to learn per category
+    #[arg(long, default_value_t = 20)]
+    pub project_limit: usize,
+
     /// Path to Claude projects directory
     #[arg(long)]
     pub sessions_dir: Option<String>,
@@ -52,6 +66,23 @@ struct Correction {
 }
 
 pub fn run(args: LearnArgs) -> Result<i32> {
+    if let Some(project_dir) = args.project_dir.as_deref() {
+        let report = learn_project_graph(
+            Path::new(project_dir),
+            args.project_name.as_deref(),
+            args.project_limit,
+        )?;
+        if args.json {
+            crate::cmd_common::emit_json(&serde_json::to_value(&report)?, args.pretty)?;
+        } else {
+            println!(
+                "Learned {}: {} concepts, {} links",
+                report.project_name, report.total_concepts, report.link_count
+            );
+        }
+        return Ok(0);
+    }
+
     let sessions_dir = args
         .sessions_dir
         .map(PathBuf::from)

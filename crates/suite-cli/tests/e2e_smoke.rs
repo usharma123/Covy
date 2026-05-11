@@ -581,6 +581,13 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
 fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
+    fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"mcp-learn-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\nserde = \"1\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/lib.rs"), "pub fn fixture() {}\n").unwrap();
     let mut child = mcp_cmd()
         .current_dir(root.path())
         .env("HOME", home.path())
@@ -1055,6 +1062,30 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":68,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.learn_project",
+                "arguments":{"directory":root.path().to_str().unwrap(), "name":"McpLearnFixture", "limit":5}
+            }
+        }),
+    );
+    let learned = read_mcp_message_for_id(&mut stdout, 68);
+    assert_eq!(
+        learned["result"]["structuredContent"]["project_name"].as_str(),
+        Some("McpLearnFixture")
+    );
+    assert!(
+        learned["result"]["structuredContent"]["total_concepts"]
+            .as_u64()
+            .unwrap()
+            >= 3
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":55,
             "method":"tools/call",
             "params":{
@@ -1157,9 +1188,11 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         }),
     );
     let graph_stats = read_mcp_message_for_id(&mut stdout, 64);
-    assert_eq!(
-        graph_stats["result"]["structuredContent"]["relation_count"].as_i64(),
-        Some(1)
+    assert!(
+        graph_stats["result"]["structuredContent"]["relation_count"]
+            .as_i64()
+            .unwrap()
+            >= 1
     );
 
     write_mcp_message(
@@ -1280,6 +1313,14 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
 #[test]
 fn test_feedback_and_graph_cli_use_sqlite() {
     let home = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    fs::write(
+        project.path().join("Cargo.toml"),
+        "[package]\nname = \"cli-learn-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\nserde_json = \"1\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project.path().join("src")).unwrap();
+    fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
     suite_cmd()
         .env("HOME", home.path())
         .args([
@@ -1345,6 +1386,26 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"deleted\":1"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "learn",
+            "--project-dir",
+            project.path().to_str().unwrap(),
+            "--project-name",
+            "CliLearnFixture",
+            "--project-limit",
+            "5",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"project_name\":\"CliLearnFixture\"",
+        ))
+        .stdout(predicate::str::contains("\"link_count\""))
+        .stdout(predicate::str::contains("serde_json"));
 
     suite_cmd()
         .env("HOME", home.path())
@@ -1456,8 +1517,6 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .args(["graph", "stats", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"concept_count\":2"))
-        .stdout(predicate::str::contains("\"relation_count\":1"))
         .stdout(predicate::str::contains("\"relation\":\"uses\""));
     suite_cmd()
         .env("HOME", home.path())

@@ -83,6 +83,7 @@ Packet28 graph export --format dot
 Packet28 graph stats
 Packet28 graph inspect
 Packet28 graph delete Packet28
+Packet28 learn --project-dir . --project-name Packet28 --json
 ```
 
 MCP tools exposed by the product slice:
@@ -109,6 +110,7 @@ MCP tools exposed by the product slice:
 - `packet28.feedback_delete`
 - `packet28.feedback_stats`
 - `packet28.wakeup`
+- `packet28.learn_project`
 - `packet28.transcript_append`
 - `packet28.transcript_list`
 - `packet28.transcript_show`

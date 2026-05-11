@@ -62,9 +62,9 @@ use crate::cmd_wakeup::build_wakeup_report;
 use crate::memory_store::{
     add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
     delete_concept, delete_feedback, embed_memories, export_graph, feedback_stats,
-    forget_memories_by_topic, forget_memory, graph_stats, inspect_graph, link_concepts,
-    list_feedback, list_memories_filtered, list_transcript_sessions, local_store_stats,
-    memory_health, memory_topics, prune_memories, recall_memories_filtered,
+    forget_memories_by_topic, forget_memory, graph_stats, inspect_graph, learn_project_graph,
+    link_concepts, list_feedback, list_memories_filtered, list_transcript_sessions,
+    local_store_stats, memory_health, memory_topics, prune_memories, recall_memories_filtered,
     record_feedback_with_metadata, refine_concept, search_concepts, search_feedback,
     search_transcripts, show_transcript_session, store_memory_with_metadata, transcript_stats,
     update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery, MemoryStoreInput,
@@ -933,6 +933,18 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.learn_project",
+                    "description": "Scan a local project into Packet28 graph concepts and relations.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "directory": {"type":"string"},
+                            "name": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.transcript_append",
                     "description": "Append a local transcript message to ~/.packet28/packet28.db.",
                     "inputSchema": {
@@ -1406,6 +1418,17 @@ fn handle_tool_call(
                 request.limit.unwrap_or(5),
             )?)?
         }
+        "packet28.learn_project" => {
+            let request: LearnProjectToolArgs = serde_json::from_value(arguments)?;
+            let dir = request
+                .directory
+                .unwrap_or_else(|| root.display().to_string());
+            serde_json::to_value(learn_project_graph(
+                Path::new(&dir),
+                request.name.as_deref(),
+                request.limit.unwrap_or(20),
+            )?)?
+        }
         "packet28.transcript_append" => {
             let request: TranscriptAppendToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(append_transcript_message(TranscriptAppendInput {
@@ -1610,6 +1633,13 @@ struct FeedbackIdToolArgs {
 #[derive(Debug, Deserialize)]
 struct WakeupToolArgs {
     query: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LearnProjectToolArgs {
+    directory: Option<String>,
+    name: Option<String>,
     limit: Option<usize>,
 }
 
@@ -1957,6 +1987,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
         }
         "packet28.feedback_stats" => "Packet28 feedback statistics.".to_string(),
         "packet28.wakeup" => "Packet28 wake-up pack.".to_string(),
+        "packet28.learn_project" => {
+            let concepts = payload
+                .get("total_concepts")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let links = payload
+                .get("link_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 learned project graph: {concepts} concepts, {links} links.")
+        }
         "packet28.transcript_append" => {
             let id = payload
                 .get("id")
@@ -2054,6 +2095,7 @@ mod tests {
             "packet28.feedback_delete",
             "packet28.feedback_stats",
             "packet28.wakeup",
+            "packet28.learn_project",
             "packet28.transcript_append",
             "packet28.transcript_search",
             "packet28.transcript_stats",
