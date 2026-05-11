@@ -291,6 +291,14 @@ Packet28 agent-prompt         Generate agent instruction fragments
 Packet28 mcp serve|proxy      Expose Packet28 as an MCP server or proxy upstream MCP servers
 Packet28 daemon               Daemon lifecycle and task management
 Packet28 setup                Configure Claude/Cursor/Codex/Windsurf integration files
+Packet28 doctor --agent windsurf --root .
+Packet28 mcp smoke-test --from-config windsurf
+Packet28 rewrite "git status --short" --json
+Packet28 run --root . git status --short
+Packet28 memory store "Important local project fact"
+Packet28 feedback record "subject" "correction"
+Packet28 graph inspect
+Packet28 dashboard --root .
 ```
 
 Reducer, packet, and context commands emit `suite.packet.v1` JSON wrappers. Three output profiles:
