@@ -240,17 +240,25 @@ pub fn run(_args: DaemonArgs) -> Result<i32> {
 pub fn run_via_daemon(cli: crate::Cli, _raw_args: &[String]) -> Result<i32> {
     let daemon_root = daemon_workspace_root(cli.daemon_root.as_deref())?;
     match cli.command {
-        crate::Commands::Cover(cover) => match cover.command {
+        None => {
+            let cli = crate::Cli {
+                command: None,
+                via_daemon: false,
+                ..cli
+            };
+            crate::run_cli_local(cli)
+        }
+        Some(crate::Commands::Cover(cover)) => match cover.command {
             crate::CoverCommands::Check(args) => {
                 crate::cmd_cover::run_remote(args, &cli.config, &daemon_root)
             }
         },
-        crate::Commands::Diff(diff) => match diff.command {
+        Some(crate::Commands::Diff(diff)) => match diff.command {
             crate::DiffCommands::Analyze(args) => {
                 crate::cmd_diff::run_remote(args, &cli.config, &daemon_root)
             }
         },
-        crate::Commands::Test(test) => match test.command {
+        Some(crate::Commands::Test(test)) => match test.command {
             crate::TestCommands::Impact(args) => {
                 crate::cmd_impact::run_remote(args, &cli.config, &daemon_root)
             }
@@ -259,7 +267,7 @@ pub fn run_via_daemon(cli: crate::Cli, _raw_args: &[String]) -> Result<i32> {
             }
             crate::TestCommands::Map(args) => crate::cmd_map::run_remote(args, &daemon_root),
         },
-        crate::Commands::Context(context) => match context.command {
+        Some(crate::Commands::Context(context)) => match context.command {
             crate::ContextCommands::Assemble(args) => {
                 crate::cmd_context::run_assemble_remote(args, &daemon_root)
             }
@@ -279,24 +287,24 @@ pub fn run_via_daemon(cli: crate::Cli, _raw_args: &[String]) -> Result<i32> {
                 crate::cmd_context::run_recall_remote(args, &daemon_root)
             }
         },
-        crate::Commands::Stack(stack) => match stack.command {
+        Some(crate::Commands::Stack(stack)) => match stack.command {
             crate::StackCommands::Slice(args) => crate::cmd_stack::run_remote(args, &daemon_root),
         },
-        crate::Commands::Build(build) => match build.command {
+        Some(crate::Commands::Build(build)) => match build.command {
             crate::BuildCommands::Reduce(args) => crate::cmd_build::run_remote(args, &daemon_root),
         },
-        crate::Commands::Map(map) => match map.command {
+        Some(crate::Commands::Map(map)) => match map.command {
             crate::MapCommands::Repo(args) => crate::cmd_map_repo::run_remote(args, &daemon_root),
             crate::MapCommands::Query(args) => crate::cmd_map_query::run_remote(args, &daemon_root),
         },
-        crate::Commands::Proxy(proxy) => match proxy.command {
+        Some(crate::Commands::Proxy(proxy)) => match proxy.command {
             crate::cmd_proxy::ProxyCommands::Run(args) => {
                 crate::cmd_proxy::run_remote(args, &daemon_root)
             }
         },
-        crate::Commands::Gain(args) => crate::cmd_compact::run_gain_command(args),
-        crate::Commands::Compact(args) => crate::cmd_compact::run(args),
-        crate::Commands::Packet(packet) => match packet.command {
+        Some(crate::Commands::Gain(args)) => crate::cmd_compact::run_gain_command(args),
+        Some(crate::Commands::Compact(args)) => crate::cmd_compact::run(args),
+        Some(crate::Commands::Packet(packet)) => match packet.command {
             crate::cmd_packet::PacketCommands::Fetch(args) => {
                 crate::cmd_packet::run_fetch_remote(args, &daemon_root)
             }

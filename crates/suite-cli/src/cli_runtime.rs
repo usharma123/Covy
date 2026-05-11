@@ -45,7 +45,7 @@ pub fn main_entry() {
 }
 
 pub fn run_cli(mut cli: Cli, raw_args: &[String]) -> Result<i32> {
-    if !matches!(cli.command, Commands::Daemon(_))
+    if !matches!(cli.command, Some(Commands::Daemon(_)))
         && (cli.via_daemon || cmd_daemon::via_daemon_env_enabled())
     {
         cli.via_daemon = true;
@@ -57,22 +57,28 @@ pub fn run_cli(mut cli: Cli, raw_args: &[String]) -> Result<i32> {
 
 pub fn run_cli_local(cli: Cli) -> Result<i32> {
     match cli.command {
-        Commands::Cover(cover) => match cover.command {
+        None => cmd_setup::run(cmd_setup::SetupArgs {
+            root: ".".to_string(),
+            yes: false,
+            fallback_only: false,
+            runtime: "all".to_string(),
+        }),
+        Some(Commands::Cover(cover)) => match cover.command {
             CoverCommands::Check(args) => cmd_cover::run(args, &cli.config),
         },
-        Commands::Diff(diff) => match diff.command {
+        Some(Commands::Diff(diff)) => match diff.command {
             DiffCommands::Analyze(args) => cmd_diff::run(args, &cli.config),
         },
-        Commands::Test(test) => match test.command {
+        Some(Commands::Test(test)) => match test.command {
             TestCommands::Impact(args) => cmd_impact::run(args, &cli.config),
             TestCommands::Shard(args) => cmd_shard::run(args, &cli.config),
             TestCommands::Map(args) => cmd_map::run(args),
         },
-        Commands::Guard(guard) => match guard.command {
+        Some(Commands::Guard(guard)) => match guard.command {
             GuardCommands::Validate(args) => cmd_guard::run_validate(args, &cli.config),
             GuardCommands::Check(args) => cmd_guard::run_check(args, &cli.config),
         },
-        Commands::Context(context) => match context.command {
+        Some(Commands::Context(context)) => match context.command {
             ContextCommands::Assemble(args) => cmd_context::run_assemble(args),
             ContextCommands::Correlate(args) => cmd_context::run_correlate(args),
             ContextCommands::Manage(args) => cmd_context::run_manage(args),
@@ -80,42 +86,42 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
             ContextCommands::Store(args) => cmd_context::run_store(args),
             ContextCommands::Recall(args) => cmd_context::run_recall(args),
         },
-        Commands::Stack(stack) => match stack.command {
+        Some(Commands::Stack(stack)) => match stack.command {
             StackCommands::Slice(args) => cmd_stack::run(args),
         },
-        Commands::Build(build) => match build.command {
+        Some(Commands::Build(build)) => match build.command {
             BuildCommands::Reduce(args) => cmd_build::run(args),
         },
-        Commands::Map(map) => match map.command {
+        Some(Commands::Map(map)) => match map.command {
             MapCommands::Repo(args) => cmd_map_repo::run(args),
             MapCommands::Query(args) => cmd_map_query::run(args),
         },
-        Commands::Proxy(proxy) => match proxy.command {
+        Some(Commands::Proxy(proxy)) => match proxy.command {
             cmd_proxy::ProxyCommands::Run(args) => cmd_proxy::run(args),
         },
-        Commands::Gain(args) => cmd_compact::run_gain_command(args),
-        Commands::Compact(args) => cmd_compact::run(args),
-        Commands::Rewrite(args) => cmd_compact::run_rewrite_command(args),
-        Commands::Session(args) => cmd_compact::run_session(args),
-        Commands::Packet(packet) => match packet.command {
+        Some(Commands::Gain(args)) => cmd_compact::run_gain_command(args),
+        Some(Commands::Compact(args)) => cmd_compact::run(args),
+        Some(Commands::Rewrite(args)) => cmd_compact::run_rewrite_command(args),
+        Some(Commands::Session(args)) => cmd_compact::run_session(args),
+        Some(Commands::Packet(packet)) => match packet.command {
             cmd_packet::PacketCommands::Fetch(args) => cmd_packet::run_fetch(args),
         },
-        Commands::Memory(args) => cmd_memory::run(args),
-        Commands::Feedback(args) => cmd_feedback::run(args),
-        Commands::Graph(args) => cmd_graph::run(args),
-        Commands::Wakeup(args) => cmd_wakeup::run(args),
-        Commands::Dashboard(args) => cmd_dashboard::run(args),
-        Commands::AgentPrompt(args) => cmd_agent_prompt::run(args),
-        Commands::Mcp(args) => cmd_mcp::run(args),
-        Commands::Hook(args) => cmd_hook::run(args),
-        Commands::Daemon(daemon) => cmd_daemon::run(daemon),
-        Commands::Doctor(args) => cmd_doctor::run(args),
-        Commands::Setup(args) => cmd_setup::run(args),
-        Commands::Init(args) => cmd_init::run(args),
-        Commands::Run(args) => cmd_run::run(args),
-        Commands::Shell(args) => cmd_shell::run(args),
-        Commands::Discover(args) => cmd_discover::run(args),
-        Commands::Learn(args) => cmd_learn::run(args),
+        Some(Commands::Memory(args)) => cmd_memory::run(args),
+        Some(Commands::Feedback(args)) => cmd_feedback::run(args),
+        Some(Commands::Graph(args)) => cmd_graph::run(args),
+        Some(Commands::Wakeup(args)) => cmd_wakeup::run(args),
+        Some(Commands::Dashboard(args)) => cmd_dashboard::run(args),
+        Some(Commands::AgentPrompt(args)) => cmd_agent_prompt::run(args),
+        Some(Commands::Mcp(args)) => cmd_mcp::run(args),
+        Some(Commands::Hook(args)) => cmd_hook::run(args),
+        Some(Commands::Daemon(daemon)) => cmd_daemon::run(daemon),
+        Some(Commands::Doctor(args)) => cmd_doctor::run(args),
+        Some(Commands::Setup(args)) => cmd_setup::run(args),
+        Some(Commands::Init(args)) => cmd_init::run(args),
+        Some(Commands::Run(args)) => cmd_run::run(args),
+        Some(Commands::Shell(args)) => cmd_shell::run(args),
+        Some(Commands::Discover(args)) => cmd_discover::run(args),
+        Some(Commands::Learn(args)) => cmd_learn::run(args),
     }
 }
 
@@ -144,7 +150,8 @@ struct MachineErrorContext {
 
 fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
     match &cli.command {
-        Commands::Cover(cover) => match &cover.command {
+        None => None,
+        Some(Commands::Cover(cover)) => match &cover.command {
             CoverCommands::Check(args) if args.machine_output_requested() => {
                 Some(MachineErrorContext {
                     command: "Packet28 cover check".to_string(),
@@ -155,7 +162,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }
             _ => None,
         },
-        Commands::Diff(diff) => match &diff.command {
+        Some(Commands::Diff(diff)) => match &diff.command {
             DiffCommands::Analyze(args) if args.machine_output_requested() => {
                 Some(MachineErrorContext {
                     command: "Packet28 diff analyze".to_string(),
@@ -169,7 +176,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }
             _ => None,
         },
-        Commands::Test(test) => match &test.command {
+        Some(Commands::Test(test)) => match &test.command {
             TestCommands::Impact(args) if args.json.is_some() || args.legacy_json => {
                 Some(MachineErrorContext {
                     command: "Packet28 test impact".to_string(),
@@ -195,7 +202,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }),
             _ => None,
         },
-        Commands::Context(context) => match &context.command {
+        Some(Commands::Context(context)) => match &context.command {
             ContextCommands::Assemble(args) if args.machine_output_requested() => {
                 Some(MachineErrorContext {
                     command: "Packet28 context assemble".to_string(),
@@ -286,7 +293,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }
             _ => None,
         },
-        Commands::Stack(stack) => match &stack.command {
+        Some(Commands::Stack(stack)) => match &stack.command {
             StackCommands::Slice(args) if args.machine_output_requested() => {
                 Some(MachineErrorContext {
                     command: "Packet28 stack slice".to_string(),
@@ -300,7 +307,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }
             _ => None,
         },
-        Commands::Build(build) => match &build.command {
+        Some(Commands::Build(build)) => match &build.command {
             BuildCommands::Reduce(args) if args.machine_output_requested() => {
                 Some(MachineErrorContext {
                     command: "Packet28 build reduce".to_string(),
@@ -314,7 +321,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }
             _ => None,
         },
-        Commands::Map(map) => match &map.command {
+        Some(Commands::Map(map)) => match &map.command {
             MapCommands::Repo(args) if args.json.is_some() || args.legacy_json => {
                 Some(MachineErrorContext {
                     command: "Packet28 map repo".to_string(),
@@ -336,7 +343,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }
             _ => None,
         },
-        Commands::Proxy(proxy) => match &proxy.command {
+        Some(Commands::Proxy(proxy)) => match &proxy.command {
             cmd_proxy::ProxyCommands::Run(args) if args.json.is_some() || args.legacy_json => {
                 Some(MachineErrorContext {
                     command: "Packet28 proxy run".to_string(),
@@ -350,7 +357,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }
             _ => None,
         },
-        Commands::Packet(packet) => {
+        Some(Commands::Packet(packet)) => {
             match &packet.command {
                 cmd_packet::PacketCommands::Fetch(args) if args.json.is_some() => Some(
                     machine_error("Packet28 packet fetch", args.pretty, "packet.fetch"),
@@ -358,27 +365,27 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
                 _ => None,
             }
         }
-        Commands::Gain(_)
-        | Commands::Compact(_)
-        | Commands::Rewrite(_)
-        | Commands::Session(_)
-        | Commands::Discover(_)
-        | Commands::Learn(_) => None,
-        Commands::Daemon(_)
-        | Commands::Guard(_)
-        | Commands::Memory(_)
-        | Commands::Feedback(_)
-        | Commands::Graph(_)
-        | Commands::Wakeup(_)
-        | Commands::Dashboard(_)
-        | Commands::AgentPrompt(_)
-        | Commands::Mcp(_)
-        | Commands::Hook(_)
-        | Commands::Setup(_)
-        | Commands::Init(_)
-        | Commands::Run(_)
-        | Commands::Shell(_)
-        | Commands::Doctor(_) => None,
+        Some(Commands::Gain(_))
+        | Some(Commands::Compact(_))
+        | Some(Commands::Rewrite(_))
+        | Some(Commands::Session(_))
+        | Some(Commands::Discover(_))
+        | Some(Commands::Learn(_)) => None,
+        Some(Commands::Daemon(_))
+        | Some(Commands::Guard(_))
+        | Some(Commands::Memory(_))
+        | Some(Commands::Feedback(_))
+        | Some(Commands::Graph(_))
+        | Some(Commands::Wakeup(_))
+        | Some(Commands::Dashboard(_))
+        | Some(Commands::AgentPrompt(_))
+        | Some(Commands::Mcp(_))
+        | Some(Commands::Hook(_))
+        | Some(Commands::Setup(_))
+        | Some(Commands::Init(_))
+        | Some(Commands::Run(_))
+        | Some(Commands::Shell(_))
+        | Some(Commands::Doctor(_)) => None,
     }
 }
 
@@ -428,4 +435,24 @@ fn configure_stdout_output(path: Option<&str>) -> anyhow::Result<()> {
         anyhow::bail!("--output is currently supported only on Unix targets");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_subcommand_defaults_to_setup_wizard() {
+        let cli = Cli::try_parse_from(["Packet28"]).unwrap();
+
+        assert!(cli.command.is_none());
+        assert!(machine_error_context(&cli).is_none());
+    }
+
+    #[test]
+    fn explicit_subcommands_still_parse() {
+        let cli = Cli::try_parse_from(["Packet28", "doctor", "--root", "."]).unwrap();
+
+        assert!(matches!(cli.command, Some(Commands::Doctor(_))));
+    }
 }

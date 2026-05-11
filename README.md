@@ -571,10 +571,19 @@ The npm package installs:
 
 ## Quick Start
 
-Auto-configure local agent files and MCP config:
+Run the setup wizard. This is the `npx nia-wizard` style path: one command,
+auto-detect local agent runtimes, review the plan, preserve existing config,
+write MCP/hooks/instruction files, start the daemon, build indexes, and print
+verification commands.
 
 ```bash
-./target/release/Packet28 setup --runtime all --yes
+npx packet28@latest
+```
+
+For CI or scripted installs, skip prompts with `--yes`:
+
+```bash
+npx packet28@latest setup --runtime all --yes
 ```
 
 Run Packet28 as an MCP server:

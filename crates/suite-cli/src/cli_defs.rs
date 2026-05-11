@@ -12,7 +12,7 @@ use crate::{
     name = "Packet28",
     version = env!("PACKET28_VERSION"),
     about = "Umbrella platform CLI for suite domains",
-    after_help = "Examples:\n  Packet28 diff analyze --coverage tests/fixtures/lcov/basic.info --base HEAD --head HEAD --json\n  Packet28 gain --task-id task-123 --json\n  Packet28 agent-prompt --format claude\n  Packet28 daemon status --root . --json\n  Packet28 doctor --root . --json\n  Packet28 context store stats --json\n  Packet28 context recall --query \"missing mappings in parser\" --json"
+    after_help = "Examples:\n  Packet28\n  Packet28 setup --runtime all --yes\n  Packet28 diff analyze --coverage tests/fixtures/lcov/basic.info --base HEAD --head HEAD --json\n  Packet28 gain --task-id task-123 --json\n  Packet28 agent-prompt --format claude\n  Packet28 daemon status --root . --json\n  Packet28 doctor --root . --json\n  Packet28 context store stats --json\n  Packet28 context recall --query \"missing mappings in parser\" --json"
 )]
 pub struct Cli {
     /// Path to config file
@@ -32,7 +32,7 @@ pub struct Cli {
     pub daemon_root: Option<String>,
 
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]

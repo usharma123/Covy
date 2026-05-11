@@ -35,6 +35,12 @@ function getPlatformKey() {
 }
 
 function findBinary(name) {
+  if (process.env.PACKET28_BINARY) {
+    const override = process.env.PACKET28_BINARY;
+    if (existsSync(override)) return override;
+    throw new Error(`PACKET28_BINARY does not exist: ${override}`);
+  }
+
   const platformKey = getPlatformKey();
   if (!platformKey) {
     throw new Error(
@@ -55,7 +61,16 @@ function findBinary(name) {
     // optional dep not installed — fall through
   }
 
-  // Try 2: local vendor directory (for development / cargo-built binaries)
+  // Try 2: PATH override. This keeps local development and smoke tests honest
+  // when an older unpacked vendor binary is present beside this wrapper.
+  try {
+    const which = execSync(`which ${name}`, { encoding: "utf-8" }).trim();
+    if (which && existsSync(which)) return which;
+  } catch {
+    // not on PATH
+  }
+
+  // Try 3: local vendor directory (for development / cargo-built binaries)
   const localBinary = path.join(
     __dirname,
     "..",
@@ -64,14 +79,6 @@ function findBinary(name) {
     name,
   );
   if (existsSync(localBinary)) return localBinary;
-
-  // Try 3: check if the binary is already on PATH
-  try {
-    const which = execSync(`which ${name}`, { encoding: "utf-8" }).trim();
-    if (which && existsSync(which)) return which;
-  } catch {
-    // not on PATH
-  }
 
   throw new Error(
     `Could not find ${name} binary. Reinstall: npm install -g packet28@latest`,
