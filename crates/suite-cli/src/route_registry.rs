@@ -360,29 +360,33 @@ fn policy_excludes_command(command: &str, argv: &[String], root: Option<&Path>) 
         .unwrap_or_default();
     excludes.iter().any(|exclude| {
         let exclude = exclude.trim();
-        !exclude.is_empty()
-            && (base == exclude
-                || argv.first().map(String::as_str) == Some(exclude)
-                || command == exclude
-                || command.starts_with(&format!("{exclude} ")))
+        if exclude.is_empty() {
+            return false;
+        }
+        if exclude.starts_with('^') {
+            return regex::Regex::new(exclude)
+                .map(|regex| regex.is_match(command))
+                .unwrap_or(false);
+        }
+        base == exclude
+            || argv.first().map(String::as_str) == Some(exclude)
+            || command == exclude
+            || command.starts_with(&format!("{exclude} "))
     })
 }
 
 fn load_policy_excludes(root: &Path) -> Vec<String> {
-    for rel in ["covy.toml", "packet28.toml", ".packet28.toml"] {
-        let path = root.join(rel);
+    let mut excludes = Vec::new();
+    for path in policy_config_paths(root) {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
         let Ok(value) = toml::from_str::<toml::Value>(&content) else {
             continue;
         };
-        let excludes = extract_policy_excludes(&value);
-        if !excludes.is_empty() {
-            return excludes;
-        }
+        excludes.extend(extract_policy_excludes(&value));
     }
-    Vec::new()
+    excludes
 }
 
 fn configured_wrapper_prefix(argv: &[String], root: Option<&Path>) -> Option<Vec<String>> {
@@ -395,20 +399,41 @@ fn configured_wrapper_prefix(argv: &[String], root: Option<&Path>) -> Option<Vec
 }
 
 fn load_policy_prefixes(root: &Path) -> Vec<String> {
-    for rel in ["covy.toml", "packet28.toml", ".packet28.toml"] {
-        let path = root.join(rel);
+    let mut prefixes = Vec::new();
+    for path in policy_config_paths(root) {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
         let Ok(value) = toml::from_str::<toml::Value>(&content) else {
             continue;
         };
-        let prefixes = extract_policy_prefixes(&value);
-        if !prefixes.is_empty() {
-            return prefixes;
+        prefixes.extend(extract_policy_prefixes(&value));
+    }
+    prefixes
+}
+
+fn policy_config_paths(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut paths = ["covy.toml", "packet28.toml", ".packet28.toml"]
+        .into_iter()
+        .map(|rel| root.join(rel))
+        .collect::<Vec<_>>();
+    if let Some(config_home) = config_home_dir() {
+        paths.push(config_home.join("packet28").join("config.toml"));
+        paths.push(config_home.join("rtk").join("config.toml"));
+    }
+    paths
+}
+
+fn config_home_dir() -> Option<std::path::PathBuf> {
+    if let Some(value) = std::env::var_os("XDG_CONFIG_HOME") {
+        if !value.is_empty() {
+            return Some(std::path::PathBuf::from(value));
         }
     }
-    Vec::new()
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .map(|home| home.join(".config"))
 }
 
 fn extract_policy_excludes(value: &toml::Value) -> Vec<String> {
@@ -1125,6 +1150,12 @@ fn shell_join(argv: &[String]) -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn routes_env_prefixed_reducer_commands() {
@@ -1262,6 +1293,58 @@ mod tests {
         )
         .unwrap();
         let decision = decide_command_route_with_cwd_and_root("cargo test", tmp.path(), tmp.path());
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("config_excluded"));
+    }
+
+    #[test]
+    fn rtk_global_config_excludes_subcommand_patterns_from_rewrite() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let config_home = tmp.path().join("config-home");
+        fs::create_dir_all(config_home.join("rtk")).unwrap();
+        fs::write(
+            config_home.join("rtk").join("config.toml"),
+            "[hooks]\nexclude_commands = [\"git push\"]\n",
+        )
+        .unwrap();
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+
+        let decision =
+            decide_command_route_with_cwd_and_root("git push origin main", tmp.path(), tmp.path());
+
+        if let Some(previous) = previous {
+            std::env::set_var("XDG_CONFIG_HOME", previous);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("config_excluded"));
+    }
+
+    #[test]
+    fn rtk_global_config_excludes_regex_patterns_from_rewrite() {
+        let _guard = env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let config_home = tmp.path().join("config-home");
+        fs::create_dir_all(config_home.join("rtk")).unwrap();
+        fs::write(
+            config_home.join("rtk").join("config.toml"),
+            "[hooks]\nexclude_commands = [\"^git (push|tag)\"]\n",
+        )
+        .unwrap();
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+
+        let decision =
+            decide_command_route_with_cwd_and_root("git tag v1.2.3", tmp.path(), tmp.path());
+
+        if let Some(previous) = previous {
+            std::env::set_var("XDG_CONFIG_HOME", previous);
+        } else {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
         assert_eq!(decision.kind, RouteKind::RawPassthrough);
         assert_eq!(decision.reason.as_deref(), Some("config_excluded"));
     }
