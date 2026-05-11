@@ -717,6 +717,7 @@ fn handle_method(
                             "topic": {"type":"string"},
                             "importance": {"type":"string"},
                             "keywords": {"type":"string"},
+                            "project": {"type":"string"},
                             "source": {"type":"string"},
                             "raw_excerpt": {"type":"string"}
                         }
@@ -732,6 +733,7 @@ fn handle_method(
                             "query": {"type":"string"},
                             "limit": {"type":"integer","minimum":1},
                             "topic": {"type":"string"},
+                            "project": {"type":"string"},
                             "tag": {"type":"string"},
                             "keyword": {"type":"string"}
                         }
@@ -745,6 +747,7 @@ fn handle_method(
                         "properties": {
                             "limit": {"type":"integer","minimum":1},
                             "topic": {"type":"string"},
+                            "project": {"type":"string"},
                             "all": {"type":"boolean"},
                             "sort": {"type":"string"}
                         }
@@ -1295,6 +1298,7 @@ fn handle_tool_call(
                 topic: request.topic.as_deref(),
                 importance: request.importance.as_deref(),
                 keywords: request.keywords.as_deref(),
+                project: request.project.as_deref(),
                 source: request.source.as_deref(),
                 raw_excerpt: request.raw_excerpt.as_deref(),
             })?)?
@@ -1305,6 +1309,7 @@ fn handle_tool_call(
                 query: &request.query,
                 limit: request.limit.unwrap_or(10),
                 topic: request.topic.as_deref(),
+                project: request.project.as_deref(),
                 tag: request.tag.as_deref(),
                 keyword: request.keyword.as_deref(),
             })?)?
@@ -1314,6 +1319,7 @@ fn handle_tool_call(
             serde_json::to_value(list_memories_filtered(MemoryListQuery {
                 limit: request.limit.unwrap_or(20),
                 topic: request.topic.as_deref(),
+                project: request.project.as_deref(),
                 all: request.all.unwrap_or(false),
                 sort: request.sort.as_deref().unwrap_or("recent"),
             })?)?
@@ -1327,6 +1333,7 @@ fn handle_tool_call(
                 topic: request.topic.as_deref(),
                 importance: request.importance.as_deref(),
                 keywords: request.keywords.as_deref(),
+                project: request.project.as_deref(),
                 source: request.source.as_deref(),
                 raw_excerpt: request.raw_excerpt.as_deref(),
             })?)?
@@ -1532,6 +1539,7 @@ struct MemoryStoreToolArgs {
     topic: Option<String>,
     importance: Option<String>,
     keywords: Option<String>,
+    project: Option<String>,
     source: Option<String>,
     raw_excerpt: Option<String>,
 }
@@ -1541,6 +1549,7 @@ struct MemoryRecallToolArgs {
     query: String,
     limit: Option<usize>,
     topic: Option<String>,
+    project: Option<String>,
     tag: Option<String>,
     keyword: Option<String>,
 }
@@ -1549,6 +1558,7 @@ struct MemoryRecallToolArgs {
 struct MemoryListToolArgs {
     limit: Option<usize>,
     topic: Option<String>,
+    project: Option<String>,
     all: Option<bool>,
     sort: Option<String>,
 }
@@ -1561,6 +1571,7 @@ struct MemoryUpdateToolArgs {
     topic: Option<String>,
     importance: Option<String>,
     keywords: Option<String>,
+    project: Option<String>,
     source: Option<String>,
     raw_excerpt: Option<String>,
 }

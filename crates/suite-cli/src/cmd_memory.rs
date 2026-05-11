@@ -42,6 +42,8 @@ pub struct MemoryStoreArgs {
     #[arg(long)]
     pub keywords: Option<String>,
     #[arg(long)]
+    pub project: Option<String>,
+    #[arg(long)]
     pub source: Option<String>,
     #[arg(long)]
     pub raw: Option<String>,
@@ -59,6 +61,8 @@ pub struct MemoryRecallArgs {
     #[arg(long)]
     pub topic: Option<String>,
     #[arg(long)]
+    pub project: Option<String>,
+    #[arg(long)]
     pub tag: Option<String>,
     #[arg(long)]
     pub keyword: Option<String>,
@@ -74,6 +78,8 @@ pub struct MemoryListArgs {
     pub limit: usize,
     #[arg(long)]
     pub topic: Option<String>,
+    #[arg(long)]
+    pub project: Option<String>,
     #[arg(long)]
     pub all: bool,
     #[arg(long, default_value = "recent")]
@@ -97,6 +103,8 @@ pub struct MemoryUpdateArgs {
     pub importance: Option<String>,
     #[arg(long)]
     pub keywords: Option<String>,
+    #[arg(long)]
+    pub project: Option<String>,
     #[arg(long)]
     pub source: Option<String>,
     #[arg(long)]
@@ -219,6 +227,7 @@ fn run_store(args: MemoryStoreArgs) -> Result<i32> {
         topic: args.topic.as_deref(),
         importance: args.importance.as_deref(),
         keywords: args.keywords.as_deref(),
+        project: args.project.as_deref(),
         source: args.source.as_deref(),
         raw_excerpt: args.raw.as_deref(),
     })?;
@@ -235,6 +244,7 @@ fn run_recall(args: MemoryRecallArgs) -> Result<i32> {
         query: &args.query,
         limit: args.limit,
         topic: args.topic.as_deref(),
+        project: args.project.as_deref(),
         tag: args.tag.as_deref(),
         keyword: args.keyword.as_deref(),
     })?;
@@ -252,6 +262,7 @@ fn run_list(args: MemoryListArgs) -> Result<i32> {
     let records = list_memories_filtered(MemoryListQuery {
         limit: args.limit,
         topic: args.topic.as_deref(),
+        project: args.project.as_deref(),
         all: args.all,
         sort: &args.sort,
     })?;
@@ -273,6 +284,7 @@ fn run_update(args: MemoryUpdateArgs) -> Result<i32> {
         topic: args.topic.as_deref(),
         importance: args.importance.as_deref(),
         keywords: args.keywords.as_deref(),
+        project: args.project.as_deref(),
         source: args.source.as_deref(),
         raw_excerpt: args.raw.as_deref(),
     })?;
