@@ -59,8 +59,9 @@ use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
 use crate::memory_store::{
-    inspect_graph, list_memories, local_store_stats, recall_memories, record_feedback,
-    search_feedback, store_memory,
+    forget_memories_by_topic, forget_memory, inspect_graph, list_memories, local_store_stats,
+    memory_topics, recall_memories, record_feedback, search_feedback, store_memory_with_metadata,
+    update_memory, MemoryStoreInput, MemoryUpdateInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
@@ -705,7 +706,11 @@ fn handle_method(
                         "required": ["content"],
                         "properties": {
                             "content": {"type":"string"},
-                            "tags": {"type":"string"}
+                            "tags": {"type":"string"},
+                            "topic": {"type":"string"},
+                            "importance": {"type":"string"},
+                            "keywords": {"type":"string"},
+                            "raw_excerpt": {"type":"string"}
                         }
                     }
                 },
@@ -729,6 +734,50 @@ fn handle_method(
                         "properties": {
                             "limit": {"type":"integer","minimum":1}
                         }
+                    }
+                },
+                {
+                    "name": "packet28.memory_update",
+                    "description": "Update a local Packet28 memory by id.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["id"],
+                        "properties": {
+                            "id": {"type":"integer"},
+                            "content": {"type":"string"},
+                            "tags": {"type":"string"},
+                            "topic": {"type":"string"},
+                            "importance": {"type":"string"},
+                            "keywords": {"type":"string"},
+                            "raw_excerpt": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.memory_forget",
+                    "description": "Delete a local Packet28 memory by id, or delete memories in a topic.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type":"integer"},
+                            "topic": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.memory_topics",
+                    "description": "List local Packet28 memory topics and counts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
+                    "name": "packet28.memory_stats",
+                    "description": "Return local Packet28 memory and store statistics.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
                     }
                 },
                 {
@@ -972,7 +1021,14 @@ fn handle_tool_call(
         }
         "packet28.memory_store" => {
             let request: MemoryStoreToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(store_memory(&request.content, request.tags.as_deref())?)?
+            serde_json::to_value(store_memory_with_metadata(MemoryStoreInput {
+                content: &request.content,
+                tags: request.tags.as_deref(),
+                topic: request.topic.as_deref(),
+                importance: request.importance.as_deref(),
+                keywords: request.keywords.as_deref(),
+                raw_excerpt: request.raw_excerpt.as_deref(),
+            })?)?
         }
         "packet28.memory_recall" => {
             let request: MemoryRecallToolArgs = serde_json::from_value(arguments)?;
@@ -985,6 +1041,29 @@ fn handle_tool_call(
             let request: MemoryListToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(list_memories(request.limit.unwrap_or(20))?)?
         }
+        "packet28.memory_update" => {
+            let request: MemoryUpdateToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(update_memory(MemoryUpdateInput {
+                id: request.id,
+                content: request.content.as_deref(),
+                tags: request.tags.as_deref(),
+                topic: request.topic.as_deref(),
+                importance: request.importance.as_deref(),
+                keywords: request.keywords.as_deref(),
+                raw_excerpt: request.raw_excerpt.as_deref(),
+            })?)?
+        }
+        "packet28.memory_forget" => {
+            let request: MemoryForgetToolArgs = serde_json::from_value(arguments)?;
+            let deleted = match (request.id, request.topic.as_deref()) {
+                (Some(id), None) => forget_memory(id)?,
+                (None, Some(topic)) => forget_memories_by_topic(topic)?,
+                _ => return Err(anyhow!("pass exactly one of id or topic")),
+            };
+            json!({ "deleted": deleted })
+        }
+        "packet28.memory_topics" => serde_json::to_value(memory_topics()?)?,
+        "packet28.memory_stats" => serde_json::to_value(local_store_stats()?)?,
         "packet28.feedback_record" => {
             let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(record_feedback(&request.subject, &request.correction)?)?
@@ -1033,6 +1112,10 @@ fn handle_tool_call(
 struct MemoryStoreToolArgs {
     content: String,
     tags: Option<String>,
+    topic: Option<String>,
+    importance: Option<String>,
+    keywords: Option<String>,
+    raw_excerpt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1044,6 +1127,23 @@ struct MemoryRecallToolArgs {
 #[derive(Debug, Deserialize)]
 struct MemoryListToolArgs {
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryUpdateToolArgs {
+    id: i64,
+    content: Option<String>,
+    tags: Option<String>,
+    topic: Option<String>,
+    importance: Option<String>,
+    keywords: Option<String>,
+    raw_excerpt: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryForgetToolArgs {
+    id: Option<i64>,
+    topic: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1241,6 +1341,25 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             let count = payload.as_array().map(Vec::len).unwrap_or_default();
             format!("Packet28 listed {count} memor(y/ies).")
         }
+        "packet28.memory_update" => {
+            let id = payload
+                .get("id")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!("Packet28 updated memory {id}.")
+        }
+        "packet28.memory_forget" => {
+            let deleted = payload
+                .get("deleted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 deleted {deleted} memor(y/ies).")
+        }
+        "packet28.memory_topics" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 listed {count} memory topic(s).")
+        }
+        "packet28.memory_stats" => "Packet28 memory statistics.".to_string(),
         "packet28.feedback_record" => {
             let id = payload
                 .get("id")

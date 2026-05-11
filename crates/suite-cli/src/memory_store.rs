@@ -10,7 +10,12 @@ pub(crate) struct MemoryRecord {
     pub(crate) id: i64,
     pub(crate) content: String,
     pub(crate) tags: Option<String>,
+    pub(crate) topic: String,
+    pub(crate) importance: String,
+    pub(crate) keywords: Option<String>,
+    pub(crate) raw_excerpt: Option<String>,
     pub(crate) created_at_unix_ms: i64,
+    pub(crate) updated_at_unix_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,31 +56,67 @@ pub(crate) struct LocalStoreStats {
     pub(crate) mcp_call_count: i64,
 }
 
-pub(crate) fn store_memory(content: &str, tags: Option<&str>) -> Result<MemoryRecord> {
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryTopicStats {
+    pub(crate) topic: String,
+    pub(crate) memory_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MemoryStoreInput<'a> {
+    pub(crate) content: &'a str,
+    pub(crate) tags: Option<&'a str>,
+    pub(crate) topic: Option<&'a str>,
+    pub(crate) importance: Option<&'a str>,
+    pub(crate) keywords: Option<&'a str>,
+    pub(crate) raw_excerpt: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct MemoryUpdateInput<'a> {
+    pub(crate) id: i64,
+    pub(crate) content: Option<&'a str>,
+    pub(crate) tags: Option<&'a str>,
+    pub(crate) topic: Option<&'a str>,
+    pub(crate) importance: Option<&'a str>,
+    pub(crate) keywords: Option<&'a str>,
+    pub(crate) raw_excerpt: Option<&'a str>,
+}
+
+pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<MemoryRecord> {
     let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
+    let topic = normalize_non_empty(input.topic, "general");
+    let importance = normalize_non_empty(input.importance, "medium");
     conn.execute(
-        "INSERT INTO memories (content, tags, created_at_unix_ms) VALUES (?1, ?2, ?3)",
-        params![content, tags, now],
+        "INSERT INTO memories
+         (content, tags, topic, importance, keywords, raw_excerpt, created_at_unix_ms, updated_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![
+            input.content,
+            input.tags,
+            topic,
+            importance,
+            input.keywords,
+            input.raw_excerpt,
+            now
+        ],
     )?;
     let id = conn.last_insert_rowid();
     conn.execute(
         "INSERT INTO memory_chunks (memory_id, chunk_index, content) VALUES (?1, 0, ?2)",
-        params![id, content],
+        params![id, input.content],
     )?;
-    Ok(MemoryRecord {
-        id,
-        content: content.to_string(),
-        tags: tags.map(ToOwned::to_owned),
-        created_at_unix_ms: now,
-    })
+    get_memory(&conn, id)
 }
 
 pub(crate) fn recall_memories(query: &str, limit: usize) -> Result<Vec<MemoryRecord>> {
     let conn = open_memory_db()?;
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
-            "SELECT m.id, m.content, m.tags, m.created_at_unix_ms
+            "SELECT
+                m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.raw_excerpt,
+                m.created_at_unix_ms, m.updated_at_unix_ms
              FROM memories_fts f
              JOIN memories m ON m.rowid = f.rowid
              WHERE memories_fts MATCH ?1
@@ -93,9 +134,15 @@ pub(crate) fn recall_memories(query: &str, limit: usize) -> Result<Vec<MemoryRec
 fn recall_memories_like(conn: &Connection, query: &str, limit: usize) -> Result<Vec<MemoryRecord>> {
     let pattern = format!("%{}%", query.trim());
     let mut stmt = conn.prepare(
-        "SELECT id, content, tags, created_at_unix_ms
+        "SELECT
+            id, content, tags, topic, importance, keywords, raw_excerpt,
+            created_at_unix_ms, updated_at_unix_ms
          FROM memories
-         WHERE content LIKE ?1 OR IFNULL(tags, '') LIKE ?1
+         WHERE content LIKE ?1
+            OR IFNULL(tags, '') LIKE ?1
+            OR IFNULL(topic, '') LIKE ?1
+            OR IFNULL(keywords, '') LIKE ?1
+            OR IFNULL(raw_excerpt, '') LIKE ?1
          ORDER BY created_at_unix_ms DESC
          LIMIT ?2",
     )?;
@@ -105,12 +152,91 @@ fn recall_memories_like(conn: &Connection, query: &str, limit: usize) -> Result<
 pub(crate) fn list_memories(limit: usize) -> Result<Vec<MemoryRecord>> {
     let conn = open_memory_db()?;
     let mut stmt = conn.prepare(
-        "SELECT id, content, tags, created_at_unix_ms
+        "SELECT
+            id, content, tags, topic, importance, keywords, raw_excerpt,
+            created_at_unix_ms, updated_at_unix_ms
          FROM memories
          ORDER BY created_at_unix_ms DESC
          LIMIT ?1",
     )?;
     read_memory_rows(&mut stmt, params![limit.max(1) as i64])
+}
+
+pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord> {
+    let conn = open_memory_db()?;
+    let current = get_memory(&conn, input.id)?;
+    let now = timestamp_unix_ms();
+    let content = input.content.unwrap_or(&current.content);
+    let tags = input.tags.or(current.tags.as_deref());
+    let topic = input.topic.unwrap_or(&current.topic);
+    let importance = input.importance.unwrap_or(&current.importance);
+    let keywords = input.keywords.or(current.keywords.as_deref());
+    let raw_excerpt = input.raw_excerpt.or(current.raw_excerpt.as_deref());
+    conn.execute(
+        "UPDATE memories
+         SET content = ?1,
+             tags = ?2,
+             topic = ?3,
+             importance = ?4,
+             keywords = ?5,
+             raw_excerpt = ?6,
+             updated_at_unix_ms = ?7
+         WHERE id = ?8",
+        params![
+            content,
+            tags,
+            normalize_non_empty(Some(topic), "general"),
+            normalize_non_empty(Some(importance), "medium"),
+            keywords,
+            raw_excerpt,
+            now,
+            input.id
+        ],
+    )?;
+    conn.execute(
+        "UPDATE memory_chunks SET content = ?1 WHERE memory_id = ?2 AND chunk_index = 0",
+        params![content, input.id],
+    )?;
+    get_memory(&conn, input.id)
+}
+
+pub(crate) fn forget_memory(id: i64) -> Result<usize> {
+    let conn = open_memory_db()?;
+    conn.execute(
+        "DELETE FROM memory_chunks WHERE memory_id = ?1",
+        params![id],
+    )?;
+    conn.execute("DELETE FROM memories WHERE id = ?1", params![id])
+        .map_err(Into::into)
+}
+
+pub(crate) fn forget_memories_by_topic(topic: &str) -> Result<usize> {
+    let conn = open_memory_db()?;
+    let topic = normalize_non_empty(Some(topic), "general");
+    conn.execute(
+        "DELETE FROM memory_chunks WHERE memory_id IN (SELECT id FROM memories WHERE topic = ?1)",
+        params![topic],
+    )?;
+    conn.execute("DELETE FROM memories WHERE topic = ?1", params![topic])
+        .map_err(Into::into)
+}
+
+pub(crate) fn memory_topics() -> Result<Vec<MemoryTopicStats>> {
+    let conn = open_memory_db()?;
+    let mut stmt = conn.prepare(
+        "SELECT topic, COUNT(*)
+         FROM memories
+         GROUP BY topic
+         ORDER BY COUNT(*) DESC, topic ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MemoryTopicStats {
+            topic: row.get(0)?,
+            memory_count: row.get(1)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 pub(crate) fn record_feedback(subject: &str, correction: &str) -> Result<FeedbackRecord> {
@@ -280,11 +406,41 @@ fn read_memory_rows<P: rusqlite::Params>(
             id: row.get(0)?,
             content: row.get(1)?,
             tags: row.get(2)?,
-            created_at_unix_ms: row.get(3)?,
+            topic: row.get(3)?,
+            importance: row.get(4)?,
+            keywords: row.get(5)?,
+            raw_excerpt: row.get(6)?,
+            created_at_unix_ms: row.get(7)?,
+            updated_at_unix_ms: row.get(8)?,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
+    conn.query_row(
+        "SELECT
+            id, content, tags, topic, importance, keywords, raw_excerpt,
+            created_at_unix_ms, updated_at_unix_ms
+         FROM memories
+         WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(MemoryRecord {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                tags: row.get(2)?,
+                topic: row.get(3)?,
+                importance: row.get(4)?,
+                keywords: row.get(5)?,
+                raw_excerpt: row.get(6)?,
+                created_at_unix_ms: row.get(7)?,
+                updated_at_unix_ms: row.get(8)?,
+            })
+        },
+    )
+    .map_err(Into::into)
 }
 
 fn open_memory_db() -> Result<Connection> {
@@ -327,7 +483,12 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             content TEXT NOT NULL,
             tags TEXT,
-            created_at_unix_ms INTEGER NOT NULL
+            topic TEXT NOT NULL DEFAULT 'general',
+            importance TEXT NOT NULL DEFAULT 'medium',
+            keywords TEXT,
+            raw_excerpt TEXT,
+            created_at_unix_ms INTEGER NOT NULL,
+            updated_at_unix_ms INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS memory_chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -410,6 +571,25 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         END;
         ",
     )?;
+    add_column_if_missing(conn, "memories", "topic", "TEXT NOT NULL DEFAULT 'general'")?;
+    add_column_if_missing(
+        conn,
+        "memories",
+        "importance",
+        "TEXT NOT NULL DEFAULT 'medium'",
+    )?;
+    add_column_if_missing(conn, "memories", "keywords", "TEXT")?;
+    add_column_if_missing(conn, "memories", "raw_excerpt", "TEXT")?;
+    add_column_if_missing(
+        conn,
+        "memories",
+        "updated_at_unix_ms",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    conn.execute(
+        "UPDATE memories SET updated_at_unix_ms = created_at_unix_ms WHERE updated_at_unix_ms = 0",
+        [],
+    )?;
     conn.execute(
         "INSERT INTO memories_fts(rowid, content, tags)
          SELECT id, content, tags FROM memories
@@ -435,6 +615,34 @@ fn fts_match_query(query: &str) -> Option<String> {
         .take(8)
         .collect();
     (!terms.is_empty()).then(|| terms.join(" OR "))
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )?;
+    Ok(())
+}
+
+fn normalize_non_empty(value: Option<&str>, default: &str) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(default)
+        .to_string()
 }
 
 fn packet28_db_path() -> PathBuf {

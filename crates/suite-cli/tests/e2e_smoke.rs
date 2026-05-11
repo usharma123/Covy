@@ -340,11 +340,21 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
             "Packet28 remembers local context",
             "--tags",
             "packet28,local",
+            "--topic",
+            "parity",
+            "--importance",
+            "high",
+            "--keywords",
+            "context,local",
+            "--raw",
+            "verbatim context",
             "--json",
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"content\""));
+        .stdout(predicate::str::contains("\"content\""))
+        .stdout(predicate::str::contains("\"topic\":\"parity\""))
+        .stdout(predicate::str::contains("\"importance\":\"high\""));
 
     assert!(db_path.exists());
     let conn = Connection::open(&db_path).unwrap();
@@ -371,6 +381,45 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .success()
         .stdout(predicate::str::contains("\"kind\":\"packet28.wakeup.v1\""))
         .stdout(predicate::str::contains("Packet28 remembers local context"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "update",
+            "1",
+            "--content",
+            "Packet28 remembers updated local context",
+            "--topic",
+            "updated-parity",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("updated local context"))
+        .stdout(predicate::str::contains("\"topic\":\"updated-parity\""));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "topics", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"topic\":\"updated-parity\""))
+        .stdout(predicate::str::contains("\"memory_count\":1"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"memory_count\":1"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "forget", "1", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"deleted\":1"));
 }
 
 #[test]
@@ -397,7 +446,14 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.memory_store",
-                "arguments":{"content":"MCP memory survives locally","tags":"mcp"}
+                "arguments":{
+                    "content":"MCP memory survives locally",
+                    "tags":"mcp",
+                    "topic":"mcp-topic",
+                    "importance":"high",
+                    "keywords":"survives,locally",
+                    "raw_excerpt":"verbatim mcp memory"
+                }
             }
         }),
     );
@@ -405,6 +461,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         stored["result"]["structuredContent"]["content"].as_str(),
         Some("MCP memory survives locally")
+    );
+    assert_eq!(
+        stored["result"]["structuredContent"]["topic"].as_str(),
+        Some("mcp-topic")
     );
 
     write_mcp_message(
@@ -441,6 +501,64 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         listed["result"]["structuredContent"][0]["content"].as_str(),
         Some("MCP memory survives locally")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":41,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_update",
+                "arguments":{"id":1, "content":"MCP memory updated locally", "topic":"mcp-updated"}
+            }
+        }),
+    );
+    let updated = read_mcp_message_for_id(&mut stdout, 41);
+    assert_eq!(
+        updated["result"]["structuredContent"]["content"].as_str(),
+        Some("MCP memory updated locally")
+    );
+    assert_eq!(
+        updated["result"]["structuredContent"]["topic"].as_str(),
+        Some("mcp-updated")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":42,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_topics",
+                "arguments":{}
+            }
+        }),
+    );
+    let topics = read_mcp_message_for_id(&mut stdout, 42);
+    assert_eq!(
+        topics["result"]["structuredContent"][0]["topic"].as_str(),
+        Some("mcp-updated")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":43,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_stats",
+                "arguments":{}
+            }
+        }),
+    );
+    let memory_stats = read_mcp_message_for_id(&mut stdout, 43);
+    assert_eq!(
+        memory_stats["result"]["structuredContent"]["memory_count"].as_i64(),
+        Some(1)
     );
 
     write_mcp_message(
@@ -511,6 +629,24 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     );
     let graph = read_mcp_message_for_id(&mut stdout, 8);
     assert!(graph["result"]["structuredContent"]["concepts"].is_array());
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":44,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_forget",
+                "arguments":{"topic":"mcp-updated"}
+            }
+        }),
+    );
+    let forgotten = read_mcp_message_for_id(&mut stdout, 44);
+    assert_eq!(
+        forgotten["result"]["structuredContent"]["deleted"].as_u64(),
+        Some(1)
+    );
 
     let _ = child.kill();
     let _ = child.wait();

@@ -1,7 +1,11 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::memory_store::{list_memories, recall_memories, store_memory};
+use crate::memory_store::{
+    forget_memories_by_topic, forget_memory, list_memories, local_store_stats, memory_topics,
+    recall_memories, store_memory_with_metadata, update_memory, MemoryStoreInput,
+    MemoryUpdateInput,
+};
 
 #[derive(Args)]
 pub struct MemoryArgs {
@@ -14,6 +18,10 @@ pub enum MemoryCommands {
     Store(MemoryStoreArgs),
     Recall(MemoryRecallArgs),
     List(MemoryListArgs),
+    Update(MemoryUpdateArgs),
+    Forget(MemoryForgetArgs),
+    Topics(MemoryTopicsArgs),
+    Stats(MemoryStatsArgs),
     Consolidate(MemoryConsolidateArgs),
 }
 
@@ -22,6 +30,14 @@ pub struct MemoryStoreArgs {
     pub content: String,
     #[arg(long)]
     pub tags: Option<String>,
+    #[arg(long)]
+    pub topic: Option<String>,
+    #[arg(long)]
+    pub importance: Option<String>,
+    #[arg(long)]
+    pub keywords: Option<String>,
+    #[arg(long)]
+    pub raw: Option<String>,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -50,6 +66,54 @@ pub struct MemoryListArgs {
 }
 
 #[derive(Args)]
+pub struct MemoryUpdateArgs {
+    pub id: i64,
+    #[arg(long)]
+    pub content: Option<String>,
+    #[arg(long)]
+    pub tags: Option<String>,
+    #[arg(long)]
+    pub topic: Option<String>,
+    #[arg(long)]
+    pub importance: Option<String>,
+    #[arg(long)]
+    pub keywords: Option<String>,
+    #[arg(long)]
+    pub raw: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryForgetArgs {
+    pub id: Option<i64>,
+    #[arg(long)]
+    pub topic: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryTopicsArgs {
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryStatsArgs {
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct MemoryConsolidateArgs {
     #[arg(long)]
     pub json: bool,
@@ -62,12 +126,23 @@ pub fn run(args: MemoryArgs) -> Result<i32> {
         MemoryCommands::Store(args) => run_store(args),
         MemoryCommands::Recall(args) => run_recall(args),
         MemoryCommands::List(args) => run_list(args),
+        MemoryCommands::Update(args) => run_update(args),
+        MemoryCommands::Forget(args) => run_forget(args),
+        MemoryCommands::Topics(args) => run_topics(args),
+        MemoryCommands::Stats(args) => run_stats(args),
         MemoryCommands::Consolidate(args) => run_consolidate(args),
     }
 }
 
 fn run_store(args: MemoryStoreArgs) -> Result<i32> {
-    let record = store_memory(&args.content, args.tags.as_deref())?;
+    let record = store_memory_with_metadata(MemoryStoreInput {
+        content: &args.content,
+        tags: args.tags.as_deref(),
+        topic: args.topic.as_deref(),
+        importance: args.importance.as_deref(),
+        keywords: args.keywords.as_deref(),
+        raw_excerpt: args.raw.as_deref(),
+    })?;
     if args.json {
         crate::cmd_common::emit_json(&serde_json::to_value(record)?, args.pretty)?;
     } else {
@@ -96,6 +171,60 @@ fn run_list(args: MemoryListArgs) -> Result<i32> {
         for record in records {
             println!("{} {}", record.id, record.content);
         }
+    }
+    Ok(0)
+}
+
+fn run_update(args: MemoryUpdateArgs) -> Result<i32> {
+    let record = update_memory(MemoryUpdateInput {
+        id: args.id,
+        content: args.content.as_deref(),
+        tags: args.tags.as_deref(),
+        topic: args.topic.as_deref(),
+        importance: args.importance.as_deref(),
+        keywords: args.keywords.as_deref(),
+        raw_excerpt: args.raw.as_deref(),
+    })?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(record)?, args.pretty)?;
+    } else {
+        println!("updated memory {}", record.id);
+    }
+    Ok(0)
+}
+
+fn run_forget(args: MemoryForgetArgs) -> Result<i32> {
+    let deleted = match (args.id, args.topic.as_deref()) {
+        (Some(id), None) => forget_memory(id)?,
+        (None, Some(topic)) => forget_memories_by_topic(topic)?,
+        _ => anyhow::bail!("pass exactly one of memory id or --topic"),
+    };
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::json!({ "deleted": deleted }), args.pretty)?;
+    } else {
+        println!("deleted={deleted}");
+    }
+    Ok(0)
+}
+
+fn run_topics(args: MemoryTopicsArgs) -> Result<i32> {
+    let topics = memory_topics()?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(topics)?, args.pretty)?;
+    } else {
+        for topic in topics {
+            println!("{} {}", topic.topic, topic.memory_count);
+        }
+    }
+    Ok(0)
+}
+
+fn run_stats(args: MemoryStatsArgs) -> Result<i32> {
+    let stats = local_store_stats()?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(stats)?, args.pretty)?;
+    } else {
+        println!("memory_count={}", stats.memory_count);
     }
     Ok(0)
 }
