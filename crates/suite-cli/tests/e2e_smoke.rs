@@ -2135,6 +2135,50 @@ fn test_discover_splits_chained_session_commands() {
 }
 
 #[test]
+fn test_discover_all_and_since_scan_multiple_session_files() {
+    let root = TempDir::new().unwrap();
+    let sessions_dir = root.path().join("claude-projects").join("project");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    for (name, command) in [
+        ("session-a.jsonl", "git status --short"),
+        ("session-b.jsonl", "pytest -q"),
+    ] {
+        let line = json!({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": command }
+                }]
+            }
+        });
+        fs::write(sessions_dir.join(name), format!("{line}\n")).unwrap();
+    }
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "discover",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+            "--limit",
+            "1",
+            "--all",
+            "--since",
+            "7",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"sessions_scanned\":2"))
+        .stdout(predicate::str::contains("\"commands_found\":2"))
+        .stdout(predicate::str::contains("\"supported_commands\":2"));
+}
+
+#[test]
 fn test_hook_records_local_event_log_stats_and_dashboard_count() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();

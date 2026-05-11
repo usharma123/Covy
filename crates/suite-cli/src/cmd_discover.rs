@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -24,6 +25,14 @@ pub struct DiscoverArgs {
     /// Maximum sessions to scan
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
+
+    /// Scan every matching session instead of truncating to --limit
+    #[arg(long)]
+    pub all: bool,
+
+    /// Limit sessions to files modified in the last N days
+    #[arg(long)]
+    pub since: Option<u64>,
 
     /// Output as JSON
     #[arg(long)]
@@ -86,7 +95,8 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    let session_files = collect_session_files(&sessions_dir, args.limit)?;
+    let session_files =
+        collect_session_files_for_scan(&sessions_dir, args.limit, args.all, args.since)?;
     report.sessions_scanned = session_files.len();
 
     let mut unsupported_counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -205,10 +215,24 @@ fn default_sessions_dir() -> PathBuf {
 }
 
 pub(crate) fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+    collect_session_files_for_scan(dir, limit, false, None)
+}
+
+fn collect_session_files_for_scan(
+    dir: &Path,
+    limit: usize,
+    all: bool,
+    since_days: Option<u64>,
+) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     if !dir.is_dir() {
         return Ok(files);
     }
+    let cutoff = since_days.map(|days| {
+        SystemTime::now()
+            .checked_sub(Duration::from_secs(days.saturating_mul(86_400)))
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    });
     // Walk project directories looking for session JSONL files
     for entry in fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))? {
         let entry = entry?;
@@ -224,15 +248,19 @@ pub(crate) fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<Path
             if let Ok(entries) = fs::read_dir(&scan_dir) {
                 for sub_entry in entries.flatten() {
                     let sub_path = sub_entry.path();
-                    if sub_path.extension().is_some_and(|ext| ext == "jsonl") {
+                    if sub_path.extension().is_some_and(|ext| ext == "jsonl")
+                        && session_file_in_since_window(&sub_path, cutoff)
+                    {
                         files.push(sub_path);
                     }
                 }
             }
-        } else if path.extension().is_some_and(|ext| ext == "jsonl") {
+        } else if path.extension().is_some_and(|ext| ext == "jsonl")
+            && session_file_in_since_window(&path, cutoff)
+        {
             files.push(path);
         }
-        if files.len() >= limit * 5 {
+        if !all && files.len() >= limit * 5 {
             break;
         }
     }
@@ -242,8 +270,20 @@ pub(crate) fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<Path
         let b_time = fs::metadata(b).and_then(|m| m.modified()).ok();
         b_time.cmp(&a_time)
     });
-    files.truncate(limit);
+    if !all {
+        files.truncate(limit);
+    }
     Ok(files)
+}
+
+fn session_file_in_since_window(path: &Path, cutoff: Option<SystemTime>) -> bool {
+    let Some(cutoff) = cutoff else {
+        return true;
+    };
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .map(|modified| modified >= cutoff)
+        .unwrap_or(false)
 }
 
 pub(crate) fn extract_bash_commands(path: &Path) -> Result<Vec<(String, u64)>> {
