@@ -58,7 +58,10 @@ use crate::cmd_mcp::support::{
 use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
-use crate::memory_store::{inspect_graph, recall_memories, record_feedback, store_memory};
+use crate::memory_store::{
+    inspect_graph, list_memories, local_store_stats, recall_memories, record_feedback,
+    search_feedback, store_memory,
+};
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
 };
@@ -719,6 +722,16 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.memory_list",
+                    "description": "List recent local Packet28 memories from ~/.packet28/packet28.db.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.feedback_record",
                     "description": "Record a local feedback correction in ~/.packet28/packet28.db.",
                     "inputSchema": {
@@ -728,6 +741,26 @@ fn handle_method(
                             "subject": {"type":"string"},
                             "correction": {"type":"string"}
                         }
+                    }
+                },
+                {
+                    "name": "packet28.feedback_search",
+                    "description": "Search local feedback corrections in ~/.packet28/packet28.db.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.feedback_stats",
+                    "description": "Return local feedback correction statistics.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
                     }
                 },
                 {
@@ -948,10 +981,22 @@ fn handle_tool_call(
                 request.limit.unwrap_or(10),
             )?)?
         }
+        "packet28.memory_list" => {
+            let request: MemoryListToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(list_memories(request.limit.unwrap_or(20))?)?
+        }
         "packet28.feedback_record" => {
             let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(record_feedback(&request.subject, &request.correction)?)?
         }
+        "packet28.feedback_search" => {
+            let request: FeedbackSearchToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(search_feedback(
+                &request.query,
+                request.limit.unwrap_or(10),
+            )?)?
+        }
+        "packet28.feedback_stats" => serde_json::to_value(local_store_stats()?)?,
         "packet28.graph_inspect" => {
             let request: GraphInspectToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(inspect_graph(request.limit.unwrap_or(50))?)?
@@ -997,9 +1042,20 @@ struct MemoryRecallToolArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct MemoryListToolArgs {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 struct FeedbackRecordToolArgs {
     subject: String,
     correction: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeedbackSearchToolArgs {
+    query: String,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1181,6 +1237,10 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             let count = payload.as_array().map(Vec::len).unwrap_or_default();
             format!("Packet28 recalled {count} memor(y/ies).")
         }
+        "packet28.memory_list" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 listed {count} memor(y/ies).")
+        }
         "packet28.feedback_record" => {
             let id = payload
                 .get("id")
@@ -1188,6 +1248,11 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 recorded feedback {id}.")
         }
+        "packet28.feedback_search" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 found {count} feedback correction(s).")
+        }
+        "packet28.feedback_stats" => "Packet28 feedback statistics.".to_string(),
         "packet28.graph_inspect" => "Packet28 graph inspection.".to_string(),
         "packet28.task_status" => "Packet28 task status.".to_string(),
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),
@@ -1234,6 +1299,9 @@ mod tests {
             "packet28.rewrite",
             "packet28.handoff",
             "packet28.doctor",
+            "packet28.memory_list",
+            "packet28.feedback_search",
+            "packet28.feedback_stats",
         ] {
             assert!(
                 tool_names.contains(&required),

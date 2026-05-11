@@ -11,15 +11,10 @@ Packet28 doctor --agent windsurf --root .
 Packet28 mcp smoke-test --from-config windsurf
 ```
 
-Plan command routing:
+Plan and run reducer-aware commands:
 
 ```bash
 Packet28 rewrite "git status --short" --json
-```
-
-Run reducer-aware commands and record savings:
-
-```bash
 Packet28 run --root . git status --short
 Packet28 run --root . cargo check
 Packet28 run --root . npm test
@@ -29,11 +24,12 @@ Packet28 run --root . docker logs app
 Packet28 run --root . gh pr checks 1
 ```
 
-Inspect local savings and missed savings:
+Inspect savings and missed savings:
 
 ```bash
 Packet28 gain --root .
 Packet28 discover --root .
+Packet28 session --root .
 Packet28 dashboard --root .
 ```
 
@@ -42,8 +38,12 @@ Use local memory, feedback, and graph:
 ```bash
 Packet28 memory store "Important local project fact" --tags project
 Packet28 memory recall "project fact"
+Packet28 memory list
+Packet28 memory consolidate
 Packet28 feedback record "bad reducer output" "prefer focused summaries"
 Packet28 feedback search reducer
+Packet28 feedback stats
+Packet28 graph create
 Packet28 graph add-concept Packet28
 Packet28 graph link Packet28 Reducers --relation uses
 Packet28 graph inspect
@@ -56,7 +56,10 @@ MCP tools exposed by the product slice:
 - `packet28.rewrite`
 - `packet28.memory_store`
 - `packet28.memory_recall`
+- `packet28.memory_list`
 - `packet28.feedback_record`
+- `packet28.feedback_search`
+- `packet28.feedback_stats`
 - `packet28.graph_inspect`
 - `packet28.prepare_handoff`
 - `packet28.handoff`
@@ -68,10 +71,10 @@ MCP tools exposed by the product slice:
 
 | Runtime | Tier | Notes |
 |---|---|---|
-| Claude Code | Existing hook/MCP support | Existing setup and doctor behavior are preserved. |
-| Cursor | Existing MCP/rules/hooks support | Existing setup tests remain in place. |
-| Codex | MCP/rules support | Setup writes Codex MCP config without hooks. |
-| Windsurf | MCP/rules verified, command rewrite guidance-only | `doctor --agent windsurf` validates config, rules, daemon/index, and MCP initialize/tools-list from generated config. Packet28 does not claim command interception. |
+| Claude Code | Hook/MCP support | Setup and tests cover Claude hook config behavior. |
+| Cursor | MCP/rules/hooks support | Setup tests cover Cursor artifacts. |
+| Codex | MCP/rules support | Setup writes Codex MCP config without claiming transparent shell interception. |
+| Windsurf | MCP/rules verified, command rewrite guidance-only | Doctor validates config, rules, daemon/index, and MCP initialize/tools-list from generated config. Packet28 does not claim command interception. |
 
 ## Local Storage
 
@@ -96,8 +99,8 @@ The SQLite schema includes:
 
 Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 
-## Limitations
+## Explicit Deferrals
 
-- Windsurf hook command interception is not guaranteed and is not claimed.
-- Memory recall is keyword/LIKE search for this MVP; vector search can be added later.
-- No telemetry, cloud sync, signup, API key, Redis, Qdrant, or Postgres dependency is used.
+- Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
+- Full ICM vector/FTS recall, wake-up CLI, memoir export/search, transcript replay, cloud/import/upgrade, and web dashboard.
+- Windsurf hook command interception until a real runtime test proves it.

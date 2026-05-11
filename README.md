@@ -377,7 +377,7 @@ Packet28's MCP surface includes:
 
 - Tools for slim reducer search, region reads, state writes, handoff assembly, and stored artifact fetches
 - Compatibility tools for command reduction, rewrite planning, handoff, and doctor checks: `packet28.reduce`, `packet28.rewrite`, `packet28.handoff`, and `packet28.doctor`
-- Local memory, feedback, and graph tools: `packet28.memory_store`, `packet28.memory_recall`, `packet28.feedback_record`, and `packet28.graph_inspect`
+- Local memory, feedback, and graph tools: `packet28.memory_store`, `packet28.memory_recall`, `packet28.memory_list`, `packet28.feedback_record`, `packet28.feedback_search`, `packet28.feedback_stats`, and `packet28.graph_inspect`
 - Prompt entry points such as `packet28.start_task`, `packet28.continue_task`, and `packet28.summarize_current_context`
 - Task resources plus ergonomic current-task aliases like `packet28://current/task` and `packet28://current/brief`
 

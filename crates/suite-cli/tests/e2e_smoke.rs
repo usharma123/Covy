@@ -413,15 +413,15 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "id":4,
             "method":"tools/call",
             "params":{
-                "name":"packet28.feedback_record",
-                "arguments":{"subject":"mcp", "correction":"store feedback locally"}
+                "name":"packet28.memory_list",
+                "arguments":{"limit": 3}
             }
         }),
     );
-    let feedback = read_mcp_message_for_id(&mut stdout, 4);
+    let listed = read_mcp_message_for_id(&mut stdout, 4);
     assert_eq!(
-        feedback["result"]["structuredContent"]["correction"].as_str(),
-        Some("store feedback locally")
+        listed["result"]["structuredContent"][0]["content"].as_str(),
+        Some("MCP memory survives locally")
     );
 
     write_mcp_message(
@@ -431,12 +431,66 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "id":5,
             "method":"tools/call",
             "params":{
+                "name":"packet28.feedback_record",
+                "arguments":{"subject":"mcp", "correction":"store feedback locally"}
+            }
+        }),
+    );
+    let feedback = read_mcp_message_for_id(&mut stdout, 5);
+    assert_eq!(
+        feedback["result"]["structuredContent"]["correction"].as_str(),
+        Some("store feedback locally")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":6,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.feedback_search",
+                "arguments":{"query":"feedback", "limit": 3}
+            }
+        }),
+    );
+    let feedback_search = read_mcp_message_for_id(&mut stdout, 6);
+    assert_eq!(
+        feedback_search["result"]["structuredContent"][0]["correction"].as_str(),
+        Some("store feedback locally")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":7,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.feedback_stats",
+                "arguments":{}
+            }
+        }),
+    );
+    let feedback_stats = read_mcp_message_for_id(&mut stdout, 7);
+    assert_eq!(
+        feedback_stats["result"]["structuredContent"]["feedback_count"].as_i64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":8,
+            "method":"tools/call",
+            "params":{
                 "name":"packet28.graph_inspect",
                 "arguments":{"limit": 5}
             }
         }),
     );
-    let graph = read_mcp_message_for_id(&mut stdout, 5);
+    let graph = read_mcp_message_for_id(&mut stdout, 8);
     assert!(graph["result"]["structuredContent"]["concepts"].is_array());
 
     let _ = child.kill();
@@ -471,6 +525,12 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("prefer focused reducers"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["feedback", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"feedback_count\":1"));
 
     suite_cmd()
         .env("HOME", home.path())

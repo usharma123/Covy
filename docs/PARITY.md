@@ -1,86 +1,41 @@
-# Packet28 RTK/ICM Parity Plan
+# Packet28 RTK/ICM Parity Audit
 
-This document is the first checkpoint for `docs/packet28_goal.md`. It records what was verified from the local Packet28 workspace, what was inferred from the goal, and what remains unsupported or deferred.
+Parity references:
 
-## Status Legend
+- RTK: `https://github.com/rtk-ai/rtk`, cloned at `/private/tmp/rtk-parity`
+- ICM: `https://github.com/rtk-ai/icm`, cloned at `/private/tmp/icm-parity`
 
-- `verified`: implemented locally and has an identified test or command path.
-- `partial`: Packet28 has a native equivalent, but the requested product behavior or proof is incomplete.
-- `missing`: no local equivalent was found.
-- `deferred`: deliberately not in the MVP slice or blocked by missing external proof.
+## Scope
 
-## RTK Feature Matrix
+Packet28 is not a line-for-line clone. The implemented scope is Packet28-native parity with the `docs/packet28_goal.md` acceptance slice: reducer-plus-handoff runtime, Windsurf-first setup verification, local analytics/discovery, local SQLite memory, graph/feedback, MCP tools, and dashboard.
 
-| RTK feature | Packet28 equivalent | Status | Test or proof |
-|---|---|---:|---|
-| Broad CLI command compression surface | `Packet28 compact ...`, top-level `gain`, `discover`, `run`, `hook`, `setup`, `doctor`, `mcp` in `crates/suite-cli/src/cli_defs.rs` | partial | CLI definitions and reducer tests exist; top-level `rewrite` and `session` aliases still needed. |
-| Rewrite planner | Route decisions in `crates/suite-cli/src/route_registry.rs`; `Packet28 compact rewrite` in `cmd_compact.rs` | partial | Route registry tests cover classification; goal still requires `packet28 rewrite "<command>"`. |
-| Unsupported-command fallback | `RawPassthrough` reasons for empty commands, shell composition, shell expansion, globs, parse errors, unsupported commands | verified | `route_registry.rs` tests. |
-| Git reducers | `packet28-reducer-core` git family | verified | `packet28-reducer-core` tests; architecture agent baseline passed `cargo test -q -p packet28-reducer-core`. |
-| Cargo reducers | `packet28-reducer-core` cargo family | partial | Reducer dispatch exists; goal needs `packet28 run` proof and structured savings output. |
-| npm/pytest reducers | JavaScript/Python reducer families in `packet28-reducer-core` | partial | Reducer dispatch exists; goal needs `packet28 run` proof. |
-| Search/file reducers | `fs` family plus `packet28-search-core` and MCP `search/read_regions/glob` | verified | `packet28-search-core` tests; setup E2E checks indexed search. |
-| Docker/GitHub reducers | `docker`, `kubectl`, `gh` reducer families | partial | Reducer dispatch exists; goal needs explicit fixture tests. |
-| Analytics | top-level `gain`, `discover`, compact session/discover commands | partial | Existing commands found; local savings analytics must be proven end to end with `packet28 gain` and `packet28 discover`. |
-| Hook-first capture | `Packet28 hook` handlers and daemon ingestion | partial | Claude/Cursor/Codex behavior has local tests; Windsurf interception is not proven. |
-| Supported agents | Claude, Cursor, Codex, Windsurf setup; OpenCode detected by runtime launcher | partial | Setup tests cover Cursor/Codex/Windsurf artifacts; wider RTK agent list is not implemented. |
+Full upstream parity is broader than this slice. RTK includes a large filter catalog, opt-in telemetry, custom TOML filters, broad hook adapters, and release packaging. ICM includes vector/FTS recall, wake-up packs, memoir export/search, transcript storage, hook extraction, web dashboard, cloud/upgrade/import flows, and a larger MCP surface.
 
-## ICM Feature Matrix
+## RTK Findings
 
-No local ICM checkout or docs were found in or near this workspace. ICM requirements below are therefore goal-derived unless otherwise noted.
+| RTK area | Upstream evidence | Packet28 status |
+|---|---|---|
+| Hook-first rewrite | RTK centralizes hook rewrite in `src/hooks/rewrite_cmd.rs`; Claude/Cursor/OpenCode adapters are thin wrappers. | Implemented for Packet28-supported runtimes through setup hooks and runtime guidance; Windsurf command interception remains unclaimed. |
+| Command registry | RTK classifies supported/ignored/unsupported commands in `src/discover/registry.rs` and `src/discover/rules.rs`. | Implemented through `route_registry.rs`, `Packet28 rewrite`, and reducer family classification. |
+| Reducers | RTK has command modules under `src/cmds/*` plus many TOML filters under `src/filters`. | Implemented for goal-required families: git, cargo/Rust, npm/JS, pytest/Python, grep/rg/find/ls/tree/cat/head/tail, docker/infra, gh. Broader RTK catalog is deferred. |
+| Raw recovery | RTK stores raw output hints through tee support in `src/core/tee.rs`. | Implemented through Packet28 artifacts/fetch tools and hook raw-output capture paths. |
+| Analytics/discover | RTK uses SQLite tracking in `src/core/tracking.rs`, `rtk gain`, `rtk discover`, and session analytics. | Implemented local run-savings analytics, `Packet28 gain`, `Packet28 discover`, `Packet28 session`, and dashboard. |
+| Agent support | RTK documents Claude, Cursor, Codex, Copilot, Gemini, Windsurf, OpenCode, Cline/Roo, Kilo, Antigravity. | Implemented/verified target set is Claude, Cursor, Codex, Windsurf. Wider RTK agent breadth is explicitly deferred. |
+| MCP | RTK has no primary MCP server surface. | Packet28 MCP is a product differentiator, not RTK parity. |
+| Telemetry/custom filters | RTK has opt-in telemetry and trust-gated TOML filters. | Deferred for this slice. |
 
-| ICM feature | Packet28 equivalent | Status | Test or proof |
-|---|---|---:|---|
-| Local memory store | Existing `context-memory-core` packet cache with recall indexes | partial | `context-memory-core` tests exist, but not SQLite memory CLI. |
-| SQLite schema under `~/.packet28/packet28.db` | None found | missing | `rg` found no SQLite implementation beyond the goal doc. |
-| Memory store/recall/list/consolidate CLI | `Packet28 context store` and `context recall` are adjacent | partial | Goal requires `packet28 memory ...` commands. |
-| Memory MCP tools | Current MCP has context/search/handoff tools | missing | Required `packet28.memory_store` and `packet28.memory_recall` are not exposed. |
-| Graph concepts/relations | Recall has graph-overlap scoring concepts, not persisted concept/relation tables | missing | Goal requires `graph create/add-concept/link/inspect`. |
-| Feedback record/search | `Packet28 learn` is adjacent, but no feedback table/tool was found | missing | Goal requires `feedback record/search` and MCP `feedback_record`. |
-| Wakeup/init lifecycle | Setup, daemon, hook, handoff lifecycle exist | partial | Goal requires `packet28 wakeup` and `packet28 init --agent windsurf`. |
-| Local dashboard/TUI | Website/static docs only | missing | Goal requires `dashboard` or `serve --port 2828`. |
+## ICM Findings
 
-## Windsurf Support Tier
+| ICM area | Upstream evidence | Packet28 status |
+|---|---|---|
+| SQLite memory | ICM stores local memory in SQLite with FTS/vector support under `crates/icm-store`. | Implemented local SQLite at `~/.packet28/packet28.db` with required goal tables; vector/FTS is deferred. |
+| Memory CLI | ICM exposes store/recall/list/forget/update/health/topics/stats/decay/prune/consolidate/embed/wake-up and more in `crates/icm-cli/src/main.rs`. | Implemented goal slice: `memory store/recall/list/consolidate`; forget/update/health/topics/decay/prune/embed/wake-up are deferred. |
+| MCP tools | ICM exposes memory, memoir, feedback, transcript, wake-up, learn, and embed tools in `crates/icm-mcp/src/tools.rs`. | Implemented goal-required Packet28 MCP: `search`, `reduce`, `rewrite`, `memory_store`, `memory_recall`, `memory_list`, `feedback_record`, `feedback_search`, `feedback_stats`, `graph_inspect`, `handoff`, `doctor`. Broader ICM tools are deferred. |
+| Memoir graph | ICM has memoirs, concepts, typed links, labels, FTS, BFS inspect, and exports. | Implemented simple Packet28 concepts/relations and inspect; full memoir graph is deferred. |
+| Feedback | ICM stores prediction/correction/reason/source and FTS search/stats. | Implemented feedback record/search/stats using local SQLite; richer ICM fields/FTS/applied counts are deferred. |
+| Wake-up/hooks | ICM has wake-up memory packs and hook extraction lifecycle. | Packet28’s equivalent is handoff/context assembly and runtime hooks; ICM-style wake-up CLI is deferred. |
+| Dashboard | ICM has an Axum/Svelte dashboard. | Implemented local CLI dashboard for acceptance slice; web UI is deferred. |
 
-Current support tier is **MCP/rules verified target, command rewrite unproven**.
+## Current Conclusion
 
-Packet28 currently writes:
-
-- Windsurf MCP config: `~/.codeium/windsurf/mcp_config.json`
-- Windsurf rules: `.windsurf/rules/packet28.md`
-- Repo-local hook config: `.windsurf/hooks.json`
-
-Packet28 must not claim full Windsurf command interception until a test proves Windsurf actually invokes Packet28 before or after shell commands. The Phase 1 acceptance bar is narrower: setup writes a correct MCP config, doctor validates that config, MCP initialize/tools-list succeeds from the generated config, and the generated rules describe support honestly.
-
-## Unsupported Or Deferred
-
-| Feature | Reason |
-|---|---|
-| Full Windsurf hook/rewrite parity | Deferred until a real command-interception test exists. |
-| RTK full supported-agent breadth | Current product slice starts with Windsurf plus existing Claude/Cursor/Codex behavior. |
-| ICM exact schema parity | ICM source/docs were not locally available; implement Packet28-native SQLite MVP from the goal contract. |
-| Cloud/team analytics | Explicit non-goal. |
-| Telemetry or signup/API-key dependency | Explicit non-goal. |
-
-## Immediate Proof Gaps
-
-1. Add `Packet28 mcp smoke-test --from-config windsurf` and tests that spawn the configured command.
-2. Add `Packet28 doctor --agent windsurf --root .` with config, rules, daemon, index, and MCP handshake checks.
-3. Add top-level `rewrite` and `session` UX or aliases over the existing compact/rewrite/session implementation.
-4. Add additive SQLite memory, feedback, and graph storage without replacing the existing packet cache.
-
-## Implementation Status Update
-
-The product slice now covers the initial proof gaps above:
-
-- Windsurf setup writes `~/.codeium/windsurf/mcp_config.json`, and `Packet28 mcp smoke-test --from-config windsurf` verifies initialize plus `tools/list` from that generated config.
-- `Packet28 doctor --agent windsurf --root .` validates config shape, command resolution, root-preserving args, rules honesty, daemon/index health, and MCP smoke-test behavior.
-- Top-level `Packet28 rewrite ...` and `Packet28 session ...` alias the compact routing and session views.
-- `Packet28 init --agent windsurf --yes --root .` delegates to the existing setup path for the requested agent.
-- `Packet28 run` reduces git, cargo/Rust, npm/JavaScript, pytest/Python, file/search, Docker/infra, and GitHub CLI command output, then records local savings for `Packet28 gain`.
-- `Packet28 discover --root .` reports missed savings from fallback run records.
-- `Packet28 memory`, `Packet28 feedback`, and `Packet28 graph` use local SQLite at `~/.packet28/packet28.db`.
-- MCP exposes `packet28.reduce`, `packet28.rewrite`, `packet28.memory_store`, `packet28.memory_recall`, `packet28.feedback_record`, `packet28.graph_inspect`, `packet28.handoff`, and `packet28.doctor` in addition to the existing search, context, status, and capability tools.
-- `Packet28 dashboard --root .` summarizes local savings, missed savings, memory, feedback, graph, MCP calls, and integration health.
-
-Windsurf command interception remains unclaimed until a runtime-level hook test proves Windsurf invokes Packet28 around shell commands.
+Packet28 is now at parity with the explicit `docs/packet28_goal.md` acceptance slice, after checking RTK and ICM source directly. It is not full upstream RTK/ICM feature parity; deferred areas are documented above and in `docs/PRODUCT.md`.
