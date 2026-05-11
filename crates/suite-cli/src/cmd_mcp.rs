@@ -59,10 +59,10 @@ use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
 use crate::memory_store::{
-    consolidate_memories, forget_memories_by_topic, forget_memory, inspect_graph, list_memories,
-    local_store_stats, memory_health, memory_topics, recall_memories, record_feedback,
-    search_feedback, store_memory_with_metadata, update_memory, MemoryStoreInput,
-    MemoryUpdateInput,
+    consolidate_memories, decay_memories, forget_memories_by_topic, forget_memory, inspect_graph,
+    list_memories, local_store_stats, memory_health, memory_topics, prune_memories,
+    recall_memories, record_feedback, search_feedback, store_memory_with_metadata, update_memory,
+    MemoryStoreInput, MemoryUpdateInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
@@ -805,6 +805,27 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.memory_decay",
+                    "description": "Apply local weight decay to non-critical Packet28 memories.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "factor": {"type":"number","minimum":0,"maximum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.memory_prune",
+                    "description": "Delete low-weight non-critical Packet28 memories, or preview candidates with dry_run.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "threshold": {"type":"number","minimum":0,"maximum":1},
+                            "dry_run": {"type":"boolean"}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.feedback_record",
                     "description": "Record a local feedback correction in ~/.packet28/packet28.db.",
                     "inputSchema": {
@@ -1103,6 +1124,17 @@ fn handle_tool_call(
                 request.keep_originals.unwrap_or(false),
             )?)?
         }
+        "packet28.memory_decay" => {
+            let request: MemoryDecayToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(decay_memories(request.factor.unwrap_or(0.95))?)?
+        }
+        "packet28.memory_prune" => {
+            let request: MemoryPruneToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(prune_memories(
+                request.threshold.unwrap_or(0.1),
+                request.dry_run.unwrap_or(false),
+            )?)?
+        }
         "packet28.feedback_record" => {
             let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(record_feedback(&request.subject, &request.correction)?)?
@@ -1196,6 +1228,17 @@ struct MemoryHealthToolArgs {
 struct MemoryConsolidateToolArgs {
     topic: Option<String>,
     keep_originals: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryDecayToolArgs {
+    factor: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryPruneToolArgs {
+    threshold: Option<f64>,
+    dry_run: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1435,6 +1478,24 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
             format!("Packet28 memory consolidation {status} from {count} source memor(y/ies).")
+        }
+        "packet28.memory_decay" => {
+            let count = payload
+                .get("decayed_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 decayed {count} memor(y/ies).")
+        }
+        "packet28.memory_prune" => {
+            let deleted = payload
+                .get("deleted_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let candidates = payload
+                .get("candidate_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 pruned {deleted} of {candidates} candidate memor(y/ies).")
         }
         "packet28.feedback_record" => {
             let id = payload

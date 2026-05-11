@@ -14,6 +14,7 @@ pub(crate) struct MemoryRecord {
     pub(crate) importance: String,
     pub(crate) keywords: Option<String>,
     pub(crate) raw_excerpt: Option<String>,
+    pub(crate) weight: f64,
     pub(crate) created_at_unix_ms: i64,
     pub(crate) updated_at_unix_ms: i64,
 }
@@ -93,6 +94,21 @@ pub(crate) struct MemoryConsolidationReport {
     pub(crate) consolidated_memory: Option<MemoryRecord>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryDecayReport {
+    pub(crate) factor: f64,
+    pub(crate) decayed_count: usize,
+    pub(crate) skipped_critical_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryPruneReport {
+    pub(crate) threshold: f64,
+    pub(crate) dry_run: bool,
+    pub(crate) candidate_count: usize,
+    pub(crate) deleted_count: usize,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryStoreInput<'a> {
     pub(crate) content: &'a str,
@@ -121,8 +137,8 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
     let importance = normalize_non_empty(input.importance, "medium");
     conn.execute(
         "INSERT INTO memories
-         (content, tags, topic, importance, keywords, raw_excerpt, created_at_unix_ms, updated_at_unix_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+         (content, tags, topic, importance, keywords, raw_excerpt, weight, created_at_unix_ms, updated_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
         params![
             input.content,
             input.tags,
@@ -130,6 +146,7 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
             importance,
             input.keywords,
             input.raw_excerpt,
+            1.0_f64,
             now
         ],
     )?;
@@ -146,7 +163,7 @@ pub(crate) fn recall_memories(query: &str, limit: usize) -> Result<Vec<MemoryRec
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
             "SELECT
-                m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.raw_excerpt,
+                m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.raw_excerpt, m.weight,
                 m.created_at_unix_ms, m.updated_at_unix_ms
              FROM memories_fts f
              JOIN memories m ON m.rowid = f.rowid
@@ -166,7 +183,7 @@ fn recall_memories_like(conn: &Connection, query: &str, limit: usize) -> Result<
     let pattern = format!("%{}%", query.trim());
     let mut stmt = conn.prepare(
         "SELECT
-            id, content, tags, topic, importance, keywords, raw_excerpt,
+            id, content, tags, topic, importance, keywords, raw_excerpt, weight,
             created_at_unix_ms, updated_at_unix_ms
          FROM memories
          WHERE content LIKE ?1
@@ -184,7 +201,7 @@ pub(crate) fn list_memories(limit: usize) -> Result<Vec<MemoryRecord>> {
     let conn = open_memory_db()?;
     let mut stmt = conn.prepare(
         "SELECT
-            id, content, tags, topic, importance, keywords, raw_excerpt,
+            id, content, tags, topic, importance, keywords, raw_excerpt, weight,
             created_at_unix_ms, updated_at_unix_ms
          FROM memories
          ORDER BY created_at_unix_ms DESC
@@ -346,6 +363,61 @@ pub(crate) fn memory_health(
     })
 }
 
+pub(crate) fn decay_memories(factor: f64) -> Result<MemoryDecayReport> {
+    let factor = factor.clamp(0.0, 1.0);
+    let conn = open_memory_db()?;
+    let decayed_count = conn.execute(
+        "UPDATE memories
+         SET weight = weight * ?1,
+             updated_at_unix_ms = ?2
+         WHERE LOWER(importance) != 'critical'",
+        params![factor, timestamp_unix_ms()],
+    )?;
+    let skipped_critical_count: usize = conn
+        .query_row(
+            "SELECT COUNT(*) FROM memories WHERE LOWER(importance) = 'critical'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or_default() as usize;
+    Ok(MemoryDecayReport {
+        factor,
+        decayed_count,
+        skipped_critical_count,
+    })
+}
+
+pub(crate) fn prune_memories(threshold: f64, dry_run: bool) -> Result<MemoryPruneReport> {
+    let threshold = threshold.clamp(0.0, 1.0);
+    let conn = open_memory_db()?;
+    let mut stmt = conn.prepare(
+        "SELECT id FROM memories
+         WHERE weight < ?1 AND LOWER(importance) != 'critical'
+         ORDER BY weight ASC, updated_at_unix_ms ASC",
+    )?;
+    let candidate_ids = stmt
+        .query_map(params![threshold], |row| row.get::<_, i64>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let candidate_count = candidate_ids.len();
+    drop(stmt);
+    let mut deleted_count = 0;
+    if !dry_run {
+        for id in &candidate_ids {
+            conn.execute(
+                "DELETE FROM memory_chunks WHERE memory_id = ?1",
+                params![id],
+            )?;
+            deleted_count += conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+        }
+    }
+    Ok(MemoryPruneReport {
+        threshold,
+        dry_run,
+        candidate_count,
+        deleted_count,
+    })
+}
+
 pub(crate) fn consolidate_memories(
     topic: Option<&str>,
     keep_originals: bool,
@@ -354,7 +426,7 @@ pub(crate) fn consolidate_memories(
     let conn = open_memory_db()?;
     let mut stmt = conn.prepare(
         "SELECT
-            id, content, tags, topic, importance, keywords, raw_excerpt,
+            id, content, tags, topic, importance, keywords, raw_excerpt, weight,
             created_at_unix_ms, updated_at_unix_ms
          FROM memories
          WHERE topic = ?1
@@ -596,8 +668,9 @@ fn read_memory_rows<P: rusqlite::Params>(
             importance: row.get(4)?,
             keywords: row.get(5)?,
             raw_excerpt: row.get(6)?,
-            created_at_unix_ms: row.get(7)?,
-            updated_at_unix_ms: row.get(8)?,
+            weight: row.get(7)?,
+            created_at_unix_ms: row.get(8)?,
+            updated_at_unix_ms: row.get(9)?,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -696,7 +769,7 @@ fn merge_csv_field<'a>(values: impl Iterator<Item = &'a str>) -> Option<String> 
 fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
     conn.query_row(
         "SELECT
-            id, content, tags, topic, importance, keywords, raw_excerpt,
+            id, content, tags, topic, importance, keywords, raw_excerpt, weight,
             created_at_unix_ms, updated_at_unix_ms
          FROM memories
          WHERE id = ?1",
@@ -710,8 +783,9 @@ fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
                 importance: row.get(4)?,
                 keywords: row.get(5)?,
                 raw_excerpt: row.get(6)?,
-                created_at_unix_ms: row.get(7)?,
-                updated_at_unix_ms: row.get(8)?,
+                weight: row.get(7)?,
+                created_at_unix_ms: row.get(8)?,
+                updated_at_unix_ms: row.get(9)?,
             })
         },
     )
@@ -762,6 +836,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             importance TEXT NOT NULL DEFAULT 'medium',
             keywords TEXT,
             raw_excerpt TEXT,
+            weight REAL NOT NULL DEFAULT 1.0,
             created_at_unix_ms INTEGER NOT NULL,
             updated_at_unix_ms INTEGER NOT NULL DEFAULT 0
         );
@@ -855,6 +930,7 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
     )?;
     add_column_if_missing(conn, "memories", "keywords", "TEXT")?;
     add_column_if_missing(conn, "memories", "raw_excerpt", "TEXT")?;
+    add_column_if_missing(conn, "memories", "weight", "REAL NOT NULL DEFAULT 1.0")?;
     add_column_if_missing(
         conn,
         "memories",

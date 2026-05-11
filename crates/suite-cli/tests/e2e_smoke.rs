@@ -472,6 +472,48 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"deleted\":1"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Packet28 can prune low-weight local context",
+            "--topic",
+            "prune-test",
+            "--importance",
+            "low",
+            "--json",
+        ])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "decay", "--factor", "0.1", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"decayed_count\":1"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "prune",
+            "--threshold",
+            "0.5",
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"candidate_count\":1"))
+        .stdout(predicate::str::contains("\"deleted_count\":0"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "prune", "--threshold", "0.5", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"candidate_count\":1"))
+        .stdout(predicate::str::contains("\"deleted_count\":1"));
 }
 
 #[test]
@@ -755,6 +797,78 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     let forgotten = read_mcp_message_for_id(&mut stdout, 44);
     assert_eq!(
         forgotten["result"]["structuredContent"]["deleted"].as_u64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":48,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_store",
+                "arguments":{"content":"MCP prunable memory", "topic":"mcp-prune", "importance":"low"}
+            }
+        }),
+    );
+    let _prunable = read_mcp_message_for_id(&mut stdout, 48);
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":49,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_decay",
+                "arguments":{"factor":0.1}
+            }
+        }),
+    );
+    let decayed = read_mcp_message_for_id(&mut stdout, 49);
+    assert_eq!(
+        decayed["result"]["structuredContent"]["decayed_count"].as_u64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":50,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_prune",
+                "arguments":{"threshold":0.5, "dry_run":true}
+            }
+        }),
+    );
+    let prune_preview = read_mcp_message_for_id(&mut stdout, 50);
+    assert_eq!(
+        prune_preview["result"]["structuredContent"]["candidate_count"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        prune_preview["result"]["structuredContent"]["deleted_count"].as_u64(),
+        Some(0)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":51,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_prune",
+                "arguments":{"threshold":0.5}
+            }
+        }),
+    );
+    let pruned = read_mcp_message_for_id(&mut stdout, 51);
+    assert_eq!(
+        pruned["result"]["structuredContent"]["deleted_count"].as_u64(),
         Some(1)
     );
 

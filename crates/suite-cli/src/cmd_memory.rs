@@ -2,9 +2,9 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::memory_store::{
-    consolidate_memories, forget_memories_by_topic, forget_memory, list_memories,
-    local_store_stats, memory_health, memory_topics, recall_memories, store_memory_with_metadata,
-    update_memory, MemoryStoreInput, MemoryUpdateInput,
+    consolidate_memories, decay_memories, forget_memories_by_topic, forget_memory, list_memories,
+    local_store_stats, memory_health, memory_topics, prune_memories, recall_memories,
+    store_memory_with_metadata, update_memory, MemoryStoreInput, MemoryUpdateInput,
 };
 
 #[derive(Args)]
@@ -23,6 +23,8 @@ pub enum MemoryCommands {
     Topics(MemoryTopicsArgs),
     Stats(MemoryStatsArgs),
     Health(MemoryHealthArgs),
+    Decay(MemoryDecayArgs),
+    Prune(MemoryPruneArgs),
     Consolidate(MemoryConsolidateArgs),
 }
 
@@ -129,6 +131,28 @@ pub struct MemoryHealthArgs {
 }
 
 #[derive(Args)]
+pub struct MemoryDecayArgs {
+    #[arg(long, default_value_t = 0.95)]
+    pub factor: f64,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryPruneArgs {
+    #[arg(long, default_value_t = 0.1)]
+    pub threshold: f64,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct MemoryConsolidateArgs {
     #[arg(long)]
     pub topic: Option<String>,
@@ -150,6 +174,8 @@ pub fn run(args: MemoryArgs) -> Result<i32> {
         MemoryCommands::Topics(args) => run_topics(args),
         MemoryCommands::Stats(args) => run_stats(args),
         MemoryCommands::Health(args) => run_health(args),
+        MemoryCommands::Decay(args) => run_decay(args),
+        MemoryCommands::Prune(args) => run_prune(args),
         MemoryCommands::Consolidate(args) => run_consolidate(args),
     }
 }
@@ -276,6 +302,31 @@ fn run_health(args: MemoryHealthArgs) -> Result<i32> {
                 topic.consolidation_needed
             );
         }
+    }
+    Ok(0)
+}
+
+fn run_decay(args: MemoryDecayArgs) -> Result<i32> {
+    let report = decay_memories(args.factor)?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+    } else {
+        println!("factor={}", report.factor);
+        println!("decayed_count={}", report.decayed_count);
+        println!("skipped_critical_count={}", report.skipped_critical_count);
+    }
+    Ok(0)
+}
+
+fn run_prune(args: MemoryPruneArgs) -> Result<i32> {
+    let report = prune_memories(args.threshold, args.dry_run)?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+    } else {
+        println!("threshold={}", report.threshold);
+        println!("dry_run={}", report.dry_run);
+        println!("candidate_count={}", report.candidate_count);
+        println!("deleted_count={}", report.deleted_count);
     }
     Ok(0)
 }
