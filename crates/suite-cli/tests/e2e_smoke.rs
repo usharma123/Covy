@@ -439,6 +439,109 @@ fn test_run_failing_reduced_command_preserves_exit_and_raw_stderr() {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_run_raw_artifact_available_across_reducer_families() {
+    let root = TempDir::new().unwrap();
+    init_repo(root.path());
+    fs::write(root.path().join("raw-visible.txt"), "fs raw marker\n").unwrap();
+    fs::write(root.path().join("git-visible.txt"), "changed\n").unwrap();
+
+    let bin_dir = TempDir::new().unwrap();
+    write_executable_script(
+        &bin_dir.path().join("cargo"),
+        "#!/bin/sh\nprintf 'rust raw marker\\n'\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("npx"),
+        "#!/bin/sh\nprintf 'javascript raw marker\\n'\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("python3"),
+        "#!/bin/sh\nprintf 'python raw marker\\n'\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("go"),
+        "#!/bin/sh\nprintf 'ok\\tpacket28.test\\t0.01s\\ngo raw marker\\n'\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("docker"),
+        "#!/bin/sh\nprintf 'infra raw marker\\n'\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("gh"),
+        "#!/bin/sh\nprintf 'build\\tpass\\t1s\\ngithub raw marker\\n'\n",
+    );
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let cases: Vec<(&str, Vec<&str>, &str)> = vec![
+        ("git", vec!["git", "status", "--short"], "git-visible.txt"),
+        ("fs", vec!["cat", "raw-visible.txt"], "fs raw marker"),
+        ("rust", vec!["cargo", "check"], "rust raw marker"),
+        (
+            "javascript",
+            vec!["npx", "tsc", "--noEmit"],
+            "javascript raw marker",
+        ),
+        (
+            "python",
+            vec!["python3", "-m", "pytest", "tests"],
+            "python raw marker",
+        ),
+        ("go", vec!["go", "test", "./..."], "go raw marker"),
+        ("infra", vec!["docker", "logs", "demo"], "infra raw marker"),
+        (
+            "github",
+            vec!["gh", "pr", "checks", "1"],
+            "github raw marker",
+        ),
+    ];
+
+    for (family, argv, raw_marker) in cases {
+        let mut command = suite_cmd();
+        command
+            .current_dir(root.path())
+            .env("PATH", &path_env)
+            .args(["run", "--root", root.path().to_str().unwrap(), "--json"])
+            .args(&argv);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{family} reducer command failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["fallback_reason"], Value::Null, "{family}");
+        assert_eq!(value["reduction"]["family"], family, "{family}");
+        assert!(
+            value["raw_artifact"]["available"].as_bool().unwrap(),
+            "{family}"
+        );
+        let handle = value["raw_artifact"]["handle"].as_str().unwrap();
+
+        suite_cmd()
+            .current_dir(root.path())
+            .args([
+                "compact",
+                "fetch-raw",
+                "--root",
+                root.path().to_str().unwrap(),
+                "--task-id",
+                "run-raw",
+                "--handle",
+                handle,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(raw_marker));
+    }
+}
+
+#[test]
 fn test_run_reduces_cargo_check() {
     let root = TempDir::new().unwrap();
     fs::write(

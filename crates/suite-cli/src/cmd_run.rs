@@ -78,7 +78,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
     };
     if !matches!(
         spec.family.as_str(),
-        "git" | "rust" | "javascript" | "python" | "fs" | "infra" | "github"
+        "git" | "rust" | "javascript" | "python" | "fs" | "infra" | "github" | "go"
     ) {
         return run_auto_fallback(root, cwd, args, "unsupported_family");
     }
