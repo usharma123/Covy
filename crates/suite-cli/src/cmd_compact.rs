@@ -242,6 +242,12 @@ pub struct SessionArgs {
     /// Maximum task sessions or JSONL sessions to report
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
+    /// Scan every matching JSONL session instead of truncating to --limit
+    #[arg(long)]
+    pub all: bool,
+    /// Limit JSONL session adoption scan to files modified in the last N days
+    #[arg(long)]
+    pub since: Option<u64>,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -1149,7 +1155,12 @@ fn run_session_adoption(args: SessionArgs) -> Result<i32> {
         .as_deref()
         .map(PathBuf::from)
         .expect("checked by caller");
-    let session_files = crate::cmd_discover::collect_session_files(&sessions_dir, args.limit)?;
+    let session_files = crate::cmd_discover::collect_session_files_for_scan(
+        &sessions_dir,
+        args.limit,
+        args.all,
+        args.since,
+    )?;
     let mut report = SessionAdoptionReport {
         sessions_scanned: 0,
         total_commands: 0,

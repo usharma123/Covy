@@ -2333,6 +2333,54 @@ fn test_session_reports_adoption_from_session_jsonl() {
         .stdout(predicate::str::contains("\"adoption_pct\":66.666"));
 }
 
+#[test]
+fn test_session_adoption_all_and_since_scan_multiple_session_files() {
+    let root = TempDir::new().unwrap();
+    let sessions_dir = root
+        .path()
+        .join("claude-projects")
+        .join("project")
+        .join("sessions");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    for (name, command) in [
+        ("session-a.jsonl", "git status --short"),
+        ("session-b.jsonl", "Packet28 run cargo check"),
+    ] {
+        let line = json!({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": command }
+                }]
+            }
+        });
+        fs::write(sessions_dir.join(name), format!("{line}\n")).unwrap();
+    }
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "session",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+            "--limit",
+            "1",
+            "--all",
+            "--since",
+            "7",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"sessions_scanned\":2"))
+        .stdout(predicate::str::contains("\"total_commands\":2"))
+        .stdout(predicate::str::contains("\"packet28_commands\":2"));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();

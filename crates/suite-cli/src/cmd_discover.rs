@@ -214,11 +214,7 @@ fn default_sessions_dir() -> PathBuf {
     PathBuf::from("/tmp/.claude/projects")
 }
 
-pub(crate) fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
-    collect_session_files_for_scan(dir, limit, false, None)
-}
-
-fn collect_session_files_for_scan(
+pub(crate) fn collect_session_files_for_scan(
     dir: &Path,
     limit: usize,
     all: bool,
