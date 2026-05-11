@@ -84,6 +84,15 @@ pub(crate) struct MemoryHealthReport {
     pub(crate) topics: Vec<MemoryHealthTopic>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryConsolidationReport {
+    pub(crate) topic: String,
+    pub(crate) source_count: usize,
+    pub(crate) status: String,
+    pub(crate) keep_originals: bool,
+    pub(crate) consolidated_memory: Option<MemoryRecord>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryStoreInput<'a> {
     pub(crate) content: &'a str,
@@ -337,6 +346,85 @@ pub(crate) fn memory_health(
     })
 }
 
+pub(crate) fn consolidate_memories(
+    topic: Option<&str>,
+    keep_originals: bool,
+) -> Result<MemoryConsolidationReport> {
+    let topic = normalize_non_empty(topic, "general");
+    let conn = open_memory_db()?;
+    let mut stmt = conn.prepare(
+        "SELECT
+            id, content, tags, topic, importance, keywords, raw_excerpt,
+            created_at_unix_ms, updated_at_unix_ms
+         FROM memories
+         WHERE topic = ?1
+         ORDER BY updated_at_unix_ms DESC, id DESC
+         LIMIT 100",
+    )?;
+    let memories = read_memory_rows(&mut stmt, params![topic.as_str()])?;
+    if memories.is_empty() {
+        return Ok(MemoryConsolidationReport {
+            topic,
+            source_count: 0,
+            status: "no_memories".to_string(),
+            keep_originals,
+            consolidated_memory: None,
+        });
+    }
+    if memories.len() == 1 {
+        return Ok(MemoryConsolidationReport {
+            topic,
+            source_count: 1,
+            status: "single_memory_noop".to_string(),
+            keep_originals,
+            consolidated_memory: Some(memories[0].clone()),
+        });
+    }
+    drop(stmt);
+    drop(conn);
+
+    let content = render_consolidated_memory(&topic, &memories);
+    let tags = merge_csv_field(memories.iter().filter_map(|memory| memory.tags.as_deref()));
+    let keywords = merge_csv_field(
+        memories
+            .iter()
+            .filter_map(|memory| memory.keywords.as_deref()),
+    );
+    let raw_excerpt = render_consolidated_raw_excerpt(&memories);
+    let importance = consolidated_importance(&memories);
+    let source_ids: Vec<i64> = memories.iter().map(|memory| memory.id).collect();
+
+    let conn = open_memory_db()?;
+    if !keep_originals {
+        let tx = conn.unchecked_transaction()?;
+        for id in &source_ids {
+            tx.execute(
+                "DELETE FROM memory_chunks WHERE memory_id = ?1",
+                params![id],
+            )?;
+            tx.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+        }
+        tx.commit()?;
+    }
+    drop(conn);
+
+    let consolidated = store_memory_with_metadata(MemoryStoreInput {
+        content: &content,
+        tags: tags.as_deref(),
+        topic: Some(&topic),
+        importance: Some(&importance),
+        keywords: keywords.as_deref(),
+        raw_excerpt: raw_excerpt.as_deref(),
+    })?;
+    Ok(MemoryConsolidationReport {
+        topic,
+        source_count: source_ids.len(),
+        status: "consolidated".to_string(),
+        keep_originals,
+        consolidated_memory: Some(consolidated),
+    })
+}
+
 pub(crate) fn record_feedback(subject: &str, correction: &str) -> Result<FeedbackRecord> {
     let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
@@ -542,6 +630,67 @@ fn read_health_rows<P: rusqlite::Params>(
 
 fn age_days(now: i64, timestamp: i64, day_ms: i64) -> i64 {
     now.saturating_sub(timestamp) / day_ms
+}
+
+fn render_consolidated_memory(topic: &str, memories: &[MemoryRecord]) -> String {
+    let mut out = format!(
+        "Consolidated memory for topic '{}'. Source memories: {}.",
+        topic,
+        memories.len()
+    );
+    for memory in memories.iter().rev() {
+        out.push_str("\n- ");
+        out.push_str(memory.content.trim());
+    }
+    out
+}
+
+fn render_consolidated_raw_excerpt(memories: &[MemoryRecord]) -> Option<String> {
+    let excerpts: Vec<&str> = memories
+        .iter()
+        .filter_map(|memory| memory.raw_excerpt.as_deref())
+        .filter(|raw| !raw.trim().is_empty())
+        .take(10)
+        .collect();
+    (!excerpts.is_empty()).then(|| excerpts.join("\n---\n"))
+}
+
+fn consolidated_importance(memories: &[MemoryRecord]) -> String {
+    let rank = memories
+        .iter()
+        .map(|memory| importance_rank(&memory.importance))
+        .max()
+        .unwrap_or(1);
+    match rank {
+        4 => "critical",
+        3 => "high",
+        2 => "medium",
+        _ => "low",
+    }
+    .to_string()
+}
+
+fn importance_rank(importance: &str) -> i64 {
+    match importance.trim().to_ascii_lowercase().as_str() {
+        "critical" => 4,
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 2,
+    }
+}
+
+fn merge_csv_field<'a>(values: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut merged = Vec::<String>::new();
+    for value in values {
+        for part in value.split(',') {
+            let part = part.trim();
+            if !part.is_empty() && !merged.iter().any(|existing| existing == part) {
+                merged.push(part.to_string());
+            }
+        }
+    }
+    (!merged.is_empty()).then(|| merged.join(","))
 }
 
 fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {

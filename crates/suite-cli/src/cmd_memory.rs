@@ -2,9 +2,9 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::memory_store::{
-    forget_memories_by_topic, forget_memory, list_memories, local_store_stats, memory_health,
-    memory_topics, recall_memories, store_memory_with_metadata, update_memory, MemoryStoreInput,
-    MemoryUpdateInput,
+    consolidate_memories, forget_memories_by_topic, forget_memory, list_memories,
+    local_store_stats, memory_health, memory_topics, recall_memories, store_memory_with_metadata,
+    update_memory, MemoryStoreInput, MemoryUpdateInput,
 };
 
 #[derive(Args)]
@@ -130,6 +130,10 @@ pub struct MemoryHealthArgs {
 
 #[derive(Args)]
 pub struct MemoryConsolidateArgs {
+    #[arg(long)]
+    pub topic: Option<String>,
+    #[arg(long)]
+    pub keep_originals: bool,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -277,15 +281,16 @@ fn run_health(args: MemoryHealthArgs) -> Result<i32> {
 }
 
 fn run_consolidate(args: MemoryConsolidateArgs) -> Result<i32> {
-    let records = list_memories(100)?;
+    let report = consolidate_memories(args.topic.as_deref(), args.keep_originals)?;
     if args.json {
-        crate::cmd_common::emit_json(
-            &serde_json::json!({"memory_count": records.len(), "status": "noop"}),
-            args.pretty,
-        )?;
+        crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
     } else {
-        println!("memory_count={}", records.len());
-        println!("status=noop");
+        println!("topic={}", report.topic);
+        println!("source_count={}", report.source_count);
+        println!("status={}", report.status);
+        if let Some(memory) = report.consolidated_memory {
+            println!("consolidated_memory={}", memory.id);
+        }
     }
     Ok(0)
 }

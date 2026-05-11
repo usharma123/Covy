@@ -59,9 +59,10 @@ use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
 use crate::memory_store::{
-    forget_memories_by_topic, forget_memory, inspect_graph, list_memories, local_store_stats,
-    memory_health, memory_topics, recall_memories, record_feedback, search_feedback,
-    store_memory_with_metadata, update_memory, MemoryStoreInput, MemoryUpdateInput,
+    consolidate_memories, forget_memories_by_topic, forget_memory, inspect_graph, list_memories,
+    local_store_stats, memory_health, memory_topics, recall_memories, record_feedback,
+    search_feedback, store_memory_with_metadata, update_memory, MemoryStoreInput,
+    MemoryUpdateInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
@@ -793,6 +794,17 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.memory_consolidate",
+                    "description": "Consolidate local Packet28 memories for a topic into one deterministic summary memory.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type":"string"},
+                            "keep_originals": {"type":"boolean"}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.feedback_record",
                     "description": "Record a local feedback correction in ~/.packet28/packet28.db.",
                     "inputSchema": {
@@ -1084,6 +1096,13 @@ fn handle_tool_call(
                 request.consolidation_threshold.unwrap_or(10),
             )?)?
         }
+        "packet28.memory_consolidate" => {
+            let request: MemoryConsolidateToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(consolidate_memories(
+                request.topic.as_deref(),
+                request.keep_originals.unwrap_or(false),
+            )?)?
+        }
         "packet28.feedback_record" => {
             let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(record_feedback(&request.subject, &request.correction)?)?
@@ -1171,6 +1190,12 @@ struct MemoryHealthToolArgs {
     topic: Option<String>,
     stale_after_days: Option<i64>,
     consolidation_threshold: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryConsolidateToolArgs {
+    topic: Option<String>,
+    keep_originals: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1399,6 +1424,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!(
                 "Packet28 memory health: {total} memories, {needs} topic(s) need consolidation."
             )
+        }
+        "packet28.memory_consolidate" => {
+            let count = payload
+                .get("source_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let status = payload
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!("Packet28 memory consolidation {status} from {count} source memor(y/ies).")
         }
         "packet28.feedback_record" => {
             let id = payload

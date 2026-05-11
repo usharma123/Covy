@@ -409,6 +409,36 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
 
     suite_cmd()
         .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Packet28 remembers a second local context",
+            "--topic",
+            "updated-parity",
+            "--keywords",
+            "second,context",
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "consolidate",
+            "--topic",
+            "updated-parity",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\":\"consolidated\""))
+        .stdout(predicate::str::contains("\"source_count\":2"))
+        .stdout(predicate::str::contains("Consolidated memory for topic"));
+
+    suite_cmd()
+        .env("HOME", home.path())
         .args(["memory", "stats", "--json"])
         .assert()
         .success()
@@ -438,7 +468,7 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
 
     suite_cmd()
         .env("HOME", home.path())
-        .args(["memory", "forget", "1", "--json"])
+        .args(["memory", "forget", "--topic", "updated-parity", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"deleted\":1"));
@@ -581,6 +611,42 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         memory_stats["result"]["structuredContent"]["memory_count"].as_i64(),
         Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":46,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_store",
+                "arguments":{"content":"Second MCP memory before consolidation", "topic":"mcp-updated"}
+            }
+        }),
+    );
+    let _second_memory = read_mcp_message_for_id(&mut stdout, 46);
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":47,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_consolidate",
+                "arguments":{"topic":"mcp-updated"}
+            }
+        }),
+    );
+    let consolidated = read_mcp_message_for_id(&mut stdout, 47);
+    assert_eq!(
+        consolidated["result"]["structuredContent"]["status"].as_str(),
+        Some("consolidated")
+    );
+    assert_eq!(
+        consolidated["result"]["structuredContent"]["source_count"].as_u64(),
+        Some(2)
     );
 
     write_mcp_message(
