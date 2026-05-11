@@ -61,14 +61,15 @@ use crate::cmd_mcp::transport::{
 use crate::cmd_wakeup::build_wakeup_report;
 use crate::memory_store::{
     add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
-    delete_concept, delete_feedback, embed_memories, export_graph, feedback_stats,
-    forget_memories_by_topic, forget_memory, graph_stats, inspect_graph, learn_project_graph,
-    link_concepts, list_feedback, list_memories_filtered, list_transcript_sessions,
-    local_store_stats, memory_health, memory_topics, prune_memories, recall_memories_filtered,
-    record_feedback_with_metadata, refine_concept, search_concepts, search_feedback,
-    search_transcripts, show_transcript_session, store_memory_with_metadata, transcript_stats,
-    update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery, MemoryStoreInput,
-    MemoryUpdateInput, TranscriptAppendInput,
+    delete_concept, delete_feedback, delete_pending_extractions, embed_memories,
+    enqueue_pending_extraction, export_graph, feedback_stats, forget_memories_by_topic,
+    forget_memory, graph_stats, inspect_graph, learn_project_graph, link_concepts, list_feedback,
+    list_memories_filtered, list_pending_extractions, list_transcript_sessions, local_store_stats,
+    memory_health, memory_topics, process_pending_extractions, prune_memories,
+    recall_memories_filtered, record_feedback_with_metadata, refine_concept, search_concepts,
+    search_feedback, search_transcripts, show_transcript_session, store_memory_with_metadata,
+    transcript_stats, update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery,
+    MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput, TranscriptAppendInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
@@ -766,6 +767,7 @@ fn handle_method(
                             "topic": {"type":"string"},
                             "importance": {"type":"string"},
                             "keywords": {"type":"string"},
+                            "project": {"type":"string"},
                             "source": {"type":"string"},
                             "raw_excerpt": {"type":"string"}
                         }
@@ -852,6 +854,59 @@ fn handle_method(
                             "all": {"type":"boolean"},
                             "dimensions": {"type":"integer","minimum":8}
                         }
+                    }
+                },
+                {
+                    "name": "packet28.memory_pending_enqueue",
+                    "description": "Queue raw local tool/session text for later Packet28 memory extraction.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["raw_output"],
+                        "properties": {
+                            "raw_output": {"type":"string"},
+                            "project": {"type":"string"},
+                            "tool_name": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.memory_pending_list",
+                    "description": "List queued Packet28 pending memory extractions.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.memory_pending_process",
+                    "description": "Process queued Packet28 pending extractions into durable local memories.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type":"integer","minimum":1},
+                            "dry_run": {"type":"boolean"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.memory_pending_delete",
+                    "description": "Delete queued Packet28 pending extraction rows by id.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["ids"],
+                        "properties": {
+                            "ids": {"type":"array","items":{"type":"integer"}}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.memory_pending_stats",
+                    "description": "Return queued Packet28 pending extraction counts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
                     }
                 },
                 {
@@ -1384,6 +1439,33 @@ fn handle_tool_call(
                 request.dimensions.unwrap_or(384),
             )?)?
         }
+        "packet28.memory_pending_enqueue" => {
+            let request: MemoryPendingEnqueueToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(enqueue_pending_extraction(PendingExtractionInput {
+                project: request.project.as_deref(),
+                tool_name: request.tool_name.as_deref(),
+                raw_output: &request.raw_output,
+            })?)?
+        }
+        "packet28.memory_pending_list" => {
+            let request: MemoryPendingListToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(list_pending_extractions(request.limit.unwrap_or(20))?)?
+        }
+        "packet28.memory_pending_process" => {
+            let request: MemoryPendingProcessToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(process_pending_extractions(
+                request.limit.unwrap_or(20),
+                request.dry_run.unwrap_or(false),
+            )?)?
+        }
+        "packet28.memory_pending_delete" => {
+            let request: MemoryPendingDeleteToolArgs = serde_json::from_value(arguments)?;
+            serde_json::json!({ "deleted": delete_pending_extractions(&request.ids)? })
+        }
+        "packet28.memory_pending_stats" => {
+            let stats = local_store_stats()?;
+            serde_json::json!({ "pending_extraction_count": stats.pending_extraction_count })
+        }
         "packet28.feedback_record" => {
             let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(record_feedback_with_metadata(FeedbackInput {
@@ -1613,6 +1695,29 @@ struct MemoryEmbedToolArgs {
     id: Option<i64>,
     all: Option<bool>,
     dimensions: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryPendingEnqueueToolArgs {
+    raw_output: String,
+    project: Option<String>,
+    tool_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryPendingListToolArgs {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryPendingProcessToolArgs {
+    limit: Option<usize>,
+    dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryPendingDeleteToolArgs {
+    ids: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -2,10 +2,12 @@ use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::memory_store::{
-    consolidate_memories, decay_memories, embed_memories, forget_memories_by_topic, forget_memory,
-    list_memories_filtered, local_store_stats, memory_health, memory_topics, prune_memories,
-    recall_memories_filtered, store_memory_with_metadata, update_memory, MemoryListQuery,
-    MemoryRecallQuery, MemoryStoreInput, MemoryUpdateInput,
+    consolidate_memories, decay_memories, delete_pending_extractions, embed_memories,
+    enqueue_pending_extraction, forget_memories_by_topic, forget_memory, list_memories_filtered,
+    list_pending_extractions, local_store_stats, memory_health, memory_topics,
+    process_pending_extractions, prune_memories, recall_memories_filtered,
+    store_memory_with_metadata, update_memory, MemoryListQuery, MemoryRecallQuery,
+    MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput,
 };
 
 #[derive(Args)]
@@ -28,6 +30,22 @@ pub enum MemoryCommands {
     Prune(MemoryPruneArgs),
     Consolidate(MemoryConsolidateArgs),
     Embed(MemoryEmbedArgs),
+    Pending(MemoryPendingArgs),
+}
+
+#[derive(Args)]
+pub struct MemoryPendingArgs {
+    #[command(subcommand)]
+    pub command: MemoryPendingCommands,
+}
+
+#[derive(Subcommand)]
+pub enum MemoryPendingCommands {
+    Enqueue(MemoryPendingEnqueueArgs),
+    List(MemoryPendingListArgs),
+    Process(MemoryPendingProcessArgs),
+    Delete(MemoryPendingDeleteArgs),
+    Stats(MemoryPendingStatsArgs),
 }
 
 #[derive(Args)]
@@ -217,6 +235,59 @@ pub struct MemoryEmbedArgs {
     pub pretty: bool,
 }
 
+#[derive(Args)]
+pub struct MemoryPendingEnqueueArgs {
+    #[arg(allow_hyphen_values = true)]
+    pub raw_output: String,
+    #[arg(long)]
+    pub project: Option<String>,
+    #[arg(long)]
+    pub tool_name: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryPendingListArgs {
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryPendingProcessArgs {
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryPendingDeleteArgs {
+    pub ids: Vec<i64>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryPendingStatsArgs {
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
 pub fn run(args: MemoryArgs) -> Result<i32> {
     match args.command {
         MemoryCommands::Store(args) => run_store(args),
@@ -231,6 +302,7 @@ pub fn run(args: MemoryArgs) -> Result<i32> {
         MemoryCommands::Prune(args) => run_prune(args),
         MemoryCommands::Consolidate(args) => run_consolidate(args),
         MemoryCommands::Embed(args) => run_embed(args),
+        MemoryCommands::Pending(args) => run_pending(args),
     }
 }
 
@@ -511,6 +583,72 @@ fn run_embed(args: MemoryEmbedArgs) -> Result<i32> {
         println!("embedded_count={}", report.embedded_count);
         println!("model={}", report.model);
         println!("dimensions={}", report.dimensions);
+    }
+    Ok(0)
+}
+
+fn run_pending(args: MemoryPendingArgs) -> Result<i32> {
+    match args.command {
+        MemoryPendingCommands::Enqueue(args) => {
+            let record = enqueue_pending_extraction(PendingExtractionInput {
+                project: args.project.as_deref(),
+                tool_name: args.tool_name.as_deref(),
+                raw_output: &args.raw_output,
+            })?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(record)?, args.pretty)?;
+            } else {
+                println!("queued pending extraction {}", record.id);
+            }
+        }
+        MemoryPendingCommands::List(args) => {
+            let records = list_pending_extractions(args.limit)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(records)?, args.pretty)?;
+            } else {
+                for record in records {
+                    println!("{} {} {}", record.id, record.project, record.tool_name);
+                }
+            }
+        }
+        MemoryPendingCommands::Process(args) => {
+            let report = process_pending_extractions(args.limit, args.dry_run)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+            } else {
+                println!("pending_count={}", report.pending_count);
+                println!("extracted_count={}", report.extracted_count);
+                println!("deleted_count={}", report.deleted_count);
+                println!("dry_run={}", report.dry_run);
+            }
+        }
+        MemoryPendingCommands::Delete(args) => {
+            let deleted = delete_pending_extractions(&args.ids)?;
+            if args.json {
+                crate::cmd_common::emit_json(
+                    &serde_json::json!({ "deleted": deleted }),
+                    args.pretty,
+                )?;
+            } else {
+                println!("deleted={deleted}");
+            }
+        }
+        MemoryPendingCommands::Stats(args) => {
+            let stats = local_store_stats()?;
+            if args.json {
+                crate::cmd_common::emit_json(
+                    &serde_json::json!({
+                        "pending_extraction_count": stats.pending_extraction_count
+                    }),
+                    args.pretty,
+                )?;
+            } else {
+                println!(
+                    "pending_extraction_count={}",
+                    stats.pending_extraction_count
+                );
+            }
+        }
     }
     Ok(0)
 }

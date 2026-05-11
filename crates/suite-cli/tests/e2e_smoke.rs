@@ -761,6 +761,70 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
 }
 
 #[test]
+fn test_memory_pending_extraction_queue_processes_into_memory() {
+    let home = TempDir::new().unwrap();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "pending",
+            "enqueue",
+            "- Packet28 pending extraction stores durable local facts",
+            "--project",
+            "coverage-a",
+            "--tool-name",
+            "Bash",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"project\":\"coverage-a\""))
+        .stdout(predicate::str::contains("\"tool_name\":\"Bash\""));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "pending", "list", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("durable local facts"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "pending", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"pending_extraction_count\":1"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "pending", "process", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"pending_count\":1"))
+        .stdout(predicate::str::contains("\"extracted_count\":1"))
+        .stdout(predicate::str::contains("\"deleted_count\":1"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "pending", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"pending_extraction_count\":0"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "recall",
+            "durable local facts",
+            "--project",
+            "coverage-a",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "pending extraction stores durable",
+        ))
+        .stdout(predicate::str::contains("pending-extraction:Bash"));
+}
+
+#[test]
 fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
@@ -1495,6 +1559,86 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         pruned["result"]["structuredContent"]["deleted_count"].as_u64(),
         Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":66,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_pending_enqueue",
+                "arguments":{
+                    "raw_output":"- MCP pending extraction stores durable facts",
+                    "project":"mcp-project-b",
+                    "tool_name":"Bash"
+                }
+            }
+        }),
+    );
+    let pending_enqueue = read_mcp_message_for_id(&mut stdout, 66);
+    assert_eq!(
+        pending_enqueue["result"]["structuredContent"]["project"].as_str(),
+        Some("mcp-project-b")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":69,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_pending_stats",
+                "arguments":{}
+            }
+        }),
+    );
+    let pending_stats = read_mcp_message_for_id(&mut stdout, 69);
+    assert_eq!(
+        pending_stats["result"]["structuredContent"]["pending_extraction_count"].as_i64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":70,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_pending_process",
+                "arguments":{"limit": 5}
+            }
+        }),
+    );
+    let pending_process = read_mcp_message_for_id(&mut stdout, 70);
+    assert_eq!(
+        pending_process["result"]["structuredContent"]["extracted_count"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        pending_process["result"]["structuredContent"]["deleted_count"].as_u64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":71,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_recall",
+                "arguments":{"query":"durable facts", "project":"mcp-project-b"}
+            }
+        }),
+    );
+    let pending_recall = read_mcp_message_for_id(&mut stdout, 71);
+    assert_eq!(
+        pending_recall["result"]["structuredContent"][0]["source"].as_str(),
+        Some("pending-extraction:Bash")
     );
 
     let _ = child.kill();
