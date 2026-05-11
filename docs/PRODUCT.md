@@ -58,8 +58,13 @@ Packet28 memory prune --threshold 0.1 --dry-run
 Packet28 memory forget 1
 Packet28 memory forget --topic obsolete-topic
 Packet28 wakeup --query project --json
-Packet28 feedback record "bad reducer output" "prefer focused summaries"
+Packet28 feedback record "bad reducer output" "prefer focused summaries" \
+  --topic reducers --context "test output was noisy" \
+  --predicted "show everything" --reason "too many irrelevant lines" --source cli
 Packet28 feedback search reducer
+Packet28 feedback list --topic reducers
+Packet28 feedback apply 1
+Packet28 feedback delete 1
 Packet28 feedback stats
 Packet28 graph create
 Packet28 graph add-concept Packet28
@@ -85,6 +90,9 @@ MCP tools exposed by the product slice:
 - `packet28.memory_prune`
 - `packet28.feedback_record`
 - `packet28.feedback_search`
+- `packet28.feedback_list`
+- `packet28.feedback_apply`
+- `packet28.feedback_delete`
 - `packet28.feedback_stats`
 - `packet28.graph_inspect`
 - `packet28.prepare_handoff`

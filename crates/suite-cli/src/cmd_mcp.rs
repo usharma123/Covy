@@ -59,10 +59,11 @@ use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
 use crate::memory_store::{
-    consolidate_memories, decay_memories, forget_memories_by_topic, forget_memory, inspect_graph,
-    list_memories, local_store_stats, memory_health, memory_topics, prune_memories,
-    recall_memories, record_feedback, search_feedback, store_memory_with_metadata, update_memory,
-    MemoryStoreInput, MemoryUpdateInput,
+    apply_feedback, consolidate_memories, decay_memories, delete_feedback, feedback_stats,
+    forget_memories_by_topic, forget_memory, inspect_graph, list_feedback, list_memories,
+    local_store_stats, memory_health, memory_topics, prune_memories, recall_memories,
+    record_feedback_with_metadata, search_feedback, store_memory_with_metadata, update_memory,
+    FeedbackInput, MemoryStoreInput, MemoryUpdateInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
@@ -833,7 +834,12 @@ fn handle_method(
                         "required": ["subject", "correction"],
                         "properties": {
                             "subject": {"type":"string"},
-                            "correction": {"type":"string"}
+                            "correction": {"type":"string"},
+                            "topic": {"type":"string"},
+                            "context": {"type":"string"},
+                            "predicted": {"type":"string"},
+                            "reason": {"type":"string"},
+                            "source": {"type":"string"}
                         }
                     }
                 },
@@ -846,6 +852,39 @@ fn handle_method(
                         "properties": {
                             "query": {"type":"string"},
                             "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.feedback_list",
+                    "description": "List local feedback corrections from ~/.packet28/packet28.db.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.feedback_apply",
+                    "description": "Increment the applied count for a feedback correction.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["id"],
+                        "properties": {
+                            "id": {"type":"integer"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.feedback_delete",
+                    "description": "Delete a local feedback correction by id.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["id"],
+                        "properties": {
+                            "id": {"type":"integer"}
                         }
                     }
                 },
@@ -1137,7 +1176,15 @@ fn handle_tool_call(
         }
         "packet28.feedback_record" => {
             let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(record_feedback(&request.subject, &request.correction)?)?
+            serde_json::to_value(record_feedback_with_metadata(FeedbackInput {
+                subject: &request.subject,
+                correction: &request.correction,
+                topic: request.topic.as_deref(),
+                context: request.context.as_deref(),
+                predicted: request.predicted.as_deref(),
+                reason: request.reason.as_deref(),
+                source: request.source.as_deref(),
+            })?)?
         }
         "packet28.feedback_search" => {
             let request: FeedbackSearchToolArgs = serde_json::from_value(arguments)?;
@@ -1146,7 +1193,22 @@ fn handle_tool_call(
                 request.limit.unwrap_or(10),
             )?)?
         }
-        "packet28.feedback_stats" => serde_json::to_value(local_store_stats()?)?,
+        "packet28.feedback_list" => {
+            let request: FeedbackListToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(list_feedback(
+                request.topic.as_deref(),
+                request.limit.unwrap_or(20),
+            )?)?
+        }
+        "packet28.feedback_apply" => {
+            let request: FeedbackIdToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(apply_feedback(request.id)?)?
+        }
+        "packet28.feedback_delete" => {
+            let request: FeedbackIdToolArgs = serde_json::from_value(arguments)?;
+            serde_json::json!({ "deleted": delete_feedback(request.id)? })
+        }
+        "packet28.feedback_stats" => serde_json::to_value(feedback_stats()?)?,
         "packet28.graph_inspect" => {
             let request: GraphInspectToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(inspect_graph(request.limit.unwrap_or(50))?)?
@@ -1245,12 +1307,28 @@ struct MemoryPruneToolArgs {
 struct FeedbackRecordToolArgs {
     subject: String,
     correction: String,
+    topic: Option<String>,
+    context: Option<String>,
+    predicted: Option<String>,
+    reason: Option<String>,
+    source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct FeedbackSearchToolArgs {
     query: String,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeedbackListToolArgs {
+    topic: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeedbackIdToolArgs {
+    id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1508,6 +1586,24 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             let count = payload.as_array().map(Vec::len).unwrap_or_default();
             format!("Packet28 found {count} feedback correction(s).")
         }
+        "packet28.feedback_list" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 listed {count} feedback correction(s).")
+        }
+        "packet28.feedback_apply" => {
+            let count = payload
+                .get("applied_count")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!("Packet28 feedback applied count is now {count}.")
+        }
+        "packet28.feedback_delete" => {
+            let deleted = payload
+                .get("deleted")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 deleted {deleted} feedback correction(s).")
+        }
         "packet28.feedback_stats" => "Packet28 feedback statistics.".to_string(),
         "packet28.graph_inspect" => "Packet28 graph inspection.".to_string(),
         "packet28.task_status" => "Packet28 task status.".to_string(),
@@ -1557,6 +1653,9 @@ mod tests {
             "packet28.doctor",
             "packet28.memory_list",
             "packet28.feedback_search",
+            "packet28.feedback_list",
+            "packet28.feedback_apply",
+            "packet28.feedback_delete",
             "packet28.feedback_stats",
         ] {
             assert!(

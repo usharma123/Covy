@@ -721,7 +721,15 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.feedback_record",
-                "arguments":{"subject":"mcp", "correction":"store feedback locally"}
+                "arguments":{
+                    "subject":"mcp",
+                    "correction":"store feedback locally",
+                    "topic":"mcp-feedback",
+                    "context":"MCP feedback context",
+                    "predicted":"ignore feedback",
+                    "reason":"user correction",
+                    "source":"mcp-test"
+                }
             }
         }),
     );
@@ -729,6 +737,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         feedback["result"]["structuredContent"]["correction"].as_str(),
         Some("store feedback locally")
+    );
+    assert_eq!(
+        feedback["result"]["structuredContent"]["topic"].as_str(),
+        Some("mcp-feedback")
     );
 
     write_mcp_message(
@@ -753,6 +765,42 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":52,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.feedback_list",
+                "arguments":{"topic":"mcp-feedback", "limit": 3}
+            }
+        }),
+    );
+    let feedback_list = read_mcp_message_for_id(&mut stdout, 52);
+    assert_eq!(
+        feedback_list["result"]["structuredContent"][0]["topic"].as_str(),
+        Some("mcp-feedback")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":53,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.feedback_apply",
+                "arguments":{"id":1}
+            }
+        }),
+    );
+    let feedback_apply = read_mcp_message_for_id(&mut stdout, 53);
+    assert_eq!(
+        feedback_apply["result"]["structuredContent"]["applied_count"].as_i64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":7,
             "method":"tools/call",
             "params":{
@@ -764,6 +812,28 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     let feedback_stats = read_mcp_message_for_id(&mut stdout, 7);
     assert_eq!(
         feedback_stats["result"]["structuredContent"]["feedback_count"].as_i64(),
+        Some(1)
+    );
+    assert_eq!(
+        feedback_stats["result"]["structuredContent"]["applied_count"].as_i64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":54,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.feedback_delete",
+                "arguments":{"id":1}
+            }
+        }),
+    );
+    let feedback_delete = read_mcp_message_for_id(&mut stdout, 54);
+    assert_eq!(
+        feedback_delete["result"]["structuredContent"]["deleted"].as_u64(),
         Some(1)
     );
 
@@ -892,11 +962,25 @@ fn test_feedback_and_graph_cli_use_sqlite() {
             "record",
             "test subject",
             "prefer focused reducers",
+            "--topic",
+            "reducers",
+            "--context",
+            "test context",
+            "--predicted",
+            "verbose reducers",
+            "--reason",
+            "too noisy",
+            "--source",
+            "cli-test",
             "--json",
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("prefer focused reducers"));
+        .stdout(predicate::str::contains("prefer focused reducers"))
+        .stdout(predicate::str::contains("\"topic\":\"reducers\""))
+        .stdout(predicate::str::contains(
+            "\"predicted\":\"verbose reducers\"",
+        ));
 
     suite_cmd()
         .env("HOME", home.path())
@@ -904,9 +988,23 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("prefer focused reducers"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["feedback", "list", "--topic", "reducers", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"topic\":\"reducers\""));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["feedback", "apply", "1", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"applied_count\":1"));
     let conn = Connection::open(home.path().join(".packet28").join("packet28.db")).unwrap();
     let feedback_fts_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM feedback_fts", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM feedback_fts_all", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(feedback_fts_rows, 1);
     suite_cmd()
@@ -914,7 +1012,14 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .args(["feedback", "stats", "--json"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"feedback_count\":1"));
+        .stdout(predicate::str::contains("\"feedback_count\":1"))
+        .stdout(predicate::str::contains("\"applied_count\":1"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["feedback", "delete", "1", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"deleted\":1"));
 
     suite_cmd()
         .env("HOME", home.path())

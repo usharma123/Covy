@@ -24,6 +24,12 @@ pub(crate) struct FeedbackRecord {
     pub(crate) id: i64,
     pub(crate) subject: String,
     pub(crate) correction: String,
+    pub(crate) topic: String,
+    pub(crate) context: Option<String>,
+    pub(crate) predicted: Option<String>,
+    pub(crate) reason: Option<String>,
+    pub(crate) source: Option<String>,
+    pub(crate) applied_count: i64,
     pub(crate) created_at_unix_ms: i64,
 }
 
@@ -107,6 +113,24 @@ pub(crate) struct MemoryPruneReport {
     pub(crate) dry_run: bool,
     pub(crate) candidate_count: usize,
     pub(crate) deleted_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct FeedbackStats {
+    pub(crate) feedback_count: i64,
+    pub(crate) applied_count: i64,
+    pub(crate) topic_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FeedbackInput<'a> {
+    pub(crate) subject: &'a str,
+    pub(crate) correction: &'a str,
+    pub(crate) topic: Option<&'a str>,
+    pub(crate) context: Option<&'a str>,
+    pub(crate) predicted: Option<&'a str>,
+    pub(crate) reason: Option<&'a str>,
+    pub(crate) source: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -497,30 +521,39 @@ pub(crate) fn consolidate_memories(
     })
 }
 
-pub(crate) fn record_feedback(subject: &str, correction: &str) -> Result<FeedbackRecord> {
+pub(crate) fn record_feedback_with_metadata(input: FeedbackInput<'_>) -> Result<FeedbackRecord> {
     let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
+    let topic = normalize_non_empty(input.topic, "general");
     conn.execute(
-        "INSERT INTO feedback (subject, correction, created_at_unix_ms) VALUES (?1, ?2, ?3)",
-        params![subject, correction, now],
+        "INSERT INTO feedback
+         (subject, correction, topic, context, predicted, reason, source, applied_count, created_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
+        params![
+            input.subject,
+            input.correction,
+            topic,
+            input.context,
+            input.predicted,
+            input.reason,
+            input.source,
+            now
+        ],
     )?;
-    Ok(FeedbackRecord {
-        id: conn.last_insert_rowid(),
-        subject: subject.to_string(),
-        correction: correction.to_string(),
-        created_at_unix_ms: now,
-    })
+    get_feedback(&conn, conn.last_insert_rowid())
 }
 
 pub(crate) fn search_feedback(query: &str, limit: usize) -> Result<Vec<FeedbackRecord>> {
     let conn = open_memory_db()?;
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
-            "SELECT fb.id, fb.subject, fb.correction, fb.created_at_unix_ms
-             FROM feedback_fts f
+            "SELECT
+                fb.id, fb.subject, fb.correction, fb.topic, fb.context, fb.predicted,
+                fb.reason, fb.source, fb.applied_count, fb.created_at_unix_ms
+             FROM feedback_fts_all f
              JOIN feedback fb ON fb.rowid = f.rowid
-             WHERE feedback_fts MATCH ?1
-             ORDER BY bm25(feedback_fts), fb.created_at_unix_ms DESC
+             WHERE feedback_fts_all MATCH ?1
+             ORDER BY bm25(feedback_fts_all), fb.created_at_unix_ms DESC
              LIMIT ?2",
         )?;
         let records = read_feedback_rows(&mut stmt, params![match_query, limit.max(1) as i64])?;
@@ -538,13 +571,78 @@ fn search_feedback_like(
 ) -> Result<Vec<FeedbackRecord>> {
     let pattern = format!("%{}%", query.trim());
     let mut stmt = conn.prepare(
-        "SELECT id, subject, correction, created_at_unix_ms
+        "SELECT
+            id, subject, correction, topic, context, predicted, reason, source,
+            applied_count, created_at_unix_ms
          FROM feedback
-         WHERE subject LIKE ?1 OR correction LIKE ?1
+         WHERE subject LIKE ?1
+            OR correction LIKE ?1
+            OR IFNULL(topic, '') LIKE ?1
+            OR IFNULL(context, '') LIKE ?1
+            OR IFNULL(predicted, '') LIKE ?1
+            OR IFNULL(reason, '') LIKE ?1
+            OR IFNULL(source, '') LIKE ?1
          ORDER BY created_at_unix_ms DESC
          LIMIT ?2",
     )?;
     read_feedback_rows(&mut stmt, params![pattern, limit.max(1) as i64])
+}
+
+pub(crate) fn list_feedback(topic: Option<&str>, limit: usize) -> Result<Vec<FeedbackRecord>> {
+    let conn = open_memory_db()?;
+    if let Some(topic) = topic {
+        let topic = normalize_non_empty(Some(topic), "general");
+        let mut stmt = conn.prepare(
+            "SELECT
+                id, subject, correction, topic, context, predicted, reason, source,
+                applied_count, created_at_unix_ms
+             FROM feedback
+             WHERE topic = ?1
+             ORDER BY created_at_unix_ms DESC
+             LIMIT ?2",
+        )?;
+        read_feedback_rows(&mut stmt, params![topic, limit.max(1) as i64])
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT
+                id, subject, correction, topic, context, predicted, reason, source,
+                applied_count, created_at_unix_ms
+             FROM feedback
+             ORDER BY created_at_unix_ms DESC
+             LIMIT ?1",
+        )?;
+        read_feedback_rows(&mut stmt, params![limit.max(1) as i64])
+    }
+}
+
+pub(crate) fn delete_feedback(id: i64) -> Result<usize> {
+    let conn = open_memory_db()?;
+    conn.execute("DELETE FROM feedback WHERE id = ?1", params![id])
+        .map_err(Into::into)
+}
+
+pub(crate) fn apply_feedback(id: i64) -> Result<FeedbackRecord> {
+    let conn = open_memory_db()?;
+    conn.execute(
+        "UPDATE feedback SET applied_count = applied_count + 1 WHERE id = ?1",
+        params![id],
+    )?;
+    get_feedback(&conn, id)
+}
+
+pub(crate) fn feedback_stats() -> Result<FeedbackStats> {
+    let conn = open_memory_db()?;
+    Ok(FeedbackStats {
+        feedback_count: table_count(&conn, "feedback")?,
+        applied_count: conn.query_row(
+            "SELECT COALESCE(SUM(applied_count), 0) FROM feedback",
+            [],
+            |row| row.get(0),
+        )?,
+        topic_count: conn.query_row("SELECT COUNT(DISTINCT topic) FROM feedback", [], |row| {
+            row.get(0)
+        })?,
+    })
 }
 
 fn read_feedback_rows<P: rusqlite::Params>(
@@ -556,7 +654,13 @@ fn read_feedback_rows<P: rusqlite::Params>(
             id: row.get(0)?,
             subject: row.get(1)?,
             correction: row.get(2)?,
-            created_at_unix_ms: row.get(3)?,
+            topic: row.get(3)?,
+            context: row.get(4)?,
+            predicted: row.get(5)?,
+            reason: row.get(6)?,
+            source: row.get(7)?,
+            applied_count: row.get(8)?,
+            created_at_unix_ms: row.get(9)?,
         })
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -792,6 +896,32 @@ fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
     .map_err(Into::into)
 }
 
+fn get_feedback(conn: &Connection, id: i64) -> Result<FeedbackRecord> {
+    conn.query_row(
+        "SELECT
+            id, subject, correction, topic, context, predicted, reason, source,
+            applied_count, created_at_unix_ms
+         FROM feedback
+         WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(FeedbackRecord {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                correction: row.get(2)?,
+                topic: row.get(3)?,
+                context: row.get(4)?,
+                predicted: row.get(5)?,
+                reason: row.get(6)?,
+                source: row.get(7)?,
+                applied_count: row.get(8)?,
+                created_at_unix_ms: row.get(9)?,
+            })
+        },
+    )
+    .map_err(Into::into)
+}
+
 fn open_memory_db() -> Result<Connection> {
     let path = packet28_db_path();
     if let Some(parent) = path.parent() {
@@ -863,6 +993,12 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             subject TEXT NOT NULL,
             correction TEXT NOT NULL,
+            topic TEXT NOT NULL DEFAULT 'general',
+            context TEXT,
+            predicted TEXT,
+            reason TEXT,
+            source TEXT,
+            applied_count INTEGER NOT NULL DEFAULT 0,
             created_at_unix_ms INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS agent_sessions (
@@ -941,6 +1077,46 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         "UPDATE memories SET updated_at_unix_ms = created_at_unix_ms WHERE updated_at_unix_ms = 0",
         [],
     )?;
+    add_column_if_missing(conn, "feedback", "topic", "TEXT NOT NULL DEFAULT 'general'")?;
+    add_column_if_missing(conn, "feedback", "context", "TEXT")?;
+    add_column_if_missing(conn, "feedback", "predicted", "TEXT")?;
+    add_column_if_missing(conn, "feedback", "reason", "TEXT")?;
+    add_column_if_missing(conn, "feedback", "source", "TEXT")?;
+    add_column_if_missing(
+        conn,
+        "feedback",
+        "applied_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    conn.execute_batch(
+        "
+        CREATE VIRTUAL TABLE IF NOT EXISTS feedback_fts_all USING fts5(
+            subject,
+            correction,
+            topic,
+            context,
+            predicted,
+            reason,
+            source,
+            content='feedback',
+            content_rowid='id'
+        );
+        CREATE TRIGGER IF NOT EXISTS feedback_all_ai AFTER INSERT ON feedback BEGIN
+            INSERT INTO feedback_fts_all(rowid, subject, correction, topic, context, predicted, reason, source)
+            VALUES (new.id, new.subject, new.correction, new.topic, new.context, new.predicted, new.reason, new.source);
+        END;
+        CREATE TRIGGER IF NOT EXISTS feedback_all_ad AFTER DELETE ON feedback BEGIN
+            INSERT INTO feedback_fts_all(feedback_fts_all, rowid, subject, correction, topic, context, predicted, reason, source)
+            VALUES ('delete', old.id, old.subject, old.correction, old.topic, old.context, old.predicted, old.reason, old.source);
+        END;
+        CREATE TRIGGER IF NOT EXISTS feedback_all_au AFTER UPDATE OF subject, correction, topic, context, predicted, reason, source ON feedback BEGIN
+            INSERT INTO feedback_fts_all(feedback_fts_all, rowid, subject, correction, topic, context, predicted, reason, source)
+            VALUES ('delete', old.id, old.subject, old.correction, old.topic, old.context, old.predicted, old.reason, old.source);
+            INSERT INTO feedback_fts_all(rowid, subject, correction, topic, context, predicted, reason, source)
+            VALUES (new.id, new.subject, new.correction, new.topic, new.context, new.predicted, new.reason, new.source);
+        END;
+        ",
+    )?;
     conn.execute(
         "INSERT INTO memories_fts(rowid, content, tags)
          SELECT id, content, tags FROM memories
@@ -951,6 +1127,12 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         "INSERT INTO feedback_fts(rowid, subject, correction)
          SELECT id, subject, correction FROM feedback
          WHERE id NOT IN (SELECT rowid FROM feedback_fts)",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO feedback_fts_all(rowid, subject, correction, topic, context, predicted, reason, source)
+         SELECT id, subject, correction, topic, context, predicted, reason, source FROM feedback
+         WHERE id NOT IN (SELECT rowid FROM feedback_fts_all)",
         [],
     )?;
     Ok(())
