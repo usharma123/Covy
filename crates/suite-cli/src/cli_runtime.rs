@@ -9,8 +9,8 @@ use crate::{
     cmd_dashboard, cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard,
     cmd_hook, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp,
     cmd_memory, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack,
-    cmd_transcript, cmd_wakeup, BuildCommands, Cli, Commands, ContextCommands, CoverCommands,
-    DiffCommands, GuardCommands, MapCommands, StackCommands, TestCommands,
+    cmd_transcript, cmd_verify, cmd_wakeup, BuildCommands, Cli, Commands, ContextCommands,
+    CoverCommands, DiffCommands, GuardCommands, MapCommands, StackCommands, TestCommands,
 };
 
 pub fn main_entry() {
@@ -120,6 +120,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Setup(args)) => cmd_setup::run(args),
         Some(Commands::Init(args)) => cmd_init::run(args),
         Some(Commands::Run(args)) => cmd_run::run(args),
+        Some(Commands::Verify(args)) => cmd_verify::run(args),
         Some(Commands::Shell(args)) => cmd_shell::run(args),
         Some(Commands::Discover(args)) => cmd_discover::run(args),
         Some(Commands::Learn(args)) => cmd_learn::run(args),
@@ -386,6 +387,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Setup(_))
         | Some(Commands::Init(_))
         | Some(Commands::Run(_))
+        | Some(Commands::Verify(_))
         | Some(Commands::Shell(_))
         | Some(Commands::Doctor(_)) => None,
     }

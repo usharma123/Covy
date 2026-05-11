@@ -13,11 +13,28 @@ pub(crate) struct AppliedTomlFilter {
     pub(crate) filter_stderr: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FilterTestOutcome {
+    pub(crate) filter_name: String,
+    pub(crate) test_name: String,
+    pub(crate) source: String,
+    pub(crate) passed: bool,
+    pub(crate) actual: String,
+    pub(crate) expected: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct FilterVerifyResults {
+    pub(crate) outcomes: Vec<FilterTestOutcome>,
+    pub(crate) filters_without_tests: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 struct TomlFilterFile {
     schema_version: u32,
     filters: BTreeMap<String, TomlFilterDef>,
+    tests: BTreeMap<String, Vec<TomlFilterTestDef>>,
 }
 
 impl Default for TomlFilterFile {
@@ -25,6 +42,7 @@ impl Default for TomlFilterFile {
         Self {
             schema_version: 1,
             filters: BTreeMap::new(),
+            tests: BTreeMap::new(),
         }
     }
 }
@@ -89,6 +107,24 @@ struct MatchOutputRule {
     pattern: String,
     message: String,
     unless: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct TomlFilterTestDef {
+    name: String,
+    input: String,
+    expected: String,
+}
+
+impl Default for TomlFilterTestDef {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            input: String::new(),
+            expected: String::new(),
+        }
+    }
 }
 
 impl Default for MatchOutputRule {
@@ -170,6 +206,23 @@ pub(crate) fn apply_configured_filter(
     Ok(None)
 }
 
+pub(crate) fn run_filter_tests(
+    root: &Path,
+    filter_name: Option<&str>,
+) -> Result<FilterVerifyResults> {
+    let mut results = FilterVerifyResults::default();
+    for path in filter_config_paths(root) {
+        if !path.exists() {
+            continue;
+        }
+        let source = path.display().to_string();
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read filter config '{source}'"))?;
+        collect_filter_tests(&content, &source, filter_name, &mut results)?;
+    }
+    Ok(results)
+}
+
 fn load_filters(root: &Path) -> Result<Vec<CompiledFilter>> {
     let mut filters = Vec::new();
     for path in filter_config_paths(root) {
@@ -215,6 +268,79 @@ fn parse_filters(content: &str, source: &str) -> Result<Vec<CompiledFilter>> {
         .into_iter()
         .map(|(name, def)| compile_filter(name, source.to_string(), def))
         .collect()
+}
+
+fn collect_filter_tests(
+    content: &str,
+    source: &str,
+    filter_name: Option<&str>,
+    results: &mut FilterVerifyResults,
+) -> Result<()> {
+    let file: TomlFilterFile = toml::from_str(content)
+        .with_context(|| format!("failed to parse filter config '{source}'"))?;
+    anyhow::ensure!(
+        file.schema_version == 1,
+        "unsupported filter schema_version {} in '{}' (expected 1)",
+        file.schema_version,
+        source
+    );
+
+    let mut compiled = BTreeMap::<String, CompiledFilter>::new();
+    for (name, def) in file.filters {
+        let requested = filter_name
+            .map(|requested| requested == name)
+            .unwrap_or(true);
+        let filter = compile_filter(name.clone(), source.to_string(), def)?;
+        if requested {
+            compiled.insert(name, filter);
+        } else if filter_name.is_none() {
+            compiled.insert(name, filter);
+        }
+    }
+
+    for name in compiled.keys() {
+        let has_tests = file
+            .tests
+            .get(name)
+            .map(|tests| !tests.is_empty())
+            .unwrap_or(false);
+        if !has_tests {
+            results
+                .filters_without_tests
+                .push(format!("{source}:{name}"));
+        }
+    }
+
+    for (name, tests) in file.tests {
+        if filter_name
+            .map(|requested| requested != name)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let Some(filter) = compiled.get(&name) else {
+            continue;
+        };
+        for test in tests {
+            let actual = apply_filter(filter, &test.input)
+                .trim_end_matches('\n')
+                .to_string();
+            let expected = test.expected.trim_end_matches('\n').to_string();
+            results.outcomes.push(FilterTestOutcome {
+                filter_name: name.clone(),
+                test_name: if test.name.is_empty() {
+                    "unnamed".to_string()
+                } else {
+                    test.name
+                },
+                source: source.to_string(),
+                passed: actual == expected,
+                actual,
+                expected,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn compile_filter(name: String, source: String, def: TomlFilterDef) -> Result<CompiledFilter> {

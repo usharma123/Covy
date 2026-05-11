@@ -4,7 +4,8 @@ use crate::{
     cmd_agent_prompt, cmd_build, cmd_compact, cmd_context, cmd_cover, cmd_daemon, cmd_dashboard,
     cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook, cmd_impact,
     cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet,
-    cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack, cmd_transcript, cmd_wakeup,
+    cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack, cmd_transcript, cmd_verify,
+    cmd_wakeup,
 };
 
 #[derive(Parser)]
@@ -93,6 +94,8 @@ pub enum Commands {
     Init(cmd_init::InitArgs),
     /// Launch an agent command through the Packet28 runtime backend
     Run(cmd_run::RunArgs),
+    /// Verify Packet28 compatibility artifacts and inline tests
+    Verify(cmd_verify::VerifyArgs),
     /// Launch a shell or command with the instruction virtualizer preloaded
     Shell(cmd_shell::ShellArgs),
     /// Scan sessions for command patterns and savings opportunities
