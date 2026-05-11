@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 use crate::{
     cmd_agent_prompt, cmd_build, cmd_common, cmd_compact, cmd_context, cmd_cover, cmd_daemon,
     cmd_diff, cmd_discover, cmd_doctor, cmd_guard, cmd_hook, cmd_impact, cmd_learn, cmd_map,
-    cmd_map_query, cmd_map_repo, cmd_mcp, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard,
-    cmd_shell, cmd_stack, BuildCommands, Cli, Commands, ContextCommands, CoverCommands,
+    cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet, cmd_proxy, cmd_run, cmd_setup,
+    cmd_shard, cmd_shell, cmd_stack, BuildCommands, Cli, Commands, ContextCommands, CoverCommands,
     DiffCommands, GuardCommands, MapCommands, StackCommands, TestCommands,
 };
 
@@ -98,6 +98,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Commands::Packet(packet) => match packet.command {
             cmd_packet::PacketCommands::Fetch(args) => cmd_packet::run_fetch(args),
         },
+        Commands::Memory(args) => cmd_memory::run(args),
         Commands::AgentPrompt(args) => cmd_agent_prompt::run(args),
         Commands::Mcp(args) => cmd_mcp::run(args),
         Commands::Hook(args) => cmd_hook::run(args),
@@ -357,6 +358,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Commands::Learn(_) => None,
         Commands::Daemon(_)
         | Commands::Guard(_)
+        | Commands::Memory(_)
         | Commands::AgentPrompt(_)
         | Commands::Mcp(_)
         | Commands::Hook(_)

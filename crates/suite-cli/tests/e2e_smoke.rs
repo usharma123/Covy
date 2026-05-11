@@ -327,6 +327,33 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
         .stdout(predicate::str::contains("\"failed\":true"));
 }
 
+#[test]
+fn test_memory_store_recall_uses_sqlite_home_db() {
+    let home = TempDir::new().unwrap();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Packet28 remembers local context",
+            "--tags",
+            "packet28,local",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"content\""));
+
+    assert!(home.path().join(".packet28").join("packet28.db").exists());
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "recall", "local context", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Packet28 remembers local context"));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
