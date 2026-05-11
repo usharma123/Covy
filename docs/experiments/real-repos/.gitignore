@@ -1,0 +1,7 @@
+# Generated real-repository experiment captures include cloned-repo command
+# output and are machine-local by default. Commit curated smoke summaries only.
+*
+!.gitignore
+!README.md
+!SMOKE_*.md
+!SMOKE_*.jsonl

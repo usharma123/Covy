@@ -187,6 +187,12 @@ Minimum maturity gate:
 - fallback reasons are explicit
 - Packet28 output is sufficient for the task without hiding correctness-critical information
 
+Current evidence:
+
+- `docs/experiments/run_packet28_real_repo_suite.sh` runs the repeatable real-repository suite against clean temporary checkouts of Packet28, ripgrep, and fd.
+- `docs/experiments/real-repos/SMOKE_20260511.md` and `docs/experiments/real-repos/SMOKE_20260511.jsonl` record a 3x run across the required workflows. The `Packet28 run --json` path had 0 fallbacks, 0 failed commands, and raw artifact recovery for 54/54 runs.
+- The same run exposed an indexed-search maturity gap: `p28` had 2/9 indexed-search hits and 7/9 readiness fallbacks, so broad indexed-search parity is still not complete.
+
 ### 6. Release Readiness
 
 Before tagging a release that claims parity progress:
