@@ -227,6 +227,39 @@ fn test_run_reduces_git_status() {
         .stdout(predicate::str::contains("quota_tokens=1000"))
         .stdout(predicate::str::contains("quota_used_pct="))
         .stdout(predicate::str::contains("quota_avoided_pct="));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "graph",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("route,count,share_pct,bar"))
+        .stdout(predicate::str::contains("run_reducer:git"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "all",
+            "--quota-tokens",
+            "1000",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[summary]"))
+        .stdout(predicate::str::contains("[graph]"))
+        .stdout(predicate::str::contains("[daily]"))
+        .stdout(predicate::str::contains("[quota]"))
+        .stdout(predicate::str::contains("[failures]"));
 }
 
 #[test]

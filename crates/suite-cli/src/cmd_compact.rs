@@ -218,7 +218,7 @@ pub struct AnalyticsArgs {
     pub task_id: Option<String>,
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
-    /// Output format for analytics commands (text, json, csv, history, failures, daily, weekly, monthly, quota)
+    /// Output format for analytics commands (text, json, csv, history, failures, daily, weekly, monthly, quota, graph, all)
     #[arg(long, default_value = "text")]
     pub format: String,
     /// Token budget used by gain --format quota
@@ -823,6 +823,10 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         print_gain_buckets(&run_savings, GainBucketKind::Monthly);
     } else if format == "quota" {
         print_gain_quota(&summary, args.quota_tokens);
+    } else if format == "graph" {
+        print_gain_graph(&summary);
+    } else if format == "all" {
+        print_gain_all(&summary, &run_savings, args.quota_tokens);
     } else {
         println!("tasks={}", summary.task_count);
         println!("invocations={}", summary.invocation_count);
@@ -894,6 +898,54 @@ fn print_gain_quota(summary: &GainSummary, quota_tokens: Option<u64>) {
     println!("saved_est_tokens={}", summary.saved_est_tokens);
     println!("quota_used_pct={used_pct:.1}");
     println!("quota_avoided_pct={avoided_pct:.1}");
+}
+
+fn print_gain_graph(summary: &GainSummary) {
+    println!("route,count,share_pct,bar");
+    let total = summary.invocation_count.max(1);
+    for (route, count) in &summary.by_route {
+        let share = (*count as f64 / total as f64) * 100.0;
+        let width = ((*count * 20) / total).max(1);
+        println!(
+            "{},{},{:.1},{}",
+            csv_cell(route),
+            count,
+            share,
+            "#".repeat(width)
+        );
+    }
+}
+
+fn print_gain_all(
+    summary: &GainSummary,
+    run_savings: &[RunSavingsRecord],
+    quota_tokens: Option<u64>,
+) {
+    println!("[summary]");
+    println!("tasks={}", summary.task_count);
+    println!("invocations={}", summary.invocation_count);
+    println!("raw_est_tokens={}", summary.raw_est_tokens);
+    println!("reduced_est_tokens={}", summary.reduced_est_tokens);
+    println!("saved_est_tokens={}", summary.saved_est_tokens);
+    println!("savings_pct={:.1}", summary.savings_pct);
+    println!();
+    println!("[graph]");
+    print_gain_graph(summary);
+    println!();
+    println!("[daily]");
+    print_gain_buckets(run_savings, GainBucketKind::Daily);
+    println!();
+    println!("[weekly]");
+    print_gain_buckets(run_savings, GainBucketKind::Weekly);
+    println!();
+    println!("[monthly]");
+    print_gain_buckets(run_savings, GainBucketKind::Monthly);
+    println!();
+    println!("[quota]");
+    print_gain_quota(summary, quota_tokens);
+    println!();
+    println!("[failures]");
+    print_gain_failures(run_savings);
 }
 
 fn print_gain_history(records: &[RunSavingsRecord]) {
