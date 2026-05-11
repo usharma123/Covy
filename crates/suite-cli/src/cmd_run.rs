@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -92,6 +93,8 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
     let reduction = reduce_command_output(&spec, &stdout, &stderr, exit_code)?;
     let raw_est_tokens = estimate_tokens(&(stdout.clone() + &stderr));
     let reduced_est_tokens = estimate_tokens(&reduction.compact_preview);
+    let raw_artifact_handle =
+        write_run_raw_artifact(root, &command_text, exit_code, &stdout, &stderr)?;
     let saved = raw_est_tokens.saturating_sub(reduced_est_tokens);
     let savings_pct = if raw_est_tokens == 0 {
         0.0
@@ -110,6 +113,10 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
         "reduced_est_tokens": reduced_est_tokens,
         "savings_percent": savings_pct,
         "fallback_reason": null,
+        "raw_artifact": {
+            "available": true,
+            "handle": raw_artifact_handle,
+        },
         "provenance": {
             "original_command": command_text,
             "cwd": cwd.display().to_string(),
@@ -200,6 +207,8 @@ fn run_plain_command(
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let exit_code = output.status.code().unwrap_or(1);
     let raw_est_tokens = estimate_tokens(&(stdout.clone() + &stderr));
+    let raw_artifact_handle =
+        write_run_raw_artifact(root, &command_text, exit_code, &stdout, &stderr)?;
     record_run_savings(
         root,
         &RunSavingsRecord {
@@ -229,6 +238,10 @@ fn run_plain_command(
                 "reduced_est_tokens": raw_est_tokens,
                 "savings_percent": 0.0,
                 "fallback_reason": fallback_reason,
+                "raw_artifact": {
+                    "available": true,
+                    "handle": raw_artifact_handle,
+                },
             }),
             pretty,
         )?;
@@ -245,6 +258,50 @@ fn command_text(argv: &[String]) -> String {
 
 fn estimate_tokens(value: &str) -> u64 {
     ((value.len() as f64) / 4.0).ceil() as u64
+}
+
+fn write_run_raw_artifact(
+    root: &Path,
+    command_text: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) -> Result<String> {
+    let dir = root.join(".packet28").join("run-raw");
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create run raw artifact dir '{}'", dir.display()))?;
+    let file_name = format!(
+        "{}-{}.txt",
+        timestamp_unix_ms(),
+        raw_artifact_slug(command_text)
+    );
+    let path = dir.join(file_name);
+    fs::write(
+        &path,
+        format!(
+            "command: {command_text}\nexit_code: {exit_code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+        ),
+    )
+    .with_context(|| format!("failed to write raw artifact '{}'", path.display()))?;
+    Ok(path
+        .strip_prefix(root)
+        .unwrap_or(&path)
+        .display()
+        .to_string())
+}
+
+fn raw_artifact_slug(command_text: &str) -> String {
+    let slug = command_text
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    slug.trim_matches('-').chars().take(48).collect()
 }
 
 fn timestamp_unix_ms() -> u128 {

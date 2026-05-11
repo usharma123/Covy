@@ -180,6 +180,52 @@ fn test_run_reduces_git_status() {
 }
 
 #[test]
+fn test_run_reduced_command_exposes_fetchable_raw_artifact() {
+    let root = TempDir::new().unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root.path())
+        .status()
+        .unwrap();
+    fs::write(root.path().join("raw-visible.txt"), "changed\n").unwrap();
+
+    let output = suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "git",
+            "status",
+            "--short",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let handle = value["raw_artifact"]["handle"].as_str().unwrap();
+    assert!(value["raw_artifact"]["available"].as_bool().unwrap());
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "compact",
+            "fetch-raw",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--task-id",
+            "run-raw",
+            "--handle",
+            handle,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("raw-visible.txt"))
+        .stdout(predicate::str::contains("--- stdout ---"));
+}
+
+#[test]
 fn test_run_reduces_cargo_check() {
     let root = TempDir::new().unwrap();
     fs::write(
