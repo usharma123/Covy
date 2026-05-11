@@ -1577,7 +1577,6 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
         .as_deref()
         .context("Packet28 Claude HTTP hook token is missing after initialization")?;
     let packet28_hooks = build_claude_packet28_hooks(&hook_command, &http_url, http_token);
-    let legacy_packet28_hooks = build_legacy_claude_packet28_hooks(&hook_command);
     let mut hooks = config
         .get("hooks")
         .and_then(Value::as_object)
@@ -1587,10 +1586,6 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
     // direct keys under `hooks`. Merge our entries into each event key
     // rather than nesting under a "packet28" grouping key.
     let packet28_events = packet28_hooks.as_object().cloned().unwrap_or_default();
-    let legacy_events = legacy_packet28_hooks
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
     let mut already_configured = true;
     for (event_name, entries) in &packet28_events {
         let existing = hooks
@@ -1599,14 +1594,9 @@ fn write_claude_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
             .cloned()
             .unwrap_or_default();
         let new_entries = entries.as_array().cloned().unwrap_or_default();
-        let legacy_entries = legacy_events
-            .get(event_name)
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
         let mut merged = existing
             .iter()
-            .filter(|entry| !new_entries.contains(entry) && !legacy_entries.contains(entry))
+            .filter(|entry| !is_packet28_claude_hook_entry(entry))
             .cloned()
             .collect::<Vec<_>>();
         merged.extend(new_entries);
@@ -1651,17 +1641,20 @@ fn build_claude_packet28_hooks(command: &str, http_url: &str, http_token: &str) 
     })
 }
 
-fn build_legacy_claude_packet28_hooks(command: &str) -> Value {
-    json!({
-        "SessionStart": [claude_command_hook_entry("startup|resume|clear|compact", command)],
-        "UserPromptSubmit": [claude_command_hook_entry(".*", command)],
-        "PreToolUse": [claude_command_hook_entry(".*", command)],
-        "PostToolUse": [claude_command_hook_entry(".*", command)],
-        "PostToolUseFailure": [claude_command_hook_entry(".*", command)],
-        "Stop": [claude_command_hook_entry(".*", command)],
-        "SubagentStop": [claude_command_hook_entry(".*", command)],
-        "PreCompact": [claude_command_hook_entry("manual|auto", command)],
-        "SessionEnd": [claude_command_hook_entry(".*", command)]
+fn is_packet28_claude_hook_entry(entry: &Value) -> bool {
+    let Some(hooks) = entry.get("hooks").and_then(Value::as_array) else {
+        return false;
+    };
+    hooks.iter().any(|hook| {
+        if let Some(url) = hook.get("url").and_then(Value::as_str) {
+            return url.contains(PACKET28_CLAUDE_HTTP_HOOK_PATH);
+        }
+        let command = hook
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        command.contains(" hook claude ")
+            && (command.contains("Packet28") || command.contains("packet28"))
     })
 }
 
@@ -2531,6 +2524,50 @@ mod tests {
         let entries = value["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["hooks"][0]["type"].as_str(), Some("http"));
+    }
+
+    #[test]
+    fn write_claude_hook_config_removes_stale_packet28_command_paths() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".claude").join("settings.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "hooks": {
+                    "SessionStart": [
+                        {
+                            "matcher": "startup|resume|clear|compact",
+                            "hooks": [{"type": "command", "command": "/missing/Packet28 hook claude --root \"/tmp/demo\""}]
+                        },
+                        {
+                            "matcher": "startup|resume|clear|compact",
+                            "hooks": [{"type": "command", "command": "/other/tool"}]
+                        }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let status = write_claude_hook_config(&path, dir.path(), true).unwrap();
+        assert!(matches!(status, McpConfigStatus::Written));
+
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let entries = value["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        let commands = entries
+            .iter()
+            .filter_map(|entry| entry["hooks"][0]["command"].as_str())
+            .collect::<Vec<_>>();
+        assert!(commands
+            .iter()
+            .any(|command| command.contains(" hook claude ")));
+        assert!(commands.contains(&"/other/tool"));
+        assert!(!commands
+            .iter()
+            .any(|command| command.starts_with("/missing/Packet28")));
     }
 
     #[test]
