@@ -59,6 +59,8 @@ pub enum Commands {
     Gain(cmd_compact::AnalyticsArgs),
     /// RTK-style compact command surface and analytics
     Compact(cmd_compact::CompactArgs),
+    /// Plan how Packet28 would reduce or pass through a command
+    Rewrite(cmd_compact::RewriteArgs),
     /// Packet artifact utilities
     Packet(cmd_packet::PacketArgs),
     /// Emit repo-local agent instruction fragments that describe how to use Packet28

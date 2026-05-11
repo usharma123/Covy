@@ -295,7 +295,7 @@ pub fn run(args: CompactArgs) -> Result<i32> {
         CompactCommands::Summary(args) => run_summary(args, "summary"),
         CompactCommands::Err(args) => run_summary(args, "err"),
         CompactCommands::Test(args) => run_summary(args, "test"),
-        CompactCommands::Rewrite(args) => run_rewrite(args),
+        CompactCommands::Rewrite(args) => run_rewrite_command(args),
         CompactCommands::Discover(args) => run_discover(args),
         CompactCommands::Session(args) => run_session(args),
         CompactCommands::FetchRaw(args) => run_fetch_raw(args),
@@ -684,7 +684,7 @@ fn run_summary(args: SummaryArgs, label: &str) -> Result<i32> {
     }
 }
 
-fn run_rewrite(args: RewriteArgs) -> Result<i32> {
+pub fn run_rewrite_command(args: RewriteArgs) -> Result<i32> {
     let root = resolve_root(&args.root)?;
     let command = args.command_argv.join(" ");
     let cwd_path = std::path::Path::new(&args.cwd);

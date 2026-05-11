@@ -81,6 +81,26 @@ policy:
     .unwrap();
 }
 
+#[test]
+fn test_top_level_rewrite_plans_supported_command() {
+    let root = TempDir::new().unwrap();
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "git",
+            "status",
+            "--short",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"route\":\"reducer_rewrite\""))
+        .stdout(predicate::str::contains("\"reducer_family\":\"git\""));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
