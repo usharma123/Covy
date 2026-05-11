@@ -1759,6 +1759,77 @@ fn test_discover_splits_chained_session_commands() {
 }
 
 #[test]
+fn test_hook_records_local_event_log_stats_and_dashboard_count() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let payload = json!({
+        "hook_event_name":"PostToolUse",
+        "task_id":"hook-telemetry-task",
+        "session_id":"hook-telemetry-session",
+        "matcher":"Bash",
+        "tool_name":"Bash",
+        "tool_input":{"command":"git status --short"},
+        "tool_response":{"stdout":" M src/lib.rs\n","stderr":"","exit_code":0}
+    });
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["hook", "claude", "--root", root.path().to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["hook", "log", "--limit", "5", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"runtime\":\"claude\""))
+        .stdout(predicate::str::contains("\"event_kind\":\"post_tool_use\""))
+        .stdout(predicate::str::contains("hook-telemetry-session"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["hook", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"event_count\":1"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "dashboard",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"hook_event_history\":1"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
 fn test_session_reports_adoption_from_session_jsonl() {
     let root = TempDir::new().unwrap();
     let sessions_dir = root

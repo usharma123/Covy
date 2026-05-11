@@ -31,6 +31,7 @@ struct DashboardReport {
     graph_relations: usize,
     feedback_corrections: i64,
     mcp_call_history: i64,
+    hook_event_history: i64,
     integration_health: BTreeMap<String, String>,
     windsurf_doctor_status: String,
 }
@@ -105,6 +106,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         graph_relations: graph.relations.len(),
         feedback_corrections,
         mcp_call_history: store_stats.mcp_call_count,
+        hook_event_history: store_stats.hook_event_count,
         integration_health,
         windsurf_doctor_status: windsurf_status.to_string(),
     };
@@ -123,6 +125,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         println!("graph_relations={}", report.graph_relations);
         println!("feedback_corrections={}", report.feedback_corrections);
         println!("mcp_call_history={}", report.mcp_call_history);
+        println!("hook_event_history={}", report.hook_event_history);
         println!("windsurf_doctor_status={}", report.windsurf_doctor_status);
     }
     Ok(0)

@@ -132,6 +132,35 @@ pub(crate) struct LocalStoreStats {
     pub(crate) transcript_session_count: i64,
     pub(crate) transcript_message_count: i64,
     pub(crate) mcp_call_count: i64,
+    pub(crate) hook_event_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct HookEventRecord {
+    pub(crate) id: i64,
+    pub(crate) runtime: String,
+    pub(crate) event_kind: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) task_id: Option<String>,
+    pub(crate) matcher: Option<String>,
+    pub(crate) payload_json: String,
+    pub(crate) created_at_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct HookEventStats {
+    pub(crate) runtime: String,
+    pub(crate) event_kind: String,
+    pub(crate) event_count: i64,
+}
+
+pub(crate) struct HookEventInput<'a> {
+    pub(crate) runtime: &'a str,
+    pub(crate) event_kind: &'a str,
+    pub(crate) session_id: Option<&'a str>,
+    pub(crate) task_id: Option<&'a str>,
+    pub(crate) matcher: Option<&'a str>,
+    pub(crate) payload_json: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1376,7 +1405,88 @@ pub(crate) fn local_store_stats() -> Result<LocalStoreStats> {
         transcript_session_count: table_count(&conn, "transcript_sessions")?,
         transcript_message_count: table_count(&conn, "transcript_messages")?,
         mcp_call_count: table_count(&conn, "mcp_calls")?,
+        hook_event_count: table_count(&conn, "hook_events")?,
     })
+}
+
+pub(crate) fn record_hook_event(input: HookEventInput<'_>) -> Result<HookEventRecord> {
+    let conn = open_memory_db()?;
+    let now = timestamp_unix_ms();
+    conn.execute(
+        "INSERT INTO hook_events
+         (runtime, event_kind, session_id, task_id, matcher, payload_json, created_at_unix_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            input.runtime,
+            input.event_kind,
+            input.session_id,
+            input.task_id,
+            input.matcher,
+            input.payload_json,
+            now
+        ],
+    )?;
+    let id = conn.last_insert_rowid();
+    Ok(HookEventRecord {
+        id,
+        runtime: input.runtime.to_string(),
+        event_kind: input.event_kind.to_string(),
+        session_id: input.session_id.map(ToOwned::to_owned),
+        task_id: input.task_id.map(ToOwned::to_owned),
+        matcher: input.matcher.map(ToOwned::to_owned),
+        payload_json: input.payload_json.to_string(),
+        created_at_unix_ms: now,
+    })
+}
+
+pub(crate) fn list_hook_events(limit: usize) -> Result<Vec<HookEventRecord>> {
+    let conn = open_memory_db()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, runtime, event_kind, session_id, task_id, matcher, payload_json, created_at_unix_ms
+         FROM hook_events
+         ORDER BY created_at_unix_ms DESC, id DESC
+         LIMIT ?1",
+    )?;
+    read_hook_event_rows(&mut stmt, params![limit.max(1) as i64])
+}
+
+pub(crate) fn hook_event_stats() -> Result<Vec<HookEventStats>> {
+    let conn = open_memory_db()?;
+    let mut stmt = conn.prepare(
+        "SELECT runtime, event_kind, COUNT(*) AS event_count
+         FROM hook_events
+         GROUP BY runtime, event_kind
+         ORDER BY runtime, event_kind",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(HookEventStats {
+            runtime: row.get(0)?,
+            event_kind: row.get(1)?,
+            event_count: row.get(2)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn read_hook_event_rows<P: rusqlite::Params>(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: P,
+) -> Result<Vec<HookEventRecord>> {
+    let rows = stmt.query_map(params, |row| {
+        Ok(HookEventRecord {
+            id: row.get(0)?,
+            runtime: row.get(1)?,
+            event_kind: row.get(2)?,
+            session_id: row.get(3)?,
+            task_id: row.get(4)?,
+            matcher: row.get(5)?,
+            payload_json: row.get(6)?,
+            created_at_unix_ms: row.get(7)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 fn table_count(conn: &Connection, table: &str) -> Result<i64> {
@@ -1960,6 +2070,16 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tool_name TEXT NOT NULL,
             arguments_json TEXT NOT NULL DEFAULT '{}',
+            created_at_unix_ms INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS hook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            runtime TEXT NOT NULL,
+            event_kind TEXT NOT NULL,
+            session_id TEXT,
+            task_id TEXT,
+            matcher TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}',
             created_at_unix_ms INTEGER NOT NULL
         );
 

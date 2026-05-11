@@ -18,6 +18,8 @@ use packet28_reducer_core::{
 };
 use serde_json::{json, Value};
 
+use crate::memory_store::{hook_event_stats, list_hook_events, record_hook_event, HookEventInput};
+
 #[derive(Args)]
 pub struct HookArgs {
     #[command(subcommand)]
@@ -30,6 +32,8 @@ pub enum HookCommands {
     Codex(ClaudeHookArgs),
     Cursor(RuntimeHookArgs),
     Windsurf(RuntimeHookArgs),
+    Log(HookLogArgs),
+    Stats(HookStatsArgs),
     ServeHttp(HookHttpServerArgs),
     ReducerRunner(ReducerRunnerArgs),
     ReduceFixture(ReduceFixtureArgs),
@@ -49,6 +53,24 @@ pub struct RuntimeHookArgs {
     pub root: String,
     #[arg(long)]
     pub event: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct HookLogArgs {
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args, Clone)]
+pub struct HookStatsArgs {
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
 }
 
 #[derive(Args, Clone)]
@@ -115,6 +137,8 @@ pub fn run(args: HookArgs) -> Result<i32> {
         HookCommands::Codex(args) => run_claude(args),
         HookCommands::Cursor(args) => run_runtime_hook(args, ExternalHookRuntime::Cursor),
         HookCommands::Windsurf(args) => run_runtime_hook(args, ExternalHookRuntime::Windsurf),
+        HookCommands::Log(args) => run_hook_log(args),
+        HookCommands::Stats(args) => run_hook_stats(args),
         HookCommands::ServeHttp(args) => run_hook_http_server(args),
         HookCommands::ReducerRunner(args) => run_reducer_runner(args),
         HookCommands::ReduceFixture(args) => run_reduce_fixture(args),
@@ -178,10 +202,10 @@ fn process_claude_hook_payload(
     let response = crate::broker_client::hook_ingest(
         root,
         HookIngestRequest {
-            task_id,
-            session_id,
+            task_id: task_id.clone(),
+            session_id: session_id.clone(),
             event_kind,
-            matcher,
+            matcher: matcher.clone(),
             source,
             boundary_kind: boundary_for_event(event_kind),
             lifecycle_event: None,
@@ -191,6 +215,14 @@ fn process_claude_hook_payload(
                 .and_then(|v| v.parse().ok()),
         },
     )?;
+    record_hook_event(HookEventInput {
+        runtime: "claude",
+        event_kind: hook_event_name(event_kind),
+        session_id: session_id.as_deref(),
+        task_id: Some(&task_id),
+        matcher: matcher.as_deref(),
+        payload_json: &serde_json::to_string(payload)?,
+    })?;
     Ok(ClaudeHookOutcome {
         exit_code: if response.block_stop { 2 } else { 0 },
         body: render_hook_output(event_kind, rewrite, &response)?,
@@ -223,10 +255,10 @@ fn run_runtime_hook(args: RuntimeHookArgs, runtime: ExternalHookRuntime) -> Resu
     let _response = crate::broker_client::hook_ingest(
         &root,
         HookIngestRequest {
-            task_id,
-            session_id,
+            task_id: task_id.clone(),
+            session_id: session_id.clone(),
             event_kind,
-            matcher,
+            matcher: matcher.clone(),
             source: Some(runtime_source(runtime).to_string()),
             boundary_kind: boundary_for_event(event_kind),
             lifecycle_event: None,
@@ -234,6 +266,49 @@ fn run_runtime_hook(args: RuntimeHookArgs, runtime: ExternalHookRuntime) -> Resu
             host_context_budget_tokens: None,
         },
     )?;
+    record_hook_event(HookEventInput {
+        runtime: external_runtime_name(runtime),
+        event_kind: hook_event_name(event_kind),
+        session_id: session_id.as_deref(),
+        task_id: Some(&task_id),
+        matcher: matcher.as_deref(),
+        payload_json: &serde_json::to_string(&payload)?,
+    })?;
+    Ok(0)
+}
+
+fn run_hook_log(args: HookLogArgs) -> Result<i32> {
+    let events = list_hook_events(args.limit)?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(events)?, args.pretty)?;
+    } else {
+        for event in events {
+            println!(
+                "id={} runtime={} event={} session={} task={} matcher={}",
+                event.id,
+                event.runtime,
+                event.event_kind,
+                event.session_id.unwrap_or_else(|| "n/a".to_string()),
+                event.task_id.unwrap_or_else(|| "n/a".to_string()),
+                event.matcher.unwrap_or_else(|| "n/a".to_string())
+            );
+        }
+    }
+    Ok(0)
+}
+
+fn run_hook_stats(args: HookStatsArgs) -> Result<i32> {
+    let stats = hook_event_stats()?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(stats)?, args.pretty)?;
+    } else {
+        for stat in stats {
+            println!(
+                "runtime={} event={} count={}",
+                stat.runtime, stat.event_kind, stat.event_count
+            );
+        }
+    }
     Ok(0)
 }
 
@@ -1217,6 +1292,31 @@ fn boundary_for_event(kind: HookEventKind) -> HookBoundaryKind {
         HookEventKind::PreCompact => HookBoundaryKind::PreCompact,
         HookEventKind::SessionEnd => HookBoundaryKind::SessionEnd,
         _ => HookBoundaryKind::None,
+    }
+}
+
+fn hook_event_name(kind: HookEventKind) -> &'static str {
+    match kind {
+        HookEventKind::SessionStart => "session_start",
+        HookEventKind::UserPromptSubmit => "user_prompt_submit",
+        HookEventKind::PreToolUse => "pre_tool_use",
+        HookEventKind::PostToolUse => "post_tool_use",
+        HookEventKind::PostToolUseFailure => "post_tool_use_failure",
+        HookEventKind::CommandStarted => "command_started",
+        HookEventKind::CommandProgress => "command_progress",
+        HookEventKind::CommandFinished => "command_finished",
+        HookEventKind::Stop => "stop",
+        HookEventKind::SubagentStop => "subagent_stop",
+        HookEventKind::PreCompact => "pre_compact",
+        HookEventKind::SessionEnd => "session_end",
+        HookEventKind::Unknown => "unknown",
+    }
+}
+
+fn external_runtime_name(runtime: ExternalHookRuntime) -> &'static str {
+    match runtime {
+        ExternalHookRuntime::Cursor => "cursor",
+        ExternalHookRuntime::Windsurf => "windsurf",
     }
 }
 
