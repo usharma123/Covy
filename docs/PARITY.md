@@ -1,41 +1,87 @@
 # Packet28 RTK/ICM Parity Audit
 
-Parity references:
+This file is the source-backed parity contract for Packet28 against current upstream RTK and ICM.
 
-- RTK: `https://github.com/rtk-ai/rtk`, cloned at `/private/tmp/rtk-parity`
-- ICM: `https://github.com/rtk-ai/icm`, cloned at `/private/tmp/icm-parity`
+## Source Snapshot
 
-## Scope
+| Source | Revision inspected | Local path | Evidence used |
+|---|---:|---|---|
+| RTK | `55f998d` | `/private/tmp/rtk-parity` | `README.md`, `hooks/README.md`, `src/main.rs`, `src/discover/registry.rs`, `src/discover/rules.rs`, `src/hooks/*`, `src/core/tracking.rs` |
+| ICM | `92bd851` | `/private/tmp/icm-parity` | `README.md`, `crates/icm-cli/src/main.rs`, `crates/icm-mcp/src/tools.rs`, `crates/icm-store/src/schema.rs`, `crates/icm-core/src/*` |
+| Packet28 | current workspace | `/Users/utsavsharma/Documents/GitHub/Coverage` | `crates/suite-cli/src/cli_defs.rs`, `cmd_run.rs`, `cmd_compact.rs`, `route_registry.rs`, `cmd_memory.rs`, `memory_store.rs`, `cmd_feedback.rs`, `cmd_graph.rs`, `cmd_wakeup.rs`, `cmd_dashboard.rs`, `cmd_mcp*`, `cmd_setup.rs`, `cmd_doctor.rs` |
 
-Packet28 is not a line-for-line clone. The implemented scope is Packet28-native parity with the `docs/packet28_goal.md` acceptance slice: reducer-plus-handoff runtime, Windsurf-first setup verification, local analytics/discovery, local SQLite memory, graph/feedback, MCP tools, and dashboard.
+Status values:
 
-Full upstream parity is broader than this slice. RTK includes a large filter catalog, opt-in telemetry, custom TOML filters, broad hook adapters, and release packaging. ICM includes vector/FTS recall, wake-up packs, memoir export/search, transcript storage, hook extraction, web dashboard, cloud/upgrade/import flows, and a larger MCP surface.
-
-## RTK Findings
-
-| RTK area | Upstream evidence | Packet28 status |
-|---|---|---|
-| Hook-first rewrite | RTK centralizes hook rewrite in `src/hooks/rewrite_cmd.rs`; Claude/Cursor/OpenCode adapters are thin wrappers. | Implemented for Packet28-supported runtimes through setup hooks and runtime guidance; Windsurf command interception remains unclaimed. |
-| Command registry | RTK classifies supported/ignored/unsupported commands in `src/discover/registry.rs` and `src/discover/rules.rs`. | Implemented through `route_registry.rs`, `Packet28 rewrite`, and reducer family classification. |
-| Reducers | RTK has command modules under `src/cmds/*` plus many TOML filters under `src/filters`. | Implemented for goal-required families: git, cargo/Rust, npm/JS, pytest/Python, grep/rg/find/ls/tree/cat/head/tail, docker/infra, gh. Broader RTK catalog is deferred. |
-| Raw recovery | RTK stores raw output hints through tee support in `src/core/tee.rs`. | Implemented through Packet28 artifacts/fetch tools and hook raw-output capture paths. |
-| Analytics/discover | RTK uses SQLite tracking in `src/core/tracking.rs`, `rtk gain`, `rtk discover`, and session analytics. | Implemented local run-savings analytics, `Packet28 gain`, `Packet28 discover`, `Packet28 session`, and dashboard. |
-| Agent support | RTK documents Claude, Cursor, Codex, Copilot, Gemini, Windsurf, OpenCode, Cline/Roo, Kilo, Antigravity. | Implemented/verified target set is Claude, Cursor, Codex, Windsurf. Wider RTK agent breadth is explicitly deferred. |
-| MCP | RTK has no primary MCP server surface. | Packet28 MCP is a product differentiator, not RTK parity. |
-| Telemetry/custom filters | RTK has opt-in telemetry and trust-gated TOML filters. | Deferred for this slice. |
-
-## ICM Findings
-
-| ICM area | Upstream evidence | Packet28 status |
-|---|---|---|
-| SQLite memory | ICM stores local memory in SQLite with FTS/vector support under `crates/icm-store`. | Implemented local SQLite at `~/.packet28/packet28.db` with required goal tables; vector/FTS is deferred. |
-| Memory CLI | ICM exposes store/recall/list/forget/update/health/topics/stats/decay/prune/consolidate/embed/wake-up and more in `crates/icm-cli/src/main.rs`. | Implemented goal slice: `memory store/recall/list/consolidate` plus Packet28-native `wakeup`; forget/update/health/topics/decay/prune/embed are deferred. |
-| MCP tools | ICM exposes memory, memoir, feedback, transcript, wake-up, learn, and embed tools in `crates/icm-mcp/src/tools.rs`. | Implemented goal-required Packet28 MCP: `search`, `reduce`, `rewrite`, `memory_store`, `memory_recall`, `memory_list`, `feedback_record`, `feedback_search`, `feedback_stats`, `graph_inspect`, `handoff`, `doctor`. Broader ICM tools are deferred. |
-| Memoir graph | ICM has memoirs, concepts, typed links, labels, FTS, BFS inspect, and exports. | Implemented simple Packet28 concepts/relations and inspect; full memoir graph is deferred. |
-| Feedback | ICM stores prediction/correction/reason/source and FTS search/stats. | Implemented feedback record/search/stats using local SQLite; richer ICM fields/FTS/applied counts are deferred. |
-| Wake-up/hooks | ICM has wake-up memory packs and hook extraction lifecycle. | Packet28 implements `wakeup` as a local memory/feedback/graph summary and uses handoff/context assembly plus runtime hooks for agent continuity; ICM's full wake-up extraction lifecycle is deferred. |
-| Dashboard | ICM has an Axum/Svelte dashboard. | Implemented local CLI dashboard for acceptance slice; web UI is deferred. |
+- `implemented`: Packet28 has a working Packet28-native equivalent.
+- `partial`: Packet28 has a useful subset but not full upstream parity.
+- `missing`: Packet28 does not yet have the capability.
+- `non-goal`: Packet28 intentionally should not implement the upstream behavior.
 
 ## Current Conclusion
 
-Packet28 is now at parity with the explicit `docs/packet28_goal.md` acceptance slice, after checking RTK and ICM source directly. It is not full upstream RTK/ICM feature parity; deferred areas are documented above and in `docs/PRODUCT.md`.
+Packet28 is useful today as a local context-reduction, search, runtime-hook, MCP, and lightweight memory helper. It is not yet at full upstream RTK + ICM parity.
+
+The largest gaps are:
+
+- RTK: broader reducer/filter catalog, custom TOML filters, telemetry controls if deliberately adopted, full agent breadth including Copilot/Gemini/OpenCode/Cline/Roo/Kilo/Antigravity/Hermes, and hook-level transparent rewrite proof across every claimed agent.
+- ICM: rich memory schema, FTS/vector hybrid recall, forget/update/health/topics/decay/prune/embed flows, transcript storage/search, hook telemetry, learn/extract-pending lifecycle, memoir export/search/refine/delete/list breadth, web/TUI dashboard parity, and richer MCP tools.
+- Evidence: Packet28 needs repeated real-world experiment runs across multiple repos and workflows before maturity claims are honest.
+
+## RTK Parity Matrix
+
+| RTK capability | RTK command/API | Upstream evidence | Packet28 equivalent | Status | Test or evidence needed |
+|---|---|---|---|---|---|
+| CLI proxy command families | `rtk <command-family>` | `src/main.rs` defines reducers for `ls`, `tree`, `read`, `smart`, `git`, `gh`, `glab`, `aws`, `psql`, `pnpm`, `err`, `test`, `json`, `deps`, `env`, plus cargo/go/js/python/ruby/dotnet/cloud modules. | `Packet28 proxy run`, `Packet28 run`, `Packet28 rewrite`, reducer crates for git, rust, JS, Python, search, fs, infra, GitHub. | partial | Matrix every RTK command family to Packet28 reducer support and add missing reducer tests. |
+| Command rewrite registry | `rtk rewrite "<command>"` | `src/discover/registry.rs` and `src/discover/rules.rs` classify supported, ignored, unsupported, compound commands, env prefixes, git global opts, heredocs, pipes, and rule statuses. | `Packet28 rewrite <command...>` backed by `route_registry.rs` and compact command planner. | partial | Add golden tests for env prefixes, compound operators, heredocs, pipe safety, git global opts, unsupported pass-through, and already-Packet28 commands. |
+| Runtime hook delegation | agent hooks call `rtk rewrite` | `hooks/README.md` says hook scripts are thin delegates and all rewrite logic lives in Rust registry. | Packet28 setup installs runtime hooks/configs and hook handlers for Packet28-supported runtimes. | partial | Prove every claimed hook invokes Packet28 rewrite/reducer path and never blocks command execution on errors. |
+| Claude Code transparent rewrite | `rtk init -g` / Claude hook | `hooks/README.md` documents `PreToolUse` updatedInput support. | Packet28 setup/doctor supports Claude Code. | partial | Fixture and live smoke for generated Claude config, hook JSON, rewrite, fallback, and idempotence. |
+| Cursor transparent rewrite | `rtk init -g --agent cursor` | `hooks/README.md` documents `preToolUse` updated_input and `{}` no-op response. | Packet28 setup/doctor supports Cursor and has `hook cursor`. | partial | Fixture and live smoke for Cursor hook payloads and no-op JSON behavior. |
+| Copilot support | `rtk init -g --copilot` | `README.md` and `hooks/README.md` document VS Code Copilot transparent rewrite and Copilot CLI deny-with-suggestion. | No visible first-class Packet28 Copilot setup command in current help. | missing | Add setup/init/doctor support or document as non-goal. |
+| Gemini support | `rtk init -g --gemini` | `README.md` and `hooks/README.md` document Gemini `BeforeTool` transparent rewrite. | No visible first-class Packet28 Gemini setup command in current help. | missing | Add setup/init/doctor support or document as non-goal. |
+| OpenCode support | `rtk init -g --opencode` | `hooks/opencode` plugin mutates command in place. | No visible first-class Packet28 OpenCode setup command in current help. | missing | Add setup/init/doctor support or document as non-goal. |
+| Hermes support | `rtk init --agent hermes` | `hooks/hermes` Python plugin added in RTK `55f998d`; mutates terminal command via `rtk rewrite`. | No visible first-class Packet28 Hermes setup command in current help. | missing | Add setup/init/doctor support or document as non-goal. |
+| Rules-only agents | Windsurf, Cline/Roo, Codex, Kilo, Antigravity | `README.md` and `hooks/README.md` classify these as rules/instructions-level guidance except Codex AGENTS.md. | Packet28 supports Claude, Cursor, Codex, Windsurf in setup help; Windsurf command interception is not claimed. | partial | Add Cline/Roo, Kilo, Antigravity support or document as non-goals; keep Windsurf support tier honest. |
+| Reducer output and raw recovery | filters plus tee hints | `src/core/tee.rs`, `src/core/README.md`, command modules, and parser tiers preserve raw recovery hints. | Packet28 reducer packets and artifact/fetch paths exist; `Packet28 run` records raw/reduced estimates. | partial | Test raw artifact recovery for each reducer family and failing-output path. |
+| Savings analytics | `rtk gain` | `src/analytics/gain.rs`, `src/core/tracking.rs`; README documents graph/history/daily/all/json/csv/failures/quota. | `Packet28 gain` and compact analytics exist. | partial | Add feature parity for graph/history/daily/weekly/monthly/failures/json/csv/quota or mark deliberate non-goals. |
+| Missed savings discovery | `rtk discover` | `src/discover/*`; README documents current project/all/since/limit/json flows. | `Packet28 discover` exists. | partial | Add tests against recorded sessions and all/since/limit/json behavior. |
+| Session analytics | `rtk session` | `src/analytics/session_cmd.rs` analyzes adoption across recent sessions. | `Packet28 session` exists. | partial | Add tests for RTK adoption-equivalent metrics and Packet28 session summaries. |
+| Custom config and filters | `~/.config/rtk/config.toml`, `src/filters`, `exclude_commands` | `src/core/config.rs`, `hooks/README.md` document custom filters, exclude patterns, opt-in behavior. | Packet28 has route registry and runtime config, but no documented full TOML custom filter parity. | missing | Implement custom filter/config parity or mark non-goal with rationale. |
+| Telemetry controls | `rtk telemetry enable/status/disable/forget` | `README.md`, `docs/TELEMETRY.md`, `src/core/telemetry.rs` document opt-in anonymous telemetry. | Packet28 is local-first with no telemetry. | non-goal | Keep privacy docs explicit; do not add telemetry unless product direction changes. |
+| Graceful hook degradation | hooks exit 0 on missing binary, bad JSON, old version, rewrite failure | `hooks/README.md` defines exit-code contract and graceful degradation. | Packet28 has setup/doctor and hook handlers. | partial | Add fixture tests for malformed JSON, missing Packet28, daemon unavailable, and no-rewrite paths. |
+
+## ICM Parity Matrix
+
+| ICM capability | ICM command/API/tool | Upstream evidence | Packet28 equivalent | Status | Test or evidence needed |
+|---|---|---|---|---|---|
+| Local SQLite memory | `icm --db`, default store | `crates/icm-store/src/schema.rs` creates durable SQLite tables for memories, memoirs, concepts, feedback, transcripts, pending extractions, hook events, and metadata. | `~/.packet28/packet28.db` via `memory_store.rs` with events, commands, reductions, memories, memory_chunks, concepts, relations, feedback, agent_sessions, mcp_calls, `memories_fts`, and `feedback_fts`. | partial | Add vector-ready fields, transcript/session tables, hook events, metadata migrations, and richer schema tests. Current FTS evidence: `test_memory_store_recall_uses_sqlite_home_db`, `test_feedback_and_graph_cli_use_sqlite`. |
+| Memory store | `icm store --topic --content --importance --keywords --raw` and `icm_memory_store` | `crates/icm-cli/src/main.rs`, `crates/icm-mcp/src/tools.rs`. | `Packet28 memory store <content> --tags`; MCP memory store exists in Packet28 MCP surface. | partial | Add topic, importance, keywords, raw excerpt, source metadata, and validation. |
+| Memory recall | `icm recall <query> --topic --limit --keyword --project --format` | ICM recall supports filters, compact/detail/json output, FTS/vector hybrid in store. | `Packet28 memory recall <query> --limit`; current store uses FTS5 first and falls back to LIKE. | partial | Add BM25 scoring exposure, topic/tag/project filtering, output formats, and vector hybrid recall. Current evidence: `test_memory_store_recall_uses_sqlite_home_db`, `test_mcp_memory_store_recall_uses_sqlite_home_db`. |
+| Memory list | `icm list --topic --all --sort` | CLI list command. | `Packet28 memory list --limit`. | partial | Add topic/all/sort behavior. |
+| Forget memory/topic | `icm forget [id] --topic`, `icm_memory_forget`, `icm_memory_forget_topic` | CLI and MCP tools. | No visible Packet28 memory forget command. | missing | Implement CLI/MCP delete by id/topic or mark non-goal. |
+| Update memory | `icm update <id> --content --importance --keywords`, `icm_memory_update` | CLI and MCP tools. | No visible Packet28 memory update command. | missing | Implement update CLI/MCP and tests. |
+| Memory health/topics/stats | `icm health`, `icm topics`, `icm stats`, MCP stats/topics tools | CLI and MCP tools. | `Packet28 feedback stats`, dashboard store stats; no memory health/topics command. | partial | Add memory topics/stats/health commands and MCP tools. |
+| Decay/prune | `icm decay`, `icm prune --dry-run` | CLI commands. | No visible Packet28 memory decay/prune. | missing | Implement or mark non-goal. |
+| Consolidation | `icm consolidate --topic --keep-originals --summarizer-*`, `icm_memory_consolidate` | CLI and MCP support deterministic or summarizer-backed consolidation. | `Packet28 memory consolidate` is currently a `noop` count report. | partial | Implement real consolidation preserving source metadata or mark summarizer-backed consolidation as non-goal. |
+| Embeddings/vector search | `icm embed`, optional fastembed, `vec_memories` | `crates/icm-store/src/schema.rs`, `fastembed_embedder.rs`. | Packet28 goal says vector-ready schema later; current store has no embedding table. | missing | Add vector-ready schema and optionally local embedding path; keep no API key requirement. |
+| FTS search | `memories_fts`, `feedback_fts`, `concepts_fts` | ICM creates FTS5 virtual tables and triggers. | Packet28 now creates `memories_fts` and `feedback_fts` with triggers, uses FTS5 query first, and falls back to LIKE. Concept/memoir FTS is still missing. | partial | Add concept/memoir FTS and regression tests for migration/backfill behavior. Current evidence: `test_memory_store_recall_uses_sqlite_home_db`, `test_feedback_and_graph_cli_use_sqlite`. |
+| Memoir graph | memoir create/list/show/delete/add/refine/link/search/export/stats | `crates/icm-cli/src/main.rs`, `crates/icm-core/src/memoir*`, `crates/icm-store/src/schema.rs`. | `Packet28 graph create/add-concept/link/inspect` simple concept graph. | partial | Add memoir containers, concept confidence/revision/labels/source ids, search/export/refine/delete/list/stats, and N+1-safe tests. |
+| Learn project graph | `icm learn`, `icm_learn` | CLI and MCP scan project into memoir graph. | Packet28 has `learn` for session error-correction patterns, not ICM project memoir learning. | partial | Decide whether to implement project-to-graph learning or document as non-goal. |
+| Feedback correction loop | `icm feedback record/search/list/delete/stats`, `icm_feedback_*` | CLI and MCP; schema includes topic, context, predicted, corrected, reason, source, applied_count, FTS. | `Packet28 feedback record/search/stats` with subject/correction and FTS5-backed search. | partial | Add richer fields, list/delete/applied counts, topic filters, and broader MCP parity. Current evidence: `test_feedback_and_graph_cli_use_sqlite`, `test_mcp_memory_store_recall_uses_sqlite_home_db`. |
+| Transcript storage/search | `icm transcript ...` | `icm-core/src/transcript*.rs`, schema sessions/messages and transcript stats/search. | Packet28 has agent sessions and command/session analytics, but no ICM-style verbatim transcript CLI. | missing | Add transcript/session/message tables and CLI/MCP search/stats if parity is required. |
+| Wake-up packs | `icm wake-up`, `icm_wake_up` | `icm-core/src/wake_up.rs`, CLI/MCP support project and compact context packs. | `Packet28 wakeup` summarizes local memory, feedback, graph, and stats. | partial | Add project filtering, scoring, deterministic budgeted rendering, and MCP tests. |
+| Hook extraction lifecycle | Claude SessionStart / SessionEnd, pending extraction, hook-log, hook-stats | ICM changelog/schema/CLI mention hook events, pending extractions, hook-log/stats. | Packet28 runtime hooks capture routine activity, but no ICM-style extraction queue documented in current parity. | partial | Add or document extraction lifecycle, queue processing, hook telemetry, and tests. |
+| MCP tool surface | `icm_memory_*`, `icm_memoir_*`, `icm_feedback_*`, `icm_transcript_*`, `icm_wake_up`, `icm_learn`, `icm_embed` | `crates/icm-mcp/src/tools.rs` exposes broad memory/memoir/feedback/transcript/wake-up tools. | Packet28 MCP exposes search/reduce/rewrite/memory/feedback/graph/handoff/doctor tools. | partial | Add missing memory forget/update/health/topics/stats, memoir, transcript, wakeup, learn, and embed-equivalent tools or mark non-goals. |
+| Dashboard/TUI/web | `icm dashboard`, `icm tui`, optional web feature | CLI modules `tui`, `web`; changelog documents TUI and Svelte dashboard. | `Packet28 dashboard` local CLI report. | partial | Add interactive TUI/web parity or document local CLI dashboard as intentional non-goal. |
+| Cloud/import/upgrade flows | import/upgrade/cloud modules | ICM has import, upgrade, and cloud-related CLI modules. | Packet28 is local-first. | non-goal | Keep local-first privacy policy explicit unless product direction changes. |
+
+## Evidence Requirements Before Claiming Full Parity
+
+Packet28 must not claim full RTK + ICM parity until:
+
+1. Every `partial` or `missing` row above is changed to `implemented` or explicitly accepted as `non-goal`.
+2. Each `implemented` row names a concrete test, smoke, or experiment artifact.
+3. Runtime hook claims are proven with generated config plus initialize/tools-list or hook-payload smoke tests.
+4. Reducer claims prove exit-code preservation, raw artifact recovery, compact output, fallback reasons, and critical-error visibility.
+5. Memory claims prove storage, recall, FTS behavior, graph inspection, feedback search, wake-up rendering, and MCP access.
+6. Real-world experiment artifacts under `docs/experiments/` include repeated runs across multiple repositories and workflows.
+7. Release smoke verifies the published install path after CI passes.
