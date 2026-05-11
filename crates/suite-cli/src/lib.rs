@@ -54,6 +54,7 @@ pub mod route_registry;
 mod runtime_integrations;
 mod savings_analytics;
 pub mod task_runtime;
+pub(crate) mod toml_filters;
 
 pub use cli_defs::*;
 pub use cli_runtime::*;

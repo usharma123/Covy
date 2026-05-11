@@ -215,6 +215,21 @@ fn run_plain_command(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let exit_code = output.status.code().unwrap_or(1);
+    if let Some(filter) =
+        crate::toml_filters::apply_configured_filter(root, &command_text, &stdout, &stderr)?
+    {
+        return emit_filtered_run(
+            root,
+            cwd,
+            &command_text,
+            exit_code,
+            &stdout,
+            &stderr,
+            filter,
+            json,
+            pretty,
+        );
+    }
     let raw_est_tokens = estimate_tokens(&(stdout.clone() + &stderr));
     let raw_artifact_handle =
         write_run_raw_artifact(root, &command_text, exit_code, &stdout, &stderr)?;
@@ -257,6 +272,99 @@ fn run_plain_command(
     } else {
         print!("{stdout}");
         eprint!("{stderr}");
+    }
+    Ok(exit_code)
+}
+
+fn emit_filtered_run(
+    root: &std::path::Path,
+    cwd: &std::path::Path,
+    command_text: &str,
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+    filter: crate::toml_filters::AppliedTomlFilter,
+    json: bool,
+    pretty: bool,
+) -> Result<i32> {
+    let raw_est_tokens = estimate_tokens(&(stdout.to_string() + stderr));
+    let reduced_est_tokens = estimate_tokens(&filter.output);
+    let saved = raw_est_tokens.saturating_sub(reduced_est_tokens);
+    let savings_pct = if raw_est_tokens == 0 {
+        0.0
+    } else {
+        (saved as f64 / raw_est_tokens as f64) * 100.0
+    };
+    let raw_artifact_handle =
+        write_run_raw_artifact(root, command_text, exit_code, stdout, stderr)?;
+    let payload = json!({
+        "command": {
+            "original": command_text,
+            "cwd": cwd.display().to_string(),
+            "exit_code": exit_code,
+            "timestamp_unix_ms": timestamp_unix_ms(),
+        },
+        "reduction": {
+            "family": "custom_filter",
+            "canonical_kind": filter.name,
+            "packet_type": "command.output.filter",
+            "operation_kind": "generic",
+            "summary": format!("custom TOML filter applied from {}", filter.source),
+            "compact_preview": filter.output,
+            "paths": [],
+            "regions": [],
+            "symbols": [],
+            "metadata": {
+                "source": filter.source,
+                "filter_stderr": filter.filter_stderr,
+            }
+        },
+        "raw_est_tokens": raw_est_tokens,
+        "reduced_est_tokens": reduced_est_tokens,
+        "savings_percent": savings_pct,
+        "fallback_reason": null,
+        "raw_artifact": {
+            "available": true,
+            "handle": raw_artifact_handle,
+        },
+        "provenance": {
+            "original_command": command_text,
+            "cwd": cwd.display().to_string(),
+            "exit_code": exit_code,
+            "timestamp_unix_ms": timestamp_unix_ms(),
+        }
+    });
+    record_run_savings(
+        root,
+        &RunSavingsRecord {
+            command: command_text.to_string(),
+            cwd: cwd.display().to_string(),
+            family: "custom_filter".to_string(),
+            canonical_kind: payload["reduction"]["canonical_kind"]
+                .as_str()
+                .unwrap_or("toml_filter")
+                .to_string(),
+            exit_code,
+            raw_est_tokens,
+            reduced_est_tokens,
+            savings_percent: savings_pct,
+            fallback_reason: None,
+            timestamp_unix_ms: timestamp_unix_ms(),
+        },
+    )?;
+    if json {
+        crate::cmd_common::emit_json(&payload, pretty)?;
+    } else {
+        println!(
+            "{}",
+            payload["reduction"]["compact_preview"]
+                .as_str()
+                .unwrap_or("")
+        );
+        println!(
+            "tokens: raw={} reduced={} saved={} ({:.1}%)",
+            raw_est_tokens, reduced_est_tokens, saved, savings_pct
+        );
     }
     Ok(exit_code)
 }
