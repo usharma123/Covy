@@ -105,14 +105,14 @@ pub struct TranscriptImportArgs {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct TranscriptExportFile {
+pub(crate) struct TranscriptExportFile {
     format: String,
     version: u32,
     messages: Vec<TranscriptImportMessage>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct TranscriptImportMessage {
+pub(crate) struct TranscriptImportMessage {
     session_key: String,
     agent: Option<String>,
     role: String,
@@ -121,7 +121,7 @@ struct TranscriptImportMessage {
 }
 
 #[derive(Debug, Serialize)]
-struct TranscriptImportReport {
+pub(crate) struct TranscriptImportReport {
     imported_count: usize,
 }
 
@@ -208,7 +208,10 @@ pub fn run(args: TranscriptArgs) -> Result<i32> {
     Ok(0)
 }
 
-fn export_transcripts(session: Option<&str>, limit: usize) -> Result<TranscriptExportFile> {
+pub(crate) fn export_transcripts(
+    session: Option<&str>,
+    limit: usize,
+) -> Result<TranscriptExportFile> {
     let mut messages = Vec::new();
     if let Some(session) = session {
         messages.extend(show_transcript_session(session, limit)?);
@@ -233,8 +236,12 @@ fn export_transcripts(session: Option<&str>, limit: usize) -> Result<TranscriptE
     })
 }
 
-fn import_transcripts(path: &str) -> Result<TranscriptImportReport> {
+pub(crate) fn import_transcripts(path: &str) -> Result<TranscriptImportReport> {
     let content = fs::read_to_string(path)?;
+    import_transcripts_from_str(&content)
+}
+
+pub(crate) fn import_transcripts_from_str(content: &str) -> Result<TranscriptImportReport> {
     let export: TranscriptExportFile = serde_json::from_str(&content)?;
     let mut imported_count = 0usize;
     for message in export.messages {

@@ -58,6 +58,7 @@ use crate::cmd_mcp::support::{
 use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
+use crate::cmd_transcript::{export_transcripts, import_transcripts_from_str};
 use crate::cmd_wakeup::build_wakeup_report;
 use crate::memory_store::{
     add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
@@ -1061,6 +1062,28 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.transcript_export",
+                    "description": "Export local transcript messages as Packet28 transcript JSON.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "session": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.transcript_import",
+                    "description": "Import Packet28 transcript JSON into the local transcript store.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["content"],
+                        "properties": {
+                            "content": {"type":"string"}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.graph_add_concept",
                     "description": "Add or update a local Packet28 graph concept.",
                     "inputSchema": {
@@ -1549,6 +1572,17 @@ fn handle_tool_call(
             )?)?
         }
         "packet28.transcript_stats" => serde_json::to_value(transcript_stats()?)?,
+        "packet28.transcript_export" => {
+            let request: TranscriptExportToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(export_transcripts(
+                request.session.as_deref(),
+                request.limit.unwrap_or(10_000),
+            )?)?
+        }
+        "packet28.transcript_import" => {
+            let request: TranscriptImportToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(import_transcripts_from_str(&request.content)?)?
+        }
         "packet28.graph_add_concept" => {
             let request: GraphConceptToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(add_concept(&request.name, request.description.as_deref())?)?
@@ -1786,6 +1820,17 @@ struct TranscriptShowToolArgs {
 struct TranscriptSearchToolArgs {
     query: String,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptExportToolArgs {
+    session: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranscriptImportToolArgs {
+    content: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2133,6 +2178,21 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!("Packet28 returned {count} transcript message(s).")
         }
         "packet28.transcript_stats" => "Packet28 transcript statistics.".to_string(),
+        "packet28.transcript_export" => {
+            let count = payload
+                .get("messages")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            format!("Packet28 exported {count} transcript message(s).")
+        }
+        "packet28.transcript_import" => {
+            let count = payload
+                .get("imported_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 imported {count} transcript message(s).")
+        }
         "packet28.graph_add_concept" | "packet28.graph_refine" => {
             let name = payload
                 .get("name")

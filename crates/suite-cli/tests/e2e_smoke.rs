@@ -1415,6 +1415,44 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":64,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.transcript_export",
+                "arguments":{"session":"mcp-session"}
+            }
+        }),
+    );
+    let transcript_export = read_mcp_message_for_id(&mut stdout, 64);
+    assert_eq!(
+        transcript_export["result"]["structuredContent"]["format"].as_str(),
+        Some("packet28.transcript.export")
+    );
+    let exported_transcript =
+        serde_json::to_string(&transcript_export["result"]["structuredContent"]).unwrap();
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":65,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.transcript_import",
+                "arguments":{"content": exported_transcript}
+            }
+        }),
+    );
+    let transcript_import = read_mcp_message_for_id(&mut stdout, 65);
+    assert_eq!(
+        transcript_import["result"]["structuredContent"]["imported_count"].as_u64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":63,
             "method":"tools/call",
             "params":{
