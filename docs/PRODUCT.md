@@ -37,6 +37,7 @@ Repo-local rewrite exclusions can be configured in `covy.toml`:
 ```toml
 [packet28.rewrite]
 exclude_commands = ["curl", "playwright"]
+transparent_prefixes = ["poetry run", "direnv exec ."]
 ```
 
 Inspect savings and missed savings:

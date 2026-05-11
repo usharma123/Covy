@@ -34,6 +34,7 @@ pub struct RouteDecision {
     pub native_tool: Option<NativeToolPlan>,
     /// Original argv before glob expansion, when expansion was applied.
     pub original_argv: Option<Vec<String>>,
+    pub wrapper_prefix: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,7 @@ fn decide_command_route_inner(
             reducer_spec: None,
             native_tool: None,
             original_argv: None,
+            wrapper_prefix: Vec::new(),
         };
     }
 
@@ -98,6 +100,13 @@ fn decide_command_route_inner(
     }
     if policy_excludes_command(trimmed, &argv, policy_root) {
         return raw_passthrough("config_excluded");
+    }
+    let wrapper_prefix = configured_wrapper_prefix(&argv, policy_root).unwrap_or_default();
+    if !wrapper_prefix.is_empty() {
+        argv = argv[wrapper_prefix.len()..].to_vec();
+        if argv.is_empty() {
+            return raw_passthrough("empty_command");
+        }
     }
 
     let mut original_argv = None;
@@ -124,6 +133,7 @@ fn decide_command_route_inner(
                 reducer_spec: None,
                 native_tool: Some(native_tool),
                 original_argv,
+                wrapper_prefix,
             };
         }
     }
@@ -148,6 +158,7 @@ fn decide_command_route_inner(
             reducer_spec: Some(spec),
             native_tool: None,
             original_argv,
+            wrapper_prefix,
         };
     }
 
@@ -160,6 +171,7 @@ fn decide_command_route_inner(
             reducer_spec: None,
             native_tool: None,
             original_argv,
+            wrapper_prefix,
         };
     }
 
@@ -256,10 +268,10 @@ pub fn build_route_rewrite(
     cwd: &str,
     decision: &RouteDecision,
 ) -> Option<String> {
-    match decision.kind {
+    let rewritten = match decision.kind {
         RouteKind::ReducerRewrite => {
             let spec = decision.reducer_spec.as_ref()?;
-            Some(build_reducer_rewrite(
+            build_reducer_rewrite(
                 root,
                 task_id,
                 session_id,
@@ -267,17 +279,16 @@ pub fn build_route_rewrite(
                 spec,
                 &decision.argv,
                 &decision.env_assignments,
-            ))
+            )
         }
         RouteKind::NativeTool => {
             let native_tool = decision.native_tool.as_ref()?;
-            Some(build_native_tool_rewrite(root, task_id, cwd, native_tool))
+            build_native_tool_rewrite(root, task_id, cwd, native_tool)
         }
-        RouteKind::ProxyPassthrough => {
-            Some(build_proxy_rewrite(root, task_id, cwd, &decision.argv))
-        }
-        RouteKind::RawPassthrough => None,
-    }
+        RouteKind::ProxyPassthrough => build_proxy_rewrite(root, task_id, cwd, &decision.argv),
+        RouteKind::RawPassthrough => return None,
+    };
+    Some(apply_wrapper_prefix(&decision.wrapper_prefix, rewritten))
 }
 
 fn raw_passthrough(reason: &str) -> RouteDecision {
@@ -289,6 +300,7 @@ fn raw_passthrough(reason: &str) -> RouteDecision {
         reducer_spec: None,
         native_tool: None,
         original_argv: None,
+        wrapper_prefix: Vec::new(),
     }
 }
 
@@ -363,6 +375,32 @@ fn load_policy_excludes(root: &Path) -> Vec<String> {
     Vec::new()
 }
 
+fn configured_wrapper_prefix(argv: &[String], root: Option<&Path>) -> Option<Vec<String>> {
+    let root = root?;
+    load_policy_prefixes(root)
+        .into_iter()
+        .filter_map(|prefix| shell_words::split(&prefix).ok())
+        .filter(|prefix| !prefix.is_empty() && argv.starts_with(prefix))
+        .max_by_key(Vec::len)
+}
+
+fn load_policy_prefixes(root: &Path) -> Vec<String> {
+    for rel in ["covy.toml", "packet28.toml", ".packet28.toml"] {
+        let path = root.join(rel);
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = toml::from_str::<toml::Value>(&content) else {
+            continue;
+        };
+        let prefixes = extract_policy_prefixes(&value);
+        if !prefixes.is_empty() {
+            return prefixes;
+        }
+    }
+    Vec::new()
+}
+
 fn extract_policy_excludes(value: &toml::Value) -> Vec<String> {
     let paths: &[&[&str]] = &[
         &["packet28", "rewrite", "exclude_commands"],
@@ -387,12 +425,44 @@ fn extract_policy_excludes(value: &toml::Value) -> Vec<String> {
     Vec::new()
 }
 
+fn extract_policy_prefixes(value: &toml::Value) -> Vec<String> {
+    let paths: &[&[&str]] = &[
+        &["packet28", "rewrite", "transparent_prefixes"],
+        &["rewrite", "transparent_prefixes"],
+        &["hooks", "transparent_prefixes"],
+        &["packet28", "hooks", "transparent_prefixes"],
+    ];
+    for path in paths {
+        if let Some(values) = toml_array_at_path(value, path) {
+            let prefixes = values
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            if !prefixes.is_empty() {
+                return prefixes;
+            }
+        }
+    }
+    Vec::new()
+}
+
 fn toml_array_at_path<'a>(value: &'a toml::Value, path: &[&str]) -> Option<&'a Vec<toml::Value>> {
     let mut current = value;
     for key in &path[..path.len().saturating_sub(1)] {
         current = current.get(*key)?;
     }
     current.get(*path.last()?)?.as_array()
+}
+
+fn apply_wrapper_prefix(prefix: &[String], rewritten: String) -> String {
+    if prefix.is_empty() {
+        rewritten
+    } else {
+        format!("{} {}", shell_join(prefix), rewritten)
+    }
 }
 
 fn normalize_git_global_options_for_classification(argv: &[String]) -> Option<Vec<String>> {
@@ -1164,6 +1234,27 @@ mod tests {
         let decision = decide_command_route_with_cwd_and_root("cargo test", tmp.path(), tmp.path());
         assert_eq!(decision.kind, RouteKind::RawPassthrough);
         assert_eq!(decision.reason.as_deref(), Some("config_excluded"));
+    }
+
+    #[test]
+    fn repo_config_transparent_prefix_routes_wrapped_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("covy.toml"),
+            "[packet28.rewrite]\ntransparent_prefixes = [\"poetry run\"]\n",
+        )
+        .unwrap();
+        let decision =
+            decide_command_route_with_cwd_and_root("poetry run pytest -q", tmp.path(), tmp.path());
+        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
+        assert_eq!(
+            decision.wrapper_prefix,
+            vec!["poetry".to_string(), "run".to_string()]
+        );
+        let rewritten =
+            build_route_rewrite(tmp.path(), "task-prefix", None, ".", &decision).unwrap();
+        assert!(rewritten.starts_with("poetry run "));
+        assert!(rewritten.contains("hook reducer-runner"));
     }
 
     #[test]

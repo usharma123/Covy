@@ -1314,6 +1314,7 @@ fn build_pretool_rewrite(
                 reducer_spec: Some(spec),
                 native_tool: None,
                 original_argv: decision.original_argv,
+                wrapper_prefix: decision.wrapper_prefix,
             };
         }
     }
