@@ -4,6 +4,7 @@ pub fn classify_fs_command(command: &str, argv: &[String]) -> Option<CommandRedu
     let program = argv.first()?.as_str();
     let (canonical_kind, operation_kind) = match program {
         "ls" if classify_ls(argv) => ("fs_ls", suite_packet_core::ToolOperationKind::Read),
+        "tree" if classify_tree(argv) => ("fs_tree", suite_packet_core::ToolOperationKind::Search),
         "find" if classify_find(argv) => ("fs_find", suite_packet_core::ToolOperationKind::Search),
         "cat" if classify_cat(argv) => ("fs_cat", suite_packet_core::ToolOperationKind::Read),
         "head" if classify_head_tail(argv, false) => {
@@ -18,12 +19,15 @@ pub fn classify_fs_command(command: &str, argv: &[String]) -> Option<CommandRedu
         "rg" if classify_grep(argv) => ("fs_rg", suite_packet_core::ToolOperationKind::Search),
         _ => return None,
     };
-    let paths = argv
-        .iter()
-        .skip(1)
-        .filter(|arg| !arg.starts_with('-') && looks_like_path(arg))
-        .cloned()
-        .collect::<Vec<_>>();
+    let paths = if canonical_kind == "fs_tree" {
+        extract_tree_paths(argv)
+    } else {
+        argv.iter()
+            .skip(1)
+            .filter(|arg| !arg.starts_with('-') && looks_like_path(arg))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
     let equivalence_key = match canonical_kind {
         "fs_cat" => paths.first().map(|path| format!("read:{path}")),
         "fs_head" => paths
@@ -34,6 +38,10 @@ pub fn classify_fs_command(command: &str, argv: &[String]) -> Option<CommandRedu
         }),
         "fs_find" => Some(format!(
             "glob:{}",
+            argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" ")
+        )),
+        "fs_tree" => Some(format!(
+            "tree:{}",
             argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" ")
         )),
         _ => None,
@@ -80,6 +88,20 @@ pub fn reduce_fs_command(
                 .cloned()
                 .unwrap_or_else(|| ".".to_string());
             format!("find matched {lines} path(s) under {target}")
+        }
+        "fs_tree" => {
+            let target = spec
+                .paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| ".".to_string());
+            let counts = parse_tree_counts(stdout);
+            match counts {
+                Some((dirs, files)) => {
+                    format!("tree listed {dirs} dir(s), {files} file(s) under {target}")
+                }
+                None => format!("tree listed {lines} line(s) under {target}"),
+            }
         }
         "fs_cat" | "fs_head" | "fs_tail" | "fs_sed" => {
             let target = spec
@@ -203,6 +225,32 @@ fn classify_ls(argv: &[String]) -> bool {
     !contains_any(argv, &["-R", "--recursive", "--dired"])
 }
 
+fn classify_tree(argv: &[String]) -> bool {
+    !contains_any(
+        argv,
+        &["-J", "--json", "-X", "--xml", "-H", "--du", "--fromfile"],
+    )
+}
+
+fn extract_tree_paths(argv: &[String]) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut skip_next = false;
+    for arg in argv.iter().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        match arg.as_str() {
+            "-L" | "-P" | "-I" | "-o" => {
+                skip_next = true;
+            }
+            value if value.starts_with("--filelimit=") || value.starts_with("-") => {}
+            value => paths.push(value.to_string()),
+        }
+    }
+    paths
+}
+
 fn classify_grep(argv: &[String]) -> bool {
     argv.len() >= 2 && !contains_any(argv, &["--binary-files", "-z", "--null-data"])
 }
@@ -289,6 +337,28 @@ fn nonempty_lines(value: &str) -> Vec<&str> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect()
+}
+
+fn parse_tree_counts(stdout: &str) -> Option<(usize, usize)> {
+    let line = stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.contains("director") && line.contains("file"))?;
+    let mut dirs = None;
+    let mut files = None;
+    let parts = line.split(',').map(str::trim).collect::<Vec<_>>();
+    for part in parts {
+        let mut words = part.split_whitespace();
+        let count = words.next()?.parse::<usize>().ok()?;
+        let label = words.next().unwrap_or_default();
+        if label.starts_with("director") {
+            dirs = Some(count);
+        } else if label.starts_with("file") {
+            files = Some(count);
+        }
+    }
+    Some((dirs?, files?))
 }
 
 fn parse_head_count(argv: &[String]) -> Option<usize> {
@@ -381,5 +451,25 @@ mod tests {
         let reduction = reduce_fs_command(&spec, "a\nb\nc\n", "", 0);
         assert_eq!(reduction.summary, "head README.md lines 1-3: a");
         assert_eq!(reduction.regions, vec!["README.md:1-3".to_string()]);
+    }
+
+    #[test]
+    fn reduce_tree_summarizes_footer_counts() {
+        let argv = vec!["tree", "-L", "2", "src"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_fs_command("tree -L 2 src", &argv).unwrap();
+        let reduction = reduce_fs_command(
+            &spec,
+            "src\n├── lib.rs\n└── bin\n    └── cli.rs\n\n1 directory, 2 files\n",
+            "",
+            0,
+        );
+        assert_eq!(
+            reduction.summary,
+            "tree listed 1 dir(s), 2 file(s) under src"
+        );
+        assert_eq!(reduction.canonical_kind, "fs_tree");
     }
 }

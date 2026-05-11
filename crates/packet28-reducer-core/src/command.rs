@@ -31,7 +31,7 @@ pub fn classify_command(command: &str) -> Option<CommandReducerSpec> {
 pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandReducerSpec> {
     match argv.first()?.as_str() {
         "git" => classify_git_command(command, argv),
-        "ls" | "find" | "cat" | "head" | "tail" | "sed" | "diff" | "grep" | "rg" => {
+        "ls" | "tree" | "find" | "cat" | "head" | "tail" | "sed" | "diff" | "grep" | "rg" => {
             classify_fs_command(command, argv)
         }
         "cargo" => classify_rust_command(command, argv),

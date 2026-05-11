@@ -586,6 +586,48 @@ fn write_executable_script(path: &Path, content: &str) {
 
 #[test]
 #[cfg(unix)]
+fn test_run_reduces_tree_command() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("src/bin")).unwrap();
+    fs::write(root.path().join("src/lib.rs"), "pub fn ok() {}\n").unwrap();
+    fs::write(root.path().join("src/bin/cli.rs"), "fn main() {}\n").unwrap();
+
+    let bin_dir = TempDir::new().unwrap();
+    write_executable_script(
+        &bin_dir.path().join("tree"),
+        "#!/bin/sh\nprintf 'src\\n├── lib.rs\\n└── bin\\n    └── cli.rs\\n\\n1 directory, 2 files\\n'\n",
+    );
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "tree",
+            "-L",
+            "2",
+            "src",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"fs\""))
+        .stdout(predicate::str::contains("\"canonical_kind\":\"fs_tree\""))
+        .stdout(predicate::str::contains(
+            "tree listed 1 dir(s), 2 file(s) under src",
+        ))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+}
+
+#[test]
+#[cfg(unix)]
 fn test_run_reduces_npm_test_and_pytest() {
     let root = TempDir::new().unwrap();
     let bin_dir = TempDir::new().unwrap();
