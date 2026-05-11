@@ -192,6 +192,41 @@ fn test_run_reduces_git_status() {
             "timestamp_unix_ms,family,raw_est_tokens",
         ))
         .stdout(predicate::str::contains("git status --short"));
+
+    for format in ["daily", "weekly", "monthly"] {
+        suite_cmd()
+            .current_dir(root.path())
+            .args([
+                "gain",
+                "--root",
+                root.path().to_str().unwrap(),
+                "--format",
+                format,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "period,invocation_count,raw_est_tokens",
+            ))
+            .stdout(predicate::str::contains(",1,"));
+    }
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "quota",
+            "--quota-tokens",
+            "1000",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("quota_tokens=1000"))
+        .stdout(predicate::str::contains("quota_used_pct="))
+        .stdout(predicate::str::contains("quota_avoided_pct="));
 }
 
 #[test]

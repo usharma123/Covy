@@ -218,9 +218,12 @@ pub struct AnalyticsArgs {
     pub task_id: Option<String>,
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
-    /// Output format for analytics commands (text, json, csv, history, failures)
+    /// Output format for analytics commands (text, json, csv, history, failures, daily, weekly, monthly, quota)
     #[arg(long, default_value = "text")]
     pub format: String,
+    /// Token budget used by gain --format quota
+    #[arg(long)]
+    pub quota_tokens: Option<u64>,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -268,6 +271,16 @@ struct GainSummary {
     saved_est_tokens: u64,
     savings_pct: f64,
     by_route: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct GainBucket {
+    period: String,
+    invocation_count: usize,
+    raw_est_tokens: u64,
+    reduced_est_tokens: u64,
+    saved_est_tokens: u64,
+    savings_pct: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -802,6 +815,14 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         print_gain_history(&run_savings);
     } else if format == "failures" {
         print_gain_failures(&run_savings);
+    } else if format == "daily" {
+        print_gain_buckets(&run_savings, GainBucketKind::Daily);
+    } else if format == "weekly" {
+        print_gain_buckets(&run_savings, GainBucketKind::Weekly);
+    } else if format == "monthly" {
+        print_gain_buckets(&run_savings, GainBucketKind::Monthly);
+    } else if format == "quota" {
+        print_gain_quota(&summary, args.quota_tokens);
     } else {
         println!("tasks={}", summary.task_count);
         println!("invocations={}", summary.invocation_count);
@@ -814,6 +835,65 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GainBucketKind {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+fn print_gain_buckets(records: &[RunSavingsRecord], kind: GainBucketKind) {
+    let mut buckets = BTreeMap::<String, GainBucket>::new();
+    for record in records {
+        let label = gain_bucket_label(record.timestamp_unix_ms, kind);
+        let bucket = buckets.entry(label.clone()).or_insert_with(|| GainBucket {
+            period: label,
+            ..GainBucket::default()
+        });
+        bucket.invocation_count += 1;
+        bucket.raw_est_tokens += record.raw_est_tokens;
+        bucket.reduced_est_tokens += record.reduced_est_tokens;
+    }
+    println!(
+        "period,invocation_count,raw_est_tokens,reduced_est_tokens,saved_est_tokens,savings_pct"
+    );
+    for bucket in buckets.values_mut() {
+        bucket.saved_est_tokens = bucket
+            .raw_est_tokens
+            .saturating_sub(bucket.reduced_est_tokens);
+        bucket.savings_pct = pct_saved(bucket.raw_est_tokens, bucket.reduced_est_tokens);
+        println!(
+            "{},{},{},{},{},{:.1}",
+            csv_cell(&bucket.period),
+            bucket.invocation_count,
+            bucket.raw_est_tokens,
+            bucket.reduced_est_tokens,
+            bucket.saved_est_tokens,
+            bucket.savings_pct
+        );
+    }
+}
+
+fn print_gain_quota(summary: &GainSummary, quota_tokens: Option<u64>) {
+    let quota = quota_tokens.unwrap_or(200_000);
+    let used_pct = if quota == 0 {
+        0.0
+    } else {
+        (summary.reduced_est_tokens as f64 / quota as f64) * 100.0
+    };
+    let avoided_pct = if quota == 0 {
+        0.0
+    } else {
+        (summary.saved_est_tokens as f64 / quota as f64) * 100.0
+    };
+    println!("quota_tokens={quota}");
+    println!("raw_est_tokens={}", summary.raw_est_tokens);
+    println!("reduced_est_tokens={}", summary.reduced_est_tokens);
+    println!("saved_est_tokens={}", summary.saved_est_tokens);
+    println!("quota_used_pct={used_pct:.1}");
+    println!("quota_avoided_pct={avoided_pct:.1}");
 }
 
 fn print_gain_history(records: &[RunSavingsRecord]) {
@@ -847,6 +927,41 @@ fn print_gain_failures(records: &[RunSavingsRecord]) {
             csv_cell(&record.command)
         );
     }
+}
+
+fn gain_bucket_label(timestamp_unix_ms: u128, kind: GainBucketKind) -> String {
+    let day = (timestamp_unix_ms / 86_400_000) as i64;
+    match kind {
+        GainBucketKind::Daily => format_ymd(day),
+        GainBucketKind::Weekly => {
+            let weekday_monday_zero = (day + 3).rem_euclid(7);
+            let week_start = day - weekday_monday_zero;
+            format!("week_of_{}", format_ymd(week_start))
+        }
+        GainBucketKind::Monthly => {
+            let (year, month, _) = civil_from_unix_day(day);
+            format!("{year:04}-{month:02}")
+        }
+    }
+}
+
+fn format_ymd(unix_day: i64) -> String {
+    let (year, month, day) = civil_from_unix_day(unix_day);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn civil_from_unix_day(unix_day: i64) -> (i32, u32, u32) {
+    let z = unix_day + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u32, day as u32)
 }
 
 fn print_gain_csv(summary: &GainSummary) {
