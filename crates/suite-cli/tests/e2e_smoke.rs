@@ -263,6 +263,62 @@ fn test_run_reduces_file_and_search_commands() {
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 
+#[test]
+#[cfg(unix)]
+fn test_run_reduces_docker_logs_and_gh_pr_checks() {
+    let root = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    write_executable_script(
+        &bin_dir.path().join("docker"),
+        "#!/bin/sh\nprintf 'service started\\nservice ready\\n'\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("gh"),
+        "#!/bin/sh\nprintf 'build\\tpass\\t12s\\ntest\\tfail\\t8s\\n'\nexit 1\n",
+    );
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "docker",
+            "logs",
+            "demo",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"infra\""))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "gh",
+            "pr",
+            "checks",
+            "1",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("\"family\":\"github\""))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"))
+        .stdout(predicate::str::contains("\"failed\":true"));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
