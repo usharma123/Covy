@@ -205,7 +205,7 @@ fn default_sessions_dir() -> PathBuf {
     PathBuf::from("/tmp/.claude/projects")
 }
 
-fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+pub(crate) fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     if !dir.is_dir() {
         return Ok(files);
@@ -247,7 +247,7 @@ fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn extract_bash_commands(path: &Path) -> Result<Vec<(String, u64)>> {
+pub(crate) fn extract_bash_commands(path: &Path) -> Result<Vec<(String, u64)>> {
     let mut commands = Vec::new();
     let content = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
 
