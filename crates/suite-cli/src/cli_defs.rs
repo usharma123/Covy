@@ -1,10 +1,10 @@
 use clap::{Args, Parser, Subcommand};
 
 use crate::{
-    cmd_agent_prompt, cmd_build, cmd_compact, cmd_context, cmd_cover, cmd_daemon, cmd_diff,
-    cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook, cmd_impact, cmd_learn,
-    cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet, cmd_proxy, cmd_run,
-    cmd_setup, cmd_shard, cmd_shell, cmd_stack,
+    cmd_agent_prompt, cmd_build, cmd_compact, cmd_context, cmd_cover, cmd_daemon, cmd_dashboard,
+    cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook, cmd_impact,
+    cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet, cmd_proxy,
+    cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack,
 };
 
 #[derive(Parser)]
@@ -69,6 +69,8 @@ pub enum Commands {
     Feedback(cmd_feedback::FeedbackArgs),
     /// Local concept graph commands
     Graph(cmd_graph::GraphArgs),
+    /// Show local Packet28 savings, memory, feedback, graph, and integration health
+    Dashboard(cmd_dashboard::DashboardArgs),
     /// Emit repo-local agent instruction fragments that describe how to use Packet28
     AgentPrompt(cmd_agent_prompt::AgentPromptArgs),
     /// Run Packet28 as an MCP stdio server

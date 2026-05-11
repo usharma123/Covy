@@ -499,6 +499,65 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .stdout(predicate::str::contains("Reducers"));
 }
 
+#[test]
+fn test_dashboard_shows_local_product_metrics() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root.path())
+        .status()
+        .unwrap();
+    fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "git",
+            "status",
+            "--short",
+        ])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "store", "dashboard memory"])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["feedback", "record", "dashboard", "shows feedback"])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "link", "Dashboard", "Packet28"])
+        .assert()
+        .success();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "dashboard",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"commands_reduced\":1"))
+        .stdout(predicate::str::contains("\"memory_count\":1"))
+        .stdout(predicate::str::contains("\"feedback_corrections\":1"))
+        .stdout(predicate::str::contains("\"graph_concepts\""))
+        .stdout(predicate::str::contains("\"windsurf_doctor_status\""));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();

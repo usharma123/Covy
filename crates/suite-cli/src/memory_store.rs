@@ -42,6 +42,15 @@ pub(crate) struct GraphInspect {
     pub(crate) relations: Vec<GraphRelation>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct LocalStoreStats {
+    pub(crate) memory_count: i64,
+    pub(crate) feedback_count: i64,
+    pub(crate) concept_count: i64,
+    pub(crate) relation_count: i64,
+    pub(crate) mcp_call_count: i64,
+}
+
 pub(crate) fn store_memory(content: &str, tags: Option<&str>) -> Result<MemoryRecord> {
     let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
@@ -196,6 +205,23 @@ pub(crate) fn inspect_graph(limit: usize) -> Result<GraphInspect> {
         concepts,
         relations,
     })
+}
+
+pub(crate) fn local_store_stats() -> Result<LocalStoreStats> {
+    let conn = open_memory_db()?;
+    Ok(LocalStoreStats {
+        memory_count: table_count(&conn, "memories")?,
+        feedback_count: table_count(&conn, "feedback")?,
+        concept_count: table_count(&conn, "concepts")?,
+        relation_count: table_count(&conn, "relations")?,
+        mcp_call_count: table_count(&conn, "mcp_calls")?,
+    })
+}
+
+fn table_count(conn: &Connection, table: &str) -> Result<i64> {
+    let sql = format!("SELECT COUNT(*) FROM {table}");
+    conn.query_row(&sql, [], |row| row.get(0))
+        .map_err(Into::into)
 }
 
 fn read_memory_rows<P: rusqlite::Params>(
