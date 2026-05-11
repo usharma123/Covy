@@ -605,7 +605,7 @@ fn test_run_reduces_tree_command() {
 
     suite_cmd()
         .current_dir(root.path())
-        .env("PATH", path_env)
+        .env("PATH", &path_env)
         .args([
             "run",
             "--root",
@@ -663,7 +663,7 @@ fn test_run_reduces_npm_test_and_pytest() {
 
     suite_cmd()
         .current_dir(root.path())
-        .env("PATH", path_env)
+        .env("PATH", &path_env)
         .args([
             "run",
             "--root",
@@ -729,6 +729,10 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
         &bin_dir.path().join("gh"),
         "#!/bin/sh\nprintf 'build\\tpass\\t12s\\ntest\\tfail\\t8s\\n'\nexit 1\n",
     );
+    write_executable_script(
+        &bin_dir.path().join("glab"),
+        "#!/bin/sh\nprintf '42\\tFix reducer\\tmain\\topened\\n43\\tUpdate docs\\tmain\\topened\\n'\n",
+    );
     let path_env = format!(
         "{}:{}",
         bin_dir.path().display(),
@@ -754,7 +758,7 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
 
     suite_cmd()
         .current_dir(root.path())
-        .env("PATH", path_env)
+        .env("PATH", &path_env)
         .args([
             "run",
             "--root",
@@ -770,6 +774,26 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
         .stdout(predicate::str::contains("\"family\":\"github\""))
         .stdout(predicate::str::contains("\"fallback_reason\":null"))
         .stdout(predicate::str::contains("\"failed\":true"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "glab",
+            "mr",
+            "list",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"github\""))
+        .stdout(predicate::str::contains(
+            "\"canonical_kind\":\"glab_mr_list\"",
+        ))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 
 #[test]

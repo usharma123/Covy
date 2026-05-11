@@ -2,7 +2,8 @@ use crate::types::{CommandReducerSpec, CommandReduction};
 use serde_json::Value;
 
 pub fn classify_github_command(command: &str, argv: &[String]) -> Option<CommandReducerSpec> {
-    if argv.first()?.as_str() != "gh" {
+    let program = argv.first()?.as_str();
+    if !matches!(program, "gh" | "glab") {
         return None;
     }
     if contains_any(
@@ -21,16 +22,19 @@ pub fn classify_github_command(command: &str, argv: &[String]) -> Option<Command
     }
     let group = argv.get(1)?.as_str();
     let action = argv.get(2)?.as_str();
-    let canonical_kind = match (group, action) {
-        ("pr", "list") => "gh_pr_list",
-        ("pr", "view") => "gh_pr_view",
-        ("pr", "diff") => "gh_pr_diff",
-        ("pr", "checks") => "gh_pr_checks",
-        ("issue", "list") => "gh_issue_list",
-        ("issue", "view") => "gh_issue_view",
-        ("run", "list") => "gh_run_list",
-        ("run", "view") => "gh_run_view",
-        ("api", _) if argv.get(1).is_some_and(|value| value == "api") => "gh_api",
+    let canonical_kind = match (program, group, action) {
+        ("gh", "pr", "list") => "gh_pr_list",
+        ("gh", "pr", "view") => "gh_pr_view",
+        ("gh", "pr", "diff") => "gh_pr_diff",
+        ("gh", "pr", "checks") => "gh_pr_checks",
+        ("gh", "issue", "list") => "gh_issue_list",
+        ("gh", "issue", "view") => "gh_issue_view",
+        ("gh", "run", "list") => "gh_run_list",
+        ("gh", "run", "view") => "gh_run_view",
+        ("gh", "api", _) if argv.get(1).is_some_and(|value| value == "api") => "gh_api",
+        ("glab", "mr", "list") => "glab_mr_list",
+        ("glab", "mr", "view") => "glab_mr_view",
+        ("glab", "mr", "diff") => "glab_mr_diff",
         _ => return None,
     };
     Some(CommandReducerSpec {
@@ -77,6 +81,12 @@ pub fn reduce_github_command(
             "gh_run_list" => summarize_list_entries("gh run list", &lines, "run"),
             "gh_run_view" => summarize_run_view(&lines),
             "gh_api" => summarize_api(stdout),
+            "glab_mr_list" => summarize_list_entries("glab mr list", &lines, "MR"),
+            "glab_mr_view" => lines
+                .first()
+                .map(|line| format!("glab mr view: {line}"))
+                .unwrap_or_else(|| "glab mr view completed".to_string()),
+            "glab_mr_diff" => format!("glab mr diff returned {line_count} diff line(s)"),
             _ => format!("{command_name} returned {line_count} line(s)"),
         }
     };
@@ -90,7 +100,7 @@ pub fn reduce_github_command(
             "gh_pr_view" => compact_pr_view_preview(stdout),
             "gh_pr_checks" => compact_pr_checks_preview(&lines),
             "gh_run_view" => compact_run_view_preview(&lines),
-            "gh_pr_diff" => crate::git::compact_diff_public(stdout, 500),
+            "gh_pr_diff" | "glab_mr_diff" => crate::git::compact_diff_public(stdout, 500),
             _ => String::new(),
         },
         paths: spec.paths.clone(),
@@ -480,6 +490,22 @@ mod tests {
         assert_eq!(
             reduction.summary,
             "gh api returned 2 item(s); first title=Add compact parity"
+        );
+    }
+
+    #[test]
+    fn reduce_glab_mr_list_summarizes_entries() {
+        let argv = vec!["glab", "mr", "list"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_github_command("glab mr list", &argv).unwrap();
+        let stdout = "42\tFix GitLab reducer\tmain\topened\n43\tUpdate docs\tmain\topened\n";
+        let reduction = reduce_github_command(&spec, stdout, "", 0);
+        assert_eq!(reduction.canonical_kind, "glab_mr_list");
+        assert_eq!(
+            reduction.summary,
+            "glab mr list: 2 MR(s); first 42 Fix GitLab reducer [opened]"
         );
     }
 }
