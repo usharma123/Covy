@@ -68,8 +68,12 @@ Packet28 feedback delete 1
 Packet28 feedback stats
 Packet28 graph create
 Packet28 graph add-concept Packet28
+Packet28 graph refine Packet28 "local context runtime with reducers"
 Packet28 graph link Packet28 Reducers --relation uses
+Packet28 graph search reducers
+Packet28 graph export --format dot
 Packet28 graph inspect
+Packet28 graph delete Packet28
 ```
 
 MCP tools exposed by the product slice:
@@ -94,6 +98,12 @@ MCP tools exposed by the product slice:
 - `packet28.feedback_apply`
 - `packet28.feedback_delete`
 - `packet28.feedback_stats`
+- `packet28.graph_add_concept`
+- `packet28.graph_refine`
+- `packet28.graph_link`
+- `packet28.graph_search`
+- `packet28.graph_export`
+- `packet28.graph_delete`
 - `packet28.graph_inspect`
 - `packet28.prepare_handoff`
 - `packet28.handoff`
@@ -127,6 +137,7 @@ The SQLite schema includes:
 - `memory_chunks`
 - `memories_fts`
 - `concepts`
+- `concepts_fts`
 - `relations`
 - `feedback`
 - `feedback_fts`

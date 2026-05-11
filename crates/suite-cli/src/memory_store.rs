@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +52,18 @@ pub(crate) struct GraphRelation {
 pub(crate) struct GraphInspect {
     pub(crate) concepts: Vec<GraphConcept>,
     pub(crate) relations: Vec<GraphRelation>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphDeleteReport {
+    pub(crate) deleted_concepts: usize,
+    pub(crate) deleted_relations: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphExport {
+    pub(crate) format: String,
+    pub(crate) content: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -687,6 +699,64 @@ pub(crate) fn add_concept(name: &str, description: Option<&str>) -> Result<Graph
     Ok(concept)
 }
 
+pub(crate) fn refine_concept(name: &str, description: &str) -> Result<GraphConcept> {
+    add_concept(name, Some(description))
+}
+
+pub(crate) fn delete_concept(name: &str) -> Result<GraphDeleteReport> {
+    let conn = open_memory_db()?;
+    let concept_id = conn
+        .query_row(
+            "SELECT id FROM concepts WHERE name = ?1",
+            params![name],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    let Some(concept_id) = concept_id else {
+        return Ok(GraphDeleteReport {
+            deleted_concepts: 0,
+            deleted_relations: 0,
+        });
+    };
+    let deleted_relations = conn.execute(
+        "DELETE FROM relations WHERE source_concept_id = ?1 OR target_concept_id = ?1",
+        params![concept_id],
+    )?;
+    let deleted_concepts =
+        conn.execute("DELETE FROM concepts WHERE id = ?1", params![concept_id])?;
+    Ok(GraphDeleteReport {
+        deleted_concepts,
+        deleted_relations,
+    })
+}
+
+pub(crate) fn search_concepts(query: &str, limit: usize) -> Result<Vec<GraphConcept>> {
+    let conn = open_memory_db()?;
+    if let Some(match_query) = fts_match_query(query) {
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.name, c.description
+             FROM concepts_fts f
+             JOIN concepts c ON c.rowid = f.rowid
+             WHERE concepts_fts MATCH ?1
+             ORDER BY bm25(concepts_fts), c.name ASC
+             LIMIT ?2",
+        )?;
+        let concepts = read_concept_rows(&mut stmt, params![match_query, limit.max(1) as i64])?;
+        if !concepts.is_empty() {
+            return Ok(concepts);
+        }
+    }
+    let pattern = format!("%{}%", query.trim());
+    let mut stmt = conn.prepare(
+        "SELECT id, name, description
+         FROM concepts
+         WHERE name LIKE ?1 OR IFNULL(description, '') LIKE ?1
+         ORDER BY name ASC
+         LIMIT ?2",
+    )?;
+    read_concept_rows(&mut stmt, params![pattern, limit.max(1) as i64])
+}
+
 pub(crate) fn link_concepts(source: &str, target: &str, relation: &str) -> Result<GraphRelation> {
     let source = add_concept(source, None)?;
     let target = add_concept(target, None)?;
@@ -702,6 +772,25 @@ pub(crate) fn link_concepts(source: &str, target: &str, relation: &str) -> Resul
         source: source.name,
         target: target.name,
         relation: relation.to_string(),
+    })
+}
+
+pub(crate) fn export_graph(format: &str, limit: usize) -> Result<GraphExport> {
+    let graph = inspect_graph(limit)?;
+    let format = format.trim().to_ascii_lowercase();
+    let content = match format.as_str() {
+        "dot" => render_graph_dot(&graph),
+        "ascii" => render_graph_ascii(&graph),
+        "json" | "" => serde_json::to_string_pretty(&graph)?,
+        other => anyhow::bail!("unsupported graph export format '{other}'"),
+    };
+    Ok(GraphExport {
+        format: if format.is_empty() {
+            "json".to_string()
+        } else {
+            format
+        },
+        content,
     })
 }
 
@@ -740,6 +829,53 @@ pub(crate) fn inspect_graph(limit: usize) -> Result<GraphInspect> {
         concepts,
         relations,
     })
+}
+
+fn read_concept_rows<P: rusqlite::Params>(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: P,
+) -> Result<Vec<GraphConcept>> {
+    let rows = stmt.query_map(params, |row| {
+        Ok(GraphConcept {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn render_graph_dot(graph: &GraphInspect) -> String {
+    let mut out = String::from("digraph packet28_graph {\n");
+    for concept in &graph.concepts {
+        out.push_str(&format!("  {:?};\n", concept.name));
+    }
+    for relation in &graph.relations {
+        out.push_str(&format!(
+            "  {:?} -> {:?} [label={:?}];\n",
+            relation.source, relation.target, relation.relation
+        ));
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn render_graph_ascii(graph: &GraphInspect) -> String {
+    let mut out = String::new();
+    for concept in &graph.concepts {
+        out.push_str(&format!("* {}\n", concept.name));
+        if let Some(description) = &concept.description {
+            out.push_str(&format!("  {}\n", description));
+        }
+    }
+    for relation in &graph.relations {
+        out.push_str(&format!(
+            "{} -{}-> {}\n",
+            relation.source, relation.relation, relation.target
+        ));
+    }
+    out
 }
 
 pub(crate) fn local_store_stats() -> Result<LocalStoreStats> {
@@ -1035,6 +1171,27 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             VALUES (new.id, new.content, new.tags);
         END;
 
+        CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
+            name,
+            description,
+            content='concepts',
+            content_rowid='id'
+        );
+        CREATE TRIGGER IF NOT EXISTS concepts_ai AFTER INSERT ON concepts BEGIN
+            INSERT INTO concepts_fts(rowid, name, description)
+            VALUES (new.id, new.name, new.description);
+        END;
+        CREATE TRIGGER IF NOT EXISTS concepts_ad AFTER DELETE ON concepts BEGIN
+            INSERT INTO concepts_fts(concepts_fts, rowid, name, description)
+            VALUES ('delete', old.id, old.name, old.description);
+        END;
+        CREATE TRIGGER IF NOT EXISTS concepts_au AFTER UPDATE OF name, description ON concepts BEGIN
+            INSERT INTO concepts_fts(concepts_fts, rowid, name, description)
+            VALUES ('delete', old.id, old.name, old.description);
+            INSERT INTO concepts_fts(rowid, name, description)
+            VALUES (new.id, new.name, new.description);
+        END;
+
         CREATE VIRTUAL TABLE IF NOT EXISTS feedback_fts USING fts5(
             subject,
             correction,
@@ -1133,6 +1290,12 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
         "INSERT INTO feedback_fts_all(rowid, subject, correction, topic, context, predicted, reason, source)
          SELECT id, subject, correction, topic, context, predicted, reason, source FROM feedback
          WHERE id NOT IN (SELECT rowid FROM feedback_fts_all)",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO concepts_fts(rowid, name, description)
+         SELECT id, name, description FROM concepts
+         WHERE id NOT IN (SELECT rowid FROM concepts_fts)",
         [],
     )?;
     Ok(())

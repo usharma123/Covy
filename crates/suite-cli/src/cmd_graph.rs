@@ -1,7 +1,10 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use crate::memory_store::{add_concept, inspect_graph, link_concepts};
+use crate::memory_store::{
+    add_concept, delete_concept, export_graph, inspect_graph, link_concepts, refine_concept,
+    search_concepts,
+};
 
 #[derive(Args)]
 pub struct GraphArgs {
@@ -13,6 +16,10 @@ pub struct GraphArgs {
 pub enum GraphCommands {
     Create(GraphCreateArgs),
     AddConcept(GraphAddConceptArgs),
+    Refine(GraphRefineArgs),
+    Delete(GraphDeleteArgs),
+    Search(GraphSearchArgs),
+    Export(GraphExportArgs),
     Link(GraphLinkArgs),
     Inspect(GraphInspectArgs),
 }
@@ -30,6 +37,48 @@ pub struct GraphAddConceptArgs {
     pub name: String,
     #[arg(long)]
     pub description: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct GraphRefineArgs {
+    pub name: String,
+    pub description: String,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct GraphDeleteArgs {
+    pub name: String,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct GraphSearchArgs {
+    pub query: String,
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct GraphExportArgs {
+    #[arg(long, default_value = "json")]
+    pub format: String,
+    #[arg(long, default_value_t = 100)]
+    pub limit: usize,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -74,6 +123,41 @@ pub fn run(args: GraphArgs) -> Result<i32> {
                 crate::cmd_common::emit_json(&serde_json::to_value(concept)?, args.pretty)?;
             } else {
                 println!("concept {}", concept.name);
+            }
+        }
+        GraphCommands::Refine(args) => {
+            let concept = refine_concept(&args.name, &args.description)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(concept)?, args.pretty)?;
+            } else {
+                println!("concept {}", concept.name);
+            }
+        }
+        GraphCommands::Delete(args) => {
+            let report = delete_concept(&args.name)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+            } else {
+                println!("deleted_concepts={}", report.deleted_concepts);
+                println!("deleted_relations={}", report.deleted_relations);
+            }
+        }
+        GraphCommands::Search(args) => {
+            let concepts = search_concepts(&args.query, args.limit)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(concepts)?, args.pretty)?;
+            } else {
+                for concept in concepts {
+                    println!("{} {}", concept.id, concept.name);
+                }
+            }
+        }
+        GraphCommands::Export(args) => {
+            let export = export_graph(&args.format, args.limit)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(export)?, args.pretty)?;
+            } else {
+                print!("{}", export.content);
             }
         }
         GraphCommands::Link(args) => {

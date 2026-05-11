@@ -59,11 +59,12 @@ use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
 use crate::memory_store::{
-    apply_feedback, consolidate_memories, decay_memories, delete_feedback, feedback_stats,
-    forget_memories_by_topic, forget_memory, inspect_graph, list_feedback, list_memories,
-    local_store_stats, memory_health, memory_topics, prune_memories, recall_memories,
-    record_feedback_with_metadata, search_feedback, store_memory_with_metadata, update_memory,
-    FeedbackInput, MemoryStoreInput, MemoryUpdateInput,
+    add_concept, apply_feedback, consolidate_memories, decay_memories, delete_concept,
+    delete_feedback, export_graph, feedback_stats, forget_memories_by_topic, forget_memory,
+    inspect_graph, link_concepts, list_feedback, list_memories, local_store_stats, memory_health,
+    memory_topics, prune_memories, recall_memories, record_feedback_with_metadata, refine_concept,
+    search_concepts, search_feedback, store_memory_with_metadata, update_memory, FeedbackInput,
+    MemoryStoreInput, MemoryUpdateInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
@@ -897,6 +898,77 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.graph_add_concept",
+                    "description": "Add or update a local Packet28 graph concept.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["name"],
+                        "properties": {
+                            "name": {"type":"string"},
+                            "description": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.graph_refine",
+                    "description": "Refine a local Packet28 graph concept definition.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["name", "description"],
+                        "properties": {
+                            "name": {"type":"string"},
+                            "description": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.graph_link",
+                    "description": "Create a typed relation between two local Packet28 graph concepts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["source", "target"],
+                        "properties": {
+                            "source": {"type":"string"},
+                            "target": {"type":"string"},
+                            "relation": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.graph_search",
+                    "description": "Search local Packet28 graph concepts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.graph_export",
+                    "description": "Export the local Packet28 graph as json, dot, or ascii.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "format": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.graph_delete",
+                    "description": "Delete a local Packet28 graph concept and attached relations.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["name"],
+                        "properties": {
+                            "name": {"type":"string"}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.graph_inspect",
                     "description": "Inspect local Packet28 graph concepts and relations.",
                     "inputSchema": {
@@ -1209,6 +1281,40 @@ fn handle_tool_call(
             serde_json::json!({ "deleted": delete_feedback(request.id)? })
         }
         "packet28.feedback_stats" => serde_json::to_value(feedback_stats()?)?,
+        "packet28.graph_add_concept" => {
+            let request: GraphConceptToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(add_concept(&request.name, request.description.as_deref())?)?
+        }
+        "packet28.graph_refine" => {
+            let request: GraphRefineToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(refine_concept(&request.name, &request.description)?)?
+        }
+        "packet28.graph_link" => {
+            let request: GraphLinkToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(link_concepts(
+                &request.source,
+                &request.target,
+                request.relation.as_deref().unwrap_or("related_to"),
+            )?)?
+        }
+        "packet28.graph_search" => {
+            let request: GraphSearchToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(search_concepts(
+                &request.query,
+                request.limit.unwrap_or(10),
+            )?)?
+        }
+        "packet28.graph_export" => {
+            let request: GraphExportToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(export_graph(
+                request.format.as_deref().unwrap_or("json"),
+                request.limit.unwrap_or(100),
+            )?)?
+        }
+        "packet28.graph_delete" => {
+            let request: GraphDeleteToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(delete_concept(&request.name)?)?
+        }
         "packet28.graph_inspect" => {
             let request: GraphInspectToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(inspect_graph(request.limit.unwrap_or(50))?)?
@@ -1329,6 +1435,42 @@ struct FeedbackListToolArgs {
 #[derive(Debug, Deserialize)]
 struct FeedbackIdToolArgs {
     id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphConceptToolArgs {
+    name: String,
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphRefineToolArgs {
+    name: String,
+    description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphLinkToolArgs {
+    source: String,
+    target: String,
+    relation: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphSearchToolArgs {
+    query: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphExportToolArgs {
+    format: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphDeleteToolArgs {
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1605,6 +1747,32 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!("Packet28 deleted {deleted} feedback correction(s).")
         }
         "packet28.feedback_stats" => "Packet28 feedback statistics.".to_string(),
+        "packet28.graph_add_concept" | "packet28.graph_refine" => {
+            let name = payload
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("concept");
+            format!("Packet28 graph concept: {name}.")
+        }
+        "packet28.graph_link" => "Packet28 graph relation recorded.".to_string(),
+        "packet28.graph_search" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 found {count} graph concept(s).")
+        }
+        "packet28.graph_export" => {
+            let format = payload
+                .get("format")
+                .and_then(Value::as_str)
+                .unwrap_or("json");
+            format!("Packet28 graph exported as {format}.")
+        }
+        "packet28.graph_delete" => {
+            let deleted = payload
+                .get("deleted_concepts")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 deleted {deleted} graph concept(s).")
+        }
         "packet28.graph_inspect" => "Packet28 graph inspection.".to_string(),
         "packet28.task_status" => "Packet28 task status.".to_string(),
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),

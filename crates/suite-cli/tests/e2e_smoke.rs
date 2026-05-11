@@ -841,6 +841,99 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":55,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_add_concept",
+                "arguments":{"name":"Packet28", "description":"local context runtime"}
+            }
+        }),
+    );
+    let graph_concept = read_mcp_message_for_id(&mut stdout, 55);
+    assert_eq!(
+        graph_concept["result"]["structuredContent"]["name"].as_str(),
+        Some("Packet28")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":56,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_refine",
+                "arguments":{"name":"Packet28", "description":"local context runtime with reducers"}
+            }
+        }),
+    );
+    let refined = read_mcp_message_for_id(&mut stdout, 56);
+    assert_eq!(
+        refined["result"]["structuredContent"]["description"].as_str(),
+        Some("local context runtime with reducers")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":57,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_link",
+                "arguments":{"source":"Packet28", "target":"Reducers", "relation":"uses"}
+            }
+        }),
+    );
+    let relation = read_mcp_message_for_id(&mut stdout, 57);
+    assert_eq!(
+        relation["result"]["structuredContent"]["relation"].as_str(),
+        Some("uses")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":58,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_search",
+                "arguments":{"query":"reducers", "limit": 5}
+            }
+        }),
+    );
+    let graph_search = read_mcp_message_for_id(&mut stdout, 58);
+    assert!(
+        graph_search["result"]["structuredContent"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 1
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":59,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_export",
+                "arguments":{"format":"dot", "limit": 5}
+            }
+        }),
+    );
+    let graph_export = read_mcp_message_for_id(&mut stdout, 59);
+    assert_eq!(
+        graph_export["result"]["structuredContent"]["format"].as_str(),
+        Some("dot")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":8,
             "method":"tools/call",
             "params":{
@@ -1025,7 +1118,22 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .env("HOME", home.path())
         .args(["graph", "add-concept", "Packet28", "--json"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("Packet28"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "graph",
+            "refine",
+            "Packet28",
+            "local context runtime with reducers",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "local context runtime with reducers",
+        ));
     suite_cmd()
         .env("HOME", home.path())
         .args([
@@ -1041,11 +1149,29 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .success();
     suite_cmd()
         .env("HOME", home.path())
+        .args(["graph", "search", "reducers", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Packet28"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "export", "--format", "dot"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("digraph packet28_graph"));
+    suite_cmd()
+        .env("HOME", home.path())
         .args(["graph", "inspect", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Packet28"))
         .stdout(predicate::str::contains("Reducers"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "delete", "Packet28", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"deleted_concepts\":1"));
 }
 
 #[test]
