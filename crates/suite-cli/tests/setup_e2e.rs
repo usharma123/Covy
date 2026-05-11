@@ -59,6 +59,19 @@ exit 0\n",
 }
 
 #[cfg(unix)]
+fn write_fake_packet28_mcp_binary(path: &Path) {
+    let script = format!(
+        "#!/bin/sh\n\
+exec \"{}\" mcp serve \"$@\"\n",
+        env!("CARGO_BIN_EXE_Packet28")
+    );
+    fs::write(path, script).unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(unix)]
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
@@ -393,6 +406,54 @@ fn test_setup_windsurf_writes_rules_hooks_and_mcp() {
         .join("windsurf")
         .join("mcp_config.json")
         .exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_windsurf_generated_mcp_config_smoke_test() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    write_fake_packet28_mcp_binary(&bin_dir.path().join("packet28-mcp"));
+    fs::create_dir_all(home.path().join(".codeium").join("windsurf")).unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", bin_dir.path().display()),
+        )
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "windsurf",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", bin_dir.path().display()),
+        )
+        .args(["mcp", "smoke-test", "--from-config", "windsurf"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MCP smoke test ok"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
+        .assert()
+        .success();
 }
 
 #[test]

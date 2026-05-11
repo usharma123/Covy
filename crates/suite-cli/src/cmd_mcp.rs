@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -70,6 +71,8 @@ pub enum McpCommands {
     Serve(McpServeArgs),
     /// Proxy one or more upstream MCP servers and auto-capture tool activity
     Proxy(McpProxyArgs),
+    /// Validate an MCP server entry from an agent config
+    SmokeTest(McpSmokeTestArgs),
 }
 
 #[derive(Args, Clone)]
@@ -88,6 +91,13 @@ pub struct McpProxyArgs {
 
     #[arg(long)]
     pub task_id: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct McpSmokeTestArgs {
+    /// Agent config to load (currently: windsurf)
+    #[arg(long = "from-config")]
+    pub from_config: String,
 }
 
 #[derive(Default)]
@@ -135,6 +145,7 @@ pub fn run(args: McpArgs) -> Result<i32> {
     match args.command {
         McpCommands::Serve(args) => run_serve(args),
         McpCommands::Proxy(args) => run_proxy(args),
+        McpCommands::SmokeTest(args) => run_smoke_test(args),
     }
 }
 
@@ -160,6 +171,171 @@ fn run_proxy(args: McpProxyArgs) -> Result<i32> {
             .unwrap_or_else(|| crate::broker_client::derive_task_id("packet28-mcp-proxy-session")),
     )?;
     Ok(0)
+}
+
+fn run_smoke_test(args: McpSmokeTestArgs) -> Result<i32> {
+    let server = load_agent_mcp_server(&args.from_config)?;
+    let report = smoke_test_mcp_server(&server)?;
+    println!(
+        "MCP smoke test ok: server={} tools={}",
+        report.server_name, report.tool_count
+    );
+    Ok(0)
+}
+
+struct McpSmokeReport {
+    server_name: String,
+    tool_count: usize,
+}
+
+fn load_agent_mcp_server(agent: &str) -> Result<McpProxyServerConfig> {
+    match agent {
+        "windsurf" => load_named_mcp_server(&windsurf_mcp_config_path(), "packet28"),
+        other => Err(anyhow!(
+            "unsupported MCP config '{other}'; supported values: windsurf"
+        )),
+    }
+}
+
+fn windsurf_mcp_config_path() -> PathBuf {
+    dirs_home()
+        .join(".codeium")
+        .join("windsurf")
+        .join("mcp_config.json")
+}
+
+fn dirs_home() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
+
+fn load_named_mcp_server(path: &Path, name: &str) -> Result<McpProxyServerConfig> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read '{}'", path.display()))?;
+    let config: McpProxyConfig = serde_json::from_str(&content)
+        .with_context(|| format!("invalid MCP config '{}'", path.display()))?;
+    config
+        .mcp_servers
+        .get(name)
+        .cloned()
+        .with_context(|| format!("MCP server '{name}' missing from '{}'", path.display()))
+}
+
+fn smoke_test_mcp_server(server: &McpProxyServerConfig) -> Result<McpSmokeReport> {
+    if server.command.trim().is_empty() {
+        return Err(anyhow!("MCP server command is empty"));
+    }
+    let mut harness = ConfiguredMcpHarness::start(server)?;
+    harness.send(&json!({
+        "jsonrpc":"2.0",
+        "id":1,
+        "method":"initialize",
+        "params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"packet28-smoke-test","version":"1"}}
+    }))?;
+    let initialize = harness.read_response(1)?;
+    let server_name = initialize["result"]["serverInfo"]["name"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+
+    harness.send(&json!({
+        "jsonrpc":"2.0",
+        "id":2,
+        "method":"tools/list"
+    }))?;
+    let tools = harness.read_response(2)?;
+    let tool_names = tools["result"]["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    if !tool_names.contains(&"packet28.search") {
+        return Err(anyhow!("packet28.search missing from tools/list"));
+    }
+    Ok(McpSmokeReport {
+        server_name,
+        tool_count: tool_names.len(),
+    })
+}
+
+struct ConfiguredMcpHarness {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl ConfiguredMcpHarness {
+    fn start(server: &McpProxyServerConfig) -> Result<Self> {
+        let mut command = Command::new(&server.command);
+        command.args(&server.args);
+        if let Some(cwd) = server.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
+            command.current_dir(cwd);
+        }
+        for (key, value) in &server.env {
+            command.env(key, value);
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "failed to start configured MCP server `{}`",
+                    render_command_preview(&server.command, &server.args)
+                )
+            })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("failed to capture MCP stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("failed to capture MCP stdout"))?;
+        Ok(Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        })
+    }
+
+    fn send(&mut self, value: &Value) -> Result<()> {
+        write_message(&mut self.stdin, value, McpMessageFraming::ContentLength)
+    }
+
+    fn read_response(&mut self, expected_id: u64) -> Result<Value> {
+        let started = Instant::now();
+        loop {
+            if started.elapsed() > Duration::from_secs(10) {
+                return Err(anyhow!(
+                    "timed out waiting for MCP response id={expected_id}"
+                ));
+            }
+            let Some((value, _)) = read_message(&mut self.stdout)? else {
+                return Err(anyhow!(
+                    "MCP stream closed before response id={expected_id}"
+                ));
+            };
+            if value.get("id").and_then(Value::as_u64) == Some(expected_id) {
+                if let Some(error) = value.get("error") {
+                    return Err(anyhow!(
+                        "MCP response id={expected_id} returned error: {error}"
+                    ));
+                }
+                return Ok(value);
+            }
+        }
+    }
+}
+
+impl Drop for ConfiguredMcpHarness {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 fn serve_stdio(root: PathBuf) -> Result<()> {
@@ -698,11 +874,13 @@ fn capabilities_payload() -> Value {
 
 fn summarize_tool_payload(name: &str, payload: &Value) -> String {
     match name {
-        "packet28.search" | "packet28.search_fast" | "packet28.read_regions" | "packet28.glob" => payload
-            .get("compact_preview")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "Packet28 compact tool result.".to_string()),
+        "packet28.search" | "packet28.search_fast" | "packet28.read_regions" | "packet28.glob" => {
+            payload
+                .get("compact_preview")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| "Packet28 compact tool result.".to_string())
+        }
         "packet28.fetch_tool_result" => {
             let artifact_id = payload
                 .get("artifact_id")
@@ -745,7 +923,6 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -760,7 +937,9 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "packet28.search_fast")
             .unwrap();
-        let props = search_fast["inputSchema"]["properties"].as_object().unwrap();
+        let props = search_fast["inputSchema"]["properties"]
+            .as_object()
+            .unwrap();
 
         assert!(props.contains_key("query"));
         assert!(!props.contains_key("task_id"));
