@@ -1612,6 +1612,24 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":53,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_add_concept",
+                "arguments":{"name":"Reducers", "memoir":"McpMemoir"}
+            }
+        }),
+    );
+    let reducer_concept = read_mcp_message_for_id(&mut stdout, 53);
+    assert_eq!(
+        reducer_concept["result"]["structuredContent"]["memoir_name"].as_str(),
+        Some("McpMemoir")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":57,
             "method":"tools/call",
             "params":{
@@ -1725,6 +1743,31 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     );
     let graph = read_mcp_message_for_id(&mut stdout, 8);
     assert!(graph["result"]["structuredContent"]["concepts"].is_array());
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":67,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_inspect_concept",
+                "arguments":{"name":"Packet28", "memoir":"McpMemoir", "depth": 1}
+            }
+        }),
+    );
+    let graph_concept_inspect = read_mcp_message_for_id(&mut stdout, 67);
+    assert_eq!(
+        graph_concept_inspect["result"]["structuredContent"]["concept"]["name"].as_str(),
+        Some("Packet28")
+    );
+    assert!(
+        graph_concept_inspect["result"]["structuredContent"]["neighbors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|concept| concept["name"] == "Reducers")
+    );
 
     write_mcp_message(
         &mut stdin,
@@ -2132,6 +2175,18 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .env("HOME", home.path())
         .args([
             "graph",
+            "add-concept",
+            "Reducers",
+            "--memoir",
+            "Packet28Memoir",
+            "--json",
+        ])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "graph",
             "link",
             "Packet28",
             "Reducers",
@@ -2176,20 +2231,38 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Packet28Memoir"))
-        .stdout(predicate::str::contains("\"concept_count\":1"));
+        .stdout(predicate::str::contains("\"concept_count\":2"));
     suite_cmd()
         .env("HOME", home.path())
         .args(["graph", "show", "Packet28Memoir", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"revision\":2"))
-        .stdout(predicate::str::contains("\"average_confidence\":0.82"));
+        .stdout(predicate::str::contains("\"average_confidence\":0.659"));
     suite_cmd()
         .env("HOME", home.path())
         .args(["graph", "inspect", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Packet28"))
+        .stdout(predicate::str::contains("Reducers"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "graph",
+            "inspect-concept",
+            "Packet28",
+            "--memoir",
+            "Packet28Memoir",
+            "--depth",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"concept\""))
+        .stdout(predicate::str::contains("\"neighbors\""))
+        .stdout(predicate::str::contains("\"relations\""))
         .stdout(predicate::str::contains("Reducers"));
     suite_cmd()
         .env("HOME", home.path())

@@ -116,6 +116,14 @@ pub(crate) struct GraphMemoirShow {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphConceptInspect {
+    pub(crate) concept: GraphConcept,
+    pub(crate) depth: usize,
+    pub(crate) neighbors: Vec<GraphConcept>,
+    pub(crate) relations: Vec<GraphRelation>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct GraphDeleteReport {
     pub(crate) deleted_concepts: usize,
     pub(crate) deleted_relations: usize,
@@ -1501,6 +1509,61 @@ pub(crate) fn inspect_graph(limit: usize) -> Result<GraphInspect> {
     let relations = read_relations_for_memoir(&conn, "", limit.max(1))?;
     Ok(GraphInspect {
         concepts,
+        relations,
+    })
+}
+
+pub(crate) fn inspect_graph_concept(
+    name: &str,
+    memoir: Option<&str>,
+    depth: usize,
+) -> Result<GraphConceptInspect> {
+    let conn = open_memory_db()?;
+    let concept = read_concept_by_name(&conn, name)?;
+    if let Some(memoir) = memoir.map(str::trim).filter(|value| !value.is_empty()) {
+        if concept.memoir_name != memoir {
+            anyhow::bail!("concept '{name}' is not in memoir '{memoir}'");
+        }
+    }
+    let depth = depth.max(1);
+    let all_relations = read_relations_for_memoir(&conn, memoir.unwrap_or(""), 10_000)?;
+    let all_concepts = read_concepts_for_memoir(&conn, memoir.unwrap_or(""), 10_000)?;
+    let mut seen_names = BTreeSet::from([concept.name.clone()]);
+    let mut frontier = BTreeSet::from([concept.name.clone()]);
+    let mut relations = Vec::new();
+    for _ in 0..depth {
+        let mut next_frontier = BTreeSet::new();
+        for relation in &all_relations {
+            let touches_source = frontier.contains(&relation.source);
+            let touches_target = frontier.contains(&relation.target);
+            if !touches_source && !touches_target {
+                continue;
+            }
+            if !relations
+                .iter()
+                .any(|existing: &GraphRelation| existing.id == relation.id)
+            {
+                relations.push(relation.clone());
+            }
+            for name in [&relation.source, &relation.target] {
+                if seen_names.insert(name.clone()) {
+                    next_frontier.insert(name.clone());
+                }
+            }
+        }
+        if next_frontier.is_empty() {
+            break;
+        }
+        frontier = next_frontier;
+    }
+    let neighbors = all_concepts
+        .into_iter()
+        .filter(|candidate| candidate.name != concept.name && seen_names.contains(&candidate.name))
+        .collect();
+    Ok(GraphConceptInspect {
+        concept,
+        depth,
+        neighbors,
         relations,
     })
 }

@@ -3,8 +3,8 @@ use clap::{Args, Subcommand};
 
 use crate::memory_store::{
     add_concept_with_metadata, create_graph_memoir, delete_concept, export_graph, graph_stats,
-    inspect_graph, link_concepts, list_graph_memoirs, refine_concept, search_concepts_filtered,
-    show_graph_memoir,
+    inspect_graph, inspect_graph_concept, link_concepts, list_graph_memoirs, refine_concept,
+    search_concepts_filtered, show_graph_memoir,
 };
 
 #[derive(Args)]
@@ -26,6 +26,7 @@ pub enum GraphCommands {
     Stats(GraphStatsArgs),
     Link(GraphLinkArgs),
     Inspect(GraphInspectArgs),
+    InspectConcept(GraphInspectConceptArgs),
 }
 
 #[derive(Args)]
@@ -155,6 +156,19 @@ pub struct GraphInspectArgs {
     pub pretty: bool,
 }
 
+#[derive(Args)]
+pub struct GraphInspectConceptArgs {
+    pub name: String,
+    #[arg(long)]
+    pub memoir: Option<String>,
+    #[arg(long, default_value_t = 1)]
+    pub depth: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
 pub fn run(args: GraphArgs) -> Result<i32> {
     match args.command {
         GraphCommands::Create(args) => {
@@ -274,6 +288,16 @@ pub fn run(args: GraphArgs) -> Result<i32> {
                 crate::cmd_common::emit_json(&serde_json::to_value(graph)?, args.pretty)?;
             } else {
                 println!("concepts={}", graph.concepts.len());
+                println!("relations={}", graph.relations.len());
+            }
+        }
+        GraphCommands::InspectConcept(args) => {
+            let graph = inspect_graph_concept(&args.name, args.memoir.as_deref(), args.depth)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(graph)?, args.pretty)?;
+            } else {
+                println!("concept {}", graph.concept.name);
+                println!("neighbors={}", graph.neighbors.len());
                 println!("relations={}", graph.relations.len());
             }
         }

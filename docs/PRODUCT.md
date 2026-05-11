@@ -94,6 +94,7 @@ Packet28 graph add-concept Packet28 --memoir Packet28 --label domain:context --c
 Packet28 graph refine Packet28 "local context runtime with reducers"
 Packet28 graph link Packet28 Reducers --relation uses
 Packet28 graph search context --memoir Packet28 --label domain:context
+Packet28 graph inspect-concept Packet28 --memoir Packet28 --depth 1
 Packet28 graph export --format dot
 Packet28 graph stats
 Packet28 graph inspect
@@ -187,5 +188,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Stronger ICM embedding backends, broader wake-up project metadata and runtime fixtures, memoir distillation/inspect-depth, cloud/import/upgrade, and web dashboard.
+- Stronger ICM embedding backends, broader wake-up project metadata and runtime fixtures, memoir distillation, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.

@@ -65,13 +65,14 @@ use crate::memory_store::{
     create_graph_memoir, decay_memories, delete_concept, delete_feedback,
     delete_pending_extractions, embed_memories, enqueue_pending_extraction, export_graph,
     feedback_stats, forget_memories_by_topic, forget_memory, graph_stats, inspect_graph,
-    learn_project_graph, link_concepts, list_feedback, list_graph_memoirs, list_memories_filtered,
-    list_pending_extractions, list_transcript_sessions, local_store_stats, memory_health,
-    memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
-    record_feedback_with_metadata, refine_concept, search_concepts_filtered, search_feedback,
-    search_transcripts, show_graph_memoir, show_transcript_session, store_memory_with_metadata,
-    transcript_stats, update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery,
-    MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput, TranscriptAppendInput,
+    inspect_graph_concept, learn_project_graph, link_concepts, list_feedback, list_graph_memoirs,
+    list_memories_filtered, list_pending_extractions, list_transcript_sessions, local_store_stats,
+    memory_health, memory_topics, process_pending_extractions, prune_memories,
+    recall_memories_filtered, record_feedback_with_metadata, refine_concept,
+    search_concepts_filtered, search_feedback, search_transcripts, show_graph_memoir,
+    show_transcript_session, store_memory_with_metadata, transcript_stats, update_memory,
+    FeedbackInput, MemoryListQuery, MemoryRecallQuery, MemoryStoreInput, MemoryUpdateInput,
+    PendingExtractionInput, TranscriptAppendInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
@@ -1054,6 +1055,8 @@ fn handle_method(
                         "required": ["query"],
                         "properties": {
                             "query": {"type":"string"},
+                            "memoir": {"type":"string"},
+                            "label": {"type":"string"},
                             "limit": {"type":"integer","minimum":1}
                         }
                     }
@@ -1208,6 +1211,19 @@ fn handle_method(
                         "type": "object",
                         "properties": {
                             "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.graph_inspect_concept",
+                    "description": "Inspect one Packet28 graph concept and its relation neighborhood.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["name"],
+                        "properties": {
+                            "name": {"type":"string"},
+                            "memoir": {"type":"string"},
+                            "depth": {"type":"integer","minimum":1}
                         }
                     }
                 },
@@ -1687,6 +1703,14 @@ fn handle_tool_call(
             let request: GraphInspectToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(inspect_graph(request.limit.unwrap_or(50))?)?
         }
+        "packet28.graph_inspect_concept" => {
+            let request: GraphInspectConceptToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(inspect_graph_concept(
+                &request.name,
+                request.memoir.as_deref(),
+                request.depth.unwrap_or(1),
+            )?)?
+        }
         "packet28.task_status" => {
             let task_id = resolve_session_task_id(
                 session,
@@ -1957,6 +1981,13 @@ struct GraphDeleteToolArgs {
 #[derive(Debug, Deserialize)]
 struct GraphInspectToolArgs {
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphInspectConceptToolArgs {
+    name: String,
+    memoir: Option<String>,
+    depth: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2325,6 +2356,14 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!("Packet28 deleted {deleted} graph concept(s).")
         }
         "packet28.graph_inspect" => "Packet28 graph inspection.".to_string(),
+        "packet28.graph_inspect_concept" => {
+            let name = payload
+                .get("concept")
+                .and_then(|concept| concept.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("concept");
+            format!("Packet28 graph concept inspection: {name}.")
+        }
         "packet28.task_status" => "Packet28 task status.".to_string(),
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),
         _ => "Packet28 response.".to_string(),
@@ -2388,6 +2427,7 @@ mod tests {
             "packet28.graph_search",
             "packet28.graph_export",
             "packet28.graph_stats",
+            "packet28.graph_inspect_concept",
         ] {
             assert!(
                 tool_names.contains(&required),
