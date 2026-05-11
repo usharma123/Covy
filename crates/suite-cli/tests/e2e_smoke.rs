@@ -1580,6 +1580,89 @@ fn fts_row_count(conn: &Connection, table: &str) -> i64 {
 }
 
 #[test]
+fn test_memory_recall_scores_importance_and_keywords() {
+    let home = TempDir::new().unwrap();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Packet28 ranking shared term high signal",
+            "--topic",
+            "scoring",
+            "--importance",
+            "high",
+            "--keywords",
+            "priority,ranking",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"weight\":0.9"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Packet28 ranking shared term low signal",
+            "--topic",
+            "scoring",
+            "--importance",
+            "low",
+            "--keywords",
+            "archive",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"weight\":0.5"));
+
+    let output = suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "recall",
+            "ranking shared term",
+            "--topic",
+            "scoring",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "recall failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let records = records.as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["importance"], "high");
+    assert_eq!(records[1]["importance"], "low");
+    let high_score = records[0]["recall_score"].as_f64().unwrap();
+    let low_score = records[1]["recall_score"].as_f64().unwrap();
+    assert!(
+        high_score > low_score,
+        "high importance keyword score {high_score} should exceed low score {low_score}"
+    );
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "update",
+            "2",
+            "--importance",
+            "critical",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"importance\":\"critical\""))
+        .stdout(predicate::str::contains("\"weight\":1.0"));
+}
+
+#[test]
 fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();

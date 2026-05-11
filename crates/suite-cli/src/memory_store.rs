@@ -405,6 +405,7 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
     let now = timestamp_unix_ms();
     let topic = normalize_non_empty(input.topic, "general");
     let importance = normalize_importance(input.importance)?;
+    let weight = initial_memory_weight(&importance);
     conn.execute(
         "INSERT INTO memories
          (content, tags, topic, importance, keywords, project, source, raw_excerpt, weight, created_at_unix_ms, updated_at_unix_ms)
@@ -418,7 +419,7 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
             input.project,
             input.source,
             input.raw_excerpt,
-            1.0_f64,
+            weight,
             now
         ],
     )?;
@@ -451,13 +452,30 @@ pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<V
     }
     let vector_records = recall_memories_vector(&conn, input, expanded_limit)?;
     let vector_records = filter_memory_records(vector_records, input);
-    let hybrid_records = merge_hybrid_memory_records(fts_records, vector_records, input.limit);
+    let hybrid_records =
+        merge_hybrid_memory_records(input.query, fts_records, vector_records, input.limit);
     if !hybrid_records.is_empty() {
         mark_memories_accessed(&conn, &hybrid_records, now)?;
         return Ok(hybrid_records);
     }
-    let records = recall_memories_like(&conn, input.query, expanded_limit)?;
-    let records = limit_memory_records(filter_memory_records(records, input), input.limit);
+    let mut records = filter_memory_records(
+        recall_memories_like(&conn, input.query, expanded_limit)?,
+        input,
+    )
+    .into_iter()
+    .map(|mut record| {
+        record.recall_score = Some(score_memory_recall(&record, 0.5, input.query));
+        record
+    })
+    .collect::<Vec<_>>();
+    records.sort_by(|a, b| {
+        b.recall_score
+            .partial_cmp(&a.recall_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.updated_at_unix_ms.cmp(&a.updated_at_unix_ms))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let records = limit_memory_records(records, input.limit);
     mark_memories_accessed(&conn, &records, now)?;
     Ok(records)
 }
@@ -476,18 +494,20 @@ fn mark_memories_accessed(conn: &Connection, records: &[MemoryRecord], now: i64)
 }
 
 fn merge_hybrid_memory_records(
+    query: &str,
     fts_records: Vec<MemoryRecord>,
     vector_records: Vec<MemoryRecord>,
     limit: usize,
 ) -> Vec<MemoryRecord> {
     let mut by_id = HashMap::<i64, (MemoryRecord, f64)>::new();
     for (rank, mut record) in fts_records.into_iter().enumerate() {
-        let score = 1.0 / (rank as f64 + 1.0);
+        let score = score_memory_recall(&record, 1.0 / (rank as f64 + 1.0), query);
         record.recall_score = Some(score);
         by_id.insert(record.id, (record, score));
     }
     for record in vector_records {
-        let score = record.recall_score.unwrap_or(0.0).max(0.0);
+        let score =
+            score_memory_recall(&record, record.recall_score.unwrap_or(0.0).max(0.0), query);
         by_id
             .entry(record.id)
             .and_modify(|(existing, existing_score)| {
@@ -672,6 +692,8 @@ pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord
     let tags = input.tags.or(current.tags.as_deref());
     let topic = input.topic.unwrap_or(&current.topic);
     let importance = input.importance.unwrap_or(&current.importance);
+    let normalized_importance = normalize_importance(Some(importance))?;
+    let min_weight = initial_memory_weight(&normalized_importance);
     let keywords = input.keywords.or(current.keywords.as_deref());
     let project = input.project.or(current.project.as_deref());
     let source = input.source.or(current.source.as_deref());
@@ -686,17 +708,19 @@ pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord
              project = ?6,
              source = ?7,
              raw_excerpt = ?8,
-             updated_at_unix_ms = ?9
-         WHERE id = ?10",
+             weight = MAX(weight, ?9),
+             updated_at_unix_ms = ?10
+         WHERE id = ?11",
         params![
             content,
             tags,
             normalize_non_empty(Some(topic), "general"),
-            normalize_importance(Some(importance))?,
+            normalized_importance,
             keywords,
             project,
             source,
             raw_excerpt,
+            min_weight,
             now,
             input.id
         ],
@@ -2566,6 +2590,62 @@ fn importance_rank(importance: &str) -> i64 {
         "low" => 1,
         _ => 2,
     }
+}
+
+fn initial_memory_weight(importance: &str) -> f64 {
+    match importance_rank(importance) {
+        4 => 1.0,
+        3 => 0.9,
+        2 => 0.75,
+        _ => 0.5,
+    }
+}
+
+fn score_memory_recall(record: &MemoryRecord, base_score: f64, query: &str) -> f64 {
+    let importance_multiplier = match importance_rank(&record.importance) {
+        4 => 1.35,
+        3 => 1.2,
+        2 => 1.0,
+        _ => 0.85,
+    };
+    let weight_multiplier = record.weight.clamp(0.5, 2.0);
+    (base_score * importance_multiplier * weight_multiplier)
+        + metadata_match_bonus(record, query).min(0.5)
+}
+
+fn metadata_match_bonus(record: &MemoryRecord, query: &str) -> f64 {
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return 0.0;
+    }
+    let keyword_bonus = field_term_bonus(record.keywords.as_deref(), &terms, 0.18);
+    let tag_bonus = field_term_bonus(record.tags.as_deref(), &terms, 0.12);
+    let topic_bonus = field_term_bonus(Some(&record.topic), &terms, 0.08);
+    let project_bonus = field_term_bonus(record.project.as_deref(), &terms, 0.04);
+    keyword_bonus + tag_bonus + topic_bonus + project_bonus
+}
+
+fn field_term_bonus(field: Option<&str>, terms: &[String], per_match: f64) -> f64 {
+    let Some(field) = field else {
+        return 0.0;
+    };
+    let field = field.to_ascii_lowercase();
+    let matches = terms
+        .iter()
+        .filter(|term| field.contains(term.as_str()))
+        .count();
+    matches as f64 * per_match
+}
+
+fn query_terms(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .filter_map(|term| {
+            let term = term.trim_matches('-').trim().to_ascii_lowercase();
+            (term.len() >= 2).then_some(term)
+        })
+        .take(8)
+        .collect()
 }
 
 fn merge_csv_field<'a>(values: impl Iterator<Item = &'a str>) -> Option<String> {
