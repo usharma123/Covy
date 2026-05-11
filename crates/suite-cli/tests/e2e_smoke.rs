@@ -101,6 +101,35 @@ fn test_top_level_rewrite_plans_supported_command() {
         .stdout(predicate::str::contains("\"reducer_family\":\"git\""));
 }
 
+#[test]
+fn test_run_reduces_git_status() {
+    let root = TempDir::new().unwrap();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root.path())
+        .status()
+        .unwrap();
+    fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "git",
+            "status",
+            "--short",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"git\""))
+        .stdout(predicate::str::contains("\"raw_est_tokens\""))
+        .stdout(predicate::str::contains("\"savings_percent\""))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
