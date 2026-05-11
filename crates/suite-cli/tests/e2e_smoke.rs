@@ -8286,6 +8286,64 @@ fn test_packet28_hook_pretool_rewrites_supported_git_command() {
 
 #[test]
 #[cfg(unix)]
+fn test_packet28_hook_pretool_is_idempotent_and_ignores_non_bash_tools() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let base_payload = json!({
+        "hook_event_name":"PreToolUse",
+        "task_id":"task-pretool-idempotent",
+        "session_id":"session-pretool-idempotent",
+        "cwd":dir.path().to_str().unwrap(),
+        "tool_name":"Bash",
+        "tool_input":{"command":"git status --short src/alpha.rs"}
+    });
+    let (status, stdout) = run_claude_hook(dir.path(), &base_payload);
+    assert_eq!(status, 0);
+    let rendered: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let rewritten = rendered["hookSpecificOutput"]["updatedInput"]["command"]
+        .as_str()
+        .unwrap();
+    assert!(rewritten.contains("hook reducer-runner"));
+
+    let (status, stdout) = run_claude_hook(
+        dir.path(),
+        &json!({
+            "hook_event_name":"PreToolUse",
+            "task_id":"task-pretool-idempotent",
+            "session_id":"session-pretool-idempotent",
+            "cwd":dir.path().to_str().unwrap(),
+            "tool_name":"Bash",
+            "tool_input":{"command": rewritten}
+        }),
+    );
+    assert_eq!(status, 0);
+    assert!(stdout.trim().is_empty());
+
+    let (status, stdout) = run_claude_hook(
+        dir.path(),
+        &json!({
+            "hook_event_name":"PreToolUse",
+            "task_id":"task-pretool-non-bash",
+            "session_id":"session-pretool-idempotent",
+            "cwd":dir.path().to_str().unwrap(),
+            "tool_name":"Read",
+            "tool_input":{"file_path":"src/alpha.rs"}
+        }),
+    );
+    assert_eq!(status, 0);
+    assert!(stdout.trim().is_empty());
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
 fn test_packet28_cursor_hook_pretool_rewrites_and_returns_empty_json_on_noop() {
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();
