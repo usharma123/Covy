@@ -1,0 +1,5 @@
+# Generated experiment captures are machine-local by default.
+*
+!.gitignore
+!README.md
+!SMOKE_*.md
