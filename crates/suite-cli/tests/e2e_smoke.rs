@@ -1187,6 +1187,81 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .assert()
         .success()
         .stdout(predicate::str::contains("preserves high-importance"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Access-aware decay keeps frequently recalled context",
+            "--topic",
+            "access-decay",
+            "--importance",
+            "medium",
+            "--json",
+        ])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Dormant decay comparison note",
+            "--topic",
+            "access-decay",
+            "--importance",
+            "medium",
+            "--json",
+        ])
+        .assert()
+        .success();
+    for _ in 0..5 {
+        suite_cmd()
+            .env("HOME", home.path())
+            .args([
+                "memory",
+                "recall",
+                "frequently recalled context",
+                "--topic",
+                "access-decay",
+                "--json",
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("frequently recalled context"));
+    }
+    let accessed_count: i64 = conn
+        .query_row(
+            "SELECT access_count FROM memories WHERE content LIKE 'Access-aware decay%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(accessed_count, 5);
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["memory", "decay", "--factor", "0.5", "--json"])
+        .assert()
+        .success();
+    let accessed_weight: f64 = conn
+        .query_row(
+            "SELECT weight FROM memories WHERE content LIKE 'Access-aware decay%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let unaccessed_weight: f64 = conn
+        .query_row(
+            "SELECT weight FROM memories WHERE content LIKE 'Dormant decay%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        accessed_weight > unaccessed_weight,
+        "accessed weight {accessed_weight} should exceed unaccessed weight {unaccessed_weight}"
+    );
 }
 
 #[test]

@@ -430,6 +430,7 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
 
 pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<Vec<MemoryRecord>> {
     let conn = open_memory_db()?;
+    let now = timestamp_unix_ms();
     let expanded_limit = expanded_filter_limit(input.limit, input.has_filters());
     let mut fts_records = Vec::new();
     if let Some(match_query) = fts_match_query(input.query) {
@@ -450,13 +451,26 @@ pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<V
     let vector_records = filter_memory_records(vector_records, input);
     let hybrid_records = merge_hybrid_memory_records(fts_records, vector_records, input.limit);
     if !hybrid_records.is_empty() {
+        mark_memories_accessed(&conn, &hybrid_records, now)?;
         return Ok(hybrid_records);
     }
     let records = recall_memories_like(&conn, input.query, expanded_limit)?;
-    Ok(limit_memory_records(
-        filter_memory_records(records, input),
-        input.limit,
-    ))
+    let records = limit_memory_records(filter_memory_records(records, input), input.limit);
+    mark_memories_accessed(&conn, &records, now)?;
+    Ok(records)
+}
+
+fn mark_memories_accessed(conn: &Connection, records: &[MemoryRecord], now: i64) -> Result<()> {
+    for record in records {
+        conn.execute(
+            "UPDATE memories
+             SET access_count = access_count + 1,
+                 last_accessed_unix_ms = ?1
+             WHERE id = ?2",
+            params![now, record.id],
+        )?;
+    }
+    Ok(())
 }
 
 fn merge_hybrid_memory_records(
@@ -813,15 +827,17 @@ pub(crate) fn decay_memories(factor: f64) -> Result<MemoryDecayReport> {
     let decayed_count = conn.execute(
         "UPDATE memories
          SET weight = weight * MAX(
-                 0.0,
-                 1.0 - ((1.0 - ?1) *
+             0.0,
+             1.0 - (
+                 ((1.0 - ?1) *
                      CASE LOWER(importance)
                          WHEN 'high' THEN 0.5
                          WHEN 'low' THEN 2.0
                          ELSE 1.0
                      END
-                 )
-             ),
+                 ) / (1.0 + (MIN(access_count, 5) * 0.1))
+             )
+         ),
              updated_at_unix_ms = ?2
          WHERE LOWER(importance) != 'critical'",
         params![factor, timestamp_unix_ms()],
@@ -2763,6 +2779,8 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
             source TEXT,
             raw_excerpt TEXT,
             weight REAL NOT NULL DEFAULT 1.0,
+            access_count INTEGER NOT NULL DEFAULT 0,
+            last_accessed_unix_ms INTEGER NOT NULL DEFAULT 0,
             created_at_unix_ms INTEGER NOT NULL,
             updated_at_unix_ms INTEGER NOT NULL DEFAULT 0
         );
@@ -2966,11 +2984,27 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
     add_column_if_missing(
         conn,
         "memories",
+        "access_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        conn,
+        "memories",
+        "last_accessed_unix_ms",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        conn,
+        "memories",
         "updated_at_unix_ms",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     conn.execute(
         "UPDATE memories SET updated_at_unix_ms = created_at_unix_ms WHERE updated_at_unix_ms = 0",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE memories SET last_accessed_unix_ms = updated_at_unix_ms WHERE last_accessed_unix_ms = 0",
         [],
     )?;
     add_column_if_missing(
