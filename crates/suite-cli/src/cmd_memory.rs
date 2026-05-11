@@ -522,9 +522,11 @@ fn run_health(args: MemoryHealthArgs) -> Result<i32> {
         );
         for topic in report.topics {
             println!(
-                "{} count={} stale={} oldest_age_days={} newest_age_days={} consolidation_needed={}",
+                "{} count={} avg_weight={:.3} avg_access_count={:.2} stale={} oldest_age_days={} newest_age_days={} consolidation_needed={}",
                 topic.topic,
                 topic.memory_count,
+                topic.avg_weight,
+                topic.avg_access_count,
                 topic.stale_count,
                 topic.oldest_age_days,
                 topic.newest_age_days,

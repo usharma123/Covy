@@ -247,6 +247,8 @@ pub(crate) struct MemoryTopicStats {
 pub(crate) struct MemoryHealthTopic {
     pub(crate) topic: String,
     pub(crate) memory_count: i64,
+    pub(crate) avg_weight: f64,
+    pub(crate) avg_access_count: f64,
     pub(crate) stale_count: i64,
     pub(crate) oldest_age_days: i64,
     pub(crate) newest_age_days: i64,
@@ -762,6 +764,8 @@ pub(crate) fn memory_health(
             "SELECT
                 topic,
                 COUNT(*),
+                AVG(weight),
+                AVG(CAST(access_count AS REAL)),
                 SUM(CASE WHEN updated_at_unix_ms <= ?1 THEN 1 ELSE 0 END),
                 MIN(updated_at_unix_ms),
                 MAX(updated_at_unix_ms)
@@ -782,6 +786,8 @@ pub(crate) fn memory_health(
             "SELECT
                 topic,
                 COUNT(*),
+                AVG(weight),
+                AVG(CAST(access_count AS REAL)),
                 SUM(CASE WHEN updated_at_unix_ms <= ?1 THEN 1 ELSE 0 END),
                 MIN(updated_at_unix_ms),
                 MAX(updated_at_unix_ms)
@@ -2481,12 +2487,14 @@ fn read_health_rows<P: rusqlite::Params>(
 ) -> Result<Vec<MemoryHealthTopic>> {
     let rows = stmt.query_map(params, |row| {
         let memory_count: i64 = row.get(1)?;
-        let oldest_updated: i64 = row.get(3)?;
-        let newest_updated: i64 = row.get(4)?;
+        let oldest_updated: i64 = row.get(5)?;
+        let newest_updated: i64 = row.get(6)?;
         Ok(MemoryHealthTopic {
             topic: row.get(0)?,
             memory_count,
-            stale_count: row.get::<_, Option<i64>>(2)?.unwrap_or_default(),
+            avg_weight: row.get::<_, Option<f64>>(2)?.unwrap_or_default(),
+            avg_access_count: row.get::<_, Option<f64>>(3)?.unwrap_or_default(),
+            stale_count: row.get::<_, Option<i64>>(4)?.unwrap_or_default(),
             oldest_age_days: age_days(now, oldest_updated, day_ms),
             newest_age_days: age_days(now, newest_updated, day_ms),
             consolidation_needed: memory_count >= consolidation_threshold,

@@ -1115,6 +1115,8 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .stdout(predicate::str::contains(
             "\"topics_needing_consolidation\":1",
         ))
+        .stdout(predicate::str::contains("\"avg_weight\""))
+        .stdout(predicate::str::contains("\"avg_access_count\""))
         .stdout(predicate::str::contains("\"consolidation_needed\":true"));
 
     suite_cmd()
