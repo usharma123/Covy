@@ -1,0 +1,5 @@
+# Raw experiment runs are large and machine-local. Keep the reproducible
+# runner and summary README in git, but leave captured stdout/stderr artifacts
+# local unless a specific run needs to be published.
+20*/
+fix*/

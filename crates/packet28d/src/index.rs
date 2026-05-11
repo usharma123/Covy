@@ -40,6 +40,13 @@ pub(crate) fn enqueue_index_command(
 pub(crate) fn enqueue_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
     {
         let mut guard = state.lock().map_err(lock_err)?;
+        let full_rebuild_already_in_flight = matches!(
+            guard.interactive_index.manifest.status.as_str(),
+            "queued" | "building"
+        ) && guard.interactive_index.snapshot.is_none();
+        if full_rebuild_already_in_flight {
+            return Ok(());
+        }
         guard.interactive_index.manifest.status = "queued".to_string();
         guard.interactive_index.manifest.total_files = 0;
         guard.interactive_index.manifest.indexed_files = 0;

@@ -42,9 +42,9 @@ const MAX_LITERAL_COVER: usize = 8;
 const MAX_INDEXED_FILE_BYTES: usize = 2 * 1024 * 1024;
 const SEGMENT_DOC_BATCH_SIZE: usize = 256;
 const SEGMENT_RECORD_BYTES: usize = 14;
-const MAX_INDEX_VERIFY_CANDIDATES: usize = 96;
+const MAX_INDEX_VERIFY_CANDIDATES: usize = 1024;
 const MAX_INDEX_VERIFY_NUMERATOR: usize = 1;
-const MAX_INDEX_VERIFY_DENOMINATOR: usize = 3;
+const MAX_INDEX_VERIFY_DENOMINATOR: usize = 2;
 const POSITION_BUCKET_COUNT: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -824,15 +824,16 @@ fn assess_plan_strength(loaded: &LoadedIndex, plan: &SearchPlan) -> Option<PlanS
             for child in children {
                 match assess_plan_strength(loaded, child) {
                     Some(PlanStrength::Strong) => saw_strong = true,
-                    Some(PlanStrength::Weak) => return None,
+                    Some(PlanStrength::Weak) => {}
                     None => return None,
                 }
             }
-            Some(if saw_strong {
-                PlanStrength::Strong
-            } else {
-                PlanStrength::Weak
-            })
+            let total_paths = all_indexed_paths(loaded, None).len().max(1);
+            let estimated_candidates = estimate_plan_cardinality(loaded, plan, None, total_paths);
+            if saw_strong || estimated_candidates.saturating_mul(2) <= total_paths {
+                return Some(PlanStrength::Strong);
+            }
+            Some(PlanStrength::Weak)
         }
     }
 }
@@ -2443,6 +2444,9 @@ fn normalize_capture_path(root: &Path, text: &str) -> String {
     if trimmed.is_empty() || trimmed.contains('\n') {
         return String::new();
     }
+    if trimmed == "." || trimmed == "./" {
+        return String::new();
+    }
     let path = PathBuf::from(trimmed);
     if path.is_absolute() {
         if let Ok(stripped) = path.strip_prefix(root) {
@@ -2467,7 +2471,10 @@ fn resolve_requested_paths(root: &Path, requested_paths: &[String]) -> (Vec<Stri
     for original in requested_paths {
         let normalized = normalize_capture_path(root, original);
         if normalized.is_empty() {
-            diagnostics.push(format!("ignored invalid path input: {}", original.trim()));
+            let trimmed = original.trim();
+            if trimmed != "." && trimmed != "./" {
+                diagnostics.push(format!("ignored invalid path input: {trimmed}"));
+            }
             continue;
         }
         let direct = root.join(&normalized);
@@ -2829,6 +2836,69 @@ mod tests {
         };
         let reason = guarded_fallback_reason(root, &runtime, &request).unwrap();
         assert!(reason.is_some());
+    }
+
+    #[test]
+    fn guarded_fallback_allows_bounded_alternation_with_weak_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        for idx in 0..128 {
+            let content = match idx {
+                0..=9 => format!("pub fn item_{idx}() {{ hook(); }}\n"),
+                10..=19 => format!("pub fn item_{idx}() {{ mcp(); }}\n"),
+                20..=24 => format!("pub fn item_{idx}() {{ tool_use(); }}\n"),
+                _ => format!("pub fn item_{idx}() {{ filler_{idx}(); }}\n"),
+            };
+            fs::write(root.join("src").join(format!("item_{idx}.rs")), content).unwrap();
+        }
+        let runtime = rebuild_full_index(root, true).unwrap();
+        let request = SearchRequest {
+            query: "hook|mcp|tool_use".to_string(),
+            ..SearchRequest::default()
+        };
+
+        let reason = guarded_fallback_reason(root, &runtime, &request).unwrap();
+        assert_eq!(reason, None);
+
+        let result = indexed_search(root, &runtime, &request).unwrap();
+        assert_eq!(result.match_count, 25);
+        assert_eq!(
+            result.engine.as_ref().map(|engine| engine.engine.as_str()),
+            Some("indexed_regex")
+        );
+    }
+
+    #[test]
+    fn dot_requested_path_means_repo_root_for_indexed_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn sample() { tool_use(); }\n").unwrap();
+        for idx in 0..16 {
+            fs::write(
+                root.join("src").join(format!("filler_{idx}.rs")),
+                format!("pub fn filler_{idx}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        let runtime = rebuild_full_index(root, true).unwrap();
+        let request = SearchRequest {
+            query: "tool_use".to_string(),
+            requested_paths: vec![".".to_string()],
+            ..SearchRequest::default()
+        };
+
+        let reason = guarded_fallback_reason(root, &runtime, &request).unwrap();
+        assert_eq!(reason, None);
+
+        let result = indexed_search(root, &runtime, &request).unwrap();
+        assert_eq!(result.match_count, 1);
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(
+            result.engine.as_ref().map(|engine| engine.engine.as_str()),
+            Some("indexed_regex")
+        );
     }
 
     #[test]
