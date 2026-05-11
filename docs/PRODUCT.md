@@ -93,7 +93,7 @@ Packet28 graph show Packet28
 Packet28 graph add-concept Packet28 --memoir Packet28 --label domain:context --confidence 0.82 --source-id memory:packet28
 Packet28 graph refine Packet28 "local context runtime with reducers"
 Packet28 graph link Packet28 Reducers --relation uses
-Packet28 graph search reducers
+Packet28 graph search context --memoir Packet28 --label domain:context
 Packet28 graph export --format dot
 Packet28 graph stats
 Packet28 graph inspect

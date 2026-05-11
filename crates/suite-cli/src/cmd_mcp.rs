@@ -68,7 +68,7 @@ use crate::memory_store::{
     learn_project_graph, link_concepts, list_feedback, list_graph_memoirs, list_memories_filtered,
     list_pending_extractions, list_transcript_sessions, local_store_stats, memory_health,
     memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
-    record_feedback_with_metadata, refine_concept, search_concepts, search_feedback,
+    record_feedback_with_metadata, refine_concept, search_concepts_filtered, search_feedback,
     search_transcripts, show_graph_memoir, show_transcript_session, store_memory_with_metadata,
     transcript_stats, update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery,
     MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput, TranscriptAppendInput,
@@ -936,6 +936,8 @@ fn handle_method(
                         "required": ["query"],
                         "properties": {
                             "query": {"type":"string"},
+                            "memoir": {"type":"string"},
+                            "label": {"type":"string"},
                             "limit": {"type":"integer","minimum":1}
                         }
                     }
@@ -1658,8 +1660,10 @@ fn handle_tool_call(
         }
         "packet28.graph_search" => {
             let request: GraphSearchToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(search_concepts(
+            serde_json::to_value(search_concepts_filtered(
                 &request.query,
+                request.memoir.as_deref(),
+                request.label.as_deref(),
                 request.limit.unwrap_or(10),
             )?)?
         }
@@ -1928,6 +1932,8 @@ struct GraphLinkToolArgs {
 #[derive(Debug, Deserialize)]
 struct GraphSearchToolArgs {
     query: String,
+    memoir: Option<String>,
+    label: Option<String>,
     limit: Option<usize>,
 }
 

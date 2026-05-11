@@ -1614,7 +1614,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             "method":"tools/call",
             "params":{
                 "name":"packet28.graph_search",
-                "arguments":{"query":"reducers", "limit": 5}
+                "arguments":{"query":"context", "memoir":"McpMemoir", "label":"domain:context", "limit": 5}
             }
         }),
     );
@@ -1625,6 +1625,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             .unwrap()
             .len()
             >= 1
+    );
+    assert_eq!(
+        graph_search["result"]["structuredContent"][0]["memoir_name"].as_str(),
+        Some("McpMemoir")
     );
 
     write_mcp_message(
@@ -2107,10 +2111,21 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .success();
     suite_cmd()
         .env("HOME", home.path())
-        .args(["graph", "search", "reducers", "--json"])
+        .args([
+            "graph",
+            "search",
+            "context",
+            "--memoir",
+            "Packet28Memoir",
+            "--label",
+            "domain:context",
+            "--json",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Packet28"));
+        .stdout(predicate::str::contains("Packet28"))
+        .stdout(predicate::str::contains("domain:context"))
+        .stdout(predicate::str::contains("Packet28Memoir"));
     suite_cmd()
         .env("HOME", home.path())
         .args(["graph", "export", "--format", "dot"])

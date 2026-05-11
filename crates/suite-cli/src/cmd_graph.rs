@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 
 use crate::memory_store::{
     add_concept_with_metadata, create_graph_memoir, delete_concept, export_graph, graph_stats,
-    inspect_graph, link_concepts, list_graph_memoirs, refine_concept, search_concepts,
+    inspect_graph, link_concepts, list_graph_memoirs, refine_concept, search_concepts_filtered,
     show_graph_memoir,
 };
 
@@ -101,6 +101,10 @@ pub struct GraphDeleteArgs {
 #[derive(Args)]
 pub struct GraphSearchArgs {
     pub query: String,
+    #[arg(long)]
+    pub memoir: Option<String>,
+    #[arg(long)]
+    pub label: Option<String>,
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
     #[arg(long)]
@@ -220,7 +224,12 @@ pub fn run(args: GraphArgs) -> Result<i32> {
             }
         }
         GraphCommands::Search(args) => {
-            let concepts = search_concepts(&args.query, args.limit)?;
+            let concepts = search_concepts_filtered(
+                &args.query,
+                args.memoir.as_deref(),
+                args.label.as_deref(),
+                args.limit,
+            )?;
             if args.json {
                 crate::cmd_common::emit_json(&serde_json::to_value(concepts)?, args.pretty)?;
             } else {

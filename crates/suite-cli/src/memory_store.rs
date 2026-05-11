@@ -1422,7 +1422,12 @@ pub(crate) fn delete_concept(name: &str) -> Result<GraphDeleteReport> {
     })
 }
 
-pub(crate) fn search_concepts(query: &str, limit: usize) -> Result<Vec<GraphConcept>> {
+pub(crate) fn search_concepts_filtered(
+    query: &str,
+    memoir: Option<&str>,
+    label: Option<&str>,
+    limit: usize,
+) -> Result<Vec<GraphConcept>> {
     let conn = open_memory_db()?;
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
@@ -1435,6 +1440,7 @@ pub(crate) fn search_concepts(query: &str, limit: usize) -> Result<Vec<GraphConc
              LIMIT ?2",
         )?;
         let concepts = read_concept_rows(&mut stmt, params![match_query, limit.max(1) as i64])?;
+        let concepts = filter_graph_concepts(concepts, memoir, label);
         if !concepts.is_empty() {
             return Ok(concepts);
         }
@@ -1444,11 +1450,12 @@ pub(crate) fn search_concepts(query: &str, limit: usize) -> Result<Vec<GraphConc
         "SELECT id, name, description, memoir_name, labels, confidence, revision,
                 source_ids, created_at_unix_ms, updated_at_unix_ms
          FROM concepts
-         WHERE name LIKE ?1 OR IFNULL(description, '') LIKE ?1
+         WHERE name LIKE ?1 OR IFNULL(description, '') LIKE ?1 OR labels LIKE ?1
          ORDER BY name ASC
          LIMIT ?2",
     )?;
-    read_concept_rows(&mut stmt, params![pattern, limit.max(1) as i64])
+    let concepts = read_concept_rows(&mut stmt, params![pattern, limit.max(1) as i64])?;
+    Ok(filter_graph_concepts(concepts, memoir, label))
 }
 
 pub(crate) fn link_concepts(source: &str, target: &str, relation: &str) -> Result<GraphRelation> {
@@ -1622,6 +1629,28 @@ fn read_concept_by_name(conn: &Connection, name: &str) -> Result<GraphConcept> {
     concepts
         .pop()
         .ok_or_else(|| anyhow::anyhow!("concept not found after insert: {name}"))
+}
+
+fn filter_graph_concepts(
+    concepts: Vec<GraphConcept>,
+    memoir: Option<&str>,
+    label: Option<&str>,
+) -> Vec<GraphConcept> {
+    let memoir = memoir.map(str::trim).filter(|value| !value.is_empty());
+    let label = label.map(str::trim).filter(|value| !value.is_empty());
+    concepts
+        .into_iter()
+        .filter(|concept| {
+            memoir
+                .map(|memoir| concept.memoir_name == memoir)
+                .unwrap_or(true)
+        })
+        .filter(|concept| {
+            label
+                .map(|label| concept.labels.iter().any(|value| value == label))
+                .unwrap_or(true)
+        })
+        .collect()
 }
 
 fn read_concepts_for_memoir(
