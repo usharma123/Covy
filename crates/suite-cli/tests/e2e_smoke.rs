@@ -725,6 +725,21 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         })
         .unwrap();
     assert_eq!(embedding_rows, 1);
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "recall",
+            "updated second",
+            "--project",
+            "coverage-b",
+            "--format",
+            "toon",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("memories[1]{score,id,topic"))
+        .stdout(predicate::str::contains("Consolidated memory for topic"));
 
     suite_cmd()
         .env("HOME", home.path())

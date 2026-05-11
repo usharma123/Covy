@@ -402,6 +402,11 @@ pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<V
             return Ok(limit_memory_records(records, input.limit));
         }
     }
+    let vector_records = recall_memories_vector(&conn, input, expanded_limit)?;
+    let vector_records = filter_memory_records(vector_records, input);
+    if !vector_records.is_empty() {
+        return Ok(limit_memory_records(vector_records, input.limit));
+    }
     let records = recall_memories_like(&conn, input.query, expanded_limit)?;
     Ok(limit_memory_records(
         filter_memory_records(records, input),
@@ -427,6 +432,68 @@ fn recall_memories_like(conn: &Connection, query: &str, limit: usize) -> Result<
          LIMIT ?2",
     )?;
     read_memory_rows(&mut stmt, params![pattern, limit.max(1) as i64])
+}
+
+fn recall_memories_vector(
+    conn: &Connection,
+    input: MemoryRecallQuery<'_>,
+    limit: usize,
+) -> Result<Vec<MemoryRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT
+            m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.project, m.source, m.raw_excerpt, m.weight,
+            m.created_at_unix_ms, m.updated_at_unix_ms,
+            e.dimensions, e.embedding_json
+         FROM memory_embeddings e
+         JOIN memories m ON m.id = e.memory_id
+         WHERE e.model = 'packet28-local-hash-v1'",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let dimensions: i64 = row.get(12)?;
+        Ok((
+            MemoryRecord {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                tags: row.get(2)?,
+                topic: row.get(3)?,
+                importance: row.get(4)?,
+                keywords: row.get(5)?,
+                project: row.get(6)?,
+                source: row.get(7)?,
+                raw_excerpt: row.get(8)?,
+                weight: row.get(9)?,
+                recall_score: None,
+                created_at_unix_ms: row.get(10)?,
+                updated_at_unix_ms: row.get(11)?,
+            },
+            dimensions.max(0) as usize,
+            row.get::<_, String>(13)?,
+        ))
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        let (mut record, dimensions, embedding_json) = row?;
+        let Ok(embedding) = serde_json::from_str::<Vec<f64>>(&embedding_json) else {
+            continue;
+        };
+        if dimensions == 0 || embedding.is_empty() {
+            continue;
+        }
+        let query_embedding = deterministic_embedding(input.query, dimensions);
+        let score = cosine_similarity(&query_embedding, &embedding);
+        if score > 0.0 {
+            record.recall_score = Some(score);
+            records.push(record);
+        }
+    }
+    records.sort_by(|a, b| {
+        b.recall_score
+            .partial_cmp(&a.recall_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.updated_at_unix_ms.cmp(&a.updated_at_unix_ms))
+    });
+    records.truncate(limit.max(1));
+    Ok(records)
 }
 
 pub(crate) fn list_memories(limit: usize) -> Result<Vec<MemoryRecord>> {
@@ -2031,6 +2098,13 @@ fn deterministic_embedding(content: &str, dimensions: usize) -> Vec<f64> {
         }
     }
     vector
+}
+
+fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {
+    left.iter()
+        .zip(right.iter())
+        .map(|(a, b)| a * b)
+        .sum::<f64>()
 }
 
 fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {
