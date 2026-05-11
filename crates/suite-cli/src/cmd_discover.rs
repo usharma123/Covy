@@ -89,40 +89,39 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
     let session_files = collect_session_files(&sessions_dir, args.limit)?;
     report.sessions_scanned = session_files.len();
 
-    let mut command_counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut command_tokens: BTreeMap<String, u64> = BTreeMap::new();
+    let mut unsupported_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unsupported_tokens: BTreeMap<String, u64> = BTreeMap::new();
 
     for file in &session_files {
         if let Ok(commands) = extract_bash_commands(file) {
             for (cmd, est_tokens) in commands {
-                report.commands_found += 1;
-                let program = cmd.split_whitespace().next().unwrap_or("").to_string();
-                *command_counts.entry(program.clone()).or_insert(0) += 1;
-                *command_tokens.entry(program).or_insert(0) += est_tokens;
+                for part in split_command_chain(&cmd) {
+                    report.commands_found += 1;
+                    let program = program_name(&part);
+                    let part_tokens = ((part.len() as u64) / 4).max(1).min(est_tokens.max(1));
+                    if command_part_supported(&part) {
+                        report.supported_commands += 1;
+                        let category = categorize_command(&program);
+                        let entry = report.by_category.entry(category).or_default();
+                        entry.count += 1;
+                        entry.estimated_tokens += part_tokens;
+                    } else {
+                        report.unsupported_commands += 1;
+                        *unsupported_counts.entry(program.clone()).or_insert(0) += 1;
+                        *unsupported_tokens.entry(program).or_insert(0) += part_tokens;
+                    }
+                }
             }
         }
     }
 
-    for (program, count) in &command_counts {
-        let tokens = command_tokens.get(program).copied().unwrap_or(0);
-        let classified = packet28_reducer_core::classify_command(&format!("{program} --help"))
-            .is_some()
-            || is_known_reducible(program);
-
-        if classified {
-            report.supported_commands += count;
-            let category = categorize_command(program);
-            let entry = report.by_category.entry(category).or_default();
-            entry.count += count;
-            entry.estimated_tokens += tokens;
-        } else {
-            report.unsupported_commands += count;
-            report.top_unsupported.push(UnsupportedCommand {
-                command: program.clone(),
-                count: *count,
-                estimated_tokens: tokens,
-            });
-        }
+    for (program, count) in &unsupported_counts {
+        let tokens = unsupported_tokens.get(program).copied().unwrap_or(0);
+        report.top_unsupported.push(UnsupportedCommand {
+            command: program.clone(),
+            count: *count,
+            estimated_tokens: tokens,
+        });
     }
 
     report
@@ -328,6 +327,64 @@ fn is_known_reducible(program: &str) -> bool {
             | "diff"
             | "aws"
     )
+}
+
+fn command_part_supported(command: &str) -> bool {
+    let program = program_name(command);
+    matches!(
+        program.as_str(),
+        "Packet28" | "packet28" | "packet28-mcp" | "p28"
+    ) || !matches!(
+        crate::route_registry::decide_command_route(command).kind,
+        crate::route_registry::RouteKind::RawPassthrough
+    ) || is_known_reducible(&program)
+}
+
+fn program_name(command: &str) -> String {
+    command.split_whitespace().next().unwrap_or("").to_string()
+}
+
+fn split_command_chain(command: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut chars = command.char_indices().peekable();
+    let mut quote = None::<char>;
+    while let Some((idx, ch)) = chars.next() {
+        if matches!(ch, '\'' | '"') {
+            if quote == Some(ch) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(ch);
+            }
+            continue;
+        }
+        if quote.is_some() {
+            continue;
+        }
+        let next = chars.peek().map(|(_, ch)| *ch);
+        let delimiter_len = match (ch, next) {
+            ('&', Some('&')) | ('|', Some('|')) => 2,
+            (';', _) => 1,
+            _ => 0,
+        };
+        if delimiter_len == 0 {
+            continue;
+        }
+        push_command_part(command, start, idx, &mut parts);
+        start = idx + delimiter_len;
+        if delimiter_len == 2 {
+            let _ = chars.next();
+        }
+    }
+    push_command_part(command, start, command.len(), &mut parts);
+    parts
+}
+
+fn push_command_part(command: &str, start: usize, end: usize, parts: &mut Vec<String>) {
+    let part = command[start..end].trim();
+    if !part.is_empty() {
+        parts.push(part.to_string());
+    }
 }
 
 fn categorize_command(program: &str) -> String {

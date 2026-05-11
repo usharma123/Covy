@@ -1651,6 +1651,53 @@ fn test_discover_reports_run_missed_savings() {
 }
 
 #[test]
+fn test_discover_splits_chained_session_commands() {
+    let root = TempDir::new().unwrap();
+    let sessions_dir = root.path().join("claude-projects").join("project");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    let session_file = sessions_dir.join("session-b.jsonl");
+    let line = json!({
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": {
+                        "command": "git status --short && echo raw"
+                    }
+                },
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": {
+                        "command": "pytest -q"
+                    }
+                }
+            ]
+        }
+    });
+    fs::write(&session_file, format!("{line}\n")).unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "discover",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"commands_found\":3"))
+        .stdout(predicate::str::contains("\"supported_commands\":2"))
+        .stdout(predicate::str::contains("\"unsupported_commands\":1"))
+        .stdout(predicate::str::contains("\"command\":\"echo\""));
+}
+
+#[test]
 fn test_session_reports_adoption_from_session_jsonl() {
     let root = TempDir::new().unwrap();
     let sessions_dir = root
