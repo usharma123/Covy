@@ -124,6 +124,16 @@ pub(crate) struct GraphConceptInspect {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphDistillReport {
+    pub(crate) topic: String,
+    pub(crate) memoir: String,
+    pub(crate) source_memory_count: usize,
+    pub(crate) created_count: usize,
+    pub(crate) refined_count: usize,
+    pub(crate) concepts: Vec<GraphConcept>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct GraphDeleteReport {
     pub(crate) deleted_concepts: usize,
     pub(crate) deleted_relations: usize,
@@ -1568,6 +1578,78 @@ pub(crate) fn inspect_graph_concept(
     })
 }
 
+pub(crate) fn distill_memories_to_graph(
+    topic: &str,
+    memoir: Option<&str>,
+    limit: usize,
+) -> Result<GraphDistillReport> {
+    let topic = normalize_non_empty(Some(topic), "general");
+    let memoir = normalize_non_empty(memoir, DEFAULT_MEMOIR_NAME);
+    create_graph_memoir(
+        Some(&memoir),
+        Some(&format!("Distilled memories for {topic}")),
+    )?;
+    let memories = list_memories_filtered(MemoryListQuery {
+        limit: limit.max(1),
+        topic: Some(&topic),
+        project: None,
+        all: true,
+        sort: "recent",
+    })?;
+    if memories.is_empty() {
+        anyhow::bail!("no memories found in topic: {topic}");
+    }
+    let mut created_count = 0usize;
+    let mut refined_count = 0usize;
+    let mut concepts = Vec::new();
+    for memory in &memories {
+        let keywords = split_csv_field(memory.keywords.as_deref());
+        let concept_name = keywords
+            .first()
+            .cloned()
+            .unwrap_or_else(|| format!("{}-{}", topic, memory.id));
+        let existing = read_concept_by_name_optional(&open_memory_db()?, &concept_name)?;
+        let source_id = format!("memory:{}", memory.id);
+        let mut labels = vec![format!("topic:{topic}")];
+        labels.extend(keywords.iter().map(|keyword| format!("tag:{keyword}")));
+        labels.sort();
+        labels.dedup();
+        let description = match existing
+            .as_ref()
+            .and_then(|concept| concept.description.as_ref())
+        {
+            Some(existing_description) if !existing_description.contains(&memory.content) => {
+                format!("{existing_description}\n---\n{}", memory.content)
+            }
+            Some(existing_description) => existing_description.clone(),
+            None => memory.content.clone(),
+        };
+        let mut concept = add_concept_with_metadata(
+            &concept_name,
+            Some(&description),
+            Some(&memoir),
+            &labels,
+            Some(memory.weight.clamp(0.0, 1.0)),
+            &[source_id],
+        )?;
+        if existing.is_some() {
+            concept = refine_concept(&concept_name, &description)?;
+            refined_count += 1;
+        } else {
+            created_count += 1;
+        }
+        concepts.push(concept);
+    }
+    Ok(GraphDistillReport {
+        topic,
+        memoir,
+        source_memory_count: memories.len(),
+        created_count,
+        refined_count,
+        concepts,
+    })
+}
+
 pub(crate) fn graph_stats() -> Result<GraphStats> {
     let conn = open_memory_db()?;
     let mut stmt = conn.prepare(
@@ -1692,6 +1774,17 @@ fn read_concept_by_name(conn: &Connection, name: &str) -> Result<GraphConcept> {
     concepts
         .pop()
         .ok_or_else(|| anyhow::anyhow!("concept not found after insert: {name}"))
+}
+
+fn read_concept_by_name_optional(conn: &Connection, name: &str) -> Result<Option<GraphConcept>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, description, memoir_name, labels, confidence, revision,
+                source_ids, created_at_unix_ms, updated_at_unix_ms
+         FROM concepts
+         WHERE name = ?1",
+    )?;
+    let mut concepts = read_concept_rows(&mut stmt, params![name])?;
+    Ok(concepts.pop())
 }
 
 fn filter_graph_concepts(
@@ -2181,6 +2274,16 @@ fn csv_field_contains(field: Option<&str>, needle: &str) -> bool {
             .unwrap_or_default()
             .split(',')
             .any(|part| part.trim().eq_ignore_ascii_case(needle))
+}
+
+fn split_csv_field(field: Option<&str>) -> Vec<String> {
+    field
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn project_identity(root: &Path, fallback_name: &str) -> String {

@@ -63,16 +63,16 @@ use crate::cmd_wakeup::build_wakeup_report_with_options;
 use crate::memory_store::{
     add_concept_with_metadata, append_transcript_message, apply_feedback, consolidate_memories,
     create_graph_memoir, decay_memories, delete_concept, delete_feedback,
-    delete_pending_extractions, embed_memories, enqueue_pending_extraction, export_graph,
-    feedback_stats, forget_memories_by_topic, forget_memory, graph_stats, inspect_graph,
-    inspect_graph_concept, learn_project_graph, link_concepts, list_feedback, list_graph_memoirs,
-    list_memories_filtered, list_pending_extractions, list_transcript_sessions, local_store_stats,
-    memory_health, memory_topics, process_pending_extractions, prune_memories,
-    recall_memories_filtered, record_feedback_with_metadata, refine_concept,
-    search_concepts_filtered, search_feedback, search_transcripts, show_graph_memoir,
-    show_transcript_session, store_memory_with_metadata, transcript_stats, update_memory,
-    FeedbackInput, MemoryListQuery, MemoryRecallQuery, MemoryStoreInput, MemoryUpdateInput,
-    PendingExtractionInput, TranscriptAppendInput,
+    delete_pending_extractions, distill_memories_to_graph, embed_memories,
+    enqueue_pending_extraction, export_graph, feedback_stats, forget_memories_by_topic,
+    forget_memory, graph_stats, inspect_graph, inspect_graph_concept, learn_project_graph,
+    link_concepts, list_feedback, list_graph_memoirs, list_memories_filtered,
+    list_pending_extractions, list_transcript_sessions, local_store_stats, memory_health,
+    memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
+    record_feedback_with_metadata, refine_concept, search_concepts_filtered, search_feedback,
+    search_transcripts, show_graph_memoir, show_transcript_session, store_memory_with_metadata,
+    transcript_stats, update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery,
+    MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput, TranscriptAppendInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
@@ -1228,6 +1228,19 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.graph_distill",
+                    "description": "Distill memories from a Packet28 topic into memoir-style graph concepts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["from_topic"],
+                        "properties": {
+                            "from_topic": {"type":"string"},
+                            "into": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.write_intention",
                     "description": "Persist the current task objective and worker intent into Packet28.",
                     "inputSchema": {
@@ -1711,6 +1724,14 @@ fn handle_tool_call(
                 request.depth.unwrap_or(1),
             )?)?
         }
+        "packet28.graph_distill" => {
+            let request: GraphDistillToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(distill_memories_to_graph(
+                &request.from_topic,
+                request.into.as_deref(),
+                request.limit.unwrap_or(100),
+            )?)?
+        }
         "packet28.task_status" => {
             let task_id = resolve_session_task_id(
                 session,
@@ -1988,6 +2009,13 @@ struct GraphInspectConceptToolArgs {
     name: String,
     memoir: Option<String>,
     depth: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphDistillToolArgs {
+    from_topic: String,
+    into: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2364,6 +2392,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or("concept");
             format!("Packet28 graph concept inspection: {name}.")
         }
+        "packet28.graph_distill" => {
+            let created = payload
+                .get("created_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let refined = payload
+                .get("refined_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 distilled graph concepts: {created} created, {refined} refined.")
+        }
         "packet28.task_status" => "Packet28 task status.".to_string(),
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),
         _ => "Packet28 response.".to_string(),
@@ -2428,6 +2467,7 @@ mod tests {
             "packet28.graph_export",
             "packet28.graph_stats",
             "packet28.graph_inspect_concept",
+            "packet28.graph_distill",
         ] {
             assert!(
                 tool_names.contains(&required),

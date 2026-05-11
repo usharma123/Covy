@@ -2,9 +2,9 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::memory_store::{
-    add_concept_with_metadata, create_graph_memoir, delete_concept, export_graph, graph_stats,
-    inspect_graph, inspect_graph_concept, link_concepts, list_graph_memoirs, refine_concept,
-    search_concepts_filtered, show_graph_memoir,
+    add_concept_with_metadata, create_graph_memoir, delete_concept, distill_memories_to_graph,
+    export_graph, graph_stats, inspect_graph, inspect_graph_concept, link_concepts,
+    list_graph_memoirs, refine_concept, search_concepts_filtered, show_graph_memoir,
 };
 
 #[derive(Args)]
@@ -27,6 +27,7 @@ pub enum GraphCommands {
     Link(GraphLinkArgs),
     Inspect(GraphInspectArgs),
     InspectConcept(GraphInspectConceptArgs),
+    Distill(GraphDistillArgs),
 }
 
 #[derive(Args)]
@@ -169,6 +170,20 @@ pub struct GraphInspectConceptArgs {
     pub pretty: bool,
 }
 
+#[derive(Args)]
+pub struct GraphDistillArgs {
+    #[arg(long = "from-topic")]
+    pub from_topic: String,
+    #[arg(long, default_value = "default")]
+    pub into: String,
+    #[arg(long, default_value_t = 100)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
 pub fn run(args: GraphArgs) -> Result<i32> {
     match args.command {
         GraphCommands::Create(args) => {
@@ -299,6 +314,17 @@ pub fn run(args: GraphArgs) -> Result<i32> {
                 println!("concept {}", graph.concept.name);
                 println!("neighbors={}", graph.neighbors.len());
                 println!("relations={}", graph.relations.len());
+            }
+        }
+        GraphCommands::Distill(args) => {
+            let report = distill_memories_to_graph(&args.from_topic, Some(&args.into), args.limit)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+            } else {
+                println!("topic={}", report.topic);
+                println!("memoir={}", report.memoir);
+                println!("created={}", report.created_count);
+                println!("refined={}", report.refined_count);
             }
         }
     }

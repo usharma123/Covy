@@ -1773,6 +1773,51 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":69,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_store",
+                "arguments":{
+                    "content":"Distill MCP memory into a graph concept",
+                    "topic":"mcp-distill",
+                    "keywords":"McpDistill,graph",
+                    "importance":"critical"
+                }
+            }
+        }),
+    );
+    let mcp_distill_memory = read_mcp_message_for_id(&mut stdout, 69);
+    assert_eq!(
+        mcp_distill_memory["result"]["structuredContent"]["topic"].as_str(),
+        Some("mcp-distill")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":70,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_distill",
+                "arguments":{"from_topic":"mcp-distill", "into":"McpMemoir", "limit": 5}
+            }
+        }),
+    );
+    let graph_distill = read_mcp_message_for_id(&mut stdout, 70);
+    assert_eq!(
+        graph_distill["result"]["structuredContent"]["created_count"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        graph_distill["result"]["structuredContent"]["concepts"][0]["name"].as_str(),
+        Some("McpDistill")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":44,
             "method":"tools/call",
             "params":{
@@ -2264,6 +2309,37 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .stdout(predicate::str::contains("\"neighbors\""))
         .stdout(predicate::str::contains("\"relations\""))
         .stdout(predicate::str::contains("Reducers"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Reducer distillation should become a graph concept",
+            "--topic",
+            "graph-distill",
+            "--keywords",
+            "ReducerDistill,graph",
+            "--json",
+        ])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "graph",
+            "distill",
+            "--from-topic",
+            "graph-distill",
+            "--into",
+            "Packet28Memoir",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"created_count\":1"))
+        .stdout(predicate::str::contains("ReducerDistill"))
+        .stdout(predicate::str::contains("topic:graph-distill"))
+        .stdout(predicate::str::contains("memory:"));
     suite_cmd()
         .env("HOME", home.path())
         .args(["graph", "delete", "Packet28", "--json"])
