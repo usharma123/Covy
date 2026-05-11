@@ -16,7 +16,10 @@ use serde_json::{json, Value};
 use toml::value::Table as TomlTable;
 
 use crate::agent_surface;
-use crate::runtime_integrations::{claude, codex, cursor, windsurf};
+use crate::runtime_integrations::{
+    antigravity, claude, cline, codex, copilot, cursor, gemini, hermes, kilocode, opencode, roo,
+    windsurf,
+};
 
 const PACKET28_CLAUDE_HTTP_HOOK_PATH: &str = "/packet28/claude-hook";
 const PACKET28_CLAUDE_HTTP_TOKEN_HEADER: &str = "X-Packet28-Hook-Token";
@@ -35,7 +38,7 @@ pub struct SetupArgs {
     #[arg(long)]
     pub fallback_only: bool,
 
-    /// Specific runtime to configure (claude, cursor, codex, all)
+    /// Specific runtime to configure (claude, cursor, codex, windsurf, copilot, gemini, opencode, hermes, cline, roo, kilocode, antigravity, all)
     #[arg(long, default_value = "all")]
     pub runtime: String,
 }
@@ -54,6 +57,14 @@ enum RuntimeKind {
     Cursor,
     Codex,
     Windsurf,
+    Copilot,
+    Gemini,
+    OpenCode,
+    Hermes,
+    Cline,
+    Roo,
+    KiloCode,
+    Antigravity,
 }
 
 #[derive(Clone, Debug)]
@@ -494,8 +505,9 @@ fn explicit_setup_choice(args: &SetupArgs, runtimes: &[RuntimeInfo]) -> Result<S
         SetupRuntimeScope::Single(args.runtime.clone())
     } else {
         anyhow::bail!(
-            "unknown runtime '{}'. Use: claude, cursor, codex, windsurf, or all",
-            args.runtime
+            "unknown runtime '{}'. Use: {}, or all",
+            args.runtime,
+            supported_runtime_slugs().join(", ")
         );
     };
     let mode = if args.fallback_only {
@@ -510,6 +522,23 @@ fn explicit_setup_choice(args: &SetupArgs, runtimes: &[RuntimeInfo]) -> Result<S
         runtime_scope,
         fallback_only: args.fallback_only,
     })
+}
+
+fn supported_runtime_slugs() -> Vec<&'static str> {
+    vec![
+        "claude",
+        "cursor",
+        "codex",
+        "windsurf",
+        "copilot",
+        "gemini",
+        "opencode",
+        "hermes",
+        "cline",
+        "roo",
+        "kilocode",
+        "antigravity",
+    ]
 }
 
 fn prompt_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoice>> {
@@ -1264,6 +1293,86 @@ fn detect_runtimes(root: &Path) -> Vec<RuntimeInfo> {
             prompt_targets: windsurf_prompt_targets(root),
             detected: detect_windsurf(&home),
         },
+        RuntimeInfo {
+            kind: RuntimeKind::Copilot,
+            name: "GitHub Copilot",
+            slug: "copilot",
+            prompt_targets: vec![PromptTarget {
+                path: copilot::instructions_path(root),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
+            detected: detect_copilot(root),
+        },
+        RuntimeInfo {
+            kind: RuntimeKind::Gemini,
+            name: "Gemini CLI",
+            slug: "gemini",
+            prompt_targets: vec![PromptTarget {
+                path: gemini::prompt_path(root),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
+            detected: detect_gemini(&home),
+        },
+        RuntimeInfo {
+            kind: RuntimeKind::OpenCode,
+            name: "OpenCode",
+            slug: "opencode",
+            prompt_targets: vec![PromptTarget {
+                path: opencode::prompt_path(root),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
+            detected: detect_opencode(&home),
+        },
+        RuntimeInfo {
+            kind: RuntimeKind::Hermes,
+            name: "Hermes",
+            slug: "hermes",
+            prompt_targets: vec![PromptTarget {
+                path: hermes::prompt_path(root),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
+            detected: detect_hermes(&home),
+        },
+        RuntimeInfo {
+            kind: RuntimeKind::Cline,
+            name: "Cline",
+            slug: "cline",
+            prompt_targets: vec![PromptTarget {
+                path: cline::rules_path(root),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
+            detected: detect_cline(&home),
+        },
+        RuntimeInfo {
+            kind: RuntimeKind::Roo,
+            name: "Roo Code",
+            slug: "roo",
+            prompt_targets: vec![PromptTarget {
+                path: roo::rules_path(root),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
+            detected: detect_roo(&home),
+        },
+        RuntimeInfo {
+            kind: RuntimeKind::KiloCode,
+            name: "Kilo Code",
+            slug: "kilocode",
+            prompt_targets: vec![PromptTarget {
+                path: kilocode::rules_path(root),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
+            detected: detect_kilocode(&home),
+        },
+        RuntimeInfo {
+            kind: RuntimeKind::Antigravity,
+            name: "Google Antigravity",
+            slug: "antigravity",
+            prompt_targets: vec![PromptTarget {
+                path: antigravity::rules_path(root),
+                format: agent_surface::AgentPromptFormat::Agents,
+            }],
+            detected: detect_antigravity(root),
+        },
     ]
 }
 
@@ -1289,6 +1398,40 @@ fn detect_codex() -> bool {
 
 fn detect_windsurf(home: &Path) -> bool {
     home.join(".codeium").join("windsurf").is_dir() || which_exists("windsurf")
+}
+
+fn detect_copilot(root: &Path) -> bool {
+    root.join(".github")
+        .join("copilot-instructions.md")
+        .is_file()
+}
+
+fn detect_gemini(home: &Path) -> bool {
+    home.join(".gemini").is_dir() || which_exists("gemini")
+}
+
+fn detect_opencode(home: &Path) -> bool {
+    home.join(".config").join("opencode").is_dir() || which_exists("opencode")
+}
+
+fn detect_hermes(home: &Path) -> bool {
+    home.join(".hermes").is_dir() || which_exists("hermes")
+}
+
+fn detect_cline(home: &Path) -> bool {
+    home.join(".cline").is_dir()
+}
+
+fn detect_roo(home: &Path) -> bool {
+    home.join(".roo").is_dir()
+}
+
+fn detect_kilocode(home: &Path) -> bool {
+    home.join(".kilocode").is_dir() || which_exists("kilocode")
+}
+
+fn detect_antigravity(root: &Path) -> bool {
+    root.join(".agents").is_dir() || which_exists("antigravity")
 }
 
 fn which_exists(name: &str) -> bool {
@@ -1365,6 +1508,16 @@ fn configure_runtime_mcp(
         RuntimeKind::Windsurf => {
             write_windsurf_mcp_config(&mcp_config_path(runtime.kind, root), root, auto_yes)
         }
+        RuntimeKind::Copilot
+        | RuntimeKind::Gemini
+        | RuntimeKind::OpenCode
+        | RuntimeKind::Hermes
+        | RuntimeKind::Cline
+        | RuntimeKind::Roo
+        | RuntimeKind::KiloCode
+        | RuntimeKind::Antigravity => {
+            unreachable!("instruction-only runtimes do not configure MCP")
+        }
     }
 }
 
@@ -1383,7 +1536,17 @@ fn configure_runtime_hooks(
         RuntimeKind::Windsurf => {
             write_windsurf_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
-        RuntimeKind::Codex => unreachable!("codex hooks are disabled in packet28 setup"),
+        RuntimeKind::Codex
+        | RuntimeKind::Copilot
+        | RuntimeKind::Gemini
+        | RuntimeKind::OpenCode
+        | RuntimeKind::Hermes
+        | RuntimeKind::Cline
+        | RuntimeKind::Roo
+        | RuntimeKind::KiloCode
+        | RuntimeKind::Antigravity => {
+            unreachable!("this runtime does not configure Packet28 hooks")
+        }
     }
 }
 
@@ -1409,6 +1572,16 @@ fn runtime_mcp_status(runtime: &RuntimeInfo, root: &Path) -> String {
             runtime.name,
             mcp_config_path(runtime.kind, root).display()
         ),
+        RuntimeKind::Copilot
+        | RuntimeKind::Gemini
+        | RuntimeKind::OpenCode
+        | RuntimeKind::Hermes
+        | RuntimeKind::Cline
+        | RuntimeKind::Roo
+        | RuntimeKind::KiloCode
+        | RuntimeKind::Antigravity => {
+            unreachable!("instruction-only runtimes do not configure MCP")
+        }
     }
 }
 
@@ -1417,7 +1590,17 @@ fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
         RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Windsurf => {
             hook_config_path(runtime.kind, root).display().to_string()
         }
-        RuntimeKind::Codex => unreachable!("codex hooks are disabled in packet28 setup"),
+        RuntimeKind::Codex
+        | RuntimeKind::Copilot
+        | RuntimeKind::Gemini
+        | RuntimeKind::OpenCode
+        | RuntimeKind::Hermes
+        | RuntimeKind::Cline
+        | RuntimeKind::Roo
+        | RuntimeKind::KiloCode
+        | RuntimeKind::Antigravity => {
+            unreachable!("this runtime does not configure Packet28 hooks")
+        }
     }
 }
 
@@ -1427,6 +1610,16 @@ fn mcp_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
         RuntimeKind::Cursor => find_cursor_mcp_config(root).expect("cursor mcp path"),
         RuntimeKind::Codex => codex_config_path(&dirs_home()),
         RuntimeKind::Windsurf => windsurf_mcp_config_path(&dirs_home()),
+        RuntimeKind::Copilot
+        | RuntimeKind::Gemini
+        | RuntimeKind::OpenCode
+        | RuntimeKind::Hermes
+        | RuntimeKind::Cline
+        | RuntimeKind::Roo
+        | RuntimeKind::KiloCode
+        | RuntimeKind::Antigravity => {
+            unreachable!("instruction-only runtimes do not configure MCP")
+        }
     }
 }
 
@@ -1435,7 +1628,17 @@ fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
         RuntimeKind::Claude => claude::settings_path(root),
         RuntimeKind::Cursor => cursor::hook_config_path(root),
         RuntimeKind::Windsurf => windsurf::hook_config_path(root),
-        RuntimeKind::Codex => unreachable!("codex hooks are disabled in packet28 setup"),
+        RuntimeKind::Codex
+        | RuntimeKind::Copilot
+        | RuntimeKind::Gemini
+        | RuntimeKind::OpenCode
+        | RuntimeKind::Hermes
+        | RuntimeKind::Cline
+        | RuntimeKind::Roo
+        | RuntimeKind::KiloCode
+        | RuntimeKind::Antigravity => {
+            unreachable!("this runtime does not configure Packet28 hooks")
+        }
     }
 }
 
@@ -2345,6 +2548,14 @@ mod tests {
                 "cursor" => RuntimeKind::Cursor,
                 "codex" => RuntimeKind::Codex,
                 "windsurf" => RuntimeKind::Windsurf,
+                "copilot" => RuntimeKind::Copilot,
+                "gemini" => RuntimeKind::Gemini,
+                "opencode" => RuntimeKind::OpenCode,
+                "hermes" => RuntimeKind::Hermes,
+                "cline" => RuntimeKind::Cline,
+                "roo" => RuntimeKind::Roo,
+                "kilocode" => RuntimeKind::KiloCode,
+                "antigravity" => RuntimeKind::Antigravity,
                 other => panic!("unknown runtime slug: {other}"),
             },
             name,
@@ -2451,6 +2662,61 @@ mod tests {
                 fallback_only: false,
             }
         );
+    }
+
+    #[test]
+    fn detect_runtimes_includes_instruction_only_parity_targets() {
+        let root = tempdir().unwrap();
+        let runtimes = detect_runtimes(root.path());
+        let by_slug = runtimes
+            .iter()
+            .map(|runtime| (runtime.slug, runtime))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            by_slug["copilot"].prompt_targets[0].path,
+            root.path().join(".github").join("copilot-instructions.md")
+        );
+        assert_eq!(
+            by_slug["gemini"].prompt_targets[0].path,
+            root.path().join("GEMINI.md")
+        );
+        assert_eq!(
+            by_slug["cline"].prompt_targets[0].path,
+            root.path().join(".clinerules")
+        );
+        assert_eq!(
+            by_slug["roo"].prompt_targets[0].path,
+            root.path().join(".roo").join("rules").join("packet28.md")
+        );
+        assert_eq!(
+            by_slug["kilocode"].prompt_targets[0].path,
+            root.path()
+                .join(".kilocode")
+                .join("rules")
+                .join("packet28-rules.md")
+        );
+        assert_eq!(
+            by_slug["antigravity"].prompt_targets[0].path,
+            root.path()
+                .join(".agents")
+                .join("rules")
+                .join("antigravity-packet28-rules.md")
+        );
+
+        for slug in [
+            "copilot",
+            "gemini",
+            "opencode",
+            "hermes",
+            "cline",
+            "roo",
+            "kilocode",
+            "antigravity",
+        ] {
+            assert!(!runtime_supports_mcp(by_slug[slug].kind));
+            assert!(!runtime_supports_hooks(by_slug[slug].kind));
+        }
     }
 
     #[test]

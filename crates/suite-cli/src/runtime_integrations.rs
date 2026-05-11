@@ -65,3 +65,71 @@ pub(crate) mod windsurf {
         root.join(".windsurf").join("rules").join("packet28.md")
     }
 }
+
+pub(crate) mod copilot {
+    use super::*;
+
+    pub(crate) fn instructions_path(root: &Path) -> PathBuf {
+        root.join(".github").join("copilot-instructions.md")
+    }
+}
+
+pub(crate) mod gemini {
+    use super::*;
+
+    pub(crate) fn prompt_path(root: &Path) -> PathBuf {
+        root.join("GEMINI.md")
+    }
+}
+
+pub(crate) mod opencode {
+    use super::*;
+
+    pub(crate) fn prompt_path(root: &Path) -> PathBuf {
+        root.join("AGENTS.md")
+    }
+}
+
+pub(crate) mod hermes {
+    use super::*;
+
+    pub(crate) fn prompt_path(root: &Path) -> PathBuf {
+        root.join("AGENTS.md")
+    }
+}
+
+pub(crate) mod cline {
+    use super::*;
+
+    pub(crate) fn rules_path(root: &Path) -> PathBuf {
+        root.join(".clinerules")
+    }
+}
+
+pub(crate) mod roo {
+    use super::*;
+
+    pub(crate) fn rules_path(root: &Path) -> PathBuf {
+        root.join(".roo").join("rules").join("packet28.md")
+    }
+}
+
+pub(crate) mod kilocode {
+    use super::*;
+
+    pub(crate) fn rules_path(root: &Path) -> PathBuf {
+        root.join(".kilocode")
+            .join("rules")
+            .join("packet28-rules.md")
+    }
+}
+
+pub(crate) mod antigravity {
+    use super::*;
+
+    pub(crate) fn rules_path(root: &Path) -> PathBuf {
+        root.join(".agents")
+            .join("rules")
+            .join("antigravity-packet28-rules.md")
+    }
+}

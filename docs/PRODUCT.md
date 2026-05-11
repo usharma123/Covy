@@ -7,6 +7,8 @@ Setup Windsurf:
 ```bash
 npx packet28@latest
 Packet28 init --agent windsurf --yes --root .
+Packet28 init --agent cline --yes --root .
+Packet28 setup --runtime copilot --yes --root .
 Packet28 init --mode all --yes --root .
 Packet28 setup --runtime windsurf --yes --root .
 Packet28 doctor --agent windsurf --root .
@@ -17,7 +19,10 @@ Running `Packet28` with no subcommand launches the same setup wizard. The
 wizard is modeled after modern `npx` setup flows: detect installed agent
 runtimes, show a plan before writing files, preserve existing config, support
 non-interactive `--yes` mode through `Packet28 setup --yes`, verify daemon/index
-health, and print exact next-step commands.
+health, and print exact next-step commands. Claude, Cursor, Codex, and Windsurf
+keep their current MCP/hook tiers; Copilot, Gemini, OpenCode, Hermes, Cline,
+Roo Code, Kilo Code, and Antigravity are currently explicit instruction-file
+targets until hook/plugin parity is implemented and tested.
 
 Plan and run reducer-aware commands:
 

@@ -427,6 +427,39 @@ fn test_setup_windsurf_writes_rules_hooks_and_mcp() {
 
 #[test]
 #[cfg(unix)]
+fn test_setup_cline_writes_instruction_only_rules_without_mcp_or_hooks() {
+    let _guard = setup_e2e_lock();
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "cline",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("instruction files only"));
+
+    let rules_path = root.path().join(".clinerules");
+    assert!(rules_path.exists());
+    assert!(fs::read_to_string(rules_path)
+        .unwrap()
+        .contains("Packet28 Guidance"));
+    assert!(!root.path().join(".mcp.json").exists());
+    assert!(!root.path().join(".claude").join("settings.json").exists());
+    assert!(!root.path().join(".cursor").join("hooks.json").exists());
+}
+
+#[test]
+#[cfg(unix)]
 fn test_windsurf_generated_mcp_config_smoke_test() {
     let _guard = setup_e2e_lock();
     let root = TempDir::new().unwrap();

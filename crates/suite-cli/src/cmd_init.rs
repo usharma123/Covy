@@ -9,11 +9,11 @@ pub struct InitArgs {
     #[arg(long, default_value = ".")]
     pub root: String,
 
-    /// Agent runtime to configure (claude, cursor, codex, windsurf, all)
+    /// Agent runtime to configure (claude, cursor, codex, windsurf, copilot, gemini, opencode, hermes, cline, roo, kilocode, antigravity, all)
     #[arg(long)]
     pub agent: Option<String>,
 
-    /// Compatibility alias for selecting an init mode/runtime (claude, cursor, codex, windsurf, all)
+    /// Compatibility alias for selecting an init mode/runtime (claude, cursor, codex, windsurf, copilot, gemini, opencode, hermes, cline, roo, kilocode, antigravity, all)
     #[arg(long)]
     pub mode: Option<String>,
 
