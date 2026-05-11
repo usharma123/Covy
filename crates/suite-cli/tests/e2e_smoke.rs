@@ -8109,6 +8109,53 @@ fn test_packet28_hook_pretool_rewrites_supported_git_command() {
 
 #[test]
 #[cfg(unix)]
+fn test_packet28_cursor_hook_pretool_rewrites_and_returns_empty_json_on_noop() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let (status, stdout, _stderr) = run_hook_raw(
+        "cursor",
+        dir.path(),
+        &serde_json::to_string(&json!({
+            "hook_event_name":"beforeShellExecution",
+            "conversation_id":"cursor-session-rewrite",
+            "cwd":dir.path().to_str().unwrap(),
+            "command":"git status --short src/alpha.rs"
+        }))
+        .unwrap(),
+    );
+    assert_eq!(status, 0);
+    let rendered: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(rendered["permission"].as_str(), Some("allow"));
+    let rewritten = rendered["updated_input"]["command"].as_str().unwrap();
+    assert!(rewritten.contains("hook reducer-runner"));
+    assert!(rewritten.contains("--family git"));
+    assert!(rewritten.contains("--kind git_status"));
+
+    let (status, stdout, _stderr) = run_hook_raw(
+        "cursor",
+        dir.path(),
+        &serde_json::to_string(&json!({
+            "hook_event_name":"beforeShellExecution",
+            "conversation_id":"cursor-session-noop",
+            "cwd":dir.path().to_str().unwrap(),
+            "command":"definitely-unsupported-packet28-tool --flag"
+        }))
+        .unwrap(),
+    );
+    assert_eq!(status, 0);
+    assert_eq!(stdout.trim(), "{}");
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
 fn test_packet28_hook_pretool_rewrites_supported_github_command() {
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();

@@ -154,6 +154,11 @@ struct ClaudeHookOutcome {
     body: Option<String>,
 }
 
+struct RuntimeHookOutcome {
+    exit_code: i32,
+    body: Option<String>,
+}
+
 fn run_claude(args: ClaudeHookArgs) -> Result<i32> {
     let mut buffer = String::new();
     io::stdin().read_to_string(&mut buffer)?;
@@ -271,7 +276,12 @@ fn run_runtime_hook(args: RuntimeHookArgs, runtime: ExternalHookRuntime) -> Resu
         }
     };
     match process_runtime_hook_payload(args, runtime, payload) {
-        Ok(code) => Ok(code),
+        Ok(outcome) => {
+            if let Some(body) = outcome.body {
+                println!("{body}");
+            }
+            Ok(outcome.exit_code)
+        }
         Err(err) => {
             eprintln!(
                 "packet28 {} hook: allowing runtime action after processing error: {err:#}",
@@ -286,8 +296,9 @@ fn process_runtime_hook_payload(
     args: RuntimeHookArgs,
     runtime: ExternalHookRuntime,
     payload: Value,
-) -> Result<i32> {
+) -> Result<RuntimeHookOutcome> {
     let root = resolve_runtime_hook_root(&args, &payload);
+    let runtime_config = load_hook_runtime_config(&root);
     crate::broker_client::ensure_daemon(&root)?;
 
     let event_kind = args
@@ -300,6 +311,15 @@ fn process_runtime_hook_payload(
     let session_id = runtime_session_id(runtime, &payload);
     let task_id = resolve_runtime_task_id(&root, &payload, session_id.as_deref(), runtime)?;
     let matcher = runtime_matcher(runtime, &payload, event_kind);
+    let rewrite = build_runtime_pretool_rewrite(
+        runtime,
+        &runtime_config,
+        &root,
+        &payload,
+        event_kind,
+        &task_id,
+        session_id.as_deref(),
+    )?;
     let reducer_packet = build_runtime_reducer_packet(runtime, &payload, event_kind);
 
     let _response = crate::broker_client::hook_ingest(
@@ -331,7 +351,10 @@ fn process_runtime_hook_payload(
         &payload,
         session_id.as_deref(),
     );
-    Ok(0)
+    Ok(RuntimeHookOutcome {
+        exit_code: 0,
+        body: render_runtime_hook_output(runtime, event_kind, rewrite)?,
+    })
 }
 
 fn run_hook_log(args: HookLogArgs) -> Result<i32> {
@@ -1324,6 +1347,13 @@ fn runtime_matcher(
     }
 }
 
+fn runtime_command(payload: &Value) -> Option<String> {
+    json_nested_string(payload, &["tool_input", "command"])
+        .or_else(|| json_string(payload, "command"))
+        .or_else(|| json_string(payload, "command_line"))
+        .or_else(|| json_string(payload, "shell_command"))
+}
+
 fn build_runtime_reducer_packet(
     runtime: ExternalHookRuntime,
     payload: &Value,
@@ -1335,6 +1365,63 @@ fn build_runtime_reducer_packet(
     }
 }
 
+fn build_runtime_pretool_rewrite(
+    runtime: ExternalHookRuntime,
+    runtime_config: &HookRuntimeConfig,
+    root: &Path,
+    payload: &Value,
+    event_kind: HookEventKind,
+    task_id: &str,
+    session_id: Option<&str>,
+) -> Result<Option<Value>> {
+    if !matches!(runtime, ExternalHookRuntime::Cursor) {
+        return Ok(None);
+    }
+    if !matches!(event_kind, HookEventKind::PreToolUse) {
+        return Ok(None);
+    }
+    let Some(command) = runtime_command(payload) else {
+        return Ok(None);
+    };
+    let normalized = json!({
+        "tool_name": "Bash",
+        "cwd": json_string(payload, "cwd")
+            .or_else(|| json_nested_string(payload, &["tool_info", "cwd"]))
+            .or_else(|| json_string(payload, "workspace_root"))
+            .unwrap_or_else(|| root.display().to_string()),
+        "tool_input": {
+            "command": command
+        }
+    });
+    build_pretool_rewrite(
+        runtime_config,
+        root,
+        &normalized,
+        event_kind,
+        task_id,
+        session_id,
+    )
+}
+
+fn render_runtime_hook_output(
+    runtime: ExternalHookRuntime,
+    event_kind: HookEventKind,
+    rewrite: Option<Value>,
+) -> Result<Option<String>> {
+    match (runtime, event_kind, rewrite) {
+        (ExternalHookRuntime::Cursor, HookEventKind::PreToolUse, Some(updated_input)) => {
+            Ok(Some(serde_json::to_string(&json!({
+                "permission": "allow",
+                "updated_input": updated_input,
+            }))?))
+        }
+        (ExternalHookRuntime::Cursor, HookEventKind::PreToolUse, None) => {
+            Ok(Some("{}".to_string()))
+        }
+        _ => Ok(None),
+    }
+}
+
 fn build_cursor_reducer_packet(
     payload: &Value,
     event_kind: HookEventKind,
@@ -1342,9 +1429,7 @@ fn build_cursor_reducer_packet(
     if !matches!(event_kind, HookEventKind::PostToolUse) {
         return None;
     }
-    let command = json_string(payload, "command")
-        .or_else(|| json_string(payload, "command_line"))
-        .or_else(|| json_string(payload, "shell_command"))?;
+    let command = runtime_command(payload)?;
     let output = json_string(payload, "output")
         .or_else(|| json_string(payload, "result"))
         .or_else(|| json_string(payload, "stderr"))
@@ -2604,6 +2689,52 @@ mod tests {
         assert!(command.contains("hook reducer-runner"));
         assert!(command.contains("--family infra"));
         assert!(command.contains("--kind kubectl_get"));
+    }
+
+    #[test]
+    fn pretool_rewrites_strict_ruby_command() {
+        let root = PathBuf::from("/tmp/demo");
+        let payload = json!({
+            "tool_name":"Bash",
+            "tool_input":{"command":"bundle exec rspec spec/models/user_spec.rb"}
+        });
+        let rewrite = build_pretool_rewrite(
+            &HookRuntimeConfig::default(),
+            &root,
+            &payload,
+            HookEventKind::PreToolUse,
+            "task-123",
+            Some("session-1"),
+        )
+        .unwrap()
+        .unwrap();
+        let command = rewrite["command"].as_str().unwrap();
+        assert!(command.contains("hook reducer-runner"));
+        assert!(command.contains("--family ruby"));
+        assert!(command.contains("--kind ruby_rspec"));
+    }
+
+    #[test]
+    fn pretool_rewrites_strict_dotnet_command() {
+        let root = PathBuf::from("/tmp/demo");
+        let payload = json!({
+            "tool_name":"Bash",
+            "tool_input":{"command":"dotnet test Packet28.Tests.csproj"}
+        });
+        let rewrite = build_pretool_rewrite(
+            &HookRuntimeConfig::default(),
+            &root,
+            &payload,
+            HookEventKind::PreToolUse,
+            "task-123",
+            Some("session-1"),
+        )
+        .unwrap()
+        .unwrap();
+        let command = rewrite["command"].as_str().unwrap();
+        assert!(command.contains("hook reducer-runner"));
+        assert!(command.contains("--family dotnet"));
+        assert!(command.contains("--kind dotnet_test"));
     }
 
     #[test]
