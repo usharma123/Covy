@@ -58,6 +58,7 @@ use crate::cmd_mcp::support::{
 use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
+use crate::cmd_wakeup::build_wakeup_report;
 use crate::memory_store::{
     add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
     delete_concept, delete_feedback, export_graph, feedback_stats, forget_memories_by_topic,
@@ -900,6 +901,17 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.wakeup",
+                    "description": "Build a compact local wake-up pack from memory, feedback, transcripts, graph, and stats.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.transcript_append",
                     "description": "Append a local transcript message to ~/.packet28/packet28.db.",
                     "inputSchema": {
@@ -1340,6 +1352,13 @@ fn handle_tool_call(
             serde_json::json!({ "deleted": delete_feedback(request.id)? })
         }
         "packet28.feedback_stats" => serde_json::to_value(feedback_stats()?)?,
+        "packet28.wakeup" => {
+            let request: WakeupToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(build_wakeup_report(
+                request.query.as_deref(),
+                request.limit.unwrap_or(5),
+            )?)?
+        }
         "packet28.transcript_append" => {
             let request: TranscriptAppendToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(append_transcript_message(TranscriptAppendInput {
@@ -1523,6 +1542,12 @@ struct FeedbackListToolArgs {
 #[derive(Debug, Deserialize)]
 struct FeedbackIdToolArgs {
     id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct WakeupToolArgs {
+    query: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1861,6 +1886,7 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!("Packet28 deleted {deleted} feedback correction(s).")
         }
         "packet28.feedback_stats" => "Packet28 feedback statistics.".to_string(),
+        "packet28.wakeup" => "Packet28 wake-up pack.".to_string(),
         "packet28.transcript_append" => {
             let id = payload
                 .get("id")
@@ -1955,6 +1981,7 @@ mod tests {
             "packet28.feedback_apply",
             "packet28.feedback_delete",
             "packet28.feedback_stats",
+            "packet28.wakeup",
             "packet28.transcript_append",
             "packet28.transcript_search",
             "packet28.transcript_stats",

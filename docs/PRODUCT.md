@@ -104,6 +104,7 @@ MCP tools exposed by the product slice:
 - `packet28.feedback_apply`
 - `packet28.feedback_delete`
 - `packet28.feedback_stats`
+- `packet28.wakeup`
 - `packet28.transcript_append`
 - `packet28.transcript_list`
 - `packet28.transcript_show`
@@ -163,5 +164,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Full ICM vector recall, wake-up extraction lifecycle, richer memoir containers/stats, cloud/import/upgrade, and web dashboard.
+- Full ICM vector recall, wake-up extraction lifecycle automation, richer memoir containers/stats, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.

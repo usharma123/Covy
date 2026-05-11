@@ -901,6 +901,31 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":63,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.wakeup",
+                "arguments":{"query":"reducer", "limit": 5}
+            }
+        }),
+    );
+    let wakeup = read_mcp_message_for_id(&mut stdout, 63);
+    assert_eq!(
+        wakeup["result"]["structuredContent"]["kind"].as_str(),
+        Some("packet28.wakeup.v1")
+    );
+    assert!(
+        wakeup["result"]["structuredContent"]["transcripts"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 1
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":55,
             "method":"tools/call",
             "params":{
@@ -1219,6 +1244,14 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .success()
         .stdout(predicate::str::contains("\"session_count\":1"))
         .stdout(predicate::str::contains("\"message_count\":1"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["wakeup", "--query", "reducers", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"kind\":\"packet28.wakeup.v1\""))
+        .stdout(predicate::str::contains("\"transcripts\""))
+        .stdout(predicate::str::contains("compact transcript recall"));
     let transcript_fts_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM transcript_messages_fts", [], |row| {
             row.get(0)
