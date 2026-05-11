@@ -58,6 +58,7 @@ use crate::cmd_mcp::support::{
 use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
+use crate::memory_store::{recall_memories, store_memory};
 use crate::runtime_integrations::windsurf;
 
 #[derive(Args)]
@@ -641,6 +642,30 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.memory_store",
+                    "description": "Store a local Packet28 memory in ~/.packet28/packet28.db.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["content"],
+                        "properties": {
+                            "content": {"type":"string"},
+                            "tags": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.memory_recall",
+                    "description": "Recall local Packet28 memories from ~/.packet28/packet28.db using keyword search.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["query"],
+                        "properties": {
+                            "query": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.write_intention",
                     "description": "Persist the current task objective and worker intent into Packet28.",
                     "inputSchema": {
@@ -831,6 +856,17 @@ fn handle_tool_call(
             )?;
             handle_packet28_write_intention(root, session, request)?
         }
+        "packet28.memory_store" => {
+            let request: MemoryStoreToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(store_memory(&request.content, request.tags.as_deref())?)?
+        }
+        "packet28.memory_recall" => {
+            let request: MemoryRecallToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(recall_memories(
+                &request.query,
+                request.limit.unwrap_or(10),
+            )?)?
+        }
         "packet28.task_status" => {
             let task_id = resolve_session_task_id(
                 session,
@@ -857,6 +893,18 @@ fn handle_tool_call(
         ],
         "structuredContent": payload
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryStoreToolArgs {
+    content: String,
+    tags: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryRecallToolArgs {
+    query: String,
+    limit: Option<usize>,
 }
 
 fn capabilities_payload() -> Value {
@@ -918,6 +966,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             } else {
                 format!("Packet28 did not prepare a handoff: {reason}")
             }
+        }
+        "packet28.memory_store" => {
+            let id = payload
+                .get("id")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!("Packet28 stored memory {id}.")
+        }
+        "packet28.memory_recall" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 recalled {count} memor(y/ies).")
         }
         "packet28.task_status" => "Packet28 task status.".to_string(),
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),

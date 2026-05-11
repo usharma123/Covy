@@ -354,6 +354,68 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .stdout(predicate::str::contains("Packet28 remembers local context"));
 }
 
+#[test]
+fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let mut child = mcp_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["mcp", "serve", "--root", root.path().to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    initialize_mcp_session(&mut stdin, &mut stdout);
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_store",
+                "arguments":{"content":"MCP memory survives locally","tags":"mcp"}
+            }
+        }),
+    );
+    let stored = read_mcp_message_for_id(&mut stdout, 2);
+    assert_eq!(
+        stored["result"]["structuredContent"]["content"].as_str(),
+        Some("MCP memory survives locally")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":3,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_recall",
+                "arguments":{"query":"survives", "limit": 3}
+            }
+        }),
+    );
+    let recalled = read_mcp_message_for_id(&mut stdout, 3);
+    assert_eq!(
+        recalled["result"]["structuredContent"][0]["content"].as_str(),
+        Some("MCP memory survives locally")
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
