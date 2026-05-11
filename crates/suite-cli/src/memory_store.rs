@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -385,6 +385,7 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
 pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<Vec<MemoryRecord>> {
     let conn = open_memory_db()?;
     let expanded_limit = expanded_filter_limit(input.limit, input.has_filters());
+    let mut fts_records = Vec::new();
     if let Some(match_query) = fts_match_query(input.query) {
         let mut stmt = conn.prepare(
             "SELECT
@@ -396,22 +397,58 @@ pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<V
              ORDER BY recall_score, m.created_at_unix_ms DESC
              LIMIT ?2",
         )?;
-        let records = read_memory_rows(&mut stmt, params![match_query, expanded_limit as i64])?;
-        let records = filter_memory_records(records, input);
-        if !records.is_empty() {
-            return Ok(limit_memory_records(records, input.limit));
-        }
+        fts_records = read_memory_rows(&mut stmt, params![match_query, expanded_limit as i64])?;
+        fts_records = filter_memory_records(fts_records, input);
     }
     let vector_records = recall_memories_vector(&conn, input, expanded_limit)?;
     let vector_records = filter_memory_records(vector_records, input);
-    if !vector_records.is_empty() {
-        return Ok(limit_memory_records(vector_records, input.limit));
+    let hybrid_records = merge_hybrid_memory_records(fts_records, vector_records, input.limit);
+    if !hybrid_records.is_empty() {
+        return Ok(hybrid_records);
     }
     let records = recall_memories_like(&conn, input.query, expanded_limit)?;
     Ok(limit_memory_records(
         filter_memory_records(records, input),
         input.limit,
     ))
+}
+
+fn merge_hybrid_memory_records(
+    fts_records: Vec<MemoryRecord>,
+    vector_records: Vec<MemoryRecord>,
+    limit: usize,
+) -> Vec<MemoryRecord> {
+    let mut by_id = HashMap::<i64, (MemoryRecord, f64)>::new();
+    for (rank, mut record) in fts_records.into_iter().enumerate() {
+        let score = 1.0 / (rank as f64 + 1.0);
+        record.recall_score = Some(score);
+        by_id.insert(record.id, (record, score));
+    }
+    for record in vector_records {
+        let score = record.recall_score.unwrap_or(0.0).max(0.0);
+        by_id
+            .entry(record.id)
+            .and_modify(|(existing, existing_score)| {
+                *existing_score += score;
+                existing.recall_score = Some(*existing_score);
+            })
+            .or_insert((record, score));
+    }
+    let mut records = by_id
+        .into_values()
+        .map(|(mut record, score)| {
+            record.recall_score = Some(score);
+            record
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|a, b| {
+        b.recall_score
+            .partial_cmp(&a.recall_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.updated_at_unix_ms.cmp(&a.updated_at_unix_ms))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    limit_memory_records(records, limit)
 }
 
 fn recall_memories_like(conn: &Connection, query: &str, limit: usize) -> Result<Vec<MemoryRecord>> {
