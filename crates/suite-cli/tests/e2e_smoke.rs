@@ -1523,11 +1523,36 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":54,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_create",
+                "arguments":{"name":"McpMemoir", "description":"MCP graph container"}
+            }
+        }),
+    );
+    let graph_memoir = read_mcp_message_for_id(&mut stdout, 54);
+    assert_eq!(
+        graph_memoir["result"]["structuredContent"]["name"].as_str(),
+        Some("McpMemoir")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":55,
             "method":"tools/call",
             "params":{
                 "name":"packet28.graph_add_concept",
-                "arguments":{"name":"Packet28", "description":"local context runtime"}
+                "arguments":{
+                    "name":"Packet28",
+                    "description":"local context runtime",
+                    "memoir":"McpMemoir",
+                    "labels":["domain:context"],
+                    "confidence":0.91,
+                    "source_ids":["memory:mcp"]
+                }
             }
         }),
     );
@@ -1535,6 +1560,14 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         graph_concept["result"]["structuredContent"]["name"].as_str(),
         Some("Packet28")
+    );
+    assert_eq!(
+        graph_concept["result"]["structuredContent"]["memoir_name"].as_str(),
+        Some("McpMemoir")
+    );
+    assert_eq!(
+        graph_concept["result"]["structuredContent"]["confidence"].as_f64(),
+        Some(0.91)
     );
 
     write_mcp_message(
@@ -1630,6 +1663,28 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
             .as_i64()
             .unwrap()
             >= 1
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":66,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_show",
+                "arguments":{"name":"McpMemoir", "limit": 5}
+            }
+        }),
+    );
+    let graph_show = read_mcp_message_for_id(&mut stdout, 66);
+    assert_eq!(
+        graph_show["result"]["structuredContent"]["memoir"]["name"].as_str(),
+        Some("McpMemoir")
+    );
+    assert_eq!(
+        graph_show["result"]["structuredContent"]["concepts"][0]["revision"].as_i64(),
+        Some(2)
     );
 
     write_mcp_message(
@@ -1986,10 +2041,43 @@ fn test_feedback_and_graph_cli_use_sqlite() {
 
     suite_cmd()
         .env("HOME", home.path())
-        .args(["graph", "add-concept", "Packet28", "--json"])
+        .args([
+            "graph",
+            "create",
+            "--name",
+            "Packet28Memoir",
+            "--description",
+            "Packet28 graph parity evidence",
+            "--json",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Packet28"));
+        .stdout(predicate::str::contains("Packet28Memoir"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "graph",
+            "add-concept",
+            "Packet28",
+            "--memoir",
+            "Packet28Memoir",
+            "--label",
+            "domain:context",
+            "--confidence",
+            "0.82",
+            "--source-id",
+            "memory:packet28",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Packet28"))
+        .stdout(predicate::str::contains(
+            "\"memoir_name\":\"Packet28Memoir\"",
+        ))
+        .stdout(predicate::str::contains("domain:context"))
+        .stdout(predicate::str::contains("\"confidence\":0.82"))
+        .stdout(predicate::str::contains("memory:packet28"));
     suite_cmd()
         .env("HOME", home.path())
         .args([
@@ -2035,6 +2123,20 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"relation\":\"uses\""));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "list", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Packet28Memoir"))
+        .stdout(predicate::str::contains("\"concept_count\":1"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "show", "Packet28Memoir", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"revision\":2"))
+        .stdout(predicate::str::contains("\"average_confidence\":0.82"));
     suite_cmd()
         .env("HOME", home.path())
         .args(["graph", "inspect", "--json"])

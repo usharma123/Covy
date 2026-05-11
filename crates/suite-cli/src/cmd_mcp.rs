@@ -61,14 +61,15 @@ use crate::cmd_mcp::transport::{
 use crate::cmd_transcript::{export_transcripts, import_transcripts_from_str};
 use crate::cmd_wakeup::build_wakeup_report;
 use crate::memory_store::{
-    add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
-    delete_concept, delete_feedback, delete_pending_extractions, embed_memories,
-    enqueue_pending_extraction, export_graph, feedback_stats, forget_memories_by_topic,
-    forget_memory, graph_stats, inspect_graph, learn_project_graph, link_concepts, list_feedback,
-    list_memories_filtered, list_pending_extractions, list_transcript_sessions, local_store_stats,
-    memory_health, memory_topics, process_pending_extractions, prune_memories,
-    recall_memories_filtered, record_feedback_with_metadata, refine_concept, search_concepts,
-    search_feedback, search_transcripts, show_transcript_session, store_memory_with_metadata,
+    add_concept_with_metadata, append_transcript_message, apply_feedback, consolidate_memories,
+    create_graph_memoir, decay_memories, delete_concept, delete_feedback,
+    delete_pending_extractions, embed_memories, enqueue_pending_extraction, export_graph,
+    feedback_stats, forget_memories_by_topic, forget_memory, graph_stats, inspect_graph,
+    learn_project_graph, link_concepts, list_feedback, list_graph_memoirs, list_memories_filtered,
+    list_pending_extractions, list_transcript_sessions, local_store_stats, memory_health,
+    memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
+    record_feedback_with_metadata, refine_concept, search_concepts, search_feedback,
+    search_transcripts, show_graph_memoir, show_transcript_session, store_memory_with_metadata,
     transcript_stats, update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery,
     MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput, TranscriptAppendInput,
 };
@@ -1084,6 +1085,36 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.graph_create",
+                    "description": "Create or update a Packet28 memoir-style graph container.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type":"string"},
+                            "description": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.graph_list",
+                    "description": "List Packet28 memoir-style graph containers.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
+                    "name": "packet28.graph_show",
+                    "description": "Show one Packet28 memoir-style graph container with concepts and relations.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type":"string"},
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.graph_add_concept",
                     "description": "Add or update a local Packet28 graph concept.",
                     "inputSchema": {
@@ -1091,7 +1122,11 @@ fn handle_method(
                         "required": ["name"],
                         "properties": {
                             "name": {"type":"string"},
-                            "description": {"type":"string"}
+                            "description": {"type":"string"},
+                            "memoir": {"type":"string"},
+                            "labels": {"type":"array","items":{"type":"string"}},
+                            "confidence": {"type":"number","minimum":0,"maximum":1},
+                            "source_ids": {"type":"array","items":{"type":"string"}}
                         }
                     }
                 },
@@ -1583,9 +1618,31 @@ fn handle_tool_call(
             let request: TranscriptImportToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(import_transcripts_from_str(&request.content)?)?
         }
+        "packet28.graph_create" => {
+            let request: GraphCreateToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(create_graph_memoir(
+                request.name.as_deref(),
+                request.description.as_deref(),
+            )?)?
+        }
+        "packet28.graph_list" => serde_json::to_value(list_graph_memoirs()?)?,
+        "packet28.graph_show" => {
+            let request: GraphShowToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(show_graph_memoir(
+                request.name.as_deref(),
+                request.limit.unwrap_or(50),
+            )?)?
+        }
         "packet28.graph_add_concept" => {
             let request: GraphConceptToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(add_concept(&request.name, request.description.as_deref())?)?
+            serde_json::to_value(add_concept_with_metadata(
+                &request.name,
+                request.description.as_deref(),
+                request.memoir.as_deref(),
+                &request.labels.unwrap_or_default(),
+                request.confidence,
+                &request.source_ids.unwrap_or_default(),
+            )?)?
         }
         "packet28.graph_refine" => {
             let request: GraphRefineToolArgs = serde_json::from_value(arguments)?;
@@ -1834,9 +1891,25 @@ struct TranscriptImportToolArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct GraphCreateToolArgs {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphShowToolArgs {
+    name: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 struct GraphConceptToolArgs {
     name: String,
     description: Option<String>,
+    memoir: Option<String>,
+    labels: Option<Vec<String>>,
+    confidence: Option<f64>,
+    source_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2193,6 +2266,25 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 imported {count} transcript message(s).")
         }
+        "packet28.graph_create" => {
+            let name = payload
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("default");
+            format!("Packet28 graph memoir: {name}.")
+        }
+        "packet28.graph_list" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 returned {count} graph memoir(s).")
+        }
+        "packet28.graph_show" => {
+            let name = payload
+                .get("memoir")
+                .and_then(|memoir| memoir.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("default");
+            format!("Packet28 graph memoir detail: {name}.")
+        }
         "packet28.graph_add_concept" | "packet28.graph_refine" => {
             let name = payload
                 .get("name")
@@ -2278,6 +2370,9 @@ mod tests {
             "packet28.transcript_append",
             "packet28.transcript_search",
             "packet28.transcript_stats",
+            "packet28.graph_create",
+            "packet28.graph_list",
+            "packet28.graph_show",
             "packet28.graph_search",
             "packet28.graph_export",
             "packet28.graph_stats",

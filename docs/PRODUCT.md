@@ -87,8 +87,10 @@ Packet28 transcript search "transcript recall"
 Packet28 transcript show project-session
 Packet28 transcript list
 Packet28 transcript stats
-Packet28 graph create
-Packet28 graph add-concept Packet28
+Packet28 graph create --name Packet28 --description "Packet28 graph memoir"
+Packet28 graph list
+Packet28 graph show Packet28
+Packet28 graph add-concept Packet28 --memoir Packet28 --label domain:context --confidence 0.82 --source-id memory:packet28
 Packet28 graph refine Packet28 "local context runtime with reducers"
 Packet28 graph link Packet28 Reducers --relation uses
 Packet28 graph search reducers
@@ -185,5 +187,5 @@ Reducer run savings are stored repo-locally under `.packet28/run-savings.jsonl`.
 ## Explicit Deferrals
 
 - Full RTK command catalog, custom TOML filters, telemetry, and release packaging.
-- Full ICM vector hybrid recall, wake-up extraction lifecycle automation, richer memoir containers/stats, cloud/import/upgrade, and web dashboard.
+- Stronger ICM embedding backends, wake-up extraction lifecycle automation, memoir distillation/label search depth, cloud/import/upgrade, and web dashboard.
 - Windsurf hook command interception until a real runtime test proves it.
