@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::memory_store::{
-    forget_memories_by_topic, forget_memory, list_memories, local_store_stats, memory_topics,
-    recall_memories, store_memory_with_metadata, update_memory, MemoryStoreInput,
+    forget_memories_by_topic, forget_memory, list_memories, local_store_stats, memory_health,
+    memory_topics, recall_memories, store_memory_with_metadata, update_memory, MemoryStoreInput,
     MemoryUpdateInput,
 };
 
@@ -22,6 +22,7 @@ pub enum MemoryCommands {
     Forget(MemoryForgetArgs),
     Topics(MemoryTopicsArgs),
     Stats(MemoryStatsArgs),
+    Health(MemoryHealthArgs),
     Consolidate(MemoryConsolidateArgs),
 }
 
@@ -114,6 +115,20 @@ pub struct MemoryStatsArgs {
 }
 
 #[derive(Args)]
+pub struct MemoryHealthArgs {
+    #[arg(long)]
+    pub topic: Option<String>,
+    #[arg(long, default_value_t = 30)]
+    pub stale_after_days: i64,
+    #[arg(long, default_value_t = 10)]
+    pub consolidation_threshold: i64,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct MemoryConsolidateArgs {
     #[arg(long)]
     pub json: bool,
@@ -130,6 +145,7 @@ pub fn run(args: MemoryArgs) -> Result<i32> {
         MemoryCommands::Forget(args) => run_forget(args),
         MemoryCommands::Topics(args) => run_topics(args),
         MemoryCommands::Stats(args) => run_stats(args),
+        MemoryCommands::Health(args) => run_health(args),
         MemoryCommands::Consolidate(args) => run_consolidate(args),
     }
 }
@@ -225,6 +241,37 @@ fn run_stats(args: MemoryStatsArgs) -> Result<i32> {
         crate::cmd_common::emit_json(&serde_json::to_value(stats)?, args.pretty)?;
     } else {
         println!("memory_count={}", stats.memory_count);
+    }
+    Ok(0)
+}
+
+fn run_health(args: MemoryHealthArgs) -> Result<i32> {
+    let report = memory_health(
+        args.topic.as_deref(),
+        args.stale_after_days,
+        args.consolidation_threshold,
+    )?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+    } else {
+        println!("total_topics={}", report.total_topics);
+        println!("total_memories={}", report.total_memories);
+        println!("stale_memories={}", report.stale_memories);
+        println!(
+            "topics_needing_consolidation={}",
+            report.topics_needing_consolidation
+        );
+        for topic in report.topics {
+            println!(
+                "{} count={} stale={} oldest_age_days={} newest_age_days={} consolidation_needed={}",
+                topic.topic,
+                topic.memory_count,
+                topic.stale_count,
+                topic.oldest_age_days,
+                topic.newest_age_days,
+                topic.consolidation_needed
+            );
+        }
     }
     Ok(0)
 }

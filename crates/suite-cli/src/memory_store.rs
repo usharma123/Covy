@@ -62,6 +62,28 @@ pub(crate) struct MemoryTopicStats {
     pub(crate) memory_count: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryHealthTopic {
+    pub(crate) topic: String,
+    pub(crate) memory_count: i64,
+    pub(crate) stale_count: i64,
+    pub(crate) oldest_age_days: i64,
+    pub(crate) newest_age_days: i64,
+    pub(crate) consolidation_needed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryHealthReport {
+    pub(crate) topic_filter: Option<String>,
+    pub(crate) stale_after_days: i64,
+    pub(crate) consolidation_threshold: i64,
+    pub(crate) total_topics: usize,
+    pub(crate) total_memories: i64,
+    pub(crate) stale_memories: i64,
+    pub(crate) topics_needing_consolidation: i64,
+    pub(crate) topics: Vec<MemoryHealthTopic>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryStoreInput<'a> {
     pub(crate) content: &'a str,
@@ -237,6 +259,82 @@ pub(crate) fn memory_topics() -> Result<Vec<MemoryTopicStats>> {
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+pub(crate) fn memory_health(
+    topic_filter: Option<&str>,
+    stale_after_days: i64,
+    consolidation_threshold: i64,
+) -> Result<MemoryHealthReport> {
+    let conn = open_memory_db()?;
+    let now = timestamp_unix_ms();
+    let day_ms = 86_400_000_i64;
+    let stale_after_days = stale_after_days.max(0);
+    let consolidation_threshold = consolidation_threshold.max(1);
+    let stale_cutoff = now.saturating_sub(stale_after_days.saturating_mul(day_ms));
+    let mut topics = if let Some(topic) = topic_filter {
+        let topic = normalize_non_empty(Some(topic), "general");
+        let mut stmt = conn.prepare(
+            "SELECT
+                topic,
+                COUNT(*),
+                SUM(CASE WHEN updated_at_unix_ms <= ?1 THEN 1 ELSE 0 END),
+                MIN(updated_at_unix_ms),
+                MAX(updated_at_unix_ms)
+             FROM memories
+             WHERE topic = ?2
+             GROUP BY topic
+             ORDER BY topic ASC",
+        )?;
+        read_health_rows(
+            &mut stmt,
+            params![stale_cutoff, topic],
+            now,
+            day_ms,
+            consolidation_threshold,
+        )?
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT
+                topic,
+                COUNT(*),
+                SUM(CASE WHEN updated_at_unix_ms <= ?1 THEN 1 ELSE 0 END),
+                MIN(updated_at_unix_ms),
+                MAX(updated_at_unix_ms)
+             FROM memories
+             GROUP BY topic
+             ORDER BY COUNT(*) DESC, topic ASC",
+        )?;
+        read_health_rows(
+            &mut stmt,
+            params![stale_cutoff],
+            now,
+            day_ms,
+            consolidation_threshold,
+        )?
+    };
+    topics.sort_by(|a, b| {
+        b.consolidation_needed
+            .cmp(&a.consolidation_needed)
+            .then_with(|| b.memory_count.cmp(&a.memory_count))
+            .then_with(|| a.topic.cmp(&b.topic))
+    });
+    let total_memories = topics.iter().map(|topic| topic.memory_count).sum();
+    let stale_memories = topics.iter().map(|topic| topic.stale_count).sum();
+    let topics_needing_consolidation = topics
+        .iter()
+        .filter(|topic| topic.consolidation_needed)
+        .count() as i64;
+    Ok(MemoryHealthReport {
+        topic_filter: topic_filter.map(|topic| normalize_non_empty(Some(topic), "general")),
+        stale_after_days,
+        consolidation_threshold,
+        total_topics: topics.len(),
+        total_memories,
+        stale_memories,
+        topics_needing_consolidation,
+        topics,
+    })
 }
 
 pub(crate) fn record_feedback(subject: &str, correction: &str) -> Result<FeedbackRecord> {
@@ -416,6 +514,34 @@ fn read_memory_rows<P: rusqlite::Params>(
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+fn read_health_rows<P: rusqlite::Params>(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: P,
+    now: i64,
+    day_ms: i64,
+    consolidation_threshold: i64,
+) -> Result<Vec<MemoryHealthTopic>> {
+    let rows = stmt.query_map(params, |row| {
+        let memory_count: i64 = row.get(1)?;
+        let oldest_updated: i64 = row.get(3)?;
+        let newest_updated: i64 = row.get(4)?;
+        Ok(MemoryHealthTopic {
+            topic: row.get(0)?,
+            memory_count,
+            stale_count: row.get::<_, Option<i64>>(2)?.unwrap_or_default(),
+            oldest_age_days: age_days(now, oldest_updated, day_ms),
+            newest_age_days: age_days(now, newest_updated, day_ms),
+            consolidation_needed: memory_count >= consolidation_threshold,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn age_days(now: i64, timestamp: i64, day_ms: i64) -> i64 {
+    now.saturating_sub(timestamp) / day_ms
 }
 
 fn get_memory(conn: &Connection, id: i64) -> Result<MemoryRecord> {

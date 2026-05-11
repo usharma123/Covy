@@ -60,8 +60,8 @@ use crate::cmd_mcp::transport::{
 };
 use crate::memory_store::{
     forget_memories_by_topic, forget_memory, inspect_graph, list_memories, local_store_stats,
-    memory_topics, recall_memories, record_feedback, search_feedback, store_memory_with_metadata,
-    update_memory, MemoryStoreInput, MemoryUpdateInput,
+    memory_health, memory_topics, recall_memories, record_feedback, search_feedback,
+    store_memory_with_metadata, update_memory, MemoryStoreInput, MemoryUpdateInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd, NativeToolKind, RouteKind,
@@ -781,6 +781,18 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.memory_health",
+                    "description": "Return local Packet28 memory topic health, staleness, and consolidation signals.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type":"string"},
+                            "stale_after_days": {"type":"integer","minimum":0},
+                            "consolidation_threshold": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.feedback_record",
                     "description": "Record a local feedback correction in ~/.packet28/packet28.db.",
                     "inputSchema": {
@@ -1064,6 +1076,14 @@ fn handle_tool_call(
         }
         "packet28.memory_topics" => serde_json::to_value(memory_topics()?)?,
         "packet28.memory_stats" => serde_json::to_value(local_store_stats()?)?,
+        "packet28.memory_health" => {
+            let request: MemoryHealthToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(memory_health(
+                request.topic.as_deref(),
+                request.stale_after_days.unwrap_or(30),
+                request.consolidation_threshold.unwrap_or(10),
+            )?)?
+        }
         "packet28.feedback_record" => {
             let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(record_feedback(&request.subject, &request.correction)?)?
@@ -1144,6 +1164,13 @@ struct MemoryUpdateToolArgs {
 struct MemoryForgetToolArgs {
     id: Option<i64>,
     topic: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryHealthToolArgs {
+    topic: Option<String>,
+    stale_after_days: Option<i64>,
+    consolidation_threshold: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1360,6 +1387,19 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!("Packet28 listed {count} memory topic(s).")
         }
         "packet28.memory_stats" => "Packet28 memory statistics.".to_string(),
+        "packet28.memory_health" => {
+            let total = payload
+                .get("total_memories")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let needs = payload
+                .get("topics_needing_consolidation")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!(
+                "Packet28 memory health: {total} memories, {needs} topic(s) need consolidation."
+            )
+        }
         "packet28.feedback_record" => {
             let id = payload
                 .get("id")

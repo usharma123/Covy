@@ -416,6 +416,28 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
 
     suite_cmd()
         .env("HOME", home.path())
+        .args([
+            "memory",
+            "health",
+            "--topic",
+            "updated-parity",
+            "--consolidation-threshold",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"topic_filter\":\"updated-parity\"",
+        ))
+        .stdout(predicate::str::contains("\"total_memories\":1"))
+        .stdout(predicate::str::contains(
+            "\"topics_needing_consolidation\":1",
+        ))
+        .stdout(predicate::str::contains("\"consolidation_needed\":true"));
+
+    suite_cmd()
+        .env("HOME", home.path())
         .args(["memory", "forget", "1", "--json"])
         .assert()
         .success()
@@ -558,6 +580,28 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     let memory_stats = read_mcp_message_for_id(&mut stdout, 43);
     assert_eq!(
         memory_stats["result"]["structuredContent"]["memory_count"].as_i64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":45,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_health",
+                "arguments":{"topic":"mcp-updated", "consolidation_threshold": 1}
+            }
+        }),
+    );
+    let health = read_mcp_message_for_id(&mut stdout, 45);
+    assert_eq!(
+        health["result"]["structuredContent"]["topic_filter"].as_str(),
+        Some("mcp-updated")
+    );
+    assert_eq!(
+        health["result"]["structuredContent"]["topics_needing_consolidation"].as_i64(),
         Some(1)
     );
 
