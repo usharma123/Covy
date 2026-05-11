@@ -1,15 +1,16 @@
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::fs::OpenOptions;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
-use std::process::{Command, Stdio};
+use std::process::Command;
+use std::process::{Child, ChildStdin, ChildStdout, Command as ProcessCommand, Stdio};
 #[cfg(unix)]
 use std::thread;
-use std::time::Instant;
 #[cfg(unix)]
-use std::time::{Duration, Instant as StdInstant};
+use std::time::Instant as StdInstant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -20,6 +21,7 @@ use packet28_daemon_core::{
     Packet28SearchRequest as DaemonPacket28SearchRequest,
 };
 use packet28_reducer_core::{parse_region_for_path, SearchRequest, SearchResult};
+use packet28_reducer_core::{SearchEngineStats, SearchGroup, SearchMatch};
 use packet28_search_core::{
     guarded_fallback_reason, indexed_search, load_runtime, rebuild_full_index,
 };
@@ -78,6 +80,7 @@ enum EngineMode {
     Auto,
     Indexed,
     Legacy,
+    Fff,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -206,6 +209,10 @@ fn run_guard(args: DebugSearchArgs) -> Result<()> {
             println!("mode=index");
             println!("reason=forced indexed backend");
         }
+        EngineMode::Fff => {
+            println!("mode=fff");
+            println!("reason=forced fff MCP backend");
+        }
         EngineMode::Auto => match guard_reason(&args.root, &request, args.options.transport)? {
             Some(reason) => {
                 println!("mode=fallback");
@@ -225,6 +232,7 @@ fn run_bench(args: DebugSearchArgs) -> Result<()> {
     let guard = match args.options.engine {
         EngineMode::Legacy => Some("forced legacy backend".to_string()),
         EngineMode::Indexed => None,
+        EngineMode::Fff => Some("forced fff MCP backend".to_string()),
         EngineMode::Auto => guard_reason(&args.root, &request, args.options.transport)?,
     };
 
@@ -329,6 +337,9 @@ fn execute_search(
     engine: EngineMode,
     transport: TransportMode,
 ) -> Result<(SearchResult, TransportMode)> {
+    if matches!(engine, EngineMode::Fff) {
+        return execute_fff_search(root, request).map(|result| (result, TransportMode::Inproc));
+    }
     match transport {
         TransportMode::Inproc => execute_search_inproc(root, request, engine)
             .map(|result| (result, TransportMode::Inproc)),
@@ -392,6 +403,7 @@ fn execute_search_inproc(
             annotate_fallback(&mut result, "forced legacy backend".to_string());
             Ok(result)
         }
+        EngineMode::Fff => execute_fff_search(root, request),
         EngineMode::Indexed => {
             let runtime = load_runtime(root)?;
             indexed_search(root, &runtime, request)
@@ -436,7 +448,274 @@ fn execute_search_daemon(
             annotate_fallback(&mut result, "forced legacy backend".to_string());
             Ok(result)
         }
+        EngineMode::Fff => execute_fff_search(root, request),
     }
+}
+
+fn execute_fff_search(root: &Path, request: &SearchRequest) -> Result<SearchResult> {
+    let mut client = FffMcpClient::spawn(root)?;
+    let tool_text = client.call_grep(request)?;
+    Ok(parse_fff_grep_text(root, request, &tool_text))
+}
+
+struct FffMcpClient {
+    child: Child,
+    stdin: BufWriter<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
+    next_id: u64,
+}
+
+impl FffMcpClient {
+    fn spawn(root: &Path) -> Result<Self> {
+        let bin = std::env::var("P28_FFF_MCP_BIN").unwrap_or_else(|_| "fff-mcp".to_string());
+        let mut child = ProcessCommand::new(&bin)
+            .arg(root)
+            .arg("--no-update-check")
+            .arg("--no-watch")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "failed to launch fff MCP backend '{bin}'; install fff-mcp or set P28_FFF_MCP_BIN"
+                )
+            })?;
+        let stdin = BufWriter::new(
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow!("fff MCP backend did not expose stdin"))?,
+        );
+        let stdout = BufReader::new(
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| anyhow!("fff MCP backend did not expose stdout"))?,
+        );
+        let mut client = Self {
+            child,
+            stdin,
+            stdout,
+            next_id: 1,
+        };
+        client.initialize()?;
+        Ok(client)
+    }
+
+    fn initialize(&mut self) -> Result<()> {
+        let id = self.next_request_id();
+        self.send(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "packet28-p28", "version": env!("CARGO_PKG_VERSION")}
+            }
+        }))?;
+        let _ = self.read_response(id)?;
+        self.send(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {}
+        }))?;
+        Ok(())
+    }
+
+    fn call_grep(&mut self, request: &SearchRequest) -> Result<String> {
+        let query = fff_query(request);
+        let max_results = request.max_total_matches.unwrap_or(200).max(1);
+        let mut last_text = String::new();
+        for attempt in 0..10 {
+            let id = self.next_request_id();
+            self.send(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {
+                    "name": "grep",
+                    "arguments": {
+                        "query": query,
+                        "maxResults": max_results,
+                        "output_mode": "content"
+                    }
+                }
+            }))?;
+            let response = self.read_response(id)?;
+            if let Some(error) = response.get("error") {
+                return Err(anyhow!("fff MCP grep failed: {error}"));
+            }
+            let result = response
+                .get("result")
+                .ok_or_else(|| anyhow!("fff MCP grep response missing result"))?;
+            let mut chunks = Vec::new();
+            if let Some(content) = result.get("content").and_then(|value| value.as_array()) {
+                for item in content {
+                    if let Some(text) = item.get("text").and_then(|value| value.as_str()) {
+                        chunks.push(text.to_string());
+                    }
+                }
+            }
+            last_text = chunks.join("\n");
+            if !is_fff_empty_result(&last_text) || attempt == 9 {
+                return Ok(last_text);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Ok(last_text)
+    }
+
+    fn next_request_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    fn send(&mut self, value: serde_json::Value) -> Result<()> {
+        serde_json::to_writer(&mut self.stdin, &value)?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()?;
+        Ok(())
+    }
+
+    fn read_response(&mut self, id: u64) -> Result<serde_json::Value> {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let bytes = self.stdout.read_line(&mut line)?;
+            if bytes == 0 {
+                return Err(anyhow!("fff MCP backend exited before response id {id}"));
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(trimmed)
+                .with_context(|| format!("failed to parse fff MCP JSON line: {trimmed}"))?;
+            if value.get("id").and_then(|value| value.as_u64()) == Some(id) {
+                return Ok(value);
+            }
+        }
+    }
+}
+
+impl Drop for FffMcpClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn fff_query(request: &SearchRequest) -> String {
+    if request.requested_paths.is_empty() {
+        return request.query.clone();
+    }
+    let mut parts = request
+        .requested_paths
+        .iter()
+        .map(|path| path.trim_start_matches("./").to_string())
+        .collect::<Vec<_>>();
+    parts.push(request.query.clone());
+    parts.join(" ")
+}
+
+fn is_fff_empty_result(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed == "0 matches." || trimmed.starts_with("0 results ")
+}
+
+fn parse_fff_grep_text(root: &Path, request: &SearchRequest, text: &str) -> SearchResult {
+    let mut groups = std::collections::BTreeMap::<String, Vec<SearchMatch>>::new();
+    let mut current_path: Option<String> = None;
+    let max_per_file = request.max_matches_per_file.unwrap_or(usize::MAX);
+    let max_total = request.max_total_matches.unwrap_or(usize::MAX);
+    let mut total_matches = 0usize;
+    for raw_line in text.lines() {
+        let line = raw_line.trim_end();
+        if line.is_empty()
+            || line.starts_with('→')
+            || line.starts_with("cursor:")
+            || line.contains(" matches shown")
+            || line.starts_with("0 ")
+        {
+            continue;
+        }
+        if let Some((line_no, body)) = parse_fff_match_line(line) {
+            if let Some(path) = current_path.clone() {
+                let file_matches = groups.entry(path.clone()).or_default();
+                if file_matches.len() < max_per_file && total_matches < max_total {
+                    file_matches.push(SearchMatch {
+                        path,
+                        line: line_no,
+                        text: body.to_string(),
+                    });
+                    total_matches += 1;
+                }
+            }
+            continue;
+        }
+        if root.join(line).exists() || line.contains('/') || line.contains('\\') {
+            current_path = Some(line.to_string());
+        }
+    }
+
+    let match_count = total_group_matches(&groups);
+    let paths = groups.keys().cloned().collect::<Vec<_>>();
+    let mut regions = Vec::new();
+    let mut compact_preview = String::new();
+    let groups = groups
+        .into_iter()
+        .map(|(path, matches)| {
+            for item in &matches {
+                regions.push(format!("{}:{}-{}", item.path, item.line, item.line));
+                compact_preview.push_str(&format!(
+                    "{}:{}:{}\n",
+                    item.path,
+                    item.line,
+                    item.text.trim()
+                ));
+            }
+            SearchGroup {
+                path,
+                match_count: matches.len(),
+                displayed_match_count: matches.len(),
+                truncated: false,
+                matches,
+            }
+        })
+        .collect::<Vec<_>>();
+    let returned_match_count = regions.len();
+    SearchResult {
+        query: request.query.clone(),
+        requested_paths: request.requested_paths.clone(),
+        resolved_paths: paths.clone(),
+        match_count,
+        returned_match_count,
+        truncated: match_count > returned_match_count,
+        paths,
+        regions,
+        symbols: Vec::new(),
+        groups,
+        compact_preview,
+        diagnostics: vec!["experimental fff MCP backend".to_string()],
+        engine: Some(SearchEngineStats {
+            engine: "fff_mcp".to_string(),
+            ..SearchEngineStats::default()
+        }),
+    }
+}
+
+fn total_group_matches(groups: &std::collections::BTreeMap<String, Vec<SearchMatch>>) -> usize {
+    groups.values().map(Vec::len).sum()
+}
+
+fn parse_fff_match_line(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start();
+    let (number, body) = trimmed.split_once(':')?;
+    let line_no = number.trim().parse::<usize>().ok()?;
+    Some((line_no, body.trim_start()))
 }
 
 fn guard_reason(

@@ -11,6 +11,7 @@ use packet28_daemon_core::{
     DaemonResponse,
 };
 use predicates::prelude::*;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 
 fn cli() -> Command {
@@ -211,6 +212,44 @@ fn p28_stats_go_to_stderr_while_hits_stay_on_stdout() {
     assert!(stderr.contains("p28_ms="));
     assert!(stderr.contains("transport="));
     assert!(stderr.contains("backend="));
+}
+
+#[test]
+fn p28_fff_engine_adapts_mcp_grep_results() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+    let fake_fff = dir.path().join("fake-fff-mcp.sh");
+    fs::write(
+        &fake_fff,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"fake-fff","version":"0"}}}'
+      ;;
+    *'"method":"tools/call"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"→ Read src/lib.rs (best match)\nsrc/lib.rs\n 1: pub struct Alpha;\nsrc/nested/mod.rs\n 1: pub enum Beta { AlphaVariant }"}]}}'
+      ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&fake_fff).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake_fff, perms).unwrap();
+
+    cli()
+        .current_dir(dir.path())
+        .env("P28_FFF_MCP_BIN", &fake_fff)
+        .args(["Alpha", "--engine", "fff", "--fixed-strings", "--stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"))
+        .stdout(predicate::str::contains(
+            "src/nested/mod.rs:1:pub enum Beta { AlphaVariant }",
+        ))
+        .stderr(predicate::str::contains("backend=fff_mcp"));
 }
 
 #[test]
