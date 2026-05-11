@@ -195,6 +195,44 @@ fn test_run_reduces_git_status() {
 }
 
 #[test]
+fn test_gain_reports_failed_and_fallback_runs() {
+    let root = TempDir::new().unwrap();
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "sh",
+            "-c",
+            "echo packet28 failure >&2; exit 7",
+        ])
+        .assert()
+        .failure()
+        .code(7)
+        .stdout(predicate::str::contains("\"fallback_reason\""));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "failures",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "timestamp_unix_ms,family,exit_code,fallback_reason,command",
+        ))
+        .stdout(predicate::str::contains("fallback,7"))
+        .stdout(predicate::str::contains("unsupported"))
+        .stdout(predicate::str::contains("packet28 failure"));
+}
+
+#[test]
 fn test_run_reduced_command_exposes_fetchable_raw_artifact() {
     let root = TempDir::new().unwrap();
     std::process::Command::new("git")

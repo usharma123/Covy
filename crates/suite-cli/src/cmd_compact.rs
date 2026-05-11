@@ -218,7 +218,7 @@ pub struct AnalyticsArgs {
     pub task_id: Option<String>,
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
-    /// Output format for analytics commands (text, json, csv, history)
+    /// Output format for analytics commands (text, json, csv, history, failures)
     #[arg(long, default_value = "text")]
     pub format: String,
     #[arg(long)]
@@ -800,6 +800,8 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         print_gain_csv(&summary);
     } else if format == "history" {
         print_gain_history(&run_savings);
+    } else if format == "failures" {
+        print_gain_failures(&run_savings);
     } else {
         println!("tasks={}", summary.task_count);
         println!("invocations={}", summary.invocation_count);
@@ -825,6 +827,23 @@ fn print_gain_history(records: &[RunSavingsRecord]) {
             record.reduced_est_tokens,
             record.savings_percent,
             record.exit_code,
+            csv_cell(&record.command)
+        );
+    }
+}
+
+fn print_gain_failures(records: &[RunSavingsRecord]) {
+    println!("timestamp_unix_ms,family,exit_code,fallback_reason,command");
+    for record in records
+        .iter()
+        .filter(|record| record.exit_code != 0 || record.fallback_reason.is_some())
+    {
+        println!(
+            "{},{},{},{},{}",
+            record.timestamp_unix_ms,
+            csv_cell(&record.family),
+            record.exit_code,
+            csv_cell(record.fallback_reason.as_deref().unwrap_or("")),
             csv_cell(&record.command)
         );
     }
