@@ -15,7 +15,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use packet28_daemon_core::{
     log_path, read_runtime_info, read_socket_message, ready_path, resolve_workspace_root,
-    socket_path, write_socket_message, DaemonRequest, DaemonResponse, Packet28SearchGuardResponse,
+    socket_path, write_socket_message, DaemonIndexStatusRequest, DaemonIndexStatusResponse,
+    DaemonRequest, DaemonResponse, Packet28SearchGuardResponse,
     Packet28SearchRequest as DaemonPacket28SearchRequest,
 };
 use packet28_reducer_core::{parse_region_for_path, SearchRequest, SearchResult};
@@ -353,6 +354,9 @@ fn execute_search_auto(
         annotate_reason(&mut result, format!("daemon unavailable: {err}"));
         return Ok((result, TransportMode::Inproc));
     }
+    if !matches!(engine, EngineMode::Legacy) {
+        let _ = wait_for_daemon_index_ready(&workspace_root, default_index_wait_timeout());
+    }
     match execute_search_daemon(root, request, engine) {
         Ok(result) => Ok((result, TransportMode::Daemon)),
         Err(err) => {
@@ -624,6 +628,70 @@ fn send_daemon_guard(_root: &Path, _request: SearchRequest) -> Result<Packet28Se
     Err(anyhow!(
         "daemon transport is only supported on unix platforms"
     ))
+}
+
+#[cfg(unix)]
+fn send_daemon_index_status(root: &Path) -> Result<DaemonIndexStatusResponse> {
+    let mut stream = connect_daemon_socket(&socket_path(root))?;
+    let reader_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(&mut stream);
+    let mut reader = BufReader::new(reader_stream);
+    write_socket_message(
+        &mut writer,
+        &DaemonRequest::DaemonIndexStatus {
+            request: DaemonIndexStatusRequest {
+                root: root.to_string_lossy().to_string(),
+            },
+        },
+    )?;
+    match read_socket_message(&mut reader)? {
+        DaemonResponse::DaemonIndexStatus { response } => Ok(response),
+        DaemonResponse::Error { message } => Err(anyhow!(message)),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_daemon_index_ready(root: &Path, timeout: Duration) -> Result<bool> {
+    if timeout.is_zero() {
+        return Ok(false);
+    }
+    let start = StdInstant::now();
+    loop {
+        let status = send_daemon_index_status(root)?;
+        if status.ready
+            && status.manifest.status == "ready"
+            && status.manifest.regex_status.as_deref() == Some("ready")
+        {
+            return Ok(true);
+        }
+        if status.manifest.status == "corrupt"
+            || status.manifest.regex_status.as_deref() == Some("corrupt")
+        {
+            return Err(anyhow!(
+                "{}",
+                status
+                    .manifest
+                    .last_error
+                    .or(status.manifest.regex_stale_reason)
+                    .unwrap_or_else(|| "regex search index is corrupt".to_string())
+            ));
+        }
+        if start.elapsed() >= timeout {
+            return Ok(false);
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(unix)]
+fn default_index_wait_timeout() -> Duration {
+    const DEFAULT_WAIT_MS: u64 = 60_000;
+    let wait_ms = std::env::var("P28_INDEX_WAIT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_WAIT_MS);
+    Duration::from_millis(wait_ms)
 }
 
 fn emit_human_hits(root: &Path, result: &SearchResult, compact: bool) -> Result<()> {

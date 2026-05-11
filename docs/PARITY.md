@@ -25,13 +25,14 @@ The largest gaps are:
 
 - RTK: broader reducer/filter catalog, custom TOML filters, telemetry controls if deliberately adopted, full agent breadth including Copilot/Gemini/OpenCode/Cline/Roo/Kilo/Antigravity/Hermes, and hook-level transparent rewrite proof across every claimed agent.
 - ICM: rich memory schema, FTS/vector hybrid recall, forget/update/health/topics/decay/prune/embed flows, transcript storage/search, hook telemetry, learn/extract-pending lifecycle, memoir export/search/refine/delete/list breadth, web/TUI dashboard parity, and richer MCP tools.
-- Evidence: Packet28 now has an initial repeated real-repo smoke artifact across Packet28, ripgrep, and fd, but indexed-search readiness remains incomplete and broader task-shape coverage is still needed before maturity claims are honest.
+- Evidence: Packet28 now has an initial repeated real-repo smoke artifact across Packet28, ripgrep, and fd with stable indexed `p28` hits, but broader task-shape coverage is still needed before maturity claims are honest.
 
 ## Experiment Evidence
 
 - `docs/experiments/real-repos/SMOKE_20260511.md` records three repeated runs across Packet28, ripgrep, and fd for search, code review, failing-test triage, implementation-state, docs lookup, and handoff/bootstrap workflows. The run produced 54 native runs, 54 `Packet28 run --json` runs, 0 Packet28 fallback reasons, 0 failed commands, and 54/54 raw artifacts available.
-- The same artifact records `p28` indexed-search attempts separately: 2/9 indexed-search hits and 7/9 readiness fallbacks. Treat broad indexed-search maturity as still partial until repeated real-repo runs show stable indexed hits without readiness fallbacks.
+- The same artifact records `p28` indexed-search attempts separately: 9/9 indexed-search hits and 0 readiness fallbacks after `p28` was changed to wait for daemon index readiness before falling back.
 - `docs/experiments/real-repos/SMOKE_20260511.jsonl` contains the compact per-command metrics used by the summary. Raw stdout/stderr captures remain ignored under the generated run directory.
+- `fff` (`dmtrKovalenko/fff` at `8cb1f476`) is a strong candidate for future search-backend reuse: it provides a long-lived Rust file finder, content grep, fuzzy fallback, frecency, git annotations, background watching, and MCP tooling. It is not yet adopted because Packet28's current search path also owns reducer packet shape, raw artifact recovery, route/fallback semantics, and daemon evidence; any adoption needs a measured adapter rather than a blind replacement.
 
 ## RTK Parity Matrix
 

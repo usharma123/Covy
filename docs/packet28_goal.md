@@ -191,7 +191,8 @@ Current evidence:
 
 - `docs/experiments/run_packet28_real_repo_suite.sh` runs the repeatable real-repository suite against clean temporary checkouts of Packet28, ripgrep, and fd.
 - `docs/experiments/real-repos/SMOKE_20260511.md` and `docs/experiments/real-repos/SMOKE_20260511.jsonl` record a 3x run across the required workflows. The `Packet28 run --json` path had 0 fallbacks, 0 failed commands, and raw artifact recovery for 54/54 runs.
-- The same run exposed an indexed-search maturity gap: `p28` had 2/9 indexed-search hits and 7/9 readiness fallbacks, so broad indexed-search parity is still not complete.
+- The latest run had 9/9 indexed `p28` hits and 0 indexed-search readiness fallbacks after `p28` was changed to wait for daemon index readiness before falling back.
+- Evaluate `fff` (`dmtrKovalenko/fff`) as a future search backend or optional MCP peer. It appears stronger than Packet28's custom search in fuzzy matching, frecency, git-aware ranking, and long-lived file-cache ergonomics, but adoption needs an adapter that preserves Packet28 reducer packets, raw artifact recovery, fallback reasons, local-first daemon semantics, and parity evidence.
 
 ### 6. Release Readiness
 

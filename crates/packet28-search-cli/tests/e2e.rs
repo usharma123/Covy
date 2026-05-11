@@ -358,7 +358,7 @@ fn debug_guard_reports_daemon_fallback_reasons() {
 }
 
 #[test]
-fn p28_auto_starts_daemon_and_eventually_uses_indexed_backend() {
+fn p28_auto_starts_daemon_and_waits_for_indexed_backend() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path();
     fs::create_dir_all(workspace.join(".git")).unwrap();
@@ -376,29 +376,8 @@ fn p28_auto_starts_daemon_and_eventually_uses_indexed_backend() {
     assert!(first.status.success());
     assert!(stdout_text(&first).contains("src/lib.rs:1:pub struct Alpha;"));
     let first_stderr = stderr_text(&first);
-    assert!(first_stderr.contains("transport="));
-    assert!(first_stderr.contains("backend="));
-
-    let start = Instant::now();
-    loop {
-        let output = output({
-            let mut command = cli_with_daemon_env();
-            command
-                .current_dir(&subtree)
-                .args(["Alpha", "--fixed-strings", "--stats"]);
-            command
-        });
-        assert!(output.status.success());
-        if stderr_text(&output).contains("backend=indexed_regex") {
-            break;
-        }
-        assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "timed out waiting for indexed backend; stderr={}",
-            stderr_text(&output)
-        );
-        thread::sleep(Duration::from_millis(100));
-    }
+    assert!(first_stderr.contains("transport=daemon"));
+    assert!(first_stderr.contains("backend=indexed_regex"));
 
     stop_daemon(workspace);
 }
