@@ -2352,6 +2352,16 @@ fn test_hook_records_local_event_log_stats_and_dashboard_count() {
     suite_cmd()
         .current_dir(root.path())
         .env("HOME", home.path())
+        .args(["transcript", "search", "post tool facts", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hook-telemetry-session"))
+        .stdout(predicate::str::contains(
+            "auto extraction stores post tool facts",
+        ));
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
         .args(["memory", "pending", "process", "--json"])
         .assert()
         .success()

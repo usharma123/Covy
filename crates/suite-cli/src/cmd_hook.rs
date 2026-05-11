@@ -19,8 +19,8 @@ use packet28_reducer_core::{
 use serde_json::{json, Value};
 
 use crate::memory_store::{
-    enqueue_pending_extraction, hook_event_stats, list_hook_events, record_hook_event,
-    HookEventInput, PendingExtractionInput,
+    append_transcript_message, enqueue_pending_extraction, hook_event_stats, list_hook_events,
+    record_hook_event, HookEventInput, PendingExtractionInput, TranscriptAppendInput,
 };
 
 #[derive(Args)]
@@ -239,7 +239,7 @@ fn process_claude_hook_payload(
         matcher: matcher.as_deref(),
         payload_json: &serde_json::to_string(payload)?,
     })?;
-    let _ = enqueue_hook_pending_extraction("claude", root, event_kind, payload);
+    let _ = capture_hook_output("claude", root, event_kind, payload, session_id.as_deref());
     Ok(ClaudeHookOutcome {
         exit_code: if response.block_stop { 2 } else { 0 },
         body: render_hook_output(event_kind, rewrite, &response)?,
@@ -317,11 +317,12 @@ fn process_runtime_hook_payload(
         matcher: matcher.as_deref(),
         payload_json: &serde_json::to_string(&payload)?,
     })?;
-    let _ = enqueue_hook_pending_extraction(
+    let _ = capture_hook_output(
         external_runtime_name(runtime),
         &root,
         event_kind,
         &payload,
+        session_id.as_deref(),
     );
     Ok(0)
 }
@@ -361,11 +362,12 @@ fn run_hook_stats(args: HookStatsArgs) -> Result<i32> {
     Ok(0)
 }
 
-fn enqueue_hook_pending_extraction(
+fn capture_hook_output(
     runtime: &str,
     root: &Path,
     event_kind: HookEventKind,
     payload: &Value,
+    session_id: Option<&str>,
 ) -> Result<()> {
     if !matches!(
         event_kind,
@@ -383,6 +385,15 @@ fn enqueue_hook_pending_extraction(
         project: Some(&hook_project_name(root, payload)),
         tool_name: hook_tool_name(runtime, payload).as_deref(),
         raw_output: &raw_output,
+    })?;
+    let fallback_session = json_string(payload, "task_id");
+    let transcript_session = session_id.or(fallback_session.as_deref());
+    append_transcript_message(TranscriptAppendInput {
+        session: transcript_session,
+        agent: Some(runtime),
+        role: Some("tool"),
+        content: &raw_output,
+        source: Some("packet28-hook"),
     })?;
     Ok(())
 }
