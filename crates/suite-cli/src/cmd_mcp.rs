@@ -63,10 +63,11 @@ use crate::memory_store::{
     add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
     delete_concept, delete_feedback, embed_memories, export_graph, feedback_stats,
     forget_memories_by_topic, forget_memory, graph_stats, inspect_graph, link_concepts,
-    list_feedback, list_memories, list_transcript_sessions, local_store_stats, memory_health,
-    memory_topics, prune_memories, recall_memories, record_feedback_with_metadata, refine_concept,
-    search_concepts, search_feedback, search_transcripts, show_transcript_session,
-    store_memory_with_metadata, transcript_stats, update_memory, FeedbackInput, MemoryStoreInput,
+    list_feedback, list_memories_filtered, list_transcript_sessions, local_store_stats,
+    memory_health, memory_topics, prune_memories, recall_memories_filtered,
+    record_feedback_with_metadata, refine_concept, search_concepts, search_feedback,
+    search_transcripts, show_transcript_session, store_memory_with_metadata, transcript_stats,
+    update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery, MemoryStoreInput,
     MemoryUpdateInput, TranscriptAppendInput,
 };
 use crate::route_registry::{
@@ -728,7 +729,10 @@ fn handle_method(
                         "required": ["query"],
                         "properties": {
                             "query": {"type":"string"},
-                            "limit": {"type":"integer","minimum":1}
+                            "limit": {"type":"integer","minimum":1},
+                            "topic": {"type":"string"},
+                            "tag": {"type":"string"},
+                            "keyword": {"type":"string"}
                         }
                     }
                 },
@@ -738,7 +742,10 @@ fn handle_method(
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "limit": {"type":"integer","minimum":1}
+                            "limit": {"type":"integer","minimum":1},
+                            "topic": {"type":"string"},
+                            "all": {"type":"boolean"},
+                            "sort": {"type":"string"}
                         }
                     }
                 },
@@ -1279,14 +1286,22 @@ fn handle_tool_call(
         }
         "packet28.memory_recall" => {
             let request: MemoryRecallToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(recall_memories(
-                &request.query,
-                request.limit.unwrap_or(10),
-            )?)?
+            serde_json::to_value(recall_memories_filtered(MemoryRecallQuery {
+                query: &request.query,
+                limit: request.limit.unwrap_or(10),
+                topic: request.topic.as_deref(),
+                tag: request.tag.as_deref(),
+                keyword: request.keyword.as_deref(),
+            })?)?
         }
         "packet28.memory_list" => {
             let request: MemoryListToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(list_memories(request.limit.unwrap_or(20))?)?
+            serde_json::to_value(list_memories_filtered(MemoryListQuery {
+                limit: request.limit.unwrap_or(20),
+                topic: request.topic.as_deref(),
+                all: request.all.unwrap_or(false),
+                sort: request.sort.as_deref().unwrap_or("recent"),
+            })?)?
         }
         "packet28.memory_update" => {
             let request: MemoryUpdateToolArgs = serde_json::from_value(arguments)?;
@@ -1497,11 +1512,17 @@ struct MemoryStoreToolArgs {
 struct MemoryRecallToolArgs {
     query: String,
     limit: Option<usize>,
+    topic: Option<String>,
+    tag: Option<String>,
+    keyword: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct MemoryListToolArgs {
     limit: Option<usize>,
+    topic: Option<String>,
+    all: Option<bool>,
+    sort: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

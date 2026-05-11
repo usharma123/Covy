@@ -426,6 +426,44 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .env("HOME", home.path())
         .args([
             "memory",
+            "recall",
+            "context",
+            "--topic",
+            "updated-parity",
+            "--tag",
+            "packet28",
+            "--keyword",
+            "context",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("updated local context"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "list",
+            "--topic",
+            "updated-parity",
+            "--sort",
+            "oldest",
+            "--all",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Packet28 remembers updated local context",
+        ))
+        .stdout(predicate::str::contains(
+            "Packet28 remembers a second local context",
+        ));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
             "consolidate",
             "--topic",
             "updated-parity",
@@ -670,6 +708,47 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         memory_stats["result"]["structuredContent"]["memory_count"].as_i64(),
         Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":66,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_recall",
+                "arguments":{
+                    "query":"updated",
+                    "topic":"mcp-updated",
+                    "keyword":"survives",
+                    "limit":3
+                }
+            }
+        }),
+    );
+    let filtered_recall = read_mcp_message_for_id(&mut stdout, 66);
+    assert_eq!(
+        filtered_recall["result"]["structuredContent"][0]["content"].as_str(),
+        Some("MCP memory updated locally")
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":67,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_list",
+                "arguments":{"topic":"mcp-updated", "all":true, "sort":"importance"}
+            }
+        }),
+    );
+    let filtered_list = read_mcp_message_for_id(&mut stdout, 67);
+    assert_eq!(
+        filtered_list["result"]["structuredContent"][0]["topic"].as_str(),
+        Some("mcp-updated")
     );
 
     write_mcp_message(

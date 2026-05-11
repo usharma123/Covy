@@ -3,9 +3,9 @@ use clap::{Args, Subcommand};
 
 use crate::memory_store::{
     consolidate_memories, decay_memories, embed_memories, forget_memories_by_topic, forget_memory,
-    list_memories, local_store_stats, memory_health, memory_topics, prune_memories,
-    recall_memories, store_memory_with_metadata, update_memory, MemoryStoreInput,
-    MemoryUpdateInput,
+    list_memories_filtered, local_store_stats, memory_health, memory_topics, prune_memories,
+    recall_memories_filtered, store_memory_with_metadata, update_memory, MemoryListQuery,
+    MemoryRecallQuery, MemoryStoreInput, MemoryUpdateInput,
 };
 
 #[derive(Args)]
@@ -55,6 +55,12 @@ pub struct MemoryRecallArgs {
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
     #[arg(long)]
+    pub topic: Option<String>,
+    #[arg(long)]
+    pub tag: Option<String>,
+    #[arg(long)]
+    pub keyword: Option<String>,
+    #[arg(long)]
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
@@ -64,6 +70,12 @@ pub struct MemoryRecallArgs {
 pub struct MemoryListArgs {
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
+    #[arg(long)]
+    pub topic: Option<String>,
+    #[arg(long)]
+    pub all: bool,
+    #[arg(long, default_value = "recent")]
+    pub sort: String,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -214,7 +226,13 @@ fn run_store(args: MemoryStoreArgs) -> Result<i32> {
 }
 
 fn run_recall(args: MemoryRecallArgs) -> Result<i32> {
-    let records = recall_memories(&args.query, args.limit)?;
+    let records = recall_memories_filtered(MemoryRecallQuery {
+        query: &args.query,
+        limit: args.limit,
+        topic: args.topic.as_deref(),
+        tag: args.tag.as_deref(),
+        keyword: args.keyword.as_deref(),
+    })?;
     if args.json {
         crate::cmd_common::emit_json(&serde_json::to_value(records)?, args.pretty)?;
     } else {
@@ -226,7 +244,12 @@ fn run_recall(args: MemoryRecallArgs) -> Result<i32> {
 }
 
 fn run_list(args: MemoryListArgs) -> Result<i32> {
-    let records = list_memories(args.limit)?;
+    let records = list_memories_filtered(MemoryListQuery {
+        limit: args.limit,
+        topic: args.topic.as_deref(),
+        all: args.all,
+        sort: &args.sort,
+    })?;
     if args.json {
         crate::cmd_common::emit_json(&serde_json::to_value(records)?, args.pretty)?;
     } else {

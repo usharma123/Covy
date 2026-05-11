@@ -239,6 +239,39 @@ pub(crate) struct MemoryUpdateInput<'a> {
     pub(crate) raw_excerpt: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MemoryRecallQuery<'a> {
+    pub(crate) query: &'a str,
+    pub(crate) limit: usize,
+    pub(crate) topic: Option<&'a str>,
+    pub(crate) tag: Option<&'a str>,
+    pub(crate) keyword: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MemoryListQuery<'a> {
+    pub(crate) limit: usize,
+    pub(crate) topic: Option<&'a str>,
+    pub(crate) all: bool,
+    pub(crate) sort: &'a str,
+}
+
+impl MemoryRecallQuery<'_> {
+    fn has_filters(&self) -> bool {
+        self.topic
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+            || self
+                .tag
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+            || self
+                .keyword
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false)
+    }
+}
+
 pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<MemoryRecord> {
     let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
@@ -268,8 +301,19 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
 }
 
 pub(crate) fn recall_memories(query: &str, limit: usize) -> Result<Vec<MemoryRecord>> {
+    recall_memories_filtered(MemoryRecallQuery {
+        query,
+        limit,
+        topic: None,
+        tag: None,
+        keyword: None,
+    })
+}
+
+pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<Vec<MemoryRecord>> {
     let conn = open_memory_db()?;
-    if let Some(match_query) = fts_match_query(query) {
+    let expanded_limit = expanded_filter_limit(input.limit, input.has_filters());
+    if let Some(match_query) = fts_match_query(input.query) {
         let mut stmt = conn.prepare(
             "SELECT
                 m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.raw_excerpt, m.weight,
@@ -280,12 +324,17 @@ pub(crate) fn recall_memories(query: &str, limit: usize) -> Result<Vec<MemoryRec
              ORDER BY bm25(memories_fts), m.created_at_unix_ms DESC
              LIMIT ?2",
         )?;
-        let records = read_memory_rows(&mut stmt, params![match_query, limit.max(1) as i64])?;
+        let records = read_memory_rows(&mut stmt, params![match_query, expanded_limit as i64])?;
+        let records = filter_memory_records(records, input);
         if !records.is_empty() {
-            return Ok(records);
+            return Ok(limit_memory_records(records, input.limit));
         }
     }
-    recall_memories_like(&conn, query, limit)
+    let records = recall_memories_like(&conn, input.query, expanded_limit)?;
+    Ok(limit_memory_records(
+        filter_memory_records(records, input),
+        input.limit,
+    ))
 }
 
 fn recall_memories_like(conn: &Connection, query: &str, limit: usize) -> Result<Vec<MemoryRecord>> {
@@ -307,16 +356,59 @@ fn recall_memories_like(conn: &Connection, query: &str, limit: usize) -> Result<
 }
 
 pub(crate) fn list_memories(limit: usize) -> Result<Vec<MemoryRecord>> {
+    list_memories_filtered(MemoryListQuery {
+        limit,
+        topic: None,
+        all: false,
+        sort: "recent",
+    })
+}
+
+pub(crate) fn list_memories_filtered(input: MemoryListQuery<'_>) -> Result<Vec<MemoryRecord>> {
     let conn = open_memory_db()?;
-    let mut stmt = conn.prepare(
-        "SELECT
-            id, content, tags, topic, importance, keywords, raw_excerpt, weight,
-            created_at_unix_ms, updated_at_unix_ms
-         FROM memories
-         ORDER BY created_at_unix_ms DESC
-         LIMIT ?1",
-    )?;
-    read_memory_rows(&mut stmt, params![limit.max(1) as i64])
+    let limit = if input.all {
+        10_000
+    } else {
+        input.limit.max(1)
+    };
+    let order_by = match input.sort.trim().to_ascii_lowercase().as_str() {
+        "oldest" => "created_at_unix_ms ASC, id ASC",
+        "importance" => {
+            "CASE LOWER(importance) WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 2 END DESC, updated_at_unix_ms DESC"
+        }
+        "weight" => "weight DESC, updated_at_unix_ms DESC",
+        "recent" | "newest" | "" => "created_at_unix_ms DESC, id DESC",
+        other => anyhow::bail!("unsupported memory list sort '{other}'"),
+    };
+    let topic = input
+        .topic
+        .map(|topic| normalize_non_empty(Some(topic), "general"));
+    let sql = if topic.is_some() {
+        format!(
+            "SELECT
+                id, content, tags, topic, importance, keywords, raw_excerpt, weight,
+                created_at_unix_ms, updated_at_unix_ms
+             FROM memories
+             WHERE topic = ?1
+             ORDER BY {order_by}
+             LIMIT ?2"
+        )
+    } else {
+        format!(
+            "SELECT
+                id, content, tags, topic, importance, keywords, raw_excerpt, weight,
+                created_at_unix_ms, updated_at_unix_ms
+             FROM memories
+             ORDER BY {order_by}
+             LIMIT ?1"
+        )
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    if let Some(topic) = topic {
+        read_memory_rows(&mut stmt, params![topic, limit as i64])
+    } else {
+        read_memory_rows(&mut stmt, params![limit as i64])
+    }
 }
 
 pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord> {
@@ -1233,6 +1325,55 @@ fn read_memory_rows<P: rusqlite::Params>(
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+fn expanded_filter_limit(limit: usize, has_filters: bool) -> usize {
+    if has_filters {
+        limit.max(1).saturating_mul(20).min(10_000)
+    } else {
+        limit.max(1)
+    }
+}
+
+fn limit_memory_records(mut records: Vec<MemoryRecord>, limit: usize) -> Vec<MemoryRecord> {
+    records.truncate(limit.max(1));
+    records
+}
+
+fn filter_memory_records(
+    records: Vec<MemoryRecord>,
+    input: MemoryRecallQuery<'_>,
+) -> Vec<MemoryRecord> {
+    records
+        .into_iter()
+        .filter(|record| {
+            input
+                .topic
+                .map(|topic| record.topic == normalize_non_empty(Some(topic), "general"))
+                .unwrap_or(true)
+        })
+        .filter(|record| {
+            input
+                .tag
+                .map(|tag| csv_field_contains(record.tags.as_deref(), tag))
+                .unwrap_or(true)
+        })
+        .filter(|record| {
+            input
+                .keyword
+                .map(|keyword| csv_field_contains(record.keywords.as_deref(), keyword))
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
+fn csv_field_contains(field: Option<&str>, needle: &str) -> bool {
+    let needle = needle.trim();
+    !needle.is_empty()
+        && field
+            .unwrap_or_default()
+            .split(',')
+            .any(|part| part.trim().eq_ignore_ascii_case(needle))
 }
 
 fn read_health_rows<P: rusqlite::Params>(
