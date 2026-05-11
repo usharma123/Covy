@@ -14,6 +14,8 @@ use packet28_daemon_core::{DaemonIndexStatusRequest, DaemonRequest, DaemonRespon
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::runtime_integrations::windsurf;
+
 #[derive(Args)]
 pub struct DoctorArgs {
     #[arg(long, default_value = ".")]
@@ -497,10 +499,7 @@ fn collect_mcp_config_checks(root: &Path) -> Vec<McpConfigCheck> {
 }
 
 fn windsurf_mcp_config_path() -> std::path::PathBuf {
-    dirs_home()
-        .join(".codeium")
-        .join("windsurf")
-        .join("mcp_config.json")
+    windsurf::mcp_config_path(&dirs_home())
 }
 
 fn dirs_home() -> std::path::PathBuf {
@@ -587,7 +586,7 @@ fn command_resolves(command: &str) -> bool {
 }
 
 fn check_windsurf_rules(root: &Path) -> DoctorCheck {
-    let path = root.join(".windsurf").join("rules").join("packet28.md");
+    let path = windsurf::rule_path(root);
     let result = (|| -> Result<String> {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;

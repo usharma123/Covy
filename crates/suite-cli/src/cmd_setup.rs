@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use toml::value::Table as TomlTable;
 
 use crate::agent_surface;
+use crate::runtime_integrations::{claude, codex, cursor, windsurf};
 
 const PACKET28_CLAUDE_HTTP_HOOK_PATH: &str = "/packet28/claude-hook";
 const PACKET28_CLAUDE_HTTP_TOKEN_HEADER: &str = "X-Packet28-Hook-Token";
@@ -1234,7 +1235,7 @@ fn detect_runtimes(root: &Path) -> Vec<RuntimeInfo> {
             name: "Claude Code",
             slug: "claude",
             prompt_targets: vec![PromptTarget {
-                path: root.join("CLAUDE.md"),
+                path: claude::prompt_path(root),
                 format: agent_surface::AgentPromptFormat::Claude,
             }],
             detected: detect_claude(&home),
@@ -1251,7 +1252,7 @@ fn detect_runtimes(root: &Path) -> Vec<RuntimeInfo> {
             name: "Codex",
             slug: "codex",
             prompt_targets: vec![PromptTarget {
-                path: root.join("AGENTS.md"),
+                path: codex::prompt_path(root),
                 format: agent_surface::AgentPromptFormat::Agents,
             }],
             detected: detect_codex(),
@@ -1302,12 +1303,12 @@ fn which_exists(name: &str) -> bool {
 
 fn find_claude_mcp_config(_home: &Path, root: &Path) -> Option<PathBuf> {
     // Claude Code uses project-level .mcp.json
-    Some(root.join(".mcp.json"))
+    Some(claude::mcp_config_path(root))
 }
 
 fn find_cursor_mcp_config(root: &Path) -> Option<PathBuf> {
     // Cursor uses project-level .cursor/mcp.json
-    Some(root.join(".cursor").join("mcp.json"))
+    Some(cursor::mcp_config_path(root))
 }
 
 fn runtime_supports_mcp(kind: RuntimeKind) -> bool {
@@ -1431,31 +1432,29 @@ fn mcp_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
 
 fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
     match kind {
-        RuntimeKind::Claude => root.join(".claude").join("settings.json"),
-        RuntimeKind::Cursor => root.join(".cursor").join("hooks.json"),
-        RuntimeKind::Windsurf => root.join(".windsurf").join("hooks.json"),
+        RuntimeKind::Claude => claude::settings_path(root),
+        RuntimeKind::Cursor => cursor::hook_config_path(root),
+        RuntimeKind::Windsurf => windsurf::hook_config_path(root),
         RuntimeKind::Codex => unreachable!("codex hooks are disabled in packet28 setup"),
     }
 }
 
 fn codex_config_path(home: &Path) -> PathBuf {
-    home.join(".codex").join("config.toml")
+    codex::config_path(home)
 }
 
 fn windsurf_mcp_config_path(home: &Path) -> PathBuf {
-    home.join(".codeium")
-        .join("windsurf")
-        .join("mcp_config.json")
+    windsurf::mcp_config_path(home)
 }
 
 fn cursor_prompt_targets(root: &Path) -> Vec<PromptTarget> {
     let mut targets = vec![PromptTarget {
-        path: root.join(".cursor").join("rules").join("packet28.mdc"),
+        path: cursor::rule_path(root),
         format: agent_surface::AgentPromptFormat::CursorRule,
     }];
-    if root.join(".cursorrules").exists() {
+    if cursor::legacy_rules_path(root).exists() {
         targets.push(PromptTarget {
-            path: root.join(".cursorrules"),
+            path: cursor::legacy_rules_path(root),
             format: agent_surface::AgentPromptFormat::Cursor,
         });
     }
@@ -1464,7 +1463,7 @@ fn cursor_prompt_targets(root: &Path) -> Vec<PromptTarget> {
 
 fn windsurf_prompt_targets(root: &Path) -> Vec<PromptTarget> {
     vec![PromptTarget {
-        path: root.join(".windsurf").join("rules").join("packet28.md"),
+        path: windsurf::rule_path(root),
         format: agent_surface::AgentPromptFormat::WindsurfRule,
     }]
 }

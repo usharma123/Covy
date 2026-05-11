@@ -58,6 +58,7 @@ use crate::cmd_mcp::support::{
 use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
+use crate::runtime_integrations::windsurf;
 
 #[derive(Args)]
 pub struct McpArgs {
@@ -202,10 +203,7 @@ fn load_agent_mcp_server(agent: &str) -> Result<McpProxyServerConfig> {
 }
 
 fn windsurf_mcp_config_path() -> PathBuf {
-    dirs_home()
-        .join(".codeium")
-        .join("windsurf")
-        .join("mcp_config.json")
+    windsurf::mcp_config_path(&dirs_home())
 }
 
 fn dirs_home() -> PathBuf {
