@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -330,6 +331,7 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
 #[test]
 fn test_memory_store_recall_uses_sqlite_home_db() {
     let home = TempDir::new().unwrap();
+    let db_path = home.path().join(".packet28").join("packet28.db");
     suite_cmd()
         .env("HOME", home.path())
         .args([
@@ -344,7 +346,16 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .success()
         .stdout(predicate::str::contains("\"content\""));
 
-    assert!(home.path().join(".packet28").join("packet28.db").exists());
+    assert!(db_path.exists());
+    let conn = Connection::open(&db_path).unwrap();
+    let fts_tables: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('memories_fts', 'feedback_fts')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(fts_tables, 2);
 
     suite_cmd()
         .env("HOME", home.path())
@@ -533,6 +544,11 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("prefer focused reducers"));
+    let conn = Connection::open(home.path().join(".packet28").join("packet28.db")).unwrap();
+    let feedback_fts_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM feedback_fts", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(feedback_fts_rows, 1);
     suite_cmd()
         .env("HOME", home.path())
         .args(["feedback", "stats", "--json"])
