@@ -6,6 +6,7 @@ Setup Windsurf:
 
 ```bash
 Packet28 init --agent windsurf --yes --root .
+Packet28 init --mode all --yes --root .
 Packet28 setup --runtime windsurf --yes --root .
 Packet28 doctor --agent windsurf --root .
 Packet28 mcp smoke-test --from-config windsurf

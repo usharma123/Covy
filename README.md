@@ -292,6 +292,7 @@ Packet28 mcp serve|proxy      Expose Packet28 as an MCP server or proxy upstream
 Packet28 daemon               Daemon lifecycle and task management
 Packet28 setup                Configure Claude/Cursor/Codex/Windsurf integration files
 Packet28 init --agent windsurf --yes --root .
+Packet28 init --mode all --yes --root .
 Packet28 doctor --agent windsurf --root .
 Packet28 mcp smoke-test --from-config windsurf
 Packet28 rewrite "git status --short" --json
