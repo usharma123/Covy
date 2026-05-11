@@ -165,6 +165,65 @@ fn test_run_reduces_cargo_check() {
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 
+#[cfg(unix)]
+fn write_executable_script(path: &Path, content: &str) {
+    fs::write(path, content).unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_run_reduces_npm_test_and_pytest() {
+    let root = TempDir::new().unwrap();
+    let bin_dir = TempDir::new().unwrap();
+    write_executable_script(
+        &bin_dir.path().join("npm"),
+        "#!/bin/sh\nprintf 'npm test fixture passed\\n'\n",
+    );
+    write_executable_script(
+        &bin_dir.path().join("pytest"),
+        "#!/bin/sh\nprintf '2 passed in 0.01s\\n'\n",
+    );
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "npm",
+            "test",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"javascript\""))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "pytest",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"python\""))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+}
+
 fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     let body = serde_json::to_vec(value).unwrap();
     write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
