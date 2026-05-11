@@ -62,7 +62,7 @@ use crate::cmd_wakeup::build_wakeup_report;
 use crate::memory_store::{
     add_concept, append_transcript_message, apply_feedback, consolidate_memories, decay_memories,
     delete_concept, delete_feedback, export_graph, feedback_stats, forget_memories_by_topic,
-    forget_memory, inspect_graph, link_concepts, list_feedback, list_memories,
+    forget_memory, graph_stats, inspect_graph, link_concepts, list_feedback, list_memories,
     list_transcript_sessions, local_store_stats, memory_health, memory_topics, prune_memories,
     recall_memories, record_feedback_with_metadata, refine_concept, search_concepts,
     search_feedback, search_transcripts, show_transcript_session, store_memory_with_metadata,
@@ -1029,6 +1029,14 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.graph_stats",
+                    "description": "Return local Packet28 graph counts and relation type statistics.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
                     "name": "packet28.graph_delete",
                     "description": "Delete a local Packet28 graph concept and attached relations.",
                     "inputSchema": {
@@ -1418,6 +1426,7 @@ fn handle_tool_call(
                 request.limit.unwrap_or(100),
             )?)?
         }
+        "packet28.graph_stats" => serde_json::to_value(graph_stats()?)?,
         "packet28.graph_delete" => {
             let request: GraphDeleteToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(delete_concept(&request.name)?)?
@@ -1922,6 +1931,7 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or("json");
             format!("Packet28 graph exported as {format}.")
         }
+        "packet28.graph_stats" => "Packet28 graph statistics.".to_string(),
         "packet28.graph_delete" => {
             let deleted = payload
                 .get("deleted_concepts")
@@ -1987,6 +1997,7 @@ mod tests {
             "packet28.transcript_stats",
             "packet28.graph_search",
             "packet28.graph_export",
+            "packet28.graph_stats",
         ] {
             assert!(
                 tool_names.contains(&required),

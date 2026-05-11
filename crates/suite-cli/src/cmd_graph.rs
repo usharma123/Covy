@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::memory_store::{
-    add_concept, delete_concept, export_graph, inspect_graph, link_concepts, refine_concept,
-    search_concepts,
+    add_concept, delete_concept, export_graph, graph_stats, inspect_graph, link_concepts,
+    refine_concept, search_concepts,
 };
 
 #[derive(Args)]
@@ -20,6 +20,7 @@ pub enum GraphCommands {
     Delete(GraphDeleteArgs),
     Search(GraphSearchArgs),
     Export(GraphExportArgs),
+    Stats(GraphStatsArgs),
     Link(GraphLinkArgs),
     Inspect(GraphInspectArgs),
 }
@@ -79,6 +80,14 @@ pub struct GraphExportArgs {
     pub format: String,
     #[arg(long, default_value_t = 100)]
     pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct GraphStatsArgs {
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -158,6 +167,17 @@ pub fn run(args: GraphArgs) -> Result<i32> {
                 crate::cmd_common::emit_json(&serde_json::to_value(export)?, args.pretty)?;
             } else {
                 print!("{}", export.content);
+            }
+        }
+        GraphCommands::Stats(args) => {
+            let stats = graph_stats()?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(stats)?, args.pretty)?;
+            } else {
+                println!("concept_count={}", stats.concept_count);
+                println!("relation_count={}", stats.relation_count);
+                println!("relation_type_count={}", stats.relation_type_count);
+                println!("isolated_concept_count={}", stats.isolated_concept_count);
             }
         }
         GraphCommands::Link(args) => {

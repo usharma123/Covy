@@ -1019,6 +1019,24 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         &mut stdin,
         &json!({
             "jsonrpc":"2.0",
+            "id":64,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.graph_stats",
+                "arguments":{}
+            }
+        }),
+    );
+    let graph_stats = read_mcp_message_for_id(&mut stdout, 64);
+    assert_eq!(
+        graph_stats["result"]["structuredContent"]["relation_count"].as_i64(),
+        Some(1)
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
             "id":8,
             "method":"tools/call",
             "params":{
@@ -1304,6 +1322,14 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         .assert()
         .success()
         .stdout(predicate::str::contains("digraph packet28_graph"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"concept_count\":2"))
+        .stdout(predicate::str::contains("\"relation_count\":1"))
+        .stdout(predicate::str::contains("\"relation\":\"uses\""));
     suite_cmd()
         .env("HOME", home.path())
         .args(["graph", "inspect", "--json"])

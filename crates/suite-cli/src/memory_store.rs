@@ -96,6 +96,21 @@ pub(crate) struct GraphExport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphRelationTypeStats {
+    pub(crate) relation: String,
+    pub(crate) relation_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct GraphStats {
+    pub(crate) concept_count: i64,
+    pub(crate) relation_count: i64,
+    pub(crate) relation_type_count: i64,
+    pub(crate) isolated_concept_count: i64,
+    pub(crate) relation_types: Vec<GraphRelationTypeStats>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct LocalStoreStats {
     pub(crate) memory_count: i64,
     pub(crate) feedback_count: i64,
@@ -1028,6 +1043,42 @@ pub(crate) fn inspect_graph(limit: usize) -> Result<GraphInspect> {
     Ok(GraphInspect {
         concepts,
         relations,
+    })
+}
+
+pub(crate) fn graph_stats() -> Result<GraphStats> {
+    let conn = open_memory_db()?;
+    let mut stmt = conn.prepare(
+        "SELECT relation, COUNT(*)
+         FROM relations
+         GROUP BY relation
+         ORDER BY COUNT(*) DESC, relation ASC",
+    )?;
+    let relation_types = stmt
+        .query_map([], |row| {
+            Ok(GraphRelationTypeStats {
+                relation: row.get(0)?,
+                relation_count: row.get(1)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let isolated_concept_count = conn.query_row(
+        "SELECT COUNT(*)
+         FROM concepts c
+         WHERE NOT EXISTS (
+             SELECT 1
+             FROM relations r
+             WHERE r.source_concept_id = c.id OR r.target_concept_id = c.id
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(GraphStats {
+        concept_count: table_count(&conn, "concepts")?,
+        relation_count: table_count(&conn, "relations")?,
+        relation_type_count: relation_types.len() as i64,
+        isolated_concept_count,
+        relation_types,
     })
 }
 
