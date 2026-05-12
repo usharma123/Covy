@@ -50,7 +50,7 @@ pub struct LearnArgs {
     pub limit: usize,
 
     /// Minimum frequency to include a correction
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, visible_alias = "min-occurrences", default_value_t = 2)]
     pub min_frequency: usize,
 
     /// Minimum confidence to include a correction

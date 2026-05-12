@@ -6083,6 +6083,20 @@ fn test_learn_detects_cli_correction_from_session_history() {
             "learn",
             "--sessions-dir",
             root.path().join("claude-projects").to_str().unwrap(),
+            "--min-occurrences",
+            "1",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"corrections_found\":1"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "learn",
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
             "--min-frequency",
             "1",
             "--write-rules",
