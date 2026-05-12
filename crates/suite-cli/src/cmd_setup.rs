@@ -3325,6 +3325,74 @@ mod tests {
     }
 
     #[test]
+    fn opencode_plugin_smoke_rewrites_and_passes_through_empty_stdout() {
+        if std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        let path = dir
+            .path()
+            .join(".config")
+            .join("opencode")
+            .join("plugins")
+            .join("packet28.ts");
+        write_opencode_plugin(&path, true).unwrap();
+        let script = r#"
+const fs = require("fs")
+let code = fs.readFileSync(process.argv[1], "utf8")
+code = code.replace(/^import type .*$/m, "")
+code = code.replace("export const Packet28OpenCodePlugin: Plugin =", "const Packet28OpenCodePlugin =")
+code = code.replaceAll("(args as Record<string, unknown>)", "args")
+code += `
+;(async () => {
+  const calls = []
+  function $(strings, ...values) {
+    const rendered = strings.reduce((acc, part, index) => acc + part + (index < values.length ? values[index] : ""), "")
+    calls.push({ rendered, values })
+    return {
+      quiet() { return this },
+      nothrow() {
+        const command = String(values[0] ?? "")
+        if (command === "git status --short") return Promise.resolve({ stdout: "rewritten git status\\n" })
+        return Promise.resolve({ stdout: "" })
+      },
+      then(resolve) { resolve({ stdout: "" }) },
+    }
+  }
+  const plugin = await Packet28OpenCodePlugin({ $ })
+  const rewriteArgs = { command: "git status --short" }
+  const passthroughArgs = { command: "htop" }
+  await plugin["tool.execute.before"]({ tool: "bash" }, { args: rewriteArgs })
+  await plugin["tool.execute.before"]({ tool: "shell" }, { args: passthroughArgs })
+  console.log(rewriteArgs.command)
+  console.log(passthroughArgs.command)
+})().catch((err) => { console.error(err); process.exit(1) })
+`
+eval(code)
+"#;
+        let output = std::process::Command::new("node")
+            .arg("-e")
+            .arg(script)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "node smoke failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "rewritten git status\nhtop\n"
+        );
+    }
+
+    #[test]
     fn write_hermes_plugin_installs_plugin_and_enables_config() {
         let dir = tempdir().unwrap();
         let status = write_hermes_plugin(dir.path(), true).unwrap();
