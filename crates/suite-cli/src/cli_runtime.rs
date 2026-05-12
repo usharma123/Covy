@@ -114,6 +114,11 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Vitest(args)) => cmd_system::run_vitest(args),
         Some(Commands::Pytest(args)) => cmd_system::run_pytest(args),
         Some(Commands::Ruff(args)) => cmd_system::run_ruff(args),
+        Some(Commands::Wc(args)) => cmd_system::run_wc(args),
+        Some(Commands::Wget(args)) => cmd_system::run_wget(args),
+        Some(Commands::Curl(args)) => cmd_system::run_curl(args),
+        Some(Commands::Docker(args)) => cmd_system::run_docker(args),
+        Some(Commands::Kubectl(args)) => cmd_system::run_kubectl(args),
         Some(Commands::Smart(args)) => cmd_system::run_smart(args),
         Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Grep(args)) => cmd_system::run_grep(args),
@@ -401,6 +406,11 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Vitest(_))
         | Some(Commands::Pytest(_))
         | Some(Commands::Ruff(_))
+        | Some(Commands::Wc(_))
+        | Some(Commands::Wget(_))
+        | Some(Commands::Curl(_))
+        | Some(Commands::Docker(_))
+        | Some(Commands::Kubectl(_))
         | Some(Commands::Smart(_))
         | Some(Commands::Find(_))
         | Some(Commands::Grep(_))

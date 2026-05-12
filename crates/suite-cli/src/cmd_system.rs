@@ -3,11 +3,13 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
-use packet28_reducer_core::{SearchRequest, SearchResult};
+use packet28_reducer_core::{
+    classify_command_argv, reduce_command_output, SearchRequest, SearchResult,
+};
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
@@ -340,15 +342,28 @@ pub fn run_ruff(args: ToolArgs) -> Result<i32> {
     run_tool_command("ruff", args, "ruff")
 }
 
+pub fn run_wc(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("wc", args, "wc")
+}
+
+pub fn run_wget(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("wget", args, "wget")
+}
+
+pub fn run_curl(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("curl", args, "curl")
+}
+
+pub fn run_docker(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("docker", args, "docker")
+}
+
+pub fn run_kubectl(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("kubectl", args, "kubectl")
+}
+
 fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
-    let (program, rest) = args
-        .command
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("{label} requires a command"))?;
-    let output = Command::new(program)
-        .args(rest)
-        .output()
-        .with_context(|| format!("failed to execute '{}'", args.command.join(" ")))?;
+    let output = execute_command(&args.command)?;
     let raw = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -368,6 +383,16 @@ fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     Ok(exit_code)
 }
 
+fn execute_command(command: &[String]) -> Result<Output> {
+    let (program, rest) = command
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("command is required"))?;
+    Command::new(program)
+        .args(rest)
+        .output()
+        .with_context(|| format!("failed to execute '{}'", command.join(" ")))
+}
+
 fn run_tool_command(program: &str, args: ToolArgs, label: &str) -> Result<i32> {
     let mut command = Vec::with_capacity(args.args.len() + 1);
     command.push(program.to_string());
@@ -380,6 +405,44 @@ fn run_tool_command(program: &str, args: ToolArgs, label: &str) -> Result<i32> {
         },
         label,
     )
+}
+
+fn run_reducer_tool_command(program: &str, args: ToolArgs, label: &str) -> Result<i32> {
+    let mut command = Vec::with_capacity(args.args.len() + 1);
+    command.push(program.to_string());
+    command.extend(args.args);
+    let output = execute_command(&command)?;
+    let exit_code = output.status.code().unwrap_or(1);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let text = if let Some(spec) = classify_command_argv(&command.join(" "), &command) {
+        let reduction = reduce_command_output(&spec, &stdout, &stderr, exit_code)?;
+        if reduction.compact_preview.trim().is_empty() {
+            reduction.summary
+        } else {
+            format!(
+                "{}\n{}",
+                reduction.summary,
+                reduction.compact_preview.trim_end()
+            )
+        }
+    } else {
+        summarize_command_output(
+            &format!("{stdout}{stderr}"),
+            &command.join(" "),
+            output.status.success(),
+        )
+    };
+    emit_system_output(
+        args.json,
+        args.pretty,
+        SystemOutput {
+            command: format!("Packet28 {label}"),
+            summary: summarize_rendered_lines(label, &text),
+            text,
+        },
+    )?;
+    Ok(exit_code)
 }
 
 struct FormatterInvocation {

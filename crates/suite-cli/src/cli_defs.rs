@@ -84,6 +84,16 @@ pub enum Commands {
     Pytest(cmd_system::ToolArgs),
     /// Run Ruff with compact output
     Ruff(cmd_system::ToolArgs),
+    /// Run wc with compact output
+    Wc(cmd_system::ToolArgs),
+    /// Run wget with compact output
+    Wget(cmd_system::ToolArgs),
+    /// Run curl with compact output
+    Curl(cmd_system::ToolArgs),
+    /// Run docker with compact output
+    Docker(cmd_system::ToolArgs),
+    /// Run kubectl with compact output
+    Kubectl(cmd_system::ToolArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output

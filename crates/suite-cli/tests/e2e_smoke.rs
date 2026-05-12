@@ -419,6 +419,83 @@ fn test_system_language_tool_commands_wrap_common_rtk_tools() {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_system_infra_and_count_commands_use_reducer_wrappers() {
+    let root = TempDir::new().unwrap();
+    let bin_dir = root.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::write(root.path().join("sample.txt"), "one\ntwo\nthree\n").unwrap();
+    write_executable_script(
+        &bin_dir.join("wc"),
+        "#!/bin/sh\nprintf '      3 sample.txt\\n'; exit 0\n",
+    );
+    write_executable_script(
+        &bin_dir.join("wget"),
+        "#!/bin/sh\nprintf '%s\\n' '--2026-05-12-- https://example.com/pkg.tgz' \"Saving to: 'pkg.tgz'\" \"'pkg.tgz' saved [2048/2048]\" >&2; exit 0\n",
+    );
+    write_executable_script(
+        &bin_dir.join("curl"),
+        "#!/bin/sh\nprintf '<html><title>Packet28 Fixture</title><body>ok</body></html>'; exit 0\n",
+    );
+    write_executable_script(
+        &bin_dir.join("docker"),
+        "#!/bin/sh\nif [ \"$1\" = ps ]; then printf 'CONTAINER ID   IMAGE   STATUS\\nabc123         app     Up 2 minutes\\n'; exit 0; fi\nexit 2\n",
+    );
+    write_executable_script(
+        &bin_dir.join("kubectl"),
+        "#!/bin/sh\nif [ \"$1\" = get ]; then printf 'NAME   READY   STATUS\\napi    1/1     Running\\njob    0/1     Pending\\n'; exit 0; fi\nexit 2\n",
+    );
+    let path_env = std::env::join_paths(std::iter::once(bin_dir.as_path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["wc", "-l", "sample.txt"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wc 3"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["wget", "https://example.com/pkg.tgz"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "wget example.com/pkg.tgz ok | pkg.tgz | 2.0KB",
+        ));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["curl", "https://example.com"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("curl HTML 'Packet28 Fixture'"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["docker", "ps"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("docker ps listed 1 container"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["kubectl", "get", "pods"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "kubectl get pods: 2 row(s), 1 pending",
+        ));
+}
+
+#[test]
 fn test_system_smart_command_summarizes_source_file() {
     let root = TempDir::new().unwrap();
     let source = root.path().join("lib.rs");
