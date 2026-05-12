@@ -381,6 +381,60 @@ fn test_setup_codex_writes_mcp_and_agents_without_hooks() {
 
 #[test]
 #[cfg(unix)]
+fn test_setup_copilot_writes_instructions_and_pretool_hook() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "copilot",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    assert!(root
+        .path()
+        .join(".github")
+        .join("copilot-instructions.md")
+        .exists());
+    let hook_path = root
+        .path()
+        .join(".github")
+        .join("hooks")
+        .join("packet28-rewrite.json");
+    let settings: Value = serde_json::from_str(&fs::read_to_string(hook_path).unwrap()).unwrap();
+    let hooks = settings["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(hooks.len(), 1);
+    let command = hooks[0]["command"].as_str().unwrap();
+    assert!(command.contains(" hook copilot "));
+    assert!(command.contains(root.path().to_str().unwrap()));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "doctor",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--agent",
+            "copilot",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("copilot_hook_config"));
+}
+
+#[test]
+#[cfg(unix)]
 fn test_setup_gemini_writes_before_tool_hook_and_prompt() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();

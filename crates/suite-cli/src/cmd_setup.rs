@@ -1464,7 +1464,11 @@ fn runtime_supports_mcp(kind: RuntimeKind) -> bool {
 fn runtime_supports_hooks(kind: RuntimeKind) -> bool {
     matches!(
         kind,
-        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Gemini | RuntimeKind::Windsurf
+        RuntimeKind::Claude
+            | RuntimeKind::Copilot
+            | RuntimeKind::Cursor
+            | RuntimeKind::Gemini
+            | RuntimeKind::Windsurf
     )
 }
 
@@ -1533,6 +1537,9 @@ fn configure_runtime_hooks(
         RuntimeKind::Cursor => {
             write_cursor_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
+        RuntimeKind::Copilot => {
+            write_copilot_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
+        }
         RuntimeKind::Gemini => {
             write_gemini_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
@@ -1540,7 +1547,6 @@ fn configure_runtime_hooks(
             write_windsurf_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
         RuntimeKind::Codex
-        | RuntimeKind::Copilot
         | RuntimeKind::OpenCode
         | RuntimeKind::Hermes
         | RuntimeKind::Cline
@@ -1589,11 +1595,12 @@ fn runtime_mcp_status(runtime: &RuntimeInfo, root: &Path) -> String {
 
 fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
     match runtime.kind {
-        RuntimeKind::Claude | RuntimeKind::Cursor | RuntimeKind::Gemini | RuntimeKind::Windsurf => {
-            hook_config_path(runtime.kind, root).display().to_string()
-        }
-        RuntimeKind::Codex
+        RuntimeKind::Claude
         | RuntimeKind::Copilot
+        | RuntimeKind::Cursor
+        | RuntimeKind::Gemini
+        | RuntimeKind::Windsurf => hook_config_path(runtime.kind, root).display().to_string(),
+        RuntimeKind::Codex
         | RuntimeKind::OpenCode
         | RuntimeKind::Hermes
         | RuntimeKind::Cline
@@ -1627,11 +1634,11 @@ fn mcp_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
 fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
     match kind {
         RuntimeKind::Claude => claude::settings_path(root),
+        RuntimeKind::Copilot => copilot::hook_config_path(root),
         RuntimeKind::Cursor => cursor::hook_config_path(root),
         RuntimeKind::Gemini => gemini::settings_path(&dirs_home()),
         RuntimeKind::Windsurf => windsurf::hook_config_path(root),
         RuntimeKind::Codex
-        | RuntimeKind::Copilot
         | RuntimeKind::OpenCode
         | RuntimeKind::Hermes
         | RuntimeKind::Cline
@@ -2275,6 +2282,65 @@ fn write_gemini_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<
     Ok(McpConfigStatus::Written)
 }
 
+fn write_copilot_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+    let hook_command = generated_packet28_hook_command("copilot", root);
+    let packet28_hook = json!({
+        "type": "command",
+        "command": hook_command,
+        "cwd": ".",
+        "timeout": 5
+    });
+    let mut config: BTreeMap<String, Value> = if path.exists() {
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        serde_json::from_str(&content).with_context(|| {
+            format!(
+                "refusing to overwrite invalid JSON in '{}'; fix the file and rerun setup",
+                path.display()
+            )
+        })?
+    } else {
+        BTreeMap::new()
+    };
+    if !auto_yes {
+        eprint!(
+            "    Write Copilot hook config to {}? [Y/n] ",
+            path.display().to_string().dimmed()
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
+            return Ok(McpConfigStatus::Declined);
+        }
+    }
+    let mut hooks = config
+        .get("hooks")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let existing = hooks
+        .get("PreToolUse")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if existing.iter().any(|entry| entry == &packet28_hook) {
+        return Ok(McpConfigStatus::AlreadyConfigured);
+    }
+    let mut merged = existing;
+    merged.push(packet28_hook);
+    hooks.insert("PreToolUse".to_string(), Value::Array(merged));
+    config.insert("hooks".to_string(), Value::Object(hooks));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&config)?),
+    )?;
+    Ok(McpConfigStatus::Written)
+}
+
 fn write_windsurf_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
     let hook_command = generated_packet28_hook_command("windsurf", root);
     let packet28_hooks = json!({
@@ -2772,11 +2838,12 @@ mod tests {
                 .join("antigravity-packet28-rules.md")
         );
 
+        assert!(!runtime_supports_mcp(by_slug["copilot"].kind));
+        assert!(runtime_supports_hooks(by_slug["copilot"].kind));
         assert!(!runtime_supports_mcp(by_slug["gemini"].kind));
         assert!(runtime_supports_hooks(by_slug["gemini"].kind));
 
         for slug in [
-            "copilot",
             "opencode",
             "hermes",
             "cline",
@@ -2955,6 +3022,25 @@ mod tests {
         assert_eq!(hooks[0]["matcher"].as_str(), Some("run_shell_command"));
         let command = hooks[0]["hooks"][0]["command"].as_str().unwrap();
         assert!(command.contains(" hook gemini "));
+    }
+
+    #[test]
+    fn write_copilot_hook_config_installs_packet28_pretool_hook() {
+        let dir = tempdir().unwrap();
+        let path = dir
+            .path()
+            .join(".github")
+            .join("hooks")
+            .join("packet28-rewrite.json");
+        let status = write_copilot_hook_config(&path, dir.path(), true).unwrap();
+        assert!(matches!(status, McpConfigStatus::Written));
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let hooks = value["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0]["type"].as_str(), Some("command"));
+        assert_eq!(hooks[0]["timeout"].as_i64(), Some(5));
+        let command = hooks[0]["command"].as_str().unwrap();
+        assert!(command.contains(" hook copilot "));
     }
 
     #[test]

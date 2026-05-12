@@ -72,6 +72,12 @@ pub(crate) mod copilot {
     pub(crate) fn instructions_path(root: &Path) -> PathBuf {
         root.join(".github").join("copilot-instructions.md")
     }
+
+    pub(crate) fn hook_config_path(root: &Path) -> PathBuf {
+        root.join(".github")
+            .join("hooks")
+            .join("packet28-rewrite.json")
+    }
 }
 
 pub(crate) mod gemini {

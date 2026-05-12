@@ -319,6 +319,9 @@ pub fn run(args: DoctorArgs) -> Result<i32> {
 }
 
 fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
+    if matches!(agent, Some("copilot")) {
+        return build_copilot_report(root);
+    }
     if matches!(agent, Some("windsurf")) {
         return build_windsurf_report(root);
     }
@@ -367,11 +370,6 @@ struct InstructionOnlyAgentTarget {
 
 fn instruction_only_agent_target(root: &Path, agent: &str) -> Option<InstructionOnlyAgentTarget> {
     match agent {
-        "copilot" => Some(InstructionOnlyAgentTarget {
-            slug: "copilot",
-            name: "GitHub Copilot",
-            path: copilot::instructions_path(root),
-        }),
         "gemini" => Some(InstructionOnlyAgentTarget {
             slug: "gemini",
             name: "Gemini CLI",
@@ -408,6 +406,78 @@ fn instruction_only_agent_target(root: &Path, agent: &str) -> Option<Instruction
             path: antigravity::rules_path(root),
         }),
         _ => None,
+    }
+}
+
+fn build_copilot_report(root: &Path) -> DoctorReport {
+    let daemon = DoctorCheck {
+        name: "daemon",
+        ok: true,
+        required: false,
+        detail: "not required for GitHub Copilot project hook verification".to_string(),
+    };
+    let index = DoctorCheck {
+        name: "index",
+        ok: true,
+        required: false,
+        detail: "not required for GitHub Copilot project hook verification".to_string(),
+    };
+    let mcp_config = Vec::new();
+    let instruction_file = check_instruction_file(
+        "copilot",
+        "GitHub Copilot",
+        &copilot::instructions_path(root),
+    );
+    let hook_config = check_copilot_hook_config(root);
+    let handshake = DoctorCheck {
+        name: "mcp_handshake",
+        ok: true,
+        required: false,
+        detail: "GitHub Copilot uses a project PreToolUse hook, not Packet28 MCP setup".to_string(),
+    };
+    let reducer_round_trip = DoctorCheck {
+        name: "runtime_rewrite_support",
+        ok: hook_config.ok,
+        required: true,
+        detail: hook_config.detail.clone(),
+    };
+    let push_notifications = DoctorCheck {
+        name: "push_notifications",
+        ok: true,
+        required: false,
+        detail: "not required for GitHub Copilot project hook verification".to_string(),
+    };
+    let handoff_round_trip = DoctorCheck {
+        name: "handoff_round_trip",
+        ok: true,
+        required: false,
+        detail: "not required for GitHub Copilot project hook verification".to_string(),
+    };
+    let checks = vec![
+        daemon.clone(),
+        index.clone(),
+        instruction_file,
+        hook_config,
+        handshake.clone(),
+        reducer_round_trip.clone(),
+        push_notifications.clone(),
+        handoff_round_trip.clone(),
+    ];
+    let ok = checks
+        .iter()
+        .filter(|check| check.required)
+        .all(|check| check.ok);
+    DoctorReport {
+        root: root.display().to_string(),
+        ok,
+        daemon,
+        index,
+        mcp_config,
+        handshake,
+        reducer_round_trip,
+        push_notifications,
+        handoff_round_trip,
+        checks,
     }
 }
 
@@ -524,6 +594,49 @@ fn check_instruction_file(slug: &str, name: &str, path: &Path) -> DoctorCheck {
             ok: false,
             required: true,
             detail: format!("{slug}: {err}"),
+        },
+    }
+}
+
+fn check_copilot_hook_config(root: &Path) -> DoctorCheck {
+    let path = copilot::hook_config_path(root);
+    let result = (|| -> Result<String> {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        let value: Value = serde_json::from_str(&content)
+            .with_context(|| format!("invalid JSON in '{}'", path.display()))?;
+        let hooks = value
+            .pointer("/hooks/PreToolUse")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing hooks.PreToolUse array"))?;
+        let configured = hooks.iter().any(|entry| {
+            entry
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains(" hook copilot "))
+        });
+        if !configured {
+            return Err(anyhow!(
+                "Packet28 Copilot PreToolUse hook is not configured"
+            ));
+        }
+        Ok(format!(
+            "GitHub Copilot PreToolUse hook configured at {}",
+            path.display()
+        ))
+    })();
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "copilot_hook_config",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(err) => DoctorCheck {
+            name: "copilot_hook_config",
+            ok: false,
+            required: true,
+            detail: format!("copilot: {err}"),
         },
     }
 }
