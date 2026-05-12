@@ -6,7 +6,7 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
         "pytest" if classify_pytest(argv) => {
             ("python_pytest", suite_packet_core::ToolOperationKind::Test)
         }
-        "python" | "python3" if classify_python_module(argv, "pytest") => {
+        python if is_python_interpreter(python) && classify_python_module(argv, "pytest") => {
             ("python_pytest", suite_packet_core::ToolOperationKind::Test)
         }
         "ruff" if classify_ruff_check(argv) => (
@@ -24,7 +24,7 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
         "mypy" if classify_mypy(argv) => {
             ("python_mypy", suite_packet_core::ToolOperationKind::Build)
         }
-        "python" | "python3" if classify_python_module(argv, "mypy") => {
+        python if is_python_interpreter(python) && classify_python_module(argv, "mypy") => {
             ("python_mypy", suite_packet_core::ToolOperationKind::Build)
         }
         "pip" | "pip3" if classify_pip_list(argv) => (
@@ -59,14 +59,24 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
             "python_pip_show",
             suite_packet_core::ToolOperationKind::Fetch,
         ),
-        "python" | "python3" if classify_python_module_command(argv, "pip", "list") => (
-            "python_pip_list",
-            suite_packet_core::ToolOperationKind::Fetch,
-        ),
-        "python" | "python3" if classify_python_module_command(argv, "pip", "outdated") => (
-            "python_pip_outdated",
-            suite_packet_core::ToolOperationKind::Fetch,
-        ),
+        python
+            if is_python_interpreter(python)
+                && classify_python_module_command(argv, "pip", "list") =>
+        {
+            (
+                "python_pip_list",
+                suite_packet_core::ToolOperationKind::Fetch,
+            )
+        }
+        python
+            if is_python_interpreter(python)
+                && classify_python_module_command(argv, "pip", "outdated") =>
+        {
+            (
+                "python_pip_outdated",
+                suite_packet_core::ToolOperationKind::Fetch,
+            )
+        }
         _ => return None,
     };
 
@@ -152,6 +162,14 @@ fn classify_pytest(argv: &[String]) -> bool {
             "--fixtures",
         ],
     )
+}
+
+fn is_python_interpreter(value: &str) -> bool {
+    value == "python"
+        || value == "python3"
+        || value.strip_prefix("python").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
+        })
 }
 
 fn classify_python_module(argv: &[String], module: &str) -> bool {
@@ -740,6 +758,16 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         let spec = classify_python_command("python3 -m pytest tests", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "python_pytest");
+    }
+
+    #[test]
+    fn classify_python_accepts_versioned_python_module_pytest_like_rtk() {
+        let argv = vec!["python3.11", "-m", "pytest", "tests"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_python_command("python3.11 -m pytest tests", &argv).unwrap();
         assert_eq!(spec.canonical_kind, "python_pytest");
     }
 

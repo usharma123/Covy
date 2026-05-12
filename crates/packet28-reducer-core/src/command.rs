@@ -32,6 +32,10 @@ pub fn classify_command(command: &str) -> Option<CommandReducerSpec> {
 }
 
 pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandReducerSpec> {
+    let first = argv.first()?.as_str();
+    if is_python_interpreter(first) {
+        return classify_python_command(command, argv);
+    }
     match argv.first()?.as_str() {
         "git" | "yadm" | "gt" => classify_git_command(command, argv),
         "ls" | "tree" | "find" | "cat" | "head" | "tail" | "sed" | "diff" | "wc" | "grep"
@@ -42,7 +46,7 @@ pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandRe
         "docker" | "kubectl" | "curl" | "wget" | "aws" | "psql" => {
             classify_infra_command(command, argv)
         }
-        "python" | "python3" | "pytest" | "ruff" | "pip" | "pip3" | "uv" | "mypy" => {
+        "pytest" | "ruff" | "pip" | "pip3" | "uv" | "mypy" => {
             classify_python_command(command, argv)
         }
         "npm" | "pnpm" | "yarn" | "npx" | "pnpx" | "tsc" | "eslint" | "biome" | "lint"
@@ -56,6 +60,14 @@ pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandRe
         "dotnet" => classify_dotnet_command(command, argv),
         _ => None,
     }
+}
+
+fn is_python_interpreter(value: &str) -> bool {
+    value == "python"
+        || value == "python3"
+        || value.strip_prefix("python").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
+        })
 }
 
 pub fn reduce_command_output(

@@ -1721,6 +1721,7 @@ mod tests {
     #[test]
     fn routes_rtk_python_package_manager_forms() {
         for (command, expected) in [
+            ("python3.11 -m pytest tests", "python_pytest"),
             ("pip3 list", "python_pip_list"),
             ("pip outdated", "python_pip_outdated"),
             ("pip install pytest", "python_pip_install"),
