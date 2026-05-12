@@ -110,10 +110,11 @@ fn decide_command_route_inner(
         return raw_passthrough("shell_parse_error");
     };
     let (mut env_assignments, mut argv) = split_leading_env_assignments(argv);
+    let mut wrapper_prefix = Vec::new();
     if argv.is_empty() {
         return raw_passthrough("empty_command");
     }
-    strip_supported_runtime_prefixes(&mut argv, &mut env_assignments);
+    strip_supported_runtime_prefixes(&mut argv, &mut env_assignments, &mut wrapper_prefix);
     if argv.is_empty() {
         return raw_passthrough("empty_command");
     }
@@ -130,9 +131,11 @@ fn decide_command_route_inner(
     if policy_excludes_command(trimmed, &argv, policy_root) {
         return raw_passthrough("config_excluded");
     }
-    let wrapper_prefix = configured_wrapper_prefix(&argv, policy_root).unwrap_or_default();
-    if !wrapper_prefix.is_empty() {
-        argv = argv[wrapper_prefix.len()..].to_vec();
+    let configured_wrapper_prefix =
+        configured_wrapper_prefix(&argv, policy_root).unwrap_or_default();
+    if !configured_wrapper_prefix.is_empty() {
+        argv = argv[configured_wrapper_prefix.len()..].to_vec();
+        wrapper_prefix.extend(configured_wrapper_prefix);
         if argv.is_empty() {
             return raw_passthrough("empty_command");
         }
@@ -380,10 +383,21 @@ fn split_leading_env_assignments(argv: Vec<String>) -> (Vec<(String, String)>, V
 fn strip_supported_runtime_prefixes(
     argv: &mut Vec<String>,
     env_assignments: &mut Vec<(String, String)>,
+    wrapper_prefix: &mut Vec<String>,
 ) {
     loop {
         if argv.first().is_some_and(|arg| arg == "sudo") && argv.len() > 1 {
-            argv.remove(0);
+            wrapper_prefix.push(argv.remove(0));
+            continue;
+        }
+        if argv.first().is_some_and(|arg| {
+            matches!(
+                arg.as_str(),
+                "noglob" | "command" | "builtin" | "exec" | "nocorrect"
+            )
+        }) && argv.len() > 1
+        {
+            wrapper_prefix.push(argv.remove(0));
             continue;
         }
         if argv.first().is_some_and(|arg| arg == "env") && argv.len() > 2 {
@@ -1840,6 +1854,7 @@ mod tests {
             Some("git_status")
         );
         assert_eq!(sudo.argv.first().map(String::as_str), Some("git"));
+        assert_eq!(sudo.wrapper_prefix, vec!["sudo".to_string()]);
 
         let env = decide_command_route("env RUST_BACKTRACE=1 cargo test");
         assert_eq!(env.kind, RouteKind::ReducerRewrite);
@@ -1853,6 +1868,45 @@ mod tests {
             env.env_assignments,
             vec![("RUST_BACKTRACE".to_string(), "1".to_string())]
         );
+    }
+
+    #[test]
+    fn routes_rtk_shell_builtin_prefixes_like_rtk() {
+        for prefix in ["noglob", "command", "builtin", "exec", "nocorrect"] {
+            let command = format!("{prefix} git status");
+            let decision = decide_command_route(&command);
+            assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
+            assert_eq!(
+                decision.wrapper_prefix,
+                vec![prefix.to_string()],
+                "{command}"
+            );
+            assert_eq!(
+                decision
+                    .reducer_spec
+                    .as_ref()
+                    .map(|spec| spec.canonical_kind.as_str()),
+                Some("git_status"),
+                "{command}"
+            );
+        }
+
+        let unknown = decide_command_route("noglob unknown_cmd --flag");
+        assert_eq!(unknown.kind, RouteKind::RawPassthrough);
+    }
+
+    #[test]
+    fn builds_rewrite_with_runtime_wrapper_prefixes() {
+        let decision = decide_command_route("sudo noglob git status");
+        assert_eq!(
+            decision.wrapper_prefix,
+            vec!["sudo".to_string(), "noglob".to_string()]
+        );
+        let rewritten =
+            build_route_rewrite(Path::new("/workspace"), "task-prefix", None, ".", &decision)
+                .unwrap();
+        assert!(rewritten.starts_with("sudo noglob "));
+        assert!(rewritten.contains("hook reducer-runner"));
     }
 
     #[test]
