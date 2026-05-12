@@ -250,6 +250,46 @@ fn test_system_summary_command_preserves_exit_and_summarizes_output() {
 }
 
 #[test]
+fn test_system_smart_command_summarizes_source_file() {
+    let root = TempDir::new().unwrap();
+    let source = root.path().join("lib.rs");
+    fs::write(
+        &source,
+        r#"
+use anyhow::Result;
+
+#[derive(Debug)]
+pub struct Config {
+    name: String,
+}
+
+pub fn load_config() -> Result<Config> {
+    Ok(Config { name: "demo".to_string() })
+}
+"#,
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["smart", source.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Rust module"))
+        .stdout(predicate::str::contains("1 fn"))
+        .stdout(predicate::str::contains("1 type"))
+        .stdout(predicate::str::contains("derive"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["smart", source.to_str().unwrap(), "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"command\":\"Packet28 smart\""))
+        .stdout(predicate::str::contains("Rust module"));
+}
+
+#[test]
 fn test_system_find_command_supports_native_find_shape() {
     let root = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("src")).unwrap();

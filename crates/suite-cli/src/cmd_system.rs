@@ -74,6 +74,28 @@ pub struct SummaryArgs {
 }
 
 #[derive(Args)]
+pub struct SmartArgs {
+    /// File to summarize with local heuristics
+    pub file: PathBuf,
+
+    /// Compatibility knob for RTK's model flag. Packet28 uses local heuristics.
+    #[arg(short, long, default_value = "heuristic")]
+    pub model: String,
+
+    /// Compatibility knob for RTK's force-download flag. Packet28 performs no download.
+    #[arg(long)]
+    pub force_download: bool,
+
+    /// Emit a machine-readable envelope
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON machine output
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct FindArgs {
     /// Find arguments. Supports `find <pattern> [path]` and native `find <path> -name <pattern>`.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -269,6 +291,24 @@ pub fn run_summary(args: SummaryArgs) -> Result<i32> {
         },
     )?;
     Ok(exit_code)
+}
+
+pub fn run_smart(args: SmartArgs) -> Result<i32> {
+    let raw = fs::read_to_string(&args.file)
+        .with_context(|| format!("failed to read {}", args.file.display()))?;
+    let language = detect_language(&args.file);
+    let summary = summarize_source_file(&raw, language);
+    let text = format!("{}\n{}", summary.line1, summary.line2);
+    emit_system_output(
+        args.json,
+        args.pretty,
+        SystemOutput {
+            command: "Packet28 smart".to_string(),
+            summary: summarize_rendered_lines("smart", &text),
+            text,
+        },
+    )?;
+    Ok(0)
 }
 
 pub fn run_find(args: FindArgs) -> Result<i32> {
@@ -1414,17 +1454,29 @@ fn compact_path_for_grep(path: &Path) -> String {
 enum ReadLanguage {
     Rust,
     JavaScript,
+    TypeScript,
     Python,
+    Go,
     Shell,
+    Markdown,
+    Json,
+    Toml,
+    Yaml,
     Unknown,
 }
 
 fn detect_language(path: &Path) -> ReadLanguage {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("rs") => ReadLanguage::Rust,
-        Some("js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs") => ReadLanguage::JavaScript,
+        Some("js" | "jsx" | "mjs" | "cjs") => ReadLanguage::JavaScript,
+        Some("ts" | "tsx") => ReadLanguage::TypeScript,
         Some("py") => ReadLanguage::Python,
+        Some("go") => ReadLanguage::Go,
         Some("sh" | "bash" | "zsh") => ReadLanguage::Shell,
+        Some("md" | "markdown") => ReadLanguage::Markdown,
+        Some("json") => ReadLanguage::Json,
+        Some("toml") => ReadLanguage::Toml,
+        Some("yaml" | "yml") => ReadLanguage::Yaml,
         _ => ReadLanguage::Unknown,
     }
 }
@@ -1443,11 +1495,18 @@ fn strip_language_comments(content: &str, language: ReadLanguage, aggressive: bo
     for line in content.lines() {
         let trimmed = line.trim();
         let is_comment = match language {
-            ReadLanguage::Rust | ReadLanguage::JavaScript => {
+            ReadLanguage::Rust
+            | ReadLanguage::JavaScript
+            | ReadLanguage::TypeScript
+            | ReadLanguage::Go => {
                 trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*')
             }
             ReadLanguage::Python | ReadLanguage::Shell => trimmed.starts_with('#'),
-            ReadLanguage::Unknown => false,
+            ReadLanguage::Markdown
+            | ReadLanguage::Json
+            | ReadLanguage::Toml
+            | ReadLanguage::Yaml
+            | ReadLanguage::Unknown => false,
         };
         if is_comment {
             continue;
@@ -1516,6 +1575,210 @@ fn smart_truncate_for_read(content: &str, max_lines: usize, language: ReadLangua
         language
     ));
     rendered
+}
+
+struct SmartSourceSummary {
+    line1: String,
+    line2: String,
+}
+
+fn summarize_source_file(content: &str, language: ReadLanguage) -> SmartSourceSummary {
+    let line_count = content.lines().count();
+    let functions = extract_source_symbols(content, language, SourceSymbolKind::Function);
+    let structs = extract_source_symbols(content, language, SourceSymbolKind::Type);
+    let traits = extract_source_symbols(content, language, SourceSymbolKind::Trait);
+    let imports = extract_source_imports(content, language);
+    let patterns = detect_source_patterns(content, language);
+
+    let language_name = language_display_name(language);
+    let subject = if !structs.is_empty() && !functions.is_empty() {
+        format!("{language_name} module")
+    } else if !structs.is_empty() {
+        format!("{language_name} data structures")
+    } else if !functions.is_empty() {
+        format!("{language_name} functions")
+    } else {
+        format!("{language_name} code")
+    };
+
+    let mut components = Vec::new();
+    if !functions.is_empty() {
+        components.push(format!("{} fn", functions.len()));
+    }
+    if !structs.is_empty() {
+        components.push(format!("{} type", structs.len()));
+    }
+    if !traits.is_empty() {
+        components.push(format!("{} trait", traits.len()));
+    }
+    let line1 = if components.is_empty() {
+        format!("{subject} ({line_count} lines)")
+    } else {
+        format!("{subject} ({}) - {line_count} lines", components.join(", "))
+    };
+
+    let mut details = Vec::new();
+    if !imports.is_empty() {
+        details.push(format!(
+            "uses: {}",
+            imports.into_iter().take(3).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if !patterns.is_empty() {
+        details.push(format!("patterns: {}", patterns.join(", ")));
+    }
+    if details.is_empty() && !functions.is_empty() {
+        details.push(format!(
+            "defines: {}",
+            functions.into_iter().take(3).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    SmartSourceSummary {
+        line1,
+        line2: if details.is_empty() {
+            "General purpose code file".to_string()
+        } else {
+            details.join(" | ")
+        },
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SourceSymbolKind {
+    Function,
+    Type,
+    Trait,
+}
+
+fn extract_source_symbols(
+    content: &str,
+    language: ReadLanguage,
+    kind: SourceSymbolKind,
+) -> Vec<String> {
+    let pattern = match (language, kind) {
+        (ReadLanguage::Rust, SourceSymbolKind::Function) => {
+            r"(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"
+        }
+        (ReadLanguage::Rust, SourceSymbolKind::Type) => {
+            r"(?:pub\s+)?(?:struct|enum)\s+([A-Za-z_][A-Za-z0-9_]*)"
+        }
+        (ReadLanguage::Rust, SourceSymbolKind::Trait) => {
+            r"(?:pub\s+)?trait\s+([A-Za-z_][A-Za-z0-9_]*)"
+        }
+        (ReadLanguage::Python, SourceSymbolKind::Function) => r"def\s+([A-Za-z_][A-Za-z0-9_]*)",
+        (ReadLanguage::Python, SourceSymbolKind::Type) => r"class\s+([A-Za-z_][A-Za-z0-9_]*)",
+        (ReadLanguage::TypeScript, SourceSymbolKind::Function)
+        | (ReadLanguage::JavaScript, SourceSymbolKind::Function) => {
+            r"(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)|(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s+)?\("
+        }
+        (ReadLanguage::TypeScript, SourceSymbolKind::Type) => {
+            r"(?:interface|class|type)\s+([A-Za-z_][A-Za-z0-9_]*)"
+        }
+        (ReadLanguage::JavaScript, SourceSymbolKind::Type) => r"class\s+([A-Za-z_][A-Za-z0-9_]*)",
+        (ReadLanguage::Go, SourceSymbolKind::Function) => {
+            r"func\s+(?:\([^)]+\)\s+)?([A-Za-z_][A-Za-z0-9_]*)"
+        }
+        (ReadLanguage::Go, SourceSymbolKind::Type) => r"type\s+([A-Za-z_][A-Za-z0-9_]*)\s+struct",
+        _ => return Vec::new(),
+    };
+    let re = Regex::new(pattern).expect("valid smart symbol regex");
+    re.captures_iter(content)
+        .filter_map(|caps| caps.get(1).or_else(|| caps.get(2)))
+        .map(|item| item.as_str().to_string())
+        .filter(|name| !matches!(name.as_str(), "main" | "new") && !name.starts_with("test_"))
+        .take(10)
+        .collect()
+}
+
+fn extract_source_imports(content: &str, language: ReadLanguage) -> Vec<String> {
+    let pattern = match language {
+        ReadLanguage::Rust => r"^use\s+([A-Za-z_][A-Za-z0-9_]*)",
+        ReadLanguage::Python => r"^(?:from\s+(\S+)|import\s+(\S+))",
+        ReadLanguage::JavaScript | ReadLanguage::TypeScript => {
+            r#"(?:import.*from\s+['"]([^'"]+)['"]|require\(['"]([^'"]+)['"]\))"#
+        }
+        ReadLanguage::Go => r#"^\s*"([^"]+)"$"#,
+        _ => return Vec::new(),
+    };
+    let re = Regex::new(pattern).expect("valid smart import regex");
+    let mut seen = HashSet::new();
+    let mut imports = Vec::new();
+    for caps in re.captures_iter(content) {
+        let Some(raw) = caps.get(1).or_else(|| caps.get(2)) else {
+            continue;
+        };
+        let base = raw.as_str().split("::").next().unwrap_or(raw.as_str());
+        if is_standard_import(base, language) || !seen.insert(base.to_string()) {
+            continue;
+        }
+        imports.push(base.to_string());
+    }
+    imports.into_iter().take(5).collect()
+}
+
+fn is_standard_import(name: &str, language: ReadLanguage) -> bool {
+    match language {
+        ReadLanguage::Rust => matches!(name, "std" | "core" | "alloc"),
+        ReadLanguage::Python => matches!(name, "os" | "sys" | "re" | "json" | "typing"),
+        _ => false,
+    }
+}
+
+fn detect_source_patterns(content: &str, language: ReadLanguage) -> Vec<String> {
+    let mut patterns = Vec::new();
+    if content.contains("async") && content.contains("await") {
+        patterns.push("async");
+    }
+    match language {
+        ReadLanguage::Rust => {
+            if content.contains("impl") && content.contains(" for ") {
+                patterns.push("trait impl");
+            }
+            if content.contains("#[derive") {
+                patterns.push("derive");
+            }
+            if content.contains("Result<") || content.contains("anyhow::") {
+                patterns.push("error handling");
+            }
+            if content.contains("#[test]") {
+                patterns.push("tests");
+            }
+        }
+        ReadLanguage::Python => {
+            if content.contains("@dataclass") {
+                patterns.push("dataclass");
+            }
+            if content.contains("def __init__") {
+                patterns.push("OOP");
+            }
+        }
+        ReadLanguage::JavaScript | ReadLanguage::TypeScript => {
+            if content.contains("useState") || content.contains("useEffect") {
+                patterns.push("React hooks");
+            }
+            if content.contains("export default") {
+                patterns.push("ES modules");
+            }
+        }
+        _ => {}
+    }
+    patterns.into_iter().take(3).map(str::to_string).collect()
+}
+
+fn language_display_name(language: ReadLanguage) -> &'static str {
+    match language {
+        ReadLanguage::Rust => "Rust",
+        ReadLanguage::Python => "Python",
+        ReadLanguage::JavaScript => "JavaScript",
+        ReadLanguage::TypeScript => "TypeScript",
+        ReadLanguage::Go => "Go",
+        ReadLanguage::Shell => "Shell",
+        ReadLanguage::Markdown => "Markdown",
+        ReadLanguage::Json => "JSON",
+        ReadLanguage::Toml => "TOML",
+        ReadLanguage::Yaml => "YAML",
+        ReadLanguage::Unknown => "Code",
+    }
 }
 
 fn format_with_line_numbers(content: &str) -> String {
@@ -1891,6 +2154,30 @@ mod tests {
         let rendered = format_with_line_numbers("alpha\nbeta\n");
         assert!(rendered.contains("1 | alpha"));
         assert!(rendered.contains("2 | beta"));
+    }
+
+    #[test]
+    fn smart_summarizes_source_file_with_local_heuristics() {
+        let summary = summarize_source_file(
+            r#"
+use anyhow::Result;
+
+#[derive(Debug)]
+pub struct Config {
+    name: String,
+}
+
+pub fn load_config() -> Result<Config> {
+    Ok(Config { name: "demo".to_string() })
+}
+"#,
+            ReadLanguage::Rust,
+        );
+        assert!(summary.line1.contains("Rust module"));
+        assert!(summary.line1.contains("1 fn"));
+        assert!(summary.line1.contains("1 type"));
+        assert!(summary.line2.contains("derive"));
+        assert!(summary.line2.contains("error handling"));
     }
 
     #[test]

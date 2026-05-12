@@ -66,6 +66,8 @@ pub enum Commands {
     Read(cmd_system::ReadArgs),
     /// Run a command and emit a compact heuristic summary of its output
     Summary(cmd_system::SummaryArgs),
+    /// Generate a local two-line heuristic summary of a source file
+    Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output
     Find(cmd_system::FindArgs),
     /// Search files with grouped compact output
