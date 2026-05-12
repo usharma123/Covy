@@ -1453,6 +1453,26 @@ fn test_run_applies_builtin_rtk_compatible_toml_filter() {
         .stdout(predicate::str::contains("\"ok\":true"))
         .stdout(predicate::str::contains("\"filter\":\"brew-install\""));
 
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", &home)
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "brew",
+            "install",
+            "rtk",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"route\":\"toml_filter_rewrite\"",
+        ))
+        .stdout(predicate::str::contains(" run --root "))
+        .stdout(predicate::str::contains(" -- brew install rtk"));
+
     let output = suite_cmd()
         .current_dir(root.path())
         .env("HOME", &home)

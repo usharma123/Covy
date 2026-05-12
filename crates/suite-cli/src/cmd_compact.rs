@@ -901,6 +901,7 @@ pub fn run_rewrite_command(args: RewriteArgs) -> Result<i32> {
         "route": match decision.kind {
             RouteKind::ReducerRewrite => "reducer_rewrite",
             RouteKind::NativeTool => "native_tool",
+            RouteKind::TomlFilterRewrite => "toml_filter_rewrite",
             RouteKind::ProxyPassthrough => "proxy_passthrough",
             RouteKind::RawPassthrough => "raw_passthrough",
         },

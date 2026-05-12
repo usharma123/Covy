@@ -213,6 +213,13 @@ pub(crate) fn apply_configured_filter(
     Ok(None)
 }
 
+pub(crate) fn matching_filter_name(root: &Path, command: &str) -> Result<Option<String>> {
+    Ok(load_filters(root)?
+        .into_iter()
+        .find(|filter| filter.match_command.is_match(command))
+        .map(|filter| filter.name))
+}
+
 pub(crate) fn run_filter_tests(
     root: &Path,
     filter_name: Option<&str>,

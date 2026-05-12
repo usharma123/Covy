@@ -6,6 +6,7 @@ use packet28_reducer_core::{classify_command_argv, CommandReducerSpec};
 pub enum RouteKind {
     ReducerRewrite,
     NativeTool,
+    TomlFilterRewrite,
     ProxyPassthrough,
     RawPassthrough,
 }
@@ -187,6 +188,24 @@ fn decide_command_route_inner(
         };
     }
 
+    if let Some(root) = policy_root {
+        if let Some(_filter_name) = crate::toml_filters::matching_filter_name(root, &normalized)
+            .ok()
+            .flatten()
+        {
+            return RouteDecision {
+                kind: RouteKind::TomlFilterRewrite,
+                reason: Some("toml_filter".to_string()),
+                argv,
+                env_assignments,
+                reducer_spec: None,
+                native_tool: None,
+                original_argv,
+                wrapper_prefix,
+            };
+        }
+    }
+
     raw_passthrough("unsupported_command")
 }
 
@@ -296,6 +315,9 @@ pub fn build_route_rewrite(
         RouteKind::NativeTool => {
             let native_tool = decision.native_tool.as_ref()?;
             build_native_tool_rewrite(root, task_id, cwd, native_tool)
+        }
+        RouteKind::TomlFilterRewrite => {
+            build_toml_filter_rewrite(root, cwd, &decision.argv, &decision.env_assignments)
         }
         RouteKind::ProxyPassthrough => build_proxy_rewrite(root, task_id, cwd, &decision.argv),
         RouteKind::RawPassthrough => return None,
@@ -1062,6 +1084,28 @@ fn build_proxy_rewrite(root: &Path, task_id: &str, cwd: &str, argv: &[String]) -
     parts.join(" ")
 }
 
+fn build_toml_filter_rewrite(
+    root: &Path,
+    _cwd: &str,
+    argv: &[String],
+    env_assignments: &[(String, String)],
+) -> String {
+    let exe = current_exe();
+    let mut parts = Vec::new();
+    for (key, value) in env_assignments {
+        parts.push(shell_quote(&format!("{key}={value}")));
+    }
+    parts.extend([
+        shell_quote(&exe),
+        "run".to_string(),
+        "--root".to_string(),
+        shell_quote(&root.display().to_string()),
+        "--".to_string(),
+    ]);
+    parts.extend(argv.iter().map(|arg| shell_quote(arg)));
+    parts.join(" ")
+}
+
 fn current_exe() -> String {
     std::env::current_exe()
         .map(|path| path.display().to_string())
@@ -1547,6 +1591,20 @@ mod tests {
         }
         assert_eq!(decision.kind, RouteKind::RawPassthrough);
         assert_eq!(decision.reason.as_deref(), Some("config_excluded"));
+    }
+
+    #[test]
+    fn builtin_toml_filters_route_to_packet28_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let decision =
+            decide_command_route_with_cwd_and_root("brew install rtk", tmp.path(), tmp.path());
+        assert_eq!(decision.kind, RouteKind::TomlFilterRewrite);
+        assert_eq!(decision.reason.as_deref(), Some("toml_filter"));
+
+        let rewritten =
+            build_route_rewrite(tmp.path(), "task-filter", None, ".", &decision).unwrap();
+        assert!(rewritten.contains(" run --root "));
+        assert!(rewritten.ends_with(" -- brew install rtk"));
     }
 
     #[test]
