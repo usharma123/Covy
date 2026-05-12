@@ -9,6 +9,9 @@ use packet28_daemon_core::trust::{
 use regex::{Regex, RegexSet};
 use serde::Deserialize;
 
+const BUILTIN_FILTER_SOURCE: &str = "packet28:rtk-compatible-builtins";
+const BUILTIN_FILTERS_TOML: &str = include_str!(concat!(env!("OUT_DIR"), "/builtin_filters.toml"));
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppliedTomlFilter {
     pub(crate) name: String,
@@ -224,6 +227,12 @@ pub(crate) fn run_filter_tests(
             .with_context(|| format!("failed to read filter config '{source}'"))?;
         collect_filter_tests(&content, &source, filter_name, &mut results)?;
     }
+    collect_filter_tests(
+        BUILTIN_FILTERS_TOML,
+        BUILTIN_FILTER_SOURCE,
+        filter_name,
+        &mut results,
+    )?;
     Ok(results)
 }
 
@@ -261,6 +270,7 @@ fn load_filters(root: &Path) -> Result<Vec<CompiledFilter>> {
             .with_context(|| format!("failed to read filter config '{}'", path.display()))?;
         filters.extend(parse_filters(&content, &path.display().to_string())?);
     }
+    filters.extend(parse_filters(BUILTIN_FILTERS_TOML, BUILTIN_FILTER_SOURCE)?);
     Ok(filters)
 }
 

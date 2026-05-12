@@ -52,3 +52,6 @@ regex.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
+
+[build-dependencies]
+toml.workspace = true
