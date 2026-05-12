@@ -23,6 +23,9 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
             "logs" if !contains_any(argv, &["--follow", "-f", "--timestamps"]) => {
                 ("docker_logs", suite_packet_core::ToolOperationKind::Read)
             }
+            "build" => ("docker_build", suite_packet_core::ToolOperationKind::Build),
+            "run" => ("docker_run", suite_packet_core::ToolOperationKind::Generic),
+            "exec" => ("docker_exec", suite_packet_core::ToolOperationKind::Generic),
             _ => return None,
         },
         "kubectl" => match argv.get(1)?.as_str() {
@@ -35,6 +38,10 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
             "describe" => (
                 "kubectl_describe",
                 suite_packet_core::ToolOperationKind::Read,
+            ),
+            "apply" => (
+                "kubectl_apply",
+                suite_packet_core::ToolOperationKind::Generic,
             ),
             _ => return None,
         },
@@ -61,6 +68,10 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
         .cloned()
         .collect::<Vec<_>>();
 
+    let mutation = matches!(
+        canonical_kind,
+        "docker_build" | "docker_run" | "docker_exec" | "kubectl_apply"
+    );
     Some(CommandReducerSpec {
         family: "infra".to_string(),
         canonical_kind: canonical_kind.to_string(),
@@ -70,7 +81,7 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
         argv: argv.to_vec(),
         cache_fingerprint: fingerprint("infra", canonical_kind, argv),
         cacheable: true,
-        mutation: false,
+        mutation,
         paths,
         equivalence_key: None,
     })
@@ -89,6 +100,9 @@ pub fn reduce_infra_command(
         "docker_ps" => format!("docker ps listed {} container(s)", data_rows(&lines)),
         "docker_images" => format!("docker images listed {} image(s)", data_rows(&lines)),
         "docker_logs" => format!("docker logs returned {} line(s)", lines.len()),
+        "docker_build" => summarize_docker_build(&combined, failed),
+        "docker_run" => summarize_docker_run_exec("docker run", &combined, failed),
+        "docker_exec" => summarize_docker_run_exec("docker exec", &combined, failed),
         "docker_compose_ps" => {
             format!("docker compose ps listed {} service(s)", data_rows(&lines))
         }
@@ -96,6 +110,7 @@ pub fn reduce_infra_command(
         "kubectl_get" => summarize_kubectl_get(spec, &lines),
         "kubectl_logs" => format!("kubectl logs returned {} line(s)", lines.len()),
         "kubectl_describe" => summarize_kubectl_describe(stdout),
+        "kubectl_apply" => summarize_kubectl_apply(&combined, failed),
         "curl_fetch" => {
             if failed {
                 first_nonempty_line(&combined).unwrap_or_else(|| "curl failed".to_string())
@@ -330,6 +345,84 @@ fn summarize_kubectl_get(spec: &CommandReducerSpec, lines: &[String]) -> String 
         )
     } else {
         format!("kubectl get {resource} returned {rows} row(s)")
+    }
+}
+
+fn summarize_docker_build(output: &str, failed: bool) -> String {
+    if failed {
+        return first_nonempty_line(output).unwrap_or_else(|| "docker build failed".to_string());
+    }
+    if let Some(line) = output
+        .lines()
+        .map(str::trim)
+        .rev()
+        .find(|line| line.starts_with("Successfully tagged "))
+    {
+        return compact(line, 180);
+    }
+    if let Some(line) =
+        output.lines().map(str::trim).rev().find(|line| {
+            line.starts_with("Successfully built ") || line.starts_with("writing image")
+        })
+    {
+        return compact(line, 180);
+    }
+    let steps = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("Step ") || line.starts_with('#'))
+        .count();
+    if steps > 0 {
+        format!("docker build completed ({steps} build line(s))")
+    } else {
+        first_nonempty_line(output).unwrap_or_else(|| "docker build completed".to_string())
+    }
+}
+
+fn summarize_docker_run_exec(label: &str, output: &str, failed: bool) -> String {
+    let lines = nonempty_lines(output);
+    if failed {
+        return first_nonempty_line(output).unwrap_or_else(|| format!("{label} failed"));
+    }
+    if lines.is_empty() {
+        format!("{label} completed with no output")
+    } else {
+        format!(
+            "{label} returned {} line(s); first {}",
+            lines.len(),
+            compact(&lines[0], 120)
+        )
+    }
+}
+
+fn summarize_kubectl_apply(output: &str, failed: bool) -> String {
+    if failed {
+        return first_nonempty_line(output).unwrap_or_else(|| "kubectl apply failed".to_string());
+    }
+    let lines = nonempty_lines(output);
+    if lines.is_empty() {
+        return "kubectl apply completed with no output".to_string();
+    }
+    let changed = lines
+        .iter()
+        .filter(|line| {
+            line.ends_with(" created")
+                || line.ends_with(" configured")
+                || line.ends_with(" unchanged")
+                || line.ends_with(" deleted")
+        })
+        .count();
+    if changed > 0 {
+        format!(
+            "kubectl apply reported {changed} resource line(s); first {}",
+            compact(&lines[0], 120)
+        )
+    } else {
+        format!(
+            "kubectl apply returned {} line(s); first {}",
+            lines.len(),
+            compact(&lines[0], 120)
+        )
     }
 }
 
@@ -1205,6 +1298,64 @@ mod tests {
                 .unwrap()
                 .canonical_kind,
             "kubectl_describe"
+        );
+    }
+
+    #[test]
+    fn classify_infra_supports_rtk_docker_and_kubectl_mutation_forms() {
+        for (command, expected) in [
+            ("docker build .", "docker_build"),
+            ("docker run alpine echo hi", "docker_run"),
+            ("docker exec app ls", "docker_exec"),
+            ("kubectl apply -f deploy.yaml", "kubectl_apply"),
+        ] {
+            let argv = shell_words::split(command).unwrap();
+            let spec = classify_infra_command(command, &argv).unwrap();
+            assert_eq!(spec.canonical_kind, expected, "{command}");
+            assert!(spec.mutation, "{command}");
+        }
+    }
+
+    #[test]
+    fn reduce_rtk_docker_and_kubectl_mutation_forms() {
+        let argv = vec!["docker", "build", "."]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("docker build .", &argv).unwrap();
+        let reduction = reduce_infra_command(
+            &spec,
+            "Step 1/2 : FROM alpine\nSuccessfully built abc123\n",
+            "",
+            0,
+        );
+        assert_eq!(reduction.summary, "Successfully built abc123");
+
+        let argv = vec!["docker", "exec", "app", "ls"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("docker exec app ls", &argv).unwrap();
+        let reduction = reduce_infra_command(&spec, "Gemfile\nREADME.md\n", "", 0);
+        assert_eq!(
+            reduction.summary,
+            "docker exec returned 2 line(s); first Gemfile"
+        );
+
+        let argv = vec!["kubectl", "apply", "-f", "deploy.yaml"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("kubectl apply -f deploy.yaml", &argv).unwrap();
+        let reduction = reduce_infra_command(
+            &spec,
+            "deployment.apps/api configured\nservice/api unchanged\n",
+            "",
+            0,
+        );
+        assert_eq!(
+            reduction.summary,
+            "kubectl apply reported 2 resource line(s); first deployment.apps/api configured"
         );
     }
 

@@ -1724,6 +1724,22 @@ mod tests {
     }
 
     #[test]
+    fn routes_rtk_docker_and_kubectl_mutation_forms() {
+        for (command, expected) in [
+            ("docker build .", "docker_build"),
+            ("docker run alpine echo hi", "docker_run"),
+            ("docker exec app ls", "docker_exec"),
+            ("kubectl apply -f deploy.yaml", "kubectl_apply"),
+        ] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
+            let spec = decision.reducer_spec.as_ref().unwrap();
+            assert_eq!(spec.canonical_kind, expected, "{command}");
+            assert!(spec.mutation, "{command}");
+        }
+    }
+
+    #[test]
     fn routes_sudo_and_env_prefixed_commands_like_rtk() {
         let sudo = decide_command_route("sudo git status --short");
         assert_eq!(sudo.kind, RouteKind::ReducerRewrite);
