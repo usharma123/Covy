@@ -23,7 +23,7 @@ Packet28 is useful today as a local context-reduction, search, runtime-hook, MCP
 
 The largest gaps are:
 
-- RTK: deeper reducer quality checks, custom TOML filter parity, telemetry controls if deliberately adopted, full agent breadth including Copilot/Gemini/OpenCode/Cline/Roo/Kilo/Antigravity/Hermes, and hook-level transparent rewrite proof across every claimed agent.
+- RTK: deeper reducer quality checks, telemetry controls if deliberately adopted, full agent breadth including Copilot/Gemini/OpenCode/Cline/Roo/Kilo/Antigravity/Hermes, and hook-level transparent rewrite proof across every claimed agent.
 - ICM: transcript runtime breadth, web/TUI dashboard parity, and broader real-runtime evidence for the local memory/graph/feedback/wake-up loop.
 - Evidence: Packet28 now has an initial repeated real-repo smoke artifact across Packet28, ripgrep, and fd with stable indexed `p28` hits, but broader task-shape coverage is still needed before maturity claims are honest.
 
