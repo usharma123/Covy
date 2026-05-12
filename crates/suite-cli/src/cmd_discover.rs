@@ -114,10 +114,13 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
     for file in &session_files {
         if let Ok(commands) = extract_bash_commands(file) {
             for (cmd, est_tokens) in commands {
-                for part in split_command_chain(&cmd) {
+                let parts = split_command_chain(&cmd);
+                let part_count = parts.len().max(1) as u64;
+                let shared_tokens = est_tokens.saturating_div(part_count).max(1);
+                for part in parts {
                     report.commands_found += 1;
                     let program = program_name(&part);
-                    let part_tokens = ((part.len() as u64) / 4).max(1).min(est_tokens.max(1));
+                    let part_tokens = shared_tokens.max(estimate_text_tokens(&part));
                     if command_part_supported(&part) {
                         report.supported_commands += 1;
                         let category = categorize_command(&program);
@@ -307,7 +310,9 @@ fn session_file_in_since_window(path: &Path, cutoff: Option<SystemTime>) -> bool
 }
 
 pub(crate) fn extract_bash_commands(path: &Path) -> Result<Vec<(String, u64)>> {
-    let mut commands = Vec::new();
+    let mut commands = Vec::<(String, u64)>::new();
+    let mut pending_by_id = BTreeMap::<String, usize>::new();
+    let mut pending_without_id = Vec::<usize>::new();
     let content = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
 
     for line in content.lines() {
@@ -315,10 +320,6 @@ pub(crate) fn extract_bash_commands(path: &Path) -> Result<Vec<(String, u64)>> {
             continue;
         };
 
-        // Look for assistant messages with tool_use content
-        if value.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
         let Some(content) = value.get("message").and_then(|m| m.get("content")) else {
             continue;
         };
@@ -326,26 +327,71 @@ pub(crate) fn extract_bash_commands(path: &Path) -> Result<Vec<(String, u64)>> {
             continue;
         };
 
-        for block in blocks {
-            if block.get("type").and_then(Value::as_str) != Some("tool_use") {
-                continue;
+        if value.get("type").and_then(Value::as_str) == Some("assistant") {
+            for block in blocks {
+                if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+                    continue;
+                }
+                let tool_name = block.get("name").and_then(Value::as_str).unwrap_or("");
+                if tool_name != "Bash" {
+                    continue;
+                }
+                if let Some(command) = block
+                    .get("input")
+                    .and_then(|input| input.get("command"))
+                    .and_then(Value::as_str)
+                {
+                    let index = commands.len();
+                    let est_tokens = estimate_text_tokens(command);
+                    commands.push((command.to_string(), est_tokens));
+                    if let Some(id) = block.get("id").and_then(Value::as_str) {
+                        pending_by_id.insert(id.to_string(), index);
+                    } else {
+                        pending_without_id.push(index);
+                    }
+                }
             }
-            let tool_name = block.get("name").and_then(Value::as_str).unwrap_or("");
-            if tool_name != "Bash" {
-                continue;
-            }
-            if let Some(command) = block
-                .get("input")
-                .and_then(|input| input.get("command"))
-                .and_then(Value::as_str)
-            {
-                let est_tokens = (command.len() as u64) / 4;
-                commands.push((command.to_string(), est_tokens));
+        } else if value.get("type").and_then(Value::as_str) == Some("user") {
+            for block in blocks {
+                if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                    continue;
+                }
+                let result_tokens =
+                    estimate_value_tokens(block.get("content").unwrap_or(&Value::Null));
+                let matched_index = block
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| pending_by_id.remove(id))
+                    .or_else(|| {
+                        if pending_without_id.is_empty() {
+                            None
+                        } else {
+                            Some(pending_without_id.remove(0))
+                        }
+                    });
+                if let Some(index) = matched_index {
+                    if let Some((_, est_tokens)) = commands.get_mut(index) {
+                        *est_tokens = result_tokens.max(*est_tokens);
+                    }
+                }
             }
         }
     }
 
     Ok(commands)
+}
+
+fn estimate_value_tokens(value: &Value) -> u64 {
+    match value {
+        Value::String(text) => estimate_text_tokens(text),
+        Value::Array(items) => items.iter().map(estimate_value_tokens).sum::<u64>().max(1),
+        Value::Object(_) => estimate_text_tokens(&value.to_string()),
+        Value::Null | Value::Bool(_) | Value::Number(_) => estimate_text_tokens(&value.to_string()),
+    }
+}
+
+fn estimate_text_tokens(text: &str) -> u64 {
+    ((text.len() as u64) / 4).max(1)
 }
 
 fn is_known_reducible(program: &str) -> bool {

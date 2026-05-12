@@ -5630,6 +5630,52 @@ fn test_discover_splits_chained_session_commands() {
 }
 
 #[test]
+fn test_discover_uses_tool_result_output_size_for_token_estimates() {
+    let root = TempDir::new().unwrap();
+    let sessions_dir = root.path().join("claude-projects").join("project");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    let session_file = sessions_dir.join("session-output.jsonl");
+    let use_line = json!({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "id": "tool-large-output",
+                "name": "Bash",
+                "input": { "command": "git status --short" }
+            }]
+        }
+    });
+    let result_line = json!({
+        "type": "user",
+        "message": {
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": "tool-large-output",
+                "content": "x".repeat(400)
+            }]
+        }
+    });
+    fs::write(&session_file, format!("{use_line}\n{result_line}\n")).unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "discover",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"commands_found\":1"))
+        .stdout(predicate::str::contains("\"supported_commands\":1"))
+        .stdout(predicate::str::contains("\"estimated_tokens\":100"));
+}
+
+#[test]
 fn test_discover_all_and_since_scan_multiple_session_files() {
     let root = TempDir::new().unwrap();
     let sessions_dir = root.path().join("claude-projects").join("project");
