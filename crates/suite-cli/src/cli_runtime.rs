@@ -105,6 +105,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Compact(args)) => cmd_compact::run(args),
         Some(Commands::Read(args)) => cmd_system::run_read(args),
         Some(Commands::Summary(args)) => cmd_system::run_summary(args),
+        Some(Commands::Err(args)) => cmd_system::run_err(args),
         Some(Commands::Smart(args)) => cmd_system::run_smart(args),
         Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Grep(args)) => cmd_system::run_grep(args),
@@ -383,6 +384,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Compact(_))
         | Some(Commands::Read(_))
         | Some(Commands::Summary(_))
+        | Some(Commands::Err(_))
         | Some(Commands::Smart(_))
         | Some(Commands::Find(_))
         | Some(Commands::Grep(_))

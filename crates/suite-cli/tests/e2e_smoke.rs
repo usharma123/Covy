@@ -250,6 +250,37 @@ fn test_system_summary_command_preserves_exit_and_summarizes_output() {
 }
 
 #[test]
+fn test_system_err_command_preserves_exit_and_summarizes_failure() {
+    let root = TempDir::new().unwrap();
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "err",
+            "sh",
+            "-c",
+            "printf 'fatal: broken build\\n' >&2; exit 42",
+        ])
+        .assert()
+        .code(42)
+        .stdout(predicate::str::contains("[FAIL] Command:"))
+        .stdout(predicate::str::contains("fatal: broken build"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "err",
+            "--json",
+            "sh",
+            "-c",
+            "printf 'fatal: broken build\\n' >&2; exit 42",
+        ])
+        .assert()
+        .code(42)
+        .stdout(predicate::str::contains("\"command\":\"Packet28 err\""))
+        .stdout(predicate::str::contains("fatal: broken build"));
+}
+
+#[test]
 fn test_system_smart_command_summarizes_source_file() {
     let root = TempDir::new().unwrap();
     let source = root.path().join("lib.rs");

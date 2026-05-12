@@ -266,10 +266,18 @@ pub fn run_read(args: ReadArgs) -> Result<i32> {
 }
 
 pub fn run_summary(args: SummaryArgs) -> Result<i32> {
+    run_summary_labeled(args, "summary")
+}
+
+pub fn run_err(args: SummaryArgs) -> Result<i32> {
+    run_summary_labeled(args, "err")
+}
+
+fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     let (program, rest) = args
         .command
         .split_first()
-        .ok_or_else(|| anyhow::anyhow!("summary requires a command"))?;
+        .ok_or_else(|| anyhow::anyhow!("{label} requires a command"))?;
     let output = Command::new(program)
         .args(rest)
         .output()
@@ -285,8 +293,8 @@ pub fn run_summary(args: SummaryArgs) -> Result<i32> {
         args.json,
         args.pretty,
         SystemOutput {
-            command: "Packet28 summary".to_string(),
-            summary: summarize_rendered_lines("summary", &text),
+            command: format!("Packet28 {label}"),
+            summary: summarize_rendered_lines(label, &text),
             text,
         },
     )?;
