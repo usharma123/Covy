@@ -2019,6 +2019,16 @@ mod tests {
         let swift = decide_command_route_with_cwd_and_root("swift test", tmp.path(), tmp.path());
         assert_eq!(swift.kind, RouteKind::TomlFilterRewrite);
         assert_eq!(swift.reason.as_deref(), Some("toml_filter"));
+
+        let diff =
+            decide_command_route_with_cwd_and_root("diff old.txt new.txt", tmp.path(), tmp.path());
+        assert_eq!(diff.kind, RouteKind::ReducerRewrite);
+        assert_eq!(
+            diff.reducer_spec
+                .as_ref()
+                .map(|spec| spec.canonical_kind.as_str()),
+            Some("fs_diff")
+        );
     }
 
     #[test]

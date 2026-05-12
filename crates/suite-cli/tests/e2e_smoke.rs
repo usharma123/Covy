@@ -2071,6 +2071,8 @@ fn test_run_applies_builtin_rtk_compatible_toml_filter() {
         &bin_dir.join("brew"),
         "#!/bin/sh\nprintf 'Warning: rtk 0.27.1 is already installed and up-to-date.\\nTo reinstall 0.27.1, run:\\n  brew reinstall rtk\\n'; exit 0\n",
     );
+    fs::write(root.path().join("old.txt"), "old line\nsame\n").unwrap();
+    fs::write(root.path().join("new.txt"), "new line\nsame\n").unwrap();
     let path_env = std::env::join_paths(std::iter::once(bin_dir.as_path().to_path_buf()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
@@ -2113,6 +2115,24 @@ fn test_run_applies_builtin_rtk_compatible_toml_filter() {
         .stdout(predicate::str::contains(" run --root "))
         .stdout(predicate::str::contains(" -- brew install rtk"));
 
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", &home)
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "diff",
+            "old.txt",
+            "new.txt",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"route\":\"reducer_rewrite\""))
+        .stdout(predicate::str::contains("\"reducer_family\":\"fs\""))
+        .stdout(predicate::str::contains("\"reducer_kind\":\"fs_diff\""));
+
     let output = suite_cmd()
         .current_dir(root.path())
         .env("HOME", &home)
@@ -2138,6 +2158,30 @@ fn test_run_applies_builtin_rtk_compatible_toml_filter() {
         "ok (already installed)"
     );
     assert!(value["raw_artifact"]["available"].as_bool().unwrap());
+
+    let diff_output = suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", &home)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "diff",
+            "-u",
+            "old.txt",
+            "new.txt",
+        ])
+        .output()
+        .unwrap();
+    assert!(!diff_output.status.success());
+    let value: Value = serde_json::from_slice(&diff_output.stdout).unwrap();
+    assert_eq!(value["reduction"]["family"], "fs");
+    assert_eq!(value["reduction"]["canonical_kind"], "fs_diff");
+    assert!(value["reduction"]["summary"]
+        .as_str()
+        .unwrap()
+        .contains("diff compared old.txt and new.txt"));
 }
 
 #[test]
