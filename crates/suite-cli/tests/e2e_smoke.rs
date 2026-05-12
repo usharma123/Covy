@@ -2308,6 +2308,59 @@ fn test_memory_recall_scores_importance_and_keywords() {
         .env("HOME", home.path())
         .args([
             "memory",
+            "store",
+            "Packet28 fts calibration keeps the exact phrase together",
+            "--topic",
+            "fts-calibration",
+            "--importance",
+            "medium",
+            "--json",
+        ])
+        .assert()
+        .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Packet28 fts calibration mentions exact and later mentions phrase",
+            "--topic",
+            "fts-calibration",
+            "--importance",
+            "medium",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let output = suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "recall",
+            "exact phrase",
+            "--topic",
+            "fts-calibration",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "fts recall failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let records = records.as_array().unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records[0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("exact phrase together"));
+
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
             "update",
             "2",
             "--importance",

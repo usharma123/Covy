@@ -2738,7 +2738,38 @@ fn score_memory_recall(record: &MemoryRecord, base_score: f64, query: &str) -> f
     };
     let weight_multiplier = record.weight.clamp(0.5, 2.0);
     (base_score * importance_multiplier * weight_multiplier)
+        + content_match_bonus(record, query).min(0.75)
         + metadata_match_bonus(record, query).min(0.5)
+}
+
+fn content_match_bonus(record: &MemoryRecord, query: &str) -> f64 {
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return 0.0;
+    }
+    let query_phrase = terms.join(" ");
+    let content = record.content.to_ascii_lowercase();
+    let raw_excerpt = record
+        .raw_excerpt
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let content_terms = terms
+        .iter()
+        .filter(|term| content.contains(term.as_str()))
+        .count() as f64
+        * 0.06;
+    let raw_terms = terms
+        .iter()
+        .filter(|term| raw_excerpt.contains(term.as_str()))
+        .count() as f64
+        * 0.03;
+    let phrase_bonus = if content.contains(&query_phrase) || raw_excerpt.contains(&query_phrase) {
+        0.25
+    } else {
+        0.0
+    };
+    content_terms + raw_terms + phrase_bonus
 }
 
 fn metadata_match_bonus(record: &MemoryRecord, query: &str) -> f64 {
