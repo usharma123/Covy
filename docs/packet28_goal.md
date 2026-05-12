@@ -207,6 +207,7 @@ Current evidence:
 - ICM MCP tool-surface coverage now includes Packet28-native recurring memory pattern extraction: `Packet28 memory extract-patterns` and MCP `packet28.memory_extract_patterns` group repeated topic memories by deterministic local keyword/content signals and can materialize those patterns as graph concepts in a selected memoir. Evidence: `test_memory_consolidate_preserves_metadata_and_deletes_sources`; `test_mcp_memory_store_recall_uses_sqlite_home_db`; `cmd_mcp::tests::tools_list_exposes_product_compatibility_aliases`.
 - RTK graceful hook degradation coverage now includes missing-binary generated command guards for Claude, Cursor, Copilot, Gemini, and Windsurf plus malformed-JSON fail-open checks for Claude, Cursor, Copilot, and Gemini. Evidence: `generated_packet28_hook_command_exits_zero_when_binary_is_missing`; `test_packet28_hooks_degrade_gracefully_on_bad_json_and_no_rewrite`.
 - RTK command rewrite planning now normalizes RTK-style runtime prefixes and binary paths for shared reducer routing: bare `sudo`, `env VAR=...`, and absolute binary paths such as `/usr/bin/git`. Evidence: `routes_sudo_and_env_prefixed_commands_like_rtk`; `normalizes_absolute_binary_paths_like_rtk`.
+- RTK runtime hook delegation evidence now proves Claude, Cursor, Copilot, and Gemini PreToolUse-style adapters route RTK-style prefix/path commands through the same Packet28 planner. Evidence: `runtime_pretool_rewrites_use_shared_route_planner`.
 
 ### 6. Release Readiness
 

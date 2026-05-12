@@ -2627,6 +2627,87 @@ mod tests {
     }
 
     #[test]
+    fn runtime_pretool_rewrites_use_shared_route_planner() {
+        let root = PathBuf::from("/tmp/demo");
+        let config = HookRuntimeConfig::default();
+
+        let claude = build_pretool_rewrite(
+            &config,
+            &root,
+            &json!({
+                "tool_name": "Bash",
+                "tool_input": {"command": "sudo git status --short"}
+            }),
+            HookEventKind::PreToolUse,
+            "task-rtk",
+            Some("session-rtk"),
+        )
+        .unwrap()
+        .unwrap();
+        let claude_command = claude["command"].as_str().unwrap();
+        assert!(claude_command.contains("hook reducer-runner"));
+        assert!(claude_command.contains("--kind git_status"));
+        assert!(claude_command.ends_with(" -- git status --short"));
+
+        let cursor = build_runtime_pretool_rewrite(
+            ExternalHookRuntime::Cursor,
+            &config,
+            &root,
+            &json!({
+                "command": "env RUST_BACKTRACE=1 cargo test",
+                "cwd": "/tmp/demo"
+            }),
+            HookEventKind::PreToolUse,
+            "task-rtk",
+            Some("session-rtk"),
+        )
+        .unwrap()
+        .unwrap();
+        let cursor_command = cursor["command"].as_str().unwrap();
+        assert!(cursor_command.contains("--kind rust_test"));
+        assert!(cursor_command.contains("--env RUST_BACKTRACE=1"));
+        assert!(cursor_command.ends_with(" -- cargo test"));
+
+        let copilot = build_runtime_pretool_rewrite(
+            ExternalHookRuntime::Copilot,
+            &config,
+            &root,
+            &json!({
+                "tool_name": "runTerminalCommand",
+                "tool_input": {"command": "/usr/bin/git status --short"},
+                "workspace_root": "/tmp/demo"
+            }),
+            HookEventKind::PreToolUse,
+            "task-rtk",
+            Some("session-rtk"),
+        )
+        .unwrap()
+        .unwrap();
+        let copilot_command = copilot["command"].as_str().unwrap();
+        assert!(copilot_command.contains("--kind git_status"));
+        assert!(copilot_command.ends_with(" -- git status --short"));
+
+        let gemini = build_runtime_pretool_rewrite(
+            ExternalHookRuntime::Gemini,
+            &config,
+            &root,
+            &json!({
+                "tool_name": "run_shell_command",
+                "tool_input": {"command": "sudo git status --short"},
+                "cwd": "/tmp/demo"
+            }),
+            HookEventKind::PreToolUse,
+            "task-rtk",
+            Some("session-rtk"),
+        )
+        .unwrap()
+        .unwrap();
+        let gemini_command = gemini["command"].as_str().unwrap();
+        assert!(gemini_command.contains("--kind git_status"));
+        assert!(gemini_command.ends_with(" -- git status --short"));
+    }
+
+    #[test]
     fn pretool_declines_composed_command() {
         let root = PathBuf::from("/tmp/demo");
         let payload = json!({
