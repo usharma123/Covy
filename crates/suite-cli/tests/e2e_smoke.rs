@@ -2425,6 +2425,25 @@ fn test_memory_consolidate_preserves_metadata_and_deletes_sources() {
         .assert()
         .success();
 
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "extract-patterns",
+            "--topic",
+            "consolidation-meta",
+            "--memoir",
+            "ConsolidationPatterns",
+            "--min-cluster-size",
+            "2",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"pattern_count\""))
+        .stdout(predicate::str::contains("\"key\":\"context\""))
+        .stdout(predicate::str::contains("\"created_concepts\""));
+
     let output = suite_cmd()
         .env("HOME", home.path())
         .args([
@@ -3400,6 +3419,69 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     assert_eq!(
         graph_distill["result"]["structuredContent"]["concepts"][1]["name"].as_str(),
         Some("graph")
+    );
+
+    for (id, content) in [
+        (72, "Pattern extraction should group adapter memories"),
+        (
+            73,
+            "Adapter pattern extraction should create graph concepts",
+        ),
+    ] {
+        write_mcp_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":"tools/call",
+                "params":{
+                    "name":"packet28.memory_store",
+                    "arguments":{
+                        "content":content,
+                        "topic":"mcp-patterns",
+                        "keywords":"adapter,pattern",
+                        "importance":"critical"
+                    }
+                }
+            }),
+        );
+        let stored_pattern_memory = read_mcp_message_for_id(&mut stdout, id);
+        assert_eq!(
+            stored_pattern_memory["result"]["structuredContent"]["topic"].as_str(),
+            Some("mcp-patterns")
+        );
+    }
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":74,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.memory_extract_patterns",
+                "arguments":{"topic":"mcp-patterns", "memoir":"McpMemoir", "min_cluster_size":2}
+            }
+        }),
+    );
+    let memory_patterns = read_mcp_message_for_id(&mut stdout, 74);
+    assert!(
+        memory_patterns["result"]["structuredContent"]["pattern_count"]
+            .as_u64()
+            .unwrap()
+            >= 2
+    );
+    assert!(memory_patterns["result"]["structuredContent"]["patterns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|pattern| pattern["key"] == "adapter" && pattern["memory_count"].as_u64() == Some(2)));
+    assert!(
+        memory_patterns["result"]["structuredContent"]["created_concepts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|concept| concept["name"] == "adapter" && concept["memoir_name"] == "McpMemoir")
     );
 
     write_mcp_message(

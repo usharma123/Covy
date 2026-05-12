@@ -3,9 +3,9 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use crate::memory_store::{
     consolidate_memories, decay_memories, delete_pending_extractions, embed_memories,
-    enqueue_pending_extraction, forget_memories_by_topic, forget_memory, list_memories_filtered,
-    list_pending_extractions, local_store_stats, memory_health, memory_topics,
-    process_pending_extractions, prune_memories, recall_memories_filtered,
+    enqueue_pending_extraction, extract_memory_patterns, forget_memories_by_topic, forget_memory,
+    list_memories_filtered, list_pending_extractions, local_store_stats, memory_health,
+    memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
     store_memory_with_metadata, update_memory, MemoryListQuery, MemoryRecallQuery,
     MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput,
 };
@@ -30,6 +30,7 @@ pub enum MemoryCommands {
     Prune(MemoryPruneArgs),
     Consolidate(MemoryConsolidateArgs),
     Embed(MemoryEmbedArgs),
+    ExtractPatterns(MemoryExtractPatternsArgs),
     Pending(MemoryPendingArgs),
 }
 
@@ -236,6 +237,20 @@ pub struct MemoryEmbedArgs {
 }
 
 #[derive(Args)]
+pub struct MemoryExtractPatternsArgs {
+    #[arg(long)]
+    pub topic: String,
+    #[arg(long)]
+    pub memoir: Option<String>,
+    #[arg(long, default_value_t = 3)]
+    pub min_cluster_size: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct MemoryPendingEnqueueArgs {
     #[arg(allow_hyphen_values = true)]
     pub raw_output: String,
@@ -302,6 +317,7 @@ pub fn run(args: MemoryArgs) -> Result<i32> {
         MemoryCommands::Prune(args) => run_prune(args),
         MemoryCommands::Consolidate(args) => run_consolidate(args),
         MemoryCommands::Embed(args) => run_embed(args),
+        MemoryCommands::ExtractPatterns(args) => run_extract_patterns(args),
         MemoryCommands::Pending(args) => run_pending(args),
     }
 }
@@ -586,6 +602,32 @@ fn run_embed(args: MemoryEmbedArgs) -> Result<i32> {
         println!("embedded_count={}", report.embedded_count);
         println!("model={}", report.model);
         println!("dimensions={}", report.dimensions);
+    }
+    Ok(0)
+}
+
+fn run_extract_patterns(args: MemoryExtractPatternsArgs) -> Result<i32> {
+    let report =
+        extract_memory_patterns(&args.topic, args.memoir.as_deref(), args.min_cluster_size)?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+    } else {
+        println!("topic={}", report.topic);
+        println!("source_memory_count={}", report.source_memory_count);
+        println!("pattern_count={}", report.pattern_count);
+        for pattern in report.patterns {
+            println!(
+                "{} count={} memories={}",
+                pattern.key,
+                pattern.memory_count,
+                pattern
+                    .memory_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
     }
     Ok(0)
 }

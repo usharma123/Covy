@@ -64,9 +64,9 @@ use crate::memory_store::{
     add_concept_with_metadata, append_transcript_message, apply_feedback, consolidate_memories,
     create_graph_memoir, decay_memories, delete_concept, delete_feedback,
     delete_pending_extractions, distill_memories_to_graph, embed_memories,
-    enqueue_pending_extraction, export_graph, feedback_stats, forget_memories_by_topic,
-    forget_memory, graph_stats, inspect_graph, inspect_graph_concept, learn_project_graph,
-    link_concepts, list_feedback, list_graph_memoirs, list_memories_filtered,
+    enqueue_pending_extraction, export_graph, extract_memory_patterns, feedback_stats,
+    forget_memories_by_topic, forget_memory, graph_stats, inspect_graph, inspect_graph_concept,
+    learn_project_graph, link_concepts, list_feedback, list_graph_memoirs, list_memories_filtered,
     list_pending_extractions, list_transcript_sessions, local_store_stats, memory_health,
     memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
     record_feedback_with_metadata, refine_concept, search_concepts_filtered,
@@ -861,6 +861,19 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.memory_extract_patterns",
+                    "description": "Detect recurring local memory patterns in a topic and optionally create graph concepts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["topic"],
+                        "properties": {
+                            "topic": {"type":"string"},
+                            "memoir": {"type":"string"},
+                            "min_cluster_size": {"type":"integer","minimum":2}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.memory_pending_enqueue",
                     "description": "Queue raw local tool/session text for later Packet28 memory extraction.",
                     "inputSchema": {
@@ -1536,6 +1549,14 @@ fn handle_tool_call(
                 request.dimensions.unwrap_or(384),
             )?)?
         }
+        "packet28.memory_extract_patterns" => {
+            let request: MemoryExtractPatternsToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(extract_memory_patterns(
+                &request.topic,
+                request.memoir.as_deref(),
+                request.min_cluster_size.unwrap_or(3),
+            )?)?
+        }
         "packet28.memory_pending_enqueue" => {
             let request: MemoryPendingEnqueueToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(enqueue_pending_extraction(PendingExtractionInput {
@@ -1850,6 +1871,13 @@ struct MemoryEmbedToolArgs {
     id: Option<i64>,
     all: Option<bool>,
     dimensions: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryExtractPatternsToolArgs {
+    topic: String,
+    memoir: Option<String>,
+    min_cluster_size: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2280,6 +2308,13 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 embedded {count} memor(y/ies).")
         }
+        "packet28.memory_extract_patterns" => {
+            let count = payload
+                .get("pattern_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 extracted {count} memory pattern(s).")
+        }
         "packet28.feedback_record" => {
             let id = payload
                 .get("id")
@@ -2466,6 +2501,7 @@ mod tests {
             "packet28.doctor",
             "packet28.memory_list",
             "packet28.memory_embed",
+            "packet28.memory_extract_patterns",
             "packet28.feedback_search",
             "packet28.feedback_list",
             "packet28.feedback_apply",

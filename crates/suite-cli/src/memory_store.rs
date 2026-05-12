@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -312,6 +312,26 @@ pub(crate) struct MemoryEmbedReport {
     pub(crate) dimensions: usize,
     pub(crate) embedded_count: usize,
     pub(crate) embeddings: Vec<MemoryEmbeddingRecord>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryPattern {
+    pub(crate) key: String,
+    pub(crate) memory_count: usize,
+    pub(crate) memory_ids: Vec<i64>,
+    pub(crate) keywords: Vec<String>,
+    pub(crate) sample_contents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MemoryPatternReport {
+    pub(crate) topic: String,
+    pub(crate) min_cluster_size: usize,
+    pub(crate) memoir: Option<String>,
+    pub(crate) source_memory_count: usize,
+    pub(crate) pattern_count: usize,
+    pub(crate) patterns: Vec<MemoryPattern>,
+    pub(crate) created_concepts: Vec<GraphConcept>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1078,6 +1098,125 @@ pub(crate) fn embed_memories(
         dimensions,
         embedded_count: embeddings.len(),
         embeddings,
+    })
+}
+
+pub(crate) fn extract_memory_patterns(
+    topic: &str,
+    memoir: Option<&str>,
+    min_cluster_size: usize,
+) -> Result<MemoryPatternReport> {
+    let topic = normalize_non_empty(Some(topic), "general");
+    let min_cluster_size = min_cluster_size.max(2);
+    let memories = list_memories_filtered(MemoryListQuery {
+        limit: 10_000,
+        topic: Some(&topic),
+        project: None,
+        all: true,
+        sort: "recent",
+    })?;
+    let mut groups: BTreeMap<String, Vec<MemoryRecord>> = BTreeMap::new();
+    for memory in &memories {
+        for token in pattern_tokens(memory) {
+            groups.entry(token).or_default().push(memory.clone());
+        }
+    }
+    let mut patterns = groups
+        .into_iter()
+        .filter_map(|(key, mut records)| {
+            records.sort_by(|a, b| b.updated_at_unix_ms.cmp(&a.updated_at_unix_ms));
+            records.dedup_by_key(|record| record.id);
+            if records.len() < min_cluster_size {
+                return None;
+            }
+            let mut related = BTreeSet::new();
+            for record in &records {
+                for keyword in split_csv_field(record.keywords.as_deref()) {
+                    if !keyword.eq_ignore_ascii_case(&key) {
+                        related.insert(keyword);
+                    }
+                }
+                for tag in split_csv_field(record.tags.as_deref()) {
+                    if !tag.eq_ignore_ascii_case(&key) {
+                        related.insert(tag);
+                    }
+                }
+            }
+            Some(MemoryPattern {
+                key,
+                memory_count: records.len(),
+                memory_ids: records.iter().map(|record| record.id).collect(),
+                keywords: related.into_iter().take(12).collect(),
+                sample_contents: records
+                    .iter()
+                    .take(3)
+                    .map(|record| record.content.clone())
+                    .collect(),
+            })
+        })
+        .collect::<Vec<_>>();
+    patterns.sort_by(|a, b| {
+        b.memory_count
+            .cmp(&a.memory_count)
+            .then_with(|| a.key.cmp(&b.key))
+    });
+
+    let mut created_concepts = Vec::new();
+    let memoir_name = memoir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(memoir_name) = &memoir_name {
+        create_graph_memoir(
+            Some(memoir_name),
+            Some(&format!("Extracted memory patterns for {topic}")),
+        )?;
+        for pattern in &patterns {
+            let description = format!(
+                "Recurring memory pattern '{}' found in {} memories for topic '{}'.\n{}",
+                pattern.key,
+                pattern.memory_count,
+                topic,
+                pattern.sample_contents.join("\n")
+            );
+            let mut labels = vec![
+                format!("topic:{topic}"),
+                "memory-pattern".to_string(),
+                format!("pattern:{}", pattern.key),
+            ];
+            labels.extend(
+                pattern
+                    .keywords
+                    .iter()
+                    .take(4)
+                    .map(|keyword| format!("tag:{keyword}")),
+            );
+            labels.sort();
+            labels.dedup();
+            let source_ids = pattern
+                .memory_ids
+                .iter()
+                .map(|id| format!("memory:{id}"))
+                .collect::<Vec<_>>();
+            created_concepts.push(add_concept_with_metadata(
+                &pattern.key,
+                Some(&description),
+                Some(memoir_name),
+                &labels,
+                Some(0.7),
+                &source_ids,
+            )?);
+        }
+    }
+
+    Ok(MemoryPatternReport {
+        topic,
+        min_cluster_size,
+        memoir: memoir_name,
+        source_memory_count: memories.len(),
+        pattern_count: patterns.len(),
+        patterns,
+        created_concepts,
     })
 }
 
@@ -2517,6 +2656,46 @@ fn split_csv_field(field: Option<&str>) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn pattern_tokens(memory: &MemoryRecord) -> BTreeSet<String> {
+    let mut tokens = BTreeSet::new();
+    for value in split_csv_field(memory.keywords.as_deref())
+        .into_iter()
+        .chain(split_csv_field(memory.tags.as_deref()))
+    {
+        let normalized = normalize_pattern_token(&value);
+        if is_pattern_token(&normalized) {
+            tokens.insert(normalized);
+        }
+    }
+    for raw in memory
+        .content
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+    {
+        let normalized = normalize_pattern_token(raw);
+        if is_pattern_token(&normalized) {
+            tokens.insert(normalized);
+        }
+    }
+    tokens
+}
+
+fn normalize_pattern_token(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .to_ascii_lowercase()
+}
+
+fn is_pattern_token(value: &str) -> bool {
+    const STOP_WORDS: &[&str] = &[
+        "about", "after", "again", "also", "because", "before", "from", "have", "into", "memory",
+        "more", "that", "the", "their", "then", "this", "with", "without",
+    ];
+    value.len() >= 4
+        && value.chars().any(|ch| ch.is_ascii_alphabetic())
+        && !STOP_WORDS.contains(&value)
 }
 
 fn project_identity(root: &Path, fallback_name: &str) -> String {
