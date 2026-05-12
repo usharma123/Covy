@@ -1896,6 +1896,117 @@ mod tests {
     }
 
     #[test]
+    fn routes_every_upstream_rtk_rule_representative() {
+        let tmp = tempfile::tempdir().unwrap();
+        for command in [
+            "git status --short",
+            "yadm status --short",
+            "gh pr list",
+            "gh release list",
+            "glab mr list",
+            "glab ci status",
+            "cargo build",
+            "cargo fmt --all",
+            "cargo install ripgrep",
+            "pnpm install",
+            "npm run test",
+            "npm rum lint",
+            "npm urn jest run",
+            "npx svgo",
+            "cat README.md",
+            "head -n 5 README.md",
+            "tail -n 5 README.md",
+            "rg packet README.md",
+            "grep packet README.md",
+            "ls -la",
+            "find . -maxdepth 1 -type f",
+            "tsc --noEmit",
+            "eslint src",
+            "biome check .",
+            "prettier --check README.md",
+            "next build",
+            "jest run",
+            "vitest run",
+            "playwright test",
+            "prisma migrate status",
+            "docker ps",
+            "docker compose ps",
+            "docker build .",
+            "kubectl get pods",
+            "kubectl apply -f deploy.yaml",
+            "tree -L 2",
+            "diff old.txt new.txt",
+            "curl https://example.com",
+            "wget https://example.com",
+            "python3 -m mypy src",
+            "ruff check src",
+            "ruff format src",
+            "python3.11 -m pytest tests",
+            "pip3 list",
+            "uv pip install pytest",
+            "go test ./...",
+            "golangci-lint run ./...",
+            "bundle install",
+            "bundle exec rails test",
+            "bundle exec rspec",
+            "bundle exec rubocop",
+            "aws sts get-caller-identity",
+            "psql postgres://localhost/db",
+            "ansible-playbook site.yml",
+            "brew install ripgrep",
+            "composer install",
+            "df -h",
+            "dotnet build",
+            "du -sh .",
+            "fail2ban-client status sshd",
+            "gcloud container clusters list",
+            "gradle test",
+            "./gradlew build",
+            "hadolint Dockerfile",
+            "helm status app",
+            "iptables -L",
+            "make test",
+            "markdownlint README.md",
+            "mix compile",
+            "mix format",
+            "mvn package",
+            "ping example.com",
+            "pio run",
+            "poetry install",
+            "pre-commit run --all-files",
+            "ps aux",
+            "quarto render index.qmd",
+            "rsync -a src remote:",
+            "shellcheck script.sh",
+            "shopify theme push",
+            "sops -d secrets.yaml",
+            "swift test",
+            "systemctl status nginx",
+            "terraform plan",
+            "tofu validate",
+            "trunk build",
+            "uv sync",
+            "yamllint config.yml",
+            "wc -l README.md",
+            "gt log",
+            "liquibase update",
+        ] {
+            let decision = decide_command_route_with_cwd_and_root(command, tmp.path(), tmp.path());
+            assert!(
+                matches!(
+                    decision.kind,
+                    RouteKind::ReducerRewrite
+                        | RouteKind::NativeTool
+                        | RouteKind::TomlFilterRewrite
+                ),
+                "{command} routed as {:?} ({:?})",
+                decision.kind,
+                decision.reason
+            );
+        }
+    }
+
+    #[test]
     fn routes_sudo_and_env_prefixed_commands_like_rtk() {
         let sudo = decide_command_route("sudo git status --short");
         assert_eq!(sudo.kind, RouteKind::ReducerRewrite);

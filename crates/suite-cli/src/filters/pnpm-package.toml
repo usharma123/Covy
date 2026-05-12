@@ -1,0 +1,34 @@
+[filters.pnpm-package]
+description = "Compact pnpm install/list/outdated output"
+match_command = "^pnpm\\s+(i|install|list|ls|outdated)\\b"
+strip_ansi = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^Progress:",
+  "^Packages:",
+  "^Resolving:",
+  "^Downloading:",
+]
+match_output = [
+  { pattern = "Already up to date", message = "ok (up to date)" },
+  { pattern = "Lockfile is up to date", message = "ok (lockfile up to date)" },
+]
+max_lines = 24
+
+[[tests.pnpm-package]]
+name = "install up-to-date short-circuits"
+input = """
+Lockfile is up to date, resolution step is skipped
+Already up to date
+Done in 812ms
+"""
+expected = "ok (up to date)"
+
+[[tests.pnpm-package]]
+name = "outdated keeps package rows"
+input = """
+Package   Current  Wanted  Latest
+react     18.2.0   18.3.1  19.0.0
+vite      5.4.0    5.4.0   6.0.0
+"""
+expected = "Package   Current  Wanted  Latest\nreact     18.2.0   18.3.1  19.0.0\nvite      5.4.0    5.4.0   6.0.0"
