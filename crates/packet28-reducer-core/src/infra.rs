@@ -41,7 +41,10 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
         "curl" if classify_curl(argv) => {
             ("curl_fetch", suite_packet_core::ToolOperationKind::Fetch)
         }
-        "aws" if classify_aws(argv) => ("aws_cli", suite_packet_core::ToolOperationKind::Fetch),
+        "aws" => (
+            classify_aws_kind(argv)?,
+            suite_packet_core::ToolOperationKind::Fetch,
+        ),
         "psql" if classify_psql(argv) => {
             ("psql_query", suite_packet_core::ToolOperationKind::Fetch)
         }
@@ -97,11 +100,11 @@ pub fn reduce_infra_command(
                 summarize_curl(stdout)
             }
         }
-        "aws_cli" => {
+        kind if kind.starts_with("aws_") => {
             if failed {
                 first_nonempty_line(&combined).unwrap_or_else(|| "aws command failed".to_string())
             } else {
-                summarize_aws(stdout)
+                summarize_aws(spec, stdout)
             }
         }
         "psql_query" => {
@@ -131,6 +134,7 @@ pub fn reduce_infra_command(
                 compact_log_output(stdout, 50)
             }
             "curl_fetch" if !failed => compact_curl_response(stdout),
+            kind if kind.starts_with("aws_") && !failed => compact_aws_output(spec, stdout),
             "psql_query" if !failed => compact_psql_output(stdout),
             _ => String::new(),
         },
@@ -348,17 +352,49 @@ fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
     format!("{family}:{kind}:{}", argv.join("\u{1f}"))
 }
 
-fn classify_aws(argv: &[String]) -> bool {
-    // Support `aws s3 ls`, `aws ec2 describe-instances`, `aws sts get-caller-identity`, etc.
-    argv.len() >= 3 && !contains_any(argv, &["--output", "-o"])
+fn classify_aws_kind(argv: &[String]) -> Option<&'static str> {
+    if argv.len() < 3 || contains_any(argv, &["--output", "-o"]) {
+        return None;
+    }
+    match (argv.get(1)?.as_str(), argv.get(2)?.as_str()) {
+        ("sts", "get-caller-identity") => Some("aws_sts_get_caller_identity"),
+        ("s3", "ls") => Some("aws_s3_ls"),
+        ("s3api", "list-objects-v2") => Some("aws_s3api_list_objects_v2"),
+        ("ec2", "describe-instances") => Some("aws_ec2_describe_instances"),
+        ("ec2", "describe-security-groups") => Some("aws_ec2_describe_security_groups"),
+        ("ecs", "list-services") => Some("aws_ecs_list_services"),
+        ("ecs", "describe-services") => Some("aws_ecs_describe_services"),
+        ("ecs", "describe-tasks") => Some("aws_ecs_describe_tasks"),
+        ("rds", "describe-db-instances") => Some("aws_rds_describe_db_instances"),
+        ("cloudformation", "list-stacks") => Some("aws_cloudformation_list_stacks"),
+        ("cloudformation", "describe-stacks") => Some("aws_cloudformation_describe_stacks"),
+        ("cloudformation", "describe-stack-events") => {
+            Some("aws_cloudformation_describe_stack_events")
+        }
+        ("logs", "get-log-events") => Some("aws_logs_get_log_events"),
+        ("logs", "filter-log-events") => Some("aws_logs_filter_log_events"),
+        ("lambda", "list-functions") => Some("aws_lambda_list_functions"),
+        ("lambda", "get-function") => Some("aws_lambda_get_function"),
+        ("iam", "list-roles") => Some("aws_iam_list_roles"),
+        ("iam", "list-users") => Some("aws_iam_list_users"),
+        ("dynamodb", "scan") => Some("aws_dynamodb_scan"),
+        ("dynamodb", "query") => Some("aws_dynamodb_query"),
+        ("dynamodb", "get-item") => Some("aws_dynamodb_get_item"),
+        ("eks", "describe-cluster") => Some("aws_eks_describe_cluster"),
+        ("sqs", "receive-message") => Some("aws_sqs_receive_message"),
+        _ => Some("aws_cli"),
+    }
 }
 
-fn summarize_aws(stdout: &str) -> String {
+fn summarize_aws(spec: &CommandReducerSpec, stdout: &str) -> String {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
         return "aws returned empty response".to_string();
     }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(summary) = summarize_aws_json(spec.canonical_kind.as_str(), &value) {
+            return summary;
+        }
         return match value {
             serde_json::Value::Object(map) => {
                 let keys: Vec<_> = map.keys().take(5).cloned().collect();
@@ -374,7 +410,321 @@ fn summarize_aws(stdout: &str) -> String {
         };
     }
     let lines = nonempty_lines(stdout);
-    format!("aws returned {} line(s)", lines.len())
+    if spec.canonical_kind == "aws_s3_ls" {
+        let prefixes = lines
+            .iter()
+            .filter(|line| line.split_whitespace().next() == Some("PRE"))
+            .count();
+        let objects = lines.len().saturating_sub(prefixes);
+        format!("aws s3 ls returned {objects} object(s), {prefixes} prefix(es)")
+    } else {
+        format!("aws returned {} line(s)", lines.len())
+    }
+}
+
+fn summarize_aws_json(kind: &str, value: &serde_json::Value) -> Option<String> {
+    match kind {
+        "aws_sts_get_caller_identity" => {
+            let account = json_str(value, &["Account"]).unwrap_or("unknown-account");
+            let arn = json_str(value, &["Arn"])
+                .map(shorten_aws_name)
+                .unwrap_or_default();
+            Some(if arn.is_empty() {
+                format!("aws sts caller account {account}")
+            } else {
+                format!("aws sts caller account {account} ({arn})")
+            })
+        }
+        "aws_ec2_describe_instances" => {
+            let instances = collect_nested_array_items(value, &["Reservations"], "Instances");
+            Some(format!(
+                "aws ec2 described {} instance(s){}",
+                instances.len(),
+                first_named_suffix(&instances, &["InstanceId"])
+            ))
+        }
+        "aws_ec2_describe_security_groups" => summarize_named_array(
+            "aws ec2 described",
+            "security group",
+            value,
+            &["SecurityGroups"],
+            &["GroupName", "GroupId"],
+        ),
+        "aws_ecs_list_services" => {
+            let count = json_array(value, &["serviceArns"]).map_or(0, <[_]>::len);
+            Some(format!("aws ecs listed {count} service(s)"))
+        }
+        "aws_ecs_describe_services" => summarize_named_array(
+            "aws ecs described",
+            "service",
+            value,
+            &["services"],
+            &["serviceName", "serviceArn"],
+        ),
+        "aws_ecs_describe_tasks" => summarize_named_array(
+            "aws ecs described",
+            "task",
+            value,
+            &["tasks"],
+            &["taskArn", "lastStatus"],
+        ),
+        "aws_rds_describe_db_instances" => summarize_named_array(
+            "aws rds described",
+            "DB instance",
+            value,
+            &["DBInstances"],
+            &["DBInstanceIdentifier"],
+        ),
+        "aws_cloudformation_list_stacks" => summarize_named_array(
+            "aws cloudformation listed",
+            "stack",
+            value,
+            &["StackSummaries"],
+            &["StackName", "StackStatus"],
+        ),
+        "aws_cloudformation_describe_stacks" => summarize_named_array(
+            "aws cloudformation described",
+            "stack",
+            value,
+            &["Stacks"],
+            &["StackName", "StackStatus"],
+        ),
+        "aws_cloudformation_describe_stack_events" => summarize_named_array(
+            "aws cloudformation returned",
+            "event",
+            value,
+            &["StackEvents"],
+            &["ResourceStatus", "LogicalResourceId"],
+        ),
+        "aws_logs_get_log_events" | "aws_logs_filter_log_events" => summarize_named_array(
+            "aws logs returned",
+            "event",
+            value,
+            &["events"],
+            &["message"],
+        ),
+        "aws_lambda_list_functions" => summarize_named_array(
+            "aws lambda listed",
+            "function",
+            value,
+            &["Functions"],
+            &["FunctionName", "Runtime"],
+        ),
+        "aws_lambda_get_function" => {
+            let name = json_str(value, &["Configuration", "FunctionName"]).unwrap_or("function");
+            let runtime = json_str(value, &["Configuration", "Runtime"]).unwrap_or("unknown");
+            Some(format!("aws lambda function {name} ({runtime})"))
+        }
+        "aws_iam_list_roles" => {
+            summarize_named_array("aws iam listed", "role", value, &["Roles"], &["RoleName"])
+        }
+        "aws_iam_list_users" => {
+            summarize_named_array("aws iam listed", "user", value, &["Users"], &["UserName"])
+        }
+        "aws_s3api_list_objects_v2" => {
+            let contents = json_array(value, &["Contents"]).unwrap_or(&[]);
+            let total_size = contents
+                .iter()
+                .filter_map(|item| json_u64(item, &["Size"]))
+                .sum::<u64>();
+            Some(format!(
+                "aws s3api listed {} object(s), {} byte(s)",
+                contents.len(),
+                total_size
+            ))
+        }
+        "aws_dynamodb_scan" | "aws_dynamodb_query" => {
+            let count = json_u64(value, &["Count"]).unwrap_or_else(|| {
+                json_array(value, &["Items"])
+                    .map(|items| items.len() as u64)
+                    .unwrap_or(0)
+            });
+            Some(format!("aws dynamodb returned {count} item(s)"))
+        }
+        "aws_dynamodb_get_item" => Some(if value.get("Item").is_some() {
+            "aws dynamodb returned item".to_string()
+        } else {
+            "aws dynamodb returned no item".to_string()
+        }),
+        "aws_eks_describe_cluster" => {
+            let name = json_str(value, &["cluster", "name"]).unwrap_or("cluster");
+            let status = json_str(value, &["cluster", "status"]).unwrap_or("unknown");
+            Some(format!("aws eks cluster {name} is {status}"))
+        }
+        "aws_sqs_receive_message" => summarize_named_array(
+            "aws sqs received",
+            "message",
+            value,
+            &["Messages"],
+            &["MessageId"],
+        ),
+        _ => None,
+    }
+}
+
+fn compact_aws_output(spec: &CommandReducerSpec, stdout: &str) -> String {
+    if spec.canonical_kind == "aws_s3_ls" {
+        return nonempty_lines(stdout)
+            .into_iter()
+            .take(30)
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout.trim()) else {
+        return nonempty_lines(stdout)
+            .into_iter()
+            .take(10)
+            .collect::<Vec<_>>()
+            .join("\n");
+    };
+    match spec.canonical_kind.as_str() {
+        "aws_sts_get_caller_identity" => ["Account", "Arn", "UserId"]
+            .iter()
+            .filter_map(|key| json_str(&value, &[*key]).map(|v| format!("{key}: {v}")))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "aws_ec2_describe_instances" => {
+            let instances = collect_nested_array_items(&value, &["Reservations"], "Instances");
+            compact_json_rows(&instances, &["InstanceId", "InstanceType", "State.Name"])
+        }
+        "aws_s3api_list_objects_v2" => compact_json_rows(
+            json_array(&value, &["Contents"]).unwrap_or(&[]),
+            &["Key", "Size", "LastModified"],
+        ),
+        "aws_lambda_list_functions" => compact_json_rows(
+            json_array(&value, &["Functions"]).unwrap_or(&[]),
+            &["FunctionName", "Runtime", "LastModified"],
+        ),
+        "aws_iam_list_roles" => compact_json_rows(
+            json_array(&value, &["Roles"]).unwrap_or(&[]),
+            &["RoleName", "Arn"],
+        ),
+        "aws_iam_list_users" => compact_json_rows(
+            json_array(&value, &["Users"]).unwrap_or(&[]),
+            &["UserName", "Arn"],
+        ),
+        "aws_logs_get_log_events" | "aws_logs_filter_log_events" => compact_json_rows(
+            json_array(&value, &["events"]).unwrap_or(&[]),
+            &["timestamp", "message"],
+        ),
+        _ => compact_curl_response(stdout),
+    }
+}
+
+fn summarize_named_array(
+    prefix: &str,
+    singular: &str,
+    value: &serde_json::Value,
+    path: &[&str],
+    first_fields: &[&str],
+) -> Option<String> {
+    let items = json_array(value, path)?;
+    Some(format!(
+        "{prefix} {} {}(s){}",
+        items.len(),
+        singular,
+        first_named_suffix(items, first_fields)
+    ))
+}
+
+fn first_named_suffix(items: &[serde_json::Value], fields: &[&str]) -> String {
+    let Some(first) = items.first() else {
+        return String::new();
+    };
+    let details = fields
+        .iter()
+        .filter_map(|field| json_dotted_str(first, field).map(shorten_aws_name))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if details.is_empty() {
+        String::new()
+    } else {
+        format!("; first {}", details.join(" "))
+    }
+}
+
+fn collect_nested_array_items(
+    value: &serde_json::Value,
+    outer_path: &[&str],
+    inner_key: &str,
+) -> Vec<serde_json::Value> {
+    json_array(value, outer_path)
+        .unwrap_or(&[])
+        .iter()
+        .flat_map(|item| {
+            json_array(item, &[inner_key])
+                .unwrap_or(&[])
+                .iter()
+                .cloned()
+        })
+        .collect()
+}
+
+fn compact_json_rows(items: &[serde_json::Value], fields: &[&str]) -> String {
+    let mut rows = Vec::new();
+    rows.push(fields.join("\t"));
+    for item in items.iter().take(30) {
+        rows.push(
+            fields
+                .iter()
+                .map(|field| json_dotted_compact(item, field).unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\t"),
+        );
+    }
+    if items.len() > 30 {
+        rows.push(format!("... +{} more rows", items.len() - 30));
+    }
+    rows.join("\n")
+}
+
+fn json_array<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a [serde_json::Value]> {
+    path.iter()
+        .try_fold(value, |current, key| current.get(*key))?
+        .as_array()
+        .map(Vec::as_slice)
+}
+
+fn json_str<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a str> {
+    path.iter()
+        .try_fold(value, |current, key| current.get(*key))?
+        .as_str()
+}
+
+fn json_u64(value: &serde_json::Value, path: &[&str]) -> Option<u64> {
+    path.iter()
+        .try_fold(value, |current, key| current.get(*key))?
+        .as_u64()
+}
+
+fn json_dotted_str<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    let mut current = value;
+    for part in field.split('.') {
+        current = current.get(part)?;
+    }
+    current.as_str()
+}
+
+fn json_dotted_compact(value: &serde_json::Value, field: &str) -> Option<String> {
+    let mut current = value;
+    for part in field.split('.') {
+        current = current.get(part)?;
+    }
+    match current {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Null => Some(String::new()),
+        _ => Some(compact(&current.to_string(), 80)),
+    }
+}
+
+fn shorten_aws_name(value: &str) -> &str {
+    value
+        .rsplit(['/', ':'])
+        .next()
+        .filter(|part| !part.is_empty())
+        .unwrap_or(value)
 }
 
 fn summarize_psql(stdout: &str) -> String {
@@ -637,5 +987,93 @@ mod tests {
         let reduction = reduce_infra_command(&spec, output, "", 0);
         assert_eq!(reduction.summary, "psql returned 2 row(s)");
         assert_eq!(reduction.compact_preview, "id\tname\n1\tAda\n2\tGrace");
+    }
+
+    #[test]
+    fn reduce_aws_sts_summarizes_identity() {
+        let argv = vec!["aws", "sts", "get-caller-identity"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("aws sts get-caller-identity", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "aws_sts_get_caller_identity");
+        let output = r#"{"UserId":"AIDA123","Account":"123456789012","Arn":"arn:aws:iam::123456789012:user/alice"}"#;
+        let reduction = reduce_infra_command(&spec, output, "", 0);
+        assert_eq!(
+            reduction.summary,
+            "aws sts caller account 123456789012 (alice)"
+        );
+        assert!(reduction.compact_preview.contains("Account: 123456789012"));
+        assert!(reduction
+            .compact_preview
+            .contains("Arn: arn:aws:iam::123456789012:user/alice"));
+    }
+
+    #[test]
+    fn reduce_aws_ec2_instances_summarizes_nested_reservations() {
+        let argv = vec!["aws", "ec2", "describe-instances"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("aws ec2 describe-instances", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "aws_ec2_describe_instances");
+        let output = r#"{
+  "Reservations": [
+    {"Instances": [
+      {"InstanceId": "i-001", "InstanceType": "t3.micro", "State": {"Name": "running"}},
+      {"InstanceId": "i-002", "InstanceType": "m5.large", "State": {"Name": "stopped"}}
+    ]}
+  ]
+}"#;
+        let reduction = reduce_infra_command(&spec, output, "", 0);
+        assert_eq!(
+            reduction.summary,
+            "aws ec2 described 2 instance(s); first i-001"
+        );
+        assert!(reduction
+            .compact_preview
+            .contains("InstanceId\tInstanceType\tState.Name"));
+        assert!(reduction
+            .compact_preview
+            .contains("i-002\tm5.large\tstopped"));
+    }
+
+    #[test]
+    fn reduce_aws_s3api_objects_summarizes_size() {
+        let argv = vec!["aws", "s3api", "list-objects-v2", "--bucket", "demo"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec =
+            classify_infra_command("aws s3api list-objects-v2 --bucket demo", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "aws_s3api_list_objects_v2");
+        let output = r#"{"Contents":[{"Key":"a.txt","Size":3},{"Key":"b.log","Size":7}]}"#;
+        let reduction = reduce_infra_command(&spec, output, "", 0);
+        assert_eq!(
+            reduction.summary,
+            "aws s3api listed 2 object(s), 10 byte(s)"
+        );
+        assert!(reduction
+            .compact_preview
+            .contains("Key\tSize\tLastModified"));
+        assert!(reduction.compact_preview.contains("a.txt\t3\t"));
+    }
+
+    #[test]
+    fn reduce_aws_s3_ls_summarizes_text_output() {
+        let argv = vec!["aws", "s3", "ls", "s3://demo"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("aws s3 ls s3://demo", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "aws_s3_ls");
+        let output =
+            "                           PRE logs/\n2026-05-11 10:00:00          12 README.md\n";
+        let reduction = reduce_infra_command(&spec, output, "", 0);
+        assert_eq!(
+            reduction.summary,
+            "aws s3 ls returned 1 object(s), 1 prefix(es)"
+        );
+        assert!(reduction.compact_preview.contains("README.md"));
     }
 }

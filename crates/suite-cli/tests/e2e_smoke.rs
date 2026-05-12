@@ -928,6 +928,10 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
         &bin_dir.path().join("psql"),
         "#!/bin/sh\nprintf ' id | name \\n----+------\\n  1 | Ada\\n  2 | Grace\\n(2 rows)\\n'\n",
     );
+    write_executable_script(
+        &bin_dir.path().join("aws"),
+        "#!/bin/sh\nprintf '{\"Functions\":[{\"FunctionName\":\"api\",\"Runtime\":\"nodejs20.x\"},{\"FunctionName\":\"worker\",\"Runtime\":\"python3.12\"}]}'\n",
+    );
     let path_env = format!(
         "{}:{}",
         bin_dir.path().display(),
@@ -992,7 +996,7 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
 
     suite_cmd()
         .current_dir(root.path())
-        .env("PATH", path_env)
+        .env("PATH", &path_env)
         .args([
             "run",
             "--root",
@@ -1009,6 +1013,29 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
             "\"canonical_kind\":\"psql_query\"",
         ))
         .stdout(predicate::str::contains("psql returned 2 row(s)"))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "aws",
+            "lambda",
+            "list-functions",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"infra\""))
+        .stdout(predicate::str::contains(
+            "\"canonical_kind\":\"aws_lambda_list_functions\"",
+        ))
+        .stdout(predicate::str::contains(
+            "aws lambda listed 2 function(s); first api nodejs20.x",
+        ))
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 
