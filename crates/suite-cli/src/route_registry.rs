@@ -1679,12 +1679,14 @@ mod tests {
         for (command, expected) in [
             ("npm exec tsc --noEmit", "javascript_tsc"),
             ("npm x eslint src", "javascript_eslint"),
+            ("npm run test", "javascript_test"),
             ("npm run-script biome check .", "javascript_lint"),
             ("pnpm dlx next build", "javascript_next_build"),
             ("pnpm exec prisma migrate status", "javascript_prisma"),
             ("pnpx vitest run", "javascript_vitest"),
             ("npx jest run", "javascript_test"),
             ("npx playwright test", "javascript_test"),
+            ("npx svgo", "javascript_npx"),
         ] {
             let decision = decide_command_route(command);
             assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
@@ -1697,6 +1699,9 @@ mod tests {
                 "{command}"
             );
         }
+
+        let npx = decide_command_route("npx svgo");
+        assert!(npx.reducer_spec.as_ref().unwrap().mutation);
     }
 
     #[test]

@@ -81,6 +81,14 @@ pub fn classify_javascript_command(command: &str, argv: &[String]) -> Option<Com
             "javascript_test",
             suite_packet_core::ToolOperationKind::Test,
         ),
+        "test" if classify_package_run_script(argv, "test") => (
+            "javascript_test",
+            suite_packet_core::ToolOperationKind::Test,
+        ),
+        _ if classify_generic_npx(argv, tool_argv) => (
+            "javascript_npx",
+            suite_packet_core::ToolOperationKind::Generic,
+        ),
         _ => return None,
     };
 
@@ -91,6 +99,7 @@ pub fn classify_javascript_command(command: &str, argv: &[String]) -> Option<Com
         .cloned()
         .collect::<Vec<_>>();
 
+    let mutation = canonical_kind == "javascript_npx";
     Some(CommandReducerSpec {
         family: "javascript".to_string(),
         canonical_kind: canonical_kind.to_string(),
@@ -99,8 +108,8 @@ pub fn classify_javascript_command(command: &str, argv: &[String]) -> Option<Com
         command: command.to_string(),
         argv: argv.to_vec(),
         cache_fingerprint: fingerprint("javascript", canonical_kind, argv),
-        cacheable: true,
-        mutation: false,
+        cacheable: !mutation,
+        mutation,
         paths,
         equivalence_key: None,
     })
@@ -122,6 +131,7 @@ pub fn reduce_javascript_command(
         "javascript_prettier" => summarize_prettier(&combined, failed),
         "javascript_next_build" => summarize_next_build(&combined, failed),
         "javascript_prisma" => summarize_prisma(&combined, failed),
+        "javascript_npx" => summarize_npm_filtered(&combined, failed),
         _ => first_nonempty_line(&combined)
             .unwrap_or_else(|| "javascript command completed".to_string()),
     };
@@ -166,6 +176,23 @@ fn classify_package_manager(argv: &[String], first: &str, second: Option<&str>) 
 
 fn classify_yarn(argv: &[String], script: &str) -> bool {
     argv.get(1).is_some_and(|arg| arg == script) && !contains_any(argv, &["--json"])
+}
+
+fn classify_package_run_script(argv: &[String], script: &str) -> bool {
+    matches!(
+        (
+            argv.first().map(String::as_str),
+            argv.get(1).map(String::as_str),
+            argv.get(2).map(String::as_str)
+        ),
+        (Some("npm" | "pnpm"), Some("run" | "run-script"), Some(value)) if value == script
+    ) && !contains_any(argv, &["--json"])
+}
+
+fn classify_generic_npx(argv: &[String], tool_argv: &[String]) -> bool {
+    matches!(argv.first().map(String::as_str), Some("npx" | "pnpx"))
+        && !tool_argv.is_empty()
+        && !contains_any(argv, &["--json", "--help", "-h", "--version", "-v"])
 }
 
 fn javascript_tool_argv(argv: &[String]) -> Option<&[String]> {
@@ -421,6 +448,31 @@ fn summarize_prisma(output: &str, failed: bool) -> String {
     }
 }
 
+fn summarize_npm_filtered(output: &str, failed: bool) -> String {
+    let filtered = filter_npm_output(output);
+    if failed {
+        first_nonempty_line(&filtered).unwrap_or_else(|| "npx command failed".to_string())
+    } else {
+        first_nonempty_line(&filtered).unwrap_or_else(|| "npx command completed".to_string())
+    }
+}
+
+fn filter_npm_output(output: &str) -> String {
+    let lines = output
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.is_empty()
+                && !(trimmed.starts_with('>') && trimmed.contains('@'))
+                && !trimmed.starts_with("npm WARN")
+                && !trimmed.starts_with("npm notice")
+        })
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    lines.join("\n")
+}
+
 fn parse_test_result(output: &str) -> Option<(usize, usize)> {
     for line in output.lines().filter(|line| line.contains("Tests")) {
         if line.contains("passed") || line.contains("failed") {
@@ -666,17 +718,35 @@ mod tests {
         for (command, expected) in [
             ("npm exec tsc --noEmit", "javascript_tsc"),
             ("npm x eslint src", "javascript_eslint"),
+            ("npm run test", "javascript_test"),
             ("npm run-script biome check .", "javascript_lint"),
             ("pnpm dlx next build", "javascript_next_build"),
             ("pnpm exec prisma migrate status", "javascript_prisma"),
             ("pnpx vitest run", "javascript_vitest"),
             ("npx jest run", "javascript_test"),
             ("npx playwright test", "javascript_test"),
+            ("npx svgo", "javascript_npx"),
         ] {
             let argv = shell_words::split(command).unwrap();
             let spec = classify_javascript_command(command, &argv).unwrap();
             assert_eq!(spec.canonical_kind, expected, "{command}");
         }
+    }
+
+    #[test]
+    fn classify_and_reduce_generic_npx_as_mutation() {
+        let argv = vec!["npx", "svgo", "icon.svg"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_javascript_command("npx svgo icon.svg", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "javascript_npx");
+        assert!(spec.mutation);
+        assert!(!spec.cacheable);
+
+        let output = "> app@1.0.0 svgo\nnpm notice using svgo\nDone in 128ms\n";
+        let reduction = reduce_javascript_command(&spec, output, "", 0);
+        assert_eq!(reduction.summary, "Done in 128ms");
     }
 
     #[test]
