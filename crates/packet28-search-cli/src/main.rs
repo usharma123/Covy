@@ -369,7 +369,13 @@ fn execute_search_auto(
         let _ = wait_for_daemon_index_ready(&workspace_root, default_index_wait_timeout());
     }
     match execute_search_daemon(root, request, engine) {
-        Ok(result) => Ok((result, TransportMode::Daemon)),
+        Ok(result) => {
+            if let Some(fff_result) = select_fff_for_auto_fallback(root, request, engine, &result) {
+                Ok((fff_result, TransportMode::Inproc))
+            } else {
+                Ok((result, TransportMode::Daemon))
+            }
+        }
         Err(err) => {
             let mut result =
                 execute_search_inproc(root, request, engine).map_err(|fallback_err| {
@@ -413,7 +419,8 @@ fn execute_search_inproc(
                 Some(reason) => {
                     let mut result = packet28_reducer_core::search(root, request)?;
                     annotate_fallback(&mut result, reason);
-                    Ok(result)
+                    Ok(select_fff_for_auto_fallback(root, request, engine, &result)
+                        .unwrap_or(result))
                 }
                 None => indexed_search(root, &runtime, request),
             },
@@ -456,6 +463,78 @@ fn execute_fff_search(root: &Path, request: &SearchRequest) -> Result<SearchResu
     let mut client = FffMcpClient::spawn(root)?;
     let tool_text = client.call_grep(request)?;
     Ok(parse_fff_grep_text(root, request, &tool_text))
+}
+
+fn select_fff_for_auto_fallback(
+    root: &Path,
+    request: &SearchRequest,
+    engine: EngineMode,
+    result: &SearchResult,
+) -> Option<SearchResult> {
+    if !matches!(engine, EngineMode::Auto) || !should_try_fff_for_auto_result(result) {
+        return None;
+    }
+    if !fff_auto_enabled() {
+        return None;
+    }
+    if !fff_backend_available() {
+        return None;
+    }
+    let prior_reason = result
+        .engine
+        .as_ref()
+        .and_then(|engine| engine.fallback_reason.clone())
+        .unwrap_or_else(|| "Packet28 indexed search selected legacy fallback".to_string());
+    match execute_fff_search(root, request) {
+        Ok(mut fff_result) => {
+            fff_result.diagnostics.push(format!(
+                "auto selected fff_mcp after indexed fallback: {prior_reason}"
+            ));
+            Some(fff_result)
+        }
+        Err(error) => {
+            let mut result = result.clone();
+            annotate_reason(&mut result, format!("fff auto backend failed: {error}"));
+            Some(result)
+        }
+    }
+}
+
+fn should_try_fff_for_auto_result(result: &SearchResult) -> bool {
+    let Some(engine) = result.engine.as_ref() else {
+        return false;
+    };
+    if engine.engine != "legacy_rg" {
+        return false;
+    }
+    let Some(reason) = engine.fallback_reason.as_deref() else {
+        return false;
+    };
+    reason.contains("weak/common literals")
+        || reason.contains("candidate set remained too broad")
+        || reason.contains("planner could not derive a selective index plan")
+}
+
+fn fff_auto_enabled() -> bool {
+    !matches!(
+        std::env::var("P28_FFF_AUTO").ok().as_deref(),
+        Some("0" | "false" | "FALSE" | "off" | "OFF")
+    )
+}
+
+fn fff_backend_available() -> bool {
+    match std::env::var("P28_FFF_MCP_BIN") {
+        Ok(value) => return !value.trim().is_empty(),
+        Err(std::env::VarError::NotUnicode(_)) => return false,
+        Err(std::env::VarError::NotPresent) => {}
+    }
+    std::env::var_os("PATH")
+        .and_then(|paths| {
+            std::env::split_paths(&paths)
+                .map(|path| path.join("fff-mcp"))
+                .find(|path| path.is_file())
+        })
+        .is_some()
 }
 
 struct FffMcpClient {

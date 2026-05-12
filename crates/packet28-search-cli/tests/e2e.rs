@@ -60,6 +60,30 @@ fn write_fixture(root: &Path) {
     }
 }
 
+fn write_fake_fff_mcp(root: &Path) -> PathBuf {
+    let fake_fff = root.join("fake-fff-mcp.sh");
+    fs::write(
+        &fake_fff,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"fake-fff","version":"0"}}}'
+      ;;
+    *'"method":"tools/call"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"→ Read src/lib.rs (best match)\nsrc/lib.rs\n 1: pub struct Alpha;\nsrc/nested/mod.rs\n 1: pub enum Beta { AlphaVariant }"}]}}'
+      ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&fake_fff).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake_fff, perms).unwrap();
+    fake_fff
+}
+
 struct DaemonHandle {
     child: Child,
 }
@@ -218,26 +242,7 @@ fn p28_stats_go_to_stderr_while_hits_stay_on_stdout() {
 fn p28_fff_engine_adapts_mcp_grep_results() {
     let dir = tempfile::tempdir().unwrap();
     write_fixture(dir.path());
-    let fake_fff = dir.path().join("fake-fff-mcp.sh");
-    fs::write(
-        &fake_fff,
-        r#"#!/bin/sh
-while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"fake-fff","version":"0"}}}'
-      ;;
-    *'"method":"tools/call"'*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"→ Read src/lib.rs (best match)\nsrc/lib.rs\n 1: pub struct Alpha;\nsrc/nested/mod.rs\n 1: pub enum Beta { AlphaVariant }"}]}}'
-      ;;
-  esac
-done
-"#,
-    )
-    .unwrap();
-    let mut perms = fs::metadata(&fake_fff).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&fake_fff, perms).unwrap();
+    let fake_fff = write_fake_fff_mcp(dir.path());
 
     cli()
         .current_dir(dir.path())
@@ -249,6 +254,27 @@ done
         .stdout(predicate::str::contains(
             "src/nested/mod.rs:1:pub enum Beta { AlphaVariant }",
         ))
+        .stderr(predicate::str::contains("backend=fff_mcp"));
+}
+
+#[test]
+fn p28_auto_uses_fff_for_broad_index_fallback_when_available() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+    let fake_fff = write_fake_fff_mcp(dir.path());
+
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    cli()
+        .current_dir(dir.path())
+        .env("P28_FFF_MCP_BIN", &fake_fff)
+        .args(["fn", "--transport", "inproc", "--stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"))
         .stderr(predicate::str::contains("backend=fff_mcp"));
 }
 
