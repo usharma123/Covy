@@ -566,6 +566,94 @@ pub fn run_liquibase(args: ToolArgs) -> Result<i32> {
     run_filtered_tool_command("liquibase", args, "liquibase")
 }
 
+pub fn run_basedpyright(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("basedpyright", args, "basedpyright")
+}
+
+pub fn run_biome(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("biome", args, "biome")
+}
+
+pub fn run_gcc(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("gcc", args, "gcc")
+}
+
+pub fn run_gpp(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("g++", args, "g++")
+}
+
+pub fn run_gradle(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("gradle", args, "gradle")
+}
+
+pub fn run_jira(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("jira", args, "jira")
+}
+
+pub fn run_jj(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("jj", args, "jj")
+}
+
+pub fn run_jq(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("jq", args, "jq")
+}
+
+pub fn run_just(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("just", args, "just")
+}
+
+pub fn run_mise(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("mise", args, "mise")
+}
+
+pub fn run_nx(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("nx", args, "nx")
+}
+
+pub fn run_ollama(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("ollama", args, "ollama")
+}
+
+pub fn run_oxlint(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("oxlint", args, "oxlint")
+}
+
+pub fn run_skopeo(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("skopeo", args, "skopeo")
+}
+
+pub fn run_ssh(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("ssh", args, "ssh")
+}
+
+pub fn run_stat(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("stat", args, "stat")
+}
+
+pub fn run_swift(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("swift", args, "swift")
+}
+
+pub fn run_task(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("task", args, "task")
+}
+
+pub fn run_turbo(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("turbo", args, "turbo")
+}
+
+pub fn run_ty(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("ty", args, "ty")
+}
+
+pub fn run_xcodebuild(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("xcodebuild", args, "xcodebuild")
+}
+
+pub fn run_yadm(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("yadm", args, "yadm")
+}
+
 fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     let output = execute_command(&args.command)?;
     let raw = format!(

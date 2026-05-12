@@ -201,6 +201,51 @@ pub enum Commands {
     Yamllint(cmd_system::ToolArgs),
     /// Run Liquibase with compact output
     Liquibase(cmd_system::ToolArgs),
+    /// Run basedpyright with compact output
+    Basedpyright(cmd_system::ToolArgs),
+    /// Run Biome with compact output
+    Biome(cmd_system::ToolArgs),
+    /// Run GCC with compact output
+    Gcc(cmd_system::ToolArgs),
+    /// Run G++ with compact output
+    #[command(name = "g++")]
+    Gpp(cmd_system::ToolArgs),
+    /// Run Gradle with compact output
+    Gradle(cmd_system::ToolArgs),
+    /// Run Jira CLI with compact output
+    Jira(cmd_system::ToolArgs),
+    /// Run Jujutsu jj with compact output
+    Jj(cmd_system::ToolArgs),
+    /// Run jq with compact output
+    Jq(cmd_system::ToolArgs),
+    /// Run just with compact output
+    Just(cmd_system::ToolArgs),
+    /// Run mise with compact output
+    Mise(cmd_system::ToolArgs),
+    /// Run Nx with compact output
+    Nx(cmd_system::ToolArgs),
+    /// Run Ollama with compact output
+    Ollama(cmd_system::ToolArgs),
+    /// Run oxlint with compact output
+    Oxlint(cmd_system::ToolArgs),
+    /// Run skopeo with compact output
+    Skopeo(cmd_system::ToolArgs),
+    /// Run ssh with compact output
+    Ssh(cmd_system::ToolArgs),
+    /// Run stat with compact output
+    Stat(cmd_system::ToolArgs),
+    /// Run Swift with compact output
+    Swift(cmd_system::ToolArgs),
+    /// Run go-task task with compact output
+    Task(cmd_system::ToolArgs),
+    /// Run Turborepo turbo with compact output
+    Turbo(cmd_system::ToolArgs),
+    /// Run ty with compact output
+    Ty(cmd_system::ToolArgs),
+    /// Run xcodebuild with compact output
+    Xcodebuild(cmd_system::ToolArgs),
+    /// Run yadm with compact output
+    Yadm(cmd_system::ToolArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output

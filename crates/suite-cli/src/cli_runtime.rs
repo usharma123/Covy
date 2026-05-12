@@ -170,6 +170,28 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Trunk(args)) => cmd_system::run_trunk(args),
         Some(Commands::Yamllint(args)) => cmd_system::run_yamllint(args),
         Some(Commands::Liquibase(args)) => cmd_system::run_liquibase(args),
+        Some(Commands::Basedpyright(args)) => cmd_system::run_basedpyright(args),
+        Some(Commands::Biome(args)) => cmd_system::run_biome(args),
+        Some(Commands::Gcc(args)) => cmd_system::run_gcc(args),
+        Some(Commands::Gpp(args)) => cmd_system::run_gpp(args),
+        Some(Commands::Gradle(args)) => cmd_system::run_gradle(args),
+        Some(Commands::Jira(args)) => cmd_system::run_jira(args),
+        Some(Commands::Jj(args)) => cmd_system::run_jj(args),
+        Some(Commands::Jq(args)) => cmd_system::run_jq(args),
+        Some(Commands::Just(args)) => cmd_system::run_just(args),
+        Some(Commands::Mise(args)) => cmd_system::run_mise(args),
+        Some(Commands::Nx(args)) => cmd_system::run_nx(args),
+        Some(Commands::Ollama(args)) => cmd_system::run_ollama(args),
+        Some(Commands::Oxlint(args)) => cmd_system::run_oxlint(args),
+        Some(Commands::Skopeo(args)) => cmd_system::run_skopeo(args),
+        Some(Commands::Ssh(args)) => cmd_system::run_ssh(args),
+        Some(Commands::Stat(args)) => cmd_system::run_stat(args),
+        Some(Commands::Swift(args)) => cmd_system::run_swift(args),
+        Some(Commands::Task(args)) => cmd_system::run_task(args),
+        Some(Commands::Turbo(args)) => cmd_system::run_turbo(args),
+        Some(Commands::Ty(args)) => cmd_system::run_ty(args),
+        Some(Commands::Xcodebuild(args)) => cmd_system::run_xcodebuild(args),
+        Some(Commands::Yadm(args)) => cmd_system::run_yadm(args),
         Some(Commands::Smart(args)) => cmd_system::run_smart(args),
         Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Grep(args)) => cmd_system::run_grep(args),
@@ -513,6 +535,28 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Trunk(_))
         | Some(Commands::Yamllint(_))
         | Some(Commands::Liquibase(_))
+        | Some(Commands::Basedpyright(_))
+        | Some(Commands::Biome(_))
+        | Some(Commands::Gcc(_))
+        | Some(Commands::Gpp(_))
+        | Some(Commands::Gradle(_))
+        | Some(Commands::Jira(_))
+        | Some(Commands::Jj(_))
+        | Some(Commands::Jq(_))
+        | Some(Commands::Just(_))
+        | Some(Commands::Mise(_))
+        | Some(Commands::Nx(_))
+        | Some(Commands::Ollama(_))
+        | Some(Commands::Oxlint(_))
+        | Some(Commands::Skopeo(_))
+        | Some(Commands::Ssh(_))
+        | Some(Commands::Stat(_))
+        | Some(Commands::Swift(_))
+        | Some(Commands::Task(_))
+        | Some(Commands::Turbo(_))
+        | Some(Commands::Ty(_))
+        | Some(Commands::Xcodebuild(_))
+        | Some(Commands::Yadm(_))
         | Some(Commands::Smart(_))
         | Some(Commands::Find(_))
         | Some(Commands::Grep(_))
