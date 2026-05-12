@@ -1454,19 +1454,34 @@ fn tier_quota_tokens(tier: &str) -> (u64, &'static str) {
 }
 
 fn print_gain_graph(summary: &GainSummary) {
-    println!("route,count,share_pct,bar");
+    println!("Packet28 savings graph");
+    println!("invocations={}", summary.invocation_count);
+    println!("saved_est_tokens={}", summary.saved_est_tokens);
+    println!("savings_pct={:.1}", summary.savings_pct);
+    println!();
+    println!("{:<36} {:>7} {:>7}  impact", "route", "count", "share");
     let total = summary.invocation_count.max(1);
     for (route, count) in &summary.by_route {
         let share = (*count as f64 / total as f64) * 100.0;
-        let width = ((*count * 20) / total).max(1);
+        let width = ((*count * 40) / total).max(1);
         println!(
-            "{},{},{:.1},{}",
-            csv_cell(route),
+            "{:<36} {:>7} {:>6.1}%  {}",
+            graph_route_cell(route, 36),
             count,
             share,
             "#".repeat(width)
         );
     }
+}
+
+fn graph_route_cell(route: &str, max_width: usize) -> String {
+    if route.len() <= max_width {
+        return route.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+    format!("{}...", &route[..max_width - 3])
 }
 
 fn print_gain_all(

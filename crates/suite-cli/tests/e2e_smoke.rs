@@ -1549,7 +1549,8 @@ fn test_run_reduces_git_status() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("route,count,share_pct,bar"))
+        .stdout(predicate::str::contains("Packet28 savings graph"))
+        .stdout(predicate::str::contains("saved_est_tokens="))
         .stdout(predicate::str::contains("run_reducer:git"));
 
     suite_cmd()
@@ -1557,7 +1558,8 @@ fn test_run_reduces_git_status() {
         .args(["gain", "--root", root.path().to_str().unwrap(), "--graph"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("route,count,share_pct,bar"))
+        .stdout(predicate::str::contains("Packet28 savings graph"))
+        .stdout(predicate::str::contains("impact"))
         .stdout(predicate::str::contains("run_reducer:git"));
 
     suite_cmd()
@@ -1565,7 +1567,8 @@ fn test_run_reduces_git_status() {
         .args(["gain", "--root", root.path().to_str().unwrap(), "-g"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("route,count,share_pct,bar"))
+        .stdout(predicate::str::contains("Packet28 savings graph"))
+        .stdout(predicate::str::contains("share"))
         .stdout(predicate::str::contains("run_reducer:git"));
 
     suite_cmd()
