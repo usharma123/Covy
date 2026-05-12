@@ -5756,6 +5756,72 @@ fn test_discover_reports_rtk_style_missed_packet28_opportunities() {
 }
 
 #[test]
+fn test_discover_reports_disabled_bypasses_like_rtk() {
+    let root = TempDir::new().unwrap();
+    let sessions_dir = root.path().join("claude-projects").join("project");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    let session_file = sessions_dir.join("session-disabled.jsonl");
+    let line = json!({
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": "PACKET28_DISABLED=1 git status --short" }
+                },
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": "env RTK_DISABLED=true cargo test" }
+                },
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": "PACKET28_DISABLED=0 pytest -q" }
+                }
+            ]
+        }
+    });
+    fs::write(&session_file, format!("{line}\n")).unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "discover",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"commands_found\":3"))
+        .stdout(predicate::str::contains("\"supported_commands\":1"))
+        .stdout(predicate::str::contains("\"unsupported_commands\":0"))
+        .stdout(predicate::str::contains("\"disabled_bypass_count\":2"))
+        .stdout(predicate::str::contains("git status (1x)"))
+        .stdout(predicate::str::contains("cargo test (1x)"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "discover",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Disabled bypasses: 2 commands"))
+        .stdout(predicate::str::contains(
+            "Remove PACKET28_DISABLED/RTK_DISABLED",
+        ));
+}
+
+#[test]
 fn test_discover_all_and_since_scan_multiple_session_files() {
     let root = TempDir::new().unwrap();
     let sessions_dir = root.path().join("claude-projects").join("project");

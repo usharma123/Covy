@@ -56,6 +56,8 @@ struct DiscoverReport {
     by_category: BTreeMap<String, CategoryStats>,
     missed_opportunities: Vec<MissedOpportunity>,
     top_unsupported: Vec<UnsupportedCommand>,
+    disabled_bypass_count: usize,
+    disabled_bypass_examples: Vec<String>,
     missed_savings: Vec<MissedSavingsCommand>,
 }
 
@@ -123,6 +125,7 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
     let mut unsupported_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut unsupported_tokens: BTreeMap<String, u64> = BTreeMap::new();
     let mut opportunity_buckets: BTreeMap<String, MissedOpportunityBucket> = BTreeMap::new();
+    let mut disabled_bypass_examples: BTreeMap<String, usize> = BTreeMap::new();
 
     for file in &session_files {
         if let Ok(commands) = extract_bash_commands(file) {
@@ -134,6 +137,15 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
                     report.commands_found += 1;
                     let program = program_name(&part);
                     let part_tokens = shared_tokens.max(estimate_text_tokens(&part));
+                    if let Some(actual_command) = strip_active_disabled_prefix(&part) {
+                        let route = crate::route_registry::decide_command_route(&actual_command);
+                        if command_part_supported_with_route(&actual_command, &route) {
+                            report.disabled_bypass_count += 1;
+                            let example = truncate_command_example(&actual_command);
+                            *disabled_bypass_examples.entry(example).or_insert(0) += 1;
+                        }
+                        continue;
+                    }
                     let route = crate::route_registry::decide_command_route(&part);
                     if command_part_supported_with_route(&part, &route) {
                         report.supported_commands += 1;
@@ -199,6 +211,14 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
     });
     report.missed_opportunities.truncate(20);
 
+    let mut disabled_examples = disabled_bypass_examples.into_iter().collect::<Vec<_>>();
+    disabled_examples.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    report.disabled_bypass_examples = disabled_examples
+        .into_iter()
+        .take(5)
+        .map(|(command, count)| format!("{command} ({count}x)"))
+        .collect();
+
     report
         .top_unsupported
         .sort_by(|a, b| b.estimated_tokens.cmp(&a.estimated_tokens));
@@ -232,6 +252,16 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
                     crate::economics::format_tokens(item.estimated_savings_tokens)
                 );
             }
+        }
+        if report.disabled_bypass_count > 0 {
+            println!(
+                "\nDisabled bypasses: {} commands ran without Packet28 reduction",
+                report.disabled_bypass_count
+            );
+            if !report.disabled_bypass_examples.is_empty() {
+                println!("  {}", report.disabled_bypass_examples.join(", "));
+            }
+            println!("  Remove PACKET28_DISABLED/RTK_DISABLED to recover savings");
         }
         if !report.top_unsupported.is_empty() {
             println!("\nTop unsupported commands:");
@@ -545,6 +575,44 @@ fn is_packet28_command(command: &str) -> bool {
         program_name(command).as_str(),
         "Packet28" | "packet28" | "packet28-mcp" | "p28"
     )
+}
+
+fn strip_active_disabled_prefix(command: &str) -> Option<String> {
+    let argv = shell_words::split(command).ok()?;
+    let mut index = usize::from(argv.first().is_some_and(|arg| arg == "env"));
+    let mut disabled = false;
+    while let Some(arg) = argv.get(index) {
+        let Some((key, value)) = split_env_assignment(arg) else {
+            break;
+        };
+        if matches!(key, "PACKET28_DISABLED" | "RTK_DISABLED")
+            && !matches!(value.trim(), "" | "0" | "false" | "FALSE" | "False")
+        {
+            disabled = true;
+        }
+        index += 1;
+    }
+    if disabled && index < argv.len() {
+        Some(argv[index..].join(" "))
+    } else {
+        None
+    }
+}
+
+fn split_env_assignment(arg: &str) -> Option<(&str, &str)> {
+    if arg.starts_with('-') {
+        return None;
+    }
+    let (key, value) = arg.split_once('=')?;
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        || key.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((key, value))
 }
 
 fn packet28_equivalent(command: &str, route: &crate::route_registry::RouteDecision) -> String {
