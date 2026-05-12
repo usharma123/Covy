@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{self, Write};
 
 use anyhow::Result;
 use clap::Args;
@@ -27,6 +28,9 @@ pub struct DashboardArgs {
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
+    /// Keep the terminal dashboard open and accept navigation commands on stdin
+    #[arg(long)]
+    pub interactive: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,6 +152,15 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         } else {
             print!("{html}");
         }
+    } else if format == "tui" {
+        if args.interactive {
+            run_dashboard_tui(&report)?;
+        } else {
+            print!(
+                "{}",
+                render_dashboard_tui(&report, DashboardPanel::Overview)
+            );
+        }
     } else {
         println!(
             "token_savings.saved_est_tokens={}",
@@ -174,6 +187,135 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         println!("windsurf_doctor_status={}", report.windsurf_doctor_status);
     }
     Ok(0)
+}
+
+#[derive(Clone, Copy)]
+enum DashboardPanel {
+    Overview,
+    Memory,
+    Graph,
+    Feedback,
+    Integrations,
+}
+
+impl DashboardPanel {
+    fn from_command(command: &str) -> Option<Self> {
+        match command.trim().to_ascii_lowercase().as_str() {
+            "1" | "overview" | "o" => Some(Self::Overview),
+            "2" | "memory" | "m" => Some(Self::Memory),
+            "3" | "graph" | "g" => Some(Self::Graph),
+            "4" | "feedback" | "f" => Some(Self::Feedback),
+            "5" | "integrations" | "i" => Some(Self::Integrations),
+            _ => None,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Memory => "Memory",
+            Self::Graph => "Graph",
+            Self::Feedback => "Feedback",
+            Self::Integrations => "Integrations",
+        }
+    }
+}
+
+fn run_dashboard_tui(report: &DashboardReport) -> Result<()> {
+    let mut panel = DashboardPanel::Overview;
+    let mut input = String::new();
+    loop {
+        print!("{}", render_dashboard_tui(report, panel));
+        io::stdout().flush()?;
+        input.clear();
+        if io::stdin().read_line(&mut input)? == 0 {
+            break;
+        }
+        let command = input.trim();
+        if matches!(command, "q" | "quit" | "exit") {
+            break;
+        }
+        if let Some(next) = DashboardPanel::from_command(command) {
+            panel = next;
+        }
+    }
+    Ok(())
+}
+
+fn render_dashboard_tui(report: &DashboardReport, panel: DashboardPanel) -> String {
+    let mut out = String::new();
+    out.push_str("Packet28 Dashboard\n");
+    out.push_str("==================\n");
+    out.push_str("1 Overview  2 Memory  3 Graph  4 Feedback  5 Integrations  q Quit\n");
+    out.push_str(&format!("panel={}\n\n", panel.title()));
+    match panel {
+        DashboardPanel::Overview => {
+            out.push_str(&format!(
+                "saved_tokens={}\nsavings_percent={:.1}\ncommands_reduced={}\nsessions={}\n",
+                report.token_savings.saved_est_tokens,
+                report.token_savings.savings_percent,
+                report.commands_reduced,
+                report.sessions
+            ));
+            out.push_str("top_noisy_commands:\n");
+            push_tui_list(&mut out, &report.top_noisy_commands);
+            out.push_str("missed_savings:\n");
+            push_tui_list(&mut out, &report.missed_savings);
+        }
+        DashboardPanel::Memory => {
+            out.push_str(&format!(
+                "memory_count={}\ntopics={}\ntopics_needing_consolidation={}\npending_extractions={}\n",
+                report.memory_count,
+                report.memory_topics.len(),
+                report.memory_health.topics_needing_consolidation,
+                report.pending_extractions
+            ));
+            out.push_str("recent_memories:\n");
+            push_tui_list(&mut out, &report.recent_memories);
+            out.push_str("memory_topics:\n");
+            for topic in &report.memory_topics {
+                out.push_str(&format!("- {} ({})\n", topic.topic, topic.memory_count));
+            }
+        }
+        DashboardPanel::Graph => {
+            out.push_str(&format!(
+                "graph_concepts={}\ngraph_relations={}\nrelation_types={}\n",
+                report.graph_concepts,
+                report.graph_relations,
+                report.graph_stats.relation_types.len()
+            ));
+        }
+        DashboardPanel::Feedback => {
+            out.push_str(&format!(
+                "feedback_corrections={}\ntranscript_messages={}\nmcp_call_history={}\nhook_event_history={}\n",
+                report.feedback_corrections,
+                report.transcript_stats.message_count,
+                report.mcp_call_history,
+                report.hook_event_history
+            ));
+        }
+        DashboardPanel::Integrations => {
+            out.push_str(&format!(
+                "windsurf_doctor_status={}\n",
+                report.windsurf_doctor_status
+            ));
+            for (name, status) in &report.integration_health {
+                out.push_str(&format!("{name}={status}\n"));
+            }
+        }
+    }
+    out.push('\n');
+    out
+}
+
+fn push_tui_list(out: &mut String, values: &[String]) {
+    if values.is_empty() {
+        out.push_str("- none\n");
+    } else {
+        for value in values {
+            out.push_str(&format!("- {}\n", value.replace('\n', " ")));
+        }
+    }
 }
 
 fn render_dashboard_html(report: &DashboardReport) -> String {

@@ -4234,6 +4234,41 @@ fn test_dashboard_shows_local_product_metrics() {
     assert!(html.contains("Saved tokens"));
     assert!(html.contains("Memory Topics"));
     assert!(html.contains("Integration Health"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "dashboard",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "tui",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Packet28 Dashboard"))
+        .stdout(predicate::str::contains("panel=Overview"))
+        .stdout(predicate::str::contains("commands_reduced=1"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "dashboard",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "tui",
+            "--interactive",
+        ])
+        .write_stdin("memory\nintegrations\nq\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("panel=Memory"))
+        .stdout(predicate::str::contains("recent_memories:"))
+        .stdout(predicate::str::contains("panel=Integrations"))
+        .stdout(predicate::str::contains("windsurf_doctor_status="));
 }
 
 #[test]
