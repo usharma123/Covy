@@ -138,6 +138,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Mypy(args)) => cmd_system::run_mypy(args),
         Some(Commands::Pip(args)) => cmd_system::run_pip(args),
         Some(Commands::Pnpm(args)) => cmd_system::run_pnpm(args),
+        Some(Commands::Bundle(args)) => cmd_system::run_bundle(args),
         Some(Commands::Smart(args)) => cmd_system::run_smart(args),
         Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Grep(args)) => cmd_system::run_grep(args),
@@ -449,6 +450,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Mypy(_))
         | Some(Commands::Pip(_))
         | Some(Commands::Pnpm(_))
+        | Some(Commands::Bundle(_))
         | Some(Commands::Smart(_))
         | Some(Commands::Find(_))
         | Some(Commands::Grep(_))

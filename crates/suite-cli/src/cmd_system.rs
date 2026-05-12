@@ -438,6 +438,10 @@ pub fn run_pnpm(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("pnpm", args, "pnpm")
 }
 
+pub fn run_bundle(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("bundle", args, "bundle")
+}
+
 fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     let output = execute_command(&args.command)?;
     let raw = format!(

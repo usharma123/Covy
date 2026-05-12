@@ -134,6 +134,8 @@ pub enum Commands {
     Pip(cmd_system::ToolArgs),
     /// Run pnpm with compact output
     Pnpm(cmd_system::ToolArgs),
+    /// Run Bundler with compact output
+    Bundle(cmd_system::ToolArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output

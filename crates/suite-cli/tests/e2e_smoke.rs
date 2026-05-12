@@ -724,6 +724,10 @@ fn test_system_build_and_lint_commands_use_reducer_wrappers() {
         &bin_dir.join("pnpm"),
         "#!/bin/sh\nprintf 'Tests 1 failed | 7 passed\\nFAIL src/app.test.ts > app\\n'; exit 1\n",
     );
+    write_executable_script(
+        &bin_dir.join("bundle"),
+        "#!/bin/sh\nif [ \"$1\" = install ]; then printf 'Using rake 13.2.1\\nInstalling rails 7.1.0\\nBundle complete!\\n'; exit 0; fi\nexit 2\n",
+    );
     let path_env = std::env::join_paths(std::iter::once(bin_dir.as_path().to_path_buf()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
@@ -828,6 +832,14 @@ fn test_system_build_and_lint_commands_use_reducer_wrappers() {
         .assert()
         .code(1)
         .stdout(predicate::str::contains("vitest: 1 failed, 7 passed"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["bundle", "install"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Bundle complete!"));
 }
 
 #[test]

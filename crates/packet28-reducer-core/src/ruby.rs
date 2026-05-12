@@ -8,6 +8,14 @@ pub fn classify_ruby_command(command: &str, argv: &[String]) -> Option<CommandRe
         "rubocop" if !contains_any(argv, &["--format", "-f", "--auto-correct", "-A", "-a"]) => {
             ("ruby_rubocop", suite_packet_core::ToolOperationKind::Build)
         }
+        "bundle" if argv.get(1).is_some_and(|arg| arg == "install") => (
+            "ruby_bundle_install",
+            suite_packet_core::ToolOperationKind::Build,
+        ),
+        "bundle" if argv.get(1).is_some_and(|arg| arg == "update") => (
+            "ruby_bundle_update",
+            suite_packet_core::ToolOperationKind::Build,
+        ),
         "bundle" if argv.get(1).is_some_and(|arg| arg == "exec") => match argv.get(2)?.as_str() {
             "rake" if argv.get(3).is_some_and(|arg| arg == "test") => {
                 ("ruby_rake_test", suite_packet_core::ToolOperationKind::Test)
@@ -54,6 +62,7 @@ pub fn classify_ruby_command(command: &str, argv: &[String]) -> Option<CommandRe
         _ => return None,
     };
 
+    let mutation = matches!(canonical_kind, "ruby_bundle_install" | "ruby_bundle_update");
     Some(CommandReducerSpec {
         family: "ruby".to_string(),
         canonical_kind: canonical_kind.to_string(),
@@ -62,8 +71,8 @@ pub fn classify_ruby_command(command: &str, argv: &[String]) -> Option<CommandRe
         command: command.to_string(),
         argv: argv.to_vec(),
         cache_fingerprint: fingerprint("ruby", canonical_kind, argv),
-        cacheable: true,
-        mutation: false,
+        cacheable: !mutation,
+        mutation,
         paths: argv
             .iter()
             .skip(1)
@@ -85,6 +94,7 @@ pub fn reduce_ruby_command(
     let summary = match spec.canonical_kind.as_str() {
         "ruby_rspec" => summarize_rspec(&combined, failed),
         "ruby_rubocop" => summarize_rubocop(&combined, failed),
+        "ruby_bundle_install" | "ruby_bundle_update" => summarize_bundle(&combined, failed),
         "ruby_rails_test" | "ruby_rake_test" | "ruby_test_file" => {
             summarize_minitest(&combined, spec.canonical_kind.as_str(), failed)
         }
@@ -147,6 +157,31 @@ fn summarize_rubocop(output: &str, failed: bool) -> String {
         first_nonempty_line(output).unwrap_or_else(|| "rubocop failed".to_string())
     } else {
         first_nonempty_line(output).unwrap_or_else(|| "rubocop completed".to_string())
+    }
+}
+
+fn summarize_bundle(output: &str, failed: bool) -> String {
+    if failed {
+        return first_nonempty_line(output).unwrap_or_else(|| "bundle failed".to_string());
+    }
+    if let Some(line) = output
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("Bundle complete!"))
+    {
+        return line.to_string();
+    }
+    let installed = output
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Installing "))
+        .count();
+    let using = output
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Using "))
+        .count();
+    match (installed, using) {
+        (0, 0) => first_nonempty_line(output).unwrap_or_else(|| "bundle completed".to_string()),
+        (installed, using) => format!("bundle completed: {installed} installed, {using} using"),
     }
 }
 
@@ -318,6 +353,27 @@ mod tests {
             .compact_preview
             .contains("spec/models/user_spec.rb:12"));
         assert!(reduction.failed);
+    }
+
+    #[test]
+    fn classify_bundle_install_and_update_as_mutations() {
+        for (command, expected) in [
+            ("bundle install", "ruby_bundle_install"),
+            ("bundle update rails", "ruby_bundle_update"),
+        ] {
+            let argv = shell_words::split(command).unwrap();
+            let spec = classify_ruby_command(command, &argv).expect("bundle command classifies");
+            assert_eq!(spec.canonical_kind, expected);
+            assert!(spec.mutation);
+            assert!(!spec.cacheable);
+        }
+
+        let argv = shell_words::split("bundle install").unwrap();
+        let spec = classify_ruby_command("bundle install", &argv).unwrap();
+        let output =
+            "Fetching gem metadata\nUsing rake 13.2.1\nInstalling rails 7.1.0\nBundle complete!\n";
+        let reduction = reduce_ruby_command(&spec, output, "", 0);
+        assert_eq!(reduction.summary, "Bundle complete!");
     }
 
     #[test]
