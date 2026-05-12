@@ -4339,6 +4339,24 @@ fn test_session_reports_adoption_from_session_jsonl() {
         .stdout(predicate::str::contains("\"total_commands\":3"))
         .stdout(predicate::str::contains("\"packet28_commands\":2"))
         .stdout(predicate::str::contains("\"adoption_pct\":66.666"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "session",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Packet28 Session Overview"))
+        .stdout(predicate::str::contains("Session"))
+        .stdout(predicate::str::contains("Packet28"))
+        .stdout(predicate::str::contains("@@@.."))
+        .stdout(predicate::str::contains("Average adoption: 67%"))
+        .stdout(predicate::str::contains("Packet28 discover --sessions-dir"));
 }
 
 #[test]

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
@@ -356,6 +357,7 @@ struct SessionAdoptionReport {
 #[derive(Debug, Serialize)]
 struct SessionAdoptionItem {
     session_id: String,
+    date: String,
     command_count: usize,
     packet28_command_count: usize,
     adoption_pct: f64,
@@ -1598,6 +1600,7 @@ fn run_session_adoption(args: SessionArgs) -> Result<i32> {
         report.packet28_commands += packet28_command_count;
         report.sessions.push(SessionAdoptionItem {
             session_id,
+            date: session_modified_label(&path),
             command_count,
             packet28_command_count,
             adoption_pct: pct_count(packet28_command_count, command_count),
@@ -1617,23 +1620,78 @@ fn run_session_adoption(args: SessionArgs) -> Result<i32> {
     } else if report.sessions.is_empty() {
         println!("No sessions with Bash commands found.");
     } else {
-        println!("Packet28 session adoption");
-        println!("sessions_scanned={}", report.sessions_scanned);
-        println!("commands={}", report.total_commands);
-        println!("packet28_commands={}", report.packet28_commands);
-        println!("adoption_pct={:.1}", report.adoption_pct);
-        for session in report.sessions {
-            println!(
-                "session={} commands={} packet28={} adoption_pct={:.1} estimated_output_tokens={}",
-                session.session_id,
-                session.command_count,
-                session.packet28_command_count,
-                session.adoption_pct,
-                session.estimated_output_tokens
-            );
-        }
+        print_session_adoption_table(&report, args.limit, args.all);
     }
     Ok(0)
+}
+
+fn print_session_adoption_table(report: &SessionAdoptionReport, limit: usize, all: bool) {
+    let scope = if all {
+        "all".to_string()
+    } else {
+        format!("last {}", limit.max(1))
+    };
+    println!("Packet28 Session Overview ({scope})");
+    println!("{}", "-".repeat(78));
+    println!(
+        "{:<12} {:<12} {:>5} {:>8} {:>9} {:<7} {:>8}",
+        "Session", "Date", "Cmds", "Packet28", "Adoption", "", "Output"
+    );
+    println!("{}", "-".repeat(78));
+    for session in &report.sessions {
+        println!(
+            "{:<12} {:<12} {:>5} {:>8} {:>8.0}% {:<7} {:>8}",
+            short_session_id(&session.session_id),
+            session.date,
+            session.command_count,
+            session.packet28_command_count,
+            session.adoption_pct,
+            adoption_bar(session.adoption_pct, 5),
+            format_compact_tokens(session.estimated_output_tokens),
+        );
+    }
+    println!("{}", "-".repeat(78));
+    println!("Average adoption: {:.0}%", report.adoption_pct);
+    println!(
+        "Tip: Run `Packet28 discover --sessions-dir <dir>` to find missed Packet28 opportunities"
+    );
+}
+
+fn short_session_id(session_id: &str) -> String {
+    session_id.chars().take(12).collect()
+}
+
+fn adoption_bar(pct: f64, width: usize) -> String {
+    let filled = ((pct.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
+    let empty = width.saturating_sub(filled);
+    format!("{}{}", "@".repeat(filled), ".".repeat(empty))
+}
+
+fn format_compact_tokens(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.1}M", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{:.1}K", value as f64 / 1_000.0)
+    } else {
+        value.to_string()
+    }
+}
+
+fn session_modified_label(path: &Path) -> String {
+    let modified = fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(UNIX_EPOCH);
+    let elapsed = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default();
+    let days = elapsed.as_secs() / 86_400;
+    if days == 0 {
+        "Today".to_string()
+    } else if days == 1 {
+        "Yesterday".to_string()
+    } else {
+        format!("{days}d ago")
+    }
 }
 
 fn split_session_command_chain(command: &str) -> Vec<String> {
