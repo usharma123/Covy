@@ -950,6 +950,10 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
         &bin_dir.path().join("aws"),
         "#!/bin/sh\nprintf '{\"Functions\":[{\"FunctionName\":\"api\",\"Runtime\":\"nodejs20.x\"},{\"FunctionName\":\"worker\",\"Runtime\":\"python3.12\"}]}'\n",
     );
+    write_executable_script(
+        &bin_dir.path().join("wget"),
+        "#!/bin/sh\nprintf '%s\n' '--2026-05-12-- https://example.com/pkg.tgz' \"Saving to: 'pkg.tgz'\" \"'pkg.tgz' saved [2048/2048]\" >&2\n",
+    );
     let path_env = format!(
         "{}:{}",
         bin_dir.path().display(),
@@ -1035,7 +1039,7 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
 
     suite_cmd()
         .current_dir(root.path())
-        .env("PATH", path_env)
+        .env("PATH", &path_env)
         .args([
             "run",
             "--root",
@@ -1053,6 +1057,28 @@ fn test_run_reduces_docker_logs_and_gh_pr_checks() {
         ))
         .stdout(predicate::str::contains(
             "aws lambda listed 2 function(s); first api nodejs20.x",
+        ))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", path_env)
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "wget",
+            "https://example.com/pkg.tgz",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"infra\""))
+        .stdout(predicate::str::contains(
+            "\"canonical_kind\":\"wget_fetch\"",
+        ))
+        .stdout(predicate::str::contains(
+            "wget example.com/pkg.tgz ok | pkg.tgz | 2.0KB",
         ))
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }

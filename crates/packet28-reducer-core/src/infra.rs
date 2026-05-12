@@ -41,6 +41,9 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
         "curl" if classify_curl(argv) => {
             ("curl_fetch", suite_packet_core::ToolOperationKind::Fetch)
         }
+        "wget" if classify_wget(argv) => {
+            ("wget_fetch", suite_packet_core::ToolOperationKind::Fetch)
+        }
         "aws" => (
             classify_aws_kind(argv)?,
             suite_packet_core::ToolOperationKind::Fetch,
@@ -100,6 +103,13 @@ pub fn reduce_infra_command(
                 summarize_curl(stdout)
             }
         }
+        "wget_fetch" => {
+            if failed {
+                summarize_wget_error(&combined)
+            } else {
+                summarize_wget(spec, stdout, stderr)
+            }
+        }
         kind if kind.starts_with("aws_") => {
             if failed {
                 first_nonempty_line(&combined).unwrap_or_else(|| "aws command failed".to_string())
@@ -124,7 +134,7 @@ pub fn reduce_infra_command(
         canonical_kind: spec.canonical_kind.clone(),
         packet_type: spec.packet_type.clone(),
         operation_kind: spec.operation_kind,
-        summary: if failed && spec.canonical_kind != "curl_fetch" {
+        summary: if failed && !matches!(spec.canonical_kind.as_str(), "curl_fetch" | "wget_fetch") {
             first_nonempty_line(&combined).unwrap_or(summary)
         } else {
             summary
@@ -134,6 +144,7 @@ pub fn reduce_infra_command(
                 compact_log_output(stdout, 50)
             }
             "curl_fetch" if !failed => compact_curl_response(stdout),
+            "wget_fetch" if !failed => compact_wget_output(spec, stdout, stderr),
             kind if kind.starts_with("aws_") && !failed => compact_aws_output(spec, stdout),
             "psql_query" if !failed => compact_psql_output(stdout),
             _ => String::new(),
@@ -180,6 +191,30 @@ fn classify_curl(argv: &[String]) -> bool {
         }
     }
     argv.iter()
+        .any(|arg| arg.starts_with("http://") || arg.starts_with("https://"))
+}
+
+fn classify_wget(argv: &[String]) -> bool {
+    if contains_any(
+        argv,
+        &[
+            "--spider",
+            "--mirror",
+            "-m",
+            "--recursive",
+            "-r",
+            "--page-requisites",
+            "-p",
+            "--input-file",
+            "-i",
+            "--post-data",
+            "--post-file",
+        ],
+    ) {
+        return false;
+    }
+    argv.iter()
+        .skip(1)
         .any(|arg| arg.starts_with("http://") || arg.starts_with("https://"))
 }
 
@@ -307,6 +342,74 @@ fn summarize_curl(stdout: &str) -> String {
     }
 }
 
+fn summarize_wget(spec: &CommandReducerSpec, stdout: &str, stderr: &str) -> String {
+    let url = wget_url(&spec.argv).unwrap_or("url");
+    if wget_outputs_stdout(&spec.argv) {
+        let lines = stdout.lines().count();
+        return format!(
+            "wget {} ok | {} line(s) | {}",
+            compact_url(url),
+            lines,
+            format_size(stdout.len() as u64)
+        );
+    }
+    let filename = wget_filename(&spec.argv, stderr, url);
+    let size = wget_saved_size(stderr)
+        .map(format_size)
+        .unwrap_or_else(|| "?".to_string());
+    format!("wget {} ok | {} | {}", compact_url(url), filename, size)
+}
+
+fn compact_wget_output(spec: &CommandReducerSpec, stdout: &str, stderr: &str) -> String {
+    if wget_outputs_stdout(&spec.argv) {
+        let lines = stdout
+            .lines()
+            .take(10)
+            .map(|line| compact(line, 100))
+            .collect::<Vec<_>>();
+        let total = stdout.lines().count();
+        if total > 10 {
+            format!("{}\n... +{} more lines", lines.join("\n"), total - 10)
+        } else {
+            lines.join("\n")
+        }
+    } else {
+        stderr
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                !trimmed.is_empty()
+                    && !trimmed.contains("%")
+                    && !trimmed.contains("=>")
+                    && !trimmed.starts_with("--")
+            })
+            .take(5)
+            .map(|line| compact(line, 120))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn summarize_wget_error(combined: &str) -> String {
+    for (needle, label) in [
+        ("404", "404 Not Found"),
+        ("403", "403 Forbidden"),
+        ("401", "401 Unauthorized"),
+        ("500", "500 Server Error"),
+        ("Connection refused", "Connection refused"),
+        ("unable to resolve", "DNS lookup failed"),
+        ("Name or service not known", "DNS lookup failed"),
+        ("timed out", "Connection timed out"),
+        ("certificate", "SSL/TLS error"),
+        ("SSL", "SSL/TLS error"),
+    ] {
+        if combined.contains(needle) {
+            return format!("wget failed: {label}");
+        }
+    }
+    first_nonempty_line(combined).unwrap_or_else(|| "wget failed".to_string())
+}
+
 fn summarize_kubectl_describe(stdout: &str) -> String {
     let name = stdout
         .lines()
@@ -335,6 +438,150 @@ fn summarize_kubectl_describe(stdout: &str) -> String {
         }
         (Some(name), None) => format!("kubectl describe: {name} ({events} event line(s))"),
         _ => "kubectl describe completed".to_string(),
+    }
+}
+
+fn wget_url(argv: &[String]) -> Option<&str> {
+    argv.iter()
+        .skip(1)
+        .find(|arg| arg.starts_with("http://") || arg.starts_with("https://"))
+        .map(String::as_str)
+}
+
+fn wget_outputs_stdout(argv: &[String]) -> bool {
+    argv.windows(2)
+        .any(|window| matches!(window, [flag, value] if (flag == "-O" || flag == "--output-document") && value == "-"))
+        || argv.iter().any(|arg| arg == "-O-" || arg == "--output-document=-")
+}
+
+fn wget_filename(argv: &[String], stderr: &str, url: &str) -> String {
+    for (idx, arg) in argv.iter().enumerate() {
+        if (arg == "-O" || arg == "--output-document") && argv.get(idx + 1).is_some() {
+            return argv[idx + 1].clone();
+        }
+        if let Some(name) = arg.strip_prefix("-O") {
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+        if let Some(name) = arg.strip_prefix("--output-document=") {
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+    }
+    for line in stderr.lines() {
+        if let Some(name) = quoted_after(line, "Saving to:") {
+            return name.to_string();
+        }
+        if let Some(name) = quoted_after(line, "Sauvegarde en") {
+            return name.to_string();
+        }
+    }
+    let filename = url
+        .split('?')
+        .next()
+        .unwrap_or(url)
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("index.html");
+    if filename.is_empty() || !filename.contains('.') {
+        "index.html".to_string()
+    } else {
+        filename.to_string()
+    }
+}
+
+fn quoted_after<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
+    let rest = line.split_once(marker)?.1;
+    let start = rest.find(['\'', '"', '«'])?;
+    let quote = rest[start..].chars().next()?;
+    let end_quote = if quote == '«' { '»' } else { quote };
+    let content = &rest[start + quote.len_utf8()..];
+    let end = content.find(end_quote)?;
+    Some(content[..end].trim())
+}
+
+fn wget_saved_size(stderr: &str) -> Option<u64> {
+    for line in stderr.lines() {
+        if !line.contains("saved") && !line.contains("enregistr") {
+            continue;
+        }
+        if let Some((left, _right)) = line
+            .split_once('[')
+            .and_then(|(_, rest)| rest.split_once('/'))
+        {
+            let cleaned = left.trim().replace(',', "");
+            if let Ok(bytes) = cleaned.parse::<u64>() {
+                return Some(bytes);
+            }
+        }
+        for token in line.split_whitespace() {
+            let cleaned = token
+                .trim_matches(|ch: char| {
+                    !ch.is_ascii_digit()
+                        && ch != '.'
+                        && ch != 'K'
+                        && ch != 'M'
+                        && ch != 'G'
+                        && ch != 'B'
+                })
+                .trim_end_matches('B');
+            if let Some(bytes) = parse_size_token(cleaned) {
+                return Some(bytes);
+            }
+        }
+    }
+    None
+}
+
+fn parse_size_token(value: &str) -> Option<u64> {
+    let (number, multiplier) = if let Some(number) = value.strip_suffix('K') {
+        (number, 1024.0)
+    } else if let Some(number) = value.strip_suffix('M') {
+        (number, 1024.0 * 1024.0)
+    } else if let Some(number) = value.strip_suffix('G') {
+        (number, 1024.0 * 1024.0 * 1024.0)
+    } else {
+        (value, 1.0)
+    };
+    let parsed = number.replace(',', "").parse::<f64>().ok()?;
+    Some((parsed * multiplier).round() as u64)
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes == 0 {
+        "?".to_string()
+    } else if bytes < 1024 {
+        format!("{bytes}B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn compact_url(url: &str) -> String {
+    let without_proto = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    if without_proto.chars().count() <= 50 {
+        without_proto.to_string()
+    } else {
+        let prefix = without_proto.chars().take(25).collect::<String>();
+        let suffix = without_proto
+            .chars()
+            .rev()
+            .take(20)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        format!("{prefix}...{suffix}")
     }
 }
 
@@ -1075,5 +1322,54 @@ mod tests {
             "aws s3 ls returned 1 object(s), 1 prefix(es)"
         );
         assert!(reduction.compact_preview.contains("README.md"));
+    }
+
+    #[test]
+    fn reduce_wget_summarizes_saved_file() {
+        let argv = vec!["wget", "https://example.com/releases/pkg.tar.gz"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec =
+            classify_infra_command("wget https://example.com/releases/pkg.tar.gz", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "wget_fetch");
+        let stderr = "--2026-05-12-- https://example.com/releases/pkg.tar.gz\nSaving to: 'pkg.tar.gz'\n'pkg.tar.gz' saved [2048/2048]\n";
+        let reduction = reduce_infra_command(&spec, "", stderr, 0);
+        assert_eq!(
+            reduction.summary,
+            "wget example.com/releases/pkg.tar.gz ok | pkg.tar.gz | 2.0KB"
+        );
+    }
+
+    #[test]
+    fn reduce_wget_stdout_compacts_first_lines() {
+        let argv = vec!["wget", "-O", "-", "https://example.com/data.txt"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("wget -O - https://example.com/data.txt", &argv).unwrap();
+        let stdout = (0..12)
+            .map(|idx| format!("line {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let reduction = reduce_infra_command(&spec, &stdout, "", 0);
+        assert_eq!(
+            reduction.summary,
+            "wget example.com/data.txt ok | 12 line(s) | 85B"
+        );
+        assert!(reduction.compact_preview.contains("line 0"));
+        assert!(reduction.compact_preview.contains("... +2 more lines"));
+    }
+
+    #[test]
+    fn reduce_wget_error_extracts_http_status() {
+        let argv = vec!["wget", "https://example.com/missing.zip"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("wget https://example.com/missing.zip", &argv).unwrap();
+        let reduction = reduce_infra_command(&spec, "", "ERROR 404: Not Found.\n", 8);
+        assert_eq!(reduction.summary, "wget failed: 404 Not Found");
+        assert!(reduction.failed);
     }
 }
