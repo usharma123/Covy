@@ -62,6 +62,8 @@ pub enum Commands {
     Compact(cmd_compact::CompactArgs),
     /// Read files with optional line windows, line numbers, and lightweight filtering
     Read(cmd_system::ReadArgs),
+    /// Run a command and emit a compact heuristic summary of its output
+    Summary(cmd_system::SummaryArgs),
     /// Compactly inspect JSON files or stdin while preserving raw values by default
     Json(cmd_system::JsonArgs),
     /// Summarize project dependency manifests

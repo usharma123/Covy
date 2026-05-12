@@ -231,6 +231,25 @@ fn test_system_read_command_filters_and_numbers_files() {
 }
 
 #[test]
+fn test_system_summary_command_preserves_exit_and_summarizes_output() {
+    let root = TempDir::new().unwrap();
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "summary",
+            "sh",
+            "-c",
+            "printf 'test result: FAILED. 1 passed; 2 failed; 3 ignored\\n'; exit 7",
+        ])
+        .assert()
+        .code(7)
+        .stdout(predicate::str::contains("[FAIL] Command:"))
+        .stdout(predicate::str::contains("[ok] 1 passed"))
+        .stdout(predicate::str::contains("[FAIL] 2 failed"))
+        .stdout(predicate::str::contains("skip 3 skipped"));
+}
+
+#[test]
 fn test_system_log_command_deduplicates_noisy_lines() {
     let root = TempDir::new().unwrap();
     let log = root.path().join("app.log");
