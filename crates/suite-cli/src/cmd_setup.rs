@@ -3163,7 +3163,7 @@ mod tests {
     #[test]
     fn generated_packet28_hook_command_exits_zero_when_binary_is_missing() {
         let dir = tempdir().unwrap();
-        for runtime in ["claude", "cursor", "windsurf"] {
+        for runtime in ["claude", "cursor", "copilot", "gemini", "windsurf"] {
             let command = guarded_packet28_hook_command("/missing/Packet28", runtime, dir.path());
             assert!(command.contains(&format!(" hook {runtime} ")));
             assert!(command.contains("exit 0"));

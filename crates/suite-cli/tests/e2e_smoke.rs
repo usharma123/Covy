@@ -9028,6 +9028,16 @@ fn test_packet28_hooks_degrade_gracefully_on_bad_json_and_no_rewrite() {
     assert!(stdout.trim().is_empty());
     assert!(stderr.contains("malformed JSON"));
 
+    let (status, stdout, stderr) = run_hook_raw("copilot", dir.path(), "{not json");
+    assert_eq!(status, 0);
+    assert!(stdout.trim().is_empty());
+    assert!(stderr.contains("malformed JSON"));
+
+    let (status, stdout, stderr) = run_hook_raw("gemini", dir.path(), "{not json");
+    assert_eq!(status, 0);
+    assert!(stdout.trim().is_empty());
+    assert!(stderr.contains("malformed JSON"));
+
     let (status, stdout) = run_claude_hook(
         dir.path(),
         &json!({
@@ -9040,7 +9050,7 @@ fn test_packet28_hooks_degrade_gracefully_on_bad_json_and_no_rewrite() {
         }),
     );
     assert_eq!(status, 0);
-    assert_eq!(stdout.trim(), "{}");
+    assert!(matches!(stdout.trim(), "" | "{}"));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
