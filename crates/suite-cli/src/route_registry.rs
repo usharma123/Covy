@@ -1899,6 +1899,10 @@ mod tests {
             build_route_rewrite(tmp.path(), "task-filter", None, ".", &decision).unwrap();
         assert!(rewritten.contains(" run --root "));
         assert!(rewritten.ends_with(" -- brew install rtk"));
+
+        let swift = decide_command_route_with_cwd_and_root("swift test", tmp.path(), tmp.path());
+        assert_eq!(swift.kind, RouteKind::TomlFilterRewrite);
+        assert_eq!(swift.reason.as_deref(), Some("toml_filter"));
     }
 
     #[test]
