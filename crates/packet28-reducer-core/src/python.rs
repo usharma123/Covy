@@ -17,6 +17,10 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
             "python_ruff_format",
             suite_packet_core::ToolOperationKind::Build,
         ),
+        "ruff" if classify_ruff_format(argv) => (
+            "python_ruff_format",
+            suite_packet_core::ToolOperationKind::Build,
+        ),
         "mypy" if classify_mypy(argv) => {
             ("python_mypy", suite_packet_core::ToolOperationKind::Build)
         }
@@ -73,6 +77,7 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
         .cloned()
         .collect::<Vec<_>>();
 
+    let mutation = canonical_kind == "python_ruff_format" && !contains_any(argv, &["--check"]);
     Some(CommandReducerSpec {
         family: "python".to_string(),
         canonical_kind: canonical_kind.to_string(),
@@ -81,8 +86,8 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
         command: command.to_string(),
         argv: argv.to_vec(),
         cache_fingerprint: fingerprint("python", canonical_kind, argv),
-        cacheable: true,
-        mutation: false,
+        cacheable: !mutation,
+        mutation,
         paths,
         equivalence_key: None,
     })
@@ -172,6 +177,10 @@ fn classify_ruff_format_check(argv: &[String]) -> bool {
     argv.get(1).is_some_and(|arg| arg == "format")
         && contains_any(argv, &["--check"])
         && !contains_any(argv, &["--diff"])
+}
+
+fn classify_ruff_format(argv: &[String]) -> bool {
+    argv.get(1).is_some_and(|arg| arg == "format") && !contains_any(argv, &["--check", "--diff"])
 }
 
 fn classify_mypy(argv: &[String]) -> bool {
@@ -291,11 +300,27 @@ fn summarize_ruff_format(output: &str, failed: bool) -> String {
         return first_nonempty_line(output)
             .unwrap_or_else(|| "ruff format --check failed".to_string());
     }
-    if output.contains("files already formatted") {
-        "ruff format --check passed".to_string()
-    } else {
-        first_nonempty_line(output).unwrap_or_else(|| "ruff format --check completed".to_string())
+    if output.contains("reformatted") {
+        let files = output
+            .lines()
+            .filter(|line| line.contains("reformatted"))
+            .count()
+            .max(1);
+        return format!("ruff format reformatted {files} file(s)");
     }
+    if output.contains("files already formatted") {
+        if spec_is_check_output(output) {
+            "ruff format --check passed".to_string()
+        } else {
+            "ruff format completed; files already formatted".to_string()
+        }
+    } else {
+        first_nonempty_line(output).unwrap_or_else(|| "ruff format completed".to_string())
+    }
+}
+
+fn spec_is_check_output(output: &str) -> bool {
+    output.contains("Would reformat") || output.contains("would be reformatted")
 }
 
 fn summarize_mypy(output: &str, failed: bool) -> String {
@@ -751,6 +776,28 @@ mod tests {
             reduction.summary,
             "ruff format --check would reformat 1 file(s)"
         );
+    }
+
+    #[test]
+    fn classify_and_reduce_ruff_format_as_mutation() {
+        let argv = vec!["ruff", "format", "src"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_python_command("ruff format src", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "python_ruff_format");
+        assert!(spec.mutation);
+        assert!(!spec.cacheable);
+
+        let reduction =
+            reduce_python_command(&spec, "1 file reformatted, 2 files left unchanged\n", "", 0);
+        assert_eq!(reduction.summary, "ruff format reformatted 1 file(s)");
+
+        let diff_argv = vec!["ruff", "format", "--diff", "src"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(classify_python_command("ruff format --diff src", &diff_argv).is_none());
     }
 
     #[test]

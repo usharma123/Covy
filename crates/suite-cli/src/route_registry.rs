@@ -1724,6 +1724,18 @@ mod tests {
     }
 
     #[test]
+    fn routes_rtk_ruff_format_as_mutation() {
+        let decision = decide_command_route("ruff format src");
+        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
+        let spec = decision.reducer_spec.as_ref().unwrap();
+        assert_eq!(spec.canonical_kind, "python_ruff_format");
+        assert!(spec.mutation);
+
+        let diff = decide_command_route("ruff format --diff src");
+        assert_eq!(diff.kind, RouteKind::RawPassthrough);
+    }
+
+    #[test]
     fn routes_rtk_docker_and_kubectl_mutation_forms() {
         for (command, expected) in [
             ("docker build .", "docker_build"),
