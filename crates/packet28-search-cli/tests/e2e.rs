@@ -279,6 +279,28 @@ fn p28_auto_uses_fff_for_broad_index_fallback_when_available() {
 }
 
 #[test]
+fn p28_auto_can_prefer_fff_when_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+    let fake_fff = write_fake_fff_mcp(dir.path());
+
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    cli()
+        .current_dir(dir.path())
+        .env("P28_FFF_MCP_BIN", &fake_fff)
+        .env("P28_FFF_AUTO", "prefer")
+        .args(["Alpha", "--transport", "inproc", "--stats"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"))
+        .stderr(predicate::str::contains("backend=fff_mcp"));
+}
+
+#[test]
 fn p28_handles_anchored_line_start_regexes() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("src")).unwrap();

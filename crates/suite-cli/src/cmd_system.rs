@@ -74,6 +74,21 @@ pub struct SummaryArgs {
 }
 
 #[derive(Args)]
+pub struct FormatterArgs {
+    /// Formatter arguments
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+
+    /// Emit a machine-readable envelope
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON machine output
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct SmartArgs {
     /// File to summarize with local heuristics
     pub file: PathBuf,
@@ -273,6 +288,19 @@ pub fn run_err(args: SummaryArgs) -> Result<i32> {
     run_summary_labeled(args, "err")
 }
 
+pub fn run_prettier(args: FormatterArgs) -> Result<i32> {
+    run_formatter_command(
+        FormatterInvocation::new("prettier", Vec::new()),
+        args,
+        "prettier",
+    )
+}
+
+pub fn run_format(args: FormatterArgs) -> Result<i32> {
+    let formatter = detect_formatter_invocation(&args.args)?;
+    run_formatter_command(formatter, args, "format")
+}
+
 fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     let (program, rest) = args
         .command
@@ -299,6 +327,80 @@ fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
         },
     )?;
     Ok(exit_code)
+}
+
+struct FormatterInvocation {
+    program: String,
+    prefix_args: Vec<String>,
+}
+
+impl FormatterInvocation {
+    fn new(program: &str, prefix_args: Vec<String>) -> Self {
+        Self {
+            program: program.to_string(),
+            prefix_args,
+        }
+    }
+}
+
+fn run_formatter_command(
+    invocation: FormatterInvocation,
+    args: FormatterArgs,
+    label: &str,
+) -> Result<i32> {
+    let mut command = Vec::with_capacity(args.args.len() + 1 + invocation.prefix_args.len());
+    command.push(invocation.program.clone());
+    command.extend(invocation.prefix_args);
+    let rest = if label == "format" && args.args.first().is_some_and(|arg| is_formatter_name(arg)) {
+        &args.args[1..]
+    } else {
+        args.args.as_slice()
+    };
+    command.extend(rest.iter().cloned());
+    run_summary_labeled(
+        SummaryArgs {
+            command,
+            json: args.json,
+            pretty: args.pretty,
+        },
+        label,
+    )
+}
+
+fn detect_formatter_invocation(args: &[String]) -> Result<FormatterInvocation> {
+    if let Some(first) = args.first() {
+        if first == "ruff" {
+            let prefix = if args.get(1).is_some_and(|arg| arg == "format") {
+                Vec::new()
+            } else {
+                vec!["format".to_string()]
+            };
+            return Ok(FormatterInvocation::new("ruff", prefix));
+        }
+        if is_formatter_name(first) {
+            return Ok(FormatterInvocation::new(first, Vec::new()));
+        }
+    }
+    if Path::new("package.json").exists()
+        || Path::new(".prettierrc").exists()
+        || Path::new(".prettierrc.json").exists()
+        || Path::new(".prettierrc.js").exists()
+    {
+        return Ok(FormatterInvocation::new("prettier", Vec::new()));
+    }
+    if let Ok(pyproject) = fs::read_to_string("pyproject.toml") {
+        if pyproject.contains("[tool.ruff") {
+            return Ok(FormatterInvocation::new("ruff", vec!["format".to_string()]));
+        }
+        if pyproject.contains("[tool.black]") {
+            return Ok(FormatterInvocation::new("black", Vec::new()));
+        }
+    }
+    Ok(FormatterInvocation::new("prettier", Vec::new()))
+}
+
+fn is_formatter_name(value: &str) -> bool {
+    matches!(value, "prettier" | "black" | "ruff" | "biome")
 }
 
 pub fn run_smart(args: SmartArgs) -> Result<i32> {

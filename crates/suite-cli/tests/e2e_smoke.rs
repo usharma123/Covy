@@ -281,6 +281,54 @@ fn test_system_err_command_preserves_exit_and_summarizes_failure() {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_system_prettier_and_format_commands_wrap_formatter_output() {
+    let root = TempDir::new().unwrap();
+    let bin_dir = root.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(
+        &bin_dir.join("prettier"),
+        "#!/bin/sh\nprintf 'Checking formatting...\\nsrc/app.ts\\nCode style issues found in the above file. Forgot to run Prettier?\\n'; exit 1\n",
+    );
+    write_executable_script(
+        &bin_dir.join("ruff"),
+        "#!/bin/sh\nprintf 'ruff args:%s\\nWould reformat: src/demo.py\\n1 file would be reformatted\\n' \"$*\"; exit 1\n",
+    );
+    let path_env = std::env::join_paths(std::iter::once(bin_dir.as_path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["prettier", "--check", "src"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("[FAIL] Command: prettier"))
+        .stdout(predicate::str::contains("src/app.ts"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["format", "prettier", "--check", "src"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("[FAIL] Command: prettier"))
+        .stdout(predicate::str::contains("src/app.ts"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["format", "ruff", "--check", "src"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("[FAIL] Command: ruff format"))
+        .stdout(predicate::str::contains("ruff args:format --check src"))
+        .stdout(predicate::str::contains("src/demo.py"));
+}
+
+#[test]
 fn test_system_smart_command_summarizes_source_file() {
     let root = TempDir::new().unwrap();
     let source = root.path().join("lib.rs");

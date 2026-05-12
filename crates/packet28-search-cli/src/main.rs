@@ -414,22 +414,29 @@ fn execute_search_inproc(
             let runtime = load_runtime(root)?;
             indexed_search(root, &runtime, request)
         }
-        EngineMode::Auto => match load_runtime(root) {
-            Ok(runtime) => match guarded_fallback_reason(root, &runtime, request)? {
-                Some(reason) => {
-                    let mut result = packet28_reducer_core::search(root, request)?;
-                    annotate_fallback(&mut result, reason);
-                    Ok(select_fff_for_auto_fallback(root, request, engine, &result)
-                        .unwrap_or(result))
+        EngineMode::Auto => {
+            if should_prefer_fff_for_auto() {
+                if let Ok(fff_result) = execute_fff_search(root, request) {
+                    return Ok(fff_result);
                 }
-                None => indexed_search(root, &runtime, request),
-            },
-            Err(err) => {
-                let mut result = packet28_reducer_core::search(root, request)?;
-                annotate_fallback(&mut result, format!("regex index load failed: {err}"));
-                Ok(result)
             }
-        },
+            match load_runtime(root) {
+                Ok(runtime) => match guarded_fallback_reason(root, &runtime, request)? {
+                    Some(reason) => {
+                        let mut result = packet28_reducer_core::search(root, request)?;
+                        annotate_fallback(&mut result, reason);
+                        Ok(select_fff_for_auto_fallback(root, request, engine, &result)
+                            .unwrap_or(result))
+                    }
+                    None => indexed_search(root, &runtime, request),
+                },
+                Err(err) => {
+                    let mut result = packet28_reducer_core::search(root, request)?;
+                    annotate_fallback(&mut result, format!("regex index load failed: {err}"));
+                    Ok(result)
+                }
+            }
+        }
     }
 }
 
@@ -520,6 +527,13 @@ fn fff_auto_enabled() -> bool {
         std::env::var("P28_FFF_AUTO").ok().as_deref(),
         Some("0" | "false" | "FALSE" | "off" | "OFF")
     )
+}
+
+fn should_prefer_fff_for_auto() -> bool {
+    matches!(
+        std::env::var("P28_FFF_AUTO").ok().as_deref(),
+        Some("prefer" | "PREFER" | "first" | "FIRST" | "1" | "true" | "TRUE" | "on" | "ON")
+    ) && fff_backend_available()
 }
 
 fn fff_backend_available() -> bool {

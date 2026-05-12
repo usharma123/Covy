@@ -68,6 +68,10 @@ pub enum Commands {
     Summary(cmd_system::SummaryArgs),
     /// Run a command and emphasize error-oriented compact output
     Err(cmd_system::SummaryArgs),
+    /// Run Prettier and summarize formatting output
+    Prettier(cmd_system::FormatterArgs),
+    /// Run a formatter such as prettier, black, ruff, or biome with compact output
+    Format(cmd_system::FormatterArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output
