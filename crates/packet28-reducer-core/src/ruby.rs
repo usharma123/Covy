@@ -9,6 +9,9 @@ pub fn classify_ruby_command(command: &str, argv: &[String]) -> Option<CommandRe
             ("ruby_rubocop", suite_packet_core::ToolOperationKind::Build)
         }
         "bundle" if argv.get(1).is_some_and(|arg| arg == "exec") => match argv.get(2)?.as_str() {
+            "rake" if argv.get(3).is_some_and(|arg| arg == "test") => {
+                ("ruby_rake_test", suite_packet_core::ToolOperationKind::Test)
+            }
             "rspec" if !contains_any(&argv[2..], &["--format", "-f", "--profile"]) => {
                 ("ruby_rspec", suite_packet_core::ToolOperationKind::Test)
             }
@@ -41,6 +44,9 @@ pub fn classify_ruby_command(command: &str, argv: &[String]) -> Option<CommandRe
                 "ruby_rails_test",
                 suite_packet_core::ToolOperationKind::Test,
             )
+        }
+        "rake" if argv.get(1).is_some_and(|arg| arg == "test") => {
+            ("ruby_rake_test", suite_packet_core::ToolOperationKind::Test)
         }
         "ruby" if argv.get(1).is_some_and(|arg| arg.ends_with("_test.rb")) => {
             ("ruby_test_file", suite_packet_core::ToolOperationKind::Test)
@@ -79,7 +85,9 @@ pub fn reduce_ruby_command(
     let summary = match spec.canonical_kind.as_str() {
         "ruby_rspec" => summarize_rspec(&combined, failed),
         "ruby_rubocop" => summarize_rubocop(&combined, failed),
-        "ruby_rails_test" | "ruby_test_file" => summarize_rails_test(&combined, failed),
+        "ruby_rails_test" | "ruby_rake_test" | "ruby_test_file" => {
+            summarize_minitest(&combined, spec.canonical_kind.as_str(), failed)
+        }
         _ => first_nonempty_line(&combined).unwrap_or_else(|| "ruby command completed".to_string()),
     };
 
@@ -90,7 +98,12 @@ pub fn reduce_ruby_command(
         operation_kind: spec.operation_kind,
         summary,
         compact_preview: if failed {
-            compact_ruby_failures(&combined)
+            match spec.canonical_kind.as_str() {
+                "ruby_rails_test" | "ruby_rake_test" | "ruby_test_file" => {
+                    compact_minitest_output(&combined)
+                }
+                _ => compact_ruby_failures(&combined),
+            }
         } else {
             String::new()
         },
@@ -137,19 +150,95 @@ fn summarize_rubocop(output: &str, failed: bool) -> String {
     }
 }
 
-fn summarize_rails_test(output: &str, failed: bool) -> String {
+fn summarize_minitest(output: &str, kind: &str, failed: bool) -> String {
+    let label = if kind == "ruby_rake_test" {
+        "rake test"
+    } else {
+        "rails test"
+    };
     if let Some(line) = output
         .lines()
         .map(str::trim)
         .find(|line| line.contains(" runs,") && line.contains(" assertions,"))
     {
-        return format!("rails test: {line}");
+        return format!("{label}: {line}");
     }
     if failed {
         first_nonempty_line(output).unwrap_or_else(|| "ruby tests failed".to_string())
     } else {
         first_nonempty_line(output).unwrap_or_else(|| "ruby tests completed".to_string())
     }
+}
+
+fn compact_minitest_output(output: &str) -> String {
+    let mut failures = Vec::new();
+    let mut current = Vec::new();
+    let mut in_failures = false;
+    let mut summary = None;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if is_minitest_summary(trimmed) {
+            summary = Some(trimmed.to_string());
+            continue;
+        }
+        if trimmed.starts_with("Finished in ") {
+            in_failures = true;
+            continue;
+        }
+        if !in_failures {
+            continue;
+        }
+        if is_minitest_failure_header(trimmed) {
+            if !current.is_empty() {
+                failures.push(current.join("\n"));
+                current.clear();
+            }
+            current.push(trimmed.to_string());
+        } else if trimmed.is_empty() && !current.is_empty() {
+            failures.push(current.join("\n"));
+            current.clear();
+        } else if !trimmed.is_empty() {
+            current.push(trimmed.to_string());
+        }
+    }
+    if !current.is_empty() {
+        failures.push(current.join("\n"));
+    }
+    let mut result = Vec::new();
+    if let Some(summary) = summary {
+        result.push(summary);
+    }
+    for failure in failures.iter().take(10) {
+        for line in failure.lines().take(5) {
+            result.push(compact(line.trim(), 120));
+        }
+        result.push(String::new());
+    }
+    if failures.len() > 10 {
+        result.push(format!("... +{} more failures", failures.len() - 10));
+    }
+    result.join("\n").trim().to_string()
+}
+
+fn is_minitest_summary(line: &str) -> bool {
+    (line.contains(" runs,") || line.contains(" tests,")) && line.contains(" assertions,")
+}
+
+fn is_minitest_failure_header(line: &str) -> bool {
+    let mut chars = line.chars();
+    let mut saw_digit = false;
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            continue;
+        }
+        if ch == ')' {
+            let rest = chars.as_str().trim_start();
+            return saw_digit && (rest == "Failure:" || rest == "Error:");
+        }
+        return false;
+    }
+    false
 }
 
 fn compact_ruby_failures(output: &str) -> String {
@@ -238,5 +327,49 @@ mod tests {
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
         assert!(classify_ruby_command("rubocop --format json app", &argv).is_none());
+    }
+
+    #[test]
+    fn classify_rake_test_and_compact_minitest_failures() {
+        let argv = ["rake", "test"]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let spec = classify_ruby_command("rake test", &argv).expect("rake test should classify");
+        assert_eq!(spec.canonical_kind, "ruby_rake_test");
+
+        let output = r#"Run options: --seed 54321
+
+# Running:
+
+..F....
+
+Finished in 0.234567s, 29.8 runs/s
+
+  1) Failure:
+TestSomething#test_that_fails [/path/to/test.rb:15]:
+Expected: true
+  Actual: false
+
+7 runs, 7 assertions, 1 failures, 0 errors, 0 skips"#;
+        let reduction = reduce_ruby_command(&spec, output, "", 1);
+        assert_eq!(
+            reduction.summary,
+            "rake test: 7 runs, 7 assertions, 1 failures, 0 errors, 0 skips"
+        );
+        assert!(reduction.compact_preview.contains("test_that_fails"));
+        assert!(reduction.compact_preview.contains("Expected: true"));
+        assert!(!reduction.compact_preview.contains("# Running:"));
+    }
+
+    #[test]
+    fn classify_bundle_exec_rake_test() {
+        let argv = ["bundle", "exec", "rake", "test"]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let spec = classify_ruby_command("bundle exec rake test", &argv)
+            .expect("bundle exec rake test should classify");
+        assert_eq!(spec.canonical_kind, "ruby_rake_test");
     }
 }

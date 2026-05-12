@@ -48,7 +48,9 @@ pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandRe
         "npm" | "pnpm" | "yarn" | "npx" | "tsc" | "eslint" | "vitest" | "prettier" | "next"
         | "prisma" | "playwright" => classify_javascript_command(command, argv),
         "gradle" | "gradlew" | "./gradlew" | "gradlew.bat" => classify_jvm_command(command, argv),
-        "bundle" | "rspec" | "rubocop" | "ruby" | "rails" => classify_ruby_command(command, argv),
+        "bundle" | "rspec" | "rubocop" | "ruby" | "rails" | "rake" => {
+            classify_ruby_command(command, argv)
+        }
         "dotnet" => classify_dotnet_command(command, argv),
         _ => None,
     }
