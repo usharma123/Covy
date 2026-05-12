@@ -7,6 +7,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 const DEFAULT_MEMOIR_NAME: &str = "default";
+const LOCAL_EMBEDDING_MODEL: &str = "packet28-local-lexical-v2";
+const LEGACY_EMBEDDING_MODEL: &str = "packet28-local-hash-v1";
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct MemoryRecord {
@@ -570,31 +572,34 @@ fn recall_memories_vector(
             e.dimensions, e.embedding_json
          FROM memory_embeddings e
          JOIN memories m ON m.id = e.memory_id
-         WHERE e.model = 'packet28-local-hash-v1'",
+         WHERE e.model IN (?1, ?2)",
     )?;
-    let rows = stmt.query_map([], |row| {
-        let dimensions: i64 = row.get(12)?;
-        Ok((
-            MemoryRecord {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                tags: row.get(2)?,
-                topic: row.get(3)?,
-                importance: row.get(4)?,
-                keywords: row.get(5)?,
-                project: row.get(6)?,
-                source: row.get(7)?,
-                raw_excerpt: row.get(8)?,
-                weight: row.get(9)?,
-                recall_score: None,
-                created_at_unix_ms: row.get(10)?,
-                updated_at_unix_ms: row.get(11)?,
-            },
-            dimensions.max(0) as usize,
-            row.get::<_, String>(13)?,
-        ))
-    })?;
-    let mut records = Vec::new();
+    let rows = stmt.query_map(
+        params![LOCAL_EMBEDDING_MODEL, LEGACY_EMBEDDING_MODEL],
+        |row| {
+            let dimensions: i64 = row.get(12)?;
+            Ok((
+                MemoryRecord {
+                    id: row.get(0)?,
+                    content: row.get(1)?,
+                    tags: row.get(2)?,
+                    topic: row.get(3)?,
+                    importance: row.get(4)?,
+                    keywords: row.get(5)?,
+                    project: row.get(6)?,
+                    source: row.get(7)?,
+                    raw_excerpt: row.get(8)?,
+                    weight: row.get(9)?,
+                    recall_score: None,
+                    created_at_unix_ms: row.get(10)?,
+                    updated_at_unix_ms: row.get(11)?,
+                },
+                dimensions.max(0) as usize,
+                row.get::<_, String>(13)?,
+            ))
+        },
+    )?;
+    let mut by_id = HashMap::<i64, MemoryRecord>::new();
     for row in rows {
         let (mut record, dimensions, embedding_json) = row?;
         let Ok(embedding) = serde_json::from_str::<Vec<f64>>(&embedding_json) else {
@@ -607,9 +612,17 @@ fn recall_memories_vector(
         let score = cosine_similarity(&query_embedding, &embedding);
         if score > 0.0 {
             record.recall_score = Some(score);
-            records.push(record);
+            by_id
+                .entry(record.id)
+                .and_modify(|existing| {
+                    if score > existing.recall_score.unwrap_or(0.0) {
+                        *existing = record.clone();
+                    }
+                })
+                .or_insert(record);
         }
     }
+    let mut records = by_id.into_values().collect::<Vec<_>>();
     records.sort_by(|a, b| {
         b.recall_score
             .partial_cmp(&a.recall_score)
@@ -1025,10 +1038,10 @@ pub(crate) fn consolidate_memories(
 pub(crate) fn embed_memory(id: i64, dimensions: usize) -> Result<MemoryEmbeddingRecord> {
     let conn = open_memory_db()?;
     let memory = get_memory(&conn, id)?;
-    let embedding = deterministic_embedding(&memory.content, dimensions);
+    let embedding = deterministic_embedding(&memory_embedding_document(&memory), dimensions);
     let embedding_json = serde_json::to_string(&embedding)?;
     let now = timestamp_unix_ms();
-    let model = "packet28-local-hash-v1";
+    let model = LOCAL_EMBEDDING_MODEL;
     conn.execute(
         "INSERT INTO memory_embeddings
          (memory_id, model, dimensions, embedding_json, created_at_unix_ms)
@@ -1061,7 +1074,7 @@ pub(crate) fn embed_memories(
         anyhow::bail!("pass a memory id or --all");
     };
     Ok(MemoryEmbedReport {
-        model: "packet28-local-hash-v1".to_string(),
+        model: LOCAL_EMBEDDING_MODEL.to_string(),
         dimensions,
         embedded_count: embeddings.len(),
         embeddings,
@@ -2776,6 +2789,22 @@ fn merge_csv_field<'a>(values: impl Iterator<Item = &'a str>) -> Option<String> 
     (!merged.is_empty()).then(|| merged.join(","))
 }
 
+fn memory_embedding_document(memory: &MemoryRecord) -> String {
+    [
+        Some(memory.content.as_str()),
+        Some(memory.topic.as_str()),
+        memory.tags.as_deref(),
+        memory.keywords.as_deref(),
+        memory.project.as_deref(),
+        memory.source.as_deref(),
+        memory.raw_excerpt.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 fn deterministic_embedding(content: &str, dimensions: usize) -> Vec<f64> {
     let dimensions = dimensions.clamp(8, 4096);
     let mut vector = vec![0.0_f64; dimensions];
@@ -2784,13 +2813,15 @@ fn deterministic_embedding(content: &str, dimensions: usize) -> Vec<f64> {
         .map(str::trim)
         .filter(|token| !token.is_empty())
     {
-        let mut hash = 14_695_981_039_346_656_037_u64;
-        for byte in token.to_ascii_lowercase().bytes() {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(1_099_511_628_211);
+        let normalized = token.to_ascii_lowercase();
+        add_embedding_feature(&mut vector, &normalized, 2.0);
+        for part in normalized
+            .split(|ch: char| ch == '_' || ch == '-')
+            .filter(|part| part.len() >= 2)
+        {
+            add_embedding_feature(&mut vector, part, 1.5);
         }
-        let index = (hash as usize) % dimensions;
-        vector[index] += 1.0;
+        add_character_ngrams(&mut vector, &normalized);
     }
     let norm = vector.iter().map(|value| value * value).sum::<f64>().sqrt();
     if norm > 0.0 {
@@ -2799,6 +2830,32 @@ fn deterministic_embedding(content: &str, dimensions: usize) -> Vec<f64> {
         }
     }
     vector
+}
+
+fn add_character_ngrams(vector: &mut [f64], token: &str) {
+    let chars = token.chars().collect::<Vec<_>>();
+    if chars.len() < 3 {
+        return;
+    }
+    for n in 3..=5 {
+        if chars.len() < n {
+            continue;
+        }
+        for window in chars.windows(n) {
+            let gram = window.iter().collect::<String>();
+            add_embedding_feature(vector, &format!("char:{gram}"), 0.75);
+        }
+    }
+}
+
+fn add_embedding_feature(vector: &mut [f64], feature: &str, weight: f64) {
+    let mut hash = 14_695_981_039_346_656_037_u64;
+    for byte in feature.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(1_099_511_628_211);
+    }
+    let index = (hash as usize) % vector.len();
+    vector[index] += weight;
 }
 
 fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {

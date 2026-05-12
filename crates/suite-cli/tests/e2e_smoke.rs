@@ -1736,7 +1736,7 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "\"model\":\"packet28-local-hash-v1\"",
+            "\"model\":\"packet28-local-lexical-v2\"",
         ))
         .stdout(predicate::str::contains("\"dimensions\":16"))
         .stdout(predicate::str::contains("\"embedded_count\":1"));
@@ -1761,6 +1761,20 @@ fn test_memory_store_recall_uses_sqlite_home_db() {
         .success()
         .stdout(predicate::str::contains("memories[1]{score,id,topic"))
         .stdout(predicate::str::contains("Consolidated memory for topic"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "recall",
+            "updted secnd",
+            "--project",
+            "coverage-b",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Consolidated memory for topic"))
+        .stdout(predicate::str::contains("\"recall_score\""));
 
     suite_cmd()
         .env("HOME", home.path())
