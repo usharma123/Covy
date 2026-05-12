@@ -1749,6 +1749,26 @@ mod tests {
     }
 
     #[test]
+    fn routes_yadm_like_rtk_git_alias() {
+        for (command, expected) in [
+            ("yadm status --short", "git_status"),
+            ("yadm diff", "git_diff"),
+            ("yadm log --oneline", "git_log"),
+        ] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
+            assert_eq!(
+                decision
+                    .reducer_spec
+                    .as_ref()
+                    .map(|spec| spec.canonical_kind.as_str()),
+                Some(expected),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
     fn routes_sudo_and_env_prefixed_commands_like_rtk() {
         let sudo = decide_command_route("sudo git status --short");
         assert_eq!(sudo.kind, RouteKind::ReducerRewrite);

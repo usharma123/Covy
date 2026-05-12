@@ -911,6 +911,20 @@ mod tests {
     }
 
     #[test]
+    fn classify_yadm_delegates_to_git_reducers() {
+        for (command, expected) in [
+            ("yadm status --short", "git_status"),
+            ("yadm diff", "git_diff"),
+            ("yadm log --oneline", "git_log"),
+        ] {
+            let argv = shell_words::split(command).unwrap();
+            let spec = classify_git_command(command, &argv).unwrap();
+            assert_eq!(spec.canonical_kind, expected, "{command}");
+            assert!(spec.cacheable, "{command}");
+        }
+    }
+
+    #[test]
     fn reduce_gt_log_strips_email_and_compacts_graph() {
         let argv = vec!["gt", "log"]
             .into_iter()
