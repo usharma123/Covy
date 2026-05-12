@@ -119,6 +119,17 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Curl(args)) => cmd_system::run_curl(args),
         Some(Commands::Docker(args)) => cmd_system::run_docker(args),
         Some(Commands::Kubectl(args)) => cmd_system::run_kubectl(args),
+        Some(Commands::Cargo(args)) => cmd_system::run_cargo(args),
+        Some(Commands::Go(args)) => cmd_system::run_go(args),
+        Some(Commands::Dotnet(args)) => cmd_system::run_dotnet(args),
+        Some(Commands::GolangciLint(args)) => cmd_system::run_golangci_lint(args),
+        Some(Commands::Gradlew(args)) => cmd_system::run_gradlew(args),
+        Some(Commands::Rake(args)) => cmd_system::run_rake(args),
+        Some(Commands::Rspec(args)) => cmd_system::run_rspec(args),
+        Some(Commands::Rubocop(args)) => cmd_system::run_rubocop(args),
+        Some(Commands::Mypy(args)) => cmd_system::run_mypy(args),
+        Some(Commands::Pip(args)) => cmd_system::run_pip(args),
+        Some(Commands::Pnpm(args)) => cmd_system::run_pnpm(args),
         Some(Commands::Smart(args)) => cmd_system::run_smart(args),
         Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Grep(args)) => cmd_system::run_grep(args),
@@ -411,6 +422,17 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Curl(_))
         | Some(Commands::Docker(_))
         | Some(Commands::Kubectl(_))
+        | Some(Commands::Cargo(_))
+        | Some(Commands::Go(_))
+        | Some(Commands::Dotnet(_))
+        | Some(Commands::GolangciLint(_))
+        | Some(Commands::Gradlew(_))
+        | Some(Commands::Rake(_))
+        | Some(Commands::Rspec(_))
+        | Some(Commands::Rubocop(_))
+        | Some(Commands::Mypy(_))
+        | Some(Commands::Pip(_))
+        | Some(Commands::Pnpm(_))
         | Some(Commands::Smart(_))
         | Some(Commands::Find(_))
         | Some(Commands::Grep(_))

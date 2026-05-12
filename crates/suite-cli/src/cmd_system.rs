@@ -362,6 +362,50 @@ pub fn run_kubectl(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("kubectl", args, "kubectl")
 }
 
+pub fn run_cargo(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("cargo", args, "cargo")
+}
+
+pub fn run_go(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("go", args, "go")
+}
+
+pub fn run_dotnet(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("dotnet", args, "dotnet")
+}
+
+pub fn run_golangci_lint(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("golangci-lint", args, "golangci-lint")
+}
+
+pub fn run_gradlew(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("gradlew", args, "gradlew")
+}
+
+pub fn run_rake(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("rake", args, "rake")
+}
+
+pub fn run_rspec(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("rspec", args, "rspec")
+}
+
+pub fn run_rubocop(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("rubocop", args, "rubocop")
+}
+
+pub fn run_mypy(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("mypy", args, "mypy")
+}
+
+pub fn run_pip(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("pip", args, "pip")
+}
+
+pub fn run_pnpm(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("pnpm", args, "pnpm")
+}
+
 fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     let output = execute_command(&args.command)?;
     let raw = format!(

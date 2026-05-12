@@ -94,6 +94,30 @@ pub enum Commands {
     Docker(cmd_system::ToolArgs),
     /// Run kubectl with compact output
     Kubectl(cmd_system::ToolArgs),
+    /// Run Cargo with compact output
+    Cargo(cmd_system::ToolArgs),
+    /// Run Go with compact output
+    Go(cmd_system::ToolArgs),
+    /// Run dotnet with compact output
+    Dotnet(cmd_system::ToolArgs),
+    /// Run golangci-lint with compact output
+    #[command(name = "golangci-lint")]
+    GolangciLint(cmd_system::ToolArgs),
+    /// Run Gradle wrapper with compact output
+    #[command(name = "gradlew")]
+    Gradlew(cmd_system::ToolArgs),
+    /// Run Rake with compact output
+    Rake(cmd_system::ToolArgs),
+    /// Run RSpec with compact output
+    Rspec(cmd_system::ToolArgs),
+    /// Run RuboCop with compact output
+    Rubocop(cmd_system::ToolArgs),
+    /// Run mypy with compact output
+    Mypy(cmd_system::ToolArgs),
+    /// Run pip with compact output
+    Pip(cmd_system::ToolArgs),
+    /// Run pnpm with compact output
+    Pnpm(cmd_system::ToolArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output
