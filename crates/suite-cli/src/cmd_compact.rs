@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
 };
-use crate::savings_analytics::{load_run_savings, RunSavingsRecord};
+use crate::savings_analytics::{load_run_savings, reset_run_savings, RunSavingsRecord};
 
 #[derive(Args)]
 pub struct CompactArgs {
@@ -253,6 +253,12 @@ pub struct AnalyticsArgs {
     /// Subscription tier used by gain --quota when --quota-tokens is not set (pro, 5x, 20x)
     #[arg(long, default_value = "20x")]
     pub tier: String,
+    /// Reset recorded Packet28 run savings
+    #[arg(long)]
+    pub reset: bool,
+    /// Confirm gain --reset without an interactive prompt
+    #[arg(long, requires = "reset")]
+    pub yes: bool,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -921,6 +927,25 @@ pub fn run_rewrite_command(args: RewriteArgs) -> Result<i32> {
 
 fn run_gain(args: AnalyticsArgs) -> Result<i32> {
     let root = resolve_root(&args.root)?;
+    if args.reset {
+        if !args.yes {
+            anyhow::bail!("gain --reset requires --yes in non-interactive Packet28 mode");
+        }
+        let cleared = reset_run_savings(&root)?;
+        if args.json {
+            crate::cmd_common::emit_json(
+                &json!({
+                    "reset": true,
+                    "cleared_run_savings": cleared,
+                }),
+                args.pretty,
+            )?;
+        } else {
+            println!("Token savings stats reset to zero.");
+            println!("cleared_run_savings={cleared}");
+        }
+        return Ok(0);
+    }
     let states = load_task_states(&root, args.task_id.as_deref(), args.limit)?;
     let mut summary = GainSummary {
         task_count: states.len(),

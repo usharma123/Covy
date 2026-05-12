@@ -627,6 +627,36 @@ fn test_run_reduces_git_status() {
         .stdout(predicate::str::contains("[daily]"))
         .stdout(predicate::str::contains("[quota]"))
         .stdout(predicate::str::contains("[failures]"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "--reset"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires --yes"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--reset",
+            "--yes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Token savings stats reset to zero.",
+        ))
+        .stdout(predicate::str::contains("cleared_run_savings=1"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"invocation_count\":0"));
 }
 
 #[test]

@@ -53,6 +53,21 @@ pub(crate) fn load_run_savings(root: &Path, limit: usize) -> Result<Vec<RunSavin
     Ok(records)
 }
 
+pub(crate) fn reset_run_savings(root: &Path) -> Result<usize> {
+    let path = run_savings_path(root);
+    if !path.exists() {
+        return Ok(0);
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read '{}'", path.display()))?;
+    let count = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    fs::remove_file(&path).with_context(|| format!("failed to remove '{}'", path.display()))?;
+    Ok(count)
+}
+
 fn run_savings_path(root: &Path) -> PathBuf {
     root.join(".packet28").join(RUN_SAVINGS_FILE)
 }
