@@ -15,6 +15,7 @@ pub fn classify_fs_command(command: &str, argv: &[String]) -> Option<CommandRedu
         }
         "sed" if classify_sed(argv) => ("fs_sed", suite_packet_core::ToolOperationKind::Read),
         "diff" if classify_diff(argv) => ("fs_diff", suite_packet_core::ToolOperationKind::Diff),
+        "wc" if classify_wc(argv) => ("fs_wc", suite_packet_core::ToolOperationKind::Read),
         "grep" if classify_grep(argv) => ("fs_grep", suite_packet_core::ToolOperationKind::Search),
         "rg" if classify_grep(argv) => ("fs_rg", suite_packet_core::ToolOperationKind::Search),
         _ => return None,
@@ -167,6 +168,13 @@ pub fn reduce_fs_command(
                 )
             }
         }
+        "fs_wc" => {
+            if failed {
+                first_nonempty_line(stderr).unwrap_or_else(|| "wc failed".to_string())
+            } else {
+                summarize_wc(stdout, &detect_wc_mode(&spec.argv))
+            }
+        }
         _ => {
             let command = spec
                 .argv
@@ -205,7 +213,11 @@ pub fn reduce_fs_command(
         } else {
             summary
         },
-        compact_preview: String::new(),
+        compact_preview: if spec.canonical_kind == "fs_wc" && !failed {
+            compact_wc_output(stdout, &detect_wc_mode(&spec.argv))
+        } else {
+            String::new()
+        },
         paths: spec.paths.clone(),
         regions,
         symbols: Vec::new(),
@@ -304,6 +316,63 @@ fn classify_diff(argv: &[String]) -> bool {
         .filter(|arg| !arg.starts_with('-'))
         .count()
         >= 2
+}
+
+fn classify_wc(argv: &[String]) -> bool {
+    !contains_any(argv, &["--files0-from"])
+        && argv
+            .iter()
+            .skip(1)
+            .any(|arg| !arg.starts_with('-') && looks_like_path(arg))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WcMode {
+    Full,
+    Lines,
+    Words,
+    Bytes,
+    Chars,
+    Mixed,
+}
+
+fn detect_wc_mode(argv: &[String]) -> WcMode {
+    let mut has_l = false;
+    let mut has_w = false;
+    let mut has_c = false;
+    let mut has_m = false;
+    let mut count = 0usize;
+    for arg in argv.iter().skip(1).filter(|arg| arg.starts_with('-')) {
+        for ch in arg.trim_start_matches('-').chars() {
+            match ch {
+                'l' => {
+                    has_l = true;
+                    count += 1;
+                }
+                'w' => {
+                    has_w = true;
+                    count += 1;
+                }
+                'c' => {
+                    has_c = true;
+                    count += 1;
+                }
+                'm' => {
+                    has_m = true;
+                    count += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    match (count, has_l, has_w, has_c, has_m) {
+        (0, _, _, _, _) => WcMode::Full,
+        (1, true, _, _, _) => WcMode::Lines,
+        (1, _, true, _, _) => WcMode::Words,
+        (1, _, _, true, _) => WcMode::Bytes,
+        (1, _, _, _, true) => WcMode::Chars,
+        _ => WcMode::Mixed,
+    }
 }
 
 fn contains_any(argv: &[String], denied: &[&str]) -> bool {
@@ -424,6 +493,151 @@ fn compact(value: &str, limit: usize) -> String {
     }
 }
 
+fn summarize_wc(stdout: &str, mode: &WcMode) -> String {
+    let compact = compact_wc_output(stdout, mode);
+    let lines = compact
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    if lines <= 1 {
+        format!("wc {}", compact.trim())
+    } else {
+        format!("wc counted {lines} row(s)")
+    }
+}
+
+fn compact_wc_output(stdout: &str, mode: &WcMode) -> String {
+    let lines = stdout
+        .trim()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return String::new();
+    }
+    if lines.len() == 1 {
+        return format_wc_line(lines[0], mode);
+    }
+    let paths = lines
+        .iter()
+        .filter_map(|line| line.split_whitespace().last())
+        .filter(|path| *path != "total")
+        .collect::<Vec<_>>();
+    let prefix = common_path_prefix(&paths);
+    lines
+        .iter()
+        .map(|line| format_wc_multi_line(line, mode, &prefix))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_wc_line(line: &str, mode: &WcMode) -> String {
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    match mode {
+        WcMode::Lines | WcMode::Words | WcMode::Bytes | WcMode::Chars => {
+            parts.first().copied().unwrap_or_default().to_string()
+        }
+        WcMode::Full => {
+            if parts.len() >= 3 {
+                format!("{}L {}W {}B", parts[0], parts[1], parts[2])
+            } else {
+                line.trim().to_string()
+            }
+        }
+        WcMode::Mixed => strip_wc_path(&parts).join(" "),
+    }
+}
+
+fn format_wc_multi_line(line: &str, mode: &WcMode, prefix: &str) -> String {
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    if parts.is_empty() {
+        return String::new();
+    }
+    let is_total = parts.last() == Some(&"total");
+    match mode {
+        WcMode::Lines | WcMode::Words | WcMode::Bytes | WcMode::Chars => {
+            let count = parts.first().copied().unwrap_or("0");
+            if is_total {
+                format!("Σ {count}")
+            } else {
+                let name = strip_prefix(parts.last().copied().unwrap_or_default(), prefix);
+                format!("{count} {name}")
+            }
+        }
+        WcMode::Full => {
+            if is_total {
+                format!(
+                    "Σ {}L {}W {}B",
+                    parts.first().copied().unwrap_or("0"),
+                    parts.get(1).copied().unwrap_or("0"),
+                    parts.get(2).copied().unwrap_or("0")
+                )
+            } else if parts.len() >= 4 {
+                let name = strip_prefix(parts[3], prefix);
+                format!("{}L {}W {}B {name}", parts[0], parts[1], parts[2])
+            } else {
+                line.trim().to_string()
+            }
+        }
+        WcMode::Mixed => {
+            if is_total {
+                format!("Σ {}", parts[..parts.len().saturating_sub(1)].join(" "))
+            } else if parts.len() >= 2
+                && parts
+                    .last()
+                    .is_some_and(|value| value.parse::<u64>().is_err())
+            {
+                let name = strip_prefix(parts.last().copied().unwrap_or_default(), prefix);
+                format!("{} {name}", parts[..parts.len() - 1].join(" "))
+            } else {
+                parts.join(" ")
+            }
+        }
+    }
+}
+
+fn strip_wc_path<'a>(parts: &[&'a str]) -> Vec<&'a str> {
+    if parts.len() >= 2
+        && parts
+            .last()
+            .is_some_and(|value| value.parse::<u64>().is_err())
+    {
+        parts[..parts.len() - 1].to_vec()
+    } else {
+        parts.to_vec()
+    }
+}
+
+fn common_path_prefix(paths: &[&str]) -> String {
+    if paths.len() <= 1 {
+        return String::new();
+    }
+    let Some(idx) = paths[0].rfind('/') else {
+        return String::new();
+    };
+    let mut prefix = paths[0][..=idx].to_string();
+    while !prefix.is_empty() {
+        if paths.iter().all(|path| path.starts_with(&prefix)) {
+            return prefix;
+        }
+        let trimmed = prefix.trim_end_matches('/');
+        let Some(idx) = trimmed.rfind('/') else {
+            return String::new();
+        };
+        prefix.truncate(idx + 1);
+    }
+    String::new()
+}
+
+fn strip_prefix<'a>(path: &'a str, prefix: &str) -> &'a str {
+    if prefix.is_empty() {
+        path
+    } else {
+        path.strip_prefix(prefix).unwrap_or(path)
+    }
+}
+
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
     format!("{family}:{kind}:{}", argv.join("\u{1f}"))
 }
@@ -471,5 +685,48 @@ mod tests {
             "tree listed 1 dir(s), 2 file(s) under src"
         );
         assert_eq!(reduction.canonical_kind, "fs_tree");
+    }
+
+    #[test]
+    fn reduce_wc_single_file_strips_path_and_padding() {
+        let argv = vec!["wc", "scripts/find_duplicate_attrs.py"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_fs_command("wc scripts/find_duplicate_attrs.py", &argv).unwrap();
+        let reduction = reduce_fs_command(
+            &spec,
+            "      30      96     978 scripts/find_duplicate_attrs.py\n",
+            "",
+            0,
+        );
+        assert_eq!(reduction.canonical_kind, "fs_wc");
+        assert_eq!(reduction.summary, "wc 30L 96W 978B");
+        assert_eq!(reduction.compact_preview, "30L 96W 978B");
+    }
+
+    #[test]
+    fn reduce_wc_lines_only_returns_count() {
+        let argv = vec!["wc", "-l", "src/main.rs"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_fs_command("wc -l src/main.rs", &argv).unwrap();
+        let reduction = reduce_fs_command(&spec, "      30 src/main.rs\n", "", 0);
+        assert_eq!(reduction.summary, "wc 30");
+        assert_eq!(reduction.compact_preview, "30");
+    }
+
+    #[test]
+    fn reduce_wc_multi_file_strips_common_prefix() {
+        let argv = vec!["wc", "-l", "src/main.rs", "src/lib.rs"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_fs_command("wc -l src/main.rs src/lib.rs", &argv).unwrap();
+        let output = "      30 src/main.rs\n      50 src/lib.rs\n      80 total\n";
+        let reduction = reduce_fs_command(&spec, output, "", 0);
+        assert_eq!(reduction.summary, "wc counted 3 row(s)");
+        assert_eq!(reduction.compact_preview, "30 main.rs\n50 lib.rs\nΣ 80");
     }
 }

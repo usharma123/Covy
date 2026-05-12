@@ -905,6 +905,24 @@ fn test_run_reduces_file_and_search_commands() {
         .stdout(predicate::str::contains("\"family\":\"fs\""))
         .stdout(predicate::str::contains("\"canonical_kind\":\"fs_grep\""))
         .stdout(predicate::str::contains("\"fallback_reason\":null"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "wc",
+            "-l",
+            "sample.txt",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"family\":\"fs\""))
+        .stdout(predicate::str::contains("\"canonical_kind\":\"fs_wc\""))
+        .stdout(predicate::str::contains("\"summary\":\"wc 3\""))
+        .stdout(predicate::str::contains("\"fallback_reason\":null"));
 }
 
 #[test]
