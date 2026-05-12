@@ -787,7 +787,7 @@ fn classify_read_tool(argv: &[String]) -> Option<NativeToolPlan> {
     let mut tool_argv = vec!["compact".to_string(), "read".to_string()];
     match argv.first()?.as_str() {
         "cat" => {
-            let path = argv.get(1)?.clone();
+            let path = parse_cat_read_path(argv)?;
             tool_argv.push(path);
         }
         "head" => {
@@ -823,6 +823,31 @@ fn classify_read_tool(argv: &[String]) -> Option<NativeToolPlan> {
         kind: NativeToolKind::Read,
         argv: tool_argv,
     })
+}
+
+fn parse_cat_read_path(argv: &[String]) -> Option<String> {
+    let mut path = None::<String>;
+    let mut iter = argv.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-n" => {}
+            "--" => {
+                path = iter.next().cloned();
+                if iter.next().is_some() {
+                    return None;
+                }
+                break;
+            }
+            value if value.starts_with('-') => return None,
+            value => {
+                if path.is_some() {
+                    return None;
+                }
+                path = Some(value.to_string());
+            }
+        }
+    }
+    path
 }
 
 fn classify_grep_tool(argv: &[String]) -> Option<NativeToolPlan> {
@@ -1544,6 +1569,30 @@ mod tests {
     fn routes_simple_reads_to_native_tool() {
         let decision = decide_command_route("head -n 20 README.md");
         assert_eq!(decision.kind, RouteKind::NativeTool);
+    }
+
+    #[test]
+    fn routes_cat_line_numbers_like_rtk_and_declines_incompatible_flags() {
+        let decision = decide_command_route("cat -n README.md");
+        assert_eq!(decision.kind, RouteKind::NativeTool);
+        assert_eq!(
+            decision.native_tool.as_ref().map(|tool| tool.argv.clone()),
+            Some(vec![
+                "compact".to_string(),
+                "read".to_string(),
+                "README.md".to_string()
+            ])
+        );
+
+        for command in ["cat -A README.md", "cat --show-all README.md"] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::RawPassthrough, "{command}");
+            assert_eq!(
+                decision.reason.as_deref(),
+                Some("unsupported_command"),
+                "{command}"
+            );
+        }
     }
 
     #[test]
