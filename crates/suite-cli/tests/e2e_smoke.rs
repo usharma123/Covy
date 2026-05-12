@@ -479,6 +479,16 @@ fn test_run_reduces_git_status() {
         ))
         .stdout(predicate::str::contains("git status --short"));
 
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "--history"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "timestamp_unix_ms,family,raw_est_tokens",
+        ))
+        .stdout(predicate::str::contains("git status --short"));
+
     for format in ["daily", "weekly", "monthly"] {
         suite_cmd()
             .current_dir(root.path())
@@ -489,6 +499,18 @@ fn test_run_reduces_git_status() {
                 "--format",
                 format,
             ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "period,invocation_count,raw_est_tokens",
+            ))
+            .stdout(predicate::str::contains(",1,"));
+    }
+
+    for flag in ["--daily", "--weekly", "--monthly"] {
+        suite_cmd()
+            .current_dir(root.path())
+            .args(["gain", "--root", root.path().to_str().unwrap(), flag])
             .assert()
             .success()
             .stdout(predicate::str::contains(
@@ -520,9 +542,33 @@ fn test_run_reduces_git_status() {
             "gain",
             "--root",
             root.path().to_str().unwrap(),
+            "--quota",
+            "--quota-tokens",
+            "1000",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("quota_tokens=1000"))
+        .stdout(predicate::str::contains("quota_used_pct="))
+        .stdout(predicate::str::contains("quota_avoided_pct="));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
             "--format",
             "graph",
         ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("route,count,share_pct,bar"))
+        .stdout(predicate::str::contains("run_reducer:git"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "--graph"])
         .assert()
         .success()
         .stdout(predicate::str::contains("route,count,share_pct,bar"))
@@ -536,6 +582,24 @@ fn test_run_reduces_git_status() {
             root.path().to_str().unwrap(),
             "--format",
             "all",
+            "--quota-tokens",
+            "1000",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[summary]"))
+        .stdout(predicate::str::contains("[graph]"))
+        .stdout(predicate::str::contains("[daily]"))
+        .stdout(predicate::str::contains("[quota]"))
+        .stdout(predicate::str::contains("[failures]"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--all",
             "--quota-tokens",
             "1000",
         ])
@@ -575,6 +639,23 @@ fn test_gain_reports_failed_and_fallback_runs() {
             root.path().to_str().unwrap(),
             "--format",
             "failures",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "timestamp_unix_ms,family,exit_code,fallback_reason,command",
+        ))
+        .stdout(predicate::str::contains("fallback,7"))
+        .stdout(predicate::str::contains("unsupported"))
+        .stdout(predicate::str::contains("packet28 failure"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--failures",
         ])
         .assert()
         .success()

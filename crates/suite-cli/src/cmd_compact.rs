@@ -223,6 +223,30 @@ pub struct AnalyticsArgs {
     /// Output format for analytics commands (text, json, csv, history, failures, daily, weekly, monthly, quota, graph, all)
     #[arg(long, default_value = "text")]
     pub format: String,
+    /// Show route graph output (RTK-compatible alias for --format graph)
+    #[arg(long)]
+    pub graph: bool,
+    /// Show recent command history (RTK-compatible alias for --format history)
+    #[arg(long)]
+    pub history: bool,
+    /// Show failed or fallback runs (RTK-compatible alias for --format failures)
+    #[arg(long)]
+    pub failures: bool,
+    /// Show daily savings buckets (RTK-compatible alias for --format daily)
+    #[arg(long)]
+    pub daily: bool,
+    /// Show weekly savings buckets (RTK-compatible alias for --format weekly)
+    #[arg(long)]
+    pub weekly: bool,
+    /// Show monthly savings buckets (RTK-compatible alias for --format monthly)
+    #[arg(long)]
+    pub monthly: bool,
+    /// Show quota impact (RTK-compatible alias for --format quota)
+    #[arg(long)]
+    pub quota: bool,
+    /// Show all analytics sections (RTK-compatible alias for --format all)
+    #[arg(long)]
+    pub all: bool,
     /// Token budget used by gain --format quota
     #[arg(long)]
     pub quota_tokens: Option<u64>,
@@ -926,7 +950,7 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         .raw_est_tokens
         .saturating_sub(summary.reduced_est_tokens);
     summary.savings_pct = pct_saved(summary.raw_est_tokens, summary.reduced_est_tokens);
-    let format = args.format.trim().to_ascii_lowercase();
+    let format = gain_output_format(&args);
     if args.json || format == "json" {
         crate::cmd_common::emit_json(&serde_json::to_value(summary)?, args.pretty)?;
     } else if format == "csv" {
@@ -959,6 +983,33 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+fn gain_output_format(args: &AnalyticsArgs) -> String {
+    let explicit = args.format.trim().to_ascii_lowercase();
+    if args.json || explicit != "text" {
+        return explicit;
+    }
+    if args.graph {
+        "graph"
+    } else if args.history {
+        "history"
+    } else if args.failures {
+        "failures"
+    } else if args.daily {
+        "daily"
+    } else if args.weekly {
+        "weekly"
+    } else if args.monthly {
+        "monthly"
+    } else if args.quota {
+        "quota"
+    } else if args.all {
+        "all"
+    } else {
+        "text"
+    }
+    .to_string()
 }
 
 fn economics_granularities(args: &CcEconomicsArgs) -> Vec<EconomicsGranularity> {
