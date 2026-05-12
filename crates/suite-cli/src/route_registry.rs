@@ -1700,6 +1700,30 @@ mod tests {
     }
 
     #[test]
+    fn routes_rtk_python_package_manager_forms() {
+        for (command, expected) in [
+            ("pip3 list", "python_pip_list"),
+            ("pip outdated", "python_pip_outdated"),
+            ("pip install pytest", "python_pip_install"),
+            ("pip show pytest", "python_pip_show"),
+            ("uv pip outdated", "python_pip_outdated"),
+            ("uv pip install pytest", "python_pip_install"),
+            ("uv pip show pytest", "python_pip_show"),
+        ] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
+            assert_eq!(
+                decision
+                    .reducer_spec
+                    .as_ref()
+                    .map(|spec| spec.canonical_kind.as_str()),
+                Some(expected),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
     fn routes_sudo_and_env_prefixed_commands_like_rtk() {
         let sudo = decide_command_route("sudo git status --short");
         assert_eq!(sudo.kind, RouteKind::ReducerRewrite);

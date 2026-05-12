@@ -23,12 +23,20 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
         "python" | "python3" if classify_python_module(argv, "mypy") => {
             ("python_mypy", suite_packet_core::ToolOperationKind::Build)
         }
-        "pip" if classify_pip_list(argv) => (
+        "pip" | "pip3" if classify_pip_list(argv) => (
             "python_pip_list",
             suite_packet_core::ToolOperationKind::Fetch,
         ),
-        "pip" if classify_pip_outdated(argv) => (
+        "pip" | "pip3" if classify_pip_outdated(argv) => (
             "python_pip_outdated",
+            suite_packet_core::ToolOperationKind::Fetch,
+        ),
+        "pip" | "pip3" if classify_pip_install(argv) => (
+            "python_pip_install",
+            suite_packet_core::ToolOperationKind::Fetch,
+        ),
+        "pip" | "pip3" if classify_pip_show(argv) => (
+            "python_pip_show",
             suite_packet_core::ToolOperationKind::Fetch,
         ),
         "uv" if classify_uv_pip_list(argv) => (
@@ -37,6 +45,14 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
         ),
         "uv" if classify_uv_pip_outdated(argv) => (
             "python_pip_outdated",
+            suite_packet_core::ToolOperationKind::Fetch,
+        ),
+        "uv" if classify_uv_pip_install(argv) => (
+            "python_pip_install",
+            suite_packet_core::ToolOperationKind::Fetch,
+        ),
+        "uv" if classify_uv_pip_show(argv) => (
+            "python_pip_show",
             suite_packet_core::ToolOperationKind::Fetch,
         ),
         "python" | "python3" if classify_python_module_command(argv, "pip", "list") => (
@@ -87,6 +103,8 @@ pub fn reduce_python_command(
         "python_mypy" => summarize_mypy(&combined, failed),
         "python_pip_list" => summarize_pip_list(stdout),
         "python_pip_outdated" => summarize_pip_outdated(stdout),
+        "python_pip_install" => summarize_pip_install(&combined, failed),
+        "python_pip_show" => summarize_pip_show(stdout, failed),
         _ => {
             first_nonempty_line(&combined).unwrap_or_else(|| "python command completed".to_string())
         }
@@ -175,7 +193,17 @@ fn classify_pip_list(argv: &[String]) -> bool {
 }
 
 fn classify_pip_outdated(argv: &[String]) -> bool {
-    argv.get(1).is_some_and(|arg| arg == "list") && contains_any(argv, &["--outdated"])
+    (argv.get(1).is_some_and(|arg| arg == "list") && contains_any(argv, &["--outdated"]))
+        || argv.get(1).is_some_and(|arg| arg == "outdated")
+}
+
+fn classify_pip_install(argv: &[String]) -> bool {
+    argv.get(1).is_some_and(|arg| arg == "install")
+        && !contains_any(argv, &["--report", "--dry-run"])
+}
+
+fn classify_pip_show(argv: &[String]) -> bool {
+    argv.get(1).is_some_and(|arg| arg == "show") && !contains_any(argv, &["--files", "-f"])
 }
 
 fn classify_uv_pip_list(argv: &[String]) -> bool {
@@ -186,8 +214,20 @@ fn classify_uv_pip_list(argv: &[String]) -> bool {
 
 fn classify_uv_pip_outdated(argv: &[String]) -> bool {
     argv.get(1).is_some_and(|arg| arg == "pip")
-        && argv.get(2).is_some_and(|arg| arg == "list")
-        && contains_any(argv, &["--outdated"])
+        && ((argv.get(2).is_some_and(|arg| arg == "list") && contains_any(argv, &["--outdated"]))
+            || argv.get(2).is_some_and(|arg| arg == "outdated"))
+}
+
+fn classify_uv_pip_install(argv: &[String]) -> bool {
+    argv.get(1).is_some_and(|arg| arg == "pip")
+        && argv.get(2).is_some_and(|arg| arg == "install")
+        && !contains_any(argv, &["--report", "--dry-run"])
+}
+
+fn classify_uv_pip_show(argv: &[String]) -> bool {
+    argv.get(1).is_some_and(|arg| arg == "pip")
+        && argv.get(2).is_some_and(|arg| arg == "show")
+        && !contains_any(argv, &["--files", "-f"])
 }
 
 fn summarize_pytest(output: &str, failed: bool) -> String {
@@ -331,6 +371,53 @@ fn summarize_pip_outdated(stdout: &str) -> String {
             packages.len(),
             packages[0]
         )
+    }
+}
+
+fn summarize_pip_install(output: &str, failed: bool) -> String {
+    if failed {
+        return first_nonempty_line(output).unwrap_or_else(|| "pip install failed".to_string());
+    }
+    let lines = nonempty_lines(output);
+    if let Some(line) = lines
+        .iter()
+        .find(|line| line.starts_with("Successfully installed "))
+    {
+        let count = line
+            .trim_start_matches("Successfully installed ")
+            .split_whitespace()
+            .count();
+        return format!("pip install: installed {count} package(s)");
+    }
+    if let Some(line) = lines
+        .iter()
+        .find(|line| line.starts_with("Requirement already satisfied:"))
+    {
+        return compact(line, 180);
+    }
+    first_nonempty_line(output).unwrap_or_else(|| "pip install completed".to_string())
+}
+
+fn summarize_pip_show(stdout: &str, failed: bool) -> String {
+    if failed {
+        return first_nonempty_line(stdout).unwrap_or_else(|| "pip show failed".to_string());
+    }
+    let mut names = Vec::new();
+    let mut version = None::<String>;
+    for line in stdout.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix("Name:") {
+            names.push(name.trim().to_string());
+        } else if version.is_none() {
+            if let Some(value) = line.strip_prefix("Version:") {
+                version = Some(value.trim().to_string());
+            }
+        }
+    }
+    match (names.first(), version) {
+        (Some(name), Some(version)) if names.len() == 1 => format!("pip show: {name} {version}"),
+        (Some(name), _) if names.len() == 1 => format!("pip show: {name}"),
+        (Some(name), _) => format!("pip show: {} package(s); first {name}", names.len()),
+        _ => "pip show returned no package metadata".to_string(),
     }
 }
 
@@ -711,6 +798,23 @@ mod tests {
     }
 
     #[test]
+    fn classify_python_accepts_rtk_pip_package_manager_forms() {
+        for (command, expected) in [
+            ("pip3 list", "python_pip_list"),
+            ("pip outdated", "python_pip_outdated"),
+            ("pip install pytest", "python_pip_install"),
+            ("pip show pytest", "python_pip_show"),
+            ("uv pip outdated", "python_pip_outdated"),
+            ("uv pip install pytest", "python_pip_install"),
+            ("uv pip show pytest", "python_pip_show"),
+        ] {
+            let argv = shell_words::split(command).unwrap();
+            let spec = classify_python_command(command, &argv).unwrap();
+            assert_eq!(spec.canonical_kind, expected, "{command}");
+        }
+    }
+
+    #[test]
     fn reduce_mypy_summarizes_first_error_code() {
         let argv = vec!["mypy", "src"]
             .into_iter()
@@ -738,5 +842,29 @@ mod tests {
             reduction.summary,
             "pip outdated: 1 package(s); first pytest (8.1.0)"
         );
+    }
+
+    #[test]
+    fn reduce_pip_install_and_show_summarize_common_output() {
+        let argv = vec!["pip", "install", "pytest"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_python_command("pip install pytest", &argv).unwrap();
+        let reduction = reduce_python_command(
+            &spec,
+            "Collecting pytest\nSuccessfully installed iniconfig-2.0.0 pytest-8.2.0\n",
+            "",
+            0,
+        );
+        assert_eq!(reduction.summary, "pip install: installed 2 package(s)");
+
+        let argv = vec!["pip", "show", "pytest"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_python_command("pip show pytest", &argv).unwrap();
+        let reduction = reduce_python_command(&spec, "Name: pytest\nVersion: 8.2.0\n", "", 0);
+        assert_eq!(reduction.summary, "pip show: pytest 8.2.0");
     }
 }
