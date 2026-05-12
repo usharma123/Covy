@@ -9,8 +9,9 @@ use crate::{
     cmd_dashboard, cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard,
     cmd_hook, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp,
     cmd_memory, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack,
-    cmd_transcript, cmd_verify, cmd_wakeup, BuildCommands, Cli, Commands, ContextCommands,
-    CoverCommands, DiffCommands, GuardCommands, MapCommands, StackCommands, TestCommands,
+    cmd_system, cmd_transcript, cmd_verify, cmd_wakeup, BuildCommands, Cli, Commands,
+    ContextCommands, CoverCommands, DiffCommands, GuardCommands, MapCommands, StackCommands,
+    TestCommands,
 };
 
 pub fn main_entry() {
@@ -101,6 +102,9 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         },
         Some(Commands::Gain(args)) => cmd_compact::run_gain_command(args),
         Some(Commands::Compact(args)) => cmd_compact::run(args),
+        Some(Commands::Json(args)) => cmd_system::run_json(args),
+        Some(Commands::Deps(args)) => cmd_system::run_deps(args),
+        Some(Commands::Env(args)) => cmd_system::run_env(args),
         Some(Commands::Rewrite(args)) => cmd_compact::run_rewrite_command(args),
         Some(Commands::Session(args)) => cmd_compact::run_session(args),
         Some(Commands::Packet(packet)) => match packet.command {
@@ -369,6 +373,9 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         }
         Some(Commands::Gain(_))
         | Some(Commands::Compact(_))
+        | Some(Commands::Json(_))
+        | Some(Commands::Deps(_))
+        | Some(Commands::Env(_))
         | Some(Commands::Rewrite(_))
         | Some(Commands::Session(_))
         | Some(Commands::Discover(_))

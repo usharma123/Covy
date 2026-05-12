@@ -143,6 +143,65 @@ fn test_top_level_rewrite_respects_repo_exclude_config() {
 }
 
 #[test]
+fn test_system_json_deps_and_env_commands() {
+    let root = TempDir::new().unwrap();
+    let payload = root.path().join("payload.json");
+    fs::write(
+        &payload,
+        serde_json::to_string(&json!({
+            "name": "demo",
+            "items": [1, 2, 3, 4, 5, 6],
+            "long": "x".repeat(120)
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["json", payload.to_str().unwrap(), "--schema-only"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("name: string"))
+        .stdout(predicate::str::contains("items:"))
+        .stdout(predicate::str::contains("[int] (6)"))
+        .stdout(predicate::str::contains("long: string"));
+
+    fs::write(
+        root.path().join("package.json"),
+        r#"{"name":"packet28-demo","version":"1.0.0","dependencies":{"react":"18.2.0"},"devDependencies":{"vite":"5.0.0"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("requirements.txt"),
+        "pytest==8.0.0\n# comment\nruff>=0.4\n",
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["deps", root.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Node.js (package.json):"))
+        .stdout(predicate::str::contains("packet28-demo @ 1.0.0"))
+        .stdout(predicate::str::contains("react (18.2.0)"))
+        .stdout(predicate::str::contains("Python (requirements.txt):"))
+        .stdout(predicate::str::contains("pytest==8.0.0"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env_clear()
+        .env("PATH", "/a:/b:/c:/d:/e:/f")
+        .env("PACKET28_SECRET_TOKEN", "supersecrettoken")
+        .args(["env", "packet28"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PACKET28_SECRET_TOKEN=su****en"))
+        .stdout(predicate::str::contains("supersecrettoken").not());
+}
+
+#[test]
 fn test_run_reduces_git_status() {
     let root = TempDir::new().unwrap();
     std::process::Command::new("git")

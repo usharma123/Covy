@@ -4,8 +4,8 @@ use crate::{
     cmd_agent_prompt, cmd_build, cmd_compact, cmd_context, cmd_cover, cmd_daemon, cmd_dashboard,
     cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook, cmd_impact,
     cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet,
-    cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack, cmd_transcript, cmd_verify,
-    cmd_wakeup,
+    cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack, cmd_system, cmd_transcript,
+    cmd_verify, cmd_wakeup,
 };
 
 #[derive(Parser)]
@@ -60,6 +60,12 @@ pub enum Commands {
     Gain(cmd_compact::AnalyticsArgs),
     /// RTK-style compact command surface and analytics
     Compact(cmd_compact::CompactArgs),
+    /// Compactly inspect JSON files or stdin while preserving raw values by default
+    Json(cmd_system::JsonArgs),
+    /// Summarize project dependency manifests
+    Deps(cmd_system::DepsArgs),
+    /// Show categorized environment variables with secrets masked by default
+    Env(cmd_system::EnvArgs),
     /// Plan how Packet28 would reduce or pass through a command
     Rewrite(cmd_compact::RewriteArgs),
     /// Inspect Packet28 task sessions
