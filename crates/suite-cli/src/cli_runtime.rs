@@ -108,6 +108,12 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Err(args)) => cmd_system::run_err(args),
         Some(Commands::Prettier(args)) => cmd_system::run_prettier(args),
         Some(Commands::Format(args)) => cmd_system::run_format(args),
+        Some(Commands::Npm(args)) => cmd_system::run_npm(args),
+        Some(Commands::Npx(args)) => cmd_system::run_npx(args),
+        Some(Commands::Tsc(args)) => cmd_system::run_tsc(args),
+        Some(Commands::Vitest(args)) => cmd_system::run_vitest(args),
+        Some(Commands::Pytest(args)) => cmd_system::run_pytest(args),
+        Some(Commands::Ruff(args)) => cmd_system::run_ruff(args),
         Some(Commands::Smart(args)) => cmd_system::run_smart(args),
         Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Grep(args)) => cmd_system::run_grep(args),
@@ -389,6 +395,12 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Err(_))
         | Some(Commands::Prettier(_))
         | Some(Commands::Format(_))
+        | Some(Commands::Npm(_))
+        | Some(Commands::Npx(_))
+        | Some(Commands::Tsc(_))
+        | Some(Commands::Vitest(_))
+        | Some(Commands::Pytest(_))
+        | Some(Commands::Ruff(_))
         | Some(Commands::Smart(_))
         | Some(Commands::Find(_))
         | Some(Commands::Grep(_))

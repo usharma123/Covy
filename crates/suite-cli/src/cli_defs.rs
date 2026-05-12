@@ -72,6 +72,18 @@ pub enum Commands {
     Prettier(cmd_system::FormatterArgs),
     /// Run a formatter such as prettier, black, ruff, or biome with compact output
     Format(cmd_system::FormatterArgs),
+    /// Run npm with compact output
+    Npm(cmd_system::ToolArgs),
+    /// Run npx with compact output
+    Npx(cmd_system::ToolArgs),
+    /// Run the TypeScript compiler with compact output
+    Tsc(cmd_system::ToolArgs),
+    /// Run Vitest with compact output
+    Vitest(cmd_system::ToolArgs),
+    /// Run pytest with compact output
+    Pytest(cmd_system::ToolArgs),
+    /// Run Ruff with compact output
+    Ruff(cmd_system::ToolArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output

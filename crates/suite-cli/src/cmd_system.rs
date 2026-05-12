@@ -89,6 +89,21 @@ pub struct FormatterArgs {
 }
 
 #[derive(Args)]
+pub struct ToolArgs {
+    /// Tool arguments
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+
+    /// Emit a machine-readable envelope
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON machine output
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct SmartArgs {
     /// File to summarize with local heuristics
     pub file: PathBuf,
@@ -301,6 +316,30 @@ pub fn run_format(args: FormatterArgs) -> Result<i32> {
     run_formatter_command(formatter, args, "format")
 }
 
+pub fn run_npm(args: ToolArgs) -> Result<i32> {
+    run_tool_command("npm", args, "npm")
+}
+
+pub fn run_npx(args: ToolArgs) -> Result<i32> {
+    run_tool_command("npx", args, "npx")
+}
+
+pub fn run_tsc(args: ToolArgs) -> Result<i32> {
+    run_tool_command("tsc", args, "tsc")
+}
+
+pub fn run_vitest(args: ToolArgs) -> Result<i32> {
+    run_tool_command("vitest", args, "vitest")
+}
+
+pub fn run_pytest(args: ToolArgs) -> Result<i32> {
+    run_tool_command("pytest", args, "pytest")
+}
+
+pub fn run_ruff(args: ToolArgs) -> Result<i32> {
+    run_tool_command("ruff", args, "ruff")
+}
+
 fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     let (program, rest) = args
         .command
@@ -327,6 +366,20 @@ fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
         },
     )?;
     Ok(exit_code)
+}
+
+fn run_tool_command(program: &str, args: ToolArgs, label: &str) -> Result<i32> {
+    let mut command = Vec::with_capacity(args.args.len() + 1);
+    command.push(program.to_string());
+    command.extend(args.args);
+    run_summary_labeled(
+        SummaryArgs {
+            command,
+            json: args.json,
+            pretty: args.pretty,
+        },
+        label,
+    )
 }
 
 struct FormatterInvocation {
