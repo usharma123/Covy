@@ -1,6 +1,9 @@
 use crate::types::{CommandReducerSpec, CommandReduction};
 
 pub fn classify_git_command(command: &str, argv: &[String]) -> Option<CommandReducerSpec> {
+    if argv.first().map(String::as_str) == Some("gt") {
+        return classify_gt_command(command, argv);
+    }
     let subcommand = argv.get(1)?.as_str();
     let (canonical_kind, mutation) = match subcommand {
         "status" => ("git_status", false),
@@ -50,6 +53,50 @@ pub fn classify_git_command(command: &str, argv: &[String]) -> Option<CommandRed
     })
 }
 
+fn classify_gt_command(command: &str, argv: &[String]) -> Option<CommandReducerSpec> {
+    let subcommand = argv.get(1)?.as_str();
+    match subcommand {
+        "status" | "diff" | "show" | "fetch" | "stash" | "worktree" | "add" | "commit" | "push"
+        | "pull" | "branch" | "switch" | "checkout" => {
+            let mut git_argv = vec!["git".to_string()];
+            git_argv.extend(argv.iter().skip(1).cloned());
+            return classify_git_command(command, &git_argv);
+        }
+        _ => {}
+    }
+    let (canonical_kind, mutation) = match subcommand {
+        "log" => match argv.get(2).map(String::as_str) {
+            Some("short") => ("gt_log_short", false),
+            Some("long") => ("gt_log_long", false),
+            _ => ("gt_log", false),
+        },
+        "submit" => ("gt_submit", true),
+        "sync" => ("gt_sync", true),
+        "restack" => ("gt_restack", true),
+        "create" => ("gt_create", true),
+        _ => return None,
+    };
+    let paths = argv
+        .iter()
+        .skip(2)
+        .filter(|arg| !arg.starts_with('-'))
+        .cloned()
+        .collect::<Vec<_>>();
+    Some(CommandReducerSpec {
+        family: "git".to_string(),
+        canonical_kind: canonical_kind.to_string(),
+        packet_type: "packet28.hook.git.v2".to_string(),
+        operation_kind: suite_packet_core::ToolOperationKind::Git,
+        command: command.to_string(),
+        argv: argv.to_vec(),
+        cache_fingerprint: fingerprint("git", canonical_kind, argv),
+        cacheable: !mutation,
+        mutation,
+        paths: normalize_paths(paths),
+        equivalence_key: None,
+    })
+}
+
 pub fn reduce_git_command(
     spec: &CommandReducerSpec,
     stdout: &str,
@@ -65,6 +112,11 @@ pub fn reduce_git_command(
             "git_diff" | "git_show" if stdout.contains("diff --git ") => compact_diff(stdout, 500),
             "git_status" => compact_git_status(stdout),
             "git_log" => compact_git_log(stdout, 20),
+            "gt_log" | "gt_log_long" => compact_gt_log_entries(stdout),
+            "gt_submit" => summarize_gt_submit(stdout),
+            "gt_sync" => summarize_gt_sync(stdout),
+            "gt_restack" => summarize_gt_restack(stdout),
+            "gt_create" => summarize_gt_create(stdout),
             _ => String::new(),
         }
     };
@@ -130,6 +182,45 @@ pub fn reduce_git_command(
                 output.unwrap_or_else(|| "git worktree failed".to_string())
             } else {
                 summarize_git_worktree(spec, stdout)
+            }
+        }
+        "gt_log" | "gt_log_long" | "gt_log_short" => {
+            if failed {
+                output.unwrap_or_else(|| "gt log failed".to_string())
+            } else {
+                let entries = stdout.lines().filter(|line| is_gt_graph_node(line)).count();
+                format!(
+                    "gt log returned {entries} stack entr{suffix}",
+                    suffix = if entries == 1 { "y" } else { "ies" }
+                )
+            }
+        }
+        "gt_submit" => {
+            if failed {
+                output.unwrap_or_else(|| "gt submit failed".to_string())
+            } else {
+                summarize_gt_submit(stdout)
+            }
+        }
+        "gt_sync" => {
+            if failed {
+                output.unwrap_or_else(|| "gt sync failed".to_string())
+            } else {
+                summarize_gt_sync(stdout)
+            }
+        }
+        "gt_restack" => {
+            if failed {
+                output.unwrap_or_else(|| "gt restack failed".to_string())
+            } else {
+                summarize_gt_restack(stdout)
+            }
+        }
+        "gt_create" => {
+            if failed {
+                output.unwrap_or_else(|| "gt create failed".to_string())
+            } else {
+                summarize_gt_create(stdout)
             }
         }
         _ => output.unwrap_or_else(|| format!("{} completed", spec.canonical_kind)),
@@ -526,6 +617,212 @@ fn compact_git_log(stdout: &str, max_entries: usize) -> String {
     entries.join("\n")
 }
 
+fn compact_gt_log_entries(stdout: &str) -> String {
+    const MAX_GT_LOG_ENTRIES: usize = 15;
+    let mut result = Vec::new();
+    let mut entry_count = 0usize;
+    let lines = stdout.trim().lines().collect::<Vec<_>>();
+    for (idx, line) in lines.iter().enumerate() {
+        if is_gt_graph_node(line) {
+            entry_count += 1;
+        }
+        let without_email = remove_email_tokens(line);
+        result.push(compact(without_email.trim_end(), 120));
+        if entry_count >= MAX_GT_LOG_ENTRIES {
+            let remaining = lines[idx + 1..]
+                .iter()
+                .filter(|line| is_gt_graph_node(line))
+                .count();
+            if remaining > 0 {
+                result.push(format!("... +{remaining} more entries"));
+            }
+            break;
+        }
+    }
+    result.join("\n")
+}
+
+fn summarize_gt_submit(stdout: &str) -> String {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return "gt submit completed".to_string();
+    }
+    let mut pushed = Vec::new();
+    let mut prs = Vec::new();
+    for line in trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if line.contains("pushed") || line.contains("Pushed") {
+            let branch = extract_gt_branch_name(line);
+            if !branch.is_empty() {
+                pushed.push(branch);
+            }
+        } else if let Some(pr) = summarize_gt_pr_line(line) {
+            prs.push(pr);
+        }
+    }
+    let mut summary = Vec::new();
+    if !pushed.is_empty() {
+        summary.push(format!("pushed {}", pushed.join(", ")));
+    }
+    summary.extend(prs);
+    if summary.is_empty() {
+        compact(trimmed, 200)
+    } else {
+        summary.join("\n")
+    }
+}
+
+fn summarize_gt_sync(stdout: &str) -> String {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return "ok sync".to_string();
+    }
+    let mut synced = 0usize;
+    let mut deleted = 0usize;
+    let mut deleted_names = Vec::new();
+    for line in trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if (line.contains("Synced") && line.contains("branch"))
+            || line.starts_with("Synced with remote")
+        {
+            synced += 1;
+        }
+        if line.contains("deleted") || line.contains("Deleted") {
+            deleted += 1;
+            let branch = extract_gt_branch_name(line);
+            if !branch.is_empty() {
+                deleted_names.push(branch);
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    if synced > 0 {
+        parts.push(format!("{synced} synced"));
+    }
+    if deleted > 0 {
+        if deleted_names.is_empty() {
+            parts.push(format!("{deleted} deleted"));
+        } else {
+            parts.push(format!("{deleted} deleted ({})", deleted_names.join(", ")));
+        }
+    }
+    if parts.is_empty() {
+        "ok sync".to_string()
+    } else {
+        format!("ok sync: {}", parts.join(", "))
+    }
+}
+
+fn summarize_gt_restack(stdout: &str) -> String {
+    let restacked = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            (line.contains("Restacked") || line.contains("Rebased")) && line.contains("branch")
+        })
+        .count();
+    if restacked > 0 {
+        format!("ok restacked {restacked} branches")
+    } else {
+        "ok restacked".to_string()
+    }
+}
+
+fn summarize_gt_create(stdout: &str) -> String {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return "ok created".to_string();
+    }
+    let branch = trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains("Created") || line.contains("created"))
+        .find_map(|line| {
+            let branch = extract_gt_branch_name(line);
+            (!branch.is_empty()).then_some(branch)
+        })
+        .unwrap_or_default();
+    if branch.is_empty() {
+        format!("ok created {}", trimmed.lines().next().unwrap_or("").trim())
+    } else {
+        format!("ok created {branch}")
+    }
+}
+
+fn summarize_gt_pr_line(line: &str) -> Option<String> {
+    let mut parts = line.split_whitespace();
+    let action = parts.next()?;
+    if !matches!(action, "Created" | "Updated") {
+        return None;
+    }
+    if parts.next()? != "pull" || parts.next()? != "request" {
+        return None;
+    }
+    let number = parts.next()?.trim_start_matches('#');
+    if parts.next()? != "for" {
+        return None;
+    }
+    let branch = parts.next()?.trim_end_matches(':');
+    let url = parts.next();
+    let action = action.to_ascii_lowercase();
+    Some(match url {
+        Some(url) => format!("{action} PR #{number} {branch} {url}"),
+        None => format!("{action} PR #{number} {branch}"),
+    })
+}
+
+fn extract_gt_branch_name(line: &str) -> String {
+    let mut tokens = line
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, '`' | '"' | '\''))
+        .filter(|token| !token.is_empty());
+    while let Some(token) = tokens.next() {
+        if token.eq_ignore_ascii_case("branch") {
+            return tokens.next().unwrap_or_default().to_string();
+        }
+    }
+    String::new()
+}
+
+fn is_gt_graph_node(line: &str) -> bool {
+    let stripped = line
+        .trim_start_matches('│')
+        .trim_start_matches('|')
+        .trim_start();
+    stripped.starts_with('◉')
+        || stripped.starts_with('○')
+        || stripped.starts_with('◯')
+        || stripped.starts_with('◆')
+        || stripped.starts_with('●')
+        || stripped.starts_with('@')
+        || stripped.starts_with('*')
+}
+
+fn remove_email_tokens(line: &str) -> String {
+    line.split_whitespace()
+        .filter(|token| !looks_like_email(token))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn looks_like_email(token: &str) -> bool {
+    let token =
+        token.trim_matches(|ch: char| matches!(ch, ',' | ';' | ':' | '<' | '>' | '(' | ')'));
+    let Some((local, domain)) = token.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && domain.contains('.')
+        && domain
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-'))
+}
+
 fn count_diff_changes(diff: &str) -> (usize, usize) {
     let mut added = 0usize;
     let mut removed = 0usize;
@@ -600,5 +897,83 @@ mod tests {
         let stderr = "From github.com:packet28/coverage\n   abc1234..def5678  main       -> origin/main\n * [new tag]         v0.2.30    -> v0.2.30\n";
         let reduction = reduce_git_command(&spec, "", stderr, 0);
         assert_eq!(reduction.summary, "git fetch updated 2 ref(s), 1 tag(s)");
+    }
+
+    #[test]
+    fn classify_gt_status_delegates_to_git_status() {
+        let argv = vec!["gt", "status"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_git_command("gt status", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "git_status");
+        assert!(spec.cacheable);
+    }
+
+    #[test]
+    fn reduce_gt_log_strips_email_and_compacts_graph() {
+        let argv = vec!["gt", "log"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_git_command("gt log", &argv).unwrap();
+        let stdout = "◉  abc1234 feat/add-auth 2d ago\n│  feat(auth): add login endpoint\n│\n◉  def5678 feat/add-db 3d ago user@example.com\n│  feat(db): add migration system\n";
+        let reduction = reduce_git_command(&spec, stdout, "", 0);
+        assert_eq!(reduction.summary, "gt log returned 2 stack entries");
+        assert!(reduction.compact_preview.contains("feat/add-db 3d ago"));
+        assert!(!reduction.compact_preview.contains("user@example.com"));
+    }
+
+    #[test]
+    fn reduce_gt_submit_summarizes_pushed_branches_and_prs() {
+        let argv = vec!["gt", "submit"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_git_command("gt submit", &argv).unwrap();
+        let stdout = "Pushed branch feat/add-auth\nCreated pull request #42 for feat/add-auth\nPushed branch feat/add-db\nUpdated pull request #40 for feat/add-db\n";
+        let reduction = reduce_git_command(&spec, stdout, "", 0);
+        assert!(reduction.mutation);
+        assert_eq!(
+            reduction.summary,
+            "pushed feat/add-auth, feat/add-db\ncreated PR #42 feat/add-auth\nupdated PR #40 feat/add-db"
+        );
+    }
+
+    #[test]
+    fn reduce_gt_sync_restack_and_create_use_short_confirmations() {
+        let sync_argv = vec!["gt", "sync"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let sync_spec = classify_git_command("gt sync", &sync_argv).unwrap();
+        let sync_stdout =
+            "Synced with remote\nDeleted branch feat/merged-feature\nDeleted branch fix/old\n";
+        let sync = reduce_git_command(&sync_spec, sync_stdout, "", 0);
+        assert_eq!(
+            sync.summary,
+            "ok sync: 1 synced, 2 deleted (feat/merged-feature, fix/old)"
+        );
+
+        let restack_argv = vec!["gt", "restack"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let restack_spec = classify_git_command("gt restack", &restack_argv).unwrap();
+        let restack = reduce_git_command(
+            &restack_spec,
+            "Restacked branch feat/a on main\nRebased branch feat/b on feat/a\n",
+            "",
+            0,
+        );
+        assert_eq!(restack.summary, "ok restacked 2 branches");
+
+        let create_argv = vec!["gt", "create"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let create_spec = classify_git_command("gt create", &create_argv).unwrap();
+        let create = reduce_git_command(&create_spec, "Created branch feat/new-feature\n", "", 0);
+        assert_eq!(create.summary, "ok created feat/new-feature");
     }
 }

@@ -649,6 +649,10 @@ fn test_run_raw_artifact_available_across_reducer_families() {
         "#!/bin/sh\nprintf 'build\\tpass\\t1s\\ngithub raw marker\\n'\n",
     );
     write_executable_script(
+        &bin_dir.path().join("gt"),
+        "#!/bin/sh\nprintf 'Pushed branch feat/add-auth\\nCreated pull request #42 for feat/add-auth\\n'\n",
+    );
+    write_executable_script(
         &bin_dir.path().join("ruby"),
         "#!/bin/sh\nprintf '1 runs, 1 assertions, 0 failures, 0 errors, 0 skips\\nruby raw marker\\n'\n",
     );
@@ -664,6 +668,7 @@ fn test_run_raw_artifact_available_across_reducer_families() {
 
     let cases: Vec<(&str, Vec<&str>, &str)> = vec![
         ("git", vec!["git", "status", "--short"], "git-visible.txt"),
+        ("git", vec!["gt", "submit"], "Created pull request"),
         ("fs", vec!["cat", "raw-visible.txt"], "fs raw marker"),
         ("rust", vec!["cargo", "check"], "rust raw marker"),
         (
