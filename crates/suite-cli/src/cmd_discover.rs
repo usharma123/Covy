@@ -54,6 +54,7 @@ struct DiscoverReport {
     supported_commands: usize,
     unsupported_commands: usize,
     by_category: BTreeMap<String, CategoryStats>,
+    missed_opportunities: Vec<MissedOpportunity>,
     top_unsupported: Vec<UnsupportedCommand>,
     missed_savings: Vec<MissedSavingsCommand>,
 }
@@ -69,6 +70,17 @@ struct UnsupportedCommand {
     command: String,
     count: usize,
     estimated_tokens: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct MissedOpportunity {
+    command: String,
+    count: usize,
+    packet28_equivalent: String,
+    category: String,
+    raw_est_tokens: u64,
+    estimated_savings_tokens: u64,
+    estimated_savings_percent: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,6 +122,7 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
 
     let mut unsupported_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut unsupported_tokens: BTreeMap<String, u64> = BTreeMap::new();
+    let mut opportunity_buckets: BTreeMap<String, MissedOpportunityBucket> = BTreeMap::new();
 
     for file in &session_files {
         if let Ok(commands) = extract_bash_commands(file) {
@@ -121,12 +134,29 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
                     report.commands_found += 1;
                     let program = program_name(&part);
                     let part_tokens = shared_tokens.max(estimate_text_tokens(&part));
-                    if command_part_supported(&part) {
+                    let route = crate::route_registry::decide_command_route(&part);
+                    if command_part_supported_with_route(&part, &route) {
                         report.supported_commands += 1;
                         let category = categorize_command(&program);
-                        let entry = report.by_category.entry(category).or_default();
+                        let entry = report.by_category.entry(category.clone()).or_default();
                         entry.count += 1;
                         entry.estimated_tokens += part_tokens;
+                        if !is_packet28_command(&part) {
+                            let equivalent = packet28_equivalent(&part, &route);
+                            let key = format!("{category}\0{equivalent}");
+                            let bucket = opportunity_buckets.entry(key).or_insert_with(|| {
+                                MissedOpportunityBucket {
+                                    example: truncate_command_example(&part),
+                                    equivalent,
+                                    category,
+                                    count: 0,
+                                    raw_est_tokens: 0,
+                                }
+                            });
+                            bucket.count += 1;
+                            bucket.raw_est_tokens =
+                                bucket.raw_est_tokens.saturating_add(part_tokens);
+                        }
                     } else {
                         report.unsupported_commands += 1;
                         *unsupported_counts.entry(program.clone()).or_insert(0) += 1;
@@ -145,6 +175,29 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
             estimated_tokens: tokens,
         });
     }
+
+    report.missed_opportunities = opportunity_buckets
+        .into_values()
+        .map(|bucket| {
+            let savings = estimate_discover_savings_tokens(bucket.raw_est_tokens);
+            MissedOpportunity {
+                command: bucket.example,
+                count: bucket.count,
+                packet28_equivalent: bucket.equivalent,
+                category: bucket.category,
+                raw_est_tokens: bucket.raw_est_tokens,
+                estimated_savings_tokens: savings,
+                estimated_savings_percent: discover_savings_percent(),
+            }
+        })
+        .collect();
+    report.missed_opportunities.sort_by(|a, b| {
+        b.estimated_savings_tokens
+            .cmp(&a.estimated_savings_tokens)
+            .then_with(|| b.count.cmp(&a.count))
+            .then_with(|| a.command.cmp(&b.command))
+    });
+    report.missed_opportunities.truncate(20);
 
     report
         .top_unsupported
@@ -165,6 +218,18 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
                     "  {category}: {} commands, ~{} tokens",
                     stats.count,
                     crate::economics::format_tokens(stats.estimated_tokens)
+                );
+            }
+        }
+        if !report.missed_opportunities.is_empty() {
+            println!("\nMissed Packet28 opportunities:");
+            for item in report.missed_opportunities.iter().take(10) {
+                println!(
+                    "  {}: {}x -> {} (~{} saveable)",
+                    item.command,
+                    item.count,
+                    item.packet28_equivalent,
+                    crate::economics::format_tokens(item.estimated_savings_tokens)
                 );
             }
         }
@@ -195,6 +260,14 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+struct MissedOpportunityBucket {
+    example: String,
+    equivalent: String,
+    category: String,
+    count: usize,
+    raw_est_tokens: u64,
 }
 
 fn add_run_savings_misses(root: &Path, limit: usize, report: &mut DiscoverReport) -> Result<()> {
@@ -455,15 +528,67 @@ fn is_known_reducible(program: &str) -> bool {
     )
 }
 
-fn command_part_supported(command: &str) -> bool {
+fn command_part_supported_with_route(
+    command: &str,
+    route: &crate::route_registry::RouteDecision,
+) -> bool {
     let program = program_name(command);
     matches!(
         program.as_str(),
         "Packet28" | "packet28" | "packet28-mcp" | "p28"
-    ) || !matches!(
-        crate::route_registry::decide_command_route(command).kind,
-        crate::route_registry::RouteKind::RawPassthrough
-    ) || is_known_reducible(&program)
+    ) || !matches!(route.kind, crate::route_registry::RouteKind::RawPassthrough)
+        || is_known_reducible(&program)
+}
+
+fn is_packet28_command(command: &str) -> bool {
+    matches!(
+        program_name(command).as_str(),
+        "Packet28" | "packet28" | "packet28-mcp" | "p28"
+    )
+}
+
+fn packet28_equivalent(command: &str, route: &crate::route_registry::RouteDecision) -> String {
+    match route.kind {
+        crate::route_registry::RouteKind::NativeTool => {
+            let name = route
+                .native_tool
+                .as_ref()
+                .map(|tool| match tool.kind {
+                    crate::route_registry::NativeToolKind::Tree => "tree",
+                    crate::route_registry::NativeToolKind::Read => "read",
+                    crate::route_registry::NativeToolKind::Grep => "grep",
+                    crate::route_registry::NativeToolKind::Env => "env",
+                })
+                .unwrap_or("run");
+            format!("Packet28 {name}")
+        }
+        crate::route_registry::RouteKind::ReducerRewrite
+        | crate::route_registry::RouteKind::TomlFilterRewrite
+        | crate::route_registry::RouteKind::ProxyPassthrough
+        | crate::route_registry::RouteKind::CompoundRewrite => "Packet28 run".to_string(),
+        crate::route_registry::RouteKind::RawPassthrough => {
+            format!("Packet28 {}", program_name(command))
+        }
+    }
+}
+
+fn discover_savings_percent() -> f64 {
+    70.0
+}
+
+fn estimate_discover_savings_tokens(raw_tokens: u64) -> u64 {
+    ((raw_tokens as f64) * discover_savings_percent() / 100.0).round() as u64
+}
+
+fn truncate_command_example(command: &str) -> String {
+    let mut parts = command.split_whitespace();
+    let Some(first) = parts.next() else {
+        return String::new();
+    };
+    let Some(second) = parts.next() else {
+        return first.to_string();
+    };
+    format!("{first} {second}")
 }
 
 fn program_name(command: &str) -> String {
