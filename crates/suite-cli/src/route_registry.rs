@@ -1740,6 +1740,15 @@ mod tests {
     }
 
     #[test]
+    fn routes_rtk_cargo_install_as_mutation() {
+        let decision = decide_command_route("cargo install ripgrep");
+        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
+        let spec = decision.reducer_spec.as_ref().unwrap();
+        assert_eq!(spec.canonical_kind, "rust_install");
+        assert!(spec.mutation);
+    }
+
+    #[test]
     fn routes_sudo_and_env_prefixed_commands_like_rtk() {
         let sudo = decide_command_route("sudo git status --short");
         assert_eq!(sudo.kind, RouteKind::ReducerRewrite);

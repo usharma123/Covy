@@ -11,6 +11,7 @@ pub fn classify_rust_command(command: &str, argv: &[String]) -> Option<CommandRe
         "test" => "rust_test",
         "nextest" if argv.get(2).is_some_and(|arg| arg == "run") => "rust_test",
         "clippy" => "rust_clippy",
+        "install" => "rust_install",
         _ => return None,
     };
     if contains_any(argv, &["--message-format", "--timings", "--json"]) {
@@ -21,6 +22,7 @@ pub fn classify_rust_command(command: &str, argv: &[String]) -> Option<CommandRe
     } else {
         suite_packet_core::ToolOperationKind::Build
     };
+    let mutation = canonical_kind == "rust_install";
     Some(CommandReducerSpec {
         family: "rust".to_string(),
         canonical_kind: canonical_kind.to_string(),
@@ -29,8 +31,8 @@ pub fn classify_rust_command(command: &str, argv: &[String]) -> Option<CommandRe
         command: command.to_string(),
         argv: argv.to_vec(),
         cache_fingerprint: fingerprint("rust", canonical_kind, argv),
-        cacheable: true,
-        mutation: false,
+        cacheable: !mutation,
+        mutation,
         paths: Vec::new(),
         equivalence_key: None,
     })
@@ -66,6 +68,7 @@ pub fn reduce_rust_command(
                 first_nonempty_line(stdout).unwrap_or_else(|| "cargo test passed".to_string())
             }
         }
+        "rust_install" => summarize_cargo_install(&combined, failed),
         _ => {
             if failed {
                 format!(
@@ -317,6 +320,28 @@ fn compact_clippy_output(output: &str) -> String {
     lines.join("\n")
 }
 
+fn summarize_cargo_install(output: &str, failed: bool) -> String {
+    if failed {
+        return first_nonempty_line(output).unwrap_or_else(|| "cargo install failed".to_string());
+    }
+    if let Some(line) = output
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("Installed package "))
+    {
+        return line.to_string();
+    }
+    if let Some(line) = output
+        .lines()
+        .map(str::trim)
+        .rev()
+        .find(|line| line.starts_with("Installing ") || line.starts_with("Replacing "))
+    {
+        return line.to_string();
+    }
+    first_nonempty_line(output).unwrap_or_else(|| "cargo install completed".to_string())
+}
+
 fn extract_clippy_rule(line: &str) -> Option<String> {
     // warning: ... #[warn(clippy::rule_name)] ...
     let start = line.find("#[warn(")? + 7;
@@ -364,5 +389,28 @@ mod tests {
         );
         assert_eq!(reduction.paths, vec!["src/main.rs".to_string()]);
         assert_eq!(reduction.regions, vec!["src/main.rs:12-12".to_string()]);
+    }
+
+    #[test]
+    fn classify_and_reduce_cargo_install_as_mutation() {
+        let argv = vec!["cargo", "install", "ripgrep"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_rust_command("cargo install ripgrep", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "rust_install");
+        assert!(spec.mutation);
+        assert!(!spec.cacheable);
+
+        let reduction = reduce_rust_command(
+            &spec,
+            "",
+            "  Installing ripgrep v14.1.0\n   Installed package `ripgrep v14.1.0` (executable `rg`)\n",
+            0,
+        );
+        assert_eq!(
+            reduction.summary,
+            "Installed package `ripgrep v14.1.0` (executable `rg`)"
+        );
     }
 }
