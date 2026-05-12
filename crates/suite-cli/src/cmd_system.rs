@@ -442,6 +442,46 @@ pub fn run_bundle(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("bundle", args, "bundle")
 }
 
+pub fn run_brew(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("brew", args, "brew")
+}
+
+pub fn run_composer(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("composer", args, "composer")
+}
+
+pub fn run_df(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("df", args, "df")
+}
+
+pub fn run_du(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("du", args, "du")
+}
+
+pub fn run_make(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("make", args, "make")
+}
+
+pub fn run_mvn(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("mvn", args, "mvn")
+}
+
+pub fn run_poetry(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("poetry", args, "poetry")
+}
+
+pub fn run_uv(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("uv", args, "uv")
+}
+
+pub fn run_terraform(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("terraform", args, "terraform")
+}
+
+pub fn run_tofu(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("tofu", args, "tofu")
+}
+
 fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     let output = execute_command(&args.command)?;
     let raw = format!(
@@ -510,6 +550,39 @@ fn run_reducer_tool_command(program: &str, args: ToolArgs, label: &str) -> Resul
         summarize_command_output(
             &format!("{stdout}{stderr}"),
             &command.join(" "),
+            output.status.success(),
+        )
+    };
+    emit_system_output(
+        args.json,
+        args.pretty,
+        SystemOutput {
+            command: format!("Packet28 {label}"),
+            summary: summarize_rendered_lines(label, &text),
+            text,
+        },
+    )?;
+    Ok(exit_code)
+}
+
+fn run_filtered_tool_command(program: &str, args: ToolArgs, label: &str) -> Result<i32> {
+    let mut command = Vec::with_capacity(args.args.len() + 1);
+    command.push(program.to_string());
+    command.extend(args.args);
+    let output = execute_command(&command)?;
+    let exit_code = output.status.code().unwrap_or(1);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let command_text = command.join(" ");
+    let cwd = env::current_dir().context("failed to read current directory")?;
+    let text = if let Some(filter) =
+        crate::toml_filters::apply_configured_filter(&cwd, &command_text, &stdout, &stderr)?
+    {
+        filter.output
+    } else {
+        summarize_command_output(
+            &format!("{stdout}{stderr}"),
+            &command_text,
             output.status.success(),
         )
     };

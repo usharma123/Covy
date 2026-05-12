@@ -136,6 +136,26 @@ pub enum Commands {
     Pnpm(cmd_system::ToolArgs),
     /// Run Bundler with compact output
     Bundle(cmd_system::ToolArgs),
+    /// Run Homebrew with compact output
+    Brew(cmd_system::ToolArgs),
+    /// Run Composer with compact output
+    Composer(cmd_system::ToolArgs),
+    /// Run df with compact output
+    Df(cmd_system::ToolArgs),
+    /// Run du with compact output
+    Du(cmd_system::ToolArgs),
+    /// Run make with compact output
+    Make(cmd_system::ToolArgs),
+    /// Run Maven with compact output
+    Mvn(cmd_system::ToolArgs),
+    /// Run Poetry with compact output
+    Poetry(cmd_system::ToolArgs),
+    /// Run uv with compact output
+    Uv(cmd_system::ToolArgs),
+    /// Run Terraform with compact output
+    Terraform(cmd_system::ToolArgs),
+    /// Run OpenTofu with compact output
+    Tofu(cmd_system::ToolArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output

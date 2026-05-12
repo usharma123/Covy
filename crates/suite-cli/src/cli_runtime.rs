@@ -139,6 +139,16 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Pip(args)) => cmd_system::run_pip(args),
         Some(Commands::Pnpm(args)) => cmd_system::run_pnpm(args),
         Some(Commands::Bundle(args)) => cmd_system::run_bundle(args),
+        Some(Commands::Brew(args)) => cmd_system::run_brew(args),
+        Some(Commands::Composer(args)) => cmd_system::run_composer(args),
+        Some(Commands::Df(args)) => cmd_system::run_df(args),
+        Some(Commands::Du(args)) => cmd_system::run_du(args),
+        Some(Commands::Make(args)) => cmd_system::run_make(args),
+        Some(Commands::Mvn(args)) => cmd_system::run_mvn(args),
+        Some(Commands::Poetry(args)) => cmd_system::run_poetry(args),
+        Some(Commands::Uv(args)) => cmd_system::run_uv(args),
+        Some(Commands::Terraform(args)) => cmd_system::run_terraform(args),
+        Some(Commands::Tofu(args)) => cmd_system::run_tofu(args),
         Some(Commands::Smart(args)) => cmd_system::run_smart(args),
         Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Grep(args)) => cmd_system::run_grep(args),
@@ -451,6 +461,16 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Pip(_))
         | Some(Commands::Pnpm(_))
         | Some(Commands::Bundle(_))
+        | Some(Commands::Brew(_))
+        | Some(Commands::Composer(_))
+        | Some(Commands::Df(_))
+        | Some(Commands::Du(_))
+        | Some(Commands::Make(_))
+        | Some(Commands::Mvn(_))
+        | Some(Commands::Poetry(_))
+        | Some(Commands::Uv(_))
+        | Some(Commands::Terraform(_))
+        | Some(Commands::Tofu(_))
         | Some(Commands::Smart(_))
         | Some(Commands::Find(_))
         | Some(Commands::Grep(_))
