@@ -4447,6 +4447,45 @@ fn test_hook_failure_output_is_searchable_transcript_context() {
 }
 
 #[test]
+fn test_hook_session_end_is_recorded_in_local_lifecycle_log() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let payload = json!({
+        "hook_event_name":"SessionEnd",
+        "task_id":"hook-session-end-task",
+        "session_id":"hook-session-end-session",
+        "matcher":"session",
+        "cwd": root.path().display().to_string(),
+    });
+
+    let (status, _stdout, stderr) = run_hook_raw_with_env(
+        "claude",
+        root.path(),
+        &serde_json::to_string(&payload).unwrap(),
+        &[("HOME", home.path().as_os_str())],
+    );
+    assert_eq!(status, 0, "stderr={stderr}");
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["hook", "log", "--limit", "5", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"event_kind\":\"session_end\""))
+        .stdout(predicate::str::contains("hook-session-end-session"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["hook", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"event_kind\":\"session_end\""))
+        .stdout(predicate::str::contains("\"event_count\":1"));
+}
+
+#[test]
 fn test_session_reports_adoption_from_session_jsonl() {
     let root = TempDir::new().unwrap();
     let sessions_dir = root
