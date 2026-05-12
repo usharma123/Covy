@@ -65,6 +65,21 @@ pub struct SummaryArgs {
 }
 
 #[derive(Args)]
+pub struct FindArgs {
+    /// Find arguments. Supports `find <pattern> [path]` and native `find <path> -name <pattern>`.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+
+    /// Emit a machine-readable envelope
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON machine output
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct JsonArgs {
     /// JSON file to inspect. Reads stdin when omitted.
     pub file: Option<PathBuf>,
@@ -207,6 +222,20 @@ pub fn run_summary(args: SummaryArgs) -> Result<i32> {
         },
     )?;
     Ok(exit_code)
+}
+
+pub fn run_find(args: FindArgs) -> Result<i32> {
+    let parsed = parse_find_args(&args.args)?;
+    let text = render_find_results(&parsed)?;
+    emit_system_output(
+        args.json,
+        args.pretty,
+        SystemOutput {
+            command: "Packet28 find".to_string(),
+            summary: summarize_rendered_lines("find", &text),
+            text,
+        },
+    )
 }
 
 pub fn run_json(args: JsonArgs) -> Result<i32> {
@@ -871,6 +900,231 @@ fn extract_labeled_number(value: &str, label: &str) -> Option<usize> {
         })
 }
 
+#[derive(Debug, Clone)]
+struct ParsedFindArgs {
+    pattern: String,
+    path: PathBuf,
+    max_results: usize,
+    max_depth: Option<usize>,
+    file_type: String,
+    case_insensitive: bool,
+}
+
+impl Default for ParsedFindArgs {
+    fn default() -> Self {
+        Self {
+            pattern: "*".to_string(),
+            path: PathBuf::from("."),
+            max_results: 50,
+            max_depth: None,
+            file_type: "f".to_string(),
+            case_insensitive: false,
+        }
+    }
+}
+
+fn parse_find_args(args: &[String]) -> Result<ParsedFindArgs> {
+    const UNSUPPORTED: &[&str] = &[
+        "-not", "!", "-or", "-o", "-and", "-a", "-exec", "-execdir", "-delete", "-print0",
+        "-newer", "-perm", "-size", "-mtime", "-mmin", "-atime", "-amin", "-ctime", "-cmin",
+        "-empty", "-link", "-regex", "-iregex",
+    ];
+    if args.iter().any(|arg| UNSUPPORTED.contains(&arg.as_str())) {
+        bail!("Packet28 find does not support compound predicates or actions; use native find directly");
+    }
+    if args.is_empty() {
+        return Ok(ParsedFindArgs::default());
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-name" | "-iname" | "-type" | "-maxdepth"))
+    {
+        parse_native_find_args(args)
+    } else {
+        parse_compact_find_args(args)
+    }
+}
+
+fn parse_native_find_args(args: &[String]) -> Result<ParsedFindArgs> {
+    let mut parsed = ParsedFindArgs::default();
+    let mut idx = 0usize;
+    if let Some(first) = args.first() {
+        if !first.starts_with('-') {
+            parsed.path = PathBuf::from(first);
+            idx = 1;
+        }
+    }
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "-name" => {
+                idx += 1;
+                parsed.pattern = args.get(idx).cloned().context("missing -name value")?;
+            }
+            "-iname" => {
+                idx += 1;
+                parsed.pattern = args.get(idx).cloned().context("missing -iname value")?;
+                parsed.case_insensitive = true;
+            }
+            "-type" => {
+                idx += 1;
+                parsed.file_type = args.get(idx).cloned().context("missing -type value")?;
+            }
+            "-maxdepth" => {
+                idx += 1;
+                parsed.max_depth = Some(
+                    args.get(idx)
+                        .context("missing -maxdepth value")?
+                        .parse()
+                        .context("invalid -maxdepth value")?,
+                );
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+    Ok(parsed)
+}
+
+fn parse_compact_find_args(args: &[String]) -> Result<ParsedFindArgs> {
+    let mut parsed = ParsedFindArgs {
+        pattern: args.first().cloned().unwrap_or_else(|| "*".to_string()),
+        ..ParsedFindArgs::default()
+    };
+    let mut idx = 1usize;
+    if let Some(path) = args.get(idx) {
+        if !path.starts_with('-') {
+            parsed.path = PathBuf::from(path);
+            idx += 1;
+        }
+    }
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "-m" | "--max" => {
+                idx += 1;
+                parsed.max_results = args
+                    .get(idx)
+                    .context("missing --max value")?
+                    .parse()
+                    .context("invalid --max value")?;
+            }
+            "-t" | "--file-type" => {
+                idx += 1;
+                parsed.file_type = args
+                    .get(idx)
+                    .cloned()
+                    .context("missing --file-type value")?;
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+    Ok(parsed)
+}
+
+fn render_find_results(args: &ParsedFindArgs) -> Result<String> {
+    let mut matches = Vec::new();
+    let include_hidden = args.pattern.starts_with('.');
+    visit_find_path(
+        &args.path,
+        0,
+        args.max_depth,
+        include_hidden,
+        args,
+        &mut matches,
+    )?;
+    matches.sort();
+    let total = matches.len();
+    let shown = total.min(args.max_results);
+    let mut out = format!(
+        "{} match(es) under {} for {}\n",
+        total,
+        args.path.display(),
+        args.pattern
+    );
+    for path in matches.iter().take(args.max_results) {
+        out.push_str(&format!("{}\n", path.display()));
+    }
+    if total > shown {
+        out.push_str(&format!("[+{} more]\n", total - shown));
+    }
+    Ok(out)
+}
+
+fn visit_find_path(
+    path: &Path,
+    depth: usize,
+    max_depth: Option<usize>,
+    include_hidden: bool,
+    args: &ParsedFindArgs,
+    matches: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if max_depth.is_some_and(|max| depth > max) {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if !include_hidden && depth > 0 && name.starts_with('.') {
+        return Ok(());
+    }
+    let is_dir = metadata.is_dir();
+    let type_matches = match args.file_type.as_str() {
+        "d" => is_dir,
+        "f" => metadata.is_file(),
+        _ => true,
+    };
+    if type_matches && glob_name_matches(&args.pattern, name, args.case_insensitive) {
+        matches.push(path.to_path_buf());
+    }
+    if is_dir {
+        for entry in
+            fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))?
+        {
+            let entry = entry?;
+            visit_find_path(
+                &entry.path(),
+                depth + 1,
+                max_depth,
+                include_hidden,
+                args,
+                matches,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn glob_name_matches(pattern: &str, name: &str, case_insensitive: bool) -> bool {
+    let pattern = if pattern == "." { "*" } else { pattern };
+    if case_insensitive {
+        glob_match(&pattern.to_lowercase(), &name.to_lowercase())
+    } else {
+        glob_match(pattern, name)
+    }
+}
+
+fn glob_match(pattern: &str, name: &str) -> bool {
+    glob_match_inner(pattern.as_bytes(), name.as_bytes())
+}
+
+fn glob_match_inner(pattern: &[u8], name: &[u8]) -> bool {
+    match (pattern.first(), name.first()) {
+        (None, None) => true,
+        (Some(b'*'), _) => {
+            glob_match_inner(&pattern[1..], name)
+                || (!name.is_empty() && glob_match_inner(pattern, &name[1..]))
+        }
+        (Some(b'?'), Some(_)) => glob_match_inner(&pattern[1..], &name[1..]),
+        (Some(pattern_byte), Some(name_byte)) if pattern_byte == name_byte => {
+            glob_match_inner(&pattern[1..], &name[1..])
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadLanguage {
     Rust,
@@ -1368,6 +1622,54 @@ mod tests {
         assert!(test_summary.contains("[ok] 1 passed"));
         assert!(test_summary.contains("[FAIL] 2 failed"));
         assert!(test_summary.contains("skip 3 skipped"));
+    }
+
+    #[test]
+    fn find_parses_native_and_compact_args() {
+        let native = parse_find_args(&[
+            ".".to_string(),
+            "-name".to_string(),
+            "*.rs".to_string(),
+            "-type".to_string(),
+            "f".to_string(),
+            "-maxdepth".to_string(),
+            "2".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(native.pattern, "*.rs");
+        assert_eq!(native.file_type, "f");
+        assert_eq!(native.max_depth, Some(2));
+
+        let compact = parse_find_args(&[
+            "*.md".to_string(),
+            "docs".to_string(),
+            "--max".to_string(),
+            "5".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(compact.pattern, "*.md");
+        assert_eq!(compact.path, PathBuf::from("docs"));
+        assert_eq!(compact.max_results, 5);
+    }
+
+    #[test]
+    fn find_renders_limited_matches() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src").join("a.rs"), "").unwrap();
+        fs::write(dir.path().join("src").join("b.rs"), "").unwrap();
+        fs::write(dir.path().join("src").join("c.txt"), "").unwrap();
+        let rendered = render_find_results(&ParsedFindArgs {
+            pattern: "*.rs".to_string(),
+            path: dir.path().to_path_buf(),
+            max_results: 1,
+            max_depth: Some(3),
+            file_type: "f".to_string(),
+            case_insensitive: false,
+        })
+        .unwrap();
+        assert!(rendered.contains("2 match(es)"));
+        assert!(rendered.contains("[+1 more]"));
     }
 
     #[test]

@@ -250,6 +250,25 @@ fn test_system_summary_command_preserves_exit_and_summarizes_output() {
 }
 
 #[test]
+fn test_system_find_command_supports_native_find_shape() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src").join("a.rs"), "").unwrap();
+    fs::write(root.path().join("src").join("b.rs"), "").unwrap();
+    fs::write(root.path().join("src").join("note.txt"), "").unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["find", ".", "-name", "*.rs", "-type", "f", "-maxdepth", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 match(es) under . for *.rs"))
+        .stdout(predicate::str::contains("src/a.rs"))
+        .stdout(predicate::str::contains("src/b.rs"))
+        .stdout(predicate::str::contains("note.txt").not());
+}
+
+#[test]
 fn test_system_log_command_deduplicates_noisy_lines() {
     let root = TempDir::new().unwrap();
     let log = root.path().join("app.log");

@@ -104,6 +104,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Compact(args)) => cmd_compact::run(args),
         Some(Commands::Read(args)) => cmd_system::run_read(args),
         Some(Commands::Summary(args)) => cmd_system::run_summary(args),
+        Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Json(args)) => cmd_system::run_json(args),
         Some(Commands::Deps(args)) => cmd_system::run_deps(args),
         Some(Commands::Env(args)) => cmd_system::run_env(args),
@@ -378,6 +379,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Compact(_))
         | Some(Commands::Read(_))
         | Some(Commands::Summary(_))
+        | Some(Commands::Find(_))
         | Some(Commands::Json(_))
         | Some(Commands::Deps(_))
         | Some(Commands::Env(_))

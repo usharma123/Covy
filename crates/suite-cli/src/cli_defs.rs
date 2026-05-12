@@ -64,6 +64,8 @@ pub enum Commands {
     Read(cmd_system::ReadArgs),
     /// Run a command and emit a compact heuristic summary of its output
     Summary(cmd_system::SummaryArgs),
+    /// Find files or directories with compact output
+    Find(cmd_system::FindArgs),
     /// Compactly inspect JSON files or stdin while preserving raw values by default
     Json(cmd_system::JsonArgs),
     /// Summarize project dependency manifests
