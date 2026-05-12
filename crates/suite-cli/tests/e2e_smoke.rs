@@ -3391,11 +3391,15 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     let graph_distill = read_mcp_message_for_id(&mut stdout, 70);
     assert_eq!(
         graph_distill["result"]["structuredContent"]["created_count"].as_u64(),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         graph_distill["result"]["structuredContent"]["concepts"][0]["name"].as_str(),
         Some("McpDistill")
+    );
+    assert_eq!(
+        graph_distill["result"]["structuredContent"]["concepts"][1]["name"].as_str(),
+        Some("graph")
     );
 
     write_mcp_message(
@@ -3963,10 +3967,19 @@ fn test_feedback_and_graph_cli_use_sqlite() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"created_count\":1"))
+        .stdout(predicate::str::contains("\"created_count\":2"))
         .stdout(predicate::str::contains("ReducerDistill"))
+        .stdout(predicate::str::contains("\"graph\""))
         .stdout(predicate::str::contains("topic:graph-distill"))
         .stdout(predicate::str::contains("memory:"));
+    suite_cmd()
+        .env("HOME", home.path())
+        .args(["graph", "show", "Packet28Memoir", "--limit", "20", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ReducerDistill"))
+        .stdout(predicate::str::contains("\"target\":\"graph\""))
+        .stdout(predicate::str::contains("\"relation\":\"mentions\""));
     suite_cmd()
         .env("HOME", home.path())
         .args(["graph", "delete", "Packet28", "--json"])

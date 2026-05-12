@@ -1630,6 +1630,14 @@ pub(crate) fn search_concepts_filtered(
 pub(crate) fn link_concepts(source: &str, target: &str, relation: &str) -> Result<GraphRelation> {
     let source = add_concept(source, None)?;
     let target = add_concept(target, None)?;
+    link_existing_concepts(&source, &target, relation)
+}
+
+fn link_existing_concepts(
+    source: &GraphConcept,
+    target: &GraphConcept,
+    relation: &str,
+) -> Result<GraphRelation> {
     let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
     conn.execute(
@@ -1639,8 +1647,8 @@ pub(crate) fn link_concepts(source: &str, target: &str, relation: &str) -> Resul
     )?;
     Ok(GraphRelation {
         id: conn.last_insert_rowid(),
-        source: source.name,
-        target: target.name,
+        source: source.name.clone(),
+        target: target.name.clone(),
         relation: relation.to_string(),
     })
 }
@@ -1789,7 +1797,39 @@ pub(crate) fn distill_memories_to_graph(
         } else {
             created_count += 1;
         }
-        concepts.push(concept);
+        concepts.push(concept.clone());
+        for related_name in keywords.iter().skip(1) {
+            if related_name == &concept_name {
+                continue;
+            }
+            let existing_related = read_concept_by_name_optional(&open_memory_db()?, related_name)?;
+            let related_description = format!(
+                "Related distilled keyword from memory {} in topic {topic}.",
+                memory.id
+            );
+            let mut related_labels = vec![
+                format!("topic:{topic}"),
+                "distilled-keyword".to_string(),
+                format!("tag:{related_name}"),
+            ];
+            related_labels.sort();
+            related_labels.dedup();
+            let related = add_concept_with_metadata(
+                related_name,
+                Some(&related_description),
+                Some(&memoir),
+                &related_labels,
+                Some((memory.weight * 0.8).clamp(0.0, 1.0)),
+                &[format!("memory:{}", memory.id)],
+            )?;
+            if existing_related.is_some() {
+                refined_count += 1;
+            } else {
+                created_count += 1;
+            }
+            let _ = link_existing_concepts(&concept, &related, "mentions")?;
+            concepts.push(related);
+        }
     }
     Ok(GraphDistillReport {
         topic,
