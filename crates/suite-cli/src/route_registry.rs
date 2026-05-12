@@ -1693,8 +1693,10 @@ mod tests {
         for (command, expected) in [
             ("npm exec tsc --noEmit", "javascript_tsc"),
             ("npm x eslint src", "javascript_eslint"),
+            ("npm rum biome check .", "javascript_lint"),
             ("npm run test", "javascript_test"),
             ("npm run-script biome check .", "javascript_lint"),
+            ("npm urn jest run", "javascript_test"),
             ("pnpm dlx next build", "javascript_next_build"),
             ("pnpm exec prisma migrate status", "javascript_prisma"),
             ("pnpx vitest run", "javascript_vitest"),
