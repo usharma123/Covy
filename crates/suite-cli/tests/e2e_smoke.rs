@@ -1713,6 +1713,70 @@ fn test_gain_reports_failed_and_fallback_runs() {
 }
 
 #[test]
+fn test_gain_warns_about_disabled_bypass_sessions_like_rtk() {
+    let root = TempDir::new().unwrap();
+    let sessions_dir = root.path().join("claude-projects").join("project");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    let line = json!({
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": "PACKET28_DISABLED=1 git status --short" }
+                },
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": "RTK_DISABLED=true cargo test" }
+                },
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": "git status --short" }
+                }
+            ]
+        }
+    });
+    fs::write(
+        sessions_dir.join("session-gain-disabled.jsonl"),
+        format!("{line}\n"),
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "used PACKET28_DISABLED/RTK_DISABLED unnecessarily",
+        ))
+        .stderr(predicate::str::contains("Packet28 discover"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
 fn test_cc_economics_merges_ccusage_and_packet28_savings() {
     let root = TempDir::new().unwrap();
     std::process::Command::new("git")

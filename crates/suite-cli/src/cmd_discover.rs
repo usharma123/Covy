@@ -577,7 +577,7 @@ fn is_packet28_command(command: &str) -> bool {
     )
 }
 
-fn strip_active_disabled_prefix(command: &str) -> Option<String> {
+pub(crate) fn strip_active_disabled_prefix(command: &str) -> Option<String> {
     let argv = shell_words::split(command).ok()?;
     let mut index = usize::from(argv.first().is_some_and(|arg| arg == "env"));
     let mut disabled = false;

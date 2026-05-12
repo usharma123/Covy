@@ -218,6 +218,9 @@ pub struct AnalyticsArgs {
     pub root: String,
     #[arg(long)]
     pub task_id: Option<String>,
+    /// Path to Claude-style sessions directory for gain disabled-bypass warnings
+    #[arg(long)]
+    pub sessions_dir: Option<String>,
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
     /// Output format for analytics commands (text, json, csv, history, failures, daily, weekly, monthly, quota, graph, all)
@@ -999,6 +1002,10 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
     } else if format == "all" {
         print_gain_all(&summary, &run_savings, args.quota_tokens, &args.tier);
     } else {
+        if let Some(warning) = gain_disabled_bypass_warning(args.sessions_dir.as_deref()) {
+            eprintln!("{warning}");
+            eprintln!();
+        }
         println!("tasks={}", summary.task_count);
         println!("invocations={}", summary.invocation_count);
         println!("raw_est_tokens={}", summary.raw_est_tokens);
@@ -1010,6 +1017,53 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+fn gain_disabled_bypass_warning(sessions_dir: Option<&str>) -> Option<String> {
+    let sessions_dir = sessions_dir.map(PathBuf::from).unwrap_or_else(|| {
+        #[cfg(unix)]
+        {
+            if let Ok(home) = std::env::var("HOME") {
+                return PathBuf::from(format!("{home}/.claude/projects"));
+            }
+        }
+        PathBuf::from("/tmp/.claude/projects")
+    });
+    let files =
+        crate::cmd_discover::collect_session_files_for_scan(&sessions_dir, 200, false, Some(7))
+            .ok()?;
+    if files.is_empty() || files.len() > 200 {
+        return None;
+    }
+
+    let mut total = 0usize;
+    let mut bypassed = 0usize;
+    for path in files {
+        let Ok(commands) = crate::cmd_discover::extract_bash_commands(&path) else {
+            continue;
+        };
+        for (command, _) in commands {
+            total += 1;
+            if let Some(actual_command) =
+                crate::cmd_discover::strip_active_disabled_prefix(&command)
+            {
+                let route = crate::route_registry::decide_command_route(&actual_command);
+                if !matches!(route.kind, crate::route_registry::RouteKind::RawPassthrough) {
+                    bypassed += 1;
+                }
+            }
+        }
+    }
+
+    if total == 0 {
+        return None;
+    }
+    let pct = (bypassed as f64 / total as f64) * 100.0;
+    (pct > 10.0).then(|| {
+        format!(
+            "[warn] {bypassed} commands ({pct:.0}%) used PACKET28_DISABLED/RTK_DISABLED unnecessarily - run `Packet28 discover` for details"
+        )
+    })
 }
 
 fn gain_output_format(args: &AnalyticsArgs) -> String {
