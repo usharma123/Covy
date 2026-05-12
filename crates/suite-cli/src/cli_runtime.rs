@@ -199,6 +199,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Deps(args)) => cmd_system::run_deps(args),
         Some(Commands::Env(args)) => cmd_system::run_env(args),
         Some(Commands::Log(args)) => cmd_system::run_log(args),
+        Some(Commands::Pipe(args)) => cmd_system::run_pipe(args),
         Some(Commands::Rewrite(args)) => cmd_compact::run_rewrite_command(args),
         Some(Commands::Session(args)) => cmd_compact::run_session(args),
         Some(Commands::Packet(packet)) => match packet.command {
@@ -564,6 +565,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Deps(_))
         | Some(Commands::Env(_))
         | Some(Commands::Log(_))
+        | Some(Commands::Pipe(_))
         | Some(Commands::Rewrite(_))
         | Some(Commands::Session(_))
         | Some(Commands::Discover(_))

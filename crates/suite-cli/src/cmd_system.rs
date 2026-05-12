@@ -249,6 +249,17 @@ pub struct LogArgs {
     pub pretty: bool,
 }
 
+#[derive(Args)]
+pub struct PipeArgs {
+    /// Named filter to apply. Uses local auto-detection when omitted.
+    #[arg(short, long)]
+    pub filter: Option<String>,
+
+    /// Pass stdin through without filtering
+    #[arg(long)]
+    pub passthrough: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemOutput {
     command: String,
@@ -982,6 +993,20 @@ pub fn run_log(args: LogArgs) -> Result<i32> {
             text,
         },
     )
+}
+
+pub fn run_pipe(args: PipeArgs) -> Result<i32> {
+    let mut input = String::new();
+    io::stdin()
+        .read_to_string(&mut input)
+        .context("failed to read pipe input from stdin")?;
+    if args.passthrough {
+        print!("{input}");
+        return Ok(0);
+    }
+    let output = filter_pipe_input(args.filter.as_deref(), &input)?;
+    print!("{output}");
+    Ok(0)
 }
 
 fn emit_system_output(json_output: bool, pretty: bool, output: SystemOutput) -> Result<i32> {
@@ -2603,6 +2628,127 @@ fn analyze_logs(content: &str) -> Result<String> {
         5,
     );
     Ok(lines.join("\n"))
+}
+
+fn filter_pipe_input(filter: Option<&str>, input: &str) -> Result<String> {
+    let selected = filter
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| auto_detect_pipe_filter(input).to_string());
+    match selected.as_str() {
+        "grep" | "rg" => Ok(render_pipe_grep(input)),
+        "find" | "fd" => Ok(render_pipe_find(input)),
+        "json" => filter_json_compact(input, 4),
+        "log" => analyze_logs(input),
+        "cargo" | "cargo-test" => Ok(summarize_command_output(input, "cargo test", true)),
+        "pytest" => Ok(summarize_command_output(input, "pytest", true)),
+        "go-test" => Ok(summarize_command_output(input, "go test", true)),
+        "go-build" => Ok(summarize_command_output(input, "go build", true)),
+        "tsc" => Ok(summarize_command_output(input, "tsc", true)),
+        "vitest" => Ok(summarize_command_output(input, "vitest", true)),
+        "mypy" => Ok(summarize_command_output(input, "mypy", true)),
+        "ruff-check" => Ok(summarize_command_output(input, "ruff check", true)),
+        "ruff-format" => Ok(summarize_command_output(input, "ruff format", true)),
+        "prettier" => Ok(summarize_command_output(input, "prettier", true)),
+        "auto" => Ok(input.to_string()),
+        other => bail!(
+            "unknown pipe filter '{other}' (available: cargo-test, pytest, go-test, go-build, tsc, vitest, grep, rg, find, fd, json, log, mypy, ruff-check, ruff-format, prettier)"
+        ),
+    }
+}
+
+fn auto_detect_pipe_filter(input: &str) -> &'static str {
+    let first = input.lines().take(8).collect::<Vec<_>>().join("\n");
+    let lower = first.to_lowercase();
+    let trimmed = first.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        "json"
+    } else if lower.contains("test result:") || lower.contains("=== test session starts") {
+        "cargo-test"
+    } else if first.lines().any(is_grep_like_line) {
+        "grep"
+    } else if looks_like_find_output(&first) {
+        "find"
+    } else if lower.contains("error:") || lower.contains("warn:") || lower.contains("panic") {
+        "log"
+    } else {
+        "auto"
+    }
+}
+
+fn render_pipe_grep(input: &str) -> String {
+    let mut entries = Vec::<(&str, usize, &str)>::new();
+    for line in input.lines() {
+        let Some((path, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let Some((line_no, text)) = rest.split_once(':') else {
+            continue;
+        };
+        if let Ok(line_no) = line_no.parse::<usize>() {
+            entries.push((path, line_no, text));
+        }
+    }
+    if entries.is_empty() {
+        return input.to_string();
+    }
+    let mut files = HashSet::new();
+    for (path, _, _) in &entries {
+        files.insert(*path);
+    }
+    let mut out = format!("{} matches in {} files:\n\n", entries.len(), files.len());
+    for (path, line_no, text) in entries.iter().take(50) {
+        out.push_str(&format!(
+            "{path}:{line_no}:{}\n",
+            compact_for_log(text.trim(), 160)
+        ));
+    }
+    if entries.len() > 50 {
+        out.push_str(&format!("[+{} more]\n", entries.len() - 50));
+    }
+    out
+}
+
+fn render_pipe_find(input: &str) -> String {
+    let paths = input
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return input.to_string();
+    }
+    let mut out = format!("{} paths:\n", paths.len());
+    for path in paths.iter().take(80) {
+        out.push_str(path);
+        out.push('\n');
+    }
+    if paths.len() > 80 {
+        out.push_str(&format!("[+{} more]\n", paths.len() - 80));
+    }
+    out
+}
+
+fn is_grep_like_line(line: &str) -> bool {
+    let Some((_path, rest)) = line.split_once(':') else {
+        return false;
+    };
+    let Some((line_no, _text)) = rest.split_once(':') else {
+        return false;
+    };
+    line_no.parse::<usize>().is_ok()
+}
+
+fn looks_like_find_output(input: &str) -> bool {
+    let mut count = 0usize;
+    for line in input.lines().filter(|line| !line.trim().is_empty()) {
+        count += 1;
+        let trimmed = line.trim();
+        if trimmed.contains(':')
+            || !(trimmed.starts_with('.') || trimmed.starts_with('/') || trimmed.contains('/'))
+        {
+            return false;
+        }
+    }
+    count >= 3
 }
 
 fn append_log_group(

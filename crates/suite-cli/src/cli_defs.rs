@@ -260,6 +260,8 @@ pub enum Commands {
     Env(cmd_system::EnvArgs),
     /// Deduplicate log output and summarize errors, warnings, and info lines
     Log(cmd_system::LogArgs),
+    /// Read stdin and apply a compact output filter
+    Pipe(cmd_system::PipeArgs),
     /// Plan how Packet28 would reduce or pass through a command
     Rewrite(cmd_compact::RewriteArgs),
     /// Inspect Packet28 task sessions

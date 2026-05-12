@@ -1327,6 +1327,37 @@ fn test_system_log_command_deduplicates_noisy_lines() {
 }
 
 #[test]
+fn test_system_pipe_filters_stdin_like_rtk_pipe() {
+    let root = TempDir::new().unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["pipe", "--filter", "grep"])
+        .write_stdin("src/main.rs:10:fn main() {}\nsrc/lib.rs:2:pub fn helper() {}\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 matches in 2 files"))
+        .stdout(predicate::str::contains("src/main.rs:10:fn main() {}"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["pipe"])
+        .write_stdin("tests/a.rs\ntests/b.rs\nsrc/main.rs\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 paths:"))
+        .stdout(predicate::str::contains("src/main.rs"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["pipe", "--passthrough"])
+        .write_stdin("raw\nunchanged\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("raw\nunchanged\n"));
+}
+
+#[test]
 fn test_run_reduces_git_status() {
     let root = TempDir::new().unwrap();
     std::process::Command::new("git")
