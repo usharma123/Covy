@@ -106,6 +106,9 @@ fn decide_command_route_inner(
     if is_packet28_invocation(&argv) {
         return raw_passthrough("already_packet28");
     }
+    if is_rtk_ignored_command(&argv) {
+        return raw_passthrough("ignored_command");
+    }
     if policy_excludes_command(trimmed, &argv, policy_root) {
         return raw_passthrough("config_excluded");
     }
@@ -390,6 +393,27 @@ fn is_packet28_invocation(argv: &[String]) -> bool {
         .and_then(|name| name.to_str())
         .map(|name| matches!(name, "Packet28" | "packet28" | "covy"))
         .unwrap_or(false)
+}
+
+fn is_rtk_ignored_command(argv: &[String]) -> bool {
+    let Some(first) = argv.first().map(String::as_str) else {
+        return true;
+    };
+    const IGNORED_EXACT: &[&str] = &[
+        "cd", "echo", "true", "false", "wait", "pwd", "bash", "sh", "fi", "done",
+    ];
+    if argv.len() == 1 && IGNORED_EXACT.contains(&first) {
+        return true;
+    }
+    match first {
+        "cd" | "echo" | "printf" | "export" | "source" | "mkdir" | "rm" | "mv" | "cp" | "chmod"
+        | "chown" | "touch" | "which" | "type" | "test" | "sleep" | "kill" | "set" | "unset"
+        | "sort" | "uniq" | "tr" | "cut" | "awk" | "sed" | "bash" | "sh" | "for" | "while"
+        | "if" | "case" | "then" | "else" | "do" => true,
+        "python3" | "python" => argv.get(1).map(String::as_str) == Some("-c"),
+        "node" | "ruby" => argv.get(1).map(String::as_str) == Some("-e"),
+        _ => false,
+    }
 }
 
 fn policy_excludes_command(command: &str, argv: &[String], root: Option<&Path>) -> bool {
@@ -1302,6 +1326,26 @@ mod tests {
         let decision = decide_command_route("Packet28 run git status --short");
         assert_eq!(decision.kind, RouteKind::RawPassthrough);
         assert_eq!(decision.reason.as_deref(), Some("already_packet28"));
+    }
+
+    #[test]
+    fn marks_rtk_ignored_commands_as_intentional_passthrough() {
+        for command in [
+            "cd crates/suite-cli",
+            "echo hello",
+            "mkdir -p target/tmp",
+            "python -c 'print(1)'",
+            "node -e 'console.log(1)'",
+            "pwd",
+        ] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::RawPassthrough, "{command}");
+            assert_eq!(
+                decision.reason.as_deref(),
+                Some("ignored_command"),
+                "{command}"
+            );
+        }
     }
 
     #[test]
