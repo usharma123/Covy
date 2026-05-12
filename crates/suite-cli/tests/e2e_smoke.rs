@@ -4393,6 +4393,60 @@ fn test_hook_records_local_event_log_stats_and_dashboard_count() {
 }
 
 #[test]
+fn test_hook_failure_output_is_searchable_transcript_context() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let payload = json!({
+        "hook_event_name":"PostToolUseFailure",
+        "task_id":"hook-failure-task",
+        "session_id":"hook-failure-session",
+        "project":"coverage-hook",
+        "matcher":"Bash",
+        "tool_name":"Bash",
+        "tool_input":{"command":"cargo test failing_case"},
+        "error":"failure transcript keeps compiler diagnostic E0425"
+    });
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["hook", "claude", "--root", root.path().to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["transcript", "search", "compiler diagnostic", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hook-failure-session"))
+        .stdout(predicate::str::contains("E0425"))
+        .stdout(predicate::str::contains("\"source\":\"packet28-hook\""));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["hook", "stats", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"event_kind\":\"post_tool_use_failure\"",
+        ));
+}
+
+#[test]
 fn test_session_reports_adoption_from_session_jsonl() {
     let root = TempDir::new().unwrap();
     let sessions_dir = root
