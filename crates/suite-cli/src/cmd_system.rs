@@ -65,6 +65,20 @@ pub struct EnvArgs {
     pub pretty: bool,
 }
 
+#[derive(Args)]
+pub struct LogArgs {
+    /// Log file to analyze. Reads stdin when omitted.
+    pub file: Option<PathBuf>,
+
+    /// Emit a machine-readable envelope
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON machine output
+    #[arg(long)]
+    pub pretty: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemOutput {
     command: String,
@@ -135,6 +149,32 @@ pub fn run_env(args: EnvArgs) -> Result<i32> {
         args.pretty,
         SystemOutput {
             command: "Packet28 env".to_string(),
+            summary,
+            text,
+        },
+    )
+}
+
+pub fn run_log(args: LogArgs) -> Result<i32> {
+    let content = match &args.file {
+        Some(path) => fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?,
+        None => {
+            let mut content = String::new();
+            io::stdin()
+                .lock()
+                .read_to_string(&mut content)
+                .context("failed to read log input from stdin")?;
+            content
+        }
+    };
+    let text = analyze_logs(&content)?;
+    let summary = summarize_rendered_lines("logs", &text);
+    emit_system_output(
+        args.json,
+        args.pretty,
+        SystemOutput {
+            command: "Packet28 log".to_string(),
             summary,
             text,
         },
@@ -728,6 +768,142 @@ fn is_interesting_var(key: &str) -> bool {
     PATTERNS.iter().any(|pattern| key.starts_with(pattern))
 }
 
+fn analyze_logs(content: &str) -> Result<String> {
+    let timestamp_re = Regex::new(r"^\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}:\d{2}[.,]?\d*\s*")?;
+    let uuid_re =
+        Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")?;
+    let hex_re = Regex::new(r"0x[0-9a-fA-F]+")?;
+    let num_re = Regex::new(r"\b\d{4,}\b")?;
+    let path_re = Regex::new(r"/[\w./\-]+")?;
+
+    let mut error_counts = std::collections::HashMap::<String, usize>::new();
+    let mut warn_counts = std::collections::HashMap::<String, usize>::new();
+    let mut info_counts = std::collections::HashMap::<String, usize>::new();
+    let mut unique_errors = Vec::<String>::new();
+    let mut unique_warnings = Vec::<String>::new();
+
+    for line in content.lines() {
+        let lower = line.to_lowercase();
+        let normalized =
+            normalize_log_line(line, &timestamp_re, &uuid_re, &hex_re, &num_re, &path_re);
+        if lower.contains("error") || lower.contains("fatal") || lower.contains("panic") {
+            let count = error_counts.entry(normalized).or_insert(0);
+            if *count == 0 {
+                unique_errors.push(line.to_string());
+            }
+            *count += 1;
+        } else if lower.contains("warn") {
+            let count = warn_counts.entry(normalized).or_insert(0);
+            if *count == 0 {
+                unique_warnings.push(line.to_string());
+            }
+            *count += 1;
+        } else if lower.contains("info") {
+            *info_counts.entry(normalized).or_insert(0) += 1;
+        }
+    }
+
+    let total_errors = error_counts.values().sum::<usize>();
+    let total_warnings = warn_counts.values().sum::<usize>();
+    let total_info = info_counts.values().sum::<usize>();
+    let mut lines = vec![
+        "Log Summary".to_string(),
+        format!(
+            "   [error] {} errors ({} unique)",
+            total_errors,
+            error_counts.len()
+        ),
+        format!(
+            "   [warn] {} warnings ({} unique)",
+            total_warnings,
+            warn_counts.len()
+        ),
+        format!("   [info] {} info messages", total_info),
+        String::new(),
+    ];
+    append_log_group(
+        &mut lines,
+        "[ERRORS]",
+        &error_counts,
+        &unique_errors,
+        (&timestamp_re, &uuid_re, &hex_re, &num_re, &path_re),
+        10,
+    );
+    append_log_group(
+        &mut lines,
+        "[WARNINGS]",
+        &warn_counts,
+        &unique_warnings,
+        (&timestamp_re, &uuid_re, &hex_re, &num_re, &path_re),
+        5,
+    );
+    Ok(lines.join("\n"))
+}
+
+fn append_log_group(
+    lines: &mut Vec<String>,
+    label: &str,
+    counts: &std::collections::HashMap<String, usize>,
+    originals: &[String],
+    regexes: (&Regex, &Regex, &Regex, &Regex, &Regex),
+    limit: usize,
+) {
+    if originals.is_empty() {
+        return;
+    }
+    lines.push(label.to_string());
+    let mut sorted = counts.iter().collect::<Vec<_>>();
+    sorted.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    for (normalized, count) in sorted.iter().take(limit) {
+        let original = originals
+            .iter()
+            .find(|line| {
+                normalize_log_line(line, regexes.0, regexes.1, regexes.2, regexes.3, regexes.4)
+                    == **normalized
+            })
+            .map(String::as_str)
+            .unwrap_or(normalized);
+        let truncated = compact_for_log(original, 100);
+        if **count > 1 {
+            lines.push(format!("   [x{}] {truncated}", count));
+        } else {
+            lines.push(format!("   {truncated}"));
+        }
+    }
+    if sorted.len() > limit {
+        lines.push(format!(
+            "   ... +{} more unique entries",
+            sorted.len() - limit
+        ));
+    }
+    lines.push(String::new());
+}
+
+fn normalize_log_line(
+    line: &str,
+    timestamp_re: &Regex,
+    uuid_re: &Regex,
+    hex_re: &Regex,
+    num_re: &Regex,
+    path_re: &Regex,
+) -> String {
+    let mut normalized = timestamp_re.replace_all(line, "").to_string();
+    normalized = uuid_re.replace_all(&normalized, "<UUID>").to_string();
+    normalized = hex_re.replace_all(&normalized, "<HEX>").to_string();
+    normalized = num_re.replace_all(&normalized, "<NUM>").to_string();
+    normalized = path_re.replace_all(&normalized, "<PATH>").to_string();
+    normalized.trim().to_string()
+}
+
+fn compact_for_log(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        value.to_string()
+    } else {
+        let budget = max_chars.saturating_sub(3);
+        format!("{}...", value.chars().take(budget).collect::<String>())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,5 +999,20 @@ mod tests {
         assert!(rendered.contains("demo @ 0.1.0"));
         assert!(rendered.contains("pytest==8"));
         assert!(rendered.contains("example.com/demo (go 1.22)"));
+    }
+
+    #[test]
+    fn log_analysis_normalizes_variable_ids_and_paths() {
+        let rendered = analyze_logs(
+            "2026-05-12T01:00:00 ERROR failed request 1001 at /tmp/a\n\
+             2026-05-12T01:00:01 ERROR failed request 1002 at /tmp/b\n\
+             2026-05-12T01:00:02 WARN retry 2001\n\
+             2026-05-12T01:00:03 INFO healthy\n",
+        )
+        .unwrap();
+        assert!(rendered.contains("[error] 2 errors (1 unique)"));
+        assert!(rendered.contains("[warn] 1 warnings (1 unique)"));
+        assert!(rendered.contains("[info] 1 info messages"));
+        assert!(rendered.contains("[x2]"));
     }
 }

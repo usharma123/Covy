@@ -202,6 +202,31 @@ fn test_system_json_deps_and_env_commands() {
 }
 
 #[test]
+fn test_system_log_command_deduplicates_noisy_lines() {
+    let root = TempDir::new().unwrap();
+    let log = root.path().join("app.log");
+    fs::write(
+        &log,
+        "2026-05-12T01:00:00 ERROR failed request id=1001 path=/tmp/a\n\
+         2026-05-12T01:00:01 ERROR failed request id=1002 path=/tmp/b\n\
+         2026-05-12T01:00:02 WARN retrying request id=2001\n\
+         2026-05-12T01:00:03 INFO healthy\n",
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["log", log.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Log Summary"))
+        .stdout(predicate::str::contains("[error] 2 errors (1 unique)"))
+        .stdout(predicate::str::contains("[warn] 1 warnings (1 unique)"))
+        .stdout(predicate::str::contains("[info] 1 info messages"))
+        .stdout(predicate::str::contains("[x2]"));
+}
+
+#[test]
 fn test_run_reduces_git_status() {
     let root = TempDir::new().unwrap();
     std::process::Command::new("git")
