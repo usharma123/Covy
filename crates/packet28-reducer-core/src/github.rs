@@ -31,10 +31,12 @@ pub fn classify_github_command(command: &str, argv: &[String]) -> Option<Command
         ("gh", "issue", "view") => "gh_issue_view",
         ("gh", "run", "list") => "gh_run_list",
         ("gh", "run", "view") => "gh_run_view",
+        ("gh", "release", "list") => "gh_release_list",
         ("gh", "api", _) if argv.get(1).is_some_and(|value| value == "api") => "gh_api",
         ("glab", "mr", "list") => "glab_mr_list",
         ("glab", "mr", "view") => "glab_mr_view",
         ("glab", "mr", "diff") => "glab_mr_diff",
+        ("glab", "ci", "status") => "glab_ci_status",
         _ => return None,
     };
     Some(CommandReducerSpec {
@@ -80,6 +82,7 @@ pub fn reduce_github_command(
                 .unwrap_or_else(|| "gh issue view completed".to_string()),
             "gh_run_list" => summarize_list_entries("gh run list", &lines, "run"),
             "gh_run_view" => summarize_run_view(&lines),
+            "gh_release_list" => summarize_list_entries("gh release list", &lines, "release"),
             "gh_api" => summarize_api(stdout),
             "glab_mr_list" => summarize_list_entries("glab mr list", &lines, "MR"),
             "glab_mr_view" => lines
@@ -87,6 +90,7 @@ pub fn reduce_github_command(
                 .map(|line| format!("glab mr view: {line}"))
                 .unwrap_or_else(|| "glab mr view completed".to_string()),
             "glab_mr_diff" => format!("glab mr diff returned {line_count} diff line(s)"),
+            "glab_ci_status" => summarize_glab_ci_status(&lines),
             _ => format!("{command_name} returned {line_count} line(s)"),
         }
     };
@@ -379,6 +383,14 @@ fn compact_pr_checks_preview(lines: &[String]) -> String {
     result.join("\n")
 }
 
+fn summarize_glab_ci_status(lines: &[String]) -> String {
+    let first = lines
+        .first()
+        .map(String::as_str)
+        .unwrap_or("no status lines");
+    format!("glab ci status: {first}")
+}
+
 fn compact_run_view_preview(lines: &[String]) -> String {
     let mut result = Vec::new();
     let mut in_jobs = false;
@@ -506,6 +518,35 @@ mod tests {
         assert_eq!(
             reduction.summary,
             "glab mr list: 2 MR(s); first 42 Fix GitLab reducer [opened]"
+        );
+    }
+
+    #[test]
+    fn reduce_rtk_release_and_glab_ci_status_forms() {
+        let argv = vec!["gh", "release", "list"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_github_command("gh release list", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "gh_release_list");
+        let stdout =
+            "v0.2.52\tLatest\t2026-05-12T08:00:00Z\nv0.2.51\tPrevious\t2026-05-11T08:00:00Z\n";
+        let reduction = reduce_github_command(&spec, stdout, "", 0);
+        assert_eq!(
+            reduction.summary,
+            "gh release list: 2 release(s); first v0.2.52 Latest"
+        );
+
+        let argv = vec!["glab", "ci", "status"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_github_command("glab ci status", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "glab_ci_status");
+        let reduction = reduce_github_command(&spec, "success: pipeline passed\n", "", 0);
+        assert_eq!(
+            reduction.summary,
+            "glab ci status: success: pipeline passed"
         );
     }
 }

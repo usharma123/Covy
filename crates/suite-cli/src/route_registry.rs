@@ -1777,6 +1777,20 @@ mod tests {
     }
 
     #[test]
+    fn routes_rtk_github_release_and_glab_ci_forms() {
+        for (command, expected) in [
+            ("gh release list", "gh_release_list"),
+            ("glab ci status", "glab_ci_status"),
+        ] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
+            let spec = decision.reducer_spec.as_ref().unwrap();
+            assert_eq!(spec.canonical_kind, expected, "{command}");
+            assert!(!spec.mutation, "{command}");
+        }
+    }
+
+    #[test]
     fn routes_yadm_like_rtk_git_alias() {
         for (command, expected) in [
             ("yadm status --short", "git_status"),
