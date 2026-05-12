@@ -66,6 +66,8 @@ pub enum Commands {
     Summary(cmd_system::SummaryArgs),
     /// Find files or directories with compact output
     Find(cmd_system::FindArgs),
+    /// Search files with grouped compact output
+    Grep(cmd_system::GrepArgs),
     /// Compactly inspect JSON files or stdin while preserving raw values by default
     Json(cmd_system::JsonArgs),
     /// Summarize project dependency manifests

@@ -7,6 +7,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
+use packet28_reducer_core::{SearchRequest, SearchResult};
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
@@ -16,6 +17,14 @@ pub enum ReadFilterLevel {
     None,
     Minimal,
     Aggressive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GrepEngine {
+    Auto,
+    Indexed,
+    Legacy,
+    Fff,
 }
 
 #[derive(Args)]
@@ -69,6 +78,44 @@ pub struct FindArgs {
     /// Find arguments. Supports `find <pattern> [path]` and native `find <path> -name <pattern>`.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
+
+    /// Emit a machine-readable envelope
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON machine output
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct GrepArgs {
+    /// Pattern to search for
+    pub pattern: String,
+
+    /// File or directory to search
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// Maximum line length to render
+    #[arg(short = 'l', long, default_value_t = 80)]
+    pub max_len: usize,
+
+    /// Maximum result lines to render
+    #[arg(short, long, default_value_t = 200)]
+    pub max: usize,
+
+    /// Show a short context slice around the match
+    #[arg(long)]
+    pub context_only: bool,
+
+    /// Filter by extension, such as rs, py, or ts
+    #[arg(short = 't', long)]
+    pub file_type: Option<String>,
+
+    /// Search backend to use. `fff` delegates to the existing p28 fff-mcp adapter.
+    #[arg(long, value_enum, default_value_t = GrepEngine::Auto)]
+    pub engine: GrepEngine,
 
     /// Emit a machine-readable envelope
     #[arg(long)]
@@ -233,6 +280,19 @@ pub fn run_find(args: FindArgs) -> Result<i32> {
         SystemOutput {
             command: "Packet28 find".to_string(),
             summary: summarize_rendered_lines("find", &text),
+            text,
+        },
+    )
+}
+
+pub fn run_grep(args: GrepArgs) -> Result<i32> {
+    let text = render_grep_results(&args)?;
+    emit_system_output(
+        args.json,
+        args.pretty,
+        SystemOutput {
+            command: "Packet28 grep".to_string(),
+            summary: summarize_rendered_lines("grep", &text),
             text,
         },
     )
@@ -1125,6 +1185,231 @@ fn glob_match_inner(pattern: &[u8], name: &[u8]) -> bool {
     }
 }
 
+fn render_grep_results(args: &GrepArgs) -> Result<String> {
+    let pattern = args.pattern.replace(r"\|", "|");
+    let regex =
+        Regex::new(&pattern).with_context(|| format!("invalid grep pattern '{pattern}'"))?;
+    let mut result = search_result_for_grep(args)?;
+    filter_search_result_by_file_type(&mut result, args.file_type.as_deref());
+    render_search_result_for_grep(&result, args, &regex)
+}
+
+fn search_result_for_grep(args: &GrepArgs) -> Result<SearchResult> {
+    if matches!(args.engine, GrepEngine::Fff | GrepEngine::Indexed) {
+        return p28_search_result(args).or_else(|err| {
+            if args.engine == GrepEngine::Fff {
+                Err(err)
+            } else {
+                reducer_search_result(args)
+            }
+        });
+    }
+    reducer_search_result(args)
+}
+
+fn reducer_search_result(args: &GrepArgs) -> Result<SearchResult> {
+    let (root, requested_paths) = grep_root_and_paths(&args.path)?;
+    packet28_reducer_core::search(
+        &root,
+        &SearchRequest {
+            query: args.pattern.clone(),
+            requested_paths,
+            max_matches_per_file: Some(1000),
+            max_total_matches: Some(1000),
+            ..SearchRequest::default()
+        },
+    )
+}
+
+fn p28_search_result(args: &GrepArgs) -> Result<SearchResult> {
+    let bin = p28_binary().context("p28 search binary was not found")?;
+    let (root, requested_paths) = grep_root_and_paths(&args.path)?;
+    let mut command = Command::new(&bin);
+    command.current_dir(&root);
+    command.arg(&args.pattern);
+    for path in requested_paths {
+        command.arg(path);
+    }
+    command
+        .args(["--json", "--engine", grep_engine_arg(args.engine)])
+        .arg("--max-total-matches")
+        .arg("1000")
+        .arg("--max-matches-per-file")
+        .arg("1000");
+    let output = command
+        .output()
+        .with_context(|| format!("failed to execute p28 search backend '{}'", bin.display()))?;
+    if !output.status.success() {
+        bail!(
+            "p28 search backend failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let value: Value =
+        serde_json::from_slice(&output.stdout).context("p28 emitted invalid JSON")?;
+    serde_json::from_value(value["result"].clone()).context("p28 JSON missing search result")
+}
+
+fn grep_root_and_paths(path: &Path) -> Result<(PathBuf, Vec<String>)> {
+    if path.is_absolute() {
+        if path.is_file() {
+            let root = path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("absolute file path has no parent"))?
+                .to_path_buf();
+            let file = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| anyhow::anyhow!("absolute file path is not valid UTF-8"))?
+                .to_string();
+            return Ok((root, vec![file]));
+        }
+        return Ok((path.to_path_buf(), Vec::new()));
+    }
+    let root = env::current_dir().context("failed to resolve current directory")?;
+    let value = path.to_string_lossy().replace('\\', "/");
+    let requested_paths = (value != ".").then_some(value).into_iter().collect();
+    Ok((root, requested_paths))
+}
+
+fn grep_engine_arg(engine: GrepEngine) -> &'static str {
+    match engine {
+        GrepEngine::Auto => "auto",
+        GrepEngine::Indexed => "indexed",
+        GrepEngine::Legacy => "legacy",
+        GrepEngine::Fff => "fff",
+    }
+}
+
+fn p28_binary() -> Option<PathBuf> {
+    if let Some(bin) = env::var_os("P28_SEARCH_BIN").map(PathBuf::from) {
+        if bin.is_file() {
+            return Some(bin);
+        }
+    }
+    if let Ok(current) = env::current_exe() {
+        if let Some(parent) = current.parent() {
+            let sibling = parent.join("p28");
+            if sibling.is_file() {
+                return Some(sibling);
+            }
+        }
+    }
+    env::var_os("PATH").and_then(|paths| {
+        env::split_paths(&paths)
+            .map(|path| path.join("p28"))
+            .find(|path| path.is_file())
+    })
+}
+
+fn filter_search_result_by_file_type(result: &mut SearchResult, file_type: Option<&str>) {
+    let Some(file_type) = file_type.map(|value| value.trim_start_matches('.')) else {
+        return;
+    };
+    result.groups.retain_mut(|group| {
+        if !Path::new(&group.path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == file_type)
+        {
+            return false;
+        }
+        group.matches.retain(|item| {
+            Path::new(&item.path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == file_type)
+        });
+        group.match_count = group.matches.len();
+        group.displayed_match_count = group.matches.len();
+        !group.matches.is_empty()
+    });
+    result.match_count = result.groups.iter().map(|group| group.match_count).sum();
+    result.returned_match_count = result
+        .groups
+        .iter()
+        .map(|group| group.matches.len())
+        .sum::<usize>();
+    result.paths = result
+        .groups
+        .iter()
+        .map(|group| group.path.clone())
+        .collect();
+    result.resolved_paths = result.paths.clone();
+    result.regions = result
+        .groups
+        .iter()
+        .flat_map(|group| {
+            group
+                .matches
+                .iter()
+                .map(|item| format!("{}:{}-{}", item.path, item.line, item.line))
+        })
+        .collect();
+}
+
+fn render_search_result_for_grep(
+    result: &SearchResult,
+    args: &GrepArgs,
+    regex: &Regex,
+) -> Result<String> {
+    let mut matches = result
+        .groups
+        .iter()
+        .flat_map(|group| group.matches.iter())
+        .collect::<Vec<_>>();
+    matches.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
+    if matches.is_empty() {
+        return Ok(format!("0 matches for '{}'\n", args.pattern));
+    }
+    let file_count = result.paths.len();
+    let total = result.match_count;
+    let mut out = format!("{total} matches in {file_count} files:\n\n");
+    for item in matches.iter().take(args.max) {
+        out.push_str(&format!(
+            "{}:{}:{}\n",
+            compact_path_for_grep(Path::new(&item.path)),
+            item.line,
+            clean_grep_line(&item.text, args.max_len, args.context_only, &regex)
+        ));
+    }
+    if total > args.max {
+        out.push_str(&format!("[+{} more]\n", total - args.max));
+    }
+    Ok(out)
+}
+
+fn clean_grep_line(line: &str, max_len: usize, context_only: bool, regex: &Regex) -> String {
+    let trimmed = line.trim();
+    if context_only {
+        if let Some(mat) = regex.find(trimmed) {
+            let chars = trimmed.chars().collect::<Vec<_>>();
+            let start = trimmed[..mat.start()].chars().count().saturating_sub(20);
+            let end = (trimmed[..mat.end()].chars().count() + 20).min(chars.len());
+            return chars[start..end].iter().collect::<String>();
+        }
+    }
+    compact_for_log(trimmed, max_len)
+}
+
+fn compact_path_for_grep(path: &Path) -> String {
+    let display = path.display().to_string();
+    if display.len() <= 50 {
+        return display;
+    }
+    let parts = display.split('/').collect::<Vec<_>>();
+    if parts.len() <= 3 {
+        display
+    } else {
+        format!(
+            "{}/.../{}/{}",
+            parts[0],
+            parts[parts.len() - 2],
+            parts[parts.len() - 1]
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadLanguage {
     Rust,
@@ -1670,6 +1955,34 @@ mod tests {
         .unwrap();
         assert!(rendered.contains("2 match(es)"));
         assert!(rendered.contains("[+1 more]"));
+    }
+
+    #[test]
+    fn grep_groups_matches_and_honors_file_type() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src").join("a.rs"),
+            "fn alpha() {}\nfn beta() {}\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src").join("b.txt"), "fn ignored\n").unwrap();
+        let rendered = render_grep_results(&GrepArgs {
+            pattern: "fn".to_string(),
+            path: dir.path().to_path_buf(),
+            max_len: 80,
+            max: 1,
+            context_only: false,
+            file_type: Some("rs".to_string()),
+            engine: GrepEngine::Legacy,
+            json: false,
+            pretty: false,
+        })
+        .unwrap();
+        assert!(rendered.contains("2 matches in 1 files"));
+        assert!(rendered.contains("a.rs:1:fn alpha() {}"));
+        assert!(rendered.contains("[+1 more]"));
+        assert!(!rendered.contains("ignored"));
     }
 
     #[test]

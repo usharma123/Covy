@@ -269,6 +269,55 @@ fn test_system_find_command_supports_native_find_shape() {
 }
 
 #[test]
+fn test_system_grep_command_groups_matches() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(
+        root.path().join("src").join("a.rs"),
+        "fn alpha() {}\nfn beta() {}\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("src").join("note.txt"), "fn ignored\n").unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["grep", "fn", "src", "--file-type", "rs", "--max", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 matches in 1 files"))
+        .stdout(predicate::str::contains("src/a.rs:1:fn alpha() {}"))
+        .stdout(predicate::str::contains("[+1 more]"))
+        .stdout(predicate::str::contains("ignored").not());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_system_grep_fff_engine_delegates_to_p28() {
+    let root = TempDir::new().unwrap();
+    let fake_p28 = root.path().join("p28");
+    fs::write(
+        &fake_p28,
+        r#"#!/usr/bin/env sh
+printf '%s\n' '{"result":{"query":"Alpha","match_count":2,"returned_match_count":2,"paths":["src/a.rs"],"groups":[{"path":"src/a.rs","match_count":2,"displayed_match_count":2,"matches":[{"path":"src/a.rs","line":1,"text":"Alpha one"},{"path":"src/a.rs","line":2,"text":"Alpha two"}]}],"engine":{"engine":"fff_mcp"}}}'
+"#,
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&fake_p28).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake_p28, perms).unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("P28_SEARCH_BIN", &fake_p28)
+        .args(["grep", "Alpha", "--engine", "fff", "--max", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 matches in 1 files"))
+        .stdout(predicate::str::contains("src/a.rs:1:Alpha one"))
+        .stdout(predicate::str::contains("[+1 more]"));
+}
+
+#[test]
 fn test_system_log_command_deduplicates_noisy_lines() {
     let root = TempDir::new().unwrap();
     let log = root.path().join("app.log");
