@@ -250,6 +250,9 @@ pub struct AnalyticsArgs {
     /// Token budget used by gain --format quota
     #[arg(long)]
     pub quota_tokens: Option<u64>,
+    /// Subscription tier used by gain --quota when --quota-tokens is not set (pro, 5x, 20x)
+    #[arg(long, default_value = "20x")]
+    pub tier: String,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -966,11 +969,11 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
     } else if format == "monthly" {
         print_gain_buckets(&run_savings, GainBucketKind::Monthly);
     } else if format == "quota" {
-        print_gain_quota(&summary, args.quota_tokens);
+        print_gain_quota(&summary, args.quota_tokens, &args.tier);
     } else if format == "graph" {
         print_gain_graph(&summary);
     } else if format == "all" {
-        print_gain_all(&summary, &run_savings, args.quota_tokens);
+        print_gain_all(&summary, &run_savings, args.quota_tokens, &args.tier);
     } else {
         println!("tasks={}", summary.task_count);
         println!("invocations={}", summary.invocation_count);
@@ -1339,8 +1342,10 @@ fn print_gain_buckets(records: &[RunSavingsRecord], kind: GainBucketKind) {
     }
 }
 
-fn print_gain_quota(summary: &GainSummary, quota_tokens: Option<u64>) {
-    let quota = quota_tokens.unwrap_or(200_000);
+fn print_gain_quota(summary: &GainSummary, quota_tokens: Option<u64>, tier: &str) {
+    let (quota, tier_label) = quota_tokens
+        .map(|tokens| (tokens, "custom"))
+        .unwrap_or_else(|| tier_quota_tokens(tier));
     let used_pct = if quota == 0 {
         0.0
     } else {
@@ -1351,12 +1356,23 @@ fn print_gain_quota(summary: &GainSummary, quota_tokens: Option<u64>) {
     } else {
         (summary.saved_est_tokens as f64 / quota as f64) * 100.0
     };
+    println!("tier={tier_label}");
     println!("quota_tokens={quota}");
     println!("raw_est_tokens={}", summary.raw_est_tokens);
     println!("reduced_est_tokens={}", summary.reduced_est_tokens);
     println!("saved_est_tokens={}", summary.saved_est_tokens);
     println!("quota_used_pct={used_pct:.1}");
     println!("quota_avoided_pct={avoided_pct:.1}");
+}
+
+fn tier_quota_tokens(tier: &str) -> (u64, &'static str) {
+    const PRO_MONTHLY_TOKENS: u64 = 6_000_000;
+    match tier {
+        "pro" => (PRO_MONTHLY_TOKENS, "pro"),
+        "5x" => (PRO_MONTHLY_TOKENS * 5, "5x"),
+        "20x" => (PRO_MONTHLY_TOKENS * 20, "20x"),
+        _ => (PRO_MONTHLY_TOKENS, "pro"),
+    }
 }
 
 fn print_gain_graph(summary: &GainSummary) {
@@ -1379,6 +1395,7 @@ fn print_gain_all(
     summary: &GainSummary,
     run_savings: &[RunSavingsRecord],
     quota_tokens: Option<u64>,
+    tier: &str,
 ) {
     println!("[summary]");
     println!("tasks={}", summary.task_count);
@@ -1401,7 +1418,7 @@ fn print_gain_all(
     print_gain_buckets(run_savings, GainBucketKind::Monthly);
     println!();
     println!("[quota]");
-    print_gain_quota(summary, quota_tokens);
+    print_gain_quota(summary, quota_tokens, tier);
     println!();
     println!("[failures]");
     print_gain_failures(run_savings);

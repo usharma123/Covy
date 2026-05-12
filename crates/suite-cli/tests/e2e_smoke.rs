@@ -532,6 +532,7 @@ fn test_run_reduces_git_status() {
         ])
         .assert()
         .success()
+        .stdout(predicate::str::contains("tier=custom"))
         .stdout(predicate::str::contains("quota_tokens=1000"))
         .stdout(predicate::str::contains("quota_used_pct="))
         .stdout(predicate::str::contains("quota_avoided_pct="));
@@ -548,9 +549,25 @@ fn test_run_reduces_git_status() {
         ])
         .assert()
         .success()
+        .stdout(predicate::str::contains("tier=custom"))
         .stdout(predicate::str::contains("quota_tokens=1000"))
         .stdout(predicate::str::contains("quota_used_pct="))
         .stdout(predicate::str::contains("quota_avoided_pct="));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--quota",
+            "--tier",
+            "pro",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tier=pro"))
+        .stdout(predicate::str::contains("quota_tokens=6000000"));
 
     suite_cmd()
         .current_dir(root.path())
