@@ -8383,6 +8383,22 @@ fn test_packet28_hook_session_start_injects_wakeup_pack() {
         ])
         .assert()
         .success();
+    suite_cmd()
+        .env("HOME", home.path())
+        .args([
+            "memory",
+            "store",
+            "Session start has a second Packet28 wakeup fact that proves budgeted hook packs truncate deterministically",
+            "--project",
+            &project,
+            "--topic",
+            "session-start",
+            "--importance",
+            "high",
+            "--json",
+        ])
+        .assert()
+        .success();
 
     let payload = json!({
         "hook_event_name":"SessionStart",
@@ -8404,6 +8420,23 @@ fn test_packet28_hook_session_start_injects_wakeup_pack() {
     assert!(additional_context.contains("Packet28 Wake-Up Pack"));
     assert!(additional_context.contains("Session start should inject this Packet28 wakeup fact"));
     assert!(additional_context.contains("Critical memories"));
+    let (budget_status, budget_stdout, budget_stderr) = run_hook_raw_with_env(
+        "claude",
+        dir.path(),
+        &serde_json::to_string(&payload).unwrap(),
+        &[
+            ("HOME", home.path().as_os_str()),
+            ("PACKET28_HOOK_WAKEUP_TOKENS", std::ffi::OsStr::new("12")),
+        ],
+    );
+    assert_eq!(budget_status, 0, "stderr={budget_stderr}");
+    let budget_rendered: Value = serde_json::from_str(&budget_stdout).unwrap();
+    let budget_context = budget_rendered["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(budget_context.contains("Packet28 Wake-Up Pack"));
+    assert!(budget_context.contains("budget:"));
+    assert!(budget_context.contains("truncated"));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
