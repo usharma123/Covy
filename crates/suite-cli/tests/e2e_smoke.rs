@@ -489,6 +489,16 @@ fn test_run_reduces_git_status() {
         ))
         .stdout(predicate::str::contains("git status --short"));
 
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "-H"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "timestamp_unix_ms,family,raw_est_tokens",
+        ))
+        .stdout(predicate::str::contains("git status --short"));
+
     for format in ["daily", "weekly", "monthly"] {
         suite_cmd()
             .current_dir(root.path())
@@ -575,6 +585,21 @@ fn test_run_reduces_git_status() {
             "gain",
             "--root",
             root.path().to_str().unwrap(),
+            "-q",
+            "-t",
+            "5x",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tier=5x"))
+        .stdout(predicate::str::contains("quota_tokens=30000000"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
             "--format",
             "graph",
         ])
@@ -586,6 +611,14 @@ fn test_run_reduces_git_status() {
     suite_cmd()
         .current_dir(root.path())
         .args(["gain", "--root", root.path().to_str().unwrap(), "--graph"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("route,count,share_pct,bar"))
+        .stdout(predicate::str::contains("run_reducer:git"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "-g"])
         .assert()
         .success()
         .stdout(predicate::str::contains("route,count,share_pct,bar"))
@@ -608,6 +641,15 @@ fn test_run_reduces_git_status() {
         .stdout(predicate::str::contains("[graph]"))
         .stdout(predicate::str::contains("[daily]"))
         .stdout(predicate::str::contains("[quota]"))
+        .stdout(predicate::str::contains("[failures]"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "-a"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[summary]"))
+        .stdout(predicate::str::contains("[graph]"))
         .stdout(predicate::str::contains("[failures]"));
 
     suite_cmd()
@@ -704,6 +746,18 @@ fn test_gain_reports_failed_and_fallback_runs() {
             root.path().to_str().unwrap(),
             "--failures",
         ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "timestamp_unix_ms,family,exit_code,fallback_reason,command",
+        ))
+        .stdout(predicate::str::contains("fallback,7"))
+        .stdout(predicate::str::contains("unsupported"))
+        .stdout(predicate::str::contains("packet28 failure"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args(["gain", "--root", root.path().to_str().unwrap(), "-F"])
         .assert()
         .success()
         .stdout(predicate::str::contains(

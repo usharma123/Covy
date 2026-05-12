@@ -221,37 +221,37 @@ pub struct AnalyticsArgs {
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
     /// Output format for analytics commands (text, json, csv, history, failures, daily, weekly, monthly, quota, graph, all)
-    #[arg(long, default_value = "text")]
+    #[arg(short, long, default_value = "text")]
     pub format: String,
     /// Show route graph output (RTK-compatible alias for --format graph)
-    #[arg(long)]
+    #[arg(short, long)]
     pub graph: bool,
     /// Show recent command history (RTK-compatible alias for --format history)
-    #[arg(long)]
+    #[arg(short = 'H', long)]
     pub history: bool,
     /// Show failed or fallback runs (RTK-compatible alias for --format failures)
-    #[arg(long)]
+    #[arg(short = 'F', long)]
     pub failures: bool,
     /// Show daily savings buckets (RTK-compatible alias for --format daily)
-    #[arg(long)]
+    #[arg(short, long)]
     pub daily: bool,
     /// Show weekly savings buckets (RTK-compatible alias for --format weekly)
-    #[arg(long)]
+    #[arg(short, long)]
     pub weekly: bool,
     /// Show monthly savings buckets (RTK-compatible alias for --format monthly)
-    #[arg(long)]
+    #[arg(short, long)]
     pub monthly: bool,
     /// Show quota impact (RTK-compatible alias for --format quota)
-    #[arg(long)]
+    #[arg(short, long)]
     pub quota: bool,
     /// Show all analytics sections (RTK-compatible alias for --format all)
-    #[arg(long)]
+    #[arg(short, long)]
     pub all: bool,
     /// Token budget used by gain --format quota
     #[arg(long)]
     pub quota_tokens: Option<u64>,
     /// Subscription tier used by gain --quota when --quota-tokens is not set (pro, 5x, 20x)
-    #[arg(long, default_value = "20x")]
+    #[arg(short, long, default_value = "20x")]
     pub tier: String,
     /// Reset recorded Packet28 run savings
     #[arg(long)]
