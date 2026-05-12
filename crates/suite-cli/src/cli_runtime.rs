@@ -125,6 +125,8 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Glab(args)) => cmd_system::run_glab(args),
         Some(Commands::Aws(args)) => cmd_system::run_aws(args),
         Some(Commands::Psql(args)) => cmd_system::run_psql(args),
+        Some(Commands::Git(args)) => cmd_system::run_git(args),
+        Some(Commands::Gt(args)) => cmd_system::run_gt(args),
         Some(Commands::Cargo(args)) => cmd_system::run_cargo(args),
         Some(Commands::Go(args)) => cmd_system::run_go(args),
         Some(Commands::Dotnet(args)) => cmd_system::run_dotnet(args),
@@ -434,6 +436,8 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Glab(_))
         | Some(Commands::Aws(_))
         | Some(Commands::Psql(_))
+        | Some(Commands::Git(_))
+        | Some(Commands::Gt(_))
         | Some(Commands::Cargo(_))
         | Some(Commands::Go(_))
         | Some(Commands::Dotnet(_))

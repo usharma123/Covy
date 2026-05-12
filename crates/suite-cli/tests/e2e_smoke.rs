@@ -548,6 +548,14 @@ fn test_system_infra_and_count_commands_use_reducer_wrappers() {
         &bin_dir.join("psql"),
         "#!/bin/sh\nprintf ' id | name\\n----+------\\n 1  | Ada\\n 2  | Lin\\n(2 rows)\\n'; exit 0\n",
     );
+    write_executable_script(
+        &bin_dir.join("git"),
+        "#!/bin/sh\nif [ \"$1\" = status ]; then printf 'Changes not staged for commit:\\n\\tmodified:   src/lib.rs\\n\\nUntracked files:\\n\\tnew.txt\\n'; exit 0; fi\nexit 2\n",
+    );
+    write_executable_script(
+        &bin_dir.join("gt"),
+        "#!/bin/sh\nif [ \"$1\" = log ]; then printf '* abc123 feature-a\\n* def456 main\\n'; exit 0; fi\nexit 2\n",
+    );
     let path_env = std::env::join_paths(std::iter::once(bin_dir.as_path().to_path_buf()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
@@ -648,6 +656,22 @@ fn test_system_infra_and_count_commands_use_reducer_wrappers() {
         .assert()
         .success()
         .stdout(predicate::str::contains("psql returned 2 row(s)"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["git", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("git status: 1 modified"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["gt", "log"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gt log returned 2 stack entries"));
 }
 
 #[test]

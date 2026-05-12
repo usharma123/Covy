@@ -386,6 +386,14 @@ pub fn run_psql(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("psql", args, "psql")
 }
 
+pub fn run_git(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("git", args, "git")
+}
+
+pub fn run_gt(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("gt", args, "gt")
+}
+
 pub fn run_cargo(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("cargo", args, "cargo")
 }

@@ -106,6 +106,10 @@ pub enum Commands {
     Aws(cmd_system::ToolArgs),
     /// Run psql with compact output
     Psql(cmd_system::ToolArgs),
+    /// Run git with compact output
+    Git(cmd_system::ToolArgs),
+    /// Run Graphite gt with compact output
+    Gt(cmd_system::ToolArgs),
     /// Run Cargo with compact output
     Cargo(cmd_system::ToolArgs),
     /// Run Go with compact output
