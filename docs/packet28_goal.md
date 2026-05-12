@@ -269,6 +269,8 @@ Before tagging a release that claims parity progress:
 - verify the npm package or install path after release
 - record the release smoke evidence
 
+Release `v0.2.54` satisfies these gates for the audited RTK `55f998d` and ICM `92bd851` parity claim. Local `cargo test --workspace` passed; GitHub Hook Benchmark Suite run `25753409843` passed; GitHub Release workflow run `25753420426` passed; GitHub release `v0.2.54` was published; `npm view packet28@0.2.54 version` returned `0.2.54`; and an isolated global npm install smoke verified `packet28 --version`, runtime setup coverage, `rewrite`, `setup --runtime gemini`, and `doctor --agent gemini --json`.
+
 ## Architecture Target
 
 Refactor incrementally toward these boundaries where they reduce complexity:
@@ -322,7 +324,7 @@ Packet28 can be described as fully mature and at full RTK + ICM parity only when
 10. Release smoke verifies the published package or install path.
 11. Docs explain exact usage, support tiers, limitations, and remaining non-goals.
 
-Until those gates pass, describe Packet28 as useful but still maturing.
+As of `v0.2.54`, these gates have passed for the audited RTK and ICM snapshots referenced in `docs/PARITY.md`. Future upstream RTK or ICM changes require a fresh audit before extending the parity claim.
 
 ## Non-Goals And Constraints
 
