@@ -1664,6 +1664,9 @@ fn run_session_adoption(args: SessionArgs) -> Result<i32> {
     };
 
     for path in session_files {
+        if crate::cmd_discover::is_subagent_session_path(&path) {
+            continue;
+        }
         let Ok(commands) = crate::cmd_discover::extract_bash_commands(&path) else {
             continue;
         };

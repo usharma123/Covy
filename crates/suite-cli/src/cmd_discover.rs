@@ -246,6 +246,11 @@ pub(crate) fn collect_session_files_for_scan_with_project(
     if !dir.is_dir() {
         return Ok(files);
     }
+    let max_scan_files = if all {
+        None
+    } else {
+        Some(limit.saturating_mul(5).max(limit))
+    };
     let cutoff = since_days.map(|days| {
         SystemTime::now()
             .checked_sub(Duration::from_secs(days.saturating_mul(86_400)))
@@ -261,29 +266,13 @@ pub(crate) fn collect_session_files_for_scan_with_project(
             }
         }
         if path.is_dir() {
-            // Look for sessions subdirectory or JSONL files directly
-            let sessions_subdir = path.join("sessions");
-            let scan_dir = if sessions_subdir.is_dir() {
-                sessions_subdir
-            } else {
-                path
-            };
-            if let Ok(entries) = fs::read_dir(&scan_dir) {
-                for sub_entry in entries.flatten() {
-                    let sub_path = sub_entry.path();
-                    if sub_path.extension().is_some_and(|ext| ext == "jsonl")
-                        && session_file_in_since_window(&sub_path, cutoff)
-                    {
-                        files.push(sub_path);
-                    }
-                }
-            }
+            collect_session_jsonl_files(&path, cutoff, max_scan_files, &mut files)?;
         } else if path.extension().is_some_and(|ext| ext == "jsonl")
             && session_file_in_since_window(&path, cutoff)
         {
             files.push(path);
         }
-        if !all && files.len() >= limit * 5 {
+        if max_scan_files.is_some_and(|max| files.len() >= max) {
             break;
         }
     }
@@ -299,6 +288,33 @@ pub(crate) fn collect_session_files_for_scan_with_project(
     Ok(files)
 }
 
+fn collect_session_jsonl_files(
+    dir: &Path,
+    cutoff: Option<SystemTime>,
+    max_files: Option<usize>,
+    files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if max_files.is_some_and(|max| files.len() >= max) {
+        return Ok(());
+    }
+    let entries = fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_session_jsonl_files(&path, cutoff, max_files, files)?;
+        } else if path.extension().is_some_and(|ext| ext == "jsonl")
+            && session_file_in_since_window(&path, cutoff)
+        {
+            files.push(path);
+        }
+        if max_files.is_some_and(|max| files.len() >= max) {
+            break;
+        }
+    }
+    Ok(())
+}
+
 fn session_file_in_since_window(path: &Path, cutoff: Option<SystemTime>) -> bool {
     let Some(cutoff) = cutoff else {
         return true;
@@ -307,6 +323,10 @@ fn session_file_in_since_window(path: &Path, cutoff: Option<SystemTime>) -> bool
         .and_then(|metadata| metadata.modified())
         .map(|modified| modified >= cutoff)
         .unwrap_or(false)
+}
+
+pub(crate) fn is_subagent_session_path(path: &Path) -> bool {
+    path.to_string_lossy().contains("subagents")
 }
 
 pub(crate) fn extract_bash_commands(path: &Path) -> Result<Vec<(String, u64)>> {

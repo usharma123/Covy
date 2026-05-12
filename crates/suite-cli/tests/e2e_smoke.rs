@@ -5762,6 +5762,48 @@ fn test_discover_project_filter_limits_session_scan_like_rtk() {
 }
 
 #[test]
+fn test_discover_recurses_project_session_dirs_like_rtk() {
+    let root = TempDir::new().unwrap();
+    let sessions_dir = root
+        .path()
+        .join("claude-projects")
+        .join("project")
+        .join("nested");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    let line = json!({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "name": "Bash",
+                "input": { "command": "git status --short" }
+            }]
+        }
+    });
+    fs::write(
+        sessions_dir.join("session-nested.jsonl"),
+        format!("{line}\n"),
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "discover",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"sessions_scanned\":1"))
+        .stdout(predicate::str::contains("\"commands_found\":1"))
+        .stdout(predicate::str::contains("\"supported_commands\":1"));
+}
+
+#[test]
 fn test_hook_records_local_event_log_stats_and_dashboard_count() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
@@ -6083,6 +6125,59 @@ fn test_session_adoption_all_and_since_scan_multiple_session_files() {
         .stdout(predicate::str::contains("\"sessions_scanned\":2"))
         .stdout(predicate::str::contains("\"total_commands\":2"))
         .stdout(predicate::str::contains("\"packet28_commands\":2"));
+}
+
+#[test]
+fn test_session_skips_subagent_session_files_like_rtk() {
+    let root = TempDir::new().unwrap();
+    let project_dir = root.path().join("claude-projects").join("project");
+    let subagent_sessions_dir = root
+        .path()
+        .join("claude-projects")
+        .join("project")
+        .join("subagents");
+    fs::create_dir_all(&project_dir).unwrap();
+    fs::create_dir_all(&subagent_sessions_dir).unwrap();
+
+    for (path, command) in [
+        (
+            project_dir.join("session-top.jsonl"),
+            "Packet28 run cargo check",
+        ),
+        (
+            subagent_sessions_dir.join("session-subagent.jsonl"),
+            "echo subagent raw",
+        ),
+    ] {
+        let line = json!({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": command }
+                }]
+            }
+        });
+        fs::write(path, format!("{line}\n")).unwrap();
+    }
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "session",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            root.path().join("claude-projects").to_str().unwrap(),
+            "--all",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"sessions_scanned\":1"))
+        .stdout(predicate::str::contains("\"total_commands\":1"))
+        .stdout(predicate::str::contains("\"packet28_commands\":1"));
 }
 
 #[test]
