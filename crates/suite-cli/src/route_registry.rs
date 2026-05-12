@@ -154,7 +154,8 @@ fn decide_command_route_inner(
     }
 
     let normalized = shell_join(&argv);
-    let classification_argv = normalize_git_global_options_for_classification(&argv);
+    let classification_argv = normalize_git_global_options_for_classification(&argv)
+        .or_else(|| normalize_golangci_global_options_for_classification(&argv));
     let classification_command = classification_argv
         .as_ref()
         .map(|argv| shell_join(argv))
@@ -603,6 +604,49 @@ fn normalize_git_global_options_for_classification(argv: &[String]) -> Option<Ve
     }
     normalized.extend(argv[idx..].iter().cloned());
     Some(normalized)
+}
+
+fn normalize_golangci_global_options_for_classification(argv: &[String]) -> Option<Vec<String>> {
+    let first = argv.first()?.as_str();
+    if !matches!(first, "golangci-lint" | "golangci") {
+        return None;
+    }
+    let mut idx = 1usize;
+    while idx < argv.len() {
+        let arg = argv[idx].as_str();
+        if arg == "--" {
+            return None;
+        }
+        if !arg.starts_with('-') {
+            if arg == "run" {
+                let mut normalized = Vec::with_capacity(argv.len() - idx + 1);
+                normalized.push("golangci-lint".to_string());
+                normalized.extend(argv[idx..].iter().cloned());
+                return Some(normalized);
+            }
+            return None;
+        }
+        if golangci_global_flag_takes_value(arg) {
+            idx += 1;
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn golangci_global_flag_takes_value(arg: &str) -> bool {
+    let flag = arg.split_once('=').map(|(flag, _)| flag).unwrap_or(arg);
+    if arg.starts_with("--") && arg.contains('=') {
+        return false;
+    }
+    matches!(
+        flag,
+        "-c" | "--color"
+            | "--config"
+            | "--cpu-profile-path"
+            | "--mem-profile-path"
+            | "--trace-path"
+    )
 }
 
 fn classify_tree_tool(argv: &[String]) -> Option<NativeToolPlan> {
@@ -1359,6 +1403,31 @@ mod tests {
                 .map(|spec| spec.canonical_kind.as_str()),
             Some("git_status")
         );
+    }
+
+    #[test]
+    fn routes_golangci_global_options_before_run_like_rtk() {
+        for command in [
+            "golangci-lint -v run ./...",
+            "golangci-lint --color never run ./...",
+            "golangci-lint --color=never run ./...",
+            "golangci-lint --config=.golangci.yml run ./...",
+            "golangci run ./...",
+        ] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
+            assert_eq!(
+                decision
+                    .reducer_spec
+                    .as_ref()
+                    .map(|spec| spec.canonical_kind.as_str()),
+                Some("golangci_lint"),
+                "{command}"
+            );
+        }
+
+        let bare = decide_command_route("golangci-lint version");
+        assert_eq!(bare.kind, RouteKind::RawPassthrough);
     }
 
     #[test]
