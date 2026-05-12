@@ -7,6 +7,7 @@ use crate::github::{classify_github_command, reduce_github_command};
 use crate::go::{classify_go_command, reduce_go_command};
 use crate::infra::{classify_infra_command, reduce_infra_command};
 use crate::javascript::{classify_javascript_command, reduce_javascript_command};
+use crate::jvm::{classify_jvm_command, reduce_jvm_command};
 use crate::python::{classify_python_command, reduce_python_command};
 use crate::ruby::{classify_ruby_command, reduce_ruby_command};
 use crate::rust::{classify_rust_command, reduce_rust_command};
@@ -46,6 +47,7 @@ pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandRe
         }
         "npm" | "pnpm" | "yarn" | "npx" | "tsc" | "eslint" | "vitest" | "prettier" | "next"
         | "prisma" | "playwright" => classify_javascript_command(command, argv),
+        "gradle" | "gradlew" | "./gradlew" | "gradlew.bat" => classify_jvm_command(command, argv),
         "bundle" | "rspec" | "rubocop" | "ruby" | "rails" => classify_ruby_command(command, argv),
         "dotnet" => classify_dotnet_command(command, argv),
         _ => None,
@@ -72,6 +74,7 @@ pub fn reduce_command_output(
         CommandReducerFamily::Javascript => {
             reduce_javascript_command(spec, stdout, stderr, exit_code)
         }
+        CommandReducerFamily::Jvm => reduce_jvm_command(spec, stdout, stderr, exit_code),
     })
 }
 
@@ -85,6 +88,7 @@ fn parse_family(value: &str) -> Result<CommandReducerFamily> {
         "infra" => CommandReducerFamily::Infra,
         "python" => CommandReducerFamily::Python,
         "javascript" => CommandReducerFamily::Javascript,
+        "jvm" => CommandReducerFamily::Jvm,
         "ruby" => CommandReducerFamily::Ruby,
         "dotnet" => CommandReducerFamily::Dotnet,
         other => anyhow::bail!("unsupported reducer family '{other}'"),

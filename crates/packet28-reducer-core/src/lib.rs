@@ -7,6 +7,7 @@ mod github;
 mod go;
 mod infra;
 mod javascript;
+mod jvm;
 pub mod parser;
 mod python;
 mod read;

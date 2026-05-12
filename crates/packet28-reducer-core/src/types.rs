@@ -105,6 +105,7 @@ pub enum CommandReducerFamily {
     Infra,
     Ruby,
     Dotnet,
+    Jvm,
 }
 
 impl CommandReducerFamily {
@@ -120,6 +121,7 @@ impl CommandReducerFamily {
             Self::Infra => "infra",
             Self::Ruby => "ruby",
             Self::Dotnet => "dotnet",
+            Self::Jvm => "jvm",
         }
     }
 }

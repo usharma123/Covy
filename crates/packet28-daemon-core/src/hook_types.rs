@@ -311,6 +311,7 @@ impl Default for HookRuntimeConfig {
                 "infra".to_string(),
                 "ruby".to_string(),
                 "dotnet".to_string(),
+                "jvm".to_string(),
             ],
             tee_mode: None,
             tee_directory: None,

@@ -433,6 +433,7 @@ fn categorize_command(program: &str) -> String {
         "python" | "python3" | "pytest" | "ruff" | "mypy" | "pip" | "pip3" | "uv" => "python",
         "npm" | "pnpm" | "yarn" | "npx" | "tsc" | "eslint" | "vitest" | "prettier" | "next"
         | "prisma" | "playwright" => "javascript",
+        "gradle" | "gradlew" | "./gradlew" | "gradlew.bat" => "jvm",
         "bundle" | "rspec" | "rubocop" | "ruby" | "rails" => "ruby",
         "dotnet" => "dotnet",
         "ls" | "find" | "cat" | "head" | "tail" | "sed" | "diff" => "fs",

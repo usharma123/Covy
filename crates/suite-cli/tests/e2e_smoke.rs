@@ -100,6 +100,21 @@ fn test_top_level_rewrite_plans_supported_command() {
         .success()
         .stdout(predicate::str::contains("\"route\":\"reducer_rewrite\""))
         .stdout(predicate::str::contains("\"reducer_family\":\"git\""));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "gradle",
+            "test",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"route\":\"reducer_rewrite\""))
+        .stdout(predicate::str::contains("\"reducer_family\":\"jvm\""));
 }
 
 #[test]
@@ -660,6 +675,10 @@ fn test_run_raw_artifact_available_across_reducer_families() {
         &bin_dir.path().join("dotnet"),
         "#!/bin/sh\nprintf 'Passed!  - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 s\\ndotnet raw marker\\n'\n",
     );
+    write_executable_script(
+        &bin_dir.path().join("gradle"),
+        "#!/bin/sh\nprintf 'ExampleTest > fails FAILED\\n    java.lang.AssertionError: expected true\\n        at org.junit.Assert.fail(Assert.java:89)\\n        at com.example.ExampleTest.fails(ExampleTest.java:42)\\n2 tests completed, 1 failed\\nBUILD FAILED in 1s\\ngradle raw marker\\n'\n",
+    );
     let path_env = format!(
         "{}:{}",
         bin_dir.path().display(),
@@ -694,6 +713,7 @@ fn test_run_raw_artifact_available_across_reducer_families() {
             vec!["dotnet", "test", "Packet28.Tests.csproj"],
             "dotnet raw marker",
         ),
+        ("jvm", vec!["gradle", "test"], "gradle raw marker"),
     ];
 
     for (family, argv, raw_marker) in cases {

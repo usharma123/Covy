@@ -88,6 +88,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
             | "go"
             | "ruby"
             | "dotnet"
+            | "jvm"
     ) {
         return run_auto_fallback(root, cwd, args, "unsupported_family");
     }
