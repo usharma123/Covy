@@ -58,6 +58,8 @@ pub enum Commands {
     Proxy(cmd_proxy::ProxyArgs),
     /// Aggregate estimated token savings across recorded task invocations
     Gain(cmd_compact::AnalyticsArgs),
+    /// Merge ccusage spend with Packet28 recorded savings
+    CcEconomics(cmd_compact::CcEconomicsArgs),
     /// RTK-style compact command surface and analytics
     Compact(cmd_compact::CompactArgs),
     /// Read files with optional line windows, line numbers, and lightweight filtering

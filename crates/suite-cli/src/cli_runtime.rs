@@ -101,6 +101,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
             cmd_proxy::ProxyCommands::Run(args) => cmd_proxy::run(args),
         },
         Some(Commands::Gain(args)) => cmd_compact::run_gain_command(args),
+        Some(Commands::CcEconomics(args)) => cmd_compact::run_cc_economics(args),
         Some(Commands::Compact(args)) => cmd_compact::run(args),
         Some(Commands::Read(args)) => cmd_system::run_read(args),
         Some(Commands::Summary(args)) => cmd_system::run_summary(args),
@@ -377,6 +378,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
             }
         }
         Some(Commands::Gain(_))
+        | Some(Commands::CcEconomics(_))
         | Some(Commands::Compact(_))
         | Some(Commands::Read(_))
         | Some(Commands::Summary(_))
