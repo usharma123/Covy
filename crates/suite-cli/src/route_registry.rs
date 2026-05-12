@@ -1791,6 +1791,20 @@ mod tests {
     }
 
     #[test]
+    fn routes_rtk_psql_connection_forms() {
+        for command in ["psql -U postgres -d mydb", "psql postgres://localhost/mydb"] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
+            let spec = decision.reducer_spec.as_ref().unwrap();
+            assert_eq!(spec.canonical_kind, "psql_query", "{command}");
+            assert!(!spec.mutation, "{command}");
+        }
+
+        let exact_output = decide_command_route("psql -o out.txt -U postgres");
+        assert_eq!(exact_output.kind, RouteKind::RawPassthrough);
+    }
+
+    #[test]
     fn routes_yadm_like_rtk_git_alias() {
         for (command, expected) in [
             ("yadm status --short", "git_status"),

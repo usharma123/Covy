@@ -254,9 +254,7 @@ fn classify_psql(argv: &[String]) -> bool {
     ) {
         return false;
     }
-    argv.iter().any(|arg| {
-        arg == "-c" || arg == "--command" || arg.starts_with("-c") || arg.starts_with("--command=")
-    })
+    argv.len() > 1
 }
 
 fn contains_any(argv: &[String], denied: &[&str]) -> bool {
@@ -1404,6 +1402,19 @@ mod tests {
         let reduction = reduce_infra_command(&spec, output, "", 0);
         assert_eq!(reduction.summary, "psql returned 2 row(s)");
         assert_eq!(reduction.compact_preview, "id\tname\n1\tAda\n2\tGrace");
+    }
+
+    #[test]
+    fn classify_rtk_psql_connection_forms() {
+        for command in ["psql -U postgres -d mydb", "psql postgres://localhost/mydb"] {
+            let argv = shell_words::split(command).unwrap();
+            let spec = classify_infra_command(command, &argv).unwrap();
+            assert_eq!(spec.canonical_kind, "psql_query", "{command}");
+            assert!(!spec.mutation, "{command}");
+        }
+
+        let argv = shell_words::split("psql -o out.txt -U postgres").unwrap();
+        assert!(classify_infra_command("psql -o out.txt -U postgres", &argv).is_none());
     }
 
     #[test]
