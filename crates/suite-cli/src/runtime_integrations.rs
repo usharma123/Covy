@@ -113,6 +113,16 @@ pub(crate) mod hermes {
     pub(crate) fn prompt_path(root: &Path) -> PathBuf {
         root.join("AGENTS.md")
     }
+
+    pub(crate) fn plugin_dir(home: &Path) -> PathBuf {
+        home.join(".hermes")
+            .join("plugins")
+            .join("packet28-rewrite")
+    }
+
+    pub(crate) fn config_path(home: &Path) -> PathBuf {
+        home.join(".hermes").join("config.yaml")
+    }
 }
 
 pub(crate) mod cline {

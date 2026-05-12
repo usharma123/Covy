@@ -483,6 +483,56 @@ fn test_setup_opencode_writes_instructions_and_rewrite_plugin() {
 
 #[test]
 #[cfg(unix)]
+fn test_setup_hermes_writes_instructions_plugin_and_config() {
+    let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "setup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--runtime",
+            "hermes",
+            "--yes",
+        ])
+        .assert()
+        .success();
+
+    assert!(root.path().join("AGENTS.md").exists());
+    let plugin_dir = home
+        .path()
+        .join(".hermes")
+        .join("plugins")
+        .join("packet28-rewrite");
+    let init = fs::read_to_string(plugin_dir.join("__init__.py")).unwrap();
+    let manifest = fs::read_to_string(plugin_dir.join("plugin.yaml")).unwrap();
+    let config = fs::read_to_string(home.path().join(".hermes").join("config.yaml")).unwrap();
+    assert!(init.contains("Packet28 rewrite"));
+    assert!(manifest.contains("packet28-rewrite"));
+    assert!(config.contains("packet28-rewrite"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "doctor",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--agent",
+            "hermes",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hermes_plugin"));
+}
+
+#[test]
+#[cfg(unix)]
 fn test_setup_gemini_writes_before_tool_hook_and_prompt() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();

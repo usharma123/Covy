@@ -325,6 +325,9 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
     if matches!(agent, Some("opencode")) {
         return build_opencode_report(root);
     }
+    if matches!(agent, Some("hermes")) {
+        return build_hermes_report(root);
+    }
     if matches!(agent, Some("windsurf")) {
         return build_windsurf_report(root);
     }
@@ -377,11 +380,6 @@ fn instruction_only_agent_target(root: &Path, agent: &str) -> Option<Instruction
             slug: "gemini",
             name: "Gemini CLI",
             path: gemini::prompt_path(root),
-        }),
-        "hermes" => Some(InstructionOnlyAgentTarget {
-            slug: "hermes",
-            name: "Hermes",
-            path: hermes::prompt_path(root),
         }),
         "cline" => Some(InstructionOnlyAgentTarget {
             slug: "cline",
@@ -735,6 +733,125 @@ fn check_opencode_plugin() -> DoctorCheck {
             ok: false,
             required: true,
             detail: format!("opencode: {err}"),
+        },
+    }
+}
+
+fn build_hermes_report(root: &Path) -> DoctorReport {
+    let daemon = DoctorCheck {
+        name: "daemon",
+        ok: true,
+        required: false,
+        detail: "not required for Hermes plugin verification".to_string(),
+    };
+    let index = DoctorCheck {
+        name: "index",
+        ok: true,
+        required: false,
+        detail: "not required for Hermes plugin verification".to_string(),
+    };
+    let mcp_config = Vec::new();
+    let instruction_file = check_instruction_file("hermes", "Hermes", &hermes::prompt_path(root));
+    let plugin = check_hermes_plugin();
+    let handshake = DoctorCheck {
+        name: "mcp_handshake",
+        ok: true,
+        required: false,
+        detail: "Hermes uses a local Python plugin, not Packet28 MCP setup".to_string(),
+    };
+    let reducer_round_trip = DoctorCheck {
+        name: "runtime_rewrite_support",
+        ok: plugin.ok,
+        required: true,
+        detail: plugin.detail.clone(),
+    };
+    let push_notifications = DoctorCheck {
+        name: "push_notifications",
+        ok: true,
+        required: false,
+        detail: "not required for Hermes plugin verification".to_string(),
+    };
+    let handoff_round_trip = DoctorCheck {
+        name: "handoff_round_trip",
+        ok: true,
+        required: false,
+        detail: "not required for Hermes plugin verification".to_string(),
+    };
+    let checks = vec![
+        daemon.clone(),
+        index.clone(),
+        instruction_file,
+        plugin,
+        handshake.clone(),
+        reducer_round_trip.clone(),
+        push_notifications.clone(),
+        handoff_round_trip.clone(),
+    ];
+    let ok = checks
+        .iter()
+        .filter(|check| check.required)
+        .all(|check| check.ok);
+    DoctorReport {
+        root: root.display().to_string(),
+        ok,
+        daemon,
+        index,
+        mcp_config,
+        handshake,
+        reducer_round_trip,
+        push_notifications,
+        handoff_round_trip,
+        checks,
+    }
+}
+
+fn check_hermes_plugin() -> DoctorCheck {
+    let home = dirs_home();
+    let plugin_dir = hermes::plugin_dir(&home);
+    let init_path = plugin_dir.join("__init__.py");
+    let manifest_path = plugin_dir.join("plugin.yaml");
+    let config_path = hermes::config_path(&home);
+    let result = (|| -> Result<String> {
+        let init = fs::read_to_string(&init_path)
+            .with_context(|| format!("failed to read '{}'", init_path.display()))?;
+        let manifest = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read '{}'", manifest_path.display()))?;
+        let config = fs::read_to_string(&config_path)
+            .with_context(|| format!("failed to read '{}'", config_path.display()))?;
+        if !init.contains("Packet28 rewrite") || !manifest.contains("packet28-rewrite") {
+            return Err(anyhow!("Packet28 Hermes plugin files are not configured"));
+        }
+        let config_value = serde_yaml::from_str::<serde_yaml::Value>(&config)
+            .with_context(|| format!("invalid YAML in '{}'", config_path.display()))?;
+        let enabled = config_value
+            .get("plugins")
+            .and_then(|plugins| plugins.get("enabled"))
+            .and_then(serde_yaml::Value::as_sequence)
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.as_str() == Some("packet28-rewrite"))
+            });
+        if !enabled {
+            return Err(anyhow!("Hermes config does not enable packet28-rewrite"));
+        }
+        Ok(format!(
+            "Hermes rewrite plugin configured at {}",
+            plugin_dir.display()
+        ))
+    })();
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "hermes_plugin",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(err) => DoctorCheck {
+            name: "hermes_plugin",
+            ok: false,
+            required: true,
+            detail: format!("hermes: {err}"),
         },
     }
 }
