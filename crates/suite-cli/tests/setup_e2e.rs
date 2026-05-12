@@ -562,6 +562,22 @@ fn test_setup_gemini_writes_before_tool_hook_and_prompt() {
     let command = hooks[0]["hooks"][0]["command"].as_str().unwrap();
     assert!(command.contains(" hook gemini "));
     assert!(command.contains(root.path().to_str().unwrap()));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "doctor",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--agent",
+            "gemini",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gemini_hook_config"))
+        .stdout(predicate::str::contains("runtime_rewrite_support"));
 }
 
 #[test]

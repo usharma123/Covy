@@ -322,6 +322,9 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
     if matches!(agent, Some("copilot")) {
         return build_copilot_report(root);
     }
+    if matches!(agent, Some("gemini")) {
+        return build_gemini_report(root);
+    }
     if matches!(agent, Some("opencode")) {
         return build_opencode_report(root);
     }
@@ -376,11 +379,6 @@ struct InstructionOnlyAgentTarget {
 
 fn instruction_only_agent_target(root: &Path, agent: &str) -> Option<InstructionOnlyAgentTarget> {
     match agent {
-        "gemini" => Some(InstructionOnlyAgentTarget {
-            slug: "gemini",
-            name: "Gemini CLI",
-            path: gemini::prompt_path(root),
-        }),
         "cline" => Some(InstructionOnlyAgentTarget {
             slug: "cline",
             name: "Cline",
@@ -633,6 +631,124 @@ fn check_copilot_hook_config(root: &Path) -> DoctorCheck {
             ok: false,
             required: true,
             detail: format!("copilot: {err}"),
+        },
+    }
+}
+
+fn build_gemini_report(root: &Path) -> DoctorReport {
+    let daemon = DoctorCheck {
+        name: "daemon",
+        ok: true,
+        required: false,
+        detail: "not required for Gemini CLI hook verification".to_string(),
+    };
+    let index = DoctorCheck {
+        name: "index",
+        ok: true,
+        required: false,
+        detail: "not required for Gemini CLI hook verification".to_string(),
+    };
+    let mcp_config = Vec::new();
+    let instruction_file =
+        check_instruction_file("gemini", "Gemini CLI", &gemini::prompt_path(root));
+    let hook_config = check_gemini_hook_config();
+    let handshake = DoctorCheck {
+        name: "mcp_handshake",
+        ok: true,
+        required: false,
+        detail: "Gemini CLI uses a BeforeTool hook, not Packet28 MCP setup".to_string(),
+    };
+    let reducer_round_trip = DoctorCheck {
+        name: "runtime_rewrite_support",
+        ok: hook_config.ok,
+        required: true,
+        detail: hook_config.detail.clone(),
+    };
+    let push_notifications = DoctorCheck {
+        name: "push_notifications",
+        ok: true,
+        required: false,
+        detail: "not required for Gemini CLI hook verification".to_string(),
+    };
+    let handoff_round_trip = DoctorCheck {
+        name: "handoff_round_trip",
+        ok: true,
+        required: false,
+        detail: "not required for Gemini CLI hook verification".to_string(),
+    };
+    let checks = vec![
+        daemon.clone(),
+        index.clone(),
+        instruction_file,
+        hook_config,
+        handshake.clone(),
+        reducer_round_trip.clone(),
+        push_notifications.clone(),
+        handoff_round_trip.clone(),
+    ];
+    let ok = checks
+        .iter()
+        .filter(|check| check.required)
+        .all(|check| check.ok);
+    DoctorReport {
+        root: root.display().to_string(),
+        ok,
+        daemon,
+        index,
+        mcp_config,
+        handshake,
+        reducer_round_trip,
+        push_notifications,
+        handoff_round_trip,
+        checks,
+    }
+}
+
+fn check_gemini_hook_config() -> DoctorCheck {
+    let path = gemini::settings_path(&dirs_home());
+    let result = (|| -> Result<String> {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        let value: Value = serde_json::from_str(&content)
+            .with_context(|| format!("invalid JSON in '{}'", path.display()))?;
+        let hooks = value
+            .pointer("/hooks/BeforeTool")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing hooks.BeforeTool array"))?;
+        let configured = hooks.iter().any(|entry| {
+            entry.get("matcher").and_then(Value::as_str) == Some("run_shell_command")
+                && entry
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .is_some_and(|commands| {
+                        commands.iter().any(|command| {
+                            command
+                                .get("command")
+                                .and_then(Value::as_str)
+                                .is_some_and(|value| value.contains(" hook gemini "))
+                        })
+                    })
+        });
+        if !configured {
+            return Err(anyhow!("Packet28 Gemini BeforeTool hook is not configured"));
+        }
+        Ok(format!(
+            "Gemini CLI BeforeTool hook configured at {}",
+            path.display()
+        ))
+    })();
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "gemini_hook_config",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(err) => DoctorCheck {
+            name: "gemini_hook_config",
+            ok: false,
+            required: true,
+            detail: format!("gemini: {err}"),
         },
     }
 }
