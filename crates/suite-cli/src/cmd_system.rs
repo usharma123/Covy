@@ -342,6 +342,10 @@ pub fn run_ruff(args: ToolArgs) -> Result<i32> {
     run_tool_command("ruff", args, "ruff")
 }
 
+pub fn run_ls(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("ls", args, "ls")
+}
+
 pub fn run_wc(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("wc", args, "wc")
 }

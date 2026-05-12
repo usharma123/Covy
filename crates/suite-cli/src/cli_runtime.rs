@@ -114,6 +114,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Vitest(args)) => cmd_system::run_vitest(args),
         Some(Commands::Pytest(args)) => cmd_system::run_pytest(args),
         Some(Commands::Ruff(args)) => cmd_system::run_ruff(args),
+        Some(Commands::Ls(args)) => cmd_system::run_ls(args),
         Some(Commands::Wc(args)) => cmd_system::run_wc(args),
         Some(Commands::Wget(args)) => cmd_system::run_wget(args),
         Some(Commands::Curl(args)) => cmd_system::run_curl(args),
@@ -417,6 +418,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Vitest(_))
         | Some(Commands::Pytest(_))
         | Some(Commands::Ruff(_))
+        | Some(Commands::Ls(_))
         | Some(Commands::Wc(_))
         | Some(Commands::Wget(_))
         | Some(Commands::Curl(_))

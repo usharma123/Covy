@@ -505,6 +505,10 @@ fn test_system_infra_and_count_commands_use_reducer_wrappers() {
     fs::create_dir_all(&bin_dir).unwrap();
     fs::write(root.path().join("sample.txt"), "one\ntwo\nthree\n").unwrap();
     write_executable_script(
+        &bin_dir.join("ls"),
+        "#!/bin/sh\nprintf 'alpha.txt\\nbeta.txt\\n'; exit 0\n",
+    );
+    write_executable_script(
         &bin_dir.join("wc"),
         "#!/bin/sh\nprintf '      3 sample.txt\\n'; exit 0\n",
     );
@@ -528,6 +532,14 @@ fn test_system_infra_and_count_commands_use_reducer_wrappers() {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["ls"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ls listed 2 entries in ."));
 
     suite_cmd()
         .current_dir(root.path())

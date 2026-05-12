@@ -84,6 +84,8 @@ pub enum Commands {
     Pytest(cmd_system::ToolArgs),
     /// Run Ruff with compact output
     Ruff(cmd_system::ToolArgs),
+    /// Run ls with compact output
+    Ls(cmd_system::ToolArgs),
     /// Run wc with compact output
     Wc(cmd_system::ToolArgs),
     /// Run wget with compact output
