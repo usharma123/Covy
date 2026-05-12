@@ -91,13 +91,18 @@ fn decide_command_route_inner(
     let Ok(argv) = shell_words::split(trimmed) else {
         return raw_passthrough("shell_parse_error");
     };
-    let (env_assignments, mut argv) = split_leading_env_assignments(argv);
+    let (mut env_assignments, mut argv) = split_leading_env_assignments(argv);
+    if argv.is_empty() {
+        return raw_passthrough("empty_command");
+    }
+    strip_supported_runtime_prefixes(&mut argv, &mut env_assignments);
     if argv.is_empty() {
         return raw_passthrough("empty_command");
     }
     if has_rewrite_disabled_prefix(&env_assignments) {
         return raw_passthrough("rewrite_disabled");
     }
+    normalize_absolute_binary_path(&mut argv);
     if is_packet28_invocation(&argv) {
         return raw_passthrough("already_packet28");
     }
@@ -318,6 +323,48 @@ fn split_leading_env_assignments(argv: Vec<String>) -> (Vec<(String, String)>, V
         idx += 1;
     }
     (assignments, argv[idx..].to_vec())
+}
+
+fn strip_supported_runtime_prefixes(
+    argv: &mut Vec<String>,
+    env_assignments: &mut Vec<(String, String)>,
+) {
+    loop {
+        if argv.first().is_some_and(|arg| arg == "sudo") && argv.len() > 1 {
+            argv.remove(0);
+            continue;
+        }
+        if argv.first().is_some_and(|arg| arg == "env") && argv.len() > 2 {
+            argv.remove(0);
+            let mut consumed = 0usize;
+            while consumed < argv.len() && looks_like_env_assignment(&argv[consumed]) {
+                let mut parts = argv[consumed].splitn(2, '=');
+                let key = parts.next().unwrap_or_default().trim().to_string();
+                let value = parts.next().unwrap_or_default().to_string();
+                env_assignments.push((key, value));
+                consumed += 1;
+            }
+            if consumed > 0 && consumed < argv.len() {
+                argv.drain(0..consumed);
+                continue;
+            }
+            break;
+        }
+        break;
+    }
+}
+
+fn normalize_absolute_binary_path(argv: &mut [String]) {
+    let Some(first) = argv.first_mut() else {
+        return;
+    };
+    let path = Path::new(first);
+    if !path.is_absolute() {
+        return;
+    }
+    if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+        *first = name.to_string();
+    }
 }
 
 fn has_rewrite_disabled_prefix(env_assignments: &[(String, String)]) -> bool {
@@ -1268,6 +1315,46 @@ mod tests {
                 .map(|spec| spec.canonical_kind.as_str()),
             Some("git_status")
         );
+    }
+
+    #[test]
+    fn routes_sudo_and_env_prefixed_commands_like_rtk() {
+        let sudo = decide_command_route("sudo git status --short");
+        assert_eq!(sudo.kind, RouteKind::ReducerRewrite);
+        assert_eq!(
+            sudo.reducer_spec
+                .as_ref()
+                .map(|spec| spec.canonical_kind.as_str()),
+            Some("git_status")
+        );
+        assert_eq!(sudo.argv.first().map(String::as_str), Some("git"));
+
+        let env = decide_command_route("env RUST_BACKTRACE=1 cargo test");
+        assert_eq!(env.kind, RouteKind::ReducerRewrite);
+        assert_eq!(
+            env.reducer_spec
+                .as_ref()
+                .map(|spec| spec.canonical_kind.as_str()),
+            Some("rust_test")
+        );
+        assert_eq!(
+            env.env_assignments,
+            vec![("RUST_BACKTRACE".to_string(), "1".to_string())]
+        );
+    }
+
+    #[test]
+    fn normalizes_absolute_binary_paths_like_rtk() {
+        let decision = decide_command_route("/usr/bin/git status --short");
+        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
+        assert_eq!(
+            decision
+                .reducer_spec
+                .as_ref()
+                .map(|spec| spec.canonical_kind.as_str()),
+            Some("git_status")
+        );
+        assert_eq!(decision.argv.first().map(String::as_str), Some("git"));
     }
 
     #[test]
