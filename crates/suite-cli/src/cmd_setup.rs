@@ -1468,6 +1468,7 @@ fn runtime_supports_hooks(kind: RuntimeKind) -> bool {
             | RuntimeKind::Copilot
             | RuntimeKind::Cursor
             | RuntimeKind::Gemini
+            | RuntimeKind::OpenCode
             | RuntimeKind::Windsurf
     )
 }
@@ -1543,11 +1544,13 @@ fn configure_runtime_hooks(
         RuntimeKind::Gemini => {
             write_gemini_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
+        RuntimeKind::OpenCode => {
+            write_opencode_plugin(&hook_config_path(runtime.kind, root), auto_yes)
+        }
         RuntimeKind::Windsurf => {
             write_windsurf_hook_config(&hook_config_path(runtime.kind, root), root, auto_yes)
         }
         RuntimeKind::Codex
-        | RuntimeKind::OpenCode
         | RuntimeKind::Hermes
         | RuntimeKind::Cline
         | RuntimeKind::Roo
@@ -1599,9 +1602,9 @@ fn runtime_hook_status(runtime: &RuntimeInfo, root: &Path) -> String {
         | RuntimeKind::Copilot
         | RuntimeKind::Cursor
         | RuntimeKind::Gemini
+        | RuntimeKind::OpenCode
         | RuntimeKind::Windsurf => hook_config_path(runtime.kind, root).display().to_string(),
         RuntimeKind::Codex
-        | RuntimeKind::OpenCode
         | RuntimeKind::Hermes
         | RuntimeKind::Cline
         | RuntimeKind::Roo
@@ -1637,9 +1640,9 @@ fn hook_config_path(kind: RuntimeKind, root: &Path) -> PathBuf {
         RuntimeKind::Copilot => copilot::hook_config_path(root),
         RuntimeKind::Cursor => cursor::hook_config_path(root),
         RuntimeKind::Gemini => gemini::settings_path(&dirs_home()),
+        RuntimeKind::OpenCode => opencode::plugin_path(&dirs_home()),
         RuntimeKind::Windsurf => windsurf::hook_config_path(root),
         RuntimeKind::Codex
-        | RuntimeKind::OpenCode
         | RuntimeKind::Hermes
         | RuntimeKind::Cline
         | RuntimeKind::Roo
@@ -2341,6 +2344,76 @@ fn write_copilot_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result
     Ok(McpConfigStatus::Written)
 }
 
+fn opencode_plugin_content() -> &'static str {
+    r#"import type { Plugin } from "@opencode-ai/plugin"
+
+// Packet28 OpenCode plugin - rewrites shell commands through Packet28.
+// Requires: Packet28 in PATH.
+//
+// This is a thin delegating plugin. Rewrite policy lives in Packet28's
+// route registry, so runtime behavior stays consistent with hooks and MCP.
+
+export const Packet28OpenCodePlugin: Plugin = async ({ $ }) => {
+  try {
+    await $`Packet28 --version`.quiet()
+  } catch {
+    console.warn("[packet28] Packet28 binary not found in PATH - plugin disabled")
+    return {}
+  }
+
+  return {
+    "tool.execute.before": async (input, output) => {
+      const tool = String(input?.tool ?? "").toLowerCase()
+      if (tool !== "bash" && tool !== "shell") return
+      const args = output?.args
+      if (!args || typeof args !== "object") return
+
+      const command = (args as Record<string, unknown>).command
+      if (typeof command !== "string" || !command) return
+
+      try {
+        const result = await $`Packet28 rewrite ${command}`.quiet().nothrow()
+        const rewritten = String(result.stdout).trim()
+        if (rewritten && rewritten !== command) {
+          ;(args as Record<string, unknown>).command = rewritten
+        }
+      } catch {
+        // Packet28 rewrite failed - pass through unchanged.
+      }
+    },
+  }
+}
+"#
+}
+
+fn write_opencode_plugin(path: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+    let content = opencode_plugin_content();
+    if path.exists() {
+        let existing = fs::read_to_string(path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        if existing == content || existing == format!("{content}\n") {
+            return Ok(McpConfigStatus::AlreadyConfigured);
+        }
+    }
+    if !auto_yes {
+        eprint!(
+            "    Write OpenCode plugin to {}? [Y/n] ",
+            path.display().to_string().dimmed()
+        );
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        let trimmed = input.trim().to_lowercase();
+        if !trimmed.is_empty() && trimmed != "y" && trimmed != "yes" {
+            return Ok(McpConfigStatus::Declined);
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, content)?;
+    Ok(McpConfigStatus::Written)
+}
+
 fn write_windsurf_hook_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
     let hook_command = generated_packet28_hook_command("windsurf", root);
     let packet28_hooks = json!({
@@ -2842,15 +2915,10 @@ mod tests {
         assert!(runtime_supports_hooks(by_slug["copilot"].kind));
         assert!(!runtime_supports_mcp(by_slug["gemini"].kind));
         assert!(runtime_supports_hooks(by_slug["gemini"].kind));
+        assert!(!runtime_supports_mcp(by_slug["opencode"].kind));
+        assert!(runtime_supports_hooks(by_slug["opencode"].kind));
 
-        for slug in [
-            "opencode",
-            "hermes",
-            "cline",
-            "roo",
-            "kilocode",
-            "antigravity",
-        ] {
+        for slug in ["hermes", "cline", "roo", "kilocode", "antigravity"] {
             assert!(!runtime_supports_mcp(by_slug[slug].kind));
             assert!(!runtime_supports_hooks(by_slug[slug].kind));
         }
@@ -3041,6 +3109,26 @@ mod tests {
         assert_eq!(hooks[0]["timeout"].as_i64(), Some(5));
         let command = hooks[0]["command"].as_str().unwrap();
         assert!(command.contains(" hook copilot "));
+    }
+
+    #[test]
+    fn write_opencode_plugin_installs_packet28_rewrite_plugin() {
+        let dir = tempdir().unwrap();
+        let path = dir
+            .path()
+            .join(".config")
+            .join("opencode")
+            .join("plugins")
+            .join("packet28.ts");
+        let status = write_opencode_plugin(&path, true).unwrap();
+        assert!(matches!(status, McpConfigStatus::Written));
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Packet28 rewrite"));
+        assert!(content.contains("tool.execute.before"));
+        assert!(content.contains("args as Record<string, unknown>).command = rewritten"));
+
+        let status = write_opencode_plugin(&path, true).unwrap();
+        assert!(matches!(status, McpConfigStatus::AlreadyConfigured));
     }
 
     #[test]

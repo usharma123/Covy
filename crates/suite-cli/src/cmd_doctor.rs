@@ -322,6 +322,9 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
     if matches!(agent, Some("copilot")) {
         return build_copilot_report(root);
     }
+    if matches!(agent, Some("opencode")) {
+        return build_opencode_report(root);
+    }
     if matches!(agent, Some("windsurf")) {
         return build_windsurf_report(root);
     }
@@ -374,11 +377,6 @@ fn instruction_only_agent_target(root: &Path, agent: &str) -> Option<Instruction
             slug: "gemini",
             name: "Gemini CLI",
             path: gemini::prompt_path(root),
-        }),
-        "opencode" => Some(InstructionOnlyAgentTarget {
-            slug: "opencode",
-            name: "OpenCode",
-            path: opencode::prompt_path(root),
         }),
         "hermes" => Some(InstructionOnlyAgentTarget {
             slug: "hermes",
@@ -637,6 +635,106 @@ fn check_copilot_hook_config(root: &Path) -> DoctorCheck {
             ok: false,
             required: true,
             detail: format!("copilot: {err}"),
+        },
+    }
+}
+
+fn build_opencode_report(root: &Path) -> DoctorReport {
+    let daemon = DoctorCheck {
+        name: "daemon",
+        ok: true,
+        required: false,
+        detail: "not required for OpenCode plugin verification".to_string(),
+    };
+    let index = DoctorCheck {
+        name: "index",
+        ok: true,
+        required: false,
+        detail: "not required for OpenCode plugin verification".to_string(),
+    };
+    let mcp_config = Vec::new();
+    let instruction_file =
+        check_instruction_file("opencode", "OpenCode", &opencode::prompt_path(root));
+    let plugin = check_opencode_plugin();
+    let handshake = DoctorCheck {
+        name: "mcp_handshake",
+        ok: true,
+        required: false,
+        detail: "OpenCode uses a local TypeScript plugin, not Packet28 MCP setup".to_string(),
+    };
+    let reducer_round_trip = DoctorCheck {
+        name: "runtime_rewrite_support",
+        ok: plugin.ok,
+        required: true,
+        detail: plugin.detail.clone(),
+    };
+    let push_notifications = DoctorCheck {
+        name: "push_notifications",
+        ok: true,
+        required: false,
+        detail: "not required for OpenCode plugin verification".to_string(),
+    };
+    let handoff_round_trip = DoctorCheck {
+        name: "handoff_round_trip",
+        ok: true,
+        required: false,
+        detail: "not required for OpenCode plugin verification".to_string(),
+    };
+    let checks = vec![
+        daemon.clone(),
+        index.clone(),
+        instruction_file,
+        plugin,
+        handshake.clone(),
+        reducer_round_trip.clone(),
+        push_notifications.clone(),
+        handoff_round_trip.clone(),
+    ];
+    let ok = checks
+        .iter()
+        .filter(|check| check.required)
+        .all(|check| check.ok);
+    DoctorReport {
+        root: root.display().to_string(),
+        ok,
+        daemon,
+        index,
+        mcp_config,
+        handshake,
+        reducer_round_trip,
+        push_notifications,
+        handoff_round_trip,
+        checks,
+    }
+}
+
+fn check_opencode_plugin() -> DoctorCheck {
+    let path = opencode::plugin_path(&dirs_home());
+    let result = (|| -> Result<String> {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        if !content.contains("Packet28 rewrite") || !content.contains("tool.execute.before") {
+            return Err(anyhow!(
+                "Packet28 OpenCode rewrite plugin is not configured"
+            ));
+        }
+        Ok(format!(
+            "OpenCode rewrite plugin configured at {}",
+            path.display()
+        ))
+    })();
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "opencode_plugin",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(err) => DoctorCheck {
+            name: "opencode_plugin",
+            ok: false,
+            required: true,
+            detail: format!("opencode: {err}"),
         },
     }
 }

@@ -98,6 +98,13 @@ pub(crate) mod opencode {
     pub(crate) fn prompt_path(root: &Path) -> PathBuf {
         root.join("AGENTS.md")
     }
+
+    pub(crate) fn plugin_path(home: &Path) -> PathBuf {
+        home.join(".config")
+            .join("opencode")
+            .join("plugins")
+            .join("packet28.ts")
+    }
 }
 
 pub(crate) mod hermes {
