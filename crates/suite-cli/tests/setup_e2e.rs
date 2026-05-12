@@ -282,6 +282,21 @@ fn test_setup_cursor_writes_rules_hooks_and_mcp_without_legacy_cursorrules() {
         .join("packet28.mdc")
         .exists());
     assert!(!root.path().join(".cursorrules").exists());
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "doctor",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--agent",
+            "cursor",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cursor_hook_config"));
 }
 
 #[test]

@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::runtime_integrations::{
-    antigravity, cline, copilot, gemini, hermes, kilocode, opencode, roo, windsurf,
+    antigravity, cline, copilot, cursor, gemini, hermes, kilocode, opencode, roo, windsurf,
 };
 
 #[derive(Args)]
@@ -322,6 +322,9 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
     if matches!(agent, Some("copilot")) {
         return build_copilot_report(root);
     }
+    if matches!(agent, Some("cursor")) {
+        return build_cursor_report(root);
+    }
     if matches!(agent, Some("gemini")) {
         return build_gemini_report(root);
     }
@@ -471,6 +474,43 @@ fn build_copilot_report(root: &Path) -> DoctorReport {
         reducer_round_trip,
         push_notifications,
         handoff_round_trip,
+        checks,
+    }
+}
+
+fn build_cursor_report(root: &Path) -> DoctorReport {
+    let daemon = check_daemon(root);
+    let index = check_index(root);
+    let mcp_config = vec![inspect_mcp_config(&cursor::mcp_config_path(root))];
+    let mcp_config_summary = summarize_mcp_config(root, &mcp_config);
+    let instruction_file = check_instruction_file("cursor", "Cursor", &cursor::rule_path(root));
+    let hook_config = check_cursor_hook_config(root);
+    let mcp_round_trip = check_mcp_round_trip(root);
+    let checks = vec![
+        daemon.clone(),
+        index.clone(),
+        mcp_config_summary,
+        instruction_file,
+        hook_config,
+        mcp_round_trip.handshake.clone(),
+        mcp_round_trip.reducer_round_trip.clone(),
+        mcp_round_trip.push_notifications.clone(),
+        mcp_round_trip.handoff_round_trip.clone(),
+    ];
+    let ok = checks
+        .iter()
+        .filter(|check| check.required)
+        .all(|check| check.ok);
+    DoctorReport {
+        root: root.display().to_string(),
+        ok,
+        daemon,
+        index,
+        mcp_config,
+        handshake: mcp_round_trip.handshake,
+        reducer_round_trip: mcp_round_trip.reducer_round_trip,
+        push_notifications: mcp_round_trip.push_notifications,
+        handoff_round_trip: mcp_round_trip.handoff_round_trip,
         checks,
     }
 }
@@ -631,6 +671,49 @@ fn check_copilot_hook_config(root: &Path) -> DoctorCheck {
             ok: false,
             required: true,
             detail: format!("copilot: {err}"),
+        },
+    }
+}
+
+fn check_cursor_hook_config(root: &Path) -> DoctorCheck {
+    let path = cursor::hook_config_path(root);
+    let result = (|| -> Result<String> {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        let value: Value = serde_json::from_str(&content)
+            .with_context(|| format!("invalid JSON in '{}'", path.display()))?;
+        let hooks = value
+            .pointer("/hooks/beforeShellExecution")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing hooks.beforeShellExecution array"))?;
+        let configured = hooks.iter().any(|entry| {
+            entry
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains(" hook cursor "))
+        });
+        if !configured {
+            return Err(anyhow!(
+                "Packet28 Cursor beforeShellExecution hook is not configured"
+            ));
+        }
+        Ok(format!(
+            "Cursor beforeShellExecution hook configured at {}",
+            path.display()
+        ))
+    })();
+    match result {
+        Ok(detail) => DoctorCheck {
+            name: "cursor_hook_config",
+            ok: true,
+            required: true,
+            detail,
+        },
+        Err(err) => DoctorCheck {
+            name: "cursor_hook_config",
+            ok: false,
+            required: true,
+            detail: format!("cursor: {err}"),
         },
     }
 }
