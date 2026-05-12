@@ -1871,13 +1871,13 @@ fn build_pretool_rewrite(
                 native_tool: None,
                 original_argv: decision.original_argv,
                 wrapper_prefix: decision.wrapper_prefix,
+                original_command: decision.original_command,
             };
         }
     }
 
-    // Only allow ReducerRewrite (when family is in allowlist) and NativeTool
-    // through hook rewrites. ProxyPassthrough and RawPassthrough are not
-    // rewritten in the hook path.
+    // Only allow compact local rewrites through hooks. ProxyPassthrough and
+    // RawPassthrough are not rewritten in the hook path.
     let proceed = match &decision.kind {
         crate::route_registry::RouteKind::ReducerRewrite => {
             decision.reducer_spec.as_ref().is_some_and(|spec| {
@@ -1888,6 +1888,8 @@ fn build_pretool_rewrite(
             })
         }
         crate::route_registry::RouteKind::NativeTool => true,
+        crate::route_registry::RouteKind::TomlFilterRewrite => true,
+        crate::route_registry::RouteKind::CompoundRewrite => true,
         _ => false,
     };
     if !proceed {
@@ -2724,6 +2726,28 @@ mod tests {
         )
         .unwrap();
         assert!(rewrite.is_none());
+    }
+
+    #[test]
+    fn pretool_rewrites_supported_compound_command() {
+        let root = PathBuf::from("/tmp/demo");
+        let payload = json!({
+            "tool_name":"Bash",
+            "tool_input":{"command":"cargo test | grep FAIL && git status --short"}
+        });
+        let rewrite = build_pretool_rewrite(
+            &HookRuntimeConfig::default(),
+            &root,
+            &payload,
+            HookEventKind::PreToolUse,
+            "task-123",
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let command = rewrite["command"].as_str().unwrap();
+        assert!(command.contains("| grep FAIL &&"));
+        assert_eq!(command.matches("hook reducer-runner").count(), 2);
     }
 
     #[test]

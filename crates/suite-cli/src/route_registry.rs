@@ -7,6 +7,7 @@ pub enum RouteKind {
     ReducerRewrite,
     NativeTool,
     TomlFilterRewrite,
+    CompoundRewrite,
     ProxyPassthrough,
     RawPassthrough,
 }
@@ -36,6 +37,7 @@ pub struct RouteDecision {
     /// Original argv before glob expansion, when expansion was applied.
     pub original_argv: Option<Vec<String>>,
     pub wrapper_prefix: Vec<String>,
+    pub original_command: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,11 +48,11 @@ enum Postprocess {
 }
 
 pub fn decide_command_route(command: &str) -> RouteDecision {
-    decide_command_route_inner(command, None, None)
+    decide_command_route_inner(command, None, None, true)
 }
 
 pub fn decide_command_route_with_cwd(command: &str, cwd: &Path) -> RouteDecision {
-    decide_command_route_inner(command, Some(cwd), None)
+    decide_command_route_inner(command, Some(cwd), None, true)
 }
 
 pub fn decide_command_route_with_cwd_and_root(
@@ -58,13 +60,14 @@ pub fn decide_command_route_with_cwd_and_root(
     cwd: &Path,
     root: &Path,
 ) -> RouteDecision {
-    decide_command_route_inner(command, Some(cwd), Some(root))
+    decide_command_route_inner(command, Some(cwd), Some(root), true)
 }
 
 fn decide_command_route_inner(
     command: &str,
     cwd: Option<&Path>,
     policy_root: Option<&Path>,
+    allow_compound: bool,
 ) -> RouteDecision {
     let sanitized = strip_supported_trailing_redirects(command.trim());
     let (normalized, postprocess) = strip_supported_postprocess(&sanitized);
@@ -79,14 +82,28 @@ fn decide_command_route_inner(
             native_tool: None,
             original_argv: None,
             wrapper_prefix: Vec::new(),
+            original_command: Some(trimmed.to_string()),
         };
     }
 
-    if contains_shell_composition(trimmed) {
-        return raw_passthrough("shell_composition");
-    }
     if contains_disallowed_shell_expansion(trimmed) {
         return raw_passthrough("shell_expansion");
+    }
+    if contains_shell_composition(trimmed) {
+        if allow_compound && compound_has_rewritable_segment(trimmed, cwd, policy_root) {
+            return RouteDecision {
+                kind: RouteKind::CompoundRewrite,
+                reason: Some("compound_rewrite".to_string()),
+                argv: Vec::new(),
+                env_assignments: Vec::new(),
+                reducer_spec: None,
+                native_tool: None,
+                original_argv: None,
+                wrapper_prefix: Vec::new(),
+                original_command: Some(trimmed.to_string()),
+            };
+        }
+        return raw_passthrough("shell_composition");
     }
 
     let Ok(argv) = shell_words::split(trimmed) else {
@@ -146,6 +163,7 @@ fn decide_command_route_inner(
                 native_tool: Some(native_tool),
                 original_argv,
                 wrapper_prefix,
+                original_command: Some(trimmed.to_string()),
             };
         }
     }
@@ -172,6 +190,7 @@ fn decide_command_route_inner(
             native_tool: None,
             original_argv,
             wrapper_prefix,
+            original_command: Some(trimmed.to_string()),
         };
     }
 
@@ -185,6 +204,7 @@ fn decide_command_route_inner(
             native_tool: None,
             original_argv,
             wrapper_prefix,
+            original_command: Some(trimmed.to_string()),
         };
     }
 
@@ -202,6 +222,7 @@ fn decide_command_route_inner(
                 native_tool: None,
                 original_argv,
                 wrapper_prefix,
+                original_command: Some(trimmed.to_string()),
             };
         }
     }
@@ -319,6 +340,10 @@ pub fn build_route_rewrite(
         RouteKind::TomlFilterRewrite => {
             build_toml_filter_rewrite(root, cwd, &decision.argv, &decision.env_assignments)
         }
+        RouteKind::CompoundRewrite => {
+            let command = decision.original_command.as_deref()?;
+            build_compound_rewrite(root, task_id, session_id, cwd, command)?
+        }
         RouteKind::ProxyPassthrough => build_proxy_rewrite(root, task_id, cwd, &decision.argv),
         RouteKind::RawPassthrough => return None,
     };
@@ -335,6 +360,7 @@ fn raw_passthrough(reason: &str) -> RouteDecision {
         native_tool: None,
         original_argv: None,
         wrapper_prefix: Vec::new(),
+        original_command: None,
     }
 }
 
@@ -1106,6 +1132,44 @@ fn build_toml_filter_rewrite(
     parts.join(" ")
 }
 
+fn build_compound_rewrite(
+    root: &Path,
+    task_id: &str,
+    session_id: Option<&str>,
+    cwd: &str,
+    command: &str,
+) -> Option<String> {
+    let parts = split_compound_command(command)?;
+    let cwd_path = Path::new(cwd);
+    let mut rewrite_next_segment = true;
+    let mut changed = false;
+    let mut out = Vec::with_capacity(parts.len());
+    for part in parts {
+        match part {
+            CompoundPart::Operator(op) => {
+                rewrite_next_segment = op != "|";
+                out.push(op.to_string());
+            }
+            CompoundPart::Segment(segment) => {
+                let rewritten = if rewrite_next_segment {
+                    let decision =
+                        decide_command_route_inner(segment, Some(cwd_path), Some(root), false);
+                    build_route_rewrite(root, task_id, session_id, cwd, &decision)
+                } else {
+                    None
+                };
+                if let Some(rewritten) = rewritten {
+                    changed = true;
+                    out.push(rewritten);
+                } else {
+                    out.push(segment.trim().to_string());
+                }
+            }
+        }
+    }
+    changed.then(|| join_compound_parts(&out))
+}
+
 fn current_exe() -> String {
     std::env::current_exe()
         .map(|path| path.display().to_string())
@@ -1143,6 +1207,112 @@ fn contains_shell_composition(command: &str) -> bool {
         idx += 1;
     }
     false
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CompoundPart<'a> {
+    Segment(&'a str),
+    Operator(&'a str),
+}
+
+fn compound_has_rewritable_segment(
+    command: &str,
+    cwd: Option<&Path>,
+    policy_root: Option<&Path>,
+) -> bool {
+    let Some(parts) = split_compound_command(command) else {
+        return false;
+    };
+    let mut rewrite_next_segment = true;
+    for part in parts {
+        match part {
+            CompoundPart::Operator(op) => rewrite_next_segment = op != "|",
+            CompoundPart::Segment(segment) if rewrite_next_segment => {
+                let decision = decide_command_route_inner(segment, cwd, policy_root, false);
+                if decision.kind != RouteKind::RawPassthrough {
+                    return true;
+                }
+            }
+            CompoundPart::Segment(_) => {}
+        }
+    }
+    false
+}
+
+fn split_compound_command(command: &str) -> Option<Vec<CompoundPart<'_>>> {
+    let bytes = command.as_bytes();
+    let mut parts = Vec::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut segment_start = 0usize;
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let ch = bytes[idx] as char;
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            idx += 1;
+            continue;
+        }
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            idx += 1;
+            continue;
+        }
+        if !in_single && !in_double {
+            let op = if bytes.get(idx) == Some(&b'&') && bytes.get(idx + 1) == Some(&b'&') {
+                Some(("&&", 2usize))
+            } else if bytes.get(idx) == Some(&b'|') && bytes.get(idx + 1) == Some(&b'|') {
+                Some(("||", 2usize))
+            } else if bytes.get(idx) == Some(&b'|') {
+                Some(("|", 1usize))
+            } else if bytes.get(idx) == Some(&b';') {
+                Some((";", 1usize))
+            } else {
+                None
+            };
+            if let Some((op, len)) = op {
+                let segment = command[segment_start..idx].trim();
+                if segment.is_empty() {
+                    return None;
+                }
+                parts.push(CompoundPart::Segment(segment));
+                parts.push(CompoundPart::Operator(op));
+                idx += len;
+                segment_start = idx;
+                continue;
+            }
+            if matches!(ch, '<' | '>' | '`') || (ch == '&' && bytes.get(idx + 1) != Some(&b'&')) {
+                return None;
+            }
+        }
+        idx += 1;
+    }
+    let segment = command[segment_start..].trim();
+    if segment.is_empty() || parts.is_empty() {
+        return None;
+    }
+    parts.push(CompoundPart::Segment(segment));
+    Some(parts)
+}
+
+fn join_compound_parts(parts: &[String]) -> String {
+    let mut out = String::new();
+    for (idx, part) in parts.iter().enumerate() {
+        if idx > 0 {
+            if part == ";" {
+                // no leading space before semicolon
+            } else if parts.get(idx - 1).map(String::as_str) == Some(";") {
+                out.push(' ');
+            } else {
+                out.push(' ');
+            }
+        }
+        out.push_str(part);
+        if part == ";" && idx + 1 < parts.len() {
+            out.push(' ');
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn strip_supported_postprocess(command: &str) -> (String, Option<Postprocess>) {
@@ -1389,10 +1559,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_compound_commands() {
+    fn routes_supported_compound_commands() {
         let decision = decide_command_route("cargo check && cargo test");
-        assert_eq!(decision.kind, RouteKind::RawPassthrough);
-        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
+        assert_eq!(decision.kind, RouteKind::CompoundRewrite);
+        assert_eq!(decision.reason.as_deref(), Some("compound_rewrite"));
     }
 
     #[test]
@@ -1403,10 +1573,40 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_pipe_commands() {
+    fn routes_pipe_commands_with_supported_left_side() {
         let decision = decide_command_route("git status --short | wc -l");
-        assert_eq!(decision.kind, RouteKind::RawPassthrough);
-        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
+        assert_eq!(decision.kind, RouteKind::CompoundRewrite);
+        assert_eq!(decision.reason.as_deref(), Some("compound_rewrite"));
+    }
+
+    #[test]
+    fn builds_compound_rewrite_for_supported_and_mixed_segments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let decision = decide_command_route_with_cwd_and_root(
+            "cargo test && htop || git status --short",
+            tmp.path(),
+            tmp.path(),
+        );
+        let rewritten =
+            build_route_rewrite(tmp.path(), "task-compound", None, ".", &decision).unwrap();
+        assert!(rewritten.contains("hook reducer-runner"));
+        assert!(rewritten.contains(" cargo test"));
+        assert!(rewritten.contains("&& htop ||"));
+        assert!(rewritten.contains(" git status --short"));
+    }
+
+    #[test]
+    fn builds_pipe_rewrite_for_left_side_only_then_resumes_after_chain_operator() {
+        let tmp = tempfile::tempdir().unwrap();
+        let decision = decide_command_route_with_cwd_and_root(
+            "cargo test | grep FAIL && git status --short",
+            tmp.path(),
+            tmp.path(),
+        );
+        let rewritten = build_route_rewrite(tmp.path(), "task-pipe", None, ".", &decision).unwrap();
+        assert!(rewritten.contains(" cargo test | grep FAIL && "));
+        assert!(rewritten.contains(" git status --short"));
+        assert_eq!(rewritten.matches("hook reducer-runner").count(), 2);
     }
 
     #[test]

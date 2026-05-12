@@ -2126,6 +2126,7 @@ fn handle_packet28_rewrite(root: &Path, request: RewriteToolArgs) -> Value {
             RouteKind::ReducerRewrite => "reducer_rewrite",
             RouteKind::NativeTool => "native_tool",
             RouteKind::TomlFilterRewrite => "toml_filter_rewrite",
+            RouteKind::CompoundRewrite => "compound_rewrite",
             RouteKind::ProxyPassthrough => "proxy_passthrough",
             RouteKind::RawPassthrough => "raw_passthrough",
         },

@@ -143,6 +143,54 @@ fn test_top_level_rewrite_respects_repo_exclude_config() {
 }
 
 #[test]
+fn test_top_level_rewrite_handles_compound_commands_like_rtk() {
+    let root = TempDir::new().unwrap();
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "cargo",
+            "test",
+            "&&",
+            "htop",
+            "||",
+            "git",
+            "status",
+            "--short",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"route\":\"compound_rewrite\""))
+        .stdout(predicate::str::contains("&& htop ||"))
+        .stdout(predicate::str::contains("hook reducer-runner"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "cargo",
+            "test",
+            "|",
+            "grep",
+            "FAIL",
+            "&&",
+            "git",
+            "status",
+            "--short",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"route\":\"compound_rewrite\""))
+        .stdout(predicate::str::contains("| grep FAIL &&"));
+}
+
+#[test]
 fn test_system_json_deps_and_env_commands() {
     let root = TempDir::new().unwrap();
     let payload = root.path().join("payload.json");
