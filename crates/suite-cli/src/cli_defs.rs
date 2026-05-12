@@ -86,6 +86,8 @@ pub enum Commands {
     Ruff(cmd_system::ToolArgs),
     /// Run ls with compact output
     Ls(cmd_system::ToolArgs),
+    /// Run tree with compact output
+    Tree(cmd_system::ToolArgs),
     /// Run wc with compact output
     Wc(cmd_system::ToolArgs),
     /// Run wget with compact output
@@ -96,6 +98,14 @@ pub enum Commands {
     Docker(cmd_system::ToolArgs),
     /// Run kubectl with compact output
     Kubectl(cmd_system::ToolArgs),
+    /// Run gh with compact output
+    Gh(cmd_system::ToolArgs),
+    /// Run glab with compact output
+    Glab(cmd_system::ToolArgs),
+    /// Run aws with compact output
+    Aws(cmd_system::ToolArgs),
+    /// Run psql with compact output
+    Psql(cmd_system::ToolArgs),
     /// Run Cargo with compact output
     Cargo(cmd_system::ToolArgs),
     /// Run Go with compact output

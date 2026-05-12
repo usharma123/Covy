@@ -346,6 +346,10 @@ pub fn run_ls(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("ls", args, "ls")
 }
 
+pub fn run_tree(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("tree", args, "tree")
+}
+
 pub fn run_wc(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("wc", args, "wc")
 }
@@ -364,6 +368,22 @@ pub fn run_docker(args: ToolArgs) -> Result<i32> {
 
 pub fn run_kubectl(args: ToolArgs) -> Result<i32> {
     run_reducer_tool_command("kubectl", args, "kubectl")
+}
+
+pub fn run_gh(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("gh", args, "gh")
+}
+
+pub fn run_glab(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("glab", args, "glab")
+}
+
+pub fn run_aws(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("aws", args, "aws")
+}
+
+pub fn run_psql(args: ToolArgs) -> Result<i32> {
+    run_reducer_tool_command("psql", args, "psql")
 }
 
 pub fn run_cargo(args: ToolArgs) -> Result<i32> {

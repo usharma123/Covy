@@ -115,11 +115,16 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Pytest(args)) => cmd_system::run_pytest(args),
         Some(Commands::Ruff(args)) => cmd_system::run_ruff(args),
         Some(Commands::Ls(args)) => cmd_system::run_ls(args),
+        Some(Commands::Tree(args)) => cmd_system::run_tree(args),
         Some(Commands::Wc(args)) => cmd_system::run_wc(args),
         Some(Commands::Wget(args)) => cmd_system::run_wget(args),
         Some(Commands::Curl(args)) => cmd_system::run_curl(args),
         Some(Commands::Docker(args)) => cmd_system::run_docker(args),
         Some(Commands::Kubectl(args)) => cmd_system::run_kubectl(args),
+        Some(Commands::Gh(args)) => cmd_system::run_gh(args),
+        Some(Commands::Glab(args)) => cmd_system::run_glab(args),
+        Some(Commands::Aws(args)) => cmd_system::run_aws(args),
+        Some(Commands::Psql(args)) => cmd_system::run_psql(args),
         Some(Commands::Cargo(args)) => cmd_system::run_cargo(args),
         Some(Commands::Go(args)) => cmd_system::run_go(args),
         Some(Commands::Dotnet(args)) => cmd_system::run_dotnet(args),
@@ -419,11 +424,16 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Pytest(_))
         | Some(Commands::Ruff(_))
         | Some(Commands::Ls(_))
+        | Some(Commands::Tree(_))
         | Some(Commands::Wc(_))
         | Some(Commands::Wget(_))
         | Some(Commands::Curl(_))
         | Some(Commands::Docker(_))
         | Some(Commands::Kubectl(_))
+        | Some(Commands::Gh(_))
+        | Some(Commands::Glab(_))
+        | Some(Commands::Aws(_))
+        | Some(Commands::Psql(_))
         | Some(Commands::Cargo(_))
         | Some(Commands::Go(_))
         | Some(Commands::Dotnet(_))

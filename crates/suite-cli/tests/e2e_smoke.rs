@@ -509,6 +509,10 @@ fn test_system_infra_and_count_commands_use_reducer_wrappers() {
         "#!/bin/sh\nprintf 'alpha.txt\\nbeta.txt\\n'; exit 0\n",
     );
     write_executable_script(
+        &bin_dir.join("tree"),
+        "#!/bin/sh\nprintf '.\\n|-- alpha.txt\\n`-- beta.txt\\n\\n0 directories, 2 files\\n'; exit 0\n",
+    );
+    write_executable_script(
         &bin_dir.join("wc"),
         "#!/bin/sh\nprintf '      3 sample.txt\\n'; exit 0\n",
     );
@@ -528,6 +532,22 @@ fn test_system_infra_and_count_commands_use_reducer_wrappers() {
         &bin_dir.join("kubectl"),
         "#!/bin/sh\nif [ \"$1\" = get ]; then printf 'NAME   READY   STATUS\\napi    1/1     Running\\njob    0/1     Pending\\n'; exit 0; fi\nexit 2\n",
     );
+    write_executable_script(
+        &bin_dir.join("gh"),
+        "#!/bin/sh\nif [ \"$1\" = pr ] && [ \"$2\" = list ]; then printf '12\\tFix packet routing\\tfeature\\n13\\tUpdate docs\\tmain\\n'; exit 0; fi\nexit 2\n",
+    );
+    write_executable_script(
+        &bin_dir.join("glab"),
+        "#!/bin/sh\nif [ \"$1\" = mr ] && [ \"$2\" = list ]; then printf '!7\\tOpen\\tAdd reducer\\n'; exit 0; fi\nexit 2\n",
+    );
+    write_executable_script(
+        &bin_dir.join("aws"),
+        "#!/bin/sh\nif [ \"$1\" = sts ] && [ \"$2\" = get-caller-identity ]; then printf '{\"Account\":\"123456789012\",\"Arn\":\"arn:aws:iam::123456789012:user/demo\",\"UserId\":\"AIDA\"}\\n'; exit 0; fi\nexit 2\n",
+    );
+    write_executable_script(
+        &bin_dir.join("psql"),
+        "#!/bin/sh\nprintf ' id | name\\n----+------\\n 1  | Ada\\n 2  | Lin\\n(2 rows)\\n'; exit 0\n",
+    );
     let path_env = std::env::join_paths(std::iter::once(bin_dir.as_path().to_path_buf()).chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
@@ -540,6 +560,16 @@ fn test_system_infra_and_count_commands_use_reducer_wrappers() {
         .assert()
         .success()
         .stdout(predicate::str::contains("ls listed 2 entries in ."));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["tree"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "tree listed 0 dir(s), 2 file(s) under .",
+        ));
 
     suite_cmd()
         .current_dir(root.path())
@@ -584,6 +614,40 @@ fn test_system_infra_and_count_commands_use_reducer_wrappers() {
         .stdout(predicate::str::contains(
             "kubectl get pods: 2 row(s), 1 pending",
         ));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["gh", "pr", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gh pr list: 2 PR(s)"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["glab", "mr", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("glab mr list: 1 MR(s)"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["aws", "sts", "get-caller-identity"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "aws sts caller account 123456789012",
+        ));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("PATH", &path_env)
+        .args(["psql", "-c", "select id, name from users"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("psql returned 2 row(s)"));
 }
 
 #[test]
