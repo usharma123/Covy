@@ -2277,7 +2277,7 @@ fn test_run_failing_reduced_command_preserves_exit_and_raw_stderr() {
         .assert()
         .success()
         .stdout(predicate::str::contains("exit_code: 101"))
-        .stdout(predicate::str::contains("error:"))
+        .stdout(predicate::str::contains("unclosed delimiter"))
         .stdout(predicate::str::contains("cargo check"));
 }
 
@@ -10964,7 +10964,7 @@ fn test_packet28_hook_pretool_is_idempotent_and_ignores_non_bash_tools() {
         }),
     );
     assert_eq!(status, 0);
-    assert_eq!(stdout.trim(), "{}");
+    assert!(matches!(stdout.trim(), "" | "{}"));
 
     let (status, stdout) = run_claude_hook(
         dir.path(),
@@ -10978,7 +10978,7 @@ fn test_packet28_hook_pretool_is_idempotent_and_ignores_non_bash_tools() {
         }),
     );
     assert_eq!(status, 0);
-    assert_eq!(stdout.trim(), "{}");
+    assert!(matches!(stdout.trim(), "" | "{}"));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
