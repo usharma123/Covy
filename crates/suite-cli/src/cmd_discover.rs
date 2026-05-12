@@ -18,6 +18,10 @@ pub struct DiscoverArgs {
     #[arg(long, default_value = ".")]
     pub root: String,
 
+    /// Filter Claude-style sessions by project path substring
+    #[arg(short, long)]
+    pub project: Option<String>,
+
     /// Path to Claude projects directory
     #[arg(long)]
     pub sessions_dir: Option<String>,
@@ -95,8 +99,13 @@ pub fn run(args: DiscoverArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    let session_files =
-        collect_session_files_for_scan(&sessions_dir, args.limit, args.all, args.since)?;
+    let session_files = collect_session_files_for_scan_with_project(
+        &sessions_dir,
+        args.project.as_deref(),
+        args.limit,
+        args.all,
+        args.since,
+    )?;
     report.sessions_scanned = session_files.len();
 
     let mut unsupported_counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -220,6 +229,16 @@ pub(crate) fn collect_session_files_for_scan(
     all: bool,
     since_days: Option<u64>,
 ) -> Result<Vec<PathBuf>> {
+    collect_session_files_for_scan_with_project(dir, None, limit, all, since_days)
+}
+
+pub(crate) fn collect_session_files_for_scan_with_project(
+    dir: &Path,
+    project: Option<&str>,
+    limit: usize,
+    all: bool,
+    since_days: Option<u64>,
+) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     if !dir.is_dir() {
         return Ok(files);
@@ -233,6 +252,11 @@ pub(crate) fn collect_session_files_for_scan(
     for entry in fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
+        if let Some(project) = project {
+            if !path.to_string_lossy().contains(project) {
+                continue;
+            }
+        }
         if path.is_dir() {
             // Look for sessions subdirectory or JSONL files directly
             let sessions_subdir = path.join("sessions");

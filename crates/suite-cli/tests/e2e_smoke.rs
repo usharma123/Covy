@@ -5674,6 +5674,48 @@ fn test_discover_all_and_since_scan_multiple_session_files() {
 }
 
 #[test]
+fn test_discover_project_filter_limits_session_scan_like_rtk() {
+    let root = TempDir::new().unwrap();
+    let projects_dir = root.path().join("claude-projects");
+    for (project, session, command) in [
+        ("matching-project", "session-a.jsonl", "git status --short"),
+        ("other-project", "session-b.jsonl", "pytest -q"),
+    ] {
+        let sessions_dir = projects_dir.join(project).join("sessions");
+        fs::create_dir_all(&sessions_dir).unwrap();
+        let line = json!({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": { "command": command }
+                }]
+            }
+        });
+        fs::write(sessions_dir.join(session), format!("{line}\n")).unwrap();
+    }
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "discover",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--sessions-dir",
+            projects_dir.to_str().unwrap(),
+            "--project",
+            "matching",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"sessions_scanned\":1"))
+        .stdout(predicate::str::contains("\"commands_found\":1"))
+        .stdout(predicate::str::contains("\"supported_commands\":1"));
+}
+
+#[test]
 fn test_hook_records_local_event_log_stats_and_dashboard_count() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
