@@ -1675,6 +1675,31 @@ mod tests {
     }
 
     #[test]
+    fn routes_rtk_javascript_package_runner_prefixes() {
+        for (command, expected) in [
+            ("npm exec tsc --noEmit", "javascript_tsc"),
+            ("npm x eslint src", "javascript_eslint"),
+            ("npm run-script biome check .", "javascript_lint"),
+            ("pnpm dlx next build", "javascript_next_build"),
+            ("pnpm exec prisma migrate status", "javascript_prisma"),
+            ("pnpx vitest run", "javascript_vitest"),
+            ("npx jest run", "javascript_test"),
+            ("npx playwright test", "javascript_test"),
+        ] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::ReducerRewrite, "{command}");
+            assert_eq!(
+                decision
+                    .reducer_spec
+                    .as_ref()
+                    .map(|spec| spec.canonical_kind.as_str()),
+                Some(expected),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
     fn routes_sudo_and_env_prefixed_commands_like_rtk() {
         let sudo = decide_command_route("sudo git status --short");
         assert_eq!(sudo.kind, RouteKind::ReducerRewrite);

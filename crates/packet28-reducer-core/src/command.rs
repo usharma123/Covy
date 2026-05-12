@@ -45,8 +45,10 @@ pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandRe
         "python" | "python3" | "pytest" | "ruff" | "pip" | "pip3" | "uv" | "mypy" => {
             classify_python_command(command, argv)
         }
-        "npm" | "pnpm" | "yarn" | "npx" | "tsc" | "eslint" | "vitest" | "prettier" | "next"
-        | "prisma" | "playwright" => classify_javascript_command(command, argv),
+        "npm" | "pnpm" | "yarn" | "npx" | "pnpx" | "tsc" | "eslint" | "biome" | "lint"
+        | "vitest" | "jest" | "prettier" | "next" | "prisma" | "playwright" => {
+            classify_javascript_command(command, argv)
+        }
         "gradle" | "gradlew" | "./gradlew" | "gradlew.bat" => classify_jvm_command(command, argv),
         "bundle" | "rspec" | "rubocop" | "ruby" | "rails" | "rake" => {
             classify_ruby_command(command, argv)

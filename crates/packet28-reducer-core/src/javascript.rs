@@ -1,7 +1,8 @@
 use crate::types::{CommandReducerSpec, CommandReduction};
 
 pub fn classify_javascript_command(command: &str, argv: &[String]) -> Option<CommandReducerSpec> {
-    let (canonical_kind, operation_kind) = match argv.first()?.as_str() {
+    let tool_argv = javascript_tool_argv(argv)?;
+    let (canonical_kind, operation_kind) = match tool_argv.first()?.as_str() {
         "npm" if classify_package_manager(argv, "test", None) => (
             "javascript_test",
             suite_packet_core::ToolOperationKind::Test,
@@ -44,40 +45,40 @@ pub fn classify_javascript_command(command: &str, argv: &[String]) -> Option<Com
             "javascript_tsc",
             suite_packet_core::ToolOperationKind::Build,
         ),
-        "prettier" if classify_prettier(argv) => (
+        "prettier" if classify_prettier(tool_argv) => (
             "javascript_prettier",
             suite_packet_core::ToolOperationKind::Build,
         ),
-        "npx" if classify_npx_package(argv, "prettier", classify_prettier) => (
-            "javascript_prettier",
-            suite_packet_core::ToolOperationKind::Build,
-        ),
-        "next" if classify_next_build(argv) => (
+        "next" if classify_next_build(tool_argv) => (
             "javascript_next_build",
             suite_packet_core::ToolOperationKind::Build,
         ),
-        "npx" if classify_npx_package(argv, "next", classify_next_build) => (
-            "javascript_next_build",
-            suite_packet_core::ToolOperationKind::Build,
-        ),
-        "prisma" if classify_prisma(argv) => (
+        "prisma" if classify_prisma(tool_argv) => (
             "javascript_prisma",
             suite_packet_core::ToolOperationKind::Build,
         ),
-        "npx" if classify_npx_package(argv, "prisma", classify_prisma) => (
-            "javascript_prisma",
-            suite_packet_core::ToolOperationKind::Build,
-        ),
-        "tsc" if classify_tsc(argv) => (
+        "tsc" if classify_tsc(tool_argv) => (
             "javascript_tsc",
             suite_packet_core::ToolOperationKind::Build,
         ),
-        "eslint" if classify_eslint(argv) => (
+        "eslint" if classify_eslint(tool_argv) => (
             "javascript_eslint",
             suite_packet_core::ToolOperationKind::Build,
         ),
-        "vitest" if classify_vitest(argv) => (
+        "biome" | "lint" if classify_eslint(tool_argv) => (
+            "javascript_lint",
+            suite_packet_core::ToolOperationKind::Build,
+        ),
+        "vitest" if classify_vitest(tool_argv) => (
             "javascript_vitest",
+            suite_packet_core::ToolOperationKind::Test,
+        ),
+        "jest" if classify_jest(tool_argv) => (
+            "javascript_test",
+            suite_packet_core::ToolOperationKind::Test,
+        ),
+        "playwright" if classify_playwright(tool_argv) => (
+            "javascript_test",
             suite_packet_core::ToolOperationKind::Test,
         ),
         _ => return None,
@@ -167,24 +168,87 @@ fn classify_yarn(argv: &[String], script: &str) -> bool {
     argv.get(1).is_some_and(|arg| arg == script) && !contains_any(argv, &["--json"])
 }
 
-fn classify_npx_tsc(argv: &[String]) -> bool {
-    argv.get(1).is_some_and(|arg| arg == "tsc") && classify_tsc(&argv[1..])
+fn javascript_tool_argv(argv: &[String]) -> Option<&[String]> {
+    let first = argv.first()?.as_str();
+    if matches!(
+        first,
+        "tsc"
+            | "eslint"
+            | "biome"
+            | "lint"
+            | "vitest"
+            | "jest"
+            | "prettier"
+            | "next"
+            | "prisma"
+            | "playwright"
+    ) {
+        return Some(argv);
+    }
+    if matches!(first, "npx" | "pnpx") {
+        return argv.get(1..);
+    }
+    if matches!(first, "npm" | "pnpm") {
+        let second = argv.get(1)?.as_str();
+        if matches!(
+            second,
+            "exec" | "run" | "run-script" | "rum" | "urn" | "x" | "dlx"
+        ) {
+            return argv.get(2..);
+        }
+        if matches!(
+            second,
+            "tsc"
+                | "eslint"
+                | "biome"
+                | "lint"
+                | "vitest"
+                | "jest"
+                | "prettier"
+                | "next"
+                | "prisma"
+                | "playwright"
+        ) {
+            return argv.get(1..);
+        }
+    }
+    Some(argv)
 }
 
-fn classify_npx_package(argv: &[String], package: &str, matcher: fn(&[String]) -> bool) -> bool {
-    argv.get(1).is_some_and(|arg| arg == package) && matcher(&argv[1..])
+fn classify_npx_tsc(argv: &[String]) -> bool {
+    matches!(argv.first().map(String::as_str), Some("npx" | "pnpx"))
+        && argv.get(1).is_some_and(|arg| arg == "tsc")
+        && classify_tsc(&argv[1..])
 }
 
 fn classify_tsc(argv: &[String]) -> bool {
-    contains_any(argv, &["--noEmit"]) && !contains_any(argv, &["--pretty", "--watch", "--build"])
+    !contains_any(argv, &["--pretty", "--watch", "--build", "-b"])
 }
 
 fn classify_eslint(argv: &[String]) -> bool {
-    !contains_any(argv, &["--format", "-f", "--fix", "--output-file"])
+    !contains_any(
+        argv,
+        &[
+            "--format",
+            "-f",
+            "--fix",
+            "--write",
+            "--output-file",
+            "--reporter",
+        ],
+    )
 }
 
 fn classify_vitest(argv: &[String]) -> bool {
     !contains_any(argv, &["--reporter", "--ui", "--watch"])
+}
+
+fn classify_jest(argv: &[String]) -> bool {
+    !contains_any(argv, &["--watch", "--watchAll", "--json", "--outputFile"])
+}
+
+fn classify_playwright(argv: &[String]) -> bool {
+    !contains_any(argv, &["--ui", "--debug", "--headed", "--reporter"])
 }
 
 fn classify_prettier(argv: &[String]) -> bool {
@@ -595,6 +659,24 @@ mod tests {
             .collect::<Vec<_>>();
         let spec = classify_javascript_command("npx tsc --noEmit", &argv).unwrap();
         assert_eq!(spec.canonical_kind, "javascript_tsc");
+    }
+
+    #[test]
+    fn classify_javascript_accepts_rtk_package_runner_prefixes() {
+        for (command, expected) in [
+            ("npm exec tsc --noEmit", "javascript_tsc"),
+            ("npm x eslint src", "javascript_eslint"),
+            ("npm run-script biome check .", "javascript_lint"),
+            ("pnpm dlx next build", "javascript_next_build"),
+            ("pnpm exec prisma migrate status", "javascript_prisma"),
+            ("pnpx vitest run", "javascript_vitest"),
+            ("npx jest run", "javascript_test"),
+            ("npx playwright test", "javascript_test"),
+        ] {
+            let argv = shell_words::split(command).unwrap();
+            let spec = classify_javascript_command(command, &argv).unwrap();
+            assert_eq!(spec.canonical_kind, expected, "{command}");
+        }
     }
 
     #[test]
