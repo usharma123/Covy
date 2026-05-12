@@ -6027,6 +6027,22 @@ fn test_learn_detects_cli_correction_from_session_history() {
             "input": {"command": "git status --short"}
         }]}
     });
+    let unrelated_use = json!({
+        "type": "assistant",
+        "message": {"content": [{
+            "type": "tool_use",
+            "name": "Bash",
+            "input": {"command": "pwd"}
+        }]}
+    });
+    let unrelated_result = json!({
+        "type": "user",
+        "message": {"content": [{
+            "type": "tool_result",
+            "is_error": false,
+            "content": root.path().display().to_string()
+        }]}
+    });
     let good_result = json!({
         "type": "user",
         "message": {"content": [{
@@ -6037,7 +6053,9 @@ fn test_learn_detects_cli_correction_from_session_history() {
     });
     fs::write(
         &session_file,
-        format!("{bad_use}\n{bad_result}\n{good_use}\n{good_result}\n"),
+        format!(
+            "{bad_use}\n{bad_result}\n{unrelated_use}\n{unrelated_result}\n{good_use}\n{good_result}\n"
+        ),
     )
     .unwrap();
 

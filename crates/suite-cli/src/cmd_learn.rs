@@ -1,6 +1,6 @@
 //! Learn module: detect error → correction patterns in session JSONL.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -86,6 +86,7 @@ struct Correction {
     failed_command: String,
     successful_command: String,
     error_type: String,
+    base_command: String,
     frequency: usize,
     confidence: f64,
 }
@@ -95,6 +96,11 @@ struct CommandExecution {
     command: String,
     failed: bool,
     output: String,
+}
+
+#[derive(Debug, Clone)]
+struct CorrectionAggregate {
+    correction: Correction,
 }
 
 pub fn run(args: LearnArgs) -> Result<i32> {
@@ -141,41 +147,53 @@ pub fn run(args: LearnArgs) -> Result<i32> {
     )?;
     report.sessions_scanned = session_files.len();
 
-    // Collect all corrections across sessions
-    let mut correction_counts: BTreeMap<(String, String, String), usize> = BTreeMap::new();
+    let mut correction_groups: BTreeMap<(String, String, String), CorrectionAggregate> =
+        BTreeMap::new();
 
     for file in &session_files {
         if let Ok(corrections) = extract_corrections(file) {
             for correction in corrections {
-                *correction_counts
-                    .entry((
-                        correction.failed_command,
-                        correction.successful_command,
-                        correction.error_type,
-                    ))
-                    .or_insert(0) += 1;
+                let diff_token =
+                    extract_diff_token(&correction.failed_command, &correction.successful_command);
+                let key = (
+                    correction.base_command.clone(),
+                    correction.error_type.clone(),
+                    diff_token,
+                );
+                correction_groups
+                    .entry(key)
+                    .and_modify(|existing| {
+                        existing.correction.frequency += 1;
+                        if correction.confidence > existing.correction.confidence {
+                            let frequency = existing.correction.frequency;
+                            existing.correction = correction.clone();
+                            existing.correction.frequency = frequency;
+                        }
+                    })
+                    .or_insert_with(|| CorrectionAggregate { correction });
             }
         }
     }
 
-    // Filter by minimum frequency and compute confidence
-    let total_corrections: usize = correction_counts.values().sum();
-    for ((failed, success, error_type), count) in &correction_counts {
-        let confidence = (*count as f64) / (total_corrections.max(1) as f64);
-        if *count >= args.min_frequency && confidence >= args.min_confidence {
-            report.corrections.push(Correction {
-                failed_command: failed.clone(),
-                successful_command: success.clone(),
-                error_type: error_type.clone(),
-                frequency: *count,
-                confidence,
-            });
+    for aggregate in correction_groups.values() {
+        let correction = &aggregate.correction;
+        if correction.frequency >= args.min_frequency
+            && correction.confidence >= args.min_confidence
+        {
+            report.corrections.push(correction.clone());
         }
     }
 
-    report
-        .corrections
-        .sort_by(|a, b| b.frequency.cmp(&a.frequency));
+    report.corrections.sort_by(|a, b| {
+        b.frequency
+            .cmp(&a.frequency)
+            .then_with(|| {
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.failed_command.cmp(&b.failed_command))
+    });
     report.corrections_found = report.corrections.len();
 
     if args.write_rules && !report.corrections.is_empty() {
@@ -345,26 +363,45 @@ fn extract_corrections(path: &Path) -> Result<Vec<Correction>> {
         }
     }
 
-    // Find fail → success correction patterns
+    // Find fail -> success correction patterns using RTK-style lookahead.
     let mut corrections = Vec::new();
-    for window in executions.windows(2) {
-        let first = &window[0];
-        let second = &window[1];
-        if first.failed && !second.failed {
-            // Extract the base command to check if they're related
-            let base1 = first.command.split_whitespace().next().unwrap_or("");
-            let base2 = second.command.split_whitespace().next().unwrap_or("");
-            if base1 == base2 {
-                let short1 = truncate_command(&first.command, 80);
-                let short2 = truncate_command(&second.command, 80);
-                corrections.push(Correction {
-                    failed_command: short1,
-                    successful_command: short2,
-                    error_type: classify_error(&first.output),
-                    frequency: 1,
-                    confidence: 1.0,
-                });
+    const CORRECTION_WINDOW: usize = 3;
+    const MIN_PAIR_CONFIDENCE: f64 = 0.6;
+    for idx in 0..executions.len() {
+        let failed = &executions[idx];
+        if !is_command_error(failed.failed, &failed.output) {
+            continue;
+        }
+        let error_type = classify_error(&failed.output);
+        if is_tdd_cycle_error(&error_type, &failed.output) {
+            continue;
+        }
+        for candidate in executions.iter().skip(idx + 1).take(CORRECTION_WINDOW) {
+            let similarity = command_similarity(&failed.command, &candidate.command);
+            if similarity < 0.5 {
+                continue;
             }
+            if failed.command == candidate.command
+                || differs_only_by_path(&failed.command, &candidate.command)
+            {
+                continue;
+            }
+            let mut confidence = similarity;
+            if !is_command_error(candidate.failed, &candidate.output) {
+                confidence = (confidence + 0.2).min(1.0);
+            }
+            if confidence < MIN_PAIR_CONFIDENCE {
+                continue;
+            }
+            corrections.push(Correction {
+                failed_command: truncate_command(&failed.command, 80),
+                successful_command: truncate_command(&candidate.command, 80),
+                error_type,
+                base_command: extract_base_command(&failed.command),
+                frequency: 1,
+                confidence,
+            });
+            break;
         }
     }
 
@@ -374,12 +411,33 @@ fn extract_corrections(path: &Path) -> Result<Vec<Correction>> {
 fn output_looks_like_error(output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
     lower.contains("error")
+        || lower.contains("failed")
+        || lower.contains("invalid")
         || lower.contains("unknown option")
         || lower.contains("unknown flag")
         || lower.contains("command not found")
+        || lower.contains("cannot")
         || lower.contains("no such file")
         || lower.contains("missing")
         || lower.contains("permission denied")
+}
+
+fn is_command_error(failed: bool, output: &str) -> bool {
+    if !failed || output_looks_like_user_rejection(output) {
+        return false;
+    }
+    output_looks_like_error(output)
+}
+
+fn output_looks_like_user_rejection(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("user declined")
+        || lower.contains("user rejected")
+        || lower.contains("user cancelled")
+        || lower.contains("user canceled")
+        || lower.contains("operation cancelled by user")
+        || lower.contains("operation canceled by user")
+        || lower.contains("doesn't want")
 }
 
 fn classify_error(output: &str) -> String {
@@ -399,6 +457,90 @@ fn classify_error(output: &str) -> String {
     }
 }
 
+fn is_tdd_cycle_error(error_type: &str, output: &str) -> bool {
+    if output.contains("error[E") || output.contains("aborting due to") {
+        return true;
+    }
+    if output.contains("test result: FAILED") || output.contains("tests failed") {
+        return true;
+    }
+    matches!(error_type, "command_not_found" | "other")
+        && (output.contains("error[E") || output.contains("FAILED"))
+}
+
+fn extract_base_command(cmd: &str) -> String {
+    let stripped = cmd
+        .trim()
+        .strip_prefix("RUST_BACKTRACE=1 ")
+        .or_else(|| cmd.trim().strip_prefix("NODE_ENV=production "))
+        .or_else(|| cmd.trim().strip_prefix("DEBUG=* "))
+        .unwrap_or_else(|| cmd.trim());
+    let parts = stripped.split_whitespace().collect::<Vec<_>>();
+    match parts.len() {
+        0 => String::new(),
+        1 => parts[0].to_string(),
+        _ => format!("{} {}", parts[0], parts[1]),
+    }
+}
+
+fn command_similarity(left: &str, right: &str) -> f64 {
+    let left_base = extract_base_command(left);
+    let right_base = extract_base_command(right);
+    if left_base != right_base {
+        return 0.0;
+    }
+    let left_args = command_args_after_base(left, &left_base);
+    let right_args = command_args_after_base(right, &right_base);
+    if left_args.is_empty() && right_args.is_empty() {
+        return 1.0;
+    }
+    let intersection = left_args.intersection(&right_args).count();
+    let union = left_args.union(&right_args).count();
+    if union == 0 {
+        0.5
+    } else {
+        0.5 + (intersection as f64 / union as f64) * 0.5
+    }
+}
+
+fn command_args_after_base<'a>(cmd: &'a str, base: &str) -> BTreeSet<&'a str> {
+    cmd.trim()
+        .strip_prefix(base)
+        .unwrap_or("")
+        .split_whitespace()
+        .collect()
+}
+
+fn differs_only_by_path(left: &str, right: &str) -> bool {
+    let left_base = extract_base_command(left);
+    let right_base = extract_base_command(right);
+    left_base == right_base && {
+        let similarity = command_similarity(left, right);
+        similarity > 0.9 && similarity < 1.0
+    }
+}
+
+fn extract_diff_token(wrong: &str, right: &str) -> String {
+    let wrong_parts = wrong.split_whitespace().collect::<BTreeSet<_>>();
+    let right_parts = right.split_whitespace().collect::<BTreeSet<_>>();
+    let removed = wrong_parts
+        .difference(&right_parts)
+        .next()
+        .copied()
+        .unwrap_or_default();
+    let added = right_parts
+        .difference(&wrong_parts)
+        .next()
+        .copied()
+        .unwrap_or_default();
+    match (removed.is_empty(), added.is_empty()) {
+        (false, false) => format!("{removed} -> {added}"),
+        (false, true) => format!("removed {removed}"),
+        (true, false) => format!("added {added}"),
+        (true, true) => "unknown".to_string(),
+    }
+}
+
 fn truncate_command(cmd: &str, max: usize) -> String {
     if cmd.len() <= max {
         cmd.to_string()
@@ -415,14 +557,73 @@ fn write_corrections_rules(corrections: &[Correction]) -> Result<()> {
     let mut content = String::from("# CLI Corrections (auto-generated by `Packet28 learn`)\n\n");
     content.push_str("These patterns were learned from session history.\n\n");
 
+    let mut grouped: BTreeMap<&str, Vec<&Correction>> = BTreeMap::new();
     for correction in corrections.iter().take(50) {
-        content.push_str(&format!(
-            "- Instead of `{}`, prefer `{}` (seen {}x)\n",
-            correction.failed_command, correction.successful_command, correction.frequency
-        ));
+        grouped
+            .entry(correction.base_command.as_str())
+            .or_default()
+            .push(correction);
+    }
+
+    for (base_command, corrections) in grouped {
+        content.push_str(&format!("## {}\n", capitalize_first(base_command)));
+        for correction in corrections {
+            let seen = if correction.frequency > 1 {
+                format!(" (seen {}x)", correction.frequency)
+            } else {
+                String::new()
+            };
+            content.push_str(&format!(
+                "- Use `{}` not `{}`{}\n",
+                correction.successful_command, correction.failed_command, seen
+            ));
+        }
+        content.push('\n');
     }
 
     fs::write(&path, &content).with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(())
+}
+
+fn capitalize_first(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_command_uses_first_two_tokens_and_strips_common_env() {
+        assert_eq!(extract_base_command("git commit --amend"), "git commit");
+        assert_eq!(
+            extract_base_command("RUST_BACKTRACE=1 cargo test --all"),
+            "cargo test"
+        );
+    }
+
+    #[test]
+    fn similarity_matches_rtk_same_base_scoring() {
+        assert_eq!(command_similarity("git status", "git status"), 1.0);
+        assert_eq!(
+            command_similarity("git status --porcelain=v9", "git status --short"),
+            0.5
+        );
+        assert_eq!(command_similarity("git status", "cargo test"), 0.0);
+    }
+
+    #[test]
+    fn command_error_filters_user_rejections_and_tdd_noise() {
+        assert!(!is_command_error(true, "Operation cancelled by user"));
+        assert!(is_command_error(true, "error: unknown flag --foo"));
+        assert!(is_tdd_cycle_error(
+            "other",
+            "error[E0308]: mismatched types"
+        ));
+    }
 }
