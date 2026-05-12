@@ -202,6 +202,35 @@ fn test_system_json_deps_and_env_commands() {
 }
 
 #[test]
+fn test_system_read_command_filters_and_numbers_files() {
+    let root = TempDir::new().unwrap();
+    let source = root.path().join("main.rs");
+    fs::write(
+        &source,
+        "// module comment\nfn main() {\n    println!(\"hello\");\n}\n",
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "read",
+            source.to_str().unwrap(),
+            "--level",
+            "minimal",
+            "--max-lines",
+            "2",
+            "--line-numbers",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("module comment").not())
+        .stdout(predicate::str::contains("1 | fn main() {"))
+        .stdout(predicate::str::contains("2 |     println!(\"hello\");"))
+        .stdout(predicate::str::contains("more lines"));
+}
+
+#[test]
 fn test_system_log_command_deduplicates_noisy_lines() {
     let root = TempDir::new().unwrap();
     let log = root.path().join("app.log");

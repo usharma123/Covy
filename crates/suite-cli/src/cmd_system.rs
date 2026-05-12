@@ -5,10 +5,48 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ReadFilterLevel {
+    None,
+    Minimal,
+    Aggressive,
+}
+
+#[derive(Args)]
+pub struct ReadArgs {
+    /// Files to read. Use - to read stdin.
+    #[arg(required = true, num_args = 1..)]
+    pub files: Vec<PathBuf>,
+
+    /// Filter level: none, minimal, or aggressive
+    #[arg(short, long, value_enum, default_value_t = ReadFilterLevel::None)]
+    pub level: ReadFilterLevel,
+
+    /// Maximum lines to show from the start after filtering
+    #[arg(short, long, conflicts_with = "tail_lines")]
+    pub max_lines: Option<usize>,
+
+    /// Show only the last N lines after filtering
+    #[arg(long, conflicts_with = "max_lines")]
+    pub tail_lines: Option<usize>,
+
+    /// Show line numbers
+    #[arg(short = 'n', long)]
+    pub line_numbers: bool,
+
+    /// Emit a machine-readable envelope
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON machine output
+    #[arg(long)]
+    pub pretty: bool,
+}
 
 #[derive(Args)]
 pub struct JsonArgs {
@@ -84,6 +122,47 @@ pub struct SystemOutput {
     command: String,
     summary: String,
     text: String,
+}
+
+pub fn run_read(args: ReadArgs) -> Result<i32> {
+    let mut rendered_files = Vec::new();
+    for file in &args.files {
+        let raw = if file.as_os_str() == "-" {
+            let mut content = String::new();
+            io::stdin()
+                .lock()
+                .read_to_string(&mut content)
+                .context("failed to read from stdin")?;
+            content
+        } else {
+            fs::read_to_string(file)
+                .with_context(|| format!("failed to read {}", file.display()))?
+        };
+        let language = detect_language(file);
+        let filtered = filter_read_content(&raw, language, args.level);
+        let windowed = apply_line_window(&filtered, args.max_lines, args.tail_lines, language);
+        let final_text = if args.line_numbers {
+            format_with_line_numbers(&windowed)
+        } else {
+            windowed
+        };
+        if args.files.len() > 1 && file.as_os_str() != "-" {
+            rendered_files.push(format!("==> {} <==\n{}", file.display(), final_text));
+        } else {
+            rendered_files.push(final_text);
+        }
+    }
+    let text = rendered_files.join(if args.line_numbers { "\n" } else { "" });
+    let summary = summarize_rendered_lines("read", &text);
+    emit_system_output(
+        args.json,
+        args.pretty,
+        SystemOutput {
+            command: "Packet28 read".to_string(),
+            summary,
+            text,
+        },
+    )
 }
 
 pub fn run_json(args: JsonArgs) -> Result<i32> {
@@ -582,6 +661,129 @@ fn render_dep_section(label: &str, items: &[String], limit: usize, include_empty
     out
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadLanguage {
+    Rust,
+    JavaScript,
+    Python,
+    Shell,
+    Unknown,
+}
+
+fn detect_language(path: &Path) -> ReadLanguage {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("rs") => ReadLanguage::Rust,
+        Some("js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs") => ReadLanguage::JavaScript,
+        Some("py") => ReadLanguage::Python,
+        Some("sh" | "bash" | "zsh") => ReadLanguage::Shell,
+        _ => ReadLanguage::Unknown,
+    }
+}
+
+fn filter_read_content(content: &str, language: ReadLanguage, level: ReadFilterLevel) -> String {
+    match level {
+        ReadFilterLevel::None => content.to_string(),
+        ReadFilterLevel::Minimal => strip_language_comments(content, language, false),
+        ReadFilterLevel::Aggressive => strip_language_comments(content, language, true),
+    }
+}
+
+fn strip_language_comments(content: &str, language: ReadLanguage, aggressive: bool) -> String {
+    let mut out = Vec::new();
+    let mut blank_pending = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let is_comment = match language {
+            ReadLanguage::Rust | ReadLanguage::JavaScript => {
+                trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*')
+            }
+            ReadLanguage::Python | ReadLanguage::Shell => trimmed.starts_with('#'),
+            ReadLanguage::Unknown => false,
+        };
+        if is_comment {
+            continue;
+        }
+        if aggressive && trimmed.is_empty() {
+            if !blank_pending {
+                out.push(String::new());
+                blank_pending = true;
+            }
+            continue;
+        }
+        blank_pending = false;
+        out.push(line.to_string());
+    }
+    let mut rendered = out.join("\n");
+    if content.ends_with('\n') && !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+fn apply_line_window(
+    content: &str,
+    max_lines: Option<usize>,
+    tail_lines: Option<usize>,
+    language: ReadLanguage,
+) -> String {
+    if let Some(tail) = tail_lines {
+        if tail == 0 {
+            return String::new();
+        }
+        let lines = content.lines().collect::<Vec<_>>();
+        let start = lines.len().saturating_sub(tail);
+        let mut result = lines[start..].join("\n");
+        if content.ends_with('\n') {
+            result.push('\n');
+        }
+        return result;
+    }
+
+    if let Some(max) = max_lines {
+        return smart_truncate_for_read(content, max, language);
+    }
+
+    content.to_string()
+}
+
+fn smart_truncate_for_read(content: &str, max_lines: usize, language: ReadLanguage) -> String {
+    if max_lines == 0 {
+        return String::new();
+    }
+    let lines = content.lines().collect::<Vec<_>>();
+    if lines.len() <= max_lines {
+        return content.to_string();
+    }
+    let mut rendered = lines
+        .iter()
+        .take(max_lines)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    rendered.push('\n');
+    rendered.push_str(&format!(
+        "... {} more lines ({:?})\n",
+        lines.len() - max_lines,
+        language
+    ));
+    rendered
+}
+
+fn format_with_line_numbers(content: &str) -> String {
+    let lines = content.lines().collect::<Vec<_>>();
+    let width = lines.len().max(1).to_string().len();
+    let mut out = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        out.push_str(&format!(
+            "{:>width$} | {}\n",
+            index + 1,
+            line,
+            width = width
+        ));
+    }
+    out
+}
+
 fn render_env_vars(vars: &[(String, String)], filter: Option<&str>, show_all: bool) -> String {
     let sensitive_patterns = sensitive_patterns();
     let filter = filter.map(str::to_lowercase);
@@ -922,6 +1124,24 @@ mod tests {
         assert!(rendered.contains("long: \""));
         assert!(rendered.contains("...\""));
         assert!(rendered.contains("[1, ... +5 more]"));
+    }
+
+    #[test]
+    fn read_filters_comments_and_applies_line_windows() {
+        let content = "// comment\nfn main() {}\n\n// another\nfn next() {}\n";
+        let filtered = filter_read_content(content, ReadLanguage::Rust, ReadFilterLevel::Minimal);
+        assert!(!filtered.contains("// comment"));
+        assert!(filtered.contains("fn main()"));
+        let windowed = apply_line_window(&filtered, Some(1), None, ReadLanguage::Rust);
+        assert!(windowed.starts_with("fn main()"));
+        assert!(windowed.contains("more lines"));
+    }
+
+    #[test]
+    fn read_line_numbers_are_stable_width() {
+        let rendered = format_with_line_numbers("alpha\nbeta\n");
+        assert!(rendered.contains("1 | alpha"));
+        assert!(rendered.contains("2 | beta"));
     }
 
     #[test]

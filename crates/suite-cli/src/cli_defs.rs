@@ -60,6 +60,8 @@ pub enum Commands {
     Gain(cmd_compact::AnalyticsArgs),
     /// RTK-style compact command surface and analytics
     Compact(cmd_compact::CompactArgs),
+    /// Read files with optional line windows, line numbers, and lightweight filtering
+    Read(cmd_system::ReadArgs),
     /// Compactly inspect JSON files or stdin while preserving raw values by default
     Json(cmd_system::JsonArgs),
     /// Summarize project dependency manifests
