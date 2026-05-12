@@ -4050,6 +4050,28 @@ fn test_dashboard_shows_local_product_metrics() {
         .stdout(predicate::str::contains("memory_topics=1"))
         .stdout(predicate::str::contains("topics_needing_consolidation=0"))
         .stdout(predicate::str::contains("transcript_messages=1"));
+
+    let html_path = root.path().join("packet28-dashboard.html");
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "dashboard",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "html",
+            "--output",
+            html_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dashboard_html="));
+    let html = fs::read_to_string(&html_path).unwrap();
+    assert!(html.contains("<title>Packet28 Dashboard</title>"));
+    assert!(html.contains("Saved tokens"));
+    assert!(html.contains("Memory Topics"));
+    assert!(html.contains("Integration Health"));
 }
 
 #[test]

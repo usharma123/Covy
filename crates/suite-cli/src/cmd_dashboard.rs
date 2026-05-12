@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 
 use anyhow::Result;
 use clap::Args;
@@ -16,6 +17,12 @@ use crate::savings_analytics::load_run_savings;
 pub struct DashboardArgs {
     #[arg(long, default_value = ".")]
     pub root: String,
+    /// Output format: text, json, or html
+    #[arg(long, default_value = "text")]
+    pub format: String,
+    /// Write rendered dashboard output to this path
+    #[arg(long)]
+    pub output: Option<String>,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -130,8 +137,17 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         windsurf_doctor_status: windsurf_status.to_string(),
     };
 
-    if args.json {
+    let format = args.format.trim().to_ascii_lowercase();
+    if args.json || format == "json" {
         crate::cmd_common::emit_json(&serde_json::to_value(report)?, args.pretty)?;
+    } else if format == "html" {
+        let html = render_dashboard_html(&report);
+        if let Some(path) = args.output.as_deref() {
+            fs::write(path, html)?;
+            println!("dashboard_html={path}");
+        } else {
+            print!("{html}");
+        }
     } else {
         println!(
             "token_savings.saved_est_tokens={}",
@@ -158,4 +174,125 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         println!("windsurf_doctor_status={}", report.windsurf_doctor_status);
     }
     Ok(0)
+}
+
+fn render_dashboard_html(report: &DashboardReport) -> String {
+    let mut html = String::from(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Packet28 Dashboard</title>
+<style>
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f7f7f4;color:#1f2328}
+main{max-width:1120px;margin:0 auto;padding:28px}
+h1{font-size:28px;margin:0 0 20px}
+h2{font-size:17px;margin:24px 0 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.metric{border:1px solid #d8d7d0;background:#fff;padding:14px;border-radius:8px}
+.label{font-size:12px;text-transform:uppercase;color:#667085}
+.value{font-size:26px;font-weight:700;margin-top:6px}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #d8d7d0}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #ecebe6;font-size:14px}
+th{background:#efeee8}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body><main>
+<h1>Packet28 Dashboard</h1>
+"#,
+    );
+    html.push_str("<section class=\"grid\">");
+    push_metric(
+        &mut html,
+        "Saved tokens",
+        &report.token_savings.saved_est_tokens.to_string(),
+    );
+    push_metric(
+        &mut html,
+        "Savings",
+        &format!("{:.1}%", report.token_savings.savings_percent),
+    );
+    push_metric(
+        &mut html,
+        "Commands reduced",
+        &report.commands_reduced.to_string(),
+    );
+    push_metric(&mut html, "Sessions", &report.sessions.to_string());
+    push_metric(&mut html, "Memories", &report.memory_count.to_string());
+    push_metric(&mut html, "Topics", &report.memory_topics.len().to_string());
+    push_metric(
+        &mut html,
+        "Graph concepts",
+        &report.graph_concepts.to_string(),
+    );
+    push_metric(
+        &mut html,
+        "Graph relations",
+        &report.graph_relations.to_string(),
+    );
+    push_metric(
+        &mut html,
+        "Feedback corrections",
+        &report.feedback_corrections.to_string(),
+    );
+    push_metric(
+        &mut html,
+        "Transcript messages",
+        &report.transcript_stats.message_count.to_string(),
+    );
+    push_metric(
+        &mut html,
+        "Pending extractions",
+        &report.pending_extractions.to_string(),
+    );
+    html.push_str("</section>");
+
+    html.push_str("<h2>Memory Topics</h2><table><tr><th>Topic</th><th>Count</th></tr>");
+    for topic in &report.memory_topics {
+        html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td></tr>",
+            escape_html(&topic.topic),
+            topic.memory_count
+        ));
+    }
+    html.push_str("</table>");
+
+    html.push_str("<h2>Top Noisy Commands</h2><table><tr><th>Command</th></tr>");
+    for command in &report.top_noisy_commands {
+        html.push_str(&format!(
+            "<tr><td><code>{}</code></td></tr>",
+            escape_html(command)
+        ));
+    }
+    html.push_str("</table>");
+
+    html.push_str("<h2>Integration Health</h2><table><tr><th>Integration</th><th>Status</th></tr>");
+    for (name, status) in &report.integration_health {
+        html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td></tr>",
+            escape_html(name),
+            escape_html(status)
+        ));
+    }
+    html.push_str("</table>");
+    html.push_str("</main></body></html>\n");
+    html
+}
+
+fn push_metric(html: &mut String, label: &str, value: &str) {
+    html.push_str(&format!(
+        "<div class=\"metric\"><div class=\"label\">{}</div><div class=\"value\">{}</div></div>",
+        escape_html(label),
+        escape_html(value)
+    ));
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

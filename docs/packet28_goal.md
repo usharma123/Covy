@@ -197,6 +197,7 @@ Current evidence:
 - RTK analytics coverage now includes `Packet28 cc-economics`, which merges local Packet28 run-savings records with ccusage-style daily/weekly/monthly Claude Code spend JSON, computes weighted input-token cost per token, estimates dollar savings, supports text/JSON/CSV output, and gracefully reports local savings when ccusage is unavailable. Evidence: `test_cc_economics_merges_ccusage_and_packet28_savings`.
 - RTK session coverage now includes RTK-style text output for `Packet28 session --sessions-dir <dir>`: a session/date/command/adoption/output table, compact adoption bar, average adoption, and discover hint, while preserving JSON output for automation. Evidence: `test_session_reports_adoption_from_session_jsonl`, `test_session_adoption_all_and_since_scan_multiple_session_files`.
 - RTK learn coverage now includes CLI correction detection from Claude-style session history: Packet28 pairs Bash tool uses with tool results, detects fail-then-succeed corrections, classifies common error types, filters by frequency/confidence, emits JSON/text, and can write `.claude/rules/cli-corrections.md`. Evidence: `test_learn_detects_cli_correction_from_session_history`.
+- ICM dashboard coverage now includes a local static web-view export: `Packet28 dashboard --format html --output <path>` renders savings, memory, graph, feedback, transcript, noisy command, pending extraction, and integration-health metrics without starting a server or leaving the machine. Evidence: `test_dashboard_shows_local_product_metrics`.
 
 ### 6. Release Readiness
 
