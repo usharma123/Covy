@@ -13,6 +13,18 @@ use crate::memory_store::learn_project_graph;
 
 #[derive(Args, Clone)]
 pub struct LearnArgs {
+    /// Claude project filter. Defaults to current project unless --all is set.
+    #[arg(long)]
+    pub project: Option<String>,
+
+    /// Scan all projects under --sessions-dir
+    #[arg(long)]
+    pub all: bool,
+
+    /// Limit session scan to files modified in the last N days
+    #[arg(long, default_value_t = 30)]
+    pub since: u64,
+
     /// Learn a project directory into the local Packet28 concept graph
     #[arg(long)]
     pub project_dir: Option<String>,
@@ -41,6 +53,14 @@ pub struct LearnArgs {
     #[arg(long, default_value_t = 2)]
     pub min_frequency: usize,
 
+    /// Minimum confidence to include a correction
+    #[arg(long, default_value_t = 0.0)]
+    pub min_confidence: f64,
+
+    /// Output format: text or json
+    #[arg(long, default_value = "text")]
+    pub format: String,
+
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -65,8 +85,16 @@ struct LearnReport {
 struct Correction {
     failed_command: String,
     successful_command: String,
+    error_type: String,
     frequency: usize,
     confidence: f64,
+}
+
+#[derive(Debug, Clone)]
+struct CommandExecution {
+    command: String,
+    failed: bool,
+    output: String,
 }
 
 pub fn run(args: LearnArgs) -> Result<i32> {
@@ -104,28 +132,41 @@ pub fn run(args: LearnArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    let session_files = collect_session_files(&sessions_dir, args.limit)?;
+    let session_files = collect_session_files(
+        &sessions_dir,
+        args.project.as_deref(),
+        args.all,
+        args.limit,
+        args.since,
+    )?;
     report.sessions_scanned = session_files.len();
 
     // Collect all corrections across sessions
-    let mut correction_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut correction_counts: BTreeMap<(String, String, String), usize> = BTreeMap::new();
 
     for file in &session_files {
         if let Ok(corrections) = extract_corrections(file) {
-            for (failed, success) in corrections {
-                *correction_counts.entry((failed, success)).or_insert(0) += 1;
+            for correction in corrections {
+                *correction_counts
+                    .entry((
+                        correction.failed_command,
+                        correction.successful_command,
+                        correction.error_type,
+                    ))
+                    .or_insert(0) += 1;
             }
         }
     }
 
     // Filter by minimum frequency and compute confidence
     let total_corrections: usize = correction_counts.values().sum();
-    for ((failed, success), count) in &correction_counts {
-        if *count >= args.min_frequency {
-            let confidence = (*count as f64) / (total_corrections.max(1) as f64);
+    for ((failed, success, error_type), count) in &correction_counts {
+        let confidence = (*count as f64) / (total_corrections.max(1) as f64);
+        if *count >= args.min_frequency && confidence >= args.min_confidence {
             report.corrections.push(Correction {
                 failed_command: failed.clone(),
                 successful_command: success.clone(),
+                error_type: error_type.clone(),
                 frequency: *count,
                 confidence,
             });
@@ -141,17 +182,18 @@ pub fn run(args: LearnArgs) -> Result<i32> {
         write_corrections_rules(&report.corrections)?;
     }
 
-    if args.json {
+    if args.json || args.format == "json" {
         crate::cmd_common::emit_json(&serde_json::to_value(&report)?, args.pretty)?;
     } else {
         println!("Sessions scanned: {}", report.sessions_scanned);
         println!("Corrections found: {}", report.corrections_found);
         for correction in report.corrections.iter().take(20) {
             println!(
-                "  {} -> {} ({}x, confidence: {:.0}%)",
+                "  {} -> {} ({}x, {}, confidence: {:.0}%)",
                 correction.failed_command,
                 correction.successful_command,
                 correction.frequency,
+                correction.error_type,
                 correction.confidence * 100.0
             );
         }
@@ -173,7 +215,13 @@ fn default_sessions_dir() -> PathBuf {
     PathBuf::from("/tmp/.claude/projects")
 }
 
-fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+fn collect_session_files(
+    dir: &Path,
+    project: Option<&str>,
+    all: bool,
+    limit: usize,
+    since_days: u64,
+) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     if !dir.is_dir() {
         return Ok(files);
@@ -181,6 +229,16 @@ fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
     for entry in fs::read_dir(dir).with_context(|| format!("read dir {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
+        if path.to_string_lossy().contains("subagents") {
+            continue;
+        }
+        if !all {
+            if let Some(project) = project {
+                if !path.to_string_lossy().contains(project) {
+                    continue;
+                }
+            }
+        }
         if path.is_dir() {
             let sessions_subdir = path.join("sessions");
             let scan_dir = if sessions_subdir.is_dir() {
@@ -191,7 +249,9 @@ fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
             if let Ok(entries) = fs::read_dir(&scan_dir) {
                 for sub_entry in entries.flatten() {
                     let sub_path = sub_entry.path();
-                    if sub_path.extension().is_some_and(|ext| ext == "jsonl") {
+                    if sub_path.extension().is_some_and(|ext| ext == "jsonl")
+                        && session_file_is_recent(&sub_path, since_days)
+                    {
                         files.push(sub_path);
                     }
                 }
@@ -210,10 +270,24 @@ fn collect_session_files(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn extract_corrections(path: &Path) -> Result<Vec<(String, String)>> {
+fn session_file_is_recent(path: &Path, since_days: u64) -> bool {
+    if since_days == 0 {
+        return true;
+    }
+    let Ok(modified) = fs::metadata(path).and_then(|metadata| metadata.modified()) else {
+        return true;
+    };
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default();
+    elapsed.as_secs() <= since_days.saturating_mul(86_400)
+}
+
+fn extract_corrections(path: &Path) -> Result<Vec<Correction>> {
     let content = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
 
-    let mut bash_results: Vec<(String, bool)> = Vec::new();
+    let mut executions = Vec::<CommandExecution>::new();
+    let mut pending_command = None::<String>;
 
     for line in content.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -235,14 +309,12 @@ fn extract_corrections(path: &Path) -> Result<Vec<(String, String)>> {
                             .unwrap_or(false);
                         let result_content =
                             block.get("content").and_then(Value::as_str).unwrap_or("");
-                        // Try to extract the command from the context
-                        if let Some(cmd) = extract_command_from_context(&value) {
-                            bash_results.push((
-                                cmd,
-                                is_error
-                                    || result_content.contains("error")
-                                    || result_content.contains("Error"),
-                            ));
+                        if let Some(cmd) = pending_command.take() {
+                            executions.push(CommandExecution {
+                                command: cmd,
+                                failed: is_error || output_looks_like_error(result_content),
+                                output: result_content.to_string(),
+                            });
                         }
                     }
                 }
@@ -265,8 +337,7 @@ fn extract_corrections(path: &Path) -> Result<Vec<(String, String)>> {
                             .and_then(|i| i.get("command"))
                             .and_then(Value::as_str)
                         {
-                            // This will be matched with its result later
-                            bash_results.push((cmd.to_string(), false));
+                            pending_command = Some(cmd.to_string());
                         }
                     }
                 }
@@ -276,17 +347,23 @@ fn extract_corrections(path: &Path) -> Result<Vec<(String, String)>> {
 
     // Find fail → success correction patterns
     let mut corrections = Vec::new();
-    for window in bash_results.windows(2) {
-        let (ref cmd1, failed1) = window[0];
-        let (ref cmd2, failed2) = window[1];
-        if failed1 && !failed2 {
+    for window in executions.windows(2) {
+        let first = &window[0];
+        let second = &window[1];
+        if first.failed && !second.failed {
             // Extract the base command to check if they're related
-            let base1 = cmd1.split_whitespace().next().unwrap_or("");
-            let base2 = cmd2.split_whitespace().next().unwrap_or("");
+            let base1 = first.command.split_whitespace().next().unwrap_or("");
+            let base2 = second.command.split_whitespace().next().unwrap_or("");
             if base1 == base2 {
-                let short1 = truncate_command(cmd1, 80);
-                let short2 = truncate_command(cmd2, 80);
-                corrections.push((short1, short2));
+                let short1 = truncate_command(&first.command, 80);
+                let short2 = truncate_command(&second.command, 80);
+                corrections.push(Correction {
+                    failed_command: short1,
+                    successful_command: short2,
+                    error_type: classify_error(&first.output),
+                    frequency: 1,
+                    confidence: 1.0,
+                });
             }
         }
     }
@@ -294,23 +371,32 @@ fn extract_corrections(path: &Path) -> Result<Vec<(String, String)>> {
     Ok(corrections)
 }
 
-fn extract_command_from_context(value: &Value) -> Option<String> {
-    // Try to find the command from the tool_use_id context
-    value
-        .get("message")
-        .and_then(|m| m.get("content"))
-        .and_then(Value::as_array)?
-        .iter()
-        .find_map(|block| {
-            if block.get("type").and_then(Value::as_str) == Some("tool_result") {
-                block
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(|c| c.lines().next().unwrap_or("").to_string())
-            } else {
-                None
-            }
-        })
+fn output_looks_like_error(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("error")
+        || lower.contains("unknown option")
+        || lower.contains("unknown flag")
+        || lower.contains("command not found")
+        || lower.contains("no such file")
+        || lower.contains("missing")
+        || lower.contains("permission denied")
+}
+
+fn classify_error(output: &str) -> String {
+    let lower = output.to_ascii_lowercase();
+    if lower.contains("unknown option") || lower.contains("unknown flag") {
+        "unknown_flag".to_string()
+    } else if lower.contains("command not found") {
+        "command_not_found".to_string()
+    } else if lower.contains("no such file") || lower.contains("not found") {
+        "wrong_path".to_string()
+    } else if lower.contains("missing") || lower.contains("required") {
+        "missing_arg".to_string()
+    } else if lower.contains("permission denied") {
+        "permission_denied".to_string()
+    } else {
+        "other".to_string()
+    }
 }
 
 fn truncate_command(cmd: &str, max: usize) -> String {
@@ -326,8 +412,7 @@ fn write_corrections_rules(corrections: &[Correction]) -> Result<()> {
     fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
 
     let path = dir.join("cli-corrections.md");
-    let mut content =
-        String::from("# CLI Corrections (auto-generated by `covy compact learn`)\n\n");
+    let mut content = String::from("# CLI Corrections (auto-generated by `Packet28 learn`)\n\n");
     content.push_str("These patterns were learned from session history.\n\n");
 
     for correction in corrections.iter().take(50) {
