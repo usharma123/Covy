@@ -149,6 +149,27 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Uv(args)) => cmd_system::run_uv(args),
         Some(Commands::Terraform(args)) => cmd_system::run_terraform(args),
         Some(Commands::Tofu(args)) => cmd_system::run_tofu(args),
+        Some(Commands::AnsiblePlaybook(args)) => cmd_system::run_ansible_playbook(args),
+        Some(Commands::Fail2banClient(args)) => cmd_system::run_fail2ban_client(args),
+        Some(Commands::Gcloud(args)) => cmd_system::run_gcloud(args),
+        Some(Commands::Hadolint(args)) => cmd_system::run_hadolint(args),
+        Some(Commands::Helm(args)) => cmd_system::run_helm(args),
+        Some(Commands::Iptables(args)) => cmd_system::run_iptables(args),
+        Some(Commands::Markdownlint(args)) => cmd_system::run_markdownlint(args),
+        Some(Commands::Mix(args)) => cmd_system::run_mix(args),
+        Some(Commands::Ping(args)) => cmd_system::run_ping(args),
+        Some(Commands::Pio(args)) => cmd_system::run_pio(args),
+        Some(Commands::PreCommit(args)) => cmd_system::run_pre_commit(args),
+        Some(Commands::Ps(args)) => cmd_system::run_ps(args),
+        Some(Commands::Quarto(args)) => cmd_system::run_quarto(args),
+        Some(Commands::Rsync(args)) => cmd_system::run_rsync(args),
+        Some(Commands::Shellcheck(args)) => cmd_system::run_shellcheck(args),
+        Some(Commands::Shopify(args)) => cmd_system::run_shopify(args),
+        Some(Commands::Sops(args)) => cmd_system::run_sops(args),
+        Some(Commands::Systemctl(args)) => cmd_system::run_systemctl(args),
+        Some(Commands::Trunk(args)) => cmd_system::run_trunk(args),
+        Some(Commands::Yamllint(args)) => cmd_system::run_yamllint(args),
+        Some(Commands::Liquibase(args)) => cmd_system::run_liquibase(args),
         Some(Commands::Smart(args)) => cmd_system::run_smart(args),
         Some(Commands::Find(args)) => cmd_system::run_find(args),
         Some(Commands::Grep(args)) => cmd_system::run_grep(args),
@@ -471,6 +492,27 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Uv(_))
         | Some(Commands::Terraform(_))
         | Some(Commands::Tofu(_))
+        | Some(Commands::AnsiblePlaybook(_))
+        | Some(Commands::Fail2banClient(_))
+        | Some(Commands::Gcloud(_))
+        | Some(Commands::Hadolint(_))
+        | Some(Commands::Helm(_))
+        | Some(Commands::Iptables(_))
+        | Some(Commands::Markdownlint(_))
+        | Some(Commands::Mix(_))
+        | Some(Commands::Ping(_))
+        | Some(Commands::Pio(_))
+        | Some(Commands::PreCommit(_))
+        | Some(Commands::Ps(_))
+        | Some(Commands::Quarto(_))
+        | Some(Commands::Rsync(_))
+        | Some(Commands::Shellcheck(_))
+        | Some(Commands::Shopify(_))
+        | Some(Commands::Sops(_))
+        | Some(Commands::Systemctl(_))
+        | Some(Commands::Trunk(_))
+        | Some(Commands::Yamllint(_))
+        | Some(Commands::Liquibase(_))
         | Some(Commands::Smart(_))
         | Some(Commands::Find(_))
         | Some(Commands::Grep(_))

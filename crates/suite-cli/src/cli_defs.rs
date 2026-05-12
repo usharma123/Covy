@@ -156,6 +156,51 @@ pub enum Commands {
     Terraform(cmd_system::ToolArgs),
     /// Run OpenTofu with compact output
     Tofu(cmd_system::ToolArgs),
+    /// Run ansible-playbook with compact output
+    #[command(name = "ansible-playbook")]
+    AnsiblePlaybook(cmd_system::ToolArgs),
+    /// Run fail2ban-client with compact output
+    #[command(name = "fail2ban-client")]
+    Fail2banClient(cmd_system::ToolArgs),
+    /// Run gcloud with compact output
+    Gcloud(cmd_system::ToolArgs),
+    /// Run hadolint with compact output
+    Hadolint(cmd_system::ToolArgs),
+    /// Run Helm with compact output
+    Helm(cmd_system::ToolArgs),
+    /// Run iptables with compact output
+    Iptables(cmd_system::ToolArgs),
+    /// Run markdownlint with compact output
+    Markdownlint(cmd_system::ToolArgs),
+    /// Run Mix with compact output
+    Mix(cmd_system::ToolArgs),
+    /// Run ping with compact output
+    Ping(cmd_system::ToolArgs),
+    /// Run PlatformIO pio with compact output
+    Pio(cmd_system::ToolArgs),
+    /// Run pre-commit with compact output
+    #[command(name = "pre-commit")]
+    PreCommit(cmd_system::ToolArgs),
+    /// Run ps with compact output
+    Ps(cmd_system::ToolArgs),
+    /// Run Quarto with compact output
+    Quarto(cmd_system::ToolArgs),
+    /// Run rsync with compact output
+    Rsync(cmd_system::ToolArgs),
+    /// Run ShellCheck with compact output
+    Shellcheck(cmd_system::ToolArgs),
+    /// Run Shopify CLI with compact output
+    Shopify(cmd_system::ToolArgs),
+    /// Run sops with compact output
+    Sops(cmd_system::ToolArgs),
+    /// Run systemctl with compact output
+    Systemctl(cmd_system::ToolArgs),
+    /// Run Trunk with compact output
+    Trunk(cmd_system::ToolArgs),
+    /// Run yamllint with compact output
+    Yamllint(cmd_system::ToolArgs),
+    /// Run Liquibase with compact output
+    Liquibase(cmd_system::ToolArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
     /// Find files or directories with compact output

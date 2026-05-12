@@ -482,6 +482,90 @@ pub fn run_tofu(args: ToolArgs) -> Result<i32> {
     run_filtered_tool_command("tofu", args, "tofu")
 }
 
+pub fn run_ansible_playbook(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("ansible-playbook", args, "ansible-playbook")
+}
+
+pub fn run_fail2ban_client(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("fail2ban-client", args, "fail2ban-client")
+}
+
+pub fn run_gcloud(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("gcloud", args, "gcloud")
+}
+
+pub fn run_hadolint(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("hadolint", args, "hadolint")
+}
+
+pub fn run_helm(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("helm", args, "helm")
+}
+
+pub fn run_iptables(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("iptables", args, "iptables")
+}
+
+pub fn run_markdownlint(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("markdownlint", args, "markdownlint")
+}
+
+pub fn run_mix(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("mix", args, "mix")
+}
+
+pub fn run_ping(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("ping", args, "ping")
+}
+
+pub fn run_pio(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("pio", args, "pio")
+}
+
+pub fn run_pre_commit(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("pre-commit", args, "pre-commit")
+}
+
+pub fn run_ps(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("ps", args, "ps")
+}
+
+pub fn run_quarto(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("quarto", args, "quarto")
+}
+
+pub fn run_rsync(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("rsync", args, "rsync")
+}
+
+pub fn run_shellcheck(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("shellcheck", args, "shellcheck")
+}
+
+pub fn run_shopify(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("shopify", args, "shopify")
+}
+
+pub fn run_sops(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("sops", args, "sops")
+}
+
+pub fn run_systemctl(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("systemctl", args, "systemctl")
+}
+
+pub fn run_trunk(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("trunk", args, "trunk")
+}
+
+pub fn run_yamllint(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("yamllint", args, "yamllint")
+}
+
+pub fn run_liquibase(args: ToolArgs) -> Result<i32> {
+    run_filtered_tool_command("liquibase", args, "liquibase")
+}
+
 fn run_summary_labeled(args: SummaryArgs, label: &str) -> Result<i32> {
     let output = execute_command(&args.command)?;
     let raw = format!(
