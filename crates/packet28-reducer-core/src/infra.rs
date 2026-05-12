@@ -725,6 +725,8 @@ fn classify_aws_kind(argv: &[String]) -> Option<&'static str> {
         ("dynamodb", "get-item") => Some("aws_dynamodb_get_item"),
         ("eks", "describe-cluster") => Some("aws_eks_describe_cluster"),
         ("sqs", "receive-message") => Some("aws_sqs_receive_message"),
+        ("secretsmanager", "list-secrets") => Some("aws_secretsmanager_list_secrets"),
+        ("secretsmanager", "get-secret-value") => Some("aws_secretsmanager_get_secret_value"),
         _ => Some("aws_cli"),
     }
 }
@@ -901,6 +903,22 @@ fn summarize_aws_json(kind: &str, value: &serde_json::Value) -> Option<String> {
             &["Messages"],
             &["MessageId"],
         ),
+        "aws_secretsmanager_list_secrets" => summarize_named_array(
+            "aws secretsmanager listed",
+            "secret",
+            value,
+            &["SecretList"],
+            &["Name", "ARN"],
+        ),
+        "aws_secretsmanager_get_secret_value" => {
+            let name = json_str(value, &["Name"])
+                .or_else(|| json_str(value, &["ARN"]).map(shorten_aws_name))
+                .unwrap_or("secret");
+            let version = json_str(value, &["VersionId"]).unwrap_or("unknown-version");
+            Some(format!(
+                "aws secretsmanager returned secret {name} ({version})"
+            ))
+        }
         _ => None,
     }
 }
@@ -950,6 +968,19 @@ fn compact_aws_output(spec: &CommandReducerSpec, stdout: &str) -> String {
             json_array(&value, &["events"]).unwrap_or(&[]),
             &["timestamp", "message"],
         ),
+        "aws_secretsmanager_list_secrets" => compact_json_rows(
+            json_array(&value, &["SecretList"]).unwrap_or(&[]),
+            &["Name", "ARN", "LastChangedDate"],
+        ),
+        "aws_secretsmanager_get_secret_value" => {
+            ["ARN", "Name", "VersionId", "CreatedDate", "VersionStages"]
+                .iter()
+                .filter_map(|field| {
+                    json_dotted_compact(&value, field).map(|v| format!("{field}: {v}"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
         _ => compact_curl_response(stdout),
     }
 }
@@ -1503,6 +1534,75 @@ mod tests {
             "aws s3 ls returned 1 object(s), 1 prefix(es)"
         );
         assert!(reduction.compact_preview.contains("README.md"));
+    }
+
+    #[test]
+    fn reduce_aws_secretsmanager_list_summarizes_secret_metadata() {
+        let argv = vec!["aws", "secretsmanager", "list-secrets"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("aws secretsmanager list-secrets", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "aws_secretsmanager_list_secrets");
+        let output = r#"{
+  "SecretList": [
+    {
+      "Name": "prod/db",
+      "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/db-AbCd",
+      "LastChangedDate": "2026-05-12T10:00:00Z"
+    },
+    {
+      "Name": "prod/api",
+      "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/api-EfGh"
+    }
+  ]
+}"#;
+        let reduction = reduce_infra_command(&spec, output, "", 0);
+        assert_eq!(
+            reduction.summary,
+            "aws secretsmanager listed 2 secret(s); first db db-AbCd"
+        );
+        assert!(reduction
+            .compact_preview
+            .contains("Name\tARN\tLastChangedDate"));
+        assert!(reduction.compact_preview.contains("prod/api"));
+    }
+
+    #[test]
+    fn reduce_aws_secretsmanager_get_secret_value_redacts_secret_payload() {
+        let argv = vec![
+            "aws",
+            "secretsmanager",
+            "get-secret-value",
+            "--secret-id",
+            "prod/db",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let spec = classify_infra_command(
+            "aws secretsmanager get-secret-value --secret-id prod/db",
+            &argv,
+        )
+        .unwrap();
+        assert_eq!(spec.canonical_kind, "aws_secretsmanager_get_secret_value");
+        let output = r#"{
+  "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod/db-AbCd",
+  "Name": "prod/db",
+  "VersionId": "1111-2222",
+  "SecretString": "{\"password\":\"super-secret-value\"}",
+  "VersionStages": ["AWSCURRENT"],
+  "CreatedDate": "2026-05-12T10:00:00Z"
+}"#;
+        let reduction = reduce_infra_command(&spec, output, "", 0);
+        assert_eq!(
+            reduction.summary,
+            "aws secretsmanager returned secret prod/db (1111-2222)"
+        );
+        assert!(reduction.compact_preview.contains("Name: prod/db"));
+        assert!(reduction.compact_preview.contains("VersionId: 1111-2222"));
+        assert!(!reduction.compact_preview.contains("SecretString"));
+        assert!(!reduction.compact_preview.contains("super-secret-value"));
     }
 
     #[test]
