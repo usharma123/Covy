@@ -1762,6 +1762,21 @@ mod tests {
     }
 
     #[test]
+    fn routes_rtk_cargo_fmt_as_mutation() {
+        let decision = decide_command_route("cargo fmt --all");
+        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
+        let spec = decision.reducer_spec.as_ref().unwrap();
+        assert_eq!(spec.canonical_kind, "rust_fmt");
+        assert!(spec.mutation);
+
+        let check = decide_command_route("cargo fmt --check");
+        assert_eq!(check.kind, RouteKind::ReducerRewrite);
+        let spec = check.reducer_spec.as_ref().unwrap();
+        assert_eq!(spec.canonical_kind, "rust_fmt");
+        assert!(!spec.mutation);
+    }
+
+    #[test]
     fn routes_yadm_like_rtk_git_alias() {
         for (command, expected) in [
             ("yadm status --short", "git_status"),

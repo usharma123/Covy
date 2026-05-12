@@ -11,18 +11,23 @@ pub fn classify_rust_command(command: &str, argv: &[String]) -> Option<CommandRe
         "test" => "rust_test",
         "nextest" if argv.get(2).is_some_and(|arg| arg == "run") => "rust_test",
         "clippy" => "rust_clippy",
+        "fmt" => "rust_fmt",
         "install" => "rust_install",
         _ => return None,
     };
     if contains_any(argv, &["--message-format", "--timings", "--json"]) {
         return None;
     }
-    let operation_kind = if canonical_kind == "rust_test" {
-        suite_packet_core::ToolOperationKind::Test
-    } else {
-        suite_packet_core::ToolOperationKind::Build
+    let operation_kind = match canonical_kind {
+        "rust_test" => suite_packet_core::ToolOperationKind::Test,
+        "rust_fmt" => suite_packet_core::ToolOperationKind::Edit,
+        _ => suite_packet_core::ToolOperationKind::Build,
     };
-    let mutation = canonical_kind == "rust_install";
+    let mutation = match canonical_kind {
+        "rust_fmt" => !contains_any(argv, &["--check"]),
+        "rust_install" => true,
+        _ => false,
+    };
     Some(CommandReducerSpec {
         family: "rust".to_string(),
         canonical_kind: canonical_kind.to_string(),
@@ -412,5 +417,33 @@ mod tests {
             reduction.summary,
             "Installed package `ripgrep v14.1.0` (executable `rg`)"
         );
+    }
+
+    #[test]
+    fn classify_and_reduce_cargo_fmt_as_mutation() {
+        let argv = vec!["cargo", "fmt", "--all"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_rust_command("cargo fmt --all", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "rust_fmt");
+        assert!(spec.mutation);
+        assert!(!spec.cacheable);
+        assert_eq!(
+            spec.operation_kind,
+            suite_packet_core::ToolOperationKind::Edit
+        );
+
+        let reduction = reduce_rust_command(&spec, "", "", 0);
+        assert_eq!(reduction.summary, "cargo fmt completed");
+
+        let argv = vec!["cargo", "fmt", "--check"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_rust_command("cargo fmt --check", &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "rust_fmt");
+        assert!(!spec.mutation);
+        assert!(spec.cacheable);
     }
 }
