@@ -2292,7 +2292,7 @@ fn test_run_raw_artifact_available_across_reducer_families() {
     let bin_dir = TempDir::new().unwrap();
     write_executable_script(
         &bin_dir.path().join("cargo"),
-        "#!/bin/sh\nprintf 'rust raw marker\\n'\n",
+        "#!/bin/sh\nprintf '    Checking packet28_fixture v0.1.0\\n    Finished dev [unoptimized + debuginfo] target(s) in 0.01s\\nrust raw marker\\n'\n",
     );
     write_executable_script(
         &bin_dir.path().join("npx"),
@@ -2300,7 +2300,7 @@ fn test_run_raw_artifact_available_across_reducer_families() {
     );
     write_executable_script(
         &bin_dir.path().join("python3"),
-        "#!/bin/sh\nprintf 'python raw marker\\n'\n",
+        "#!/bin/sh\nprintf 'tests/test_demo.py .\\n1 passed in 0.01s\\npython raw marker\\n'\n",
     );
     write_executable_script(
         &bin_dir.path().join("go"),
@@ -2336,38 +2336,77 @@ fn test_run_raw_artifact_available_across_reducer_families() {
         std::env::var("PATH").unwrap_or_default()
     );
 
-    let cases: Vec<(&str, Vec<&str>, &str)> = vec![
-        ("git", vec!["git", "status", "--short"], "git-visible.txt"),
-        ("git", vec!["gt", "submit"], "Created pull request"),
-        ("fs", vec!["cat", "raw-visible.txt"], "fs raw marker"),
-        ("rust", vec!["cargo", "check"], "rust raw marker"),
+    let cases: Vec<(&str, Vec<&str>, &str, &str)> = vec![
+        (
+            "git",
+            vec!["git", "status", "--short"],
+            "git-visible.txt",
+            "git status",
+        ),
+        (
+            "git",
+            vec!["gt", "submit"],
+            "Created pull request",
+            "created PR #42",
+        ),
+        ("fs", vec!["cat", "raw-visible.txt"], "fs raw marker", "cat"),
+        (
+            "rust",
+            vec!["cargo", "check"],
+            "rust raw marker",
+            "Checking packet28_fixture",
+        ),
         (
             "javascript",
             vec!["npx", "tsc", "--noEmit"],
             "javascript raw marker",
+            "tsc passed",
         ),
         (
             "python",
             vec!["python3", "-m", "pytest", "tests"],
             "python raw marker",
+            "pytest passed",
         ),
-        ("go", vec!["go", "test", "./..."], "go raw marker"),
-        ("infra", vec!["docker", "logs", "demo"], "infra raw marker"),
+        (
+            "go",
+            vec!["go", "test", "./..."],
+            "go raw marker",
+            "go test passed",
+        ),
+        (
+            "infra",
+            vec!["docker", "logs", "demo"],
+            "infra raw marker",
+            "docker logs returned",
+        ),
         (
             "github",
             vec!["gh", "pr", "checks", "1"],
             "github raw marker",
+            "gh pr checks",
         ),
-        ("ruby", vec!["ruby", "sample_test.rb"], "ruby raw marker"),
+        (
+            "ruby",
+            vec!["ruby", "sample_test.rb"],
+            "ruby raw marker",
+            "1 runs",
+        ),
         (
             "dotnet",
             vec!["dotnet", "test", "Packet28.Tests.csproj"],
             "dotnet raw marker",
+            "dotnet test",
         ),
-        ("jvm", vec!["gradle", "test"], "gradle raw marker"),
+        (
+            "jvm",
+            vec!["gradle", "test"],
+            "gradle raw marker",
+            "2 tests completed",
+        ),
     ];
 
-    for (family, argv, raw_marker) in cases {
+    for (family, argv, raw_marker, compact_marker) in cases {
         let mut command = suite_cmd();
         command
             .current_dir(root.path())
@@ -2384,6 +2423,18 @@ fn test_run_raw_artifact_available_across_reducer_families() {
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["fallback_reason"], Value::Null, "{family}");
         assert_eq!(value["reduction"]["family"], family, "{family}");
+        let summary = value["reduction"]["summary"].as_str().unwrap_or_default();
+        let preview = value["reduction"]["compact_preview"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            summary.contains(compact_marker) || preview.contains(compact_marker),
+            "{family} compact output missing marker {compact_marker:?}: summary={summary:?} preview={preview:?}"
+        );
+        assert!(
+            !summary.is_empty(),
+            "{family} reducer returned an empty compact summary"
+        );
         assert!(
             value["raw_artifact"]["available"].as_bool().unwrap(),
             "{family}"
