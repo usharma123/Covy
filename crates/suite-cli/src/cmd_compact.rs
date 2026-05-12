@@ -916,14 +916,11 @@ pub fn run_rewrite_command(args: RewriteArgs) -> Result<i32> {
             .as_ref()
             .map(|spec| spec.canonical_kind.clone()),
     });
-    emit_or_print(
-        &payload,
-        payload["rewritten_command"]
-            .as_str()
-            .unwrap_or("command would not be rewritten"),
-        args.json,
-        args.pretty,
-    )?;
+    if args.json {
+        crate::cmd_common::emit_json(&payload, args.pretty)?;
+    } else if let Some(rewritten) = payload["rewritten_command"].as_str() {
+        println!("{rewritten}");
+    }
     Ok(0)
 }
 

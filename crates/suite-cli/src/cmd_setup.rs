@@ -3343,6 +3343,62 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn hermes_plugin_smoke_rewrites_and_passes_through_empty_stdout() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        write_hermes_plugin(dir.path(), true).unwrap();
+        let init = hermes::plugin_dir(dir.path()).join("__init__.py");
+        let script = r#"
+import importlib.util
+import subprocess
+import sys
+spec = importlib.util.spec_from_file_location("packet28_rewrite", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+class FakeResult:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+def fake_run(argv, **kwargs):
+    assert argv[0:2] == ["Packet28", "rewrite"]
+    if argv[2] == "git status --short":
+        return FakeResult("rewritten git status\n")
+    return FakeResult("")
+mod.subprocess.run = fake_run
+rewrite_args = {"command": "git status --short"}
+mod._pre_tool_call(tool_name="terminal", args=rewrite_args)
+passthrough_args = {"command": "htop"}
+mod._pre_tool_call(tool_name="terminal", args=passthrough_args)
+print(rewrite_args["command"])
+print(passthrough_args["command"])
+"#;
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(init)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "python smoke failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "rewritten git status\nhtop\n"
+        );
+    }
+
+    #[test]
     fn patch_hermes_config_preserves_existing_enabled_plugins() {
         let config = patch_hermes_config(
             r#"

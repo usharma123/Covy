@@ -143,6 +143,37 @@ fn test_top_level_rewrite_respects_repo_exclude_config() {
 }
 
 #[test]
+fn test_top_level_rewrite_prints_empty_stdout_on_no_rewrite() {
+    let root = TempDir::new().unwrap();
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "definitely-unsupported-packet28-tool",
+            "--flag",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "rewrite",
+            "--root",
+            root.path().to_str().unwrap(),
+            "git",
+            "status",
+            "--short",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hook reducer-runner"));
+}
+
+#[test]
 fn test_top_level_rewrite_handles_compound_commands_like_rtk() {
     let root = TempDir::new().unwrap();
     suite_cmd()
