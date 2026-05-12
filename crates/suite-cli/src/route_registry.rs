@@ -1739,6 +1739,7 @@ mod tests {
     fn routes_rtk_docker_and_kubectl_mutation_forms() {
         for (command, expected) in [
             ("docker build .", "docker_build"),
+            ("docker compose build", "docker_compose_build"),
             ("docker run alpine echo hi", "docker_run"),
             ("docker exec app ls", "docker_exec"),
             ("kubectl apply -f deploy.yaml", "kubectl_apply"),

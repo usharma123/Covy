@@ -12,6 +12,10 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
                     "docker_compose_logs",
                     suite_packet_core::ToolOperationKind::Read,
                 ),
+                "build" => (
+                    "docker_compose_build",
+                    suite_packet_core::ToolOperationKind::Build,
+                ),
                 _ => return None,
             },
             "ps" if !contains_any(argv, &["--format", "--quiet", "-q"]) => {
@@ -70,7 +74,7 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
 
     let mutation = matches!(
         canonical_kind,
-        "docker_build" | "docker_run" | "docker_exec" | "kubectl_apply"
+        "docker_build" | "docker_compose_build" | "docker_run" | "docker_exec" | "kubectl_apply"
     );
     Some(CommandReducerSpec {
         family: "infra".to_string(),
@@ -107,6 +111,7 @@ pub fn reduce_infra_command(
             format!("docker compose ps listed {} service(s)", data_rows(&lines))
         }
         "docker_compose_logs" => format!("docker compose logs returned {} line(s)", lines.len()),
+        "docker_compose_build" => summarize_docker_build(&combined, failed),
         "kubectl_get" => summarize_kubectl_get(spec, &lines),
         "kubectl_logs" => format!("kubectl logs returned {} line(s)", lines.len()),
         "kubectl_describe" => summarize_kubectl_describe(stdout),
@@ -1305,6 +1310,7 @@ mod tests {
     fn classify_infra_supports_rtk_docker_and_kubectl_mutation_forms() {
         for (command, expected) in [
             ("docker build .", "docker_build"),
+            ("docker compose build", "docker_compose_build"),
             ("docker run alpine echo hi", "docker_run"),
             ("docker exec app ls", "docker_exec"),
             ("kubectl apply -f deploy.yaml", "kubectl_apply"),
@@ -1330,6 +1336,19 @@ mod tests {
             0,
         );
         assert_eq!(reduction.summary, "Successfully built abc123");
+
+        let argv = vec!["docker", "compose", "build"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let spec = classify_infra_command("docker compose build", &argv).unwrap();
+        let reduction = reduce_infra_command(
+            &spec,
+            "#1 [web internal] load build definition\nSuccessfully built compose123\n",
+            "",
+            0,
+        );
+        assert_eq!(reduction.summary, "Successfully built compose123");
 
         let argv = vec!["docker", "exec", "app", "ls"]
             .into_iter()
