@@ -10578,7 +10578,7 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
             "id":2,
             "method":"tools/call",
             "params":{
-                "name":"packet28.search",
+                "name":"packet28_search",
                 "arguments":{
                     "task_id":"task-native-tools",
                     "query":"Alpha",
@@ -10616,7 +10616,7 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
             "id":3,
             "method":"tools/call",
             "params":{
-                "name":"packet28.fetch_tool_result",
+                "name":"packet28_fetch_tool_result",
                 "arguments":{
                     "task_id":"task-native-tools",
                     "artifact_id": search_artifact
@@ -10640,7 +10640,7 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
             "id":4,
             "method":"tools/call",
             "params":{
-                "name":"packet28.read_regions",
+                "name":"packet28_read_regions",
                 "arguments":{
                     "task_id":"task-native-tools",
                     "path":"src/alpha.rs",
@@ -10664,7 +10664,7 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
             "id":5,
             "method":"tools/call",
             "params":{
-                "name":"packet28.fetch_tool_result",
+                "name":"packet28_fetch_tool_result",
                 "arguments":{
                     "task_id":"task-native-tools",
                     "artifact_id": read_artifact
@@ -10685,7 +10685,7 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
             "id":6,
             "method":"tools/call",
             "params":{
-                "name":"packet28.glob",
+                "name":"packet28_glob",
                 "arguments":{
                     "task_id":"task-native-tools",
                     "pattern":"src/*.rs",
@@ -10707,7 +10707,7 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
             "id":7,
             "method":"tools/call",
             "params":{
-                "name":"packet28.fetch_tool_result",
+                "name":"packet28_fetch_tool_result",
                 "arguments":{
                     "task_id":"task-native-tools",
                     "artifact_id": glob_artifact
@@ -11404,32 +11404,32 @@ fn test_packet28_mcp_accepts_newline_json_stdio() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|tool| tool["name"] == "packet28.write_intention"));
+        .any(|tool| tool["name"] == "packet28_write_intention"));
     assert!(tools["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|tool| tool["name"] == "packet28.search"));
+        .any(|tool| tool["name"] == "packet28_search"));
     assert!(tools["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|tool| tool["name"] == "packet28.read_regions"));
+        .any(|tool| tool["name"] == "packet28_read_regions"));
     assert!(tools["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|tool| tool["name"] == "packet28.glob"));
+        .any(|tool| tool["name"] == "packet28_glob"));
     assert!(tools["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|tool| tool["name"] == "packet28.fetch_tool_result"));
+        .any(|tool| tool["name"] == "packet28_fetch_tool_result"));
     assert!(!tools["result"]["tools"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|tool| tool["name"] == "packet28.sync"));
+        .any(|tool| tool["name"] == "packet28_sync"));
 
     let _ = child.kill();
 }

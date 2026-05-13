@@ -115,6 +115,7 @@ Packet28 agent-prompt --format cursor
 #### Cursor
 
 - Start MCP once per workspace
+- Use the advertised `packet28_*` MCP tool names in Cursor; dotted `packet28.*` names are legacy aliases for clients that accept them
 - Replace the prior Packet28 context block instead of appending Packet28 history
 - Let Cursor hooks rewrite supported shell commands and capture reducer packets in the turn, then relaunch from handoff after threshold or stop boundaries
 - Keep `.packet28/task/<task_id>/brief.md` only as a fallback bridge

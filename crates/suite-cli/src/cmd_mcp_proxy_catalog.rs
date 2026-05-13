@@ -222,10 +222,15 @@ fn annotated_tool_item(mut item: Value, alias: &str, owner: &str, namespaced: bo
 fn native_tool_names() -> BTreeMap<String, ()> {
     [
         "packet28.fetch_context",
+        "packet28_fetch_context",
         "packet28.prepare_handoff",
+        "packet28_prepare_handoff",
         "packet28.write_intention",
+        "packet28_write_intention",
         "packet28.task_status",
+        "packet28_task_status",
         "packet28.capabilities",
+        "packet28_capabilities",
     ]
     .into_iter()
     .map(|name| (name.to_string(), ()))

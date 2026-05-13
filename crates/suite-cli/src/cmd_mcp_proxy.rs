@@ -275,7 +275,7 @@ fn handle_proxy_tool_call(
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing tool name"))?;
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-    if name.starts_with("packet28.") {
+    if name.starts_with("packet28.") || name.starts_with("packet28_") {
         let result = handle_tool_call(root, session, params)?;
         return Ok(json!({"jsonrpc":"2.0","id":id,"result":result}));
     }

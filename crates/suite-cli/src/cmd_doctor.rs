@@ -281,7 +281,7 @@ fn wait_for_handoff_ready(
             "id":request_id,
             "method":"tools/call",
             "params":{
-                "name":"packet28.task_status",
+                "name":"packet28_task_status",
                 "arguments":{"task_id":task_id}
             }
         }))?;
@@ -1481,9 +1481,9 @@ fn check_mcp_round_trip(root: &Path) -> McpRoundTripChecks {
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
             .collect::<Vec<_>>();
         for required_tool in [
-            "packet28.write_intention",
-            "packet28.prepare_handoff",
-            "packet28.fetch_context",
+            "packet28_write_intention",
+            "packet28_prepare_handoff",
+            "packet28_fetch_context",
         ] {
             if !tool_names.contains(&required_tool) {
                 return Err(anyhow!("{required_tool} missing from tools/list"));
@@ -1504,7 +1504,7 @@ fn check_mcp_round_trip(root: &Path) -> McpRoundTripChecks {
             "id":3,
             "method":"tools/call",
             "params":{
-                "name":"packet28.write_intention",
+                "name":"packet28_write_intention",
                 "arguments":{
                     "task_id":task_id,
                     "text": format!("Doctor handoff probe {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()),
@@ -1533,7 +1533,7 @@ fn check_mcp_round_trip(root: &Path) -> McpRoundTripChecks {
             "id":4,
             "method":"tools/call",
             "params":{
-                "name":"packet28.task_status",
+                "name":"packet28_task_status",
                 "arguments":{"task_id":task_id}
             }
         }))?;
@@ -1629,7 +1629,7 @@ fn check_mcp_round_trip(root: &Path) -> McpRoundTripChecks {
             "id":12,
             "method":"tools/call",
             "params":{
-                "name":"packet28.prepare_handoff",
+                "name":"packet28_prepare_handoff",
                 "arguments":{
                     "task_id":task_id,
                     "response_mode":"slim"

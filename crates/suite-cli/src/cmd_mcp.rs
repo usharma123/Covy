@@ -273,8 +273,8 @@ fn smoke_test_mcp_server(server: &McpProxyServerConfig) -> Result<McpSmokeReport
         .flatten()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect::<Vec<_>>();
-    if !tool_names.contains(&"packet28.search") {
-        return Err(anyhow!("packet28.search missing from tools/list"));
+    if !tool_names.contains(&"packet28_search") {
+        return Err(anyhow!("packet28_search missing from tools/list"));
     }
     Ok(McpSmokeReport {
         server_name,
@@ -507,6 +507,31 @@ fn handle_notification(
     Ok(())
 }
 
+fn cursor_safe_tool_name(name: &str) -> String {
+    name.strip_prefix("packet28.")
+        .map(|suffix| format!("packet28_{suffix}"))
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn canonical_tool_name(name: &str) -> String {
+    name.strip_prefix("packet28_")
+        .map(|suffix| format!("packet28.{suffix}"))
+        .unwrap_or_else(|| name.to_string())
+}
+
+fn rewrite_tool_names_for_cursor(payload: &mut Value) {
+    let Some(tools) = payload.get_mut("tools").and_then(Value::as_array_mut) else {
+        return;
+    };
+
+    for tool in tools {
+        if let Some(name) = tool.get("name").and_then(Value::as_str) {
+            let safe_name = cursor_safe_tool_name(name);
+            tool["name"] = Value::String(safe_name);
+        }
+    }
+}
+
 fn handle_method(
     root: &Path,
     session: &Arc<Mutex<McpSessionState>>,
@@ -538,7 +563,8 @@ fn handle_method(
                 }
             }))
         }
-        "tools/list" => Ok(json!({
+        "tools/list" => {
+            let mut payload = json!({
             "tools": [
                 {
                     "name": "packet28.search",
@@ -1295,7 +1321,10 @@ fn handle_method(
                     }
                 }
             ]
-        })),
+            });
+            rewrite_tool_names_for_cursor(&mut payload);
+            Ok(payload)
+        }
         "prompts/list" => Ok(json!({
             "prompts": prompt_descriptors(),
         })),
@@ -1336,10 +1365,12 @@ fn handle_tool_call(
     session: &Arc<Mutex<McpSessionState>>,
     params: Value,
 ) -> Result<Value> {
-    let name = params
+    let requested_name = params
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing tool name"))?;
+    let canonical_name = canonical_tool_name(requested_name);
+    let name = canonical_name.as_str();
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
     let payload = match name {
         "packet28.search" => {
@@ -2474,7 +2505,7 @@ mod tests {
         let tools = payload["tools"].as_array().unwrap();
         let search_fast = tools
             .iter()
-            .find(|tool| tool["name"] == "packet28.search_fast")
+            .find(|tool| tool["name"] == "packet28_search_fast")
             .unwrap();
         let props = search_fast["inputSchema"]["properties"]
             .as_object()
@@ -2497,31 +2528,31 @@ mod tests {
             .collect::<Vec<_>>();
 
         for required in [
-            "packet28.reduce",
-            "packet28.rewrite",
-            "packet28.handoff",
-            "packet28.doctor",
-            "packet28.memory_list",
-            "packet28.memory_embed",
-            "packet28.memory_extract_patterns",
-            "packet28.feedback_search",
-            "packet28.feedback_list",
-            "packet28.feedback_apply",
-            "packet28.feedback_delete",
-            "packet28.feedback_stats",
-            "packet28.wakeup",
-            "packet28.learn_project",
-            "packet28.transcript_append",
-            "packet28.transcript_search",
-            "packet28.transcript_stats",
-            "packet28.graph_create",
-            "packet28.graph_list",
-            "packet28.graph_show",
-            "packet28.graph_search",
-            "packet28.graph_export",
-            "packet28.graph_stats",
-            "packet28.graph_inspect_concept",
-            "packet28.graph_distill",
+            "packet28_reduce",
+            "packet28_rewrite",
+            "packet28_handoff",
+            "packet28_doctor",
+            "packet28_memory_list",
+            "packet28_memory_embed",
+            "packet28_memory_extract_patterns",
+            "packet28_feedback_search",
+            "packet28_feedback_list",
+            "packet28_feedback_apply",
+            "packet28_feedback_delete",
+            "packet28_feedback_stats",
+            "packet28_wakeup",
+            "packet28_learn_project",
+            "packet28_transcript_append",
+            "packet28_transcript_search",
+            "packet28_transcript_stats",
+            "packet28_graph_create",
+            "packet28_graph_list",
+            "packet28_graph_show",
+            "packet28_graph_search",
+            "packet28_graph_export",
+            "packet28_graph_stats",
+            "packet28_graph_inspect_concept",
+            "packet28_graph_distill",
         ] {
             assert!(
                 tool_names.contains(&required),

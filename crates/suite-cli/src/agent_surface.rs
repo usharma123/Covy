@@ -95,12 +95,13 @@ When the task is substantial, use Packet28 as a hooks-first reducer-plus-handoff
             "Packet28 integration:\n\
 - Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
 - Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
-- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` when compact native read/list output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
-- Use `packet28.write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
-- Use `packet28.task_status` only when you need handoff readiness or artifact IDs.\n\
-- For checkpointed relaunch flows, use `packet28.prepare_handoff` to seed the next worker.\n\
+- Cursor MCP tool names use `packet28_*` underscores; legacy dotted aliases still work where the client permits them.\n\
+- For search, prefer `p28` instant grep when available; use `packet28_read_regions` and `packet28_glob` when compact native read/list output matters in-turn; use `packet28_fetch_tool_result` for stored full artifacts.\n\
+- Use `packet28_write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
+- Use `packet28_task_status` only when you need handoff readiness or artifact IDs.\n\
+- For checkpointed relaunch flows, use `packet28_prepare_handoff` to seed the next worker.\n\
 - Keep one mutable Packet28 context block and replace it whenever a newer brief supersedes the old one.\n\
-- Use `packet28.fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
+- Use `packet28_fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
 - Prefer `{wrapper}` or daemon-managed relaunch after checkpointed handoff assembly instead of keeping one session hot.\n\
 - Respect the supersession header in each brief and use it to discard older Packet28 reasoning context.\n\
 - Use `.packet28/task/<task_id>/brief.md` only as a fallback bridge when MCP is unavailable.\n\
@@ -119,12 +120,13 @@ alwaysApply: true\n\
 \n\
 - Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
 - Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
-- For search, prefer `p28` instant grep when available; use `packet28.read_regions` and `packet28.glob` when compact native read/list output matters in-turn; use `packet28.fetch_tool_result` for stored full artifacts.\n\
-- Use `packet28.write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
-- Use `packet28.task_status` only when you need handoff readiness or artifact IDs.\n\
-- For checkpointed relaunch flows, use `packet28.prepare_handoff` to seed the next worker.\n\
+- Cursor MCP tool names use `packet28_*` underscores; legacy dotted aliases still work where the client permits them.\n\
+- For search, prefer `p28` instant grep when available; use `packet28_read_regions` and `packet28_glob` when compact native read/list output matters in-turn; use `packet28_fetch_tool_result` for stored full artifacts.\n\
+- Use `packet28_write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
+- Use `packet28_task_status` only when you need handoff readiness or artifact IDs.\n\
+- For checkpointed relaunch flows, use `packet28_prepare_handoff` to seed the next worker.\n\
 - Keep one mutable Packet28 context block and replace it whenever a newer brief supersedes the old one.\n\
-- Use `packet28.fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
+- Use `packet28_fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
 - Prefer `{wrapper}` or daemon-managed relaunch after checkpointed handoff assembly instead of keeping one session hot.\n\
 - Respect the supersession header in each brief and use it to discard older Packet28 reasoning context.\n\
 - Use `.packet28/task/<task_id>/brief.md` only as a fallback bridge when MCP is unavailable.\n\
@@ -212,11 +214,11 @@ mod tests {
     #[test]
     fn cursor_fragment_mentions_non_trivial_scope() {
         let rendered = render_prompt_fragment(AgentPromptFormat::Cursor, None);
-        assert!(rendered.contains("packet28.prepare_handoff"));
-        assert!(rendered.contains("packet28.fetch_context"));
-        assert!(rendered.contains("packet28.glob"));
-        assert!(rendered.contains("packet28.fetch_tool_result"));
-        assert!(rendered.contains("packet28.task_status"));
+        assert!(rendered.contains("packet28_prepare_handoff"));
+        assert!(rendered.contains("packet28_fetch_context"));
+        assert!(rendered.contains("packet28_glob"));
+        assert!(rendered.contains("packet28_fetch_tool_result"));
+        assert!(rendered.contains("packet28_task_status"));
         assert!(rendered.contains("Packet28 mcp serve"));
         assert!(rendered.contains("single-file edits"));
     }
