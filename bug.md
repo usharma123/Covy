@@ -34,3 +34,11 @@ No open bugs are currently confirmed.
   - `cargo test -p suite-cli cmd_system::tests::json_schema_renders_types_without_values`
   - `cargo test -p suite-cli route_registry::tests::routes_supported_compound_commands`
   - `cargo clippy --workspace --all-targets -- -D warnings`
+
+### BUG-2026-05-14-004: Release source metadata lagged behind stability patch version
+
+- Symptom: Package dry-runs showed source npm metadata at older versions while the stability patch changelog reached v0.2.59.
+- Root cause: Workspace and npm template versions were not aligned with the latest stability patch release notes.
+- Fix: Aligned the Cargo workspace version, root npm package metadata, platform package template, and checked-in Darwin package metadata to v0.2.59.
+- Verification:
+  - `cargo check -p suite-cli -p packet28d -p packet28-search-cli`
