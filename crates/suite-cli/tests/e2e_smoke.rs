@@ -4534,13 +4534,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         .as_str()
         .unwrap()
         .contains("mcp-project-b"));
-    assert!(
-        wakeup["result"]["structuredContent"]["transcripts"]
-            .as_array()
-            .unwrap()
-            .len()
-            >= 1
-    );
+    assert!(!wakeup["result"]["structuredContent"]["transcripts"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
         wakeup["result"]["structuredContent"]["transcripts"][0]["project"].as_str(),
         Some("mcp-project-b")
@@ -4700,13 +4697,10 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         }),
     );
     let graph_search = read_mcp_message_for_id(&mut stdout, 58);
-    assert!(
-        graph_search["result"]["structuredContent"]
-            .as_array()
-            .unwrap()
-            .len()
-            >= 1
-    );
+    assert!(!graph_search["result"]["structuredContent"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
         graph_search["result"]["structuredContent"][0]["memoir_name"].as_str(),
         Some("McpMemoir")

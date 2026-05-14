@@ -1163,8 +1163,6 @@ fn extract_schema(value: &Value, depth: usize, max_depth: usize) -> String {
                 format!("{indent}url")
             } else if value.len() == 10 && value.chars().filter(|ch| *ch == '-').count() == 2 {
                 format!("{indent}date?")
-            } else if value.is_empty() {
-                format!("{indent}string")
             } else {
                 format!("{indent}string")
             }
@@ -1986,7 +1984,7 @@ fn render_search_result_for_grep(
             "{}:{}:{}\n",
             compact_path_for_grep(Path::new(&item.path)),
             item.line,
-            clean_grep_line(&item.text, args.max_len, args.context_only, &regex)
+            clean_grep_line(&item.text, args.max_len, args.context_only, regex)
         ));
     }
     if total > args.max {

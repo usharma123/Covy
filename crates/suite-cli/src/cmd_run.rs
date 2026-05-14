@@ -219,17 +219,17 @@ fn run_plain_command(
     if let Some(filter) =
         crate::toml_filters::apply_configured_filter(root, &command_text, &stdout, &stderr)?
     {
-        return emit_filtered_run(
+        return emit_filtered_run(FilteredRun {
             root,
             cwd,
-            &command_text,
+            command_text: &command_text,
             exit_code,
-            &stdout,
-            &stderr,
+            stdout: &stdout,
+            stderr: &stderr,
             filter,
             json,
             pretty,
-        );
+        });
     }
     let raw_est_tokens = estimate_tokens(&(stdout.clone() + &stderr));
     let raw_artifact_handle =
@@ -277,17 +277,30 @@ fn run_plain_command(
     Ok(exit_code)
 }
 
-fn emit_filtered_run(
-    root: &std::path::Path,
-    cwd: &std::path::Path,
-    command_text: &str,
+struct FilteredRun<'a> {
+    root: &'a std::path::Path,
+    cwd: &'a std::path::Path,
+    command_text: &'a str,
     exit_code: i32,
-    stdout: &str,
-    stderr: &str,
+    stdout: &'a str,
+    stderr: &'a str,
     filter: crate::toml_filters::AppliedTomlFilter,
     json: bool,
     pretty: bool,
-) -> Result<i32> {
+}
+
+fn emit_filtered_run(run: FilteredRun<'_>) -> Result<i32> {
+    let FilteredRun {
+        root,
+        cwd,
+        command_text,
+        exit_code,
+        stdout,
+        stderr,
+        filter,
+        json,
+        pretty,
+    } = run;
     let raw_est_tokens = estimate_tokens(&(stdout.to_string() + stderr));
     let reduced_est_tokens = estimate_tokens(&filter.output);
     let saved = raw_est_tokens.saturating_sub(reduced_est_tokens);

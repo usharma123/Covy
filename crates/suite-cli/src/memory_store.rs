@@ -3065,10 +3065,7 @@ fn deterministic_embedding(content: &str, dimensions: usize) -> Vec<f64> {
     {
         let normalized = token.to_ascii_lowercase();
         add_embedding_feature(&mut vector, &normalized, 2.0);
-        for part in normalized
-            .split(|ch: char| ch == '_' || ch == '-')
-            .filter(|part| part.len() >= 2)
-        {
+        for part in normalized.split(['_', '-']).filter(|part| part.len() >= 2) {
             add_embedding_feature(&mut vector, part, 1.5);
         }
         add_character_ngrams(&mut vector, &normalized);

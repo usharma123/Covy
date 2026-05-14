@@ -463,10 +463,10 @@ fn filter_npm_output(output: &str) -> String {
         .map(str::trim_end)
         .filter(|line| {
             let trimmed = line.trim_start();
-            !trimmed.is_empty()
-                && !(trimmed.starts_with('>') && trimmed.contains('@'))
-                && !trimmed.starts_with("npm WARN")
-                && !trimmed.starts_with("npm notice")
+            !(trimmed.is_empty()
+                || (trimmed.starts_with('>') && trimmed.contains('@'))
+                || trimmed.starts_with("npm WARN")
+                || trimmed.starts_with("npm notice"))
         })
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();

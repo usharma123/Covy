@@ -247,7 +247,7 @@ pub(crate) fn import_transcripts(path: &str) -> Result<TranscriptImportReport> {
 }
 
 pub(crate) fn import_transcripts_from_str(content: &str) -> Result<TranscriptImportReport> {
-    let export: TranscriptExportFile = serde_json::from_str(&content)?;
+    let export: TranscriptExportFile = serde_json::from_str(content)?;
     let mut imported_count = 0usize;
     for message in export.messages {
         append_transcript_message(TranscriptAppendInput {

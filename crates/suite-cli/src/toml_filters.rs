@@ -54,7 +54,7 @@ impl Default for TomlFilterFile {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct TomlFilterDef {
     description: Option<String>,
@@ -72,43 +72,14 @@ struct TomlFilterDef {
     filter_stderr: bool,
 }
 
-impl Default for TomlFilterDef {
-    fn default() -> Self {
-        Self {
-            description: None,
-            match_command: String::new(),
-            strip_ansi: false,
-            replace: Vec::new(),
-            match_output: Vec::new(),
-            strip_lines_matching: Vec::new(),
-            keep_lines_matching: Vec::new(),
-            truncate_lines_at: None,
-            head_lines: None,
-            tail_lines: None,
-            max_lines: None,
-            on_empty: None,
-            filter_stderr: false,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ReplaceRule {
     pattern: String,
     replacement: String,
 }
 
-impl Default for ReplaceRule {
-    fn default() -> Self {
-        Self {
-            pattern: String::new(),
-            replacement: String::new(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct MatchOutputRule {
     pattern: String,
@@ -116,32 +87,12 @@ struct MatchOutputRule {
     unless: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct TomlFilterTestDef {
     name: String,
     input: String,
     expected: String,
-}
-
-impl Default for TomlFilterTestDef {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            input: String::new(),
-            expected: String::new(),
-        }
-    }
-}
-
-impl Default for MatchOutputRule {
-    fn default() -> Self {
-        Self {
-            pattern: String::new(),
-            message: String::new(),
-            unless: None,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -346,9 +297,7 @@ fn collect_filter_tests(
             .map(|requested| requested == name)
             .unwrap_or(true);
         let filter = compile_filter(name.clone(), source.to_string(), def)?;
-        if requested {
-            compiled.insert(name, filter);
-        } else if filter_name.is_none() {
+        if requested || filter_name.is_none() {
             compiled.insert(name, filter);
         }
     }

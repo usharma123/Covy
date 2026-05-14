@@ -1340,8 +1340,6 @@ fn join_compound_parts(parts: &[String]) -> String {
         if idx > 0 {
             if part == ";" {
                 // no leading space before semicolon
-            } else if parts.get(idx - 1).map(String::as_str) == Some(";") {
-                out.push(' ');
             } else {
                 out.push(' ');
             }
