@@ -96,10 +96,10 @@ When the task is substantial, use Packet28 as a hooks-first reducer-plus-handoff
 - Start `{mcp}` and use Packet28 as a control-plane plus handoff broker.\n\
 - Prefer `{proxy}` when you want Packet28 to auto-capture upstream tool activity.\n\
 - Cursor MCP tool names use `packet28_*` underscores; legacy dotted aliases still work where the client permits them.\n\
-- For search, prefer `p28` instant grep when available; use `packet28_read_regions` and `packet28_glob` when compact native read/list output matters in-turn; use `packet28_fetch_tool_result` for stored full artifacts.\n\
-- Use `packet28_write_intention` for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
+- For search, prefer `p28` instant grep when available; use `packet28_read_regions` (`packet28.read_regions`) and `packet28_glob` (`packet28.glob`) when compact native read/list output matters in-turn; use `packet28_fetch_tool_result` (`packet28.fetch_tool_result`) for stored full artifacts.\n\
+- Use `packet28_write_intention` (`packet28.write_intention`) for semantic objective updates and keep rewrite/capture out of the visible MCP loop.\n\
 - Use `packet28_task_status` only when you need handoff readiness or artifact IDs.\n\
-- For checkpointed relaunch flows, use `packet28_prepare_handoff` to seed the next worker.\n\
+- For checkpointed relaunch flows, use `packet28_prepare_handoff` (`packet28.prepare_handoff`) to seed the next worker.\n\
 - Keep one mutable Packet28 context block and replace it whenever a newer brief supersedes the old one.\n\
 - Use `packet28_fetch_context` only when you explicitly need to inspect a stored handoff or context artifact.\n\
 - Prefer `{wrapper}` or daemon-managed relaunch after checkpointed handoff assembly instead of keeping one session hot.\n\

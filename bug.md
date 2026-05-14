@@ -15,3 +15,10 @@ No open bugs are currently confirmed.
   - `cargo test -p suite-cli ensure_executable_repairs_packaged_daemon_mode`
   - `cargo check -p suite-cli -p packet28d -p packet28-daemon-core`
 
+### BUG-2026-05-14-002: Cursor agent prompt hides canonical MCP tool names
+
+- Symptom: `cargo test --workspace` failed `test_suite_agent_prompt_outputs_all_supported_fragments` because the Cursor prompt did not include `packet28.write_intention`.
+- Root cause: The Cursor prompt had been narrowed to underscore-only MCP names, which made the canonical dotted Packet28 aliases disappear from the generated guidance.
+- Fix: The Cursor prompt now includes underscore client names together with the canonical dotted aliases for intention writing, compact reads/globs, tool-result fetches, and handoff preparation.
+- Verification:
+  - `cargo test -p suite-cli test_suite_agent_prompt_outputs_all_supported_fragments`
