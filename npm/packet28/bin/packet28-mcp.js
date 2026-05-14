@@ -56,6 +56,13 @@ try {
   if (!(mode & 0o111)) {
     chmodSync(binaryPath, mode | 0o755);
   }
+  const daemonPath = path.join(path.dirname(binaryPath), "packet28d");
+  if (existsSync(daemonPath)) {
+    const daemonMode = statSync(daemonPath).mode;
+    if (!(daemonMode & 0o111)) {
+      chmodSync(daemonPath, daemonMode | 0o755);
+    }
+  }
 } catch {
   // ignore
 }

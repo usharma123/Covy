@@ -19,6 +19,8 @@ use std::io::{BufReader, BufWriter, Read, Write};
 #[cfg(unix)]
 use std::net::TcpStream;
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::process::{Command, Stdio};
@@ -361,6 +363,7 @@ pub(crate) fn resolve_root_arg(root: &str) -> PathBuf {
 #[cfg(unix)]
 fn start_daemon(root: &Path) -> Result<()> {
     let binary = packet28d_binary()?;
+    ensure_executable(&binary)?;
     let root_arg = root.to_string_lossy().to_string();
     let log_path = log_path(root);
     if let Some(parent) = log_path.parent() {
@@ -579,6 +582,24 @@ fn packet28d_binary() -> Result<PathBuf> {
     ))
 }
 
+#[cfg(unix)]
+fn ensure_executable(path: &Path) -> Result<()> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("failed to inspect packet28d binary '{}'", path.display()))?;
+    let mode = metadata.permissions().mode();
+    if mode & 0o111 != 0 {
+        return Ok(());
+    }
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(mode | 0o755);
+    std::fs::set_permissions(path, permissions).with_context(|| {
+        format!(
+            "packet28d binary '{}' is not executable and could not be repaired",
+            path.display()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,5 +617,24 @@ mod tests {
             message: "prepare_handoff did not return a ready handoff".to_string(),
         };
         assert!(!daemon_response_indicates_protocol_mismatch(&response));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_executable_repairs_packaged_daemon_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = dir.path().join("packet28d");
+        std::fs::File::create(&daemon)
+            .unwrap()
+            .write_all(b"#!/bin/sh\n")
+            .unwrap();
+        let mut permissions = std::fs::metadata(&daemon).unwrap().permissions();
+        permissions.set_mode(0o644);
+        std::fs::set_permissions(&daemon, permissions).unwrap();
+
+        ensure_executable(&daemon).unwrap();
+
+        let mode = std::fs::metadata(&daemon).unwrap().permissions().mode();
+        assert_ne!(mode & 0o111, 0);
     }
 }
