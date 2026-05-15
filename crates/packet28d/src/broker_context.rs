@@ -596,6 +596,21 @@ pub(crate) fn broker_validate_plan(
                         related_paths,
                         related_symbols: step.symbols.clone(),
                     });
+                } else if mapped_tests.is_empty()
+                    && testmap
+                        .as_ref()
+                        .is_some_and(|testmap| !testmap.file_to_tests.is_empty())
+                {
+                    warnings.push(BrokerPlanViolation {
+                        step_id: step.id.clone(),
+                        rule: "missing_testmap_mapping".to_string(),
+                        severity: "warning".to_string(),
+                        message: format!(
+                            "step edits uncovered path '{path}' but the cached testmap has no mapped tests for it; generic test gate accepted with lower confidence"
+                        ),
+                        related_paths: vec![path.clone()],
+                        related_symbols: step.symbols.clone(),
+                    });
                 } else if !has_mapped_test_gate {
                     let mut related_paths = vec![path.clone()];
                     related_paths.extend(mapped_tests.iter().cloned());

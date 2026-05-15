@@ -249,6 +249,63 @@ fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
 }
 
 #[test]
+fn validate_plan_warns_when_testmap_has_no_mapping_for_uncovered_edit() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("tests")).unwrap();
+    std::fs::write(root.join("src/alpha.rs"), "pub fn alpha() -> i32 { 1 }\n").unwrap();
+    std::fs::write(root.join("src/beta.rs"), "pub fn beta() -> i32 { 2 }\n").unwrap();
+    std::fs::write(
+        root.join("tests/alpha_test.rs"),
+        "#[test]\nfn alpha_test() {}\n",
+    )
+    .unwrap();
+    write_test_coverage_state(&root, "src/alpha.rs", false);
+    write_testmap_state(&root, "src/beta.rs", &["tests/beta_test.rs"]);
+
+    let response = broker_validate_plan(
+        state,
+        BrokerValidatePlanRequest {
+            task_id: "task-testmap-missing-mapping".to_string(),
+            require_read_before_edit: Some(false),
+            steps: vec![
+                BrokerPlanStep {
+                    id: "edit-alpha".to_string(),
+                    action: "edit".to_string(),
+                    paths: vec!["src/alpha.rs".to_string()],
+                    ..BrokerPlanStep::default()
+                },
+                BrokerPlanStep {
+                    id: "test-suite".to_string(),
+                    action: "test".to_string(),
+                    paths: Vec::new(),
+                    ..BrokerPlanStep::default()
+                },
+            ],
+            ..BrokerValidatePlanRequest::default()
+        },
+    )
+    .unwrap();
+
+    assert!(
+        response
+            .violations
+            .iter()
+            .all(|violation| violation.rule != "missing_test_gate"),
+        "generic test gate should remain accepted when no mapping exists: {:?}",
+        response.violations
+    );
+    let warning = response
+        .warnings
+        .iter()
+        .find(|warning| warning.rule == "missing_testmap_mapping")
+        .expect("missing testmap mapping warning should be reported");
+    assert!(warning.message.contains("src/alpha.rs"));
+    assert_eq!(warning.related_paths, vec!["src/alpha.rs".to_string()]);
+}
+
+#[test]
 fn infer_scope_paths_prefers_explicit_paths() {
     let inferred = infer_scope_paths(
         "refactor auth module",

@@ -6,7 +6,7 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Plan-to-test map validation | Prevents agents from claiming weak verification after edits. | Extend broker `validate_plan` to score test gates by mapped impact coverage, broad-suite fallback, and missing mappings. | Unit tests with mapped, broad, missing, and stale test-map cases; one real-repo plan validation artifact. |
+| Plan-to-test map validation | Prevents agents from claiming weak verification after edits. | Extend broker `validate_plan` to score test gates by mapped impact coverage, broad-suite fallback, and missing mappings. | Unit tests now cover mapped, broad, and missing-mapping cases; stale test-map detection and one real-repo plan validation artifact remain. |
 | Context ROI ledger | Lets agents prefer commands and memories that historically saved the most tokens for the current repo. | Record per-tool compact/raw token delta, reuse count, and downstream follow-up count in local SQLite. | `Packet28 gain --json` exposes ROI by route; dashboard shows top saved context sources. |
 | Evidence freshness scoring | Stops stale reads/searches from anchoring current decisions after edits. | Add freshness metadata to broker evidence sections and downrank cached snippets for changed paths. | Broker tests proving changed files demote older evidence and preserve fresh tool results. |
 | Hypothesis checkpoints | Helps agents carry explicit assumptions across handoff without replaying long transcripts. | Add `packet28 hypothesis add/confirm/reject` and MCP aliases backed by local memory/events. | Handoff brief contains active hypotheses with state and evidence links. |
