@@ -735,7 +735,9 @@ fn handle_method(
                         "properties": {
                             "task_id": {"type":"string"},
                             "id": {"type":"string"},
-                            "text": {"type":"string"}
+                            "text": {"type":"string"},
+                            "paths": {"type":"array","items":{"type":"string"}},
+                            "symbols": {"type":"array","items":{"type":"string"}}
                         }
                     }
                 },
@@ -1545,6 +1547,8 @@ fn handle_tool_call(
                 task_id,
                 request.id,
                 &request.text,
+                request.paths.unwrap_or_default(),
+                request.symbols.unwrap_or_default(),
             )?)?
         }
         "packet28.hypothesis_list" => {
@@ -2274,6 +2278,8 @@ struct HypothesisAddToolArgs {
     task_id: Option<String>,
     id: Option<String>,
     text: String,
+    paths: Option<Vec<String>>,
+    symbols: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -443,6 +443,8 @@ fn apply_agent_snapshot_event(
                 .push(suite_packet_core::AgentDecision {
                     id: decision_id.clone(),
                     text: text.clone(),
+                    related_paths: event.paths.clone(),
+                    related_symbols: event.symbols.clone(),
                 });
             snapshot
                 .active_decisions

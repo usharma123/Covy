@@ -28,6 +28,10 @@ pub struct HypothesisAddArgs {
     pub task_id: String,
     #[arg(long)]
     pub id: Option<String>,
+    #[arg(long = "path")]
+    pub paths: Vec<String>,
+    #[arg(long = "symbol")]
+    pub symbols: Vec<String>,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -66,6 +70,8 @@ pub(crate) struct HypothesisRecord {
     pub(crate) id: String,
     pub(crate) decision_id: String,
     pub(crate) text: String,
+    pub(crate) related_paths: Vec<String>,
+    pub(crate) related_symbols: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,7 +92,14 @@ pub fn run(args: HypothesisArgs) -> Result<i32> {
 
 fn add_hypothesis(args: HypothesisAddArgs) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
-    let mutation = add_hypothesis_record(&root, &args.task_id, args.id, &args.text)?;
+    let mutation = add_hypothesis_record(
+        &root,
+        &args.task_id,
+        args.id,
+        &args.text,
+        args.paths,
+        args.symbols,
+    )?;
     emit_mutation(&mutation, args.json, args.pretty)
 }
 
@@ -95,6 +108,8 @@ pub(crate) fn add_hypothesis_record(
     task_id: &str,
     id: Option<String>,
     text: &str,
+    paths: Vec<String>,
+    symbols: Vec<String>,
 ) -> Result<HypothesisMutation> {
     let id = id.unwrap_or_else(|| hypothesis_id(text));
     let decision_id = decision_id(&id);
@@ -106,6 +121,8 @@ pub(crate) fn add_hypothesis_record(
             op: Some(BrokerWriteOp::DecisionAdd),
             decision_id: Some(decision_id.clone()),
             text: Some(text),
+            paths,
+            symbols,
             ..BrokerWriteStateRequest::default()
         },
     )?;
@@ -215,6 +232,8 @@ pub(crate) fn active_hypotheses(
                 .strip_prefix("hypothesis active: ")
                 .unwrap_or(&decision.text)
                 .to_string(),
+            related_paths: decision.related_paths,
+            related_symbols: decision.related_symbols,
         })
         .collect())
 }

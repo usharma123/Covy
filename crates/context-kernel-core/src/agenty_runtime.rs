@@ -613,7 +613,8 @@ pub(crate) fn derive_agent_snapshot(
     let mut focus_symbols = std::collections::BTreeSet::new();
     let mut files_read = std::collections::BTreeSet::new();
     let mut files_edited = std::collections::BTreeSet::new();
-    let mut decisions = std::collections::BTreeMap::<String, String>::new();
+    let mut decisions =
+        std::collections::BTreeMap::<String, suite_packet_core::AgentDecision>::new();
     let mut completed_steps = std::collections::BTreeSet::new();
     let mut open_questions = std::collections::BTreeMap::<String, String>::new();
     let mut last_event_at_unix = None;
@@ -700,7 +701,15 @@ pub(crate) fn derive_agent_snapshot(
                 if let Some(previous) = supersedes {
                     decisions.remove(previous);
                 }
-                decisions.insert(decision_id.clone(), text.clone());
+                decisions.insert(
+                    decision_id.clone(),
+                    suite_packet_core::AgentDecision {
+                        id: decision_id.clone(),
+                        text: text.clone(),
+                        related_paths: event.paths.clone(),
+                        related_symbols: event.symbols.clone(),
+                    },
+                );
             }
             suite_packet_core::AgentStateEventData::DecisionSuperseded { decision_id, .. } => {
                 decisions.remove(decision_id);
@@ -923,10 +932,7 @@ pub(crate) fn derive_agent_snapshot(
         focus_symbols: focus_symbols.into_iter().collect(),
         files_read: files_read.into_iter().collect(),
         files_edited: files_edited.into_iter().collect(),
-        active_decisions: decisions
-            .into_iter()
-            .map(|(id, text)| suite_packet_core::AgentDecision { id, text })
-            .collect(),
+        active_decisions: decisions.into_values().collect(),
         completed_steps: completed_steps.into_iter().collect(),
         open_questions: open_questions
             .into_iter()

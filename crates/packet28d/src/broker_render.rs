@@ -39,6 +39,21 @@ fn render_relevant_context_line(packet: &suite_packet_core::ContextManagePacketR
     format!("- {rendered}")
 }
 
+fn render_decision_evidence(decision: &suite_packet_core::AgentDecision) -> String {
+    let mut refs = Vec::new();
+    if !decision.related_paths.is_empty() {
+        refs.push(format!("paths={}", decision.related_paths.join(",")));
+    }
+    if !decision.related_symbols.is_empty() {
+        refs.push(format!("symbols={}", decision.related_symbols.join(",")));
+    }
+    if refs.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", refs.join("; "))
+    }
+}
+
 pub(crate) fn load_task_record(
     state: &Arc<Mutex<DaemonState>>,
     task_id: &str,
@@ -334,7 +349,8 @@ pub(crate) fn build_broker_sections(
                             .and_then(|task| task.linked_decisions.get(&decision.id))
                             .map(|question_id| format!(" (answers {question_id})"))
                             .unwrap_or_default();
-                        format!("- {}: {}{}", decision.id, decision.text, suffix)
+                        let evidence = render_decision_evidence(decision);
+                        format!("- {}: {}{}{}", decision.id, decision.text, evidence, suffix)
                     })
                     .collect(),
                 section_item_limit(&effective_limits, "active_decisions"),

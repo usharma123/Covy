@@ -5816,6 +5816,10 @@ fn test_hypothesis_cli_tracks_active_assumptions() {
             task_id,
             "--id",
             "auth-cache",
+            "--path",
+            "src/auth.rs",
+            "--symbol",
+            "AuthCache",
             "--json",
             "Auth cache invalidation is the regression source",
         ])
@@ -5840,6 +5844,12 @@ fn test_hypothesis_cli_tracks_active_assumptions() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"id\":\"auth-cache\""))
+        .stdout(predicate::str::contains(
+            "\"related_paths\":[\"src/auth.rs\"]",
+        ))
+        .stdout(predicate::str::contains(
+            "\"related_symbols\":[\"AuthCache\"]",
+        ))
         .stdout(predicate::str::contains("Auth cache invalidation"));
 
     suite_cmd()
@@ -5900,7 +5910,9 @@ fn test_packet28_mcp_hypothesis_tools_track_active_assumptions() {
                 "arguments":{
                     "task_id":task_id,
                     "id":"auth-cache",
-                    "text":"Auth cache invalidation is the regression source"
+                    "text":"Auth cache invalidation is the regression source",
+                    "paths":["src/auth.rs"],
+                    "symbols":["AuthCache"]
                 }
             }
         }),
@@ -5933,6 +5945,8 @@ fn test_packet28_mcp_hypothesis_tools_track_active_assumptions() {
         listed_payload[0]["text"],
         "Auth cache invalidation is the regression source"
     );
+    assert_eq!(listed_payload[0]["related_paths"][0], "src/auth.rs");
+    assert_eq!(listed_payload[0]["related_symbols"][0], "AuthCache");
 
     write_mcp_message(
         &mut stdin,

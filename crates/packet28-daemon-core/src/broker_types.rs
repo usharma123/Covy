@@ -164,6 +164,10 @@ pub struct BrokerRecommendedAction {
 pub struct BrokerDecision {
     pub id: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_symbols: Vec<String>,
     pub resolves_question_id: Option<String>,
 }
 

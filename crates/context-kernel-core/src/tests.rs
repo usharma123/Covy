@@ -1277,6 +1277,8 @@ fn agenty_state_snapshot_derives_current_task_state() {
             "occurred_at_unix": 2,
             "actor": "agent",
             "kind": "decision_added",
+            "paths": ["src/time/StopWatch.java"],
+            "symbols": ["split"],
             "data": {
                 "type": "decision_added",
                 "decision_id": "d1",
@@ -1376,6 +1378,14 @@ fn agenty_state_snapshot_derives_current_task_state() {
     assert!(envelope.payload.open_questions.is_empty());
     assert_eq!(envelope.payload.active_decisions.len(), 1);
     assert_eq!(envelope.payload.active_decisions[0].id, "d1");
+    assert_eq!(
+        envelope.payload.active_decisions[0].related_paths,
+        vec!["src/time/StopWatch.java".to_string()]
+    );
+    assert_eq!(
+        envelope.payload.active_decisions[0].related_symbols,
+        vec!["split".to_string()]
+    );
     assert_eq!(
         envelope
             .payload

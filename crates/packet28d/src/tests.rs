@@ -1203,6 +1203,38 @@ fn relevant_context_renders_human_summaries_without_debug_ids() {
 }
 
 #[test]
+fn active_decisions_render_related_paths_and_symbols() {
+    let snapshot = suite_packet_core::AgentSnapshotPayload {
+        active_decisions: vec![suite_packet_core::AgentDecision {
+            id: "hypothesis:auth-cache".to_string(),
+            text: "hypothesis active: Auth cache invalidation is suspect".to_string(),
+            related_paths: vec!["src/auth.rs".to_string()],
+            related_symbols: vec!["AuthCache".to_string()],
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let request = BrokerGetContextRequest {
+        task_id: "task-hypothesis-evidence".to_string(),
+        action: Some(BrokerAction::Inspect),
+        ..BrokerGetContextRequest::default()
+    };
+    let sections = build_broker_sections(
+        Path::new("."),
+        &daemon_test_state(),
+        &request,
+        &snapshot,
+        None,
+        None,
+    );
+    let active_decisions = sections
+        .iter()
+        .find(|section| section.id == "active_decisions")
+        .expect("active_decisions section should exist");
+    assert!(active_decisions.body.contains("paths=src/auth.rs"));
+    assert!(active_decisions.body.contains("symbols=AuthCache"));
+}
+
+#[test]
 fn budget_pruning_shrinks_critical_sections_before_dropping_them() {
     let code_evidence_body = (1..=8)
         .map(|idx| format!("- src/alpha.rs:{idx} evidence line {idx}"))
