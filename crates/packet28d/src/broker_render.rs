@@ -251,6 +251,22 @@ pub(crate) fn build_broker_sections(
         });
     }
 
+    if allowed_sections.contains("action_critic") {
+        let critic_lines = build_action_critic_lines(request, &focus_symbols);
+        if !critic_lines.is_empty() {
+            sections.push(BrokerSection {
+                id: "action_critic".to_string(),
+                title: "Action Critic".to_string(),
+                body: truncate_lines(
+                    critic_lines,
+                    section_item_limit(&effective_limits, "action_critic"),
+                ),
+                priority: 1,
+                source_kind: BrokerSourceKind::Derived,
+            });
+        }
+    }
+
     let task_memory_lines = render_task_memory_lines(snapshot);
     if !task_memory_lines.is_empty() {
         sections.push(BrokerSection {
@@ -763,6 +779,68 @@ pub(crate) fn build_broker_sections(
 
     sections.retain(|section| allowed_sections.contains(&section.id));
     sections
+}
+
+pub(crate) fn build_action_critic_lines(
+    request: &BrokerGetContextRequest,
+    focus_symbols: &[String],
+) -> Vec<String> {
+    if !matches!(
+        request.action.unwrap_or(BrokerAction::Plan),
+        BrokerAction::ChooseTool
+    ) {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let query = request
+        .query
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    if query.is_none() && request.tool_name.as_deref().unwrap_or("").trim().is_empty() {
+        lines.push(
+            "- missing_tool_intent: supply a query or tool_name before choosing the next tool"
+                .to_string(),
+        );
+    }
+    let lower_query = query.unwrap_or_default().to_ascii_lowercase();
+    if destructive_command_risk(&lower_query) {
+        lines.push(
+            "- destructive_command: inspect scope and confirm intent before running this command"
+                .to_string(),
+        );
+    }
+    let has_scope = !request.focus_paths.is_empty() || !focus_symbols.is_empty();
+    if !has_scope && broad_search_risk(&lower_query) {
+        lines.push(
+            "- broad_search: add focus_paths or focus_symbols before launching a repository-wide search"
+                .to_string(),
+        );
+    }
+    lines
+}
+
+fn destructive_command_risk(query: &str) -> bool {
+    [
+        "rm -rf",
+        "git reset --hard",
+        "git clean -fd",
+        "chmod -r",
+        "chown -r",
+        "sudo rm",
+    ]
+    .iter()
+    .any(|needle| query.contains(needle))
+}
+
+fn broad_search_risk(query: &str) -> bool {
+    let query = query.trim();
+    query.starts_with("rg ")
+        || query.starts_with("grep ")
+        || query.contains(" rg ")
+        || query.contains(" grep ")
+        || query.contains("search the repo")
+        || query.contains("search repository")
 }
 
 pub(crate) fn render_brief(

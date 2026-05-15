@@ -623,6 +623,57 @@ fn choose_tool_uses_the_same_staged_search_planner() {
 }
 
 #[test]
+fn choose_tool_action_critic_flags_missing_intent_and_risky_commands() {
+    let missing = build_action_critic_lines(
+        &BrokerGetContextRequest {
+            action: Some(BrokerAction::ChooseTool),
+            ..BrokerGetContextRequest::default()
+        },
+        &[],
+    );
+    assert!(missing
+        .iter()
+        .any(|line| line.contains("missing_tool_intent")));
+
+    let risky = build_action_critic_lines(
+        &BrokerGetContextRequest {
+            action: Some(BrokerAction::ChooseTool),
+            query: Some("run rm -rf target/tmp after checking".to_string()),
+            ..BrokerGetContextRequest::default()
+        },
+        &[],
+    );
+    assert!(risky
+        .iter()
+        .any(|line| line.contains("destructive_command")));
+
+    let scoped_search = build_action_critic_lines(
+        &BrokerGetContextRequest {
+            action: Some(BrokerAction::ChooseTool),
+            query: Some("rg AlphaService".to_string()),
+            focus_paths: vec!["src/alpha.rs".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &[],
+    );
+    assert!(!scoped_search
+        .iter()
+        .any(|line| line.contains("broad_search")));
+
+    let broad_search = build_action_critic_lines(
+        &BrokerGetContextRequest {
+            action: Some(BrokerAction::ChooseTool),
+            query: Some("rg AlphaService".to_string()),
+            ..BrokerGetContextRequest::default()
+        },
+        &[],
+    );
+    assert!(broad_search
+        .iter()
+        .any(|line| line.contains("broad_search")));
+}
+
+#[test]
 fn extract_code_evidence_prefers_query_hits_and_context() {
     let root = std::env::temp_dir().join(format!("packet28d-code-evidence-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

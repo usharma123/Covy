@@ -54,6 +54,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
         BrokerAction::ChooseTool => &[
             "task_objective",
             "budget_notes",
+            "action_critic",
             "task_memory",
             "agent_intention",
             "checkpoint_context",
@@ -347,6 +348,7 @@ pub(crate) fn action_critical_section_ids(action: BrokerAction) -> &'static [&'s
         ],
         BrokerAction::ChooseTool => &[
             "budget_notes",
+            "action_critic",
             "task_memory",
             "agent_intention",
             "checkpoint_context",
