@@ -869,24 +869,38 @@ fn build_choose_tool_action_critic_lines(
 fn render_evidence_freshness_lines(
     snapshot: &suite_packet_core::AgentSnapshotPayload,
 ) -> Vec<String> {
-    snapshot
+    let fresh_paths = snapshot
         .changed_paths_since_checkpoint
         .iter()
-        .map(|path| {
-            let read_status = if snapshot.files_read.iter().any(|read| read == path) {
-                "fresh read recorded"
-            } else {
-                "refresh read/search before relying on cached evidence"
-            };
-            format!("- changed path: {path} ({read_status})")
-        })
-        .chain(
-            snapshot
-                .changed_symbols_since_checkpoint
-                .iter()
-                .map(|symbol| format!("- changed symbol: {symbol} (refresh symbol evidence)")),
-        )
-        .collect()
+        .filter(|path| snapshot.files_read.iter().any(|read| read == *path))
+        .count();
+    let changed_paths = snapshot.changed_paths_since_checkpoint.len();
+    let stale_paths = changed_paths.saturating_sub(fresh_paths);
+    let changed_symbols = snapshot.changed_symbols_since_checkpoint.len();
+    let mut lines = vec![format!(
+        "- freshness_score: {fresh_paths}/{changed_paths} changed path(s) have fresh reads; {stale_paths} path(s) and {changed_symbols} symbol(s) need refresh"
+    )];
+
+    lines.extend(
+        snapshot
+            .changed_paths_since_checkpoint
+            .iter()
+            .map(|path| {
+                let read_status = if snapshot.files_read.iter().any(|read| read == path) {
+                    "fresh read recorded"
+                } else {
+                    "refresh read/search before relying on cached evidence"
+                };
+                format!("- changed path: {path} ({read_status})")
+            })
+            .chain(
+                snapshot
+                    .changed_symbols_since_checkpoint
+                    .iter()
+                    .map(|symbol| format!("- changed symbol: {symbol} (refresh symbol evidence)")),
+            ),
+    );
+    lines
 }
 
 fn build_edit_action_critic_lines(

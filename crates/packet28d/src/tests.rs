@@ -1424,6 +1424,9 @@ fn broker_edit_context_surfaces_evidence_freshness_for_changed_paths() {
         .iter()
         .find(|section| section.id == "evidence_freshness")
         .expect("changed paths should produce evidence freshness section");
+    assert!(freshness.body.contains(
+        "freshness_score: 1/2 changed path(s) have fresh reads; 1 path(s) and 1 symbol(s) need refresh"
+    ));
     assert!(freshness
         .body
         .contains("src/fresh.rs (fresh read recorded)"));
