@@ -438,6 +438,11 @@ pub(crate) fn broker_validate_plan(
         .cloned()
         .collect::<HashSet<_>>();
     let mut files_read = snapshot.files_read.iter().cloned().collect::<HashSet<_>>();
+    let changed_paths_since_checkpoint = snapshot
+        .changed_paths_since_checkpoint
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
     let step_index = normalized_steps
         .iter()
         .enumerate()
@@ -528,6 +533,23 @@ pub(crate) fn broker_validate_plan(
                         severity: "error".to_string(),
                         message: format!(
                             "step edits '{path}' before the agent has recorded a file_read for it"
+                        ),
+                        related_paths: vec![path.clone()],
+                        related_symbols: step.symbols.clone(),
+                    });
+                }
+            }
+        }
+
+        if is_edit_like_action(&step.action) {
+            for path in &step.paths {
+                if changed_paths_since_checkpoint.contains(path) && !files_read.contains(path) {
+                    warnings.push(BrokerPlanViolation {
+                        step_id: step.id.clone(),
+                        rule: "stale_evidence_after_checkpoint".to_string(),
+                        severity: "warning".to_string(),
+                        message: format!(
+                            "step edits '{path}', which changed since the latest checkpoint; refresh read evidence before relying on cached context"
                         ),
                         related_paths: vec![path.clone()],
                         related_symbols: step.symbols.clone(),

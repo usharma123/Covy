@@ -376,6 +376,51 @@ fn validate_plan_warns_when_cached_testmap_is_stale() {
 }
 
 #[test]
+fn validate_plan_warns_when_edit_relies_on_stale_evidence_after_checkpoint() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/alpha.rs"), "pub fn alpha() -> i32 { 1 }\n").unwrap();
+    state.lock().unwrap().agent_snapshots.insert(
+        "task-stale-evidence".to_string(),
+        suite_packet_core::AgentSnapshotPayload {
+            task_id: "task-stale-evidence".to_string(),
+            changed_paths_since_checkpoint: vec!["src/alpha.rs".to_string()],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+
+    let response = broker_validate_plan(
+        state,
+        BrokerValidatePlanRequest {
+            task_id: "task-stale-evidence".to_string(),
+            require_read_before_edit: Some(false),
+            require_test_gate: Some(false),
+            steps: vec![BrokerPlanStep {
+                id: "edit-alpha".to_string(),
+                action: "edit".to_string(),
+                paths: vec!["src/alpha.rs".to_string()],
+                ..BrokerPlanStep::default()
+            }],
+            ..BrokerValidatePlanRequest::default()
+        },
+    )
+    .unwrap();
+
+    assert!(response.valid);
+    let warning = response
+        .warnings
+        .iter()
+        .find(|warning| warning.rule == "stale_evidence_after_checkpoint")
+        .expect("stale evidence warning should be reported");
+    assert_eq!(warning.step_id, "edit-alpha");
+    assert_eq!(warning.related_paths, vec!["src/alpha.rs".to_string()]);
+    assert!(warning
+        .message
+        .contains("changed since the latest checkpoint"));
+}
+
+#[test]
 fn infer_scope_paths_prefers_explicit_paths() {
     let inferred = infer_scope_paths(
         "refactor auth module",
