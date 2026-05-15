@@ -275,6 +275,8 @@ Release `v0.2.54` satisfies these gates for the audited RTK `55f998d` and ICM `9
 
 ## Architecture Target
 
+Additional post-parity ideas for maximizing Packet28's value to coding agents are tracked in `docs/AGENTIC_CONTEXT_IDEAS.md`.
+
 Refactor incrementally toward these boundaries where they reduce complexity:
 
 - `packet28-core`: schemas, `EnvelopeV1`, token estimates, packet formats
