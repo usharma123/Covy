@@ -1584,7 +1584,7 @@ fn print_gain_failures(records: &[RunSavingsRecord]) {
             *repeat_counts.entry(fingerprint.to_string()).or_insert(0) += 1;
         }
     }
-    println!("timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,next_success_command,next_success_changed_paths,command");
+    println!("timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,next_success_command,next_success_changed_paths,fix_advice,command");
     for record in records
         .iter()
         .filter(|record| record.exit_code != 0 || record.fallback_reason.is_some())
@@ -1602,8 +1602,13 @@ fn print_gain_failures(records: &[RunSavingsRecord]) {
         let next_success_changed_paths = next_success
             .map(|record| record.changed_paths.join(";"))
             .unwrap_or_default();
+        let fix_advice = failure_fix_advice(
+            repeat_count,
+            next_success_command.as_str(),
+            next_success_changed_paths.as_str(),
+        );
         println!(
-            "{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{}",
             record.timestamp_unix_ms,
             csv_cell(&record.family),
             record.exit_code,
@@ -1612,8 +1617,29 @@ fn print_gain_failures(records: &[RunSavingsRecord]) {
             repeat_count,
             csv_cell(&next_success_command),
             csv_cell(&next_success_changed_paths),
+            csv_cell(&fix_advice),
             csv_cell(&record.command)
         );
+    }
+}
+
+fn failure_fix_advice(
+    repeat_count: usize,
+    next_success_command: &str,
+    next_success_changed_paths: &str,
+) -> String {
+    if next_success_command.is_empty() {
+        return "no later successful same-directory run observed".to_string();
+    }
+    let prefix = if repeat_count > 1 {
+        "repeated failure"
+    } else {
+        "failure"
+    };
+    if next_success_changed_paths.is_empty() {
+        format!("{prefix}: retry with `{next_success_command}`")
+    } else {
+        format!("{prefix}: retry with `{next_success_command}` after inspecting {next_success_changed_paths}")
     }
 }
 
