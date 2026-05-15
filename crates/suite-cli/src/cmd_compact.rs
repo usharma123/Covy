@@ -1578,17 +1578,18 @@ fn print_gain_history(records: &[RunSavingsRecord]) {
 }
 
 fn print_gain_failures(records: &[RunSavingsRecord]) {
-    println!("timestamp_unix_ms,family,exit_code,fallback_reason,command");
+    println!("timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,command");
     for record in records
         .iter()
         .filter(|record| record.exit_code != 0 || record.fallback_reason.is_some())
     {
         println!(
-            "{},{},{},{},{}",
+            "{},{},{},{},{},{}",
             record.timestamp_unix_ms,
             csv_cell(&record.family),
             record.exit_code,
             csv_cell(record.fallback_reason.as_deref().unwrap_or("")),
+            csv_cell(record.failure_fingerprint.as_deref().unwrap_or("")),
             csv_cell(&record.command)
         );
     }

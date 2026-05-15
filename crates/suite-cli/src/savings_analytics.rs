@@ -18,6 +18,8 @@ pub(crate) struct RunSavingsRecord {
     pub(crate) reduced_est_tokens: u64,
     pub(crate) savings_percent: f64,
     pub(crate) fallback_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failure_fingerprint: Option<String>,
     pub(crate) timestamp_unix_ms: u128,
 }
 

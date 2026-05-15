@@ -105,6 +105,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
     let reduced_est_tokens = estimate_tokens(&reduction.compact_preview);
     let raw_artifact_handle =
         write_run_raw_artifact(root, &command_text, exit_code, &stdout, &stderr)?;
+    let failure_fingerprint = failure_fingerprint(exit_code, &stdout, &stderr);
     let saved = raw_est_tokens.saturating_sub(reduced_est_tokens);
     let savings_pct = if raw_est_tokens == 0 {
         0.0
@@ -123,6 +124,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
         "reduced_est_tokens": reduced_est_tokens,
         "savings_percent": savings_pct,
         "fallback_reason": null,
+        "failure_fingerprint": failure_fingerprint,
         "raw_artifact": {
             "available": true,
             "handle": raw_artifact_handle,
@@ -146,6 +148,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
             reduced_est_tokens,
             savings_percent: savings_pct,
             fallback_reason: None,
+            failure_fingerprint,
             timestamp_unix_ms: timestamp_unix_ms(),
         },
     )?;
@@ -234,6 +237,7 @@ fn run_plain_command(
     let raw_est_tokens = estimate_tokens(&(stdout.clone() + &stderr));
     let raw_artifact_handle =
         write_run_raw_artifact(root, &command_text, exit_code, &stdout, &stderr)?;
+    let failure_fingerprint = failure_fingerprint(exit_code, &stdout, &stderr);
     record_run_savings(
         root,
         &RunSavingsRecord {
@@ -246,6 +250,7 @@ fn run_plain_command(
             reduced_est_tokens: raw_est_tokens,
             savings_percent: 0.0,
             fallback_reason: Some(fallback_reason.to_string()),
+            failure_fingerprint: failure_fingerprint.clone(),
             timestamp_unix_ms: timestamp_unix_ms(),
         },
     )?;
@@ -263,6 +268,7 @@ fn run_plain_command(
                 "reduced_est_tokens": raw_est_tokens,
                 "savings_percent": 0.0,
                 "fallback_reason": fallback_reason,
+                "failure_fingerprint": failure_fingerprint,
                 "raw_artifact": {
                     "available": true,
                     "handle": raw_artifact_handle,
@@ -311,6 +317,7 @@ fn emit_filtered_run(run: FilteredRun<'_>) -> Result<i32> {
     };
     let raw_artifact_handle =
         write_run_raw_artifact(root, command_text, exit_code, stdout, stderr)?;
+    let failure_fingerprint = failure_fingerprint(exit_code, stdout, stderr);
     let payload = json!({
         "command": {
             "original": command_text,
@@ -337,6 +344,7 @@ fn emit_filtered_run(run: FilteredRun<'_>) -> Result<i32> {
         "reduced_est_tokens": reduced_est_tokens,
         "savings_percent": savings_pct,
         "fallback_reason": null,
+        "failure_fingerprint": failure_fingerprint,
         "raw_artifact": {
             "available": true,
             "handle": raw_artifact_handle,
@@ -363,6 +371,7 @@ fn emit_filtered_run(run: FilteredRun<'_>) -> Result<i32> {
             reduced_est_tokens,
             savings_percent: savings_pct,
             fallback_reason: None,
+            failure_fingerprint,
             timestamp_unix_ms: timestamp_unix_ms(),
         },
     )?;
@@ -389,6 +398,26 @@ fn command_text(argv: &[String]) -> String {
 
 fn estimate_tokens(value: &str) -> u64 {
     ((value.len() as f64) / 4.0).ceil() as u64
+}
+
+fn failure_fingerprint(exit_code: i32, stdout: &str, stderr: &str) -> Option<String> {
+    if exit_code == 0 {
+        return None;
+    }
+    let mut normalized = format!("exit={exit_code}\n");
+    for line in stderr.lines().chain(stdout.lines()).take(20) {
+        let compact = line
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+        if !compact.is_empty() {
+            normalized.push_str(&compact);
+            normalized.push('\n');
+        }
+    }
+    let hash = blake3::hash(normalized.as_bytes()).to_hex().to_string();
+    Some(format!("failure:v1:{}", &hash[..16]))
 }
 
 fn write_run_raw_artifact(

@@ -1668,7 +1668,10 @@ fn test_gain_reports_failed_and_fallback_runs() {
         .assert()
         .failure()
         .code(7)
-        .stdout(predicate::str::contains("\"fallback_reason\""));
+        .stdout(predicate::str::contains("\"fallback_reason\""))
+        .stdout(predicate::str::contains(
+            "\"failure_fingerprint\":\"failure:v1:",
+        ));
 
     suite_cmd()
         .current_dir(root.path())
@@ -1682,9 +1685,10 @@ fn test_gain_reports_failed_and_fallback_runs() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "timestamp_unix_ms,family,exit_code,fallback_reason,command",
+            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,command",
         ))
         .stdout(predicate::str::contains("fallback,7"))
+        .stdout(predicate::str::contains("failure:v1:"))
         .stdout(predicate::str::contains("unsupported"))
         .stdout(predicate::str::contains("packet28 failure"));
 
@@ -1699,9 +1703,10 @@ fn test_gain_reports_failed_and_fallback_runs() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "timestamp_unix_ms,family,exit_code,fallback_reason,command",
+            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,command",
         ))
         .stdout(predicate::str::contains("fallback,7"))
+        .stdout(predicate::str::contains("failure:v1:"))
         .stdout(predicate::str::contains("unsupported"))
         .stdout(predicate::str::contains("packet28 failure"));
 
@@ -1711,9 +1716,10 @@ fn test_gain_reports_failed_and_fallback_runs() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "timestamp_unix_ms,family,exit_code,fallback_reason,command",
+            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,command",
         ))
         .stdout(predicate::str::contains("fallback,7"))
+        .stdout(predicate::str::contains("failure:v1:"))
         .stdout(predicate::str::contains("unsupported"))
         .stdout(predicate::str::contains("packet28 failure"));
 }
