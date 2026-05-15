@@ -2327,10 +2327,17 @@ fn test_verify_experiments_checks_manifest_evidence() {
             "--manifest",
             manifest.to_str().unwrap(),
             "--json",
+            "--require-workflow",
+            "Claude Code hook smoke",
+            "--require-workflow",
+            "missing required workflow",
         ])
         .assert()
         .failure()
         .stdout(predicate::str::contains("\"ok\":false"))
+        .stdout(predicate::str::contains(
+            "\"kind\":\"missing_required_workflow\"",
+        ))
         .stdout(predicate::str::contains("\"kind\":\"uncovered_workflow\""))
         .stdout(predicate::str::contains(
             "\"kind\":\"missing_command_evidence\"",
@@ -2376,6 +2383,8 @@ fn test_verify_experiments_checks_manifest_evidence() {
             root.path().to_str().unwrap(),
             "--manifest",
             manifest.to_str().unwrap(),
+            "--require-workflow",
+            "Claude Code hook smoke",
         ])
         .assert()
         .success()

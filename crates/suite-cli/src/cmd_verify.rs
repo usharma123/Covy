@@ -42,6 +42,8 @@ pub struct ExperimentVerifyArgs {
     pub root: String,
     #[arg(long, default_value = "docs/experiments/manifest.json")]
     pub manifest: String,
+    #[arg(long = "require-workflow")]
+    pub require_workflows: Vec<String>,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -236,7 +238,7 @@ fn run_experiments(args: ExperimentVerifyArgs) -> Result<i32> {
         .with_context(|| format!("failed to read '{}'", manifest_path.display()))?;
     let manifest: ExperimentManifest = serde_json::from_str(&manifest_raw)
         .with_context(|| format!("failed to parse '{}'", manifest_path.display()))?;
-    let issues = verify_experiment_manifest(&root, &manifest);
+    let issues = verify_experiment_manifest(&root, &manifest, &args.require_workflows);
     let ok = issues.is_empty();
 
     if args.json {
@@ -245,6 +247,7 @@ fn run_experiments(args: ExperimentVerifyArgs) -> Result<i32> {
                 "ok": ok,
                 "manifest": manifest_path.display().to_string(),
                 "experiment_count": manifest.experiments.len(),
+                "required_workflows": args.require_workflows,
                 "issue_count": issues.len(),
                 "issues": issues.iter().map(|issue| {
                     json!({
@@ -280,9 +283,29 @@ fn run_experiments(args: ExperimentVerifyArgs) -> Result<i32> {
     }
 }
 
-fn verify_experiment_manifest(root: &Path, manifest: &ExperimentManifest) -> Vec<ExperimentIssue> {
+fn verify_experiment_manifest(
+    root: &Path,
+    manifest: &ExperimentManifest,
+    required_workflows: &[String],
+) -> Vec<ExperimentIssue> {
     let mut issues = Vec::new();
     let mut seen_ids = BTreeSet::new();
+    let covered_workflows = manifest
+        .experiments
+        .iter()
+        .map(|experiment| experiment.workflow.trim())
+        .filter(|workflow| !workflow.is_empty())
+        .collect::<BTreeSet<_>>();
+    for workflow in required_workflows {
+        let workflow = workflow.trim();
+        if !workflow.is_empty() && !covered_workflows.contains(workflow) {
+            issues.push(ExperimentIssue {
+                experiment_id: "<manifest>".to_string(),
+                kind: "missing_required_workflow".to_string(),
+                detail: workflow.to_string(),
+            });
+        }
+    }
     if manifest.experiments.is_empty() {
         issues.push(ExperimentIssue {
             experiment_id: "<manifest>".to_string(),
