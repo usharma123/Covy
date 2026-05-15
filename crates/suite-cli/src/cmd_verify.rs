@@ -69,6 +69,8 @@ struct ExperimentEntry {
     workflow: String,
     commands: Vec<String>,
     artifacts: Vec<String>,
+    metrics: Vec<ExperimentMetric>,
+    runtime_versions: Vec<ExperimentRuntimeVersion>,
     fallback_reasons: Vec<String>,
     allow_fallbacks: bool,
 }
@@ -80,8 +82,46 @@ impl Default for ExperimentEntry {
             workflow: String::new(),
             commands: Vec::new(),
             artifacts: Vec::new(),
+            metrics: Vec::new(),
+            runtime_versions: Vec::new(),
             fallback_reasons: Vec::new(),
             allow_fallbacks: false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct ExperimentMetric {
+    name: String,
+    value: Option<f64>,
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+impl Default for ExperimentMetric {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            value: None,
+            min: None,
+            max: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct ExperimentRuntimeVersion {
+    name: String,
+    version: String,
+}
+
+impl Default for ExperimentRuntimeVersion {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            version: String::new(),
         }
     }
 }
@@ -306,6 +346,52 @@ fn verify_experiment_manifest(root: &Path, manifest: &ExperimentManifest) -> Vec
                     experiment_id: issue_id.to_string(),
                     kind: "missing_artifact".to_string(),
                     detail: artifact.to_string(),
+                });
+            }
+        }
+        for metric in &experiment.metrics {
+            let metric_name = metric.name.trim();
+            if metric_name.is_empty() {
+                issues.push(ExperimentIssue {
+                    experiment_id: issue_id.to_string(),
+                    kind: "missing_metric_name".to_string(),
+                    detail: "metric name is required".to_string(),
+                });
+            }
+            let Some(value) = metric.value else {
+                issues.push(ExperimentIssue {
+                    experiment_id: issue_id.to_string(),
+                    kind: "missing_metric_value".to_string(),
+                    detail: metric_name.to_string(),
+                });
+                continue;
+            };
+            if let Some(min) = metric.min {
+                if value < min {
+                    issues.push(ExperimentIssue {
+                        experiment_id: issue_id.to_string(),
+                        kind: "metric_below_min".to_string(),
+                        detail: format!("{metric_name} value={value} min={min}"),
+                    });
+                }
+            }
+            if let Some(max) = metric.max {
+                if value > max {
+                    issues.push(ExperimentIssue {
+                        experiment_id: issue_id.to_string(),
+                        kind: "metric_above_max".to_string(),
+                        detail: format!("{metric_name} value={value} max={max}"),
+                    });
+                }
+            }
+        }
+        for runtime in &experiment.runtime_versions {
+            if runtime.name.trim().is_empty() || runtime.version.trim().is_empty() {
+                issues.push(ExperimentIssue {
+                    experiment_id: issue_id.to_string(),
+                    kind: "missing_runtime_version".to_string(),
+                    detail: "runtime version entries require non-empty name and version"
+                        .to_string(),
                 });
             }
         }

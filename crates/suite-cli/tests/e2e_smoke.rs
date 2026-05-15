@@ -2302,6 +2302,14 @@ fn test_verify_experiments_checks_manifest_evidence() {
       "workflow": "",
       "commands": [""],
       "artifacts": ["docs/experiments/runtime-live/MISSING.md"],
+      "metrics": [
+        {"name": "saved_tokens", "value": 5, "min": 10},
+        {"name": "latency_ms", "value": 120, "max": 100},
+        {"name": "missing-value"}
+      ],
+      "runtime_versions": [
+        {"name": "claude-code", "version": ""}
+      ],
       "fallback_reasons": ["unsupported"]
     }
   ]
@@ -2328,6 +2336,14 @@ fn test_verify_experiments_checks_manifest_evidence() {
             "\"kind\":\"missing_command_evidence\"",
         ))
         .stdout(predicate::str::contains("\"kind\":\"missing_artifact\""))
+        .stdout(predicate::str::contains("\"kind\":\"metric_below_min\""))
+        .stdout(predicate::str::contains("\"kind\":\"metric_above_max\""))
+        .stdout(predicate::str::contains(
+            "\"kind\":\"missing_metric_value\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"kind\":\"missing_runtime_version\"",
+        ))
         .stdout(predicate::str::contains("\"kind\":\"unexpected_fallback\""));
 
     fs::write(
@@ -2338,7 +2354,13 @@ fn test_verify_experiments_checks_manifest_evidence() {
       "id": "claude-runtime-smoke",
       "workflow": "Claude Code hook smoke",
       "commands": ["Packet28 doctor --json"],
-      "artifacts": ["docs/experiments/runtime-live/SMOKE.md"]
+      "artifacts": ["docs/experiments/runtime-live/SMOKE.md"],
+      "metrics": [
+        {"name": "saved_tokens", "value": 32, "min": 10}
+      ],
+      "runtime_versions": [
+        {"name": "claude-code", "version": "2.1.139"}
+      ]
     }
   ]
 }"#,
