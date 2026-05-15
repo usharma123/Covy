@@ -727,6 +727,43 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.hypothesis_add",
+                    "description": "Record an active task hypothesis so it flows into Packet28 broker context and handoff state.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["text"],
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "id": {"type":"string"},
+                            "text": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.hypothesis_list",
+                    "description": "List active task hypotheses from the Packet28 broker snapshot.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.hypothesis_resolve",
+                    "description": "Confirm or reject an active Packet28 task hypothesis.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["id", "status"],
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "id": {"type":"string"},
+                            "status": {"type":"string","enum":["confirmed","rejected"]},
+                            "note": {"type":"string"}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.reduce",
                     "description": "Reduce command stdout/stderr into a compact Packet28 packet without executing the command.",
                     "inputSchema": {
@@ -1492,6 +1529,65 @@ fn handle_tool_call(
             track_task(session, root, &request.task_id)?;
             handle_packet28_validate_plan(root, request)?
         }
+        "packet28.hypothesis_add" => {
+            let mut request: HypothesisAddToolArgs = serde_json::from_value(arguments)?;
+            request.task_id = Some(resolve_session_task_id(
+                session,
+                root,
+                request.task_id.as_deref().unwrap_or_default(),
+                Some(request.text.as_str()),
+                name,
+            )?);
+            let task_id = request.task_id.as_deref().unwrap_or_default();
+            track_task(session, root, task_id)?;
+            serde_json::to_value(crate::cmd_hypothesis::add_hypothesis_record(
+                root,
+                task_id,
+                request.id,
+                &request.text,
+            )?)?
+        }
+        "packet28.hypothesis_list" => {
+            let mut request: HypothesisListToolArgs = serde_json::from_value(arguments)?;
+            request.task_id = Some(resolve_session_task_id(
+                session,
+                root,
+                request.task_id.as_deref().unwrap_or_default(),
+                None,
+                name,
+            )?);
+            let task_id = request.task_id.as_deref().unwrap_or_default();
+            track_task(session, root, task_id)?;
+            serde_json::to_value(crate::cmd_hypothesis::active_hypotheses(root, task_id)?)?
+        }
+        "packet28.hypothesis_resolve" => {
+            let mut request: HypothesisResolveToolArgs = serde_json::from_value(arguments)?;
+            request.task_id = Some(resolve_session_task_id(
+                session,
+                root,
+                request.task_id.as_deref().unwrap_or_default(),
+                Some(request.id.as_str()),
+                name,
+            )?);
+            let status = match request.status.trim() {
+                "confirmed" | "confirm" => "confirmed",
+                "rejected" | "reject" => "rejected",
+                other => {
+                    return Err(anyhow!(
+                        "packet28.hypothesis_resolve status must be confirmed or rejected, got '{other}'"
+                    ))
+                }
+            };
+            let task_id = request.task_id.as_deref().unwrap_or_default();
+            track_task(session, root, task_id)?;
+            serde_json::to_value(crate::cmd_hypothesis::resolve_hypothesis_record(
+                root,
+                task_id,
+                &request.id,
+                status,
+                request.note,
+            )?)?
+        }
         "packet28.reduce" => {
             let request: ReduceToolArgs = serde_json::from_value(arguments)?;
             handle_packet28_reduce(request)?
@@ -2173,6 +2269,26 @@ struct DoctorToolArgs {
     agent: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct HypothesisAddToolArgs {
+    task_id: Option<String>,
+    id: Option<String>,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HypothesisListToolArgs {
+    task_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HypothesisResolveToolArgs {
+    task_id: Option<String>,
+    id: String,
+    status: String,
+    note: Option<String>,
+}
+
 fn handle_packet28_reduce(request: ReduceToolArgs) -> Result<Value> {
     let spec = packet28_reducer_core::classify_command(&request.command)
         .ok_or_else(|| anyhow!("unsupported command for packet28.reduce"))?;
@@ -2324,6 +2440,28 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .map(Vec::len)
                 .unwrap_or_default();
             format!("Packet28 plan validation valid={valid} violations={violations} warnings={warnings}.")
+        }
+        "packet28.hypothesis_add" => {
+            let id = payload
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!("Packet28 recorded active hypothesis {id}.")
+        }
+        "packet28.hypothesis_list" => {
+            let count = payload.as_array().map(Vec::len).unwrap_or_default();
+            format!("Packet28 listed {count} active hypothesis/hypotheses.")
+        }
+        "packet28.hypothesis_resolve" => {
+            let id = payload
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let status = payload
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("resolved");
+            format!("Packet28 marked hypothesis {id} {status}.")
         }
         "packet28.reduce" => "Packet28 command reduction.".to_string(),
         "packet28.rewrite" => {
@@ -2608,6 +2746,9 @@ mod tests {
             "packet28_rewrite",
             "packet28_handoff",
             "packet28_validate_plan",
+            "packet28_hypothesis_add",
+            "packet28_hypothesis_list",
+            "packet28_hypothesis_resolve",
             "packet28_doctor",
             "packet28_memory_list",
             "packet28_memory_embed",

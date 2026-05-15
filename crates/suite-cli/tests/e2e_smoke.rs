@@ -5878,6 +5878,114 @@ fn test_hypothesis_cli_tracks_active_assumptions() {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_packet28_mcp_hypothesis_tools_track_active_assumptions() {
+    ensure_packet28d_built();
+    let root = TempDir::new().unwrap();
+    init_repo(root.path());
+    write_repo_fixture(root.path());
+    let task_id = "task-mcp-hypothesis";
+
+    let (mut child, mut stdin, mut stdout) = start_mcp_server(root.path());
+    initialize_mcp_session(&mut stdin, &mut stdout);
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.hypothesis_add",
+                "arguments":{
+                    "task_id":task_id,
+                    "id":"auth-cache",
+                    "text":"Auth cache invalidation is the regression source"
+                }
+            }
+        }),
+    );
+    let added = read_mcp_message_for_id(&mut stdout, 2);
+    let added_payload = &added["result"]["structuredContent"];
+    assert_eq!(added_payload["id"], "auth-cache");
+    assert_eq!(added_payload["status"], "active");
+    assert_eq!(added_payload["decision_id"], "hypothesis:auth-cache");
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":3,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.hypothesis_list",
+                "arguments":{
+                    "task_id":task_id
+                }
+            }
+        }),
+    );
+    let listed = read_mcp_message_for_id(&mut stdout, 3);
+    let listed_payload = listed["result"]["structuredContent"].as_array().unwrap();
+    assert_eq!(listed_payload.len(), 1);
+    assert_eq!(listed_payload[0]["id"], "auth-cache");
+    assert_eq!(
+        listed_payload[0]["text"],
+        "Auth cache invalidation is the regression source"
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":4,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.hypothesis_resolve",
+                "arguments":{
+                    "task_id":task_id,
+                    "id":"auth-cache",
+                    "status":"rejected"
+                }
+            }
+        }),
+    );
+    let rejected = read_mcp_message_for_id(&mut stdout, 4);
+    assert_eq!(
+        rejected["result"]["structuredContent"]["status"],
+        "rejected"
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":5,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.hypothesis_list",
+                "arguments":{
+                    "task_id":task_id
+                }
+            }
+        }),
+    );
+    let listed_after_reject = read_mcp_message_for_id(&mut stdout, 5);
+    assert!(listed_after_reject["result"]["structuredContent"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
 fn test_discover_reports_run_missed_savings() {
     let root = TempDir::new().unwrap();
     let missing_sessions = root.path().join("missing-sessions");

@@ -62,17 +62,17 @@ pub struct HypothesisListArgs {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct HypothesisRecord {
-    id: String,
-    decision_id: String,
-    text: String,
+pub(crate) struct HypothesisRecord {
+    pub(crate) id: String,
+    pub(crate) decision_id: String,
+    pub(crate) text: String,
 }
 
 #[derive(Debug, Serialize)]
-struct HypothesisMutation {
-    id: String,
-    decision_id: String,
-    status: String,
+pub(crate) struct HypothesisMutation {
+    pub(crate) id: String,
+    pub(crate) decision_id: String,
+    pub(crate) status: String,
 }
 
 pub fn run(args: HypothesisArgs) -> Result<i32> {
@@ -86,13 +86,23 @@ pub fn run(args: HypothesisArgs) -> Result<i32> {
 
 fn add_hypothesis(args: HypothesisAddArgs) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
-    let id = args.id.unwrap_or_else(|| hypothesis_id(&args.text));
+    let mutation = add_hypothesis_record(&root, &args.task_id, args.id, &args.text)?;
+    emit_mutation(&mutation, args.json, args.pretty)
+}
+
+pub(crate) fn add_hypothesis_record(
+    root: &std::path::Path,
+    task_id: &str,
+    id: Option<String>,
+    text: &str,
+) -> Result<HypothesisMutation> {
+    let id = id.unwrap_or_else(|| hypothesis_id(text));
     let decision_id = decision_id(&id);
-    let text = format!("hypothesis active: {}", args.text.trim());
+    let text = format!("hypothesis active: {}", text.trim());
     crate::broker_client::write_state(
-        &root,
+        root,
         BrokerWriteStateRequest {
-            task_id: args.task_id,
+            task_id: task_id.to_string(),
             op: Some(BrokerWriteOp::DecisionAdd),
             decision_id: Some(decision_id.clone()),
             text: Some(text),
@@ -104,28 +114,39 @@ fn add_hypothesis(args: HypothesisAddArgs) -> Result<i32> {
         decision_id,
         status: "active".to_string(),
     };
-    emit_mutation(&mutation, args.json, args.pretty)
+    Ok(mutation)
 }
 
 fn resolve_hypothesis(args: HypothesisResolveArgs, status: &str) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
-    let decision_id = decision_id(&args.id);
+    let mutation = resolve_hypothesis_record(&root, &args.task_id, &args.id, status, args.note)?;
+    emit_mutation(&mutation, args.json, args.pretty)
+}
+
+pub(crate) fn resolve_hypothesis_record(
+    root: &std::path::Path,
+    task_id: &str,
+    id: &str,
+    status: &str,
+    note: Option<String>,
+) -> Result<HypothesisMutation> {
+    let decision_id = decision_id(id);
     crate::broker_client::write_state(
-        &root,
+        root,
         BrokerWriteStateRequest {
-            task_id: args.task_id,
+            task_id: task_id.to_string(),
             op: Some(BrokerWriteOp::DecisionSupersede),
             decision_id: Some(decision_id.clone()),
-            note: args.note.or_else(|| Some(status.to_string())),
+            note: note.or_else(|| Some(status.to_string())),
             ..BrokerWriteStateRequest::default()
         },
     )?;
     let mutation = HypothesisMutation {
-        id: args.id,
+        id: id.to_string(),
         decision_id,
         status: status.to_string(),
     };
-    emit_mutation(&mutation, args.json, args.pretty)
+    Ok(mutation)
 }
 
 fn list_hypotheses(args: HypothesisListArgs) -> Result<i32> {
@@ -155,7 +176,10 @@ fn emit_mutation(mutation: &HypothesisMutation, json: bool, pretty: bool) -> Res
     Ok(0)
 }
 
-fn active_hypotheses(root: &std::path::Path, task_id: &str) -> Result<Vec<HypothesisRecord>> {
+pub(crate) fn active_hypotheses(
+    root: &std::path::Path,
+    task_id: &str,
+) -> Result<Vec<HypothesisRecord>> {
     let kernel = crate::cmd_context::build_persistent_kernel(root.to_path_buf());
     let response = kernel.execute(context_kernel_core::KernelRequest {
         target: "agenty.state.snapshot".to_string(),
