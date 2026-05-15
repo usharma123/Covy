@@ -93,6 +93,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
         return run_auto_fallback(root, cwd, args, "unsupported_family");
     }
 
+    let before_changed_paths = current_changed_paths(root);
     let output = build_command(&args.command)?
         .current_dir(cwd)
         .output()
@@ -106,6 +107,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
     let raw_artifact_handle =
         write_run_raw_artifact(root, &command_text, exit_code, &stdout, &stderr)?;
     let failure_fingerprint = failure_fingerprint(exit_code, &stdout, &stderr);
+    let changed_paths = new_changed_paths(root, &before_changed_paths);
     let saved = raw_est_tokens.saturating_sub(reduced_est_tokens);
     let savings_pct = if raw_est_tokens == 0 {
         0.0
@@ -149,6 +151,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
             savings_percent: savings_pct,
             fallback_reason: None,
             failure_fingerprint,
+            changed_paths,
             timestamp_unix_ms: timestamp_unix_ms(),
         },
     )?;
@@ -213,6 +216,7 @@ fn run_plain_command(
     fallback_reason: &str,
 ) -> Result<i32> {
     let command_text = command_text(argv);
+    let before_changed_paths = current_changed_paths(root);
     let output = build_command(argv)?
         .output()
         .with_context(|| format!("failed to run `{command_text}`"))?;
@@ -230,6 +234,7 @@ fn run_plain_command(
             stdout: &stdout,
             stderr: &stderr,
             filter,
+            before_changed_paths,
             json,
             pretty,
         });
@@ -238,6 +243,7 @@ fn run_plain_command(
     let raw_artifact_handle =
         write_run_raw_artifact(root, &command_text, exit_code, &stdout, &stderr)?;
     let failure_fingerprint = failure_fingerprint(exit_code, &stdout, &stderr);
+    let changed_paths = new_changed_paths(root, &before_changed_paths);
     record_run_savings(
         root,
         &RunSavingsRecord {
@@ -251,6 +257,7 @@ fn run_plain_command(
             savings_percent: 0.0,
             fallback_reason: Some(fallback_reason.to_string()),
             failure_fingerprint: failure_fingerprint.clone(),
+            changed_paths,
             timestamp_unix_ms: timestamp_unix_ms(),
         },
     )?;
@@ -291,6 +298,7 @@ struct FilteredRun<'a> {
     stdout: &'a str,
     stderr: &'a str,
     filter: crate::toml_filters::AppliedTomlFilter,
+    before_changed_paths: Vec<String>,
     json: bool,
     pretty: bool,
 }
@@ -304,6 +312,7 @@ fn emit_filtered_run(run: FilteredRun<'_>) -> Result<i32> {
         stdout,
         stderr,
         filter,
+        before_changed_paths,
         json,
         pretty,
     } = run;
@@ -372,6 +381,7 @@ fn emit_filtered_run(run: FilteredRun<'_>) -> Result<i32> {
             savings_percent: savings_pct,
             fallback_reason: None,
             failure_fingerprint,
+            changed_paths: new_changed_paths(root, &before_changed_paths),
             timestamp_unix_ms: timestamp_unix_ms(),
         },
     )?;
@@ -418,6 +428,53 @@ fn failure_fingerprint(exit_code: i32, stdout: &str, stderr: &str) -> Option<Str
     }
     let hash = blake3::hash(normalized.as_bytes()).to_hex().to_string();
     Some(format!("failure:v1:{}", &hash[..16]))
+}
+
+fn current_changed_paths(root: &std::path::Path) -> Vec<String> {
+    let Ok(output) = Command::new("git")
+        .current_dir(root)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut paths = stdout
+        .lines()
+        .filter_map(parse_git_status_path)
+        .filter(|path| !is_packet28_telemetry_path(path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn new_changed_paths(root: &std::path::Path, before: &[String]) -> Vec<String> {
+    let before = before.iter().collect::<std::collections::HashSet<_>>();
+    current_changed_paths(root)
+        .into_iter()
+        .filter(|path| !before.contains(path))
+        .collect()
+}
+
+fn parse_git_status_path(line: &str) -> Option<String> {
+    let path = line.get(3..)?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let path = path
+        .rsplit_once(" -> ")
+        .map(|(_, new_path)| new_path)
+        .unwrap_or(path)
+        .trim_matches('"');
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+fn is_packet28_telemetry_path(path: &str) -> bool {
+    path.starts_with(".packet28/") || path.starts_with(".covy/state/")
 }
 
 fn write_run_raw_artifact(

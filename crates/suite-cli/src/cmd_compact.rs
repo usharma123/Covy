@@ -1584,7 +1584,7 @@ fn print_gain_failures(records: &[RunSavingsRecord]) {
             *repeat_counts.entry(fingerprint.to_string()).or_insert(0) += 1;
         }
     }
-    println!("timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,next_success_command,command");
+    println!("timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,next_success_command,next_success_changed_paths,command");
     for record in records
         .iter()
         .filter(|record| record.exit_code != 0 || record.fallback_reason.is_some())
@@ -1595,9 +1595,15 @@ fn print_gain_failures(records: &[RunSavingsRecord]) {
             .and_then(|fingerprint| repeat_counts.get(fingerprint))
             .copied()
             .unwrap_or(0);
-        let next_success_command = next_success_command(records, record).unwrap_or_default();
+        let next_success = next_success_record(records, record);
+        let next_success_command = next_success
+            .map(|record| record.command.clone())
+            .unwrap_or_default();
+        let next_success_changed_paths = next_success
+            .map(|record| record.changed_paths.join(";"))
+            .unwrap_or_default();
         println!(
-            "{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{}",
             record.timestamp_unix_ms,
             csv_cell(&record.family),
             record.exit_code,
@@ -1605,12 +1611,16 @@ fn print_gain_failures(records: &[RunSavingsRecord]) {
             csv_cell(record.failure_fingerprint.as_deref().unwrap_or("")),
             repeat_count,
             csv_cell(&next_success_command),
+            csv_cell(&next_success_changed_paths),
             csv_cell(&record.command)
         );
     }
 }
 
-fn next_success_command(records: &[RunSavingsRecord], failed: &RunSavingsRecord) -> Option<String> {
+fn next_success_record<'a>(
+    records: &'a [RunSavingsRecord],
+    failed: &RunSavingsRecord,
+) -> Option<&'a RunSavingsRecord> {
     records
         .iter()
         .filter(|candidate| {
@@ -1619,7 +1629,6 @@ fn next_success_command(records: &[RunSavingsRecord], failed: &RunSavingsRecord)
                 && candidate.exit_code == 0
         })
         .min_by_key(|candidate| candidate.timestamp_unix_ms)
-        .map(|candidate| candidate.command.clone())
 }
 
 fn gain_bucket_label(timestamp_unix_ms: u128, kind: GainBucketKind) -> String {

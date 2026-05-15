@@ -20,6 +20,8 @@ pub(crate) struct RunSavingsRecord {
     pub(crate) fallback_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) failure_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) changed_paths: Vec<String>,
     pub(crate) timestamp_unix_ms: u128,
 }
 
