@@ -8,10 +8,10 @@ use crate::{
     cmd_agent_prompt, cmd_build, cmd_common, cmd_compact, cmd_context, cmd_cover, cmd_daemon,
     cmd_dashboard, cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard,
     cmd_hook, cmd_hypothesis, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query,
-    cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard,
-    cmd_shell, cmd_stack, cmd_system, cmd_transcript, cmd_verify, cmd_wakeup, BuildCommands, Cli,
-    Commands, ContextCommands, CoverCommands, DiffCommands, GuardCommands, MapCommands,
-    StackCommands, TestCommands,
+    cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet, cmd_plan, cmd_proxy, cmd_run, cmd_setup,
+    cmd_shard, cmd_shell, cmd_stack, cmd_system, cmd_transcript, cmd_verify, cmd_wakeup,
+    BuildCommands, Cli, Commands, ContextCommands, CoverCommands, DiffCommands, GuardCommands,
+    MapCommands, StackCommands, TestCommands,
 };
 
 pub fn main_entry() {
@@ -205,6 +205,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Packet(packet)) => match packet.command {
             cmd_packet::PacketCommands::Fetch(args) => cmd_packet::run_fetch(args),
         },
+        Some(Commands::Plan(args)) => cmd_plan::run(args),
         Some(Commands::Memory(args)) => cmd_memory::run(args),
         Some(Commands::Feedback(args)) => cmd_feedback::run(args),
         Some(Commands::Graph(args)) => cmd_graph::run(args),
@@ -573,6 +574,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Learn(_)) => None,
         Some(Commands::Daemon(_))
         | Some(Commands::Guard(_))
+        | Some(Commands::Plan(_))
         | Some(Commands::Memory(_))
         | Some(Commands::Feedback(_))
         | Some(Commands::Graph(_))
@@ -657,5 +659,22 @@ mod tests {
         let cli = Cli::try_parse_from(["Packet28", "doctor", "--root", "."]).unwrap();
 
         assert!(matches!(cli.command, Some(Commands::Doctor(_))));
+    }
+
+    #[test]
+    fn plan_validate_subcommand_parses_inline_steps() {
+        let cli = Cli::try_parse_from([
+            "Packet28",
+            "plan",
+            "validate",
+            "--task-id",
+            "task-plan",
+            "--steps",
+            r#"[{"id":"read","action":"read","paths":["src/lib.rs"]}]"#,
+            "--json",
+        ])
+        .unwrap();
+
+        assert!(matches!(cli.command, Some(Commands::Plan(_))));
     }
 }

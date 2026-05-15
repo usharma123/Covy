@@ -40,6 +40,7 @@ pub mod cmd_map_repo;
 pub mod cmd_mcp;
 pub mod cmd_memory;
 pub mod cmd_packet;
+pub mod cmd_plan;
 pub mod cmd_proxy;
 pub mod cmd_run;
 pub mod cmd_setup;
