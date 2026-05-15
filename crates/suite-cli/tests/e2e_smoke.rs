@@ -5800,6 +5800,84 @@ fn test_dashboard_shows_local_product_metrics() {
 }
 
 #[test]
+fn test_hypothesis_cli_tracks_active_assumptions() {
+    ensure_packet28d_built();
+    let root = TempDir::new().unwrap();
+    let task_id = "task-hypothesis-smoke";
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "hypothesis",
+            "add",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--task-id",
+            task_id,
+            "--id",
+            "auth-cache",
+            "--json",
+            "Auth cache invalidation is the regression source",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\":\"active\""))
+        .stdout(predicate::str::contains(
+            "\"decision_id\":\"hypothesis:auth-cache\"",
+        ));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "hypothesis",
+            "list",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--task-id",
+            task_id,
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"id\":\"auth-cache\""))
+        .stdout(predicate::str::contains("Auth cache invalidation"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "hypothesis",
+            "reject",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--task-id",
+            task_id,
+            "auth-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hypothesis auth-cache rejected"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "hypothesis",
+            "list",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--task-id",
+            task_id,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("active_hypotheses=0"));
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
 fn test_discover_reports_run_missed_savings() {
     let root = TempDir::new().unwrap();
     let missing_sessions = root.path().join("missing-sessions");

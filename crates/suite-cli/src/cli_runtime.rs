@@ -7,11 +7,11 @@ use serde_json::{json, Value};
 use crate::{
     cmd_agent_prompt, cmd_build, cmd_common, cmd_compact, cmd_context, cmd_cover, cmd_daemon,
     cmd_dashboard, cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard,
-    cmd_hook, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp,
-    cmd_memory, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell, cmd_stack,
-    cmd_system, cmd_transcript, cmd_verify, cmd_wakeup, BuildCommands, Cli, Commands,
-    ContextCommands, CoverCommands, DiffCommands, GuardCommands, MapCommands, StackCommands,
-    TestCommands,
+    cmd_hook, cmd_hypothesis, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query,
+    cmd_map_repo, cmd_mcp, cmd_memory, cmd_packet, cmd_proxy, cmd_run, cmd_setup, cmd_shard,
+    cmd_shell, cmd_stack, cmd_system, cmd_transcript, cmd_verify, cmd_wakeup, BuildCommands, Cli,
+    Commands, ContextCommands, CoverCommands, DiffCommands, GuardCommands, MapCommands,
+    StackCommands, TestCommands,
 };
 
 pub fn main_entry() {
@@ -210,6 +210,7 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
         Some(Commands::Graph(args)) => cmd_graph::run(args),
         Some(Commands::Transcript(args)) => cmd_transcript::run(args),
         Some(Commands::Wakeup(args)) => cmd_wakeup::run(args),
+        Some(Commands::Hypothesis(args)) => cmd_hypothesis::run(args),
         Some(Commands::Dashboard(args)) => cmd_dashboard::run(args),
         Some(Commands::AgentPrompt(args)) => cmd_agent_prompt::run(args),
         Some(Commands::Mcp(args)) => cmd_mcp::run(args),
@@ -577,6 +578,7 @@ fn machine_error_context(cli: &Cli) -> Option<MachineErrorContext> {
         | Some(Commands::Graph(_))
         | Some(Commands::Transcript(_))
         | Some(Commands::Wakeup(_))
+        | Some(Commands::Hypothesis(_))
         | Some(Commands::Dashboard(_))
         | Some(Commands::AgentPrompt(_))
         | Some(Commands::Mcp(_))
