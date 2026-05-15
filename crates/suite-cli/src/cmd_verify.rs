@@ -1,5 +1,9 @@
-use anyhow::Result;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use serde::Deserialize;
 use serde_json::json;
 
 #[derive(Args)]
@@ -12,6 +16,8 @@ pub struct VerifyArgs {
 pub enum VerifyCommands {
     /// Run inline tests from Packet28/RTK-compatible TOML output filters
     Filters(FilterVerifyArgs),
+    /// Verify experiment manifests reference concrete evidence artifacts
+    Experiments(ExperimentVerifyArgs),
 }
 
 #[derive(Args)]
@@ -30,9 +36,67 @@ pub struct FilterVerifyArgs {
     pub pretty: bool,
 }
 
+#[derive(Args)]
+pub struct ExperimentVerifyArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long, default_value = "docs/experiments/manifest.json")]
+    pub manifest: String,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct ExperimentManifest {
+    experiments: Vec<ExperimentEntry>,
+}
+
+impl Default for ExperimentManifest {
+    fn default() -> Self {
+        Self {
+            experiments: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct ExperimentEntry {
+    id: String,
+    workflow: String,
+    commands: Vec<String>,
+    artifacts: Vec<String>,
+    fallback_reasons: Vec<String>,
+    allow_fallbacks: bool,
+}
+
+impl Default for ExperimentEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            workflow: String::new(),
+            commands: Vec::new(),
+            artifacts: Vec::new(),
+            fallback_reasons: Vec::new(),
+            allow_fallbacks: false,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ExperimentIssue {
+    experiment_id: String,
+    kind: String,
+    detail: String,
+}
+
 pub fn run(args: VerifyArgs) -> Result<i32> {
     match args.command {
         VerifyCommands::Filters(args) => run_filters(args),
+        VerifyCommands::Experiments(args) => run_experiments(args),
     }
 }
 
@@ -119,4 +183,139 @@ fn run_filters(args: FilterVerifyArgs) -> Result<i32> {
     } else {
         Ok(1)
     }
+}
+
+fn run_experiments(args: ExperimentVerifyArgs) -> Result<i32> {
+    let cwd = crate::cmd_common::caller_cwd()?;
+    let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
+    let manifest_path = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(
+        &args.manifest,
+        &root,
+    ));
+    let manifest_raw = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("failed to read '{}'", manifest_path.display()))?;
+    let manifest: ExperimentManifest = serde_json::from_str(&manifest_raw)
+        .with_context(|| format!("failed to parse '{}'", manifest_path.display()))?;
+    let issues = verify_experiment_manifest(&root, &manifest);
+    let ok = issues.is_empty();
+
+    if args.json {
+        crate::cmd_common::emit_json(
+            &json!({
+                "ok": ok,
+                "manifest": manifest_path.display().to_string(),
+                "experiment_count": manifest.experiments.len(),
+                "issue_count": issues.len(),
+                "issues": issues.iter().map(|issue| {
+                    json!({
+                        "experiment_id": issue.experiment_id,
+                        "kind": issue.kind,
+                        "detail": issue.detail,
+                    })
+                }).collect::<Vec<_>>(),
+            }),
+            args.pretty,
+        )?;
+    } else {
+        if ok {
+            println!(
+                "{} experiment(s) verified from {}",
+                manifest.experiments.len(),
+                manifest_path.display()
+            );
+        } else {
+            for issue in &issues {
+                eprintln!(
+                    "FAIL [{}] {}: {}",
+                    issue.experiment_id, issue.kind, issue.detail
+                );
+            }
+        }
+    }
+
+    if ok {
+        Ok(0)
+    } else {
+        Ok(1)
+    }
+}
+
+fn verify_experiment_manifest(root: &Path, manifest: &ExperimentManifest) -> Vec<ExperimentIssue> {
+    let mut issues = Vec::new();
+    let mut seen_ids = BTreeSet::new();
+    if manifest.experiments.is_empty() {
+        issues.push(ExperimentIssue {
+            experiment_id: "<manifest>".to_string(),
+            kind: "missing_experiments".to_string(),
+            detail: "manifest must contain at least one experiment".to_string(),
+        });
+    }
+    for experiment in &manifest.experiments {
+        let id = experiment.id.trim();
+        let issue_id = if id.is_empty() { "<missing-id>" } else { id };
+        if id.is_empty() {
+            issues.push(ExperimentIssue {
+                experiment_id: issue_id.to_string(),
+                kind: "missing_id".to_string(),
+                detail: "experiment id is required".to_string(),
+            });
+        } else if !seen_ids.insert(id.to_string()) {
+            issues.push(ExperimentIssue {
+                experiment_id: issue_id.to_string(),
+                kind: "duplicate_id".to_string(),
+                detail: "experiment id appears more than once".to_string(),
+            });
+        }
+        if experiment.workflow.trim().is_empty() {
+            issues.push(ExperimentIssue {
+                experiment_id: issue_id.to_string(),
+                kind: "uncovered_workflow".to_string(),
+                detail: "workflow must name the agent workflow this experiment covers".to_string(),
+            });
+        }
+        if experiment
+            .commands
+            .iter()
+            .all(|command| command.trim().is_empty())
+        {
+            issues.push(ExperimentIssue {
+                experiment_id: issue_id.to_string(),
+                kind: "missing_command_evidence".to_string(),
+                detail: "at least one non-empty command is required".to_string(),
+            });
+        }
+        if experiment.artifacts.is_empty() {
+            issues.push(ExperimentIssue {
+                experiment_id: issue_id.to_string(),
+                kind: "missing_artifact".to_string(),
+                detail: "at least one artifact path is required".to_string(),
+            });
+        }
+        for artifact in &experiment.artifacts {
+            let artifact = artifact.trim();
+            if artifact.is_empty() {
+                issues.push(ExperimentIssue {
+                    experiment_id: issue_id.to_string(),
+                    kind: "missing_artifact".to_string(),
+                    detail: "artifact path is empty".to_string(),
+                });
+                continue;
+            }
+            if !root.join(artifact).exists() {
+                issues.push(ExperimentIssue {
+                    experiment_id: issue_id.to_string(),
+                    kind: "missing_artifact".to_string(),
+                    detail: artifact.to_string(),
+                });
+            }
+        }
+        if !experiment.allow_fallbacks && !experiment.fallback_reasons.is_empty() {
+            issues.push(ExperimentIssue {
+                experiment_id: issue_id.to_string(),
+                kind: "unexpected_fallback".to_string(),
+                detail: experiment.fallback_reasons.join("; "),
+            });
+        }
+    }
+    issues
 }

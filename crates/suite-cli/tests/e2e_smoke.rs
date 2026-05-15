@@ -2278,6 +2278,89 @@ expected = "useful"
 }
 
 #[test]
+fn test_verify_experiments_checks_manifest_evidence() {
+    let root = TempDir::new().unwrap();
+    fs::create_dir_all(root.path().join("docs/experiments/runtime-live")).unwrap();
+    fs::write(
+        root.path().join("docs/experiments/runtime-live/SMOKE.md"),
+        "raw smoke evidence\n",
+    )
+    .unwrap();
+    let manifest = root.path().join("experiments.json");
+    fs::write(
+        &manifest,
+        r#"{
+  "experiments": [
+    {
+      "id": "claude-runtime-smoke",
+      "workflow": "Claude Code hook smoke",
+      "commands": ["Packet28 doctor --json"],
+      "artifacts": ["docs/experiments/runtime-live/SMOKE.md"]
+    },
+    {
+      "id": "missing-fallback",
+      "workflow": "",
+      "commands": [""],
+      "artifacts": ["docs/experiments/runtime-live/MISSING.md"],
+      "fallback_reasons": ["unsupported"]
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "verify",
+            "experiments",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("\"ok\":false"))
+        .stdout(predicate::str::contains("\"kind\":\"uncovered_workflow\""))
+        .stdout(predicate::str::contains(
+            "\"kind\":\"missing_command_evidence\"",
+        ))
+        .stdout(predicate::str::contains("\"kind\":\"missing_artifact\""))
+        .stdout(predicate::str::contains("\"kind\":\"unexpected_fallback\""));
+
+    fs::write(
+        &manifest,
+        r#"{
+  "experiments": [
+    {
+      "id": "claude-runtime-smoke",
+      "workflow": "Claude Code hook smoke",
+      "commands": ["Packet28 doctor --json"],
+      "artifacts": ["docs/experiments/runtime-live/SMOKE.md"]
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "verify",
+            "experiments",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--manifest",
+            manifest.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 experiment(s) verified"));
+}
+
+#[test]
 fn test_run_failing_reduced_command_preserves_exit_and_raw_stderr() {
     let root = TempDir::new().unwrap();
     fs::write(
