@@ -54,6 +54,42 @@ pub(crate) fn is_test_like_step(step: &BrokerPlanStep) -> bool {
         })
 }
 
+pub(crate) fn testmap_tests_for_path(
+    testmap: Option<&suite_packet_core::TestMapIndex>,
+    path: &str,
+) -> Vec<String> {
+    let Some(testmap) = testmap else {
+        return Vec::new();
+    };
+    let mut mapped = testmap
+        .file_to_tests
+        .get(path)
+        .map(|tests| tests.iter().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    mapped.sort();
+    mapped.dedup();
+    mapped
+}
+
+pub(crate) fn test_step_covers_path(step: &BrokerPlanStep, mapped_tests: &[String]) -> bool {
+    if !is_test_like_step(step) {
+        return false;
+    }
+    if mapped_tests.is_empty() || step.paths.is_empty() {
+        return true;
+    }
+    step.paths.iter().any(|path| {
+        mapped_tests.iter().any(|mapped| {
+            path == mapped
+                || path.ends_with(mapped)
+                || step
+                    .description
+                    .as_deref()
+                    .is_some_and(|description| description.contains(mapped))
+        })
+    })
+}
+
 pub(crate) fn estimate_plan_step_tokens(step: &BrokerPlanStep) -> u64 {
     let mut estimate = 48_u64;
     estimate = estimate.saturating_add((step.paths.len() as u64) * 40);

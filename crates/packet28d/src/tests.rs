@@ -37,6 +37,35 @@ fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
     }))
 }
 
+fn daemon_test_root(state: &Arc<Mutex<DaemonState>>) -> PathBuf {
+    state.lock().unwrap().root.clone()
+}
+
+fn write_test_coverage_state(root: &Path, path: &str, covered: bool) {
+    let mut coverage = suite_packet_core::CoverageData::new();
+    let mut file = suite_packet_core::FileCoverage::new();
+    file.lines_instrumented.insert(1);
+    if covered {
+        file.lines_covered.insert(1);
+    }
+    coverage.files.insert(path.to_string(), file);
+    let bytes = suite_foundation_core::cache::serialize_coverage(&coverage).unwrap();
+    let state_dir = root.join(".covy").join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("latest.bin"), bytes).unwrap();
+}
+
+fn write_testmap_state(root: &Path, path: &str, tests: &[&str]) {
+    let mut index = suite_packet_core::TestMapIndex::default();
+    index.file_to_tests.insert(
+        path.to_string(),
+        tests.iter().map(|test| (*test).to_string()).collect(),
+    );
+    let state_dir = root.join(".covy").join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    testy_core::pipeline_testmap::write_testmap(&state_dir.join("testmap.bin"), &index).unwrap();
+}
+
 #[test]
 fn explicit_limits_override_verbosity_alias() {
     let mut section_limits = BTreeMap::new();
@@ -99,6 +128,116 @@ fn normalize_plan_steps_trims_and_assigns_missing_ids() {
     assert_eq!(normalized[0].paths, vec!["src/auth.rs".to_string()]);
     assert_eq!(normalized[0].symbols, vec!["Login".to_string()]);
     assert_eq!(normalized[0].depends_on, vec!["prev".to_string()]);
+}
+
+#[test]
+fn validate_plan_requires_testmap_mapped_gate_for_uncovered_edits() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("tests")).unwrap();
+    std::fs::write(root.join("src/alpha.rs"), "pub fn alpha() -> i32 { 1 }\n").unwrap();
+    std::fs::write(
+        root.join("tests/alpha_test.rs"),
+        "#[test]\nfn alpha_test() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tests/beta_test.rs"),
+        "#[test]\nfn beta_test() {}\n",
+    )
+    .unwrap();
+    write_test_coverage_state(&root, "src/alpha.rs", false);
+    write_testmap_state(&root, "src/alpha.rs", &["tests/alpha_test.rs"]);
+
+    let response = broker_validate_plan(
+        state,
+        BrokerValidatePlanRequest {
+            task_id: "task-testmap-gate".to_string(),
+            require_read_before_edit: Some(false),
+            steps: vec![
+                BrokerPlanStep {
+                    id: "edit-alpha".to_string(),
+                    action: "edit".to_string(),
+                    paths: vec!["src/alpha.rs".to_string()],
+                    ..BrokerPlanStep::default()
+                },
+                BrokerPlanStep {
+                    id: "test-beta".to_string(),
+                    action: "test".to_string(),
+                    paths: vec!["tests/beta_test.rs".to_string()],
+                    ..BrokerPlanStep::default()
+                },
+            ],
+            ..BrokerValidatePlanRequest::default()
+        },
+    )
+    .unwrap();
+
+    assert!(!response.valid);
+    let violation = response
+        .violations
+        .iter()
+        .find(|violation| violation.rule == "missing_test_gate")
+        .expect("mapped test gate violation should be reported");
+    assert!(violation.message.contains("tests/alpha_test.rs"));
+    assert!(violation
+        .related_paths
+        .contains(&"tests/alpha_test.rs".to_string()));
+}
+
+#[test]
+fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
+    for (name, paths) in [
+        ("mapped", vec!["tests/alpha_test.rs".to_string()]),
+        ("generic", Vec::new()),
+    ] {
+        let state = daemon_test_state();
+        let root = daemon_test_root(&state);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(root.join("src/alpha.rs"), "pub fn alpha() -> i32 { 1 }\n").unwrap();
+        std::fs::write(
+            root.join("tests/alpha_test.rs"),
+            "#[test]\nfn alpha_test() {}\n",
+        )
+        .unwrap();
+        write_test_coverage_state(&root, "src/alpha.rs", false);
+        write_testmap_state(&root, "src/alpha.rs", &["tests/alpha_test.rs"]);
+
+        let response = broker_validate_plan(
+            state,
+            BrokerValidatePlanRequest {
+                task_id: format!("task-testmap-gate-{name}"),
+                require_read_before_edit: Some(false),
+                steps: vec![
+                    BrokerPlanStep {
+                        id: "edit-alpha".to_string(),
+                        action: "edit".to_string(),
+                        paths: vec!["src/alpha.rs".to_string()],
+                        ..BrokerPlanStep::default()
+                    },
+                    BrokerPlanStep {
+                        id: "test-alpha".to_string(),
+                        action: "test".to_string(),
+                        paths,
+                        ..BrokerPlanStep::default()
+                    },
+                ],
+                ..BrokerValidatePlanRequest::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            response
+                .violations
+                .iter()
+                .all(|violation| violation.rule != "missing_test_gate"),
+            "{name} test gate should satisfy mapped coverage requirement: {:?}",
+            response.violations
+        );
+    }
 }
 
 #[test]

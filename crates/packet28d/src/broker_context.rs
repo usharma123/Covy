@@ -412,8 +412,7 @@ pub(crate) fn broker_validate_plan(
     let snapshot = load_agent_snapshot_for_task(&state, &request.task_id)?;
     let normalized_steps = normalize_plan_steps(&request.steps);
     let coverage = load_cached_coverage(&root)?;
-    // TODO: Use testmap coverage to validate test-oriented plan steps.
-    let _ = load_cached_testmap(&root)?;
+    let testmap = load_cached_testmap(&root)?;
     let focus_paths = normalized_steps
         .iter()
         .flat_map(|step| step.paths.iter().cloned())
@@ -564,17 +563,32 @@ pub(crate) fn broker_validate_plan(
                 if !coverage_gap_for_path(coverage.as_ref(), path) {
                     continue;
                 }
-                let has_following_test_gate =
-                    normalized_steps.iter().skip(idx + 1).any(is_test_like_step);
+                let mapped_tests = testmap_tests_for_path(testmap.as_ref(), path);
+                let has_following_test_gate = normalized_steps
+                    .iter()
+                    .skip(idx + 1)
+                    .any(|candidate| test_step_covers_path(candidate, &mapped_tests));
                 if !has_following_test_gate {
+                    let mut related_paths = vec![path.clone()];
+                    related_paths.extend(mapped_tests.iter().cloned());
+                    related_paths.sort();
+                    related_paths.dedup();
+                    let message = if mapped_tests.is_empty() {
+                        format!(
+                            "step edits uncovered path '{path}' without a later test-focused step"
+                        )
+                    } else {
+                        format!(
+                            "step edits uncovered path '{path}' without a later test step mapped by the testmap ({})",
+                            mapped_tests.join(", ")
+                        )
+                    };
                     violations.push(BrokerPlanViolation {
                         step_id: step.id.clone(),
                         rule: "missing_test_gate".to_string(),
                         severity: "error".to_string(),
-                        message: format!(
-                            "step edits uncovered path '{path}' without a later test-focused step"
-                        ),
-                        related_paths: vec![path.clone()],
+                        message,
+                        related_paths,
                         related_symbols: step.symbols.clone(),
                     });
                 }
