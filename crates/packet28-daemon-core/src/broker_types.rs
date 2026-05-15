@@ -279,6 +279,7 @@ pub struct BrokerValidatePlanResponse {
     pub warnings: Vec<BrokerPlanViolation>,
     pub normalized_steps: Vec<BrokerPlanStep>,
     pub est_plan_tokens: Option<u64>,
+    pub test_gate_score: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

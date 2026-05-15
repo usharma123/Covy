@@ -693,16 +693,52 @@ pub(crate) fn broker_validate_plan(
         }
     }
 
+    let test_gate_score = request
+        .require_test_gate
+        .unwrap_or(true)
+        .then(|| plan_test_gate_score(&violations, &warnings));
+
     Ok(BrokerValidatePlanResponse {
         valid: violations.is_empty(),
         violations,
         warnings,
         normalized_steps,
         est_plan_tokens: Some(est_plan_tokens),
+        test_gate_score,
     })
 }
 
 const TESTMAP_STALE_AFTER_SECONDS: u64 = 14 * 24 * 60 * 60;
+
+fn plan_test_gate_score(
+    violations: &[BrokerPlanViolation],
+    warnings: &[BrokerPlanViolation],
+) -> u64 {
+    let missing_gate_penalty = violations
+        .iter()
+        .filter(|violation| violation.rule == "missing_test_gate")
+        .count() as u64
+        * 60;
+    let broad_gate_penalty = warnings
+        .iter()
+        .filter(|warning| warning.rule == "broad_test_gate")
+        .count() as u64
+        * 20;
+    let missing_mapping_penalty = warnings
+        .iter()
+        .filter(|warning| warning.rule == "missing_testmap_mapping")
+        .count() as u64
+        * 15;
+    let stale_testmap_penalty = warnings
+        .iter()
+        .any(|warning| warning.rule == "stale_testmap")
+        .then_some(10)
+        .unwrap_or(0);
+
+    100u64.saturating_sub(
+        missing_gate_penalty + broad_gate_penalty + missing_mapping_penalty + stale_testmap_penalty,
+    )
+}
 
 fn stale_testmap_reason(
     testmap: &suite_packet_core::TestMapIndex,

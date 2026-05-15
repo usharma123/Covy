@@ -201,13 +201,19 @@ fn validate_plan_requires_testmap_mapped_gate_for_uncovered_edits() {
     assert!(violation
         .related_paths
         .contains(&"tests/alpha_test.rs".to_string()));
+    assert_eq!(response.test_gate_score, Some(40));
 }
 
 #[test]
 fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
-    for (name, paths, expect_broad_warning) in [
-        ("mapped", vec!["tests/alpha_test.rs".to_string()], false),
-        ("generic", Vec::new(), true),
+    for (name, paths, expect_broad_warning, expected_score) in [
+        (
+            "mapped",
+            vec!["tests/alpha_test.rs".to_string()],
+            false,
+            100,
+        ),
+        ("generic", Vec::new(), true, 80),
     ] {
         let state = daemon_test_state();
         let root = daemon_test_root(&state);
@@ -262,6 +268,7 @@ fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
             expect_broad_warning,
             "{name} test gate broad warning state should match"
         );
+        assert_eq!(response.test_gate_score, Some(expected_score));
     }
 }
 
@@ -320,6 +327,7 @@ fn validate_plan_warns_when_testmap_has_no_mapping_for_uncovered_edit() {
         .expect("missing testmap mapping warning should be reported");
     assert!(warning.message.contains("src/alpha.rs"));
     assert_eq!(warning.related_paths, vec!["src/alpha.rs".to_string()]);
+    assert_eq!(response.test_gate_score, Some(85));
 }
 
 #[test]
@@ -373,6 +381,7 @@ fn validate_plan_warns_when_cached_testmap_is_stale() {
         .expect("stale testmap warning should be reported");
     assert_eq!(warning.step_id, "testmap");
     assert!(warning.message.contains("lower confidence"));
+    assert_eq!(response.test_gate_score, Some(90));
 }
 
 #[test]
