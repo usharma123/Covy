@@ -78,6 +78,16 @@ pub(crate) fn test_step_covers_path(step: &BrokerPlanStep, mapped_tests: &[Strin
     if mapped_tests.is_empty() || step.paths.is_empty() {
         return true;
     }
+    test_step_targets_mapped_tests(step, mapped_tests)
+}
+
+pub(crate) fn test_step_targets_mapped_tests(
+    step: &BrokerPlanStep,
+    mapped_tests: &[String],
+) -> bool {
+    if mapped_tests.is_empty() || !is_test_like_step(step) || step.paths.is_empty() {
+        return false;
+    }
     step.paths.iter().any(|path| {
         mapped_tests.iter().any(|mapped| {
             path == mapped

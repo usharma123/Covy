@@ -568,6 +568,11 @@ pub(crate) fn broker_validate_plan(
                     .iter()
                     .skip(idx + 1)
                     .any(|candidate| test_step_covers_path(candidate, &mapped_tests));
+                let has_mapped_test_gate = mapped_tests.is_empty()
+                    || normalized_steps
+                        .iter()
+                        .skip(idx + 1)
+                        .any(|candidate| test_step_targets_mapped_tests(candidate, &mapped_tests));
                 if !has_following_test_gate {
                     let mut related_paths = vec![path.clone()];
                     related_paths.extend(mapped_tests.iter().cloned());
@@ -588,6 +593,22 @@ pub(crate) fn broker_validate_plan(
                         rule: "missing_test_gate".to_string(),
                         severity: "error".to_string(),
                         message,
+                        related_paths,
+                        related_symbols: step.symbols.clone(),
+                    });
+                } else if !has_mapped_test_gate {
+                    let mut related_paths = vec![path.clone()];
+                    related_paths.extend(mapped_tests.iter().cloned());
+                    related_paths.sort();
+                    related_paths.dedup();
+                    warnings.push(BrokerPlanViolation {
+                        step_id: step.id.clone(),
+                        rule: "broad_test_gate".to_string(),
+                        severity: "warning".to_string(),
+                        message: format!(
+                            "step edits uncovered path '{path}' and uses a broad test gate; mapped test target(s) are {}",
+                            mapped_tests.join(", ")
+                        ),
                         related_paths,
                         related_symbols: step.symbols.clone(),
                     });

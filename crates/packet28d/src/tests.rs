@@ -188,9 +188,9 @@ fn validate_plan_requires_testmap_mapped_gate_for_uncovered_edits() {
 
 #[test]
 fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
-    for (name, paths) in [
-        ("mapped", vec!["tests/alpha_test.rs".to_string()]),
-        ("generic", Vec::new()),
+    for (name, paths, expect_broad_warning) in [
+        ("mapped", vec!["tests/alpha_test.rs".to_string()], false),
+        ("generic", Vec::new(), true),
     ] {
         let state = daemon_test_state();
         let root = daemon_test_root(&state);
@@ -236,6 +236,14 @@ fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
                 .all(|violation| violation.rule != "missing_test_gate"),
             "{name} test gate should satisfy mapped coverage requirement: {:?}",
             response.violations
+        );
+        assert_eq!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.rule == "broad_test_gate"),
+            expect_broad_warning,
+            "{name} test gate broad warning state should match"
         );
     }
 }
