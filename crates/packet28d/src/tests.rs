@@ -1257,6 +1257,78 @@ fn relevant_context_renders_human_summaries_without_debug_ids() {
 }
 
 #[test]
+fn relevant_context_marks_and_downranks_stale_changed_path_context() {
+    let request = BrokerGetContextRequest {
+        task_id: "task-stale-context".to_string(),
+        include_sections: vec!["relevant_context".to_string()],
+        ..BrokerGetContextRequest::default()
+    };
+    let snapshot = suite_packet_core::AgentSnapshotPayload {
+        changed_paths_since_checkpoint: vec!["src/stale.rs".to_string()],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let manage = suite_packet_core::ContextManagePayload {
+        working_set: vec![
+            suite_packet_core::ContextManagePacketRef {
+                cache_key: "cache-stale".to_string(),
+                target: "contextq.manage".to_string(),
+                score: 9.0,
+                summary: Some("cached notes for src/stale.rs before the edit".to_string()),
+                reason: Some("curated_memory".to_string()),
+                source_tier: Some(suite_packet_core::MemorySourceTier::CuratedMemory),
+                memory_kind: Some(suite_packet_core::MemoryKind::Evidence),
+                packet_types: vec!["suite.context.manage.v1".to_string()],
+                est_tokens: 18,
+                est_bytes: 72,
+                runtime_ms: 1,
+            },
+            suite_packet_core::ContextManagePacketRef {
+                cache_key: "cache-fresh".to_string(),
+                target: "contextq.manage".to_string(),
+                score: 7.0,
+                summary: Some("general implementation notes".to_string()),
+                reason: Some("curated_memory".to_string()),
+                source_tier: Some(suite_packet_core::MemorySourceTier::CuratedMemory),
+                memory_kind: Some(suite_packet_core::MemoryKind::Brief),
+                packet_types: vec!["suite.context.manage.v1".to_string()],
+                est_tokens: 18,
+                est_bytes: 72,
+                runtime_ms: 1,
+            },
+        ],
+        ..suite_packet_core::ContextManagePayload::default()
+    };
+
+    let sections = build_broker_sections(
+        Path::new("."),
+        &daemon_test_state(),
+        &request,
+        &snapshot,
+        Some(&manage),
+        None,
+    );
+    let relevant_context = sections
+        .iter()
+        .find(|section| section.id == "relevant_context")
+        .expect("relevant_context section should exist");
+    assert!(relevant_context
+        .body
+        .contains("[stale_after_change: refresh src/stale.rs]"));
+    let fresh_idx = relevant_context
+        .body
+        .find("general implementation notes")
+        .expect("fresh context should render");
+    let stale_idx = relevant_context
+        .body
+        .find("cached notes for src/stale.rs")
+        .expect("stale context should render");
+    assert!(
+        fresh_idx < stale_idx,
+        "stale changed-path context should render after fresh context"
+    );
+}
+
+#[test]
 fn active_decisions_render_related_paths_and_symbols() {
     let snapshot = suite_packet_core::AgentSnapshotPayload {
         active_decisions: vec![suite_packet_core::AgentDecision {

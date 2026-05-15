@@ -17,7 +17,10 @@ fn packet_source_kind(packet: &suite_packet_core::ContextManagePacketRef) -> Bro
     }
 }
 
-fn render_relevant_context_line(packet: &suite_packet_core::ContextManagePacketRef) -> String {
+fn render_relevant_context_line(
+    packet: &suite_packet_core::ContextManagePacketRef,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> (bool, String) {
     let summary = packet
         .summary
         .as_deref()
@@ -36,7 +39,38 @@ fn render_relevant_context_line(packet: &suite_packet_core::ContextManagePacketR
         }
         _ => "relevant context".to_string(),
     };
-    format!("- {rendered}")
+    let (is_stale, freshness_note) = relevant_context_freshness_note(packet, &rendered, snapshot);
+    (is_stale, format!("- {rendered}{freshness_note}"))
+}
+
+fn relevant_context_freshness_note(
+    packet: &suite_packet_core::ContextManagePacketRef,
+    rendered: &str,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> (bool, String) {
+    for path in &snapshot.changed_paths_since_checkpoint {
+        if !packet_mentions_path(packet, rendered, path) {
+            continue;
+        }
+        if snapshot.files_read.iter().any(|read| read == path) {
+            return (false, format!(" [fresh_after_change: {path}]"));
+        }
+        return (true, format!(" [stale_after_change: refresh {path}]"));
+    }
+    (false, String::new())
+}
+
+fn packet_mentions_path(
+    packet: &suite_packet_core::ContextManagePacketRef,
+    rendered: &str,
+    path: &str,
+) -> bool {
+    rendered.contains(path)
+        || packet.target.contains(path)
+        || packet
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(path))
 }
 
 fn render_decision_evidence(decision: &suite_packet_core::AgentDecision) -> String {
@@ -765,13 +799,18 @@ pub(crate) fn build_broker_sections(
         } else {
             &manage.recommended_packets
         };
-        let visible_packets = packets
+        let mut visible_packets = packets
             .iter()
             .filter(|packet| {
                 request.include_self_context
                     || packet_source_kind(packet) != BrokerSourceKind::SelfAuthored
             })
-            .map(render_relevant_context_line)
+            .map(|packet| render_relevant_context_line(packet, snapshot))
+            .collect::<Vec<_>>();
+        visible_packets.sort_by_key(|(is_stale, _)| *is_stale);
+        let visible_packets = visible_packets
+            .into_iter()
+            .map(|(_, line)| line)
             .collect::<Vec<_>>();
         if !visible_packets.is_empty() {
             sections.push(BrokerSection {

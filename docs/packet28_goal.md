@@ -275,6 +275,7 @@ Current evidence:
 - Packet28 MCP now exposes broker plan validation as `packet28.validate_plan`, so agents can ask for dependency, read-before-edit, coverage, testmap, and budget validation before executing an implementation plan. Evidence: `tools_list_exposes_product_compatibility_aliases`.
 - Packet28 broker choose-tool and edit contexts now include an `action_critic` section that warns about missing tool intent, destructive command shapes, broad unscoped searches, missing edit scope, and read-before-edit gaps on focused paths before the agent commits to a risky next action. Evidence: `choose_tool_action_critic_flags_missing_intent_and_risky_commands`; `edit_action_critic_flags_missing_scope_and_unread_paths`.
 - Packet28 broker edit/inspect context now includes `evidence_freshness` when paths or symbols changed since checkpoint, scoring fresh changed-path reads before marking which paths and symbols should be refreshed before relying on cached evidence. Evidence: `broker_edit_context_surfaces_evidence_freshness_for_changed_paths`.
+- Packet28 relevant-context rendering now marks cached snippets that mention changed-since-checkpoint paths as `stale_after_change` unless that path has a fresh read, and downranks stale snippets after fresher context in the rendered broker section. Evidence: `relevant_context_marks_and_downranks_stale_changed_path_context`.
 
 ### 6. Release Readiness
 
