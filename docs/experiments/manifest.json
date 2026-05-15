@@ -1,0 +1,105 @@
+{
+  "experiments": [
+    {
+      "id": "runtime-live-20260512",
+      "workflow": "Claude Code, Gemini, and OpenCode runtime integration smoke",
+      "commands": [
+        "Packet28 setup --runtime claude --root <temp-root> --yes",
+        "claude --print --verbose --output-format stream-json --include-hook-events ...",
+        "Packet28 doctor --agent gemini --root <temp-root> --json",
+        "opencode debug config --log-level ERROR"
+      ],
+      "artifacts": [
+        "docs/experiments/runtime-live/SMOKE_20260512.md"
+      ],
+      "metrics": [
+        {
+          "name": "runtime_smokes_passed",
+          "value": 3,
+          "min": 3
+        }
+      ],
+      "runtime_versions": [
+        {
+          "name": "claude-code",
+          "version": "2.1.139"
+        },
+        {
+          "name": "gemini-cli",
+          "version": "0.30.0"
+        },
+        {
+          "name": "opencode",
+          "version": "1.14.48"
+        }
+      ]
+    },
+    {
+      "id": "real-repos-index-wait-20260511",
+      "workflow": "Packet28 real repository parity and indexed search evidence across packet28, ripgrep, and fd",
+      "commands": [
+        "docs/experiments/run_packet28_fixture_suite.sh"
+      ],
+      "artifacts": [
+        "docs/experiments/real-repos/20260511TREAL_INDEX_WAIT_60S/summary.md",
+        "docs/experiments/real-repos/20260511TREAL_INDEX_WAIT_60S/results.jsonl",
+        "docs/experiments/real-repos/20260511TREAL_INDEX_WAIT_60S/packet28.gain.json"
+      ],
+      "metrics": [
+        {
+          "name": "packet28_average_savings_percent",
+          "value": 94.44,
+          "min": 90
+        },
+        {
+          "name": "packet28_fallback_count",
+          "value": 0,
+          "max": 0
+        },
+        {
+          "name": "raw_artifact_recovery_available",
+          "value": 54,
+          "min": 54
+        }
+      ],
+      "runtime_versions": [
+        {
+          "name": "packet28",
+          "version": "0.2.59"
+        }
+      ]
+    },
+    {
+      "id": "fff-search-backend-20260511",
+      "workflow": "Optional fff MCP search backend comparison and adapter smoke",
+      "commands": [
+        "cargo test -p packet28-search-cli p28_fff_engine_adapts_mcp_grep_results",
+        "P28_FFF_MCP_BIN=/tmp/fff-eval/target/release/fff-mcp target/debug/p28 SearchResult --engine fff --stats --max-total-matches 5",
+        "docs/experiments/run_p28_search_backend_comparison.sh"
+      ],
+      "artifacts": [
+        "docs/experiments/search-backends/FFF_EVAL_20260511.md",
+        "docs/experiments/search-backends/FFF_COMPARE_20260511/summary.md",
+        "docs/experiments/search-backends/FFF_COMPARE_20260511/results.jsonl"
+      ],
+      "metrics": [
+        {
+          "name": "failed_rows",
+          "value": 0,
+          "max": 0
+        },
+        {
+          "name": "fff_adapter_rows",
+          "value": 27,
+          "min": 27
+        }
+      ],
+      "runtime_versions": [
+        {
+          "name": "fff",
+          "version": "39f67c0cf97c22a71408fc6de2f2888c5c4a700e"
+        }
+      ]
+    }
+  ]
+}
