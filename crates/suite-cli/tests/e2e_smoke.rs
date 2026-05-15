@@ -10570,6 +10570,11 @@ fn test_packet28_doctor_reports_healthy_stack() {
         assert_eq!(payload["reducer_round_trip"]["ok"], true);
         assert!(payload.get("push_notifications").is_some());
         assert_eq!(payload["handoff_round_trip"]["ok"], true);
+        assert!(payload["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["name"] == "experiment_manifest"));
     }
 
     suite_cmd()
@@ -11184,6 +11189,11 @@ fn test_packet28_doctor_reports_healthy_runtime() {
     assert_eq!(report["handshake"]["ok"], true);
     assert_eq!(report["reducer_round_trip"]["ok"], true);
     assert_eq!(report["handoff_round_trip"]["ok"], true);
+    assert!(report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|check| check["name"] == "experiment_manifest"));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

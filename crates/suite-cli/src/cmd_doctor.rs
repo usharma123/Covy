@@ -347,6 +347,7 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
     let mcp_config = collect_mcp_config_checks(root);
     let mcp_config_summary = summarize_mcp_config(root, &mcp_config);
     let mcp_round_trip = check_mcp_round_trip(root);
+    let experiment_manifest = check_experiment_manifest(root);
     let checks = vec![
         daemon.clone(),
         index.clone(),
@@ -355,6 +356,7 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
         mcp_round_trip.reducer_round_trip.clone(),
         mcp_round_trip.push_notifications.clone(),
         mcp_round_trip.handoff_round_trip.clone(),
+        experiment_manifest,
     ];
     let ok = checks
         .iter()
@@ -371,6 +373,66 @@ fn build_report(root: &Path, agent: Option<&str>) -> DoctorReport {
         push_notifications: mcp_round_trip.push_notifications,
         handoff_round_trip: mcp_round_trip.handoff_round_trip,
         checks,
+    }
+}
+
+fn check_experiment_manifest(root: &Path) -> DoctorCheck {
+    let manifest = root.join("docs/experiments/manifest.json");
+    if !manifest.exists() {
+        return DoctorCheck {
+            name: "experiment_manifest",
+            ok: false,
+            required: false,
+            detail: "no docs/experiments/manifest.json found; add one and run `Packet28 verify experiments --root . --json` to audit experiment evidence".to_string(),
+        };
+    }
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            return DoctorCheck {
+                name: "experiment_manifest",
+                ok: false,
+                required: false,
+                detail: format!(
+                    "failed to resolve Packet28 binary for manifest verification: {error}"
+                ),
+            }
+        }
+    };
+    match Command::new(exe)
+        .arg("verify")
+        .arg("experiments")
+        .arg("--root")
+        .arg(root)
+        .arg("--json")
+        .output()
+    {
+        Ok(output) if output.status.success() => DoctorCheck {
+            name: "experiment_manifest",
+            ok: true,
+            required: false,
+            detail: "docs/experiments/manifest.json verified with `Packet28 verify experiments --root . --json`".to_string(),
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            DoctorCheck {
+                name: "experiment_manifest",
+                ok: false,
+                required: false,
+                detail: format!(
+                    "experiment manifest verification failed: {}{}",
+                    stdout.trim(),
+                    stderr.trim()
+                ),
+            }
+        }
+        Err(error) => DoctorCheck {
+            name: "experiment_manifest",
+            ok: false,
+            required: false,
+            detail: format!("failed to run experiment manifest verification: {error}"),
+        },
     }
 }
 
