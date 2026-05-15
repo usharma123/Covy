@@ -727,6 +727,17 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.verify_experiments",
+                    "description": "Verify Packet28 experiment manifest evidence, artifacts, metric gates, runtime versions, and required workflow coverage.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "manifest": {"type":"string"},
+                            "require_workflows": {"type":"array","items":{"type":"string"}}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.hypothesis_add",
                     "description": "Record an active task hypothesis so it flows into Packet28 broker context and handoff state.",
                     "inputSchema": {
@@ -1532,6 +1543,20 @@ fn handle_tool_call(
             track_task(session, root, &request.task_id)?;
             handle_packet28_validate_plan(root, request)?
         }
+        "packet28.verify_experiments" => {
+            let request: VerifyExperimentsToolArgs = serde_json::from_value(arguments)?;
+            let manifest = root.join(
+                request
+                    .manifest
+                    .as_deref()
+                    .unwrap_or("docs/experiments/manifest.json"),
+            );
+            crate::cmd_verify::verify_experiments_payload(
+                root,
+                &manifest,
+                &request.require_workflows.unwrap_or_default(),
+            )?
+        }
         "packet28.hypothesis_add" => {
             let mut request: HypothesisAddToolArgs = serde_json::from_value(arguments)?;
             request.task_id = Some(resolve_session_task_id(
@@ -2276,6 +2301,12 @@ struct DoctorToolArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct VerifyExperimentsToolArgs {
+    manifest: Option<String>,
+    require_workflows: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HypothesisAddToolArgs {
     task_id: Option<String>,
     id: Option<String>,
@@ -2449,6 +2480,20 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .map(Vec::len)
                 .unwrap_or_default();
             format!("Packet28 plan validation valid={valid} violations={violations} warnings={warnings}.")
+        }
+        "packet28.verify_experiments" => {
+            let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
+            let experiments = payload
+                .get("experiment_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let issues = payload
+                .get("issue_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!(
+                "Packet28 experiment manifest ok={ok} experiments={experiments} issues={issues}."
+            )
         }
         "packet28.hypothesis_add" => {
             let id = payload
@@ -2755,6 +2800,7 @@ mod tests {
             "packet28_rewrite",
             "packet28_handoff",
             "packet28_validate_plan",
+            "packet28_verify_experiments",
             "packet28_hypothesis_add",
             "packet28_hypothesis_list",
             "packet28_hypothesis_resolve",
@@ -2825,5 +2871,42 @@ mod tests {
             rewrite["structuredContent"]["route"],
             Value::String("reducer_rewrite".to_string())
         );
+    }
+
+    #[test]
+    fn verify_experiments_tool_returns_manifest_status() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("docs/experiments")).unwrap();
+        std::fs::write(root.path().join("docs/experiments/evidence.md"), "evidence").unwrap();
+        std::fs::write(
+            root.path().join("docs/experiments/manifest.json"),
+            r#"{
+              "experiments": [{
+                "id": "mcp-verify",
+                "workflow": "MCP experiment audit",
+                "commands": ["Packet28 verify experiments --json"],
+                "artifacts": ["docs/experiments/evidence.md"],
+                "metrics": [{"name":"saved_tokens","value":12,"min":10}],
+                "runtime_versions": [{"name":"packet28","version":"0.2.59"}]
+              }]
+            }"#,
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.verify_experiments",
+                "arguments": {
+                    "require_workflows": ["MCP experiment audit"]
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["ok"], true);
+        assert_eq!(response["structuredContent"]["experiment_count"], 1);
+        assert_eq!(response["structuredContent"]["issue_count"], 0);
     }
 }

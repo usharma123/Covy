@@ -234,43 +234,37 @@ fn run_experiments(args: ExperimentVerifyArgs) -> Result<i32> {
         &args.manifest,
         &root,
     ));
-    let manifest_raw = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("failed to read '{}'", manifest_path.display()))?;
-    let manifest: ExperimentManifest = serde_json::from_str(&manifest_raw)
-        .with_context(|| format!("failed to parse '{}'", manifest_path.display()))?;
-    let issues = verify_experiment_manifest(&root, &manifest, &args.require_workflows);
-    let ok = issues.is_empty();
+    let payload = verify_experiments_payload(&root, &manifest_path, &args.require_workflows)?;
+    let ok = payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
 
     if args.json {
-        crate::cmd_common::emit_json(
-            &json!({
-                "ok": ok,
-                "manifest": manifest_path.display().to_string(),
-                "experiment_count": manifest.experiments.len(),
-                "required_workflows": args.require_workflows,
-                "issue_count": issues.len(),
-                "issues": issues.iter().map(|issue| {
-                    json!({
-                        "experiment_id": issue.experiment_id,
-                        "kind": issue.kind,
-                        "detail": issue.detail,
-                    })
-                }).collect::<Vec<_>>(),
-            }),
-            args.pretty,
-        )?;
+        crate::cmd_common::emit_json(&payload, args.pretty)?;
     } else {
+        let experiment_count = payload
+            .get("experiment_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default();
         if ok {
             println!(
-                "{} experiment(s) verified from {}",
-                manifest.experiments.len(),
+                "{experiment_count} experiment(s) verified from {}",
                 manifest_path.display()
             );
-        } else {
-            for issue in &issues {
+        } else if let Some(issues) = payload.get("issues").and_then(serde_json::Value::as_array) {
+            for issue in issues {
                 eprintln!(
                     "FAIL [{}] {}: {}",
-                    issue.experiment_id, issue.kind, issue.detail
+                    issue
+                        .get("experiment_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>"),
+                    issue
+                        .get("kind")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("issue"),
+                    issue
+                        .get("detail")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
                 );
             }
         }
@@ -281,6 +275,33 @@ fn run_experiments(args: ExperimentVerifyArgs) -> Result<i32> {
     } else {
         Ok(1)
     }
+}
+
+pub(crate) fn verify_experiments_payload(
+    root: &Path,
+    manifest_path: &Path,
+    required_workflows: &[String],
+) -> Result<serde_json::Value> {
+    let manifest_raw = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("failed to read '{}'", manifest_path.display()))?;
+    let manifest: ExperimentManifest = serde_json::from_str(&manifest_raw)
+        .with_context(|| format!("failed to parse '{}'", manifest_path.display()))?;
+    let issues = verify_experiment_manifest(root, &manifest, required_workflows);
+    let ok = issues.is_empty();
+    Ok(json!({
+        "ok": ok,
+        "manifest": manifest_path.display().to_string(),
+        "experiment_count": manifest.experiments.len(),
+        "required_workflows": required_workflows,
+        "issue_count": issues.len(),
+        "issues": issues.iter().map(|issue| {
+            json!({
+                "experiment_id": issue.experiment_id,
+                "kind": issue.kind,
+                "detail": issue.detail,
+            })
+        }).collect::<Vec<_>>(),
+    }))
 }
 
 fn verify_experiment_manifest(
