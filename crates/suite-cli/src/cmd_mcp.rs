@@ -59,7 +59,7 @@ use crate::cmd_mcp::transport::{
     read_message, render_command_preview, write_message, McpMessageFraming,
 };
 use crate::cmd_transcript::{export_transcripts, import_transcripts_from_str};
-use crate::cmd_wakeup::build_wakeup_report_with_options;
+use crate::cmd_wakeup::{build_wakeup_report_scoped, WakeupScope};
 use crate::memory_store::{
     add_concept_with_metadata, append_transcript_message, apply_feedback, consolidate_memories,
     create_graph_memoir, decay_memories, delete_concept, delete_feedback,
@@ -1034,6 +1034,9 @@ fn handle_method(
                         "properties": {
                             "query": {"type":"string"},
                             "project": {"type":"string"},
+                            "paths": {"type":"array","items":{"type":"string"}},
+                            "symbols": {"type":"array","items":{"type":"string"}},
+                            "intent": {"type":"string"},
                             "limit": {"type":"integer","minimum":1},
                             "max_tokens": {"type":"integer","minimum":1},
                             "format": {"type":"string"}
@@ -1654,9 +1657,26 @@ fn handle_tool_call(
         "packet28.feedback_stats" => serde_json::to_value(feedback_stats()?)?,
         "packet28.wakeup" => {
             let request: WakeupToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(build_wakeup_report_with_options(
+            let paths = request
+                .paths
+                .as_ref()
+                .or(request.path.as_ref())
+                .cloned()
+                .unwrap_or_default();
+            let symbols = request
+                .symbols
+                .as_ref()
+                .or(request.symbol.as_ref())
+                .cloned()
+                .unwrap_or_default();
+            serde_json::to_value(build_wakeup_report_scoped(
                 request.query.as_deref(),
                 request.project.as_deref(),
+                WakeupScope {
+                    paths: paths.iter().map(String::as_str).collect(),
+                    symbols: symbols.iter().map(String::as_str).collect(),
+                    intent: request.intent.as_deref(),
+                },
                 request.limit.unwrap_or(5),
                 request.max_tokens.unwrap_or(500),
                 request.format.as_deref().unwrap_or("markdown"),
@@ -1968,6 +1988,11 @@ struct FeedbackIdToolArgs {
 struct WakeupToolArgs {
     query: Option<String>,
     project: Option<String>,
+    path: Option<Vec<String>>,
+    paths: Option<Vec<String>>,
+    symbol: Option<Vec<String>>,
+    symbols: Option<Vec<String>>,
+    intent: Option<String>,
     limit: Option<usize>,
     max_tokens: Option<usize>,
     format: Option<String>,
