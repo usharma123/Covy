@@ -86,6 +86,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
         BrokerAction::Edit => &[
             "task_objective",
             "budget_notes",
+            "action_critic",
             "task_memory",
             "agent_intention",
             "checkpoint_context",
@@ -198,6 +199,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
         }
         BrokerAction::Edit => {
             section_item_limits.insert("budget_notes".to_string(), 4);
+            section_item_limits.insert("action_critic".to_string(), 4);
             section_item_limits.insert("task_memory".to_string(), 8);
             section_item_limits.insert("agent_intention".to_string(), 6);
             section_item_limits.insert("checkpoint_context".to_string(), 6);
@@ -367,6 +369,7 @@ pub(crate) fn action_critical_section_ids(action: BrokerAction) -> &'static [&'s
         ],
         BrokerAction::Edit => &[
             "budget_notes",
+            "action_critic",
             "task_memory",
             "agent_intention",
             "checkpoint_context",

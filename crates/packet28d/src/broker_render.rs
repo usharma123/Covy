@@ -252,7 +252,7 @@ pub(crate) fn build_broker_sections(
     }
 
     if allowed_sections.contains("action_critic") {
-        let critic_lines = build_action_critic_lines(request, &focus_symbols);
+        let critic_lines = build_action_critic_lines(request, snapshot, &focus_symbols);
         if !critic_lines.is_empty() {
             sections.push(BrokerSection {
                 id: "action_critic".to_string(),
@@ -783,14 +783,20 @@ pub(crate) fn build_broker_sections(
 
 pub(crate) fn build_action_critic_lines(
     request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
     focus_symbols: &[String],
 ) -> Vec<String> {
-    if !matches!(
-        request.action.unwrap_or(BrokerAction::Plan),
-        BrokerAction::ChooseTool
-    ) {
-        return Vec::new();
+    match request.action.unwrap_or(BrokerAction::Plan) {
+        BrokerAction::ChooseTool => build_choose_tool_action_critic_lines(request, focus_symbols),
+        BrokerAction::Edit => build_edit_action_critic_lines(request, snapshot, focus_symbols),
+        _ => Vec::new(),
     }
+}
+
+fn build_choose_tool_action_critic_lines(
+    request: &BrokerGetContextRequest,
+    focus_symbols: &[String],
+) -> Vec<String> {
     let mut lines = Vec::new();
     let query = request
         .query
@@ -818,6 +824,54 @@ pub(crate) fn build_action_critic_lines(
         );
     }
     lines
+}
+
+fn build_edit_action_critic_lines(
+    request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    focus_symbols: &[String],
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let focus_paths = merged_unique(
+        &merged_unique(&snapshot.focus_paths, &snapshot.checkpoint_focus_paths),
+        &request.focus_paths,
+    );
+    if focus_paths.is_empty() && focus_symbols.is_empty() {
+        lines.push(
+            "- missing_edit_scope: add focus_paths or focus_symbols before requesting edit context"
+                .to_string(),
+        );
+    }
+
+    let read_paths = merged_unique(
+        &snapshot.files_read,
+        &snapshot
+            .read_paths_by_tool
+            .iter()
+            .flat_map(|summary| summary.paths.iter().cloned())
+            .collect::<Vec<_>>(),
+    );
+    let unread_paths = focus_paths
+        .iter()
+        .filter(|path| !path_read_before_edit(path, &read_paths))
+        .take(4)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unread_paths.is_empty() {
+        lines.push(format!(
+            "- read_before_edit: inspect focused path(s) before editing: {}",
+            unread_paths.join(", ")
+        ));
+    }
+    lines
+}
+
+fn path_read_before_edit(path: &str, read_paths: &[String]) -> bool {
+    let path = path.trim().trim_start_matches("./");
+    read_paths
+        .iter()
+        .map(|read_path| read_path.trim().trim_start_matches("./"))
+        .any(|read_path| read_path == path)
 }
 
 fn destructive_command_risk(query: &str) -> bool {
