@@ -5686,6 +5686,8 @@ fn test_dashboard_shows_local_product_metrics() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"commands_reduced\":1"))
+        .stdout(predicate::str::contains("\"top_saved_routes\""))
+        .stdout(predicate::str::contains("\"route\":\"run_reducer:git\""))
         .stdout(predicate::str::contains("\"memory_count\":1"))
         .stdout(predicate::str::contains("\"memory_topics\""))
         .stdout(predicate::str::contains("\"topic\":\"general\""))
@@ -5705,6 +5707,7 @@ fn test_dashboard_shows_local_product_metrics() {
         .args(["dashboard", "--root", root.path().to_str().unwrap()])
         .assert()
         .success()
+        .stdout(predicate::str::contains("top_saved_routes=1"))
         .stdout(predicate::str::contains("memory_topics=1"))
         .stdout(predicate::str::contains("topics_needing_consolidation=0"))
         .stdout(predicate::str::contains("transcript_messages=1"));
@@ -5728,6 +5731,8 @@ fn test_dashboard_shows_local_product_metrics() {
     let html = fs::read_to_string(&html_path).unwrap();
     assert!(html.contains("<title>Packet28 Dashboard</title>"));
     assert!(html.contains("Saved tokens"));
+    assert!(html.contains("Top Saved Routes"));
+    assert!(html.contains("run_reducer:git"));
     assert!(html.contains("Memory Topics"));
     assert!(html.contains("Integration Health"));
 
@@ -5745,6 +5750,7 @@ fn test_dashboard_shows_local_product_metrics() {
         .success()
         .stdout(predicate::str::contains("Packet28 Dashboard"))
         .stdout(predicate::str::contains("panel=Overview"))
+        .stdout(predicate::str::contains("top_saved_routes:"))
         .stdout(predicate::str::contains("commands_reduced=1"));
 
     suite_cmd()

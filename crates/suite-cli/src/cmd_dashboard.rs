@@ -38,6 +38,7 @@ struct DashboardReport {
     token_savings: TokenSavings,
     commands_reduced: usize,
     sessions: usize,
+    top_saved_routes: Vec<DashboardRouteRoi>,
     top_noisy_commands: Vec<String>,
     missed_savings: Vec<String>,
     memory_count: i64,
@@ -65,15 +66,27 @@ struct TokenSavings {
     savings_percent: f64,
 }
 
+#[derive(Debug, Serialize, Default, Clone)]
+struct DashboardRouteRoi {
+    route: String,
+    invocation_count: usize,
+    raw_est_tokens: u64,
+    reduced_est_tokens: u64,
+    saved_est_tokens: u64,
+    savings_percent: f64,
+}
+
 pub fn run(args: DashboardArgs) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
     let savings = load_run_savings(&root, 100)?;
     let mut token_savings = TokenSavings::default();
     let mut top_noisy_commands = Vec::new();
     let mut missed_savings = Vec::new();
+    let mut route_roi = BTreeMap::<String, DashboardRouteRoi>::new();
     for record in &savings {
         token_savings.raw_est_tokens += record.raw_est_tokens;
         token_savings.reduced_est_tokens += record.reduced_est_tokens;
+        record_dashboard_route_roi(&mut route_roi, record);
         if record.raw_est_tokens > 0 {
             top_noisy_commands.push(record.command.clone());
         }
@@ -91,6 +104,13 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
     };
     top_noisy_commands.truncate(5);
     missed_savings.truncate(5);
+    let mut top_saved_routes = route_roi.into_values().collect::<Vec<_>>();
+    top_saved_routes.sort_by(|a, b| {
+        b.saved_est_tokens
+            .cmp(&a.saved_est_tokens)
+            .then_with(|| a.route.cmp(&b.route))
+    });
+    top_saved_routes.truncate(5);
 
     let sessions = load_task_registry(&root)
         .map(|registry| registry.tasks.len())
@@ -122,6 +142,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
             .filter(|record| record.fallback_reason.is_none())
             .count(),
         sessions,
+        top_saved_routes,
         top_noisy_commands,
         missed_savings,
         memory_count: store_stats.memory_count,
@@ -167,6 +188,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
             report.token_savings.saved_est_tokens
         );
         println!("commands_reduced={}", report.commands_reduced);
+        println!("top_saved_routes={}", report.top_saved_routes.len());
         println!("sessions={}", report.sessions);
         println!("memory_count={}", report.memory_count);
         println!("memory_topics={}", report.memory_topics.len());
@@ -187,6 +209,36 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         println!("windsurf_doctor_status={}", report.windsurf_doctor_status);
     }
     Ok(0)
+}
+
+fn record_dashboard_route_roi(
+    route_roi: &mut BTreeMap<String, DashboardRouteRoi>,
+    record: &crate::savings_analytics::RunSavingsRecord,
+) {
+    let route = if let Some(reason) = &record.fallback_reason {
+        format!("run_fallback:{reason}")
+    } else {
+        format!("run_reducer:{}", record.family)
+    };
+    let entry = route_roi
+        .entry(route.clone())
+        .or_insert_with(|| DashboardRouteRoi {
+            route,
+            ..DashboardRouteRoi::default()
+        });
+    entry.invocation_count += 1;
+    entry.raw_est_tokens = entry.raw_est_tokens.saturating_add(record.raw_est_tokens);
+    entry.reduced_est_tokens = entry
+        .reduced_est_tokens
+        .saturating_add(record.reduced_est_tokens);
+    entry.saved_est_tokens = entry
+        .raw_est_tokens
+        .saturating_sub(entry.reduced_est_tokens);
+    entry.savings_percent = if entry.raw_est_tokens == 0 {
+        0.0
+    } else {
+        (entry.saved_est_tokens as f64 / entry.raw_est_tokens as f64) * 100.0
+    };
 }
 
 #[derive(Clone, Copy)]
@@ -257,6 +309,13 @@ fn render_dashboard_tui(report: &DashboardReport, panel: DashboardPanel) -> Stri
                 report.commands_reduced,
                 report.sessions
             ));
+            out.push_str("top_saved_routes:\n");
+            for route in &report.top_saved_routes {
+                out.push_str(&format!(
+                    "- {} saved={} pct={:.1}\n",
+                    route.route, route.saved_est_tokens, route.savings_percent
+                ));
+            }
             out.push_str("top_noisy_commands:\n");
             push_tui_list(&mut out, &report.top_noisy_commands);
             out.push_str("missed_savings:\n");
@@ -397,6 +456,17 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
             "<tr><td>{}</td><td>{}</td></tr>",
             escape_html(&topic.topic),
             topic.memory_count
+        ));
+    }
+    html.push_str("</table>");
+
+    html.push_str("<h2>Top Saved Routes</h2><table><tr><th>Route</th><th>Saved tokens</th><th>Savings</th></tr>");
+    for route in &report.top_saved_routes {
+        html.push_str(&format!(
+            "<tr><td><code>{}</code></td><td>{}</td><td>{:.1}%</td></tr>",
+            escape_html(&route.route),
+            route.saved_est_tokens,
+            route.savings_percent
         ));
     }
     html.push_str("</table>");
