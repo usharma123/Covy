@@ -121,6 +121,16 @@ pub(crate) struct Packet28PrepareHandoffArgs {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
+pub(crate) struct Packet28ValidatePlanArgs {
+    pub(crate) task_id: String,
+    pub(crate) steps: Vec<BrokerPlanStep>,
+    pub(crate) require_read_before_edit: Option<bool>,
+    pub(crate) require_test_gate: Option<bool>,
+    pub(crate) budget_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
 pub(crate) struct Packet28WriteIntentionArgs {
     pub(crate) task_id: String,
     pub(crate) text: String,
@@ -1140,6 +1150,29 @@ pub(crate) fn handle_packet28_prepare_handoff(
             query: args.query,
             response_mode: args.response_mode,
             include_debug_memory: false,
+        },
+    )?;
+    Ok(serde_json::to_value(response)?)
+}
+
+pub(crate) fn handle_packet28_validate_plan(
+    root: &Path,
+    args: Packet28ValidatePlanArgs,
+) -> Result<Value> {
+    if args.task_id.trim().is_empty() {
+        return Err(anyhow!("packet28.validate_plan requires task_id"));
+    }
+    if args.steps.is_empty() {
+        return Err(anyhow!("packet28.validate_plan requires at least one step"));
+    }
+    let response = crate::broker_client::validate_plan(
+        root,
+        BrokerValidatePlanRequest {
+            task_id: args.task_id,
+            steps: args.steps,
+            require_read_before_edit: args.require_read_before_edit,
+            require_test_gate: args.require_test_gate,
+            budget_tokens: args.budget_tokens,
         },
     )?;
     Ok(serde_json::to_value(response)?)

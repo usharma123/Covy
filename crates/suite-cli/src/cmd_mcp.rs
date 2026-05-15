@@ -11,10 +11,10 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 use packet28_daemon_core::{
     load_task_events, task_artifact_dir, task_brief_markdown_path, task_state_json_path,
-    task_version_json_path, BrokerPrepareHandoffRequest, BrokerResponseMode,
-    BrokerTaskStatusRequest, BrokerTaskStatusResponse, BrokerWriteOp, BrokerWriteStateBatchRequest,
-    BrokerWriteStateBatchResponse, BrokerWriteStateRequest, BrokerWriteStateResponse,
-    DaemonRequest, DaemonResponse, TaskRecord,
+    task_version_json_path, BrokerPlanStep, BrokerPrepareHandoffRequest, BrokerResponseMode,
+    BrokerTaskStatusRequest, BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
+    BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
+    BrokerWriteStateResponse, DaemonRequest, DaemonResponse, TaskRecord,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -40,10 +40,10 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_fetch_context, handle_packet28_fetch_raw_output,
     handle_packet28_fetch_tool_result, handle_packet28_glob, handle_packet28_prepare_handoff,
     handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
-    handle_packet28_write_intention, Packet28FetchContextArgs, Packet28FetchRawOutputArgs,
-    Packet28FetchToolResultArgs, Packet28GlobArgs, Packet28PrepareHandoffArgs,
-    Packet28ReadRegionsArgs, Packet28SearchArgs, Packet28SearchFastArgs,
-    Packet28WriteIntentionArgs,
+    handle_packet28_validate_plan, handle_packet28_write_intention, Packet28FetchContextArgs,
+    Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs, Packet28GlobArgs,
+    Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs, Packet28SearchArgs,
+    Packet28SearchFastArgs, Packet28ValidatePlanArgs, Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -695,6 +695,34 @@ fn handle_method(
                             "task_id": {"type":"string"},
                             "query": {"type":"string"},
                             "response_mode": {"type":"string","enum":["slim","full"]}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.validate_plan",
+                    "description": "Validate an agent implementation plan against Packet28 broker state, coverage, dependency order, read-before-edit, and mapped test-gate evidence.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["task_id", "steps"],
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "steps": {
+                                "type":"array",
+                                "items": {
+                                    "type":"object",
+                                    "properties": {
+                                        "id": {"type":"string"},
+                                        "action": {"type":"string"},
+                                        "description": {"type":"string"},
+                                        "paths": {"type":"array","items":{"type":"string"}},
+                                        "symbols": {"type":"array","items":{"type":"string"}},
+                                        "depends_on": {"type":"array","items":{"type":"string"}}
+                                    }
+                                }
+                            },
+                            "require_read_before_edit": {"type":"boolean"},
+                            "require_test_gate": {"type":"boolean"},
+                            "budget_tokens": {"type":"integer","minimum":1}
                         }
                     }
                 },
@@ -1457,6 +1485,12 @@ fn handle_tool_call(
             request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
             track_task(session, root, &request.task_id)?;
             handle_packet28_prepare_handoff(root, request)?
+        }
+        "packet28.validate_plan" => {
+            let mut request: Packet28ValidatePlanArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
+            track_task(session, root, &request.task_id)?;
+            handle_packet28_validate_plan(root, request)?
         }
         "packet28.reduce" => {
             let request: ReduceToolArgs = serde_json::from_value(arguments)?;
@@ -2274,6 +2308,23 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 format!("Packet28 did not prepare a handoff: {reason}")
             }
         }
+        "packet28.validate_plan" => {
+            let valid = payload
+                .get("valid")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let violations = payload
+                .get("violations")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            let warnings = payload
+                .get("warnings")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            format!("Packet28 plan validation valid={valid} violations={violations} warnings={warnings}.")
+        }
         "packet28.reduce" => "Packet28 command reduction.".to_string(),
         "packet28.rewrite" => {
             let route = payload
@@ -2556,6 +2607,7 @@ mod tests {
             "packet28_reduce",
             "packet28_rewrite",
             "packet28_handoff",
+            "packet28_validate_plan",
             "packet28_doctor",
             "packet28_memory_list",
             "packet28_memory_embed",

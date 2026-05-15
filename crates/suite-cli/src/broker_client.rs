@@ -4,9 +4,10 @@ use anyhow::{anyhow, Result};
 use blake3::Hasher;
 use packet28_daemon_core::{
     BrokerPrepareHandoffRequest, BrokerPrepareHandoffResponse, BrokerTaskStatusRequest,
-    BrokerTaskStatusResponse, BrokerWriteOp, BrokerWriteStateRequest, BrokerWriteStateResponse,
-    DaemonRequest, DaemonResponse, HookIngestRequest, HookIngestResponse, TaskAwaitHandoffRequest,
-    TaskAwaitHandoffResponse, TaskMarkHandoffConsumedRequest, TaskMarkHandoffConsumedResponse,
+    BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerValidatePlanResponse, BrokerWriteOp,
+    BrokerWriteStateRequest, BrokerWriteStateResponse, DaemonRequest, DaemonResponse,
+    HookIngestRequest, HookIngestResponse, TaskAwaitHandoffRequest, TaskAwaitHandoffResponse,
+    TaskMarkHandoffConsumedRequest, TaskMarkHandoffConsumedResponse,
 };
 
 pub fn resolve_root(root: &str) -> PathBuf {
@@ -56,6 +57,21 @@ pub fn write_intention(
 ) -> Result<BrokerWriteStateResponse> {
     request.op = Some(BrokerWriteOp::Intention);
     write_state(root, request)
+}
+
+pub fn validate_plan(
+    root: &Path,
+    request: BrokerValidatePlanRequest,
+) -> Result<BrokerValidatePlanResponse> {
+    if request.task_id.trim().is_empty() {
+        return Err(anyhow!("broker validate_plan requires task_id"));
+    }
+    ensure_daemon(root)?;
+    match crate::cmd_daemon::send_request(root, &DaemonRequest::BrokerValidatePlan { request })? {
+        DaemonResponse::BrokerValidatePlan { response } => Ok(response),
+        DaemonResponse::Error { message } => Err(anyhow!(message)),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
 }
 
 pub fn task_status(root: &Path, task_id: &str) -> Result<BrokerTaskStatusResponse> {
