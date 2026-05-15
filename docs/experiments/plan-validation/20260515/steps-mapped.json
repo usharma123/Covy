@@ -1,0 +1,19 @@
+[
+  {
+    "id": "read-plan-cli",
+    "action": "read",
+    "paths": ["crates/suite-cli/src/cmd_plan.rs"]
+  },
+  {
+    "id": "edit-plan-cli",
+    "action": "edit",
+    "paths": ["crates/suite-cli/src/cmd_plan.rs"],
+    "depends_on": ["read-plan-cli"]
+  },
+  {
+    "id": "test-plan-cli",
+    "action": "test",
+    "paths": ["crates/suite-cli/tests/e2e_smoke.rs"],
+    "depends_on": ["edit-plan-cli"]
+  }
+]

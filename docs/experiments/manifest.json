@@ -100,6 +100,47 @@
           "version": "39f67c0cf97c22a71408fc6de2f2888c5c4a700e"
         }
       ]
+    },
+    {
+      "id": "plan-validation-cli-20260515",
+      "workflow": "Packet28 broker plan validation CLI with mapped test-gate score evidence",
+      "commands": [
+        "target/debug/covy ingest docs/experiments/plan-validation/20260515/coverage.lcov --format lcov --output .covy/state/latest.bin --json",
+        "target/debug/Packet28 test map --manifest docs/experiments/plan-validation/20260515/testmap-manifest.jsonl --output .covy/state/testmap.bin --timings-output .covy/state/testtimings.bin --json",
+        "target/debug/Packet28 plan validate --task-id plan-validation-20260515 --steps-file docs/experiments/plan-validation/20260515/steps-mapped.json --json --pretty"
+      ],
+      "artifacts": [
+        "docs/experiments/plan-validation/20260515/summary.md",
+        "docs/experiments/plan-validation/20260515/covy-ingest.json",
+        "docs/experiments/plan-validation/20260515/testmap-build.json",
+        "docs/experiments/plan-validation/20260515/plan-validate-mapped.json",
+        "docs/experiments/plan-validation/20260515/steps-mapped.json",
+        "docs/experiments/plan-validation/20260515/testmap-manifest.jsonl",
+        "docs/experiments/plan-validation/20260515/coverage.lcov"
+      ],
+      "metrics": [
+        {
+          "name": "plan_validation_test_gate_score",
+          "value": 100,
+          "min": 100
+        },
+        {
+          "name": "plan_validation_violations",
+          "value": 0,
+          "max": 0
+        },
+        {
+          "name": "plan_validation_warnings",
+          "value": 0,
+          "max": 0
+        }
+      ],
+      "runtime_versions": [
+        {
+          "name": "packet28",
+          "version": "0.2.59"
+        }
+      ]
     }
   ]
 }

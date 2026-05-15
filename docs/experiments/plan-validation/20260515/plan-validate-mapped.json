@@ -1,0 +1,43 @@
+{
+  "est_plan_tokens": 280,
+  "normalized_steps": [
+    {
+      "action": "read",
+      "depends_on": [],
+      "description": null,
+      "id": "read-plan-cli",
+      "paths": [
+        "crates/suite-cli/src/cmd_plan.rs"
+      ],
+      "symbols": []
+    },
+    {
+      "action": "edit",
+      "depends_on": [
+        "read-plan-cli"
+      ],
+      "description": null,
+      "id": "edit-plan-cli",
+      "paths": [
+        "crates/suite-cli/src/cmd_plan.rs"
+      ],
+      "symbols": []
+    },
+    {
+      "action": "test",
+      "depends_on": [
+        "edit-plan-cli"
+      ],
+      "description": null,
+      "id": "test-plan-cli",
+      "paths": [
+        "crates/suite-cli/tests/e2e_smoke.rs"
+      ],
+      "symbols": []
+    }
+  ],
+  "test_gate_score": 100,
+  "valid": true,
+  "violations": [],
+  "warnings": []
+}

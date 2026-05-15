@@ -1,0 +1,8 @@
+{
+  "coverage_inputs": 1,
+  "coverage_files_tracked": 1,
+  "diagnostics_inputs": 0,
+  "diagnostics_total_issues": 0,
+  "output_coverage_path": ".covy/state/latest.bin",
+  "output_issues_path": null
+}

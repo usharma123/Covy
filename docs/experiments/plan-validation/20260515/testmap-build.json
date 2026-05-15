@@ -1,0 +1,8 @@
+{
+  "manifest_files": 1,
+  "records": 1,
+  "tests": 1,
+  "files": 1,
+  "output_testmap_path": ".covy/state/testmap.bin",
+  "output_timings_path": ".covy/state/testtimings.bin"
+}
