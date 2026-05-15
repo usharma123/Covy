@@ -737,6 +737,9 @@ fn parse_fff_grep_text(root: &Path, request: &SearchRequest, text: &str) -> Sear
         }
         if let Some((line_no, body)) = parse_fff_match_line(line) {
             if let Some(path) = current_path.clone() {
+                if !fff_path_allowed(&path, &request.requested_paths) {
+                    continue;
+                }
                 let file_matches = groups.entry(path.clone()).or_default();
                 if file_matches.len() < max_per_file && total_matches < max_total {
                     file_matches.push(SearchMatch {
@@ -809,6 +812,26 @@ fn parse_fff_match_line(line: &str) -> Option<(usize, &str)> {
     let (number, body) = trimmed.split_once(':')?;
     let line_no = number.trim().parse::<usize>().ok()?;
     Some((line_no, body.trim_start()))
+}
+
+fn fff_path_allowed(path: &str, requested_paths: &[String]) -> bool {
+    if requested_paths.is_empty() {
+        return true;
+    }
+    let normalized = normalize_fff_path(path);
+    requested_paths.iter().any(|requested| {
+        let requested = normalize_fff_path(requested);
+        requested == "."
+            || normalized == requested
+            || normalized.starts_with(&format!("{requested}/"))
+    })
+}
+
+fn normalize_fff_path(path: &str) -> String {
+    path.trim()
+        .trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn guard_reason(

@@ -258,6 +258,30 @@ fn p28_fff_engine_adapts_mcp_grep_results() {
 }
 
 #[test]
+fn p28_fff_engine_respects_requested_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+    let fake_fff = write_fake_fff_mcp(dir.path());
+
+    cli()
+        .current_dir(dir.path())
+        .env("P28_FFF_MCP_BIN", &fake_fff)
+        .args([
+            "Alpha",
+            "src/lib.rs",
+            "--engine",
+            "fff",
+            "--fixed-strings",
+            "--stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"))
+        .stdout(predicate::str::contains("src/nested/mod.rs").not())
+        .stderr(predicate::str::contains("backend=fff_mcp"));
+}
+
+#[test]
 fn p28_auto_uses_fff_for_broad_index_fallback_when_available() {
     let dir = tempfile::tempdir().unwrap();
     write_fixture(dir.path());
