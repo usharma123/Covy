@@ -576,6 +576,30 @@ pub(crate) fn build_broker_sections(
         });
     }
 
+    let failure_advice_lines = render_failure_advice_lines(root);
+    if !failure_advice_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "failure_advice".to_string(),
+            title: "Failure Advice".to_string(),
+            body: truncate_lines(
+                failure_advice_lines,
+                section_item_limit(&effective_limits, "failure_advice"),
+            ),
+            priority: if matches!(
+                action,
+                BrokerAction::Plan
+                    | BrokerAction::ChooseTool
+                    | BrokerAction::Interpret
+                    | BrokerAction::Summarize
+            ) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
     if !snapshot.evidence_artifact_ids.is_empty() {
         sections.push(BrokerSection {
             id: "evidence_cache".to_string(),
@@ -901,6 +925,114 @@ fn render_evidence_freshness_lines(
             ),
     );
     lines
+}
+
+#[derive(Debug, Clone)]
+struct BrokerRunSavingsRecord {
+    command: String,
+    cwd: String,
+    exit_code: i32,
+    fallback_reason: Option<String>,
+    failure_fingerprint: Option<String>,
+    changed_paths: Vec<String>,
+    timestamp_unix_ms: u128,
+}
+
+fn render_failure_advice_lines(root: &Path) -> Vec<String> {
+    let records = load_broker_run_savings(root, 64);
+    if records.is_empty() {
+        return Vec::new();
+    }
+    let mut repeat_counts = HashMap::<String, usize>::new();
+    for record in &records {
+        if let Some(fingerprint) = record.failure_fingerprint.as_deref() {
+            *repeat_counts.entry(fingerprint.to_string()).or_insert(0) += 1;
+        }
+    }
+    records
+        .iter()
+        .filter(|record| record.exit_code != 0 || record.fallback_reason.is_some())
+        .filter_map(|record| {
+            let fingerprint = record.failure_fingerprint.as_deref()?;
+            let repeat_count = repeat_counts.get(fingerprint).copied().unwrap_or(1);
+            let next_success = next_success_record(&records, record)?;
+            let changed_paths = if next_success.changed_paths.is_empty() {
+                "paths=none".to_string()
+            } else {
+                format!("paths={}", next_success.changed_paths.join(";"))
+            };
+            Some(format!(
+                "- repeated_failure: count={repeat_count} fingerprint={fingerprint} advice=retry `{}` after inspecting {changed_paths}",
+                next_success.command
+            ))
+        })
+        .take(4)
+        .collect()
+}
+
+fn load_broker_run_savings(root: &Path, limit: usize) -> Vec<BrokerRunSavingsRecord> {
+    let path = root.join(".packet28").join("run-savings.jsonl");
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut records = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(parse_broker_run_savings_record)
+        .collect::<Vec<_>>();
+    records.sort_by(|a, b| b.timestamp_unix_ms.cmp(&a.timestamp_unix_ms));
+    records.truncate(limit.max(1));
+    records
+}
+
+fn parse_broker_run_savings_record(line: &str) -> Option<BrokerRunSavingsRecord> {
+    let value = serde_json::from_str::<Value>(line).ok()?;
+    let command = value.get("command")?.as_str()?.to_string();
+    let cwd = value.get("cwd")?.as_str()?.to_string();
+    let exit_code = value.get("exit_code")?.as_i64()? as i32;
+    let fallback_reason = value
+        .get("fallback_reason")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let failure_fingerprint = value
+        .get("failure_fingerprint")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let changed_paths = value
+        .get("changed_paths")
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let timestamp_unix_ms = value.get("timestamp_unix_ms")?.as_u64()? as u128;
+    Some(BrokerRunSavingsRecord {
+        command,
+        cwd,
+        exit_code,
+        fallback_reason,
+        failure_fingerprint,
+        changed_paths,
+        timestamp_unix_ms,
+    })
+}
+
+fn next_success_record<'a>(
+    records: &'a [BrokerRunSavingsRecord],
+    failed: &BrokerRunSavingsRecord,
+) -> Option<&'a BrokerRunSavingsRecord> {
+    records
+        .iter()
+        .filter(|candidate| {
+            candidate.timestamp_unix_ms > failed.timestamp_unix_ms
+                && candidate.cwd == failed.cwd
+                && candidate.exit_code == 0
+        })
+        .min_by_key(|candidate| candidate.timestamp_unix_ms)
 }
 
 fn build_edit_action_critic_lines(

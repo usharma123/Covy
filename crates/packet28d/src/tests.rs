@@ -1293,6 +1293,72 @@ fn active_decisions_render_related_paths_and_symbols() {
 }
 
 #[test]
+fn broker_context_surfaces_failure_advice_from_run_savings() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    std::fs::create_dir_all(root.join(".packet28")).unwrap();
+    std::fs::write(
+        root.join(".packet28").join("run-savings.jsonl"),
+        [
+            serde_json::json!({
+                "command": "cargo test failing_case",
+                "cwd": root.display().to_string(),
+                "family": "rust",
+                "canonical_kind": "cargo_test",
+                "exit_code": 101,
+                "raw_est_tokens": 100,
+                "reduced_est_tokens": 20,
+                "savings_percent": 80.0,
+                "fallback_reason": null,
+                "failure_fingerprint": "failure:v1:abc",
+                "changed_paths": [],
+                "timestamp_unix_ms": 1
+            })
+            .to_string(),
+            serde_json::json!({
+                "command": "cargo test fixed_case",
+                "cwd": root.display().to_string(),
+                "family": "rust",
+                "canonical_kind": "cargo_test",
+                "exit_code": 0,
+                "raw_est_tokens": 100,
+                "reduced_est_tokens": 20,
+                "savings_percent": 80.0,
+                "fallback_reason": null,
+                "failure_fingerprint": null,
+                "changed_paths": ["src/fix.rs"],
+                "timestamp_unix_ms": 2
+            })
+            .to_string(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+
+    let sections = build_broker_sections(
+        &root,
+        &state,
+        &BrokerGetContextRequest {
+            task_id: "task-failure-advice".to_string(),
+            action: Some(BrokerAction::Plan),
+            include_sections: vec!["failure_advice".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &suite_packet_core::AgentSnapshotPayload::default(),
+        None,
+        None,
+    );
+
+    let advice = sections
+        .iter()
+        .find(|section| section.id == "failure_advice")
+        .expect("failure advice section should render from run savings");
+    assert!(advice.body.contains("failure:v1:abc"));
+    assert!(advice.body.contains("cargo test fixed_case"));
+    assert!(advice.body.contains("paths=src/fix.rs"));
+}
+
+#[test]
 fn budget_pruning_shrinks_critical_sections_before_dropping_them() {
     let code_evidence_body = (1..=8)
         .map(|idx| format!("- src/alpha.rs:{idx} evidence line {idx}"))

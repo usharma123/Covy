@@ -339,6 +339,7 @@ pub(crate) fn action_critical_section_ids(action: BrokerAction) -> &'static [&'s
             "task_memory",
             "agent_intention",
             "checkpoint_context",
+            "failure_advice",
             "search_evidence",
             "relevant_context",
             "recommended_actions",
@@ -361,6 +362,7 @@ pub(crate) fn action_critical_section_ids(action: BrokerAction) -> &'static [&'s
             "checkpoint_context",
             "recent_tool_activity",
             "tool_failures",
+            "failure_advice",
             "recommended_actions",
         ],
         BrokerAction::Interpret => &[
@@ -370,6 +372,7 @@ pub(crate) fn action_critical_section_ids(action: BrokerAction) -> &'static [&'s
             "checkpoint_context",
             "recent_tool_activity",
             "tool_failures",
+            "failure_advice",
             "code_evidence",
         ],
         BrokerAction::Edit => &[
@@ -392,6 +395,7 @@ pub(crate) fn action_critical_section_ids(action: BrokerAction) -> &'static [&'s
             "progress",
             "recent_tool_activity",
             "tool_failures",
+            "failure_advice",
         ],
     }
 }
