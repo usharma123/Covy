@@ -605,6 +605,24 @@ pub(crate) fn build_broker_sections(
         });
     }
 
+    let freshness_lines = render_evidence_freshness_lines(snapshot);
+    if !freshness_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "evidence_freshness".to_string(),
+            title: "Evidence Freshness".to_string(),
+            body: truncate_lines(
+                freshness_lines,
+                section_item_limit(&effective_limits, "evidence_freshness"),
+            ),
+            priority: if matches!(action, BrokerAction::Inspect | BrokerAction::Edit) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
     if should_run_reducer_search(&allowed_sections) {
         let search_execution = build_reducer_search_execution(SearchExecutionArgs {
             state: Some(state),
@@ -824,6 +842,29 @@ fn build_choose_tool_action_critic_lines(
         );
     }
     lines
+}
+
+fn render_evidence_freshness_lines(
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> Vec<String> {
+    snapshot
+        .changed_paths_since_checkpoint
+        .iter()
+        .map(|path| {
+            let read_status = if snapshot.files_read.iter().any(|read| read == path) {
+                "fresh read recorded"
+            } else {
+                "refresh read/search before relying on cached evidence"
+            };
+            format!("- changed path: {path} ({read_status})")
+        })
+        .chain(
+            snapshot
+                .changed_symbols_since_checkpoint
+                .iter()
+                .map(|symbol| format!("- changed symbol: {symbol} (refresh symbol evidence)")),
+        )
+        .collect()
 }
 
 fn build_edit_action_critic_lines(

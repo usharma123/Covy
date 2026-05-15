@@ -1313,6 +1313,46 @@ fn reducer_search_only_runs_when_evidence_sections_are_allowed() {
 }
 
 #[test]
+fn broker_edit_context_surfaces_evidence_freshness_for_changed_paths() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let snapshot = suite_packet_core::AgentSnapshotPayload {
+        files_read: vec!["src/fresh.rs".to_string()],
+        changed_paths_since_checkpoint: vec![
+            "src/fresh.rs".to_string(),
+            "src/stale.rs".to_string(),
+        ],
+        changed_symbols_since_checkpoint: vec!["StaleSymbol".to_string()],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let sections = build_broker_sections(
+        &root,
+        &state,
+        &BrokerGetContextRequest {
+            task_id: "task-freshness".to_string(),
+            action: Some(BrokerAction::Edit),
+            include_sections: vec!["evidence_freshness".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &snapshot,
+        None,
+        None,
+    );
+
+    let freshness = sections
+        .iter()
+        .find(|section| section.id == "evidence_freshness")
+        .expect("changed paths should produce evidence freshness section");
+    assert!(freshness
+        .body
+        .contains("src/fresh.rs (fresh read recorded)"));
+    assert!(freshness
+        .body
+        .contains("src/stale.rs (refresh read/search before relying on cached evidence)"));
+    assert!(freshness.body.contains("StaleSymbol"));
+}
+
+#[test]
 fn render_task_memory_lines_surfaces_recent_state() {
     let snapshot = suite_packet_core::AgentSnapshotPayload {
         files_read: vec!["src/alpha.rs".to_string()],

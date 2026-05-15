@@ -42,6 +42,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "checkpoint_context",
             "current_focus",
             "discovered_scope",
+            "evidence_freshness",
             "recent_tool_activity",
             "tool_failures",
             "search_evidence",
@@ -96,6 +97,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "tool_failures",
             "evidence_cache",
             "checkpoint_deltas",
+            "evidence_freshness",
             "active_decisions",
             "search_evidence",
             "code_evidence",
@@ -149,6 +151,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("checkpoint_context".to_string(), 6);
             section_item_limits.insert("current_focus".to_string(), 8);
             section_item_limits.insert("discovered_scope".to_string(), 8);
+            section_item_limits.insert("evidence_freshness".to_string(), 4);
             section_item_limits.insert("recent_tool_activity".to_string(), 6);
             section_item_limits.insert("tool_failures".to_string(), 4);
             section_item_limits.insert("search_evidence".to_string(), 8);
@@ -209,6 +212,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("tool_failures".to_string(), 4);
             section_item_limits.insert("evidence_cache".to_string(), 4);
             section_item_limits.insert("checkpoint_deltas".to_string(), 8);
+            section_item_limits.insert("evidence_freshness".to_string(), 4);
             section_item_limits.insert("search_evidence".to_string(), 8);
             section_item_limits.insert("code_evidence".to_string(), 6);
             section_item_limits.insert("relevant_context".to_string(), 5);
@@ -346,6 +350,7 @@ pub(crate) fn action_critical_section_ids(action: BrokerAction) -> &'static [&'s
             "checkpoint_context",
             "code_evidence",
             "search_evidence",
+            "evidence_freshness",
             "relevant_context",
         ],
         BrokerAction::ChooseTool => &[
@@ -377,6 +382,7 @@ pub(crate) fn action_critical_section_ids(action: BrokerAction) -> &'static [&'s
             "current_focus",
             "checkpoint_deltas",
             "evidence_cache",
+            "evidence_freshness",
         ],
         BrokerAction::Summarize => &[
             "budget_notes",
