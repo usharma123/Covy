@@ -346,6 +346,17 @@ struct GainSummary {
     saved_est_tokens: u64,
     savings_pct: f64,
     by_route: BTreeMap<String, usize>,
+    route_roi: BTreeMap<String, GainRouteRoi>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct GainRouteRoi {
+    invocation_count: usize,
+    raw_est_tokens: u64,
+    reduced_est_tokens: u64,
+    saved_est_tokens: u64,
+    savings_pct: f64,
+    avg_saved_tokens: f64,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -961,7 +972,13 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
             let route = invocation
                 .compact_path
                 .unwrap_or_else(|| "unknown".to_string());
-            *summary.by_route.entry(route).or_insert(0) += 1;
+            *summary.by_route.entry(route.clone()).or_insert(0) += 1;
+            record_gain_route_roi(
+                &mut summary.route_roi,
+                &route,
+                invocation.raw_est_tokens.unwrap_or(0),
+                invocation.reduced_est_tokens.unwrap_or(0),
+            );
         }
     }
     let run_savings = load_run_savings(&root, args.limit)?;
@@ -974,7 +991,13 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         } else {
             format!("run_reducer:{}", record.family)
         };
-        *summary.by_route.entry(route).or_insert(0) += 1;
+        *summary.by_route.entry(route.clone()).or_insert(0) += 1;
+        record_gain_route_roi(
+            &mut summary.route_roi,
+            &route,
+            record.raw_est_tokens,
+            record.reduced_est_tokens,
+        );
     }
     summary.saved_est_tokens = summary
         .raw_est_tokens
@@ -1017,6 +1040,27 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+fn record_gain_route_roi(
+    route_roi: &mut BTreeMap<String, GainRouteRoi>,
+    route: &str,
+    raw_est_tokens: u64,
+    reduced_est_tokens: u64,
+) {
+    let entry = route_roi.entry(route.to_string()).or_default();
+    entry.invocation_count += 1;
+    entry.raw_est_tokens = entry.raw_est_tokens.saturating_add(raw_est_tokens);
+    entry.reduced_est_tokens = entry.reduced_est_tokens.saturating_add(reduced_est_tokens);
+    entry.saved_est_tokens = entry
+        .raw_est_tokens
+        .saturating_sub(entry.reduced_est_tokens);
+    entry.savings_pct = pct_saved(entry.raw_est_tokens, entry.reduced_est_tokens);
+    entry.avg_saved_tokens = if entry.invocation_count == 0 {
+        0.0
+    } else {
+        entry.saved_est_tokens as f64 / entry.invocation_count as f64
+    };
 }
 
 fn gain_disabled_bypass_warning(sessions_dir: Option<&str>) -> Option<String> {
