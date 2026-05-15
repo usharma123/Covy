@@ -185,6 +185,8 @@ pub enum AgentStateEventData {
         text: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         supersedes: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifact_id: Option<String>,
     },
     DecisionSuperseded {
         decision_id: String,
@@ -335,6 +337,8 @@ pub struct AgentDecision {
     pub related_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related_symbols: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_artifact_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

@@ -204,6 +204,7 @@ pub(crate) fn compute_broker_response(
                 text: decision.text.clone(),
                 related_paths: decision.related_paths.clone(),
                 related_symbols: decision.related_symbols.clone(),
+                related_artifact_ids: decision.related_artifact_ids.clone(),
                 resolves_question_id: task
                     .as_ref()
                     .and_then(|task| task.linked_decisions.get(&decision.id))

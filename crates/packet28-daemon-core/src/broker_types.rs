@@ -168,6 +168,8 @@ pub struct BrokerDecision {
     pub related_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related_symbols: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_artifact_ids: Vec<String>,
     pub resolves_question_id: Option<String>,
 }
 

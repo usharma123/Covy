@@ -429,6 +429,7 @@ fn apply_agent_snapshot_event(
             decision_id,
             text,
             supersedes,
+            artifact_id,
         } => {
             if let Some(previous) = supersedes {
                 snapshot
@@ -445,6 +446,7 @@ fn apply_agent_snapshot_event(
                     text: text.clone(),
                     related_paths: event.paths.clone(),
                     related_symbols: event.symbols.clone(),
+                    related_artifact_ids: artifact_id.iter().cloned().collect(),
                 });
             snapshot
                 .active_decisions

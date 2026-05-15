@@ -1283,7 +1283,8 @@ fn agenty_state_snapshot_derives_current_task_state() {
                 "type": "decision_added",
                 "decision_id": "d1",
                 "text": "Bug is in split()",
-                "supersedes": null
+                "supersedes": null,
+                "artifact_id": "artifact-split"
             }
         }),
         json!({
@@ -1385,6 +1386,10 @@ fn agenty_state_snapshot_derives_current_task_state() {
     assert_eq!(
         envelope.payload.active_decisions[0].related_symbols,
         vec!["split".to_string()]
+    );
+    assert_eq!(
+        envelope.payload.active_decisions[0].related_artifact_ids,
+        vec!["artifact-split".to_string()]
     );
     assert_eq!(
         envelope

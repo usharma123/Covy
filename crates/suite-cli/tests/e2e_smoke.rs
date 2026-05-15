@@ -5820,6 +5820,8 @@ fn test_hypothesis_cli_tracks_active_assumptions() {
             "src/auth.rs",
             "--symbol",
             "AuthCache",
+            "--artifact-id",
+            "artifact-auth-cache",
             "--json",
             "Auth cache invalidation is the regression source",
         ])
@@ -5849,6 +5851,9 @@ fn test_hypothesis_cli_tracks_active_assumptions() {
         ))
         .stdout(predicate::str::contains(
             "\"related_symbols\":[\"AuthCache\"]",
+        ))
+        .stdout(predicate::str::contains(
+            "\"related_artifact_ids\":[\"artifact-auth-cache\"]",
         ))
         .stdout(predicate::str::contains("Auth cache invalidation"));
 
@@ -5912,7 +5917,8 @@ fn test_packet28_mcp_hypothesis_tools_track_active_assumptions() {
                     "id":"auth-cache",
                     "text":"Auth cache invalidation is the regression source",
                     "paths":["src/auth.rs"],
-                    "symbols":["AuthCache"]
+                    "symbols":["AuthCache"],
+                    "artifact_id":"artifact-auth-cache"
                 }
             }
         }),
@@ -5947,6 +5953,10 @@ fn test_packet28_mcp_hypothesis_tools_track_active_assumptions() {
     );
     assert_eq!(listed_payload[0]["related_paths"][0], "src/auth.rs");
     assert_eq!(listed_payload[0]["related_symbols"][0], "AuthCache");
+    assert_eq!(
+        listed_payload[0]["related_artifact_ids"][0],
+        "artifact-auth-cache"
+    );
 
     write_mcp_message(
         &mut stdin,

@@ -697,6 +697,7 @@ pub(crate) fn derive_agent_snapshot(
                 decision_id,
                 text,
                 supersedes,
+                artifact_id,
             } => {
                 if let Some(previous) = supersedes {
                     decisions.remove(previous);
@@ -708,6 +709,7 @@ pub(crate) fn derive_agent_snapshot(
                         text: text.clone(),
                         related_paths: event.paths.clone(),
                         related_symbols: event.symbols.clone(),
+                        related_artifact_ids: artifact_id.iter().cloned().collect(),
                     },
                 );
             }

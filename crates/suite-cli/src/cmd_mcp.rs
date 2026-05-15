@@ -737,7 +737,8 @@ fn handle_method(
                             "id": {"type":"string"},
                             "text": {"type":"string"},
                             "paths": {"type":"array","items":{"type":"string"}},
-                            "symbols": {"type":"array","items":{"type":"string"}}
+                            "symbols": {"type":"array","items":{"type":"string"}},
+                            "artifact_id": {"type":"string"}
                         }
                     }
                 },
@@ -1549,6 +1550,7 @@ fn handle_tool_call(
                 &request.text,
                 request.paths.unwrap_or_default(),
                 request.symbols.unwrap_or_default(),
+                request.artifact_id,
             )?)?
         }
         "packet28.hypothesis_list" => {
@@ -2280,6 +2282,7 @@ struct HypothesisAddToolArgs {
     text: String,
     paths: Option<Vec<String>>,
     symbols: Option<Vec<String>>,
+    artifact_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

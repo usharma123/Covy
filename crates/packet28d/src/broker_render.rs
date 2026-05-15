@@ -47,6 +47,12 @@ fn render_decision_evidence(decision: &suite_packet_core::AgentDecision) -> Stri
     if !decision.related_symbols.is_empty() {
         refs.push(format!("symbols={}", decision.related_symbols.join(",")));
     }
+    if !decision.related_artifact_ids.is_empty() {
+        refs.push(format!(
+            "artifacts={}",
+            decision.related_artifact_ids.join(",")
+        ));
+    }
     if refs.is_empty() {
         String::new()
     } else {

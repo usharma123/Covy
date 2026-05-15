@@ -33,6 +33,8 @@ pub struct HypothesisAddArgs {
     #[arg(long = "symbol")]
     pub symbols: Vec<String>,
     #[arg(long)]
+    pub artifact_id: Option<String>,
+    #[arg(long)]
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
@@ -72,6 +74,7 @@ pub(crate) struct HypothesisRecord {
     pub(crate) text: String,
     pub(crate) related_paths: Vec<String>,
     pub(crate) related_symbols: Vec<String>,
+    pub(crate) related_artifact_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +102,7 @@ fn add_hypothesis(args: HypothesisAddArgs) -> Result<i32> {
         &args.text,
         args.paths,
         args.symbols,
+        args.artifact_id,
     )?;
     emit_mutation(&mutation, args.json, args.pretty)
 }
@@ -110,6 +114,7 @@ pub(crate) fn add_hypothesis_record(
     text: &str,
     paths: Vec<String>,
     symbols: Vec<String>,
+    artifact_id: Option<String>,
 ) -> Result<HypothesisMutation> {
     let id = id.unwrap_or_else(|| hypothesis_id(text));
     let decision_id = decision_id(&id);
@@ -123,6 +128,7 @@ pub(crate) fn add_hypothesis_record(
             text: Some(text),
             paths,
             symbols,
+            artifact_id,
             ..BrokerWriteStateRequest::default()
         },
     )?;
@@ -234,6 +240,7 @@ pub(crate) fn active_hypotheses(
                 .to_string(),
             related_paths: decision.related_paths,
             related_symbols: decision.related_symbols,
+            related_artifact_ids: decision.related_artifact_ids,
         })
         .collect())
 }

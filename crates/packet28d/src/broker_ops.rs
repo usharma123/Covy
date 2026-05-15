@@ -65,6 +65,7 @@ pub(crate) fn broker_write_to_event(
                     .clone()
                     .ok_or_else(|| anyhow!("decision_add requires text"))?,
                 supersedes: None,
+                artifact_id: request.artifact_id.clone(),
             },
         ),
         BrokerWriteOp::DecisionSupersede => (

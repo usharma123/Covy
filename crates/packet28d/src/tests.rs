@@ -1210,6 +1210,7 @@ fn active_decisions_render_related_paths_and_symbols() {
             text: "hypothesis active: Auth cache invalidation is suspect".to_string(),
             related_paths: vec!["src/auth.rs".to_string()],
             related_symbols: vec!["AuthCache".to_string()],
+            related_artifact_ids: vec!["artifact-auth-cache".to_string()],
         }],
         ..suite_packet_core::AgentSnapshotPayload::default()
     };
@@ -1232,6 +1233,9 @@ fn active_decisions_render_related_paths_and_symbols() {
         .expect("active_decisions section should exist");
     assert!(active_decisions.body.contains("paths=src/auth.rs"));
     assert!(active_decisions.body.contains("symbols=AuthCache"));
+    assert!(active_decisions
+        .body
+        .contains("artifacts=artifact-auth-cache"));
 }
 
 #[test]
