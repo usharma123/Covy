@@ -1689,6 +1689,20 @@ fn test_gain_reports_failed_and_fallback_runs() {
         .stdout(predicate::str::contains(
             "\"failure_fingerprint\":\"failure:v1:",
         ));
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "run",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--json",
+            "sh",
+            "-c",
+            "echo packet28 fix",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"exit_code\":0"));
 
     suite_cmd()
         .current_dir(root.path())
@@ -1702,10 +1716,11 @@ fn test_gain_reports_failed_and_fallback_runs() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,command",
+            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,next_success_command,command",
         ))
         .stdout(predicate::str::contains("fallback,7"))
         .stdout(predicate::str::contains(",2,sh -c"))
+        .stdout(predicate::str::contains("echo packet28 fix"))
         .stdout(predicate::str::contains("failure:v1:"))
         .stdout(predicate::str::contains("unsupported"))
         .stdout(predicate::str::contains("packet28 failure"));
@@ -1721,10 +1736,11 @@ fn test_gain_reports_failed_and_fallback_runs() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,command",
+            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,next_success_command,command",
         ))
         .stdout(predicate::str::contains("fallback,7"))
         .stdout(predicate::str::contains(",2,sh -c"))
+        .stdout(predicate::str::contains("echo packet28 fix"))
         .stdout(predicate::str::contains("failure:v1:"))
         .stdout(predicate::str::contains("unsupported"))
         .stdout(predicate::str::contains("packet28 failure"));
@@ -1735,10 +1751,11 @@ fn test_gain_reports_failed_and_fallback_runs() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,command",
+            "timestamp_unix_ms,family,exit_code,fallback_reason,failure_fingerprint,repeat_count,next_success_command,command",
         ))
         .stdout(predicate::str::contains("fallback,7"))
         .stdout(predicate::str::contains(",2,sh -c"))
+        .stdout(predicate::str::contains("echo packet28 fix"))
         .stdout(predicate::str::contains("failure:v1:"))
         .stdout(predicate::str::contains("unsupported"))
         .stdout(predicate::str::contains("packet28 failure"));
