@@ -56,7 +56,17 @@ fn write_test_coverage_state(root: &Path, path: &str, covered: bool) {
 }
 
 fn write_testmap_state(root: &Path, path: &str, tests: &[&str]) {
+    write_testmap_state_with_generated_at(root, path, tests, current_test_unix_seconds());
+}
+
+fn write_testmap_state_with_generated_at(
+    root: &Path,
+    path: &str,
+    tests: &[&str],
+    generated_at: u64,
+) {
     let mut index = suite_packet_core::TestMapIndex::default();
+    index.metadata.generated_at = generated_at;
     index.file_to_tests.insert(
         path.to_string(),
         tests.iter().map(|test| (*test).to_string()).collect(),
@@ -64,6 +74,13 @@ fn write_testmap_state(root: &Path, path: &str, tests: &[&str]) {
     let state_dir = root.join(".covy").join("state");
     std::fs::create_dir_all(&state_dir).unwrap();
     testy_core::pipeline_testmap::write_testmap(&state_dir.join("testmap.bin"), &index).unwrap();
+}
+
+fn current_test_unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[test]
@@ -303,6 +320,59 @@ fn validate_plan_warns_when_testmap_has_no_mapping_for_uncovered_edit() {
         .expect("missing testmap mapping warning should be reported");
     assert!(warning.message.contains("src/alpha.rs"));
     assert_eq!(warning.related_paths, vec!["src/alpha.rs".to_string()]);
+}
+
+#[test]
+fn validate_plan_warns_when_cached_testmap_is_stale() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("tests")).unwrap();
+    std::fs::write(root.join("src/alpha.rs"), "pub fn alpha() -> i32 { 1 }\n").unwrap();
+    std::fs::write(
+        root.join("tests/alpha_test.rs"),
+        "#[test]\nfn alpha_test() {}\n",
+    )
+    .unwrap();
+    write_test_coverage_state(&root, "src/alpha.rs", false);
+    write_testmap_state_with_generated_at(&root, "src/alpha.rs", &["tests/alpha_test.rs"], 1);
+
+    let response = broker_validate_plan(
+        state,
+        BrokerValidatePlanRequest {
+            task_id: "task-stale-testmap".to_string(),
+            require_read_before_edit: Some(false),
+            steps: vec![
+                BrokerPlanStep {
+                    id: "edit-alpha".to_string(),
+                    action: "edit".to_string(),
+                    paths: vec!["src/alpha.rs".to_string()],
+                    ..BrokerPlanStep::default()
+                },
+                BrokerPlanStep {
+                    id: "test-alpha".to_string(),
+                    action: "test".to_string(),
+                    paths: vec!["tests/alpha_test.rs".to_string()],
+                    ..BrokerPlanStep::default()
+                },
+            ],
+            ..BrokerValidatePlanRequest::default()
+        },
+    )
+    .unwrap();
+
+    assert!(
+        response.valid,
+        "stale testmap is advisory: {:?}",
+        response.violations
+    );
+    let warning = response
+        .warnings
+        .iter()
+        .find(|warning| warning.rule == "stale_testmap")
+        .expect("stale testmap warning should be reported");
+    assert_eq!(warning.step_id, "testmap");
+    assert!(warning.message.contains("lower confidence"));
 }
 
 #[test]

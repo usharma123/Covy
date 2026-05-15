@@ -449,6 +449,20 @@ pub(crate) fn broker_validate_plan(
 
     let mut violations = Vec::new();
     let mut warnings = Vec::new();
+    if let Some(testmap) = testmap.as_ref() {
+        if let Some(reason) = stale_testmap_reason(testmap, current_unix_seconds()) {
+            warnings.push(BrokerPlanViolation {
+                step_id: "testmap".to_string(),
+                rule: "stale_testmap".to_string(),
+                severity: "warning".to_string(),
+                message: format!(
+                    "cached testmap may be stale ({reason}); mapped test gates are accepted with lower confidence"
+                ),
+                related_paths: Vec::new(),
+                related_symbols: Vec::new(),
+            });
+        }
+    }
 
     for step in &normalized_steps {
         for path in &step.paths {
@@ -661,6 +675,33 @@ pub(crate) fn broker_validate_plan(
         normalized_steps,
         est_plan_tokens: Some(est_plan_tokens),
     })
+}
+
+const TESTMAP_STALE_AFTER_SECONDS: u64 = 14 * 24 * 60 * 60;
+
+fn stale_testmap_reason(
+    testmap: &suite_packet_core::TestMapIndex,
+    now_unix_seconds: u64,
+) -> Option<String> {
+    if testmap.file_to_tests.is_empty() {
+        return None;
+    }
+    let generated_at = testmap.metadata.generated_at;
+    if generated_at == 0 {
+        return Some("missing generated_at metadata".to_string());
+    }
+    let age_seconds = now_unix_seconds.saturating_sub(generated_at);
+    if age_seconds > TESTMAP_STALE_AFTER_SECONDS {
+        return Some(format!("generated {} days ago", age_seconds / 86_400));
+    }
+    None
+}
+
+fn current_unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 pub(crate) fn broker_decompose(
