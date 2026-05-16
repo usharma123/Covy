@@ -81,12 +81,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown source ordering | Makes hidden sample summaries deterministic when multiple records mention the same category. | Recurring hidden-category samples now have a regression test proving newer history samples win over older samples. | Evidence: `context_anomaly_tile_uses_latest_hidden_category_sample`; newer fallback provenance signal replaces the older signal while tile samples stay under 512 bytes. |
 | Context anomaly drilldown sample truncation | Prevents noisy source strings from bloating recurring hidden-sample summaries. | Long hidden sample signals now have a regression test and the context anomaly runbook documents the 120-character budget. | Evidence: `context_hidden_samples_truncate_long_signals`; fallback provenance samples preserve `recent_fallbacks=1` and `latest_reason=` while staying under 120 characters. |
 | Context anomaly drilldown summary escaping | Keeps hidden sample summaries parseable when source signals contain delimiters. | Dashboard text summaries and CI hidden-sample summaries now percent-escape pair delimiters while preserving readable signal equals signs. | Evidence: `context_hidden_sample_summary_escapes_pair_delimiters`; delimiter-heavy fallback reasons remain one sample pair and CI summaries still cap output at 256 characters. |
+| Context anomaly drilldown summary golden fixture | Prevents Rust and workflow hidden-sample summary encoders from drifting apart. | A delimiter-heavy hidden-sample fixture now has a checked-in expected summary used by both a Rust unit test and workflow jq check. | Evidence: `context_hidden_sample_summary_matches_delimiter_fixture`; workflow summary step validates the same fixture before writing hidden sample lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown summary golden fixture | Prevents Rust and workflow hidden-sample summary encoders from drifting apart. | Add a checked-in delimiter-heavy fixture and verify the Rust summary and jq workflow expression produce the same escaped string. | Compact metric: escaped fixture summary stays under 256 characters; correctness metric: Rust and jq render identical hidden sample pairs. |
+| Context anomaly drilldown summary drift smoke | Gives maintainers a local command for checking hidden-sample summary fixtures without waiting for CI. | Add a small local script or cargo test target that prints the delimiter fixture summary and compares it to the checked-in expected line. | Compact metric: smoke output is one line on success; correctness metric: exits nonzero when the checked-in expected summary drifts. |
 
 ## Research Rules
 

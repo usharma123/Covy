@@ -59,6 +59,8 @@ jobs:
           target/debug/Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json > context-anomaly-fixture-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-fixture-dashboard.json
           trend_repair_hint="$(jq -r '.trend_repair_hint // empty' context-anomalies.json)"
           hidden_sample_jq='def cat_escape: gsub("%"; "%25") | gsub("="; "%3D") | gsub(";"; "%3B") | gsub("\n"; "%0A"); def signal_escape: gsub("%"; "%25") | gsub(";"; "%3B") | gsub("\n"; "%0A"); map((.category | cat_escape) + "=" + (.signal | signal_escape)) | join(";")'
+          hidden_sample_fixture_summary="$(jq -r "$hidden_sample_jq" docs/context-anomalies/hidden-samples-delimiters.json)"
+          test "$hidden_sample_fixture_summary" = "$(cat docs/context-anomalies/hidden-samples-delimiters.summary)"
           {
             echo "### Context anomalies"
             echo "- anomalies: $(jq -r '.anomaly_count // 0' context-anomalies.json)"
