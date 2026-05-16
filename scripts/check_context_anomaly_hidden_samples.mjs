@@ -19,12 +19,24 @@ const maxSummaryLength = Number.parseInt(
 );
 const args = process.argv.slice(2);
 const unknownArgs = args.filter(
-  (arg) => !["--json", "--self-test"].includes(arg),
+  (arg) => !["--json", "--self-test", "--help"].includes(arg),
 );
 if (unknownArgs.length > 0) {
   console.error("context_anomaly_hidden_sample_unknown_option");
   console.error(`option=${unknownArgs[0]}`);
   process.exit(2);
+}
+if (args.includes("--help")) {
+  console.log(
+    [
+      "Usage: node scripts/check_context_anomaly_hidden_samples.mjs [--json|--self-test|--help]",
+      "default: validate fixture and print context_anomaly_hidden_sample_fixture_ok=...",
+      "--json: print ok, actual_len, max_len, and summary as JSON",
+      "--self-test: validate fixture, JSON payload, and budget checks",
+      "--help: print this help",
+    ].join("\n"),
+  );
+  process.exit(0);
 }
 const jsonOutput = args.includes("--json");
 const selfTest = args.includes("--self-test");

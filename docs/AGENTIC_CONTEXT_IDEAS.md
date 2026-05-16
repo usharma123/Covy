@@ -93,12 +93,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown script self-test flag | Makes the smoke script independently verify its normal, JSON, and budget-failure modes. | The hidden-sample smoke script now has `--self-test`, which checks fixture equality, JSON payload fields, and an intentionally low budget. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` prints one success line; the runbook documents the self-test command. |
 | Context anomaly drilldown self-test workflow gate | Makes CI use the smoke script's own self-test before rendering formatter summaries. | The context-anomalies workflow now runs `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` before collecting formatter JSON. | Evidence: no summary lines were added; workflow fails before summary rendering if the script self-test detects drift. |
 | Context anomaly drilldown script option guard | Prevents typoed smoke-script flags from silently running the default formatter path. | The hidden-sample smoke script now rejects unknown command-line options before reading fixtures. | Evidence: success output is unchanged; `node scripts/check_context_anomaly_hidden_samples.mjs --bad-flag` exits nonzero with `context_anomaly_hidden_sample_unknown_option`. |
+| Context anomaly drilldown script help | Gives agents a compact usage string for hidden-sample smoke script modes. | The hidden-sample smoke script now supports `--help`, and the runbook command table lists it. | Evidence: help output is five lines, exits zero, and lists default, `--json`, `--self-test`, and `--help` modes. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown script help | Gives agents a compact usage string for hidden-sample smoke script modes. | Add `--help` output listing default, `--json`, and `--self-test` modes. | Compact metric: help output under eight lines; correctness metric: help lists every accepted flag and exits zero. |
+| Context anomaly drilldown help workflow guard | Keeps documented smoke-script modes visible in CI logs without expanding the step summary. | Run `node scripts/check_context_anomaly_hidden_samples.mjs --help` in the workflow summary step before self-test. | Compact metric: no added summary lines; correctness metric: CI fails if help output breaks. |
 
 ## Research Rules
 
