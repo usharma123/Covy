@@ -165,12 +165,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density help self-test | Proves density checker help keeps listing every supported mode and typo behavior. | The density checker self-test now verifies help text contains default, `--json`, `--self-test`, `--help`, and the unknown-option code. | Evidence: self-test output remains one line and help drift fails self-test. |
 | Context anomaly drilldown runbook density JSON byte cap | Prevents density checker JSON from growing into noisy local output. | Runbook density `--json` output now enforces `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX` with a 256-byte default and reports `max_json_bytes`. | Evidence: JSON output remains under the explicit cap and required command coverage remains intact. |
 | Context anomaly drilldown runbook density JSON byte self-test | Proves the density JSON byte cap fails when output exceeds budget. | The density checker self-test now verifies a forced low JSON byte cap reports `context_anomaly_runbook_density_json_too_long`. | Evidence: self-test output remains one line and covers the byte-cap failure code. |
+| Context anomaly drilldown runbook density JSON env self-test | Proves the density JSON byte env knob is wired to the JSON failure gate. | The density checker self-test now shells back with `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX=10 --json`. | Evidence: self-test output remains one line and forced env reports `context_anomaly_runbook_density_json_too_long`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density JSON env self-test | Proves the density JSON byte env knob is wired to the JSON failure gate. | Extend density self-test to shell back with `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX=10 --json`. | Compact metric: self-test output remains one line; correctness metric: forced env reports `context_anomaly_runbook_density_json_too_long`. |
+| Context anomaly drilldown runbook density JSON failure docs | Helps maintainers understand the density JSON byte-cap failure. | Document `context_anomaly_runbook_density_json_too_long` in the runbook density row. | Compact metric: runbook remains under 45 lines; correctness metric: failure name matches checker output. |
 
 ## Research Rules
 

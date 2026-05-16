@@ -104,9 +104,9 @@ function assertSelfTest(result, expectedCode) {
   }
 }
 
-function assertEnvFailure(env, expectedCode) {
+function assertEnvFailure(env, commandArgs, expectedCode) {
   try {
-    execFileSync(process.execPath, [scriptPath], {
+    execFileSync(process.execPath, [scriptPath, ...commandArgs], {
       encoding: "utf8",
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
@@ -187,7 +187,13 @@ if (args.includes("--self-test")) {
   );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
+    [],
     "context_anomaly_runbook_density_too_many_lines",
+  );
+  assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
+    ["--json"],
+    "context_anomaly_runbook_density_json_too_long",
   );
   assertSelfTest(
     jsonBudgetIssue(successPayload(result, 10), 10) ?? { code: "ok" },
