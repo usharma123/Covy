@@ -334,12 +334,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-headroom JSON low-cap failure | Proves JSON mode fails before emitting stale `default_output_headroom` when text output is too wide. | JSON mode now shares the fixed-point text-width guard before emitting payloads. | Evidence: no output growth; JSON mode fails at text cap 195. |
 | Context anomaly drilldown density text-headroom JSON low-cap error shape | Helps automation distinguish JSON-mode text-cap failures from success payloads. | Self-test now checks the JSON low-cap failure contains `ok:false` and the text-width failure code. | Evidence: error JSON stays compact; failure shape is machine-readable. |
 | Context anomaly drilldown density text-headroom env helper reuse | Reduces boilerplate as env failure shape checks grow. | JSON cap and JSON-headroom env failures now reuse the multi-text failure-shape helper. | Evidence: self-test output stays one line; failure checks remain exact. |
+| Context anomaly drilldown density JSON error shape docs | Helps maintainers know JSON failures are machine-readable, not plain stderr. | Runbook JSON docs now include guarded `ok:false` error-shape wording. | Evidence: runbook row/prose stay under caps; missing JSON error-shape docs fail coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON error shape docs | Helps maintainers know JSON failures are machine-readable, not plain stderr. | Document that JSON-mode budget failures emit `ok:false` with a failure code. | Compact metric: runbook row/prose stay under caps; correctness metric: docs mention JSON error shape. |
+| Context anomaly drilldown density JSON error shape order guard | Keeps the JSON error-shape note adjacent to the help-width note for compact triage. | Add a dedicated self-test mutation that separates `err:` from `h:` in the JSON docs line. | Compact metric: JSON prose remains under cap; correctness metric: docs shape order drift fails coverage. |
 
 ## Research Rules
 
