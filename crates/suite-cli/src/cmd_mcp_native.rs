@@ -228,6 +228,14 @@ pub(crate) struct Packet28HandoffTestLintArgs {
     pub(crate) context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffStaleCommandLintArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1657,6 +1665,50 @@ pub(crate) fn handle_packet28_handoff_lint_tests(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_lint_stale_commands(
+    root: &Path,
+    args: Packet28HandoffStaleCommandLintArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!(
+            "packet28.handoff_lint_stale_commands requires task_id"
+        ));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.handoff_lint_stale_commands requires artifact_id or context_version")
+    })?;
+    let payload = read_handoff_payload(root, task_id, &artifact_id, "handoff stale-command lint")?;
+    let command_refs = referenced_handoff_commands(&payload);
+    let changed_paths = available_handoff_paths(&payload);
+    let events = load_task_events(root, task_id).unwrap_or_default();
+    let latest_edit_at = latest_relevant_edit_at(&events, &changed_paths);
+    let mut issues = Vec::new();
+    if let Some(latest_edit_at) = latest_edit_at {
+        for command in command_refs {
+            if let Some(command_at) = latest_command_event_at(&events, &command) {
+                if command_at < latest_edit_at {
+                    issues.push(json!({
+                        "kind": "stale_command",
+                        "reference": command,
+                        "command_at_unix": command_at,
+                        "latest_edit_at_unix": latest_edit_at,
+                        "reason": "referenced command ran before the latest relevant edit",
+                    }));
+                }
+            }
+        }
+    }
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "ok": issues.is_empty(),
+        "issue_count": issues.len(),
+        "issues": issues,
+        "summary": format!("handoff_stale_command_lint issue_count={}", issues.len()),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -1766,6 +1818,18 @@ fn referenced_handoff_paths(payload: &Value) -> Vec<String> {
     references
 }
 
+fn referenced_handoff_commands(payload: &Value) -> Vec<String> {
+    let mut commands = Vec::new();
+    for block in handoff_text_blocks(payload) {
+        for line in block.lines() {
+            if let Some(command) = extract_test_command_reference(line) {
+                append_unique(&mut commands, command);
+            }
+        }
+    }
+    commands
+}
+
 fn collect_artifact_references(text: &str, references: &mut Vec<String>) {
     for token in text.split_whitespace() {
         let token = token.trim_matches(|ch: char| {
@@ -1811,6 +1875,35 @@ fn contains_test_command(line: &str) -> bool {
         || line.contains("gradle test")
 }
 
+fn extract_test_command_reference(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let markers = [
+        "cargo test",
+        "cargo nextest",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "bun test",
+        "pytest",
+        "go test",
+        "mvn test",
+        "gradle test",
+    ];
+    let start = markers
+        .iter()
+        .filter_map(|marker| lower.find(marker))
+        .min()?;
+    let command = clean_command_reference(&line[start..]);
+    (!command.is_empty()).then_some(command)
+}
+
+fn clean_command_reference(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '`' | '\'' | '"' | ',' | '.' | ';' | ')' | ']'))
+        .to_string()
+}
+
 fn is_test_name_reference(token: &str) -> bool {
     let lower = token.to_ascii_lowercase();
     token.len() >= 6
@@ -1850,6 +1943,65 @@ fn is_repo_relative_path_reference(token: &str) -> bool {
             .rsplit('/')
             .next()
             .is_some_and(|name| name.contains('.'))
+}
+
+fn latest_relevant_edit_at(
+    events: &[packet28_daemon_core::DaemonEventFrame],
+    changed_paths: &[String],
+) -> Option<u64> {
+    events
+        .iter()
+        .filter(|frame| is_edit_event(frame, changed_paths))
+        .map(|frame| frame.event.occurred_at_unix)
+        .max()
+}
+
+fn latest_command_event_at(
+    events: &[packet28_daemon_core::DaemonEventFrame],
+    command_ref: &str,
+) -> Option<u64> {
+    events
+        .iter()
+        .filter(|frame| {
+            frame
+                .event
+                .data
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command == command_ref || command.contains(command_ref))
+        })
+        .map(|frame| frame.event.occurred_at_unix)
+        .max()
+}
+
+fn is_edit_event(frame: &packet28_daemon_core::DaemonEventFrame, changed_paths: &[String]) -> bool {
+    let kind = frame.event.kind.to_ascii_lowercase();
+    if !kind.contains("edit") && !kind.contains("write") {
+        return false;
+    }
+    if changed_paths.is_empty() {
+        return true;
+    }
+    frame_event_paths(frame)
+        .iter()
+        .any(|path| changed_paths.iter().any(|changed| changed == path))
+}
+
+fn frame_event_paths(frame: &packet28_daemon_core::DaemonEventFrame) -> Vec<String> {
+    frame
+        .event
+        .data
+        .get("paths")
+        .or_else(|| frame.event.data.get("changed_paths"))
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn section_identifier(section: &Value) -> String {
