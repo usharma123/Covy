@@ -261,12 +261,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density failure continuation guard | Prevents future failure-code compaction from dropping the continuation line. | The density checker now requires the `Density failures cont.:` line and self-tests relabeling it away. | Evidence: no runbook growth; missing continuation line fails output-doc coverage. |
 | Context anomaly drilldown density doc-failure continuation guard | Prevents future doc-failure compaction from dropping the doc-failure continuation line. | The density checker now requires the `Density doc failures cont.:` line and self-tests relabeling it away. | Evidence: no runbook growth; missing doc-failure continuation line fails output-doc coverage. |
 | Context anomaly drilldown density prose anchor count refresh | Keeps `anc` meaningful after adding failure continuation anchors. | Default and JSON output now report four required prose line anchors, and self-test ties the count to `requiredDensityDocLinePrefixes.length`. | Evidence: default output remains under text cap; `anc` and JSON anchor count equal the required line-prefix count. |
+| Context anomaly drilldown density prose anchor missing-field self-test | Proves the parser rejects omitted prose-anchor counts, not just stale values. | Density self-test now removes `anc` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted anchor count fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density prose anchor missing-field self-test | Proves the parser rejects omitted prose-anchor counts, not just stale values. | Remove `anc` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted anchor count fails parser validation. |
+| Context anomaly drilldown density parsed count missing-field self-test | Proves the parser rejects omitted parser-field counts, not just stale values. | Remove `parsed` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted parser-field count fails parser validation. |
 
 ## Research Rules
 

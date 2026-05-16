@@ -779,6 +779,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${staleDensityDocAnchorError ?? "ok"}`);
     process.exit(1);
   }
+  const missingDensityDocAnchorError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ anc=\d+/, "")),
+    result,
+  );
+  if (missingDensityDocAnchorError !== "missing_default_output_field=anc") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=missing_default_output_field=anc");
+    console.error(`actual=${missingDensityDocAnchorError ?? "ok"}`);
+    process.exit(1);
+  }
   const staleSoftStatusError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ soft=\w+/, " soft=over")),
     result,
