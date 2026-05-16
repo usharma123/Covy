@@ -183,12 +183,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density prose width guard | Prevents compact prose fallback lines from becoming the new unreadable runbook hotspot. | The density checker now enforces `P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX` for non-table density failure lines. | Evidence: default output stays one line and forced low prose width fails `context_anomaly_runbook_density_prose_too_wide`. |
 | Context anomaly drilldown density prose width docs | Helps maintainers tune and repair prose-width failures without reading checker source. | The runbook density row now documents `P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX`, and the failure prose names `context_anomaly_runbook_density_prose_too_wide`. | Evidence: runbook stays under line and row budgets; env var and failure code match checker output. |
 | Context anomaly drilldown density prose width output | Helps automation see prose-width headroom before the guard fails. | Density output now includes `max_density_prose_line`, its budget, and default text label `prose`. | Evidence: JSON remains under `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX`; forced low prose budget still reports the same max line. |
+| Context anomaly drilldown density JSON headroom guard | Prevents density JSON from sitting one byte below the cap after field additions. | Density JSON budget validation now requires spare headroom via `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`. | Evidence: success JSON has at least 16 spare bytes by default; forced oversized headroom still fails `context_anomaly_runbook_density_json_too_long`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON headroom guard | Prevents density JSON from sitting one byte below the cap after field additions. | Add a small minimum success-output headroom check or lower-noise field naming before accepting future JSON fields. | Compact metric: success JSON has explicit spare bytes; correctness metric: forced oversized payload still fails `context_anomaly_runbook_density_json_too_long`. |
+| Context anomaly drilldown density JSON headroom output | Helps automation see remaining JSON budget without recomputing payload length. | Add `json_headroom_bytes` to default text output or a compact JSON-friendly equivalent. | Compact metric: JSON still passes the headroom guard; correctness metric: reported headroom matches byte length calculation. |
 
 ## Research Rules
 

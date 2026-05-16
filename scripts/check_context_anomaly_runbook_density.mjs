@@ -14,7 +14,11 @@ const maxLines = Number.parseInt(
   10,
 );
 const maxJsonBytes = Number.parseInt(
-  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ?? "256",
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ?? "288",
+  10,
+);
+const minJsonHeadroomBytes = Number.parseInt(
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN ?? "16",
   10,
 );
 const maxTableRowLength = Number.parseInt(
@@ -29,7 +33,7 @@ const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
   "default: validate runbook line budget, row width, density prose width, docs, and workflow density commands",
   "--json: print ok, budgets, width metrics, command counts, and max_json_bytes",
-  "--self-test: verify line, width, missing-command, and JSON byte failure modes",
+  "--self-test: verify line, width, missing-command, and JSON byte/headroom failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
 ];
 const args = process.argv.slice(2);
@@ -260,7 +264,7 @@ function successPayload(result, workflow, jsonBudget) {
 
 function jsonBudgetIssue(payload, jsonBudget) {
   const json = JSON.stringify(payload);
-  if (json.length <= jsonBudget) {
+  if (json.length + minJsonHeadroomBytes <= jsonBudget) {
     return null;
   }
   return {
@@ -268,6 +272,7 @@ function jsonBudgetIssue(payload, jsonBudget) {
     code: "context_anomaly_runbook_density_json_too_long",
     actual_bytes: json.length,
     max_json_bytes: jsonBudget,
+    min_json_headroom_bytes: minJsonHeadroomBytes,
   };
 }
 
@@ -373,6 +378,11 @@ if (args.includes("--self-test")) {
   );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
+    ["--json"],
+    "context_anomaly_runbook_density_json_too_long",
+  );
+  assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
     ["--json"],
     "context_anomaly_runbook_density_json_too_long",
   );
