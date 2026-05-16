@@ -2215,19 +2215,22 @@ if (args.includes("--self-test")) {
     }
   };
   assertPlainEnvDocMutationSelfTests();
-  for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
-    assertSelfTestMissing(
-      evaluateWorkflow(
-        workflow.replace(
-          `          ${command}\n`,
-          `          drifted_workflow_command_${commandIndex}\n`,
+  const assertWorkflowCommandMutationSelfTests = () => {
+    for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
+      assertSelfTestMissing(
+        evaluateWorkflow(
+          workflow.replace(
+            `          ${command}\n`,
+            `          drifted_workflow_command_${commandIndex}\n`,
+          ),
         ),
-      ),
-      "context_anomaly_runbook_density_workflow_missing_commands",
-      command,
-      `drifted_workflow_command_${commandIndex}`,
-    );
-  }
+        "context_anomaly_runbook_density_workflow_missing_commands",
+        command,
+        `drifted_workflow_command_${commandIndex}`,
+      );
+    }
+  };
+  assertWorkflowCommandMutationSelfTests();
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
     [],
