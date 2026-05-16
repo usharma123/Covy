@@ -431,12 +431,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper array detail | Makes invariant helper diagnostics match existing array-detail formatting. | `failSelfTestInvariant` now joins array values the same way the main `fail` printer does. | Evidence: no runtime output growth; helper supports scalar and array details. |
 | Context anomaly drilldown density self-test invariant helper array detail guard | Proves invariant helper array formatting stays compact and deterministic. | Added `invariantDetailValue` plus a self-test assertion for comma-joined arrays and scalar passthrough. | Evidence: no runtime output growth; array details render comma-separated. |
 | Context anomaly drilldown density self-test invariant helper format expected constant | Avoids duplicating expected formatter strings in the invariant detail self-test. | Extracted expected scalar and array formatter outputs into named constants. | Evidence: no runtime output growth; formatter self-test expectations are named. |
+| Context anomaly drilldown density self-test invariant helper format expected labels | Makes formatter self-test failure fields distinguish scalar and array expectations. | Split expected formatter diagnostics into `expected_invariant_array_detail_format` and `expected_invariant_scalar_detail_format`. | Evidence: no runtime output growth; formatter failures identify which expectation broke. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test invariant helper format expected labels | Makes formatter self-test failure fields distinguish scalar and array expectations. | Split `expected_invariant_detail_format` into array/scalar-specific detail keys. | Compact metric: no runtime output growth; correctness metric: formatter failures identify which expectation broke. |
+| Context anomaly drilldown density self-test invariant helper actual labels | Makes formatter self-test actual fields distinguish scalar and array outputs. | Split `actual_invariant_detail_format` into array/scalar-specific detail keys. | Compact metric: no runtime output growth; correctness metric: formatter failures identify which output broke. |
 
 ## Research Rules
 

@@ -1524,10 +1524,8 @@ if (args.includes("--self-test")) {
     invariantDetailValue("scalar") !== expectedInvariantScalarDetail
   ) {
     failSelfTestInvariant({
-      expected_invariant_detail_format: [
-        expectedInvariantArrayDetail,
-        expectedInvariantScalarDetail,
-      ],
+      expected_invariant_array_detail_format: expectedInvariantArrayDetail,
+      expected_invariant_scalar_detail_format: expectedInvariantScalarDetail,
       actual_invariant_detail_format: [
         invariantDetailValue(["array", "detail"]),
         invariantDetailValue("scalar"),
