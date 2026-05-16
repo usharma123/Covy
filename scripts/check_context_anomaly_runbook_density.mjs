@@ -68,6 +68,7 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_row_too_wide",
   "context_anomaly_runbook_density_missing_commands",
   "context_anomaly_runbook_density_workflow_missing_commands",
+  "context_anomaly_runbook_density_missing_failure_docs",
   "context_anomaly_runbook_density_json_too_long",
 ];
 
