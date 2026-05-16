@@ -388,12 +388,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper JSON parity field adoption | Closes a missing self-test mutation for the JSON parity field-doc token. | Added a `json_parity_fields_checked` JSON field-doc mutation using `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers parity field-doc detail checks. |
 | Context anomaly drilldown density missing-detail helper parsed field adoption | Reuses the missing-detail helper for parsed-field JSON docs. | The `parsed_fields_checked` docs mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers parsed-field docs detail checks. |
 | Context anomaly drilldown density missing-detail helper anchor-count field adoption | Reuses the missing-detail helper for density anchor-count JSON docs. | The `density_doc_anchors_checked` docs mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers anchor-count docs detail checks. |
+| Context anomaly drilldown density missing-detail helper density-phrases field adoption | Reuses the missing-detail helper for density phrase-count JSON docs. | The `density_doc_phrases_checked` docs mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers density phrase-count docs detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper density-phrases field adoption | Reuses the missing-detail helper for density phrase-count JSON docs. | Convert the `density_doc_phrases_checked` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers density phrase-count docs detail checks. |
+| Context anomaly drilldown density missing-detail helper row-soft field adoption | Reuses the missing-detail helper for row-soft JSON docs. | Convert the `row_soft_ok` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers row-soft docs detail checks. |
 
 ## Research Rules
 
