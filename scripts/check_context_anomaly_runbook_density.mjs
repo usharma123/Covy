@@ -426,8 +426,8 @@ function successPayload(result, workflow, jsonBudget) {
   };
 }
 
-function jsonPayloadParityIssue(payload, result) {
-  const expectedFields = {
+function jsonPayloadParityExpectedFields(result) {
+  return {
     output_doc_phrases_checked: result.output_doc_phrases_checked,
     alias_docs_checked: result.alias_docs_checked,
     row_soft_ok: result.row_soft_ok,
@@ -437,6 +437,10 @@ function jsonPayloadParityIssue(payload, result) {
     parsed_fields_checked: result.parsed_fields_checked,
     text_width_docs_checked: result.text_width_docs_checked,
   };
+}
+
+function jsonPayloadParityIssue(payload, result) {
+  const expectedFields = jsonPayloadParityExpectedFields(result);
   for (const [field, expected] of Object.entries(expectedFields)) {
     if (payload[field] !== expected) {
       return `json_payload_mismatch=${field}`;
@@ -708,18 +712,42 @@ if (args.includes("--self-test")) {
     console.error(jsonPayloadError);
     process.exit(1);
   }
-  const staleJsonPhraseCountError = jsonPayloadParityIssue(
-    { ...baselinePayload, output_doc_phrases_checked: 0 },
-    result,
-  );
-  if (
-    staleJsonPhraseCountError !==
-    "json_payload_mismatch=output_doc_phrases_checked"
-  ) {
+  const staleJsonPayloadValues = {
+    output_doc_phrases_checked: 0,
+    alias_docs_checked: 0,
+    row_soft_ok: !baselinePayload.row_soft_ok,
+    row_soft_max: 0,
+    density_doc_phrases_checked: 0,
+    density_doc_anchors_checked: 0,
+    parsed_fields_checked: 0,
+    text_width_docs_checked: 0,
+  };
+  const missingJsonParityMutationFields = Object.keys(
+    jsonPayloadParityExpectedFields(result),
+  ).filter((field) => staleJsonPayloadValues[field] === undefined);
+  if (missingJsonParityMutationFields.length > 0) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error("expected=json_payload_mismatch=output_doc_phrases_checked");
-    console.error(`actual=${staleJsonPhraseCountError ?? "ok"}`);
+    console.error(
+      `missing_json_parity_mutation_fields=${missingJsonParityMutationFields.join(",")}`,
+    );
     process.exit(1);
+  }
+  for (const [field, staleValue] of Object.entries(staleJsonPayloadValues)) {
+    if (staleValue === baselinePayload[field]) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`json_parity_mutation_noop=${field}`);
+      process.exit(1);
+    }
+    const staleJsonPayloadError = jsonPayloadParityIssue(
+      { ...baselinePayload, [field]: staleValue },
+      result,
+    );
+    if (staleJsonPayloadError !== `json_payload_mismatch=${field}`) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`expected=json_payload_mismatch=${field}`);
+      console.error(`actual=${staleJsonPayloadError ?? "ok"}`);
+      process.exit(1);
+    }
   }
   const baselineHeadroom = jsonHeadroomBytes(baselinePayload, maxJsonBytes);
   if (baselineHeadroom < minJsonHeadroomBytes) {
