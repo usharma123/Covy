@@ -341,12 +341,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label-width docs parity | Keeps `dlab` meaningful after moving error/help docs onto the label line. | Self-test now asserts `density_label_line_width` equals the actual `Density labels:` line length. | Evidence: no output growth; reported label width matches the runbook line. |
 | Context anomaly drilldown density label-width output parity | Proves compact default output `dlab` is not only internally counted. | Self-test now asserts parsed `dlab` equals the actual `Density labels:` line length. | Evidence: no output growth; parsed `dlab` matches runbook text. |
 | Context anomaly drilldown density label-width JSON output parity | Proves JSON `density_label_line_width` matches the same runbook text, not just the evaluator result. | Self-test now asserts JSON `density_label_line_width` equals the actual `Density labels:` line length. | Evidence: no output growth; JSON label width matches runbook text. |
+| Context anomaly drilldown density label-width spaced regression parity | Ensures the spacing-regression mutation also changes the computed `dlab` value. | The spacing self-test now compares compact and spaced label widths through `evaluate()`. | Evidence: no output growth; widened label mutation increases reported `dlab`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label-width spaced regression parity | Ensures the spacing-regression mutation also changes the computed `dlab` value. | Extend the spacing self-test to compare compact and spaced label widths through `evaluate()`. | Compact metric: no output growth; correctness metric: widened label mutation increases reported `dlab`. |
+| Context anomaly drilldown density label-width JSON spaced regression parity | Ensures spaced-label regressions would change JSON-facing width too. | Build a success payload for the spaced-label mutation and require `density_label_line_width` to grow. | Compact metric: no output growth; correctness metric: widened label mutation increases JSON `density_label_line_width`. |
 
 ## Research Rules
 
