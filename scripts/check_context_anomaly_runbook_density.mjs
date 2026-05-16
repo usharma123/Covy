@@ -1983,12 +1983,13 @@ if (args.includes("--self-test")) {
             swappedOrderDoc: swappedJsonIterationsTextWidthPairDoc,
           },
         ];
-        for (const {
-          caseName,
-          expectedFullOrderDoc,
-          originalOrderDoc,
-          swappedOrderDoc,
-        } of jsonFieldOrderMutations) {
+        const assertJsonFieldOrderMutation = (jsonFieldOrderMutation) => {
+          const {
+            caseName,
+            expectedFullOrderDoc,
+            originalOrderDoc,
+            swappedOrderDoc,
+          } = jsonFieldOrderMutation;
           assertSelfTestMissing(
             evaluate(
               runbook.replace(originalOrderDoc, swappedOrderDoc),
@@ -1998,6 +1999,9 @@ if (args.includes("--self-test")) {
             expectedFullOrderDoc,
             caseName,
           );
+        };
+        for (const jsonFieldOrderMutation of jsonFieldOrderMutations) {
+          assertJsonFieldOrderMutation(jsonFieldOrderMutation);
         }
       };
       const leadingJsonFieldDocs = [
