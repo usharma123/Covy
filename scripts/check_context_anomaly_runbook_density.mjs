@@ -41,7 +41,7 @@ const maxDefaultOutputLength = Number.parseInt(
 );
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
-  "default: validate runbook line budget, row width, density prose width, docs, and workflow density commands",
+  "default: validate runbook line budget, row width, soft row env P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX, docs, and workflow density commands",
   "--json: print ok, budgets, width metrics, command counts, and max_json_bytes",
   "--self-test: verify line, width, missing-command, and JSON byte/headroom failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
@@ -803,6 +803,7 @@ if (args.includes("--self-test")) {
     "--self-test",
     "--help",
     "context_anomaly_runbook_density_unknown_option",
+    "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX",
   ]) {
     assertHelpIncludes(expected);
   }
