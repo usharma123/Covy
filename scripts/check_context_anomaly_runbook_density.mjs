@@ -103,20 +103,21 @@ const defaultOutputFieldOrder = [
   "cmds",
   "fc",
   "env",
-  "labels",
-  "phrases",
+  "lbl",
+  "phr",
   "adocs",
   "dphr",
   "anc",
   "soft",
-  "parsed",
+  "prs",
   "wf",
   "prose",
   "dlab",
   "jhead",
   "jpar",
   "wdocs",
-  "width",
+  "thead",
+  "tw",
 ];
 const requiredOutputLabels = [...defaultOutputFieldOrder];
 const defaultTextFields = [...defaultOutputFieldOrder];
@@ -233,7 +234,7 @@ function evaluate(runbook, lineBudget) {
     .split("\n")
     .some(
       (line) =>
-        line.includes("`width`") &&
+        line.includes("`tw`") &&
         line.includes("`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`"),
     );
   const hasJsonHeadroomEnvDoc = runbook
@@ -304,7 +305,7 @@ function evaluate(runbook, lineBudget) {
         ...missingDensityDocLinePrefixes.map((prefix) => `${prefix}line`),
         ...(hasTextWidthEnvDoc
           ? []
-          : ["width:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
+          : ["tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
         ...(hasJsonHeadroomEnvDoc
           ? []
           : ["jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN"]),
@@ -533,44 +534,68 @@ function defaultOutputIssue(payload, resultDetails, jsonHeadroom) {
   return null;
 }
 
-function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
+function renderDefaultOutput(
+  payload,
+  resultDetails,
+  jsonHeadroom,
+  textWidth,
+  textHeadroom,
+) {
   return [
     `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines}`,
     `row=${payload.max_table_row}/${payload.max_table_row_allowed}`,
     `cmds=${payload.commands_checked}`,
     `fc=${payload.failure_codes_checked}`,
     `env=${resultDetails.env_docs_checked}`,
-    `labels=${resultDetails.output_labels_checked}`,
-    `phrases=${resultDetails.output_doc_phrases_checked}`,
+    `lbl=${resultDetails.output_labels_checked}`,
+    `phr=${resultDetails.output_doc_phrases_checked}`,
     `adocs=${resultDetails.alias_docs_checked}`,
     `dphr=${resultDetails.density_doc_phrases_checked}`,
     `anc=${resultDetails.density_doc_anchors_checked}`,
     `soft=${resultDetails.row_soft_ok ? "ok" : "over"}`,
-    `parsed=${resultDetails.parsed_fields_checked}`,
+    `prs=${resultDetails.parsed_fields_checked}`,
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `dlab=${resultDetails.density_label_line_width}`,
     `jhead=${jsonHeadroom}`,
     `jpar=${resultDetails.json_parity_fields_checked}`,
     `wdocs=${resultDetails.text_width_docs_checked}`,
-    textWidth === undefined ? null : `width=${textWidth}`,
+    textHeadroom === undefined ? null : `thead=${textHeadroom}`,
+    textWidth === undefined ? null : `tw=${textWidth}`,
   ]
     .filter(Boolean)
     .join(" ");
 }
 
 function renderDefaultOutputWithWidth(payload, resultDetails, jsonHeadroom) {
-  let line = renderDefaultOutput(payload, resultDetails, jsonHeadroom, 0);
-  for (let i = 0; i < 3; i += 1) {
+  let textWidth = 0;
+  let textHeadroom = 0;
+  let line = renderDefaultOutput(
+    payload,
+    resultDetails,
+    jsonHeadroom,
+    textWidth,
+    textHeadroom,
+  );
+  for (let i = 0; i < 5; i += 1) {
+    const nextTextWidth = line.length;
+    const nextTextHeadroom = maxDefaultOutputLength - nextTextWidth;
     const next = renderDefaultOutput(
       payload,
       resultDetails,
       jsonHeadroom,
-      line.length,
+      nextTextWidth,
+      nextTextHeadroom,
     );
-    if (next.length === line.length) {
+    if (
+      next.length === line.length &&
+      nextTextWidth === textWidth &&
+      nextTextHeadroom === textHeadroom
+    ) {
       return next;
     }
+    textWidth = nextTextWidth;
+    textHeadroom = nextTextHeadroom;
     line = next;
   }
   return line;
@@ -591,8 +616,8 @@ function defaultOutputExpectedValues(resultDetails) {
     cmds: String(resultDetails.commands_checked),
     fc: String(resultDetails.failure_codes_checked),
     env: String(resultDetails.env_docs_checked),
-    labels: String(resultDetails.output_labels_checked),
-    phrases: String(resultDetails.output_doc_phrases_checked),
+    lbl: String(resultDetails.output_labels_checked),
+    phr: String(resultDetails.output_doc_phrases_checked),
     prose: `${resultDetails.max_density_prose_line}/${resultDetails.max_density_prose_line_allowed}`,
     dlab: String(resultDetails.density_label_line_width),
     jpar: String(resultDetails.json_parity_fields_checked),
@@ -600,7 +625,7 @@ function defaultOutputExpectedValues(resultDetails) {
     dphr: String(resultDetails.density_doc_phrases_checked),
     anc: String(resultDetails.density_doc_anchors_checked),
     soft: resultDetails.row_soft_ok ? "ok" : "over",
-    parsed: String(resultDetails.parsed_fields_checked),
+    prs: String(resultDetails.parsed_fields_checked),
     wdocs: String(resultDetails.text_width_docs_checked),
   };
   if (resultDetails.workflow_commands_checked !== undefined) {
@@ -609,8 +634,11 @@ function defaultOutputExpectedValues(resultDetails) {
   if (resultDetails.json_headroom !== undefined) {
     expectedValues.jhead = String(resultDetails.json_headroom);
   }
+  if (resultDetails.default_output_headroom !== undefined) {
+    expectedValues.thead = String(resultDetails.default_output_headroom);
+  }
   if (resultDetails.default_output_width !== undefined) {
-    expectedValues.width = String(resultDetails.default_output_width);
+    expectedValues.tw = String(resultDetails.default_output_width);
   }
   return expectedValues;
 }
@@ -895,6 +923,7 @@ if (args.includes("--self-test")) {
     ...result,
     workflow_commands_checked: baselinePayload.workflow_commands_checked,
     json_headroom: baselineHeadroom,
+    default_output_headroom: maxDefaultOutputLength - defaultOutputLine.length,
     default_output_width: defaultOutputLine.length,
   };
   // These fields are derived outside evaluate(), but parser parity still
@@ -902,6 +931,7 @@ if (args.includes("--self-test")) {
   const requiredDefaultParseDetailFields = [
     "workflow_commands_checked",
     "json_headroom",
+    "default_output_headroom",
     "default_output_width",
   ];
   const missingDefaultParseDetailFields =
@@ -946,10 +976,21 @@ if (args.includes("--self-test")) {
     console.error(defaultOutputError);
     process.exit(1);
   }
-  if (parsedDefaultOutput.width !== String(defaultOutputLine.length)) {
+  if (parsedDefaultOutput.tw !== String(defaultOutputLine.length)) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_text_width=${defaultOutputLine.length}`);
-    console.error(`actual_text_width=${parsedDefaultOutput.width}`);
+    console.error(`actual_text_width=${parsedDefaultOutput.tw}`);
+    process.exit(1);
+  }
+  if (
+    parsedDefaultOutput.thead !==
+    String(maxDefaultOutputLength - defaultOutputLine.length)
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_text_headroom=${maxDefaultOutputLength - defaultOutputLine.length}`,
+    );
+    console.error(`actual_text_headroom=${parsedDefaultOutput.thead}`);
     process.exit(1);
   }
   const defaultOutputHeadroom = maxDefaultOutputLength - defaultOutputLine.length;
@@ -977,16 +1018,17 @@ if (args.includes("--self-test")) {
     prose: "0/0",
     jhead: "0",
     env: "0",
-    labels: "0",
-    phrases: "0",
+    lbl: "0",
+    phr: "0",
     adocs: "0",
     dphr: "0",
     anc: "0",
     dlab: "0",
     jpar: "0",
     soft: "over",
-    parsed: "0",
-    width: "0",
+    prs: "0",
+    thead: "0",
+    tw: "0",
     wdocs: "0",
   };
   const missingStaleMutationFields = defaultTextFields.filter(
@@ -1090,11 +1132,11 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`labels`", ""), maxLines),
+    evaluate(runbook.replace("`lbl`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`phrases`", ""), maxLines),
+    evaluate(runbook.replace("`phr`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
@@ -1110,7 +1152,7 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`parsed`", ""), maxLines),
+    evaluate(runbook.replace("`prs`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
@@ -1123,7 +1165,7 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(
-      runbook.replace("`env`, `labels`", "`labels`, `env`"),
+      runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
@@ -1244,7 +1286,7 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(
-      runbook.replace("`width` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
+      runbook.replace("`tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",

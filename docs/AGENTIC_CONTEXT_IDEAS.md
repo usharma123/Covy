@@ -320,12 +320,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label width output order guard | Keeps the new `dlab` metric in the same order across docs, renderer, and parser checks. | Self-test now swaps `dlab`/`jhead` in the documented key list and expects output-doc failure. | Evidence: docs stay under row cap; order drift fails output-doc coverage. |
 | Context anomaly drilldown density label width headroom guard | Keeps `dlab` from consuming the remaining compact text margin unnoticed. | Self-test now requires at least 8 characters of default-output headroom after rendering `dlab`. | Evidence: default output keeps reserved slack; low text cap still fails. |
 | Context anomaly drilldown density label width headroom docs | Helps maintainers understand why the text output cap has reserved slack. | Runbook text-width docs now include guarded `thead>=8` wording beside the text cap. | Evidence: row/prose stay under caps; missing headroom wording fails docs coverage. |
+| Context anomaly drilldown density label width headroom output | Lets agents see text-output slack directly instead of subtracting `tw` from the cap. | Default output now reports `thead`, with compact label/parser aliases preserving text-output slack. | Evidence: `thead` matches cap minus rendered width; parser coverage stays field-specific. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label width headroom output | Lets agents see text-output slack directly instead of subtracting `width` from the cap. | Add compact `thead` output for default-text headroom with parser coverage. | Compact metric: output stays within text cap; correctness metric: `thead` matches cap minus rendered width. |
+| Context anomaly drilldown density label width headroom JSON parity | Lets JSON consumers inspect default-text slack without parsing compact output. | Add a full-field `default_output_headroom` JSON value and parity-check it against rendered text. | Compact metric: JSON cap/headroom still passes; correctness metric: JSON value matches text cap minus width. |
 
 ## Research Rules
 
