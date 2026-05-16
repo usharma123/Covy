@@ -801,7 +801,7 @@ if (args.includes("--self-test")) {
     );
     process.exit(1);
   }
-  for (const field of defaultTextFields) {
+  const assertDefaultOutputMutation = (field, staleValue) => {
     const fieldPattern = new RegExp(` ${field}=\\S+`);
     const missingOutputLine = defaultOutputLine.replace(fieldPattern, "");
     if (missingOutputLine === defaultOutputLine) {
@@ -821,11 +821,11 @@ if (args.includes("--self-test")) {
     }
     const staleOutputLine = defaultOutputLine.replace(
       fieldPattern,
-      ` ${field}=${staleDefaultOutputValues[field]}`,
+      ` ${field}=${staleValue}`,
     );
     if (
       staleOutputLine === defaultOutputLine ||
-      staleDefaultOutputValues[field] === parsedDefaultOutput[field]
+      staleValue === parsedDefaultOutput[field]
     ) {
       console.error("context_anomaly_runbook_density_self_test_failed");
       console.error(`stale_mutation_noop=${field}`);
@@ -841,6 +841,9 @@ if (args.includes("--self-test")) {
       console.error(`actual=${staleFieldError ?? "ok"}`);
       process.exit(1);
     }
+  };
+  for (const field of defaultTextFields) {
+    assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
   assertSelfTest(
     evaluate(runbook, result.line_count - 1),
