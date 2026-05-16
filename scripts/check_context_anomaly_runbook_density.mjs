@@ -799,6 +799,18 @@ if (args.includes("--self-test")) {
     console.error(`actual=${staleSoftStatusError ?? "ok"}`);
     process.exit(1);
   }
+  const missingParsedFieldCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ parsed=\d+/, "")),
+    result,
+  );
+  if (
+    missingParsedFieldCountError !== "missing_default_output_field=parsed"
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=missing_default_output_field=parsed");
+    console.error(`actual=${missingParsedFieldCountError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingDensityDocCountError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ dphr=\d+/, "")),
     result,
