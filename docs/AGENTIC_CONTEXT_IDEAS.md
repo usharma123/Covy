@@ -661,12 +661,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test post-cleanup helper grouping audit | Checks whether the indented runner still has oversized helper groups after line cleanup. | Scanned the self-test helper sequence and identified `assertJsonFieldDocMutationSelfTests()` as the remaining oversized group mixing JSON field-presence and order-swap assertions. | Evidence: no runtime output growth; next refactor candidate is explicit before code churn. |
 | Context anomaly drilldown density self-test JSON field order helper | Separates JSON field-order swaps from JSON field-presence docs inside the oversized helper. | Extracted the swapped-order assertions into a local `assertJsonFieldOrderDocMutationSelfTests()` helper called from `assertJsonFieldDocMutationSelfTests()`. | Evidence: no runtime output growth; swapped-order cases keep their expected missing-doc target. |
 | Context anomaly drilldown density self-test JSON field order helper order | Keeps the extracted JSON field-order helper beside the field-doc group it specializes. | Verified `assertJsonFieldOrderDocMutationSelfTests()` is defined and called inside `assertJsonFieldDocMutationSelfTests()` before the final `text_width_docs_checked` field-presence check. | Evidence: no runtime output growth; order-swap coverage remains local to JSON field docs. |
+| Context anomaly drilldown density self-test JSON field presence table | Replaces repeated JSON field-presence assertions with a compact data table. | Extracted repeated field-presence docs in `assertJsonFieldDocMutationSelfTests()` into `assertRequiredJsonFieldDocs(requiredJsonFieldDocs)` calls around the order helper. | Evidence: no runtime output growth; every existing JSON field-doc case name remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field presence table | Replaces repeated JSON field-presence assertions with a compact data table. | Extract the repeated field-presence docs in `assertJsonFieldDocMutationSelfTests()` into `requiredJsonFieldDocs` and loop through them around the order helper. | Compact metric: no runtime output growth; correctness metric: every existing JSON field-doc case name remains covered. |
+| Context anomaly drilldown density self-test JSON field presence table order | Keeps the table-driven field docs and order helper in a deliberate sequence. | Verify `assertRequiredJsonFieldDocs(...)` runs for leading JSON fields, then `assertJsonFieldOrderDocMutationSelfTests()`, then the trailing `text_width_docs_checked` field doc. | Compact metric: no runtime output growth; correctness metric: the order-helper still stays between leading and trailing field-doc checks. |
 
 ## Research Rules
 
