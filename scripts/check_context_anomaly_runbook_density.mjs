@@ -1603,13 +1603,6 @@ if (args.includes("--self-test")) {
     expected,
     actual: defaultOutputMutationActualDetail(actual),
   });
-  const assertStaleDefaultOutputValuesCovered = () => {
-    if (missingStaleMutationFields.length > 0) {
-      failDefaultOutputMutation(
-        missingStaleMutationFieldsDetails(missingStaleMutationFields),
-      );
-    }
-  };
   const assertDefaultOutputMissingMutation = (field) => {
     const missingOutputLine = defaultOutputWithoutField(defaultOutputLine, field);
     if (
@@ -1667,6 +1660,13 @@ if (args.includes("--self-test")) {
     assertDefaultOutputStaleMutation(field, staleValue);
   };
   const staleDefaultOutputValue = (field) => staleDefaultOutputValues[field];
+  const assertStaleDefaultOutputValuesCovered = () => {
+    if (missingStaleMutationFields.length > 0) {
+      failDefaultOutputMutation(
+        missingStaleMutationFieldsDetails(missingStaleMutationFields),
+      );
+    }
+  };
   const assertDefaultOutputMutations = () => {
     assertStaleDefaultOutputValuesCovered();
     for (const field of defaultTextFields) {
