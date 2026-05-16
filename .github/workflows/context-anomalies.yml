@@ -50,7 +50,7 @@ jobs:
       - name: Verify context anomaly thresholds
         run: |
           set -o pipefail
-          target/debug/Packet28 verify context-anomalies --root . --max-high 0 --json | tee context-anomalies.json
+          target/debug/Packet28 verify context-anomalies --root . --max-high 0 --max-trend-age-ms 604800000 --json | tee context-anomalies.json
 
       - name: Summarize context anomalies
         if: always()
