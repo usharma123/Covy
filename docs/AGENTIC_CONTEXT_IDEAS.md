@@ -594,12 +594,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output phrase mutation wrapper | Names the default-output phrase mutation loop. | Extracted `assertDefaultOutputPhraseMutationSelfTests()` around the `defaultOutputFieldOrder` phrase drift assertions. | Evidence: no runtime output growth; default-output phrase coverage still fails for each drifted field label. |
 | Context anomaly drilldown density self-test default output phrase mutation order | Keeps default-output phrase mutations beside key/value and order assertions. | Verified `assertDefaultOutputPhraseMutationSelfTests()` sits after key/value output docs and before explicit output-order swaps. | Evidence: no runtime output growth; phrase drift coverage remains before order-swap coverage. |
 | Context anomaly drilldown density self-test output order swap wrapper | Names the explicit output-order swap assertions. | Extracted `assertOutputOrderSwapMutationSelfTests()` around env/lbl, dlab/jhead, and thead/tw swap checks. | Evidence: no runtime output growth; output-order coverage still fails when documented output order is swapped. |
+| Context anomaly drilldown density self-test output order swap order | Keeps output-order swap checks before JSON output documentation checks. | Verified `assertOutputOrderSwapMutationSelfTests()` sits directly after phrase mutations and before JSON field-name doc coverage. | Evidence: no runtime output growth; order-swap coverage remains before JSON output-doc coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test output order swap order | Keeps output-order swap checks before JSON output documentation checks. | Verify `assertOutputOrderSwapMutationSelfTests()` sits directly after phrase mutations and before JSON field-name doc coverage. | Compact metric: no runtime output growth; correctness metric: order-swap coverage remains before JSON output-doc coverage. |
+| Context anomaly drilldown density self-test JSON field-name doc wrapper | Names the JSON full-field-name documentation assertion. | Extract `assertJsonFieldNameDocMutationSelfTest()` around the `JSON keeps full field names` removal assertion. | Compact metric: no runtime output growth; correctness metric: JSON field-name documentation coverage still fails when removed. |
 
 ## Research Rules
 
