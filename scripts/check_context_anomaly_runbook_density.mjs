@@ -1700,12 +1700,12 @@ if (args.includes("--self-test")) {
     expected_default_output_mutation_fields: sample.expectedMutationFields,
     actual_default_output_mutation_fields: sample.actualMutationFields,
   });
-  const defaultOutputMutationFieldsMirrorParserFields = (sample) =>
+  const defaultOutputMutationFieldIdentityMatches = (sample) =>
     sample.actualMutationFields.join(",") ===
     sample.expectedMutationFields.join(",");
   const assertDefaultOutputMutationFieldsMirrorParserFields = () => {
     const identitySample = defaultOutputMutationFieldIdentitySample();
-    if (!defaultOutputMutationFieldsMirrorParserFields(identitySample)) {
+    if (!defaultOutputMutationFieldIdentityMatches(identitySample)) {
       failDefaultOutputMutation(
         defaultOutputMutationFieldIdentityDetails(identitySample),
       );
