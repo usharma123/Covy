@@ -659,12 +659,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field order literal order | Keeps JSON field-order constants close to the swap assertions. | Verified the extracted JSON field-order constants sit in `assertJsonFieldDocMutationSelfTests()` immediately before the swapped-order assertions. | Evidence: no runtime output growth; constants remain local to their coverage. |
 | Context anomaly drilldown density self-test post-cleanup line audit | Confirms no overlong lines remain in the indented self-test runner. | Ran the post-cleanup line-length scan over the self-test runner and found no lines over 100 characters in the audited range. | Evidence: no runtime output growth; line-length audit is explicit after literal cleanup. |
 | Context anomaly drilldown density self-test post-cleanup helper grouping audit | Checks whether the indented runner still has oversized helper groups after line cleanup. | Scanned the self-test helper sequence and identified `assertJsonFieldDocMutationSelfTests()` as the remaining oversized group mixing JSON field-presence and order-swap assertions. | Evidence: no runtime output growth; next refactor candidate is explicit before code churn. |
+| Context anomaly drilldown density self-test JSON field order helper | Separates JSON field-order swaps from JSON field-presence docs inside the oversized helper. | Extracted the swapped-order assertions into a local `assertJsonFieldOrderDocMutationSelfTests()` helper called from `assertJsonFieldDocMutationSelfTests()`. | Evidence: no runtime output growth; swapped-order cases keep their expected missing-doc target. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field order helper | Separates JSON field-order swaps from JSON field-presence docs inside the oversized helper. | Extract the swapped-order assertions into a local `assertJsonFieldOrderDocMutationSelfTests()` helper called from `assertJsonFieldDocMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: swapped-order cases keep their expected missing-doc target. |
+| Context anomaly drilldown density self-test JSON field order helper order | Keeps the extracted JSON field-order helper beside the field-doc group it specializes. | Verify `assertJsonFieldOrderDocMutationSelfTests()` is defined and called inside `assertJsonFieldDocMutationSelfTests()` before the final `text_width_docs_checked` field-presence check. | Compact metric: no runtime output growth; correctness metric: order-swap coverage remains local to JSON field docs. |
 
 ## Research Rules
 
