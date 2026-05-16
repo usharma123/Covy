@@ -1664,9 +1664,10 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMissingMutation(field);
     assertDefaultOutputStaleMutation(field, staleValue);
   };
+  const staleDefaultOutputValue = (field) => staleDefaultOutputValues[field];
   const assertDefaultOutputMutations = () => {
     for (const field of defaultTextFields) {
-      assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
+      assertDefaultOutputMutation(field, staleDefaultOutputValue(field));
     }
   };
   assertDefaultOutputMutations();
