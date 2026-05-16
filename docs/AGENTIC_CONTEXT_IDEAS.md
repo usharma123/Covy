@@ -224,12 +224,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density help width guard | Prevents compact help from becoming a single unreadable long line as env docs grow. | Density self-test now enforces a 120-character max help line and shortens the soft-env help wording. | Evidence: `--help` remains five lines; overly long help lines fail self-test. |
 | Context anomaly drilldown density help width docs | Helps maintainers understand why help wording is intentionally compressed. | The runbook now documents `help<=120`, and the density checker requires that help budget phrase. | Evidence: runbook row stays under soft target; removing the help budget doc fails output-doc coverage. |
 | Context anomaly drilldown density env prose width guard | Prevents non-failure density prose, such as env and help-budget docs, from becoming the next oversized line. | Density prose-width checking now includes all `Density ...` prose lines, not only failure-code lines. | Evidence: max env/help prose width is reported; forced low prose budget catches the env/help line. |
+| Context anomaly drilldown density env prose width self-test | Proves the env/help prose line is the source of the reported prose-width maximum. | Density self-test now widens the `Density envs:` line and verifies `max_density_prose_line` grows. | Evidence: default output remains one line; env/help prose participates in width calculation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density env prose width self-test | Proves the env/help prose line is the source of the reported prose-width maximum. | Self-test a runbook variant with a widened `Density envs:` line and verify `max_density_prose_line` grows. | Compact metric: default output remains one line; correctness metric: env/help prose participates in width calculation. |
+| Context anomaly drilldown density env prose headroom recovery | Restores prose-width margin after env/help docs made the env line the widest density prose line. | Compress or split density env/help wording while keeping the 44-line runbook limit. | Compact metric: `prose` drops below 360; correctness metric: required env, JSON soft, and help docs still pass. |
 
 ## Research Rules
 
