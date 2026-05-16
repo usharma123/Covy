@@ -216,12 +216,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON budget docs refresh | Helps maintainers understand why the density JSON cap increased after adding full-field parity. | The runbook now documents `max_json_bytes=320`, and the density checker requires that default-cap phrase. | Evidence: runbook remains within row/prose budgets; docs match `max_json_bytes` output and removal fails output-doc coverage. |
 | Context anomaly drilldown density JSON budget headroom docs | Helps maintainers connect the `json` default-text alias to remaining JSON bytes after the 320-byte cap. | The runbook alias map now documents `json` as remaining JSON headroom while compressing the density row wording. | Evidence: runbook remains within row/prose budgets; required alias docs match the `json` headroom calculation. |
 | Context anomaly drilldown density row headroom recovery | Restores table-width margin before the next density doc addition. | The runbook density row now compacts repeated alias wording while preserving guarded output, env, and failure docs. | Evidence: max table row drops below 480; required output, env, and failure docs still pass. |
+| Context anomaly drilldown density row soft-target guard | Prevents recovered table-width margin from being consumed by the next small doc addition. | Default density output now reports `soft=ok/over` from `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX` without turning the soft target into a hard failure. | Evidence: default output reports `soft=ok`, row remains under 480, and the hard row cap still gates true row-width failures. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density row soft-target guard | Prevents recovered table-width margin from being consumed by the next small doc addition. | Add a stricter soft target or warning for the density row below the hard 520-character cap. | Compact metric: default output reports the soft target status; correctness metric: hard row cap still catches true failures. |
+| Context anomaly drilldown density row soft-target self-test | Proves the soft row signal flips before the hard row-width failure. | Force `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX` below the current row and verify default output reports `soft=over` while exiting successfully. | Compact metric: soft-target smoke output remains one line; correctness metric: hard row cap still fails only when `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX` is too low. |
 
 ## Research Rules
 

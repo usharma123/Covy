@@ -27,6 +27,10 @@ const maxTableRowLength = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX ?? "520",
   10,
 );
+const softTableRowLength = Number.parseInt(
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX ?? "480",
+  10,
+);
 const maxDensityProseLineLength = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX ?? "420",
   10,
@@ -101,6 +105,7 @@ const requiredOutputLabels = [
   "labels",
   "phrases",
   "alias_docs",
+  "soft",
   "width",
   "width_docs",
 ];
@@ -118,6 +123,7 @@ const requiredAliasDocPhrases = [
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
+  "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX",
@@ -241,6 +247,8 @@ function evaluate(runbook, lineBudget) {
     max_lines: lineBudget,
     max_table_row: maxActualTableRowLength,
     max_table_row_allowed: maxTableRowLength,
+    row_soft_ok: maxActualTableRowLength <= softTableRowLength,
+    row_soft_max: softTableRowLength,
     max_density_prose_line: maxActualDensityProseLineLength,
     max_density_prose_line_allowed: maxDensityProseLineLength,
     commands_checked: requiredCommands.length,
@@ -391,6 +399,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `labels=${resultDetails.output_labels_checked}`,
     `phrases=${resultDetails.output_doc_phrases_checked}`,
     `alias_docs=${resultDetails.alias_docs_checked}`,
+    `soft=${resultDetails.row_soft_ok ? "ok" : "over"}`,
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json=${jsonHeadroom}`,
@@ -436,6 +445,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     "labels",
     "phrases",
     "alias_docs",
+    "soft",
     "wf",
     "prose",
     "json",
@@ -449,7 +459,8 @@ function defaultOutputParseIssue(parsed, resultDetails) {
   }
   if (
     parsed.cmds !== String(resultDetails.commands_checked) ||
-    parsed.labels !== String(resultDetails.output_labels_checked)
+    parsed.labels !== String(resultDetails.output_labels_checked) ||
+    parsed.soft !== (resultDetails.row_soft_ok ? "ok" : "over")
   ) {
     return "default_output_parse_mismatch";
   }
@@ -503,6 +514,12 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_alias_docs=${requiredAliasDocPhrases.length}`);
     console.error(`actual_alias_docs=${result.alias_docs_checked}`);
+    process.exit(1);
+  }
+  if (!result.row_soft_ok) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_row_soft_max=${result.row_soft_max}`);
+    console.error(`actual_row=${result.max_table_row}`);
     process.exit(1);
   }
   if (result.text_width_docs_checked !== 1) {
@@ -647,6 +664,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`alias_docs`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`soft`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
