@@ -1280,6 +1280,11 @@ if (args.includes("--self-test")) {
     "swapped_dlab_jhead_output_order",
   );
   assertSelfTest(
+    evaluate(runbook.replace("`thead`, `tw`", "`tw`, `thead`"), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "swapped_thead_tw_output_order",
+  );
+  assertSelfTest(
     evaluate(runbook.replace("JSON keeps full field names", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
