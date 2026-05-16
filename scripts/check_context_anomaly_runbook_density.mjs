@@ -11,7 +11,9 @@ const maxLines = Number.parseInt(
   10,
 );
 const args = process.argv.slice(2);
-const unknownArgs = args.filter((arg) => !["--json", "--help"].includes(arg));
+const unknownArgs = args.filter(
+  (arg) => !["--json", "--self-test", "--help"].includes(arg),
+);
 if (unknownArgs.length > 0) {
   console.error("context_anomaly_runbook_density_unknown_option");
   console.error(`option=${unknownArgs[0]}`);
@@ -20,9 +22,10 @@ if (unknownArgs.length > 0) {
 if (args.includes("--help")) {
   console.log(
     [
-      "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--help]",
+      "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
       "default: validate runbook line budget and required command entries",
       "--json: print ok, line_count, max_lines, and commands_checked",
+      "--self-test: verify line-budget and missing-command failure modes",
       "--help: print this help",
     ].join("\n"),
   );
@@ -44,13 +47,35 @@ const requiredCommands = [
   "Packet28 digest --root . --json",
 ];
 
-const runbook = readFileSync(runbookPath, "utf8");
-const lineCount = runbook.endsWith("\n")
-  ? runbook.split("\n").length - 1
-  : runbook.split("\n").length;
-const missingCommands = requiredCommands.filter(
-  (command) => !runbook.includes(command),
-);
+function evaluate(runbook, lineBudget) {
+  const lineCount = runbook.endsWith("\n")
+    ? runbook.split("\n").length - 1
+    : runbook.split("\n").length;
+  const missingCommands = requiredCommands.filter(
+    (command) => !runbook.includes(command),
+  );
+  if (lineCount > lineBudget) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_too_many_lines",
+      line_count: lineCount,
+      max_lines: lineBudget,
+    };
+  }
+  if (missingCommands.length > 0) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_missing_commands",
+      missing: missingCommands,
+    };
+  }
+  return {
+    ok: true,
+    line_count: lineCount,
+    max_lines: lineBudget,
+    commands_checked: requiredCommands.length,
+  };
+}
 
 function fail(code, details) {
   if (args.includes("--json")) {
@@ -64,23 +89,45 @@ function fail(code, details) {
   process.exit(1);
 }
 
-if (lineCount > maxLines) {
-  fail("context_anomaly_runbook_density_too_many_lines", {
-    line_count: lineCount,
-    max_lines: maxLines,
-  });
+function assertSelfTest(result, expectedCode) {
+  if (result.code !== expectedCode) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=${expectedCode}`);
+    console.error(`actual=${result.code ?? "ok"}`);
+    process.exit(1);
+  }
 }
-if (missingCommands.length > 0) {
-  fail("context_anomaly_runbook_density_missing_commands", {
-    missing: missingCommands,
-  });
+
+const runbook = readFileSync(runbookPath, "utf8");
+const result = evaluate(runbook, maxLines);
+if (args.includes("--self-test")) {
+  if (!result.ok) {
+    console.error("context_anomaly_runbook_density_self_test_baseline_failed");
+    console.error(`code=${result.code}`);
+    process.exit(1);
+  }
+  assertSelfTest(
+    evaluate(runbook, result.line_count - 1),
+    "context_anomaly_runbook_density_too_many_lines",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace(requiredCommands[0], ""), maxLines),
+    "context_anomaly_runbook_density_missing_commands",
+  );
+  console.log("context_anomaly_runbook_density_self_test_ok");
+  process.exit(0);
+}
+
+if (!result.ok) {
+  const { code, ok, ...details } = result;
+  fail(code, details);
 }
 
 const payload = {
   ok: true,
-  line_count: lineCount,
-  max_lines: maxLines,
-  commands_checked: requiredCommands.length,
+  line_count: result.line_count,
+  max_lines: result.max_lines,
+  commands_checked: result.commands_checked,
 };
 if (args.includes("--json")) {
   console.log(JSON.stringify(payload));
