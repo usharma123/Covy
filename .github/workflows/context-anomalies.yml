@@ -69,7 +69,7 @@ jobs:
           hidden_sample_smoke="$(printf '%s\n' "$hidden_sample_smoke_json" | jq -r '.summary')"
           hidden_sample_smoke_len="$(printf '%s\n' "$hidden_sample_smoke_json" | jq -r '.actual_len')"
           hidden_sample_smoke_max="$(printf '%s\n' "$hidden_sample_smoke_json" | jq -r '.max_len')"
-          hidden_sample_checksum="$(cut -c1-64 docs/context-anomalies/hidden-samples-delimiters.sha256)"
+          hidden_sample_checksum="$(printf '%s\n' "$hidden_sample_smoke_json" | jq -r '.checksum')"
           {
             echo "### Context anomalies"
             echo "- anomalies: $(jq -r '.anomaly_count // 0' context-anomalies.json)"
