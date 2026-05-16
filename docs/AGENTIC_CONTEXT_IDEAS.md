@@ -66,12 +66,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly trend fixture | Makes the CI trend summary reproducible without relying on live repository history. | A checked-in `docs/context-anomalies/history.jsonl` fixture captures repeated hidden fallback provenance followed by a clean latest run, and the context-anomalies workflow now triggers on that fixture. | Evidence: `context_anomaly_tile_reads_checked_in_trend_fixture`; fixture stays under 512 bytes and recurring hidden categories survive a final clean record. |
 | Context anomaly fixture CLI smoke | Lets maintainers reproduce the trend fixture from the command line, not only through a Rust unit test. | `Packet28 dashboard --context-anomaly-history <path>` reads a fixture JSONL for the context-anomaly tile without mutating live `.packet28` state. | Evidence: `test_dashboard_shows_local_product_metrics` runs the checked-in fixture through the dashboard CLI and reports `latest_status=ready` plus recurring hidden `fallback_provenance`. |
 | Context anomaly trend workflow fixture mode | Lets CI prove the summary trend extraction with deterministic history, independent of whatever live history a run generates. | The context-anomalies workflow now adds a fixture trend section using `Packet28 dashboard --context-anomaly-history docs/context-anomalies/history.jsonl`. | Evidence: added summary section is three lines and extracts fixture `latest_status=ready` plus recurring hidden `fallback_provenance` from `context-anomaly-fixture-dashboard.json`. |
+| Context anomaly trend docs runbook | Helps maintainers understand when live trends differ from fixture trends. | `docs/context-anomalies/RUNBOOK.md` explains live `.packet28` history, fixture replay, and when to inspect recurring hidden categories. | Evidence: runbook is under 40 lines and includes live dashboard, fixture dashboard, verifier, and digest commands. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly trend docs runbook | Helps maintainers understand when live trends differ from fixture trends. | Add a short docs note explaining live `.packet28` history, fixture replay, and when to inspect recurring hidden categories. | Compact metric: runbook under 40 lines; correctness metric: includes commands for live dashboard, fixture dashboard, and context-anomaly verifier. |
+| Context anomaly trend age signal | Helps agents tell whether recurring hidden-category trends are current or stale. | Add latest history age and oldest recurring hidden-category age to the context-anomaly dashboard tile. | Compact metric: tile remains under 768 bytes; correctness metric: old recurring hidden history is distinguishable from recent recurring hidden history. |
 
 ## Research Rules
 
