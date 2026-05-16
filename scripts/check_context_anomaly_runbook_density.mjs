@@ -2072,44 +2072,34 @@ if (args.includes("--self-test")) {
     };
     assertEnvLineAnchorMutationSelfTest();
     const assertSectionAnchorMutationSelfTests = () => {
-      assertSelfTest(
-        evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-      );
-      assertSelfTest(
-        evaluate(
-          runbook.replace("JSON:`alias_docs_checked`", "`alias_docs_checked`"),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-      );
-      assertSelfTest(
-        evaluate(
-          runbook.replace(
-            "Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
-            "`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
-          ),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-      );
-      assertSelfTest(
-        evaluate(
-          runbook.replace("Density failures cont.:", "Density failures merged:"),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-      );
-      assertSelfTest(
-        evaluate(
-          runbook.replace(
-            "Density doc failures cont.:",
-            "Density doc failures merged:",
-          ),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-      );
+      const sectionAnchorMutations = [
+        {
+          originalText: "`JSON:`=fields",
+          replacementText: "",
+        },
+        {
+          originalText: "JSON:`alias_docs_checked`",
+          replacementText: "`alias_docs_checked`",
+        },
+        {
+          originalText: "Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
+          replacementText: "`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
+        },
+        {
+          originalText: "Density failures cont.:",
+          replacementText: "Density failures merged:",
+        },
+        {
+          originalText: "Density doc failures cont.:",
+          replacementText: "Density doc failures merged:",
+        },
+      ];
+      for (const { originalText, replacementText } of sectionAnchorMutations) {
+        assertSelfTest(
+          evaluate(runbook.replace(originalText, replacementText), maxLines),
+          "context_anomaly_runbook_density_missing_output_docs",
+        );
+      }
     };
     assertSectionAnchorMutationSelfTests();
     const assertAliasGlossaryMutationSelfTests = () => {
