@@ -30,6 +30,7 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Handoff replay diff | Explains why two handoff artifacts would steer fresh workers differently. | MCP `packet28.handoff_diff` compares two stored context artifacts across objective, next-action, evidence handles, and debt signal. | Evidence: `handoff_diff_reports_changed_next_action_as_top_delta`; compact diff stays under 1KB when next action changes. |
 | Handoff compression advisor | Suggests the cheapest removals to make an over-budget handoff replay-ready. | MCP `packet28.handoff_compress` recommends dropping non-critical sections while protecting objective, next-action, debt, and evidence-freshness anchors. | Evidence: `handoff_compress_preserves_objective_and_next_action_sections`; response stays under 1KB and does not recommend protected anchors. |
 | Handoff dependency linter | Finds handoff references to artifact handles missing from the packet. | MCP `packet28.handoff_lint_dependencies` scans brief and section text for artifact handles and flags references absent from `artifact_id` or `evidence_artifact_ids`. | Evidence: `handoff_dependency_lint_flags_missing_artifact_handle`; compact lint output stays under 1KB and ignores included handles. |
+| Handoff path linter | Finds handoff file-path references that will fail for a fresh worker. | MCP `packet28.handoff_lint_paths` scans brief and section text for repo-relative paths and flags references absent on disk and absent from changed-path metadata. | Evidence: `handoff_path_lint_flags_missing_path_reference`; compact lint output stays under 1KB and ignores existing changed paths. |
 
 ## Next-Wave Backlog
 
@@ -37,7 +38,7 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 |---|---|---|---|
 | Reducer drift detector | Prevents compact reducers from silently losing decisive lines after upstream tool output changes. | Compare current reducer output against stored golden raw artifacts and flag missing error paths, counts, or command-status markers. | Compact metric: drift report under 1KB; correctness metric: fixture with removed failing-test line fails drift check. |
 | Cross-agent memory lint | Finds memories that are useful to one runtime but confusing or stale for another. | Scan local memories and runtime hook events for runtime-specific advice, stale paths, and unsupported integration assumptions. | Compact metric: lint summary under 768 bytes; correctness metric: fixture flags stale runtime-specific memory while preserving generic project memory. |
-| Handoff path linter | Finds handoff file-path references missing from changed-path or evidence arrays. | Extend dependency linting to parse repo-relative file paths and compare them against changed paths plus existing files. | Compact metric: path lint output under 1KB; correctness metric: fixture flags a nonexistent path but not an existing changed path. |
+| Handoff test linter | Finds handoff next actions that mention tests without runnable commands. | Parse next-action and verification sections for test names and flag missing concrete commands or testmap evidence. | Compact metric: test lint output under 1KB; correctness metric: fixture flags a named test without a command while accepting a command-backed test. |
 
 ## Research Rules
 

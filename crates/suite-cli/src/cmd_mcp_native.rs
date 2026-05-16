@@ -212,6 +212,14 @@ pub(crate) struct Packet28HandoffDependencyLintArgs {
     pub(crate) context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffPathLintArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1563,6 +1571,42 @@ pub(crate) fn handle_packet28_handoff_lint_dependencies(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_lint_paths(
+    root: &Path,
+    args: Packet28HandoffPathLintArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.handoff_lint_paths requires task_id"));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.handoff_lint_paths requires artifact_id or context_version")
+    })?;
+    let payload = read_handoff_payload(root, task_id, &artifact_id, "handoff path lint")?;
+    let changed_paths = available_handoff_paths(&payload);
+    let referenced_paths = referenced_handoff_paths(&payload);
+    let mut issues = Vec::new();
+    for reference in referenced_paths {
+        let exists_on_disk = root.join(&reference).exists();
+        let listed_as_changed = changed_paths.iter().any(|path| path == &reference);
+        if !exists_on_disk && !listed_as_changed {
+            issues.push(json!({
+                "kind": "missing_path",
+                "reference": reference,
+                "reason": "referenced path is absent on disk and not listed in changed_paths_since_checkpoint",
+            }));
+        }
+    }
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "ok": issues.is_empty(),
+        "issue_count": issues.len(),
+        "issues": issues,
+        "summary": format!("handoff_path_lint issue_count={}", issues.len()),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -1595,6 +1639,19 @@ fn available_handoff_artifacts(payload: &Value) -> Vec<String> {
     artifacts
 }
 
+fn available_handoff_paths(payload: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Some(changed_paths) = payload
+        .get("changed_paths_since_checkpoint")
+        .and_then(Value::as_array)
+    {
+        for path in changed_paths.iter().filter_map(Value::as_str) {
+            append_unique(&mut paths, path.to_string());
+        }
+    }
+    paths
+}
+
 fn referenced_handoff_artifacts(payload: &Value) -> Vec<String> {
     let mut references = Vec::new();
     collect_artifact_references(
@@ -1618,6 +1675,29 @@ fn referenced_handoff_artifacts(payload: &Value) -> Vec<String> {
     references
 }
 
+fn referenced_handoff_paths(payload: &Value) -> Vec<String> {
+    let mut references = Vec::new();
+    collect_path_references(
+        payload
+            .get("brief")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        &mut references,
+    );
+    if let Some(sections) = payload.get("sections").and_then(Value::as_array) {
+        for section in sections {
+            collect_path_references(
+                section
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                &mut references,
+            );
+        }
+    }
+    references
+}
+
 fn collect_artifact_references(text: &str, references: &mut Vec<String>) {
     for token in text.split_whitespace() {
         let token = token.trim_matches(|ch: char| {
@@ -1630,6 +1710,33 @@ fn collect_artifact_references(text: &str, references: &mut Vec<String>) {
             append_unique(references, token.to_string());
         }
     }
+}
+
+fn collect_path_references(text: &str, references: &mut Vec<String>) {
+    for token in text.split_whitespace() {
+        let token = token.trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '`' | '\'' | '"' | ',' | '.' | ';' | ':' | ')' | '(' | '[' | ']'
+            )
+        });
+        if is_repo_relative_path_reference(token) {
+            append_unique(references, token.to_string());
+        }
+    }
+}
+
+fn is_repo_relative_path_reference(token: &str) -> bool {
+    !token.starts_with('/')
+        && !token.contains("://")
+        && token.contains('/')
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '.'))
+        && token
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.contains('.'))
 }
 
 fn section_identifier(section: &Value) -> String {
