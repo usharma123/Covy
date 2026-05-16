@@ -650,12 +650,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test success output order | Keeps success emission after all self-test validation helpers. | Verified `finishSelfTestOk()` sits after `assertHelpLineWidthSelfTest()` and before the non-self-test failure handling path. | Evidence: no runtime output growth; success output only occurs after all self-test validation helpers. |
 | Context anomaly drilldown density self-test helper sequence audit | Audits the full named-helper sequence for remaining grouping gaps. | Scanned the `--self-test` block from `assertDefaultOutputMutationSelfTest()` through `finishSelfTestOk()` and found no remaining unnamed assertion phases. | Evidence: no runtime output growth; helper sequence ownership is complete across the audited block. |
 | Context anomaly drilldown density self-test sequence runner wrapper | Names the ordered execution of self-test helpers. | Extracted `runContextAnomalyDensitySelfTests()` around the ordered helper execution sequence. | Evidence: no runtime output growth; helper execution order remains explicit and covered. |
+| Context anomaly drilldown density self-test sequence runner order | Keeps the sequence runner inside `--self-test` before normal failure handling. | Verified `runContextAnomalyDensitySelfTests()` is invoked after helper definitions and before the non-self-test failure path. | Evidence: no runtime output growth; sequence execution remains isolated to self-test mode. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test sequence runner order | Keeps the sequence runner inside `--self-test` before normal failure handling. | Verify `runContextAnomalyDensitySelfTests()` is invoked after helper definitions and before the non-self-test failure path. | Compact metric: no runtime output growth; correctness metric: sequence execution remains isolated to self-test mode. |
+| Context anomaly drilldown density self-test sequence indentation audit | Checks whether the sequence-runner wrapper needs formatting churn. | Audit the minimal `runContextAnomalyDensitySelfTests()` wrapper and decide whether to preserve low-churn indentation or queue a mechanical indent-only cleanup. | Compact metric: no runtime output growth; correctness metric: sequence wrapper readability decision is explicit. |
 
 ## Research Rules
 
