@@ -120,12 +120,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit output artifact | Lets maintainers inspect the exact audit output when workflow summaries are truncated. | The context-anomalies workflow now uploads `context-anomaly-hidden-sample-audit.txt` as the `context-anomaly-hidden-sample-audit` artifact. | Evidence: default audit artifact content is seven lines and contains the same audit mode line used in the summary. |
 | Context anomaly drilldown audit artifact runbook note | Helps maintainers find the uploaded audit output from failed workflow runs. | The context anomaly runbook now names the `context-anomaly-hidden-sample-audit` artifact and its source file. | Evidence: runbook remains under 45 lines and the note names both artifact and `context-anomaly-hidden-sample-audit.txt`. |
 | Context anomaly drilldown audit artifact checksum | Lets maintainers confirm an uploaded audit artifact matches the summary without downloading it first. | The context-anomalies workflow summary now prints a SHA-256 checksum computed from `context-anomaly-hidden-sample-audit.txt`. | Evidence: audit checksum summary line is under 100 characters and is computed from the seven-line audit artifact. |
+| Context anomaly drilldown audit artifact checksum docs | Helps maintainers reproduce the audit artifact checksum locally. | The context anomaly runbook now includes the same Node SHA-256 command the workflow uses for `context-anomaly-hidden-sample-audit.txt`. | Evidence: runbook remains under 45 lines; local command reproduces the workflow audit checksum. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit artifact checksum docs | Helps maintainers reproduce the audit artifact checksum locally. | Add the audit artifact checksum command to the runbook. | Compact metric: runbook remains under 45 lines; correctness metric: command matches the workflow checksum computation. |
+| Context anomaly drilldown artifact checksum helper | Avoids duplicating a long Node checksum one-liner between workflow and docs. | Add checksum mode to the audit script or a small helper script for audit artifact hashing. | Compact metric: helper output one line; correctness metric: workflow and runbook use the helper. |
 
 ## Research Rules
 
