@@ -128,12 +128,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit JSON workflow summary | Removes text-line parsing from the workflow summary audit fields. | The context-anomalies workflow now writes `context-anomaly-hidden-sample-audit.json` and derives the summary audit mode line from that JSON with a text fallback. | Evidence: summary line count does not grow; JSON-derived mode matches the previous text summary shape while the audit checksum helper remains unchanged. |
 | Context anomaly drilldown audit pipefail guard | Prevents the workflow audit step from passing when the audited command fails before `tee`. | The context-anomalies audit workflow step now sets `pipefail` before piping audit output through `tee`. | Evidence: no summary growth; a failing command in a `pipefail` pipeline exits nonzero despite `tee`. |
 | Context anomaly drilldown audit JSON artifact | Lets maintainers inspect structured audit details from workflow runs, not only line text. | The `context-anomaly-hidden-sample-audit` artifact now uploads both text and JSON audit outputs. | Evidence: no summary growth; uploaded JSON parses and matches the text artifact mode line. |
+| Context anomaly drilldown audit JSON artifact docs | Helps maintainers know the audit artifact includes both text and structured JSON. | The runbook artifact note now names both `context-anomaly-hidden-sample-audit.txt` and `.json`. | Evidence: runbook remains under 45 lines and the note matches workflow artifact paths. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit JSON artifact docs | Helps maintainers know the audit artifact includes both text and structured JSON. | Update the runbook artifact note to name the JSON file. | Compact metric: runbook remains under 45 lines; correctness metric: note matches workflow artifact paths. |
+| Context anomaly drilldown audit JSON checksum summary | Lets maintainers confirm the structured audit artifact matches the run without downloading it. | Add a workflow summary checksum for `context-anomaly-hidden-sample-audit.json`. | Compact metric: one summary line under 100 characters; correctness metric: checksum helper reproduces the uploaded JSON digest. |
 
 ## Research Rules
 
