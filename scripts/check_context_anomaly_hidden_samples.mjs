@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,6 +13,10 @@ const fixturePath = join(
 const expectedPath = join(
   repoRoot,
   "docs/context-anomalies/hidden-samples-delimiters.summary",
+);
+const checksumPath = join(
+  repoRoot,
+  "docs/context-anomalies/hidden-samples-delimiters.sha256",
 );
 const maxSummaryLength = Number.parseInt(
   process.env.P28_HIDDEN_SAMPLE_SUMMARY_MAX ?? "256",
@@ -64,7 +69,17 @@ function summarize(samples) {
     .join(";");
 }
 
-const samples = JSON.parse(readFileSync(fixturePath, "utf8"));
+const fixtureRaw = readFileSync(fixturePath, "utf8");
+const actualChecksum = createHash("sha256").update(fixtureRaw).digest("hex");
+const expectedChecksum = readFileSync(checksumPath, "utf8").trim();
+if (actualChecksum !== expectedChecksum) {
+  console.error("context_anomaly_hidden_sample_fixture_checksum_mismatch");
+  console.error(`expected=${expectedChecksum}`);
+  console.error(`actual=${actualChecksum}`);
+  process.exit(1);
+}
+
+const samples = JSON.parse(fixtureRaw);
 const actual = summarize(samples);
 const expected = readFileSync(expectedPath, "utf8").trim();
 
