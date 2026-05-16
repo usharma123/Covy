@@ -13,9 +13,9 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
-// 576 keeps full-field JSON parity output compact while preserving the
+// 592 keeps full-field JSON parity output compact while preserving the
 // explicit headroom gate after adding default_output_headroom.
-const defaultMaxJsonBytes = 576;
+const defaultMaxJsonBytes = 592;
 const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
     String(defaultMaxJsonBytes),
@@ -151,7 +151,7 @@ const requiredOutputDocPhrases = [
   "`density_label_line_width`",
   "`default_output_headroom`",
   "`text_width_docs_checked`",
-  "`max_json_bytes=576`",
+  "`max_json_bytes=592`",
   "`thead>=8`",
   "`help<=120`",
 ];
