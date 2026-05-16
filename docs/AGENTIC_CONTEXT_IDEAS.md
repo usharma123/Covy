@@ -687,12 +687,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test section-anchor table order | Keeps the section-anchor table beside the loop that executes it. | Verified `sectionAnchorMutations` is defined inside `assertSectionAnchorMutationSelfTests()` immediately before the `originalText`/`replacementText` loop. | Evidence: no runtime output growth; section-anchor rows remain adjacent to their assertion loop. |
 | Context anomaly drilldown density self-test section-anchor row helper | Names the per-row execution of section-anchor mutations. | Extracted the loop body in `assertSectionAnchorMutationSelfTests()` into `assertSectionAnchorMutation(sectionAnchorMutation)`. | Evidence: no runtime output growth; each section-anchor row still replaces the intended text and fails on missing output docs. |
 | Context anomaly drilldown density self-test section-anchor row helper order | Keeps the section-anchor row helper beside the table it executes. | Verified `assertSectionAnchorMutation(sectionAnchorMutation)` is defined after `sectionAnchorMutations` and used by the following loop. | Evidence: no runtime output growth; row helper remains local to section-anchor mutations. |
+| Context anomaly drilldown density self-test section-anchor post-helper audit | Checks whether the section-anchor helper is decomposed enough after table and row-helper extraction. | Re-scanned `assertSectionAnchorMutationSelfTests()` and kept its table/helper/loop shape while moving the next target to repeated alias glossary assertions. | Evidence: no runtime output growth; next target is based on the current section-anchor helper shape. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test section-anchor post-helper audit | Checks whether the section-anchor helper is decomposed enough after table and row-helper extraction. | Re-scan `assertSectionAnchorMutationSelfTests()` and decide whether to keep the table/helper/loop local or move to alias glossary coverage. | Compact metric: no runtime output growth; correctness metric: next target is based on the current section-anchor helper shape. |
+| Context anomaly drilldown density self-test alias glossary table | Replaces repeated alias glossary assertions with a compact table. | Extract the four assertions in `assertAliasGlossaryMutationSelfTests()` into alias glossary rows with doc text and case name. | Compact metric: no runtime output growth; correctness metric: all alias glossary case names still fail on missing output docs. |
 
 ## Research Rules
 
