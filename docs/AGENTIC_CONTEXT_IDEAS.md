@@ -250,12 +250,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density prose anchor JSON docs | Helps maintainers discover `density_doc_anchors_checked` without inspecting checker source. | The runbook now documents `density_doc_anchors_checked`, and the checker self-tests removal of that field doc. | Evidence: prose remains under width budget; removing the field doc fails output-doc coverage. |
 | Context anomaly drilldown density JSON prose docs split | Keeps the growing JSON field list readable after adding anchor coverage. | The runbook keeps JSON field docs on a split `JSON:` prose line while env docs remain on `Env:`. | Evidence: `prose=329` stays below 360; all JSON field docs still pass. |
 | Context anomaly drilldown density text width headroom recovery | Restores default-output width margin after adding `anc` and `parsed`. | Default text now uses `adocs` and `wdocs` compact aliases while JSON keeps full field names. | Evidence: `width` drops below 185; parser and docs still cover every label. |
+| Context anomaly drilldown density text alias glossary refresh | Helps maintainers map the new `adocs` and `wdocs` aliases without reading checker source. | The density label glossary now documents `adocs` and `wdocs`, and the checker self-tests alias-doc removal. | Evidence: row remains under soft target; required alias docs cover the new labels. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text alias glossary refresh | Helps maintainers map the new `adocs` and `wdocs` aliases without reading checker source. | Extend the compact alias glossary for the new default-text labels. | Compact metric: row remains under soft target; correctness metric: required alias docs cover the new labels. |
+| Context anomaly drilldown density alias count refresh | Keeps the `adocs` count meaningful after adding `adocs` and `wdocs` glossary docs. | Verify default `adocs` and JSON alias counts reflect the expanded required alias doc list. | Compact metric: default output remains under text cap; correctness metric: `adocs` equals required alias doc count. |
 
 ## Research Rules
 

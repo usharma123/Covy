@@ -130,6 +130,8 @@ const requiredAliasDocPhrases = [
   "`fc`=failure codes",
   "`wf`=workflow commands",
   "`json`=remaining JSON headroom",
+  "`adocs`=alias docs",
+  "`wdocs`=width docs",
 ];
 const requiredDensityDocPhrases = [
   "Env:",
@@ -822,7 +824,7 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`adocs`", ""), maxLines),
+    evaluate(runbook.replaceAll("`adocs`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
@@ -906,6 +908,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`fc`=failure codes", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_fc_alias_glossary",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`adocs`=alias docs", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "missing_adocs_alias_glossary",
   );
   assertSelfTest(
     evaluate(

@@ -20,7 +20,7 @@ Use this command table before treating a compact anomaly summary as complete:
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`,`P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`.
 JSON:`row_soft_ok`,`row_soft_max`,`density_doc_phrases_checked`,`density_doc_anchors_checked`,`parsed_fields_checked`;h:`help<=120`.
-Density labels: `Env:`=env, `JSON:`=fields, `h:`=help.
+Density labels: `Env:`=env, `JSON:`=fields, `h:`=help, `adocs`=alias docs, `wdocs`=width docs.
 Density failures: `context_anomaly_runbook_density_too_many_lines`, `context_anomaly_runbook_density_row_too_wide`, `context_anomaly_runbook_density_missing_commands`, `context_anomaly_runbook_density_workflow_missing_commands`, `context_anomaly_runbook_density_missing_env_docs`, `context_anomaly_runbook_density_text_too_wide`.
 Density doc failures: `context_anomaly_runbook_density_missing_failure_docs`, `context_anomaly_runbook_density_missing_output_docs`, `context_anomaly_runbook_density_prose_too_wide`, `context_anomaly_runbook_density_json_too_long`. Dashboard JSON reports latest status, high count, hidden and recurring hidden categories.
 The audit script uses `verify context-anomalies --max-high 2` so local smoke can pass with known live quality debt and reports `audit_mode=tolerant`. The workflow threshold step and strict audit mode use `--max-high 0` and report `audit_mode=strict`.
