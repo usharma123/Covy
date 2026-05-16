@@ -451,12 +451,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test env invariant group helper | Keeps env doc structural invariants under one named assertion. | Extracted `assertEnvDocInvariants()` to call the paired count, plain count, and omission assertions. | Evidence: no runtime output growth; env doc structural checks stay grouped and directly self-tested. |
 | Context anomaly drilldown density self-test default output group helper | Keeps default output parser mutation checks under one named assertion. | Extracted `assertDefaultOutputMutations()` around the loop over `defaultTextFields`. | Evidence: no runtime output growth; default output parser mutations stay fully covered. |
 | Context anomaly drilldown density self-test default output missing diagnostic helper | Gives missing-field default output diagnostics one named failure path. | Extracted `failDefaultOutputMutation()` for the repeated self-test failure header and expected/actual lines. | Evidence: no runtime output growth; default output mutation diagnostics stay consistent. |
+| Context anomaly drilldown density self-test default output noop detail helper | Keeps no-op mutation diagnostic detail keys behind named helpers. | Extracted `missingMutationNoopDetails()` and `staleMutationNoopDetails()` before calling `failDefaultOutputMutation()`. | Evidence: no runtime output growth; no-op mutation diagnostics remain field-specific. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output noop detail helper | Keeps no-op mutation diagnostic detail keys behind named helpers. | Extract small helpers for missing/stale mutation no-op detail objects before calling `failDefaultOutputMutation()`. | Compact metric: no runtime output growth; correctness metric: no-op mutation diagnostics remain field-specific. |
+| Context anomaly drilldown density self-test default output mismatch detail helper | Keeps expected/actual mutation diagnostic details behind one helper. | Extract a `defaultOutputMutationMismatchDetails()` helper for expected/actual parser mismatch diagnostics. | Compact metric: no runtime output growth; correctness metric: mismatch diagnostics remain field-specific. |
 
 ## Research Rules
 

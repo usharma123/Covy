@@ -1569,6 +1569,12 @@ if (args.includes("--self-test")) {
   const failDefaultOutputMutation = (details) => {
     failSelfTestInvariant(details);
   };
+  const missingMutationNoopDetails = (field) => ({
+    missing_mutation_noop: field,
+  });
+  const staleMutationNoopDetails = (field) => ({
+    stale_mutation_noop: field,
+  });
   if (missingStaleMutationFields.length > 0) {
     failDefaultOutputMutation({
       missing_stale_mutation_fields: missingStaleMutationFields,
@@ -1578,7 +1584,7 @@ if (args.includes("--self-test")) {
     const fieldPattern = new RegExp(` ${field}=\\S+`);
     const missingOutputLine = defaultOutputLine.replace(fieldPattern, "");
     if (missingOutputLine === defaultOutputLine) {
-      failDefaultOutputMutation({ missing_mutation_noop: field });
+      failDefaultOutputMutation(missingMutationNoopDetails(field));
     }
     const missingFieldError = defaultOutputParseIssue(
       parseDefaultOutput(missingOutputLine),
@@ -1598,7 +1604,7 @@ if (args.includes("--self-test")) {
       staleOutputLine === defaultOutputLine ||
       staleValue === parsedDefaultOutput[field]
     ) {
-      failDefaultOutputMutation({ stale_mutation_noop: field });
+      failDefaultOutputMutation(staleMutationNoopDetails(field));
     }
     const staleFieldError = defaultOutputParseIssue(
       parseDefaultOutput(staleOutputLine),
