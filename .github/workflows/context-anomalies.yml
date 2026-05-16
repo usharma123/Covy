@@ -51,6 +51,9 @@ jobs:
       - name: Build Packet28 CLI
         run: cargo build -p suite-cli
 
+      - name: Audit context anomaly hidden samples
+        run: node scripts/audit_context_anomaly_hidden_samples.mjs
+
       - name: Verify context anomaly thresholds
         run: |
           set -o pipefail
