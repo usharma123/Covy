@@ -652,12 +652,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test sequence runner wrapper | Names the ordered execution of self-test helpers. | Extracted `runContextAnomalyDensitySelfTests()` around the ordered helper execution sequence. | Evidence: no runtime output growth; helper execution order remains explicit and covered. |
 | Context anomaly drilldown density self-test sequence runner order | Keeps the sequence runner inside `--self-test` before normal failure handling. | Verified `runContextAnomalyDensitySelfTests()` is invoked after helper definitions and before the non-self-test failure path. | Evidence: no runtime output growth; sequence execution remains isolated to self-test mode. |
 | Context anomaly drilldown density self-test sequence indentation audit | Checks whether the sequence-runner wrapper needs formatting churn. | Audited the minimal `runContextAnomalyDensitySelfTests()` wrapper and preserved the low-churn wrapper while queuing mechanical indentation cleanup separately. | Evidence: no runtime output growth; sequence wrapper readability decision is explicit. |
+| Context anomaly drilldown density self-test sequence indentation cleanup | Improves readability of the sequence-runner wrapper. | Mechanically indented the `runContextAnomalyDensitySelfTests()` body without changing helper order or output. | Evidence: no runtime output growth; indent-only cleanup preserves all self-test and density gates. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test sequence indentation cleanup | Improves readability of the sequence-runner wrapper. | Mechanically indent the `runContextAnomalyDensitySelfTests()` body without changing helper order or output. | Compact metric: no runtime output growth; correctness metric: indent-only cleanup preserves all self-test and density gates. |
+| Context anomaly drilldown density self-test sequence indentation order | Verifies the indented runner still ends before normal failure handling. | Verify the indented `runContextAnomalyDensitySelfTests()` body still ends before invocation and the non-self-test failure path. | Compact metric: no runtime output growth; correctness metric: indentation cleanup did not move execution boundaries. |
 
 ## Research Rules
 

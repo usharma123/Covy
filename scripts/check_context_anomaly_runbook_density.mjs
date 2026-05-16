@@ -1764,634 +1764,634 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutations();
   };
   const runContextAnomalyDensitySelfTests = () => {
-  assertDefaultOutputMutationSelfTest();
-  const assertInvariantDetailFormatSelfTest = () => {
-    assertInvariantDetailFormats();
-  };
-  assertInvariantDetailFormatSelfTest();
-  const assertEnvDocInvariantSelfTest = () => {
-    assertEnvDocInvariants();
-  };
-  assertEnvDocInvariantSelfTest();
-  const assertLineCountBoundarySelfTest = () => {
-    assertSelfTest(
-      evaluate(runbook, result.line_count - 1),
-      "context_anomaly_runbook_density_too_many_lines",
-    );
-  };
-  assertLineCountBoundarySelfTest();
-  const assertRequiredCommandMutationSelfTests = () => {
-    for (const [commandIndex, command] of requiredCommands.entries()) {
-      assertSelfTestMissing(
-        evaluate(
-          runbook.replaceAll(
-            command,
-            `drifted_required_command_${commandIndex}`,
-          ),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_commands",
-        command,
-        `drifted_required_command_${commandIndex}`,
+    assertDefaultOutputMutationSelfTest();
+    const assertInvariantDetailFormatSelfTest = () => {
+      assertInvariantDetailFormats();
+    };
+    assertInvariantDetailFormatSelfTest();
+    const assertEnvDocInvariantSelfTest = () => {
+      assertEnvDocInvariants();
+    };
+    assertEnvDocInvariantSelfTest();
+    const assertLineCountBoundarySelfTest = () => {
+      assertSelfTest(
+        evaluate(runbook, result.line_count - 1),
+        "context_anomaly_runbook_density_too_many_lines",
       );
-    }
-  };
-  assertRequiredCommandMutationSelfTests();
-  const assertRequiredFailureCodeMutationSelfTests = () => {
-    for (const [
-      failureCodeIndex,
-      failureCode,
-    ] of requiredFailureCodes.entries()) {
-      assertSelfTestMissing(
-        evaluate(
-          runbook.replace(
-            failureCode,
-            `drifted_failure_code_${failureCodeIndex}`,
-          ),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_failure_docs",
-        failureCode,
-        `drifted_${failureCode}`,
-      );
-    }
-  };
-  assertRequiredFailureCodeMutationSelfTests();
-  const assertOutputLabelMutationSelfTests = () => {
-    assertSelfTestMissing(
-      evaluate(runbook.replaceAll("`wf`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "wf",
-      "missing_wf_output_label",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`env`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "env",
-      "missing_env_output_label",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`lbl`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "lbl",
-      "missing_lbl_output_label",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`phr`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "phr",
-      "missing_phr_output_label",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replaceAll("`adocs`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "adocs",
-      "missing_adocs_output_label",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`dphr`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "dphr",
-      "missing_dphr_output_label",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`anc`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "anc",
-      "missing_anc_output_label",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`prs`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "prs",
-      "missing_prs_output_label",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`soft`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "soft",
-      "missing_soft_output_label",
-    );
-  };
-  assertOutputLabelMutationSelfTests();
-  const assertKeyValueOutputDocMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`key=value`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`key=value`",
-      "missing_key_value_output_doc",
-    );
-  };
-  assertKeyValueOutputDocMutationSelfTest();
-  const assertDefaultOutputPhraseMutationSelfTests = () => {
-    for (const label of defaultOutputFieldOrder) {
-      assertSelfTestMissing(
-        evaluate(
-          runbook.replace(
-            defaultOutputDocPhrase,
-            defaultOutputDocPhrase.replace(
-              `\`${label}\``,
-              `\`${label}_drift\``,
+    };
+    assertLineCountBoundarySelfTest();
+    const assertRequiredCommandMutationSelfTests = () => {
+      for (const [commandIndex, command] of requiredCommands.entries()) {
+        assertSelfTestMissing(
+          evaluate(
+            runbook.replaceAll(
+              command,
+              `drifted_required_command_${commandIndex}`,
             ),
+            maxLines,
           ),
+          "context_anomaly_runbook_density_missing_commands",
+          command,
+          `drifted_required_command_${commandIndex}`,
+        );
+      }
+    };
+    assertRequiredCommandMutationSelfTests();
+    const assertRequiredFailureCodeMutationSelfTests = () => {
+      for (const [
+        failureCodeIndex,
+        failureCode,
+      ] of requiredFailureCodes.entries()) {
+        assertSelfTestMissing(
+          evaluate(
+            runbook.replace(
+              failureCode,
+              `drifted_failure_code_${failureCodeIndex}`,
+            ),
+            maxLines,
+          ),
+          "context_anomaly_runbook_density_missing_failure_docs",
+          failureCode,
+          `drifted_${failureCode}`,
+        );
+      }
+    };
+    assertRequiredFailureCodeMutationSelfTests();
+    const assertOutputLabelMutationSelfTests = () => {
+      assertSelfTestMissing(
+        evaluate(runbook.replaceAll("`wf`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "wf",
+        "missing_wf_output_label",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`env`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "env",
+        "missing_env_output_label",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`lbl`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "lbl",
+        "missing_lbl_output_label",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`phr`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "phr",
+        "missing_phr_output_label",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replaceAll("`adocs`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "adocs",
+        "missing_adocs_output_label",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`dphr`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "dphr",
+        "missing_dphr_output_label",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`anc`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "anc",
+        "missing_anc_output_label",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`prs`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "prs",
+        "missing_prs_output_label",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`soft`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "soft",
+        "missing_soft_output_label",
+      );
+    };
+    assertOutputLabelMutationSelfTests();
+    const assertKeyValueOutputDocMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`key=value`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`key=value`",
+        "missing_key_value_output_doc",
+      );
+    };
+    assertKeyValueOutputDocMutationSelfTest();
+    const assertDefaultOutputPhraseMutationSelfTests = () => {
+      for (const label of defaultOutputFieldOrder) {
+        assertSelfTestMissing(
+          evaluate(
+            runbook.replace(
+              defaultOutputDocPhrase,
+              defaultOutputDocPhrase.replace(
+                `\`${label}\``,
+                `\`${label}_drift\``,
+              ),
+            ),
+            maxLines,
+          ),
+          "context_anomaly_runbook_density_missing_output_docs",
+          defaultOutputDocPhrase,
+          `drifted_${label}_default_output_doc_phrase`,
+        );
+      }
+    };
+    assertDefaultOutputPhraseMutationSelfTests();
+    const assertOutputOrderSwapMutationSelfTests = () => {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
           maxLines,
         ),
         "context_anomaly_runbook_density_missing_output_docs",
         defaultOutputDocPhrase,
-        `drifted_${label}_default_output_doc_phrase`,
+        "swapped_env_lbl_output_order",
       );
-    }
-  };
-  assertDefaultOutputPhraseMutationSelfTests();
-  const assertOutputOrderSwapMutationSelfTests = () => {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      defaultOutputDocPhrase,
-      "swapped_env_lbl_output_order",
-    );
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace("`dlab`, `jhead`", "`jhead`, `dlab`"),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      defaultOutputDocPhrase,
-      "swapped_dlab_jhead_output_order",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`thead`, `tw`", "`tw`, `thead`"), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      defaultOutputDocPhrase,
-      "swapped_thead_tw_output_order",
-    );
-  };
-  assertOutputOrderSwapMutationSelfTests();
-  const assertJsonFieldNameDocMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(runbook.replace("JSON keeps full field names", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "JSON keeps full field names",
-      "missing_json_full_field_names_doc",
-    );
-  };
-  assertJsonFieldNameDocMutationSelfTest();
-  const assertJsonFieldDocMutationSelfTests = () => {
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`alias_docs_checked`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`alias_docs_checked`",
-      "missing_alias_docs_checked_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`row_soft_ok`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`row_soft_ok`",
-      "missing_row_soft_ok_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`density_doc_phrases_checked`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`density_doc_phrases_checked`",
-      "missing_density_doc_phrases_checked_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`density_doc_anchors_checked`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`density_doc_anchors_checked`",
-      "missing_density_doc_anchors_checked_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`parsed_fields_checked`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`parsed_fields_checked`",
-      "missing_parsed_fields_checked_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`json_parity_fields_checked`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`json_parity_fields_checked`",
-      "missing_json_parity_fields_checked_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`density_label_line_width`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`density_label_line_width`",
-      "missing_density_label_line_width_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`default_output_headroom`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`default_output_headroom`",
-      "missing_default_output_headroom_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`default_output_iterations`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`default_output_iterations`",
-      "missing_default_output_iterations_json_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace(
-          "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
-          "`density_label_line_width`,`text_width_docs_checked`,`default_output_iterations`,`default_output_headroom`",
-        ),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
-      "swapped_default_output_headroom_json_doc_order",
-    );
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace(
-          "`default_output_iterations`,`text_width_docs_checked`",
-          "`text_width_docs_checked`,`default_output_iterations`",
-        ),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
-      "swapped_default_output_iterations_json_doc_order",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`text_width_docs_checked`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`text_width_docs_checked`",
-      "missing_text_width_docs_checked_json_doc",
-    );
-  };
-  assertJsonFieldDocMutationSelfTests();
-  const assertJsonByteHelpCapMutationSelfTests = () => {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace(`\`max_json_bytes=${defaultMaxJsonBytes}\``, ""),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      `\`max_json_bytes=${defaultMaxJsonBytes}\``,
-      "missing_max_json_bytes_doc",
-    );
-    assertSelfTestMissing(
-      evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      `\`help<=${maxHelpLineLength}\``,
-      "missing_help_cap_doc",
-    );
-  };
-  assertJsonByteHelpCapMutationSelfTests();
-  const assertEnvLineAnchorMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(runbook.replaceAll("Env:", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "Env:line",
-      "missing_env_line_anchor",
-    );
-  };
-  assertEnvLineAnchorMutationSelfTest();
-  const assertSectionAnchorMutationSelfTests = () => {
-    assertSelfTest(
-      evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-    );
-    assertSelfTest(
-      evaluate(
-        runbook.replace("JSON:`alias_docs_checked`", "`alias_docs_checked`"),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-    );
-    assertSelfTest(
-      evaluate(
-        runbook.replace(
-          "Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
-          "`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
-        ),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-    );
-    assertSelfTest(
-      evaluate(
-        runbook.replace("Density failures cont.:", "Density failures merged:"),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-    );
-    assertSelfTest(
-      evaluate(
-        runbook.replace(
-          "Density doc failures cont.:",
-          "Density doc failures merged:",
-        ),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-    );
-  };
-  assertSectionAnchorMutationSelfTests();
-  const assertAliasGlossaryMutationSelfTests = () => {
-    assertSelfTest(
-      evaluate(runbook.replace("`fc`=failure codes", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "missing_fc_alias_glossary",
-    );
-    assertSelfTest(
-      evaluate(runbook.replace("`jhead`=JSON headroom", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "missing_jhead_alias_glossary",
-    );
-    assertSelfTest(
-      evaluate(runbook.replace("`adocs`=alias docs", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "missing_adocs_alias_glossary",
-    );
-    assertSelfTest(
-      evaluate(runbook.replace("`dlab`=density label width", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "missing_dlab_alias_glossary",
-    );
-  };
-  assertAliasGlossaryMutationSelfTests();
-  const assertWidthEnvPairMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace("`tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
-      "missing_width_env_pair",
-    );
-  };
-  assertWidthEnvPairMutationSelfTest();
-  const assertTextHeadroomMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`thead>=8`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`thead>=8`",
-      "missing_default_text_headroom_doc",
-    );
-  };
-  assertTextHeadroomMutationSelfTest();
-  const assertJsonErrorShapeMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`ok:false`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`ok:false`",
-      "missing_json_error_shape_doc",
-    );
-  };
-  assertJsonErrorShapeMutationSelfTest();
-  const assertFailureSuccessFieldMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(runbook.replace("`no-succ`", ""), maxLines),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`no-succ`",
-      "missing_json_failure_success_field_doc",
-    );
-  };
-  assertFailureSuccessFieldMutationSelfTest();
-  const assertStaleFailureAliasMutationSelfTest = () => {
-    const staleFailureAliasResult = evaluate(
-      runbook.replace("`no-succ`", "`no-success`"),
-      maxLines,
-    );
-    assertSelfTestMissing(
-      staleFailureAliasResult,
-      "context_anomaly_runbook_density_missing_output_docs",
-      "stale:no-success",
-      "stale_json_failure_success_field_alias",
-    );
-  };
-  assertStaleFailureAliasMutationSelfTest();
-  const assertJsonErrorHelpAdjacencyMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace(
-          "`ok:false`;`no-succ`;h:`help<=120`",
-          "`ok:false`;`no-succ`;x:`help<=120`",
-        ),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "`ok:false`;`no-succ`;h:`help<=120`",
-      "missing_json_error_help_adjacency_doc",
-    );
-  };
-  assertJsonErrorHelpAdjacencyMutationSelfTest();
-  const assertJsonHeadroomEnvPairMutationSelfTest = () => {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace(
-          "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`",
-          "`jhead` has headroom",
-        ),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      "jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
-      "missing_jhead_env_pair",
-    );
-  };
-  assertJsonHeadroomEnvPairMutationSelfTest();
-  const assertPlainEnvDocMutationSelfTests = () => {
-    for (const [envIndex, envName] of requiredPlainEnvDocs.entries()) {
       assertSelfTestMissing(
         evaluate(
-          runbook.replaceAll(
-            `\`${envName}\``,
-            `\`DRIFTED_ENV_DOC_${envIndex}\``,
+          runbook.replace("`dlab`, `jhead`", "`jhead`, `dlab`"),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+        defaultOutputDocPhrase,
+        "swapped_dlab_jhead_output_order",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`thead`, `tw`", "`tw`, `thead`"), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        defaultOutputDocPhrase,
+        "swapped_thead_tw_output_order",
+      );
+    };
+    assertOutputOrderSwapMutationSelfTests();
+    const assertJsonFieldNameDocMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(runbook.replace("JSON keeps full field names", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "JSON keeps full field names",
+        "missing_json_full_field_names_doc",
+      );
+    };
+    assertJsonFieldNameDocMutationSelfTest();
+    const assertJsonFieldDocMutationSelfTests = () => {
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`alias_docs_checked`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`alias_docs_checked`",
+        "missing_alias_docs_checked_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`row_soft_ok`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`row_soft_ok`",
+        "missing_row_soft_ok_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`density_doc_phrases_checked`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`density_doc_phrases_checked`",
+        "missing_density_doc_phrases_checked_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`density_doc_anchors_checked`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`density_doc_anchors_checked`",
+        "missing_density_doc_anchors_checked_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`parsed_fields_checked`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`parsed_fields_checked`",
+        "missing_parsed_fields_checked_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`json_parity_fields_checked`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`json_parity_fields_checked`",
+        "missing_json_parity_fields_checked_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`density_label_line_width`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`density_label_line_width`",
+        "missing_density_label_line_width_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`default_output_headroom`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`default_output_headroom`",
+        "missing_default_output_headroom_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`default_output_iterations`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`default_output_iterations`",
+        "missing_default_output_iterations_json_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replace(
+            "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
+            "`density_label_line_width`,`text_width_docs_checked`,`default_output_iterations`,`default_output_headroom`",
           ),
           maxLines,
         ),
-        "context_anomaly_runbook_density_missing_env_docs",
-        envName,
-        `drifted_${envName}`,
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
+        "swapped_default_output_headroom_json_doc_order",
       );
-    }
-  };
-  assertPlainEnvDocMutationSelfTests();
-  const assertWorkflowCommandMutationSelfTests = () => {
-    for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
       assertSelfTestMissing(
-        evaluateWorkflow(
-          workflow.replace(
-            `          ${command}\n`,
-            `          drifted_workflow_command_${commandIndex}\n`,
+        evaluate(
+          runbook.replace(
+            "`default_output_iterations`,`text_width_docs_checked`",
+            "`text_width_docs_checked`,`default_output_iterations`",
           ),
+          maxLines,
         ),
-        "context_anomaly_runbook_density_workflow_missing_commands",
-        command,
-        `drifted_workflow_command_${commandIndex}`,
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
+        "swapped_default_output_iterations_json_doc_order",
       );
-    }
-  };
-  assertWorkflowCommandMutationSelfTests();
-  const assertEnvLimitFailureSelfTests = () => {
-    assertEnvFailure(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
-      [],
-      "context_anomaly_runbook_density_too_many_lines",
-    );
-    assertEnvFailure(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
-      [],
-      "context_anomaly_runbook_density_row_too_wide",
-    );
-  };
-  assertEnvLimitFailureSelfTests();
-  const assertSoftRowOutputSelfTests = () => {
-    assertEnvOutput(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
-      [],
-      "soft=over",
-    );
-    assertEnvOutput(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
-      ["--json"],
-      '"row_soft_ok":false',
-    );
-  };
-  assertSoftRowOutputSelfTests();
-  const assertProseTextEnvFailureSelfTests = () => {
-    assertEnvFailure(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX: "10" },
-      [],
-      "context_anomaly_runbook_density_prose_too_wide",
-    );
-    assertEnvFailure(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "10" },
-      [],
-      "context_anomaly_runbook_density_text_too_wide",
-    );
-    assertEnvFailure(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-      [],
-      "context_anomaly_runbook_density_text_too_wide",
-    );
-    assertEnvFailure(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-      ["--json"],
-      "context_anomaly_runbook_density_text_too_wide",
-    );
-  };
-  assertProseTextEnvFailureSelfTests();
-  const assertTextJsonFailureShapeSelfTests = () => {
-    assertEnvFailureOutput(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-      ["--json"],
-      [
-        '"ok":false',
-        '"code":"context_anomaly_runbook_density_text_too_wide"',
-        '"default_output_len":197',
-        '"max_default_output_len":195',
-      ],
-    );
-    assertEnvFailureExcludes(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-      ["--json"],
-      '"default_output_iterations"',
-    );
-  };
-  assertTextJsonFailureShapeSelfTests();
-  const assertTextHeadroomOutputSelfTests = () => {
-    assertEnvOutput(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
-      [],
-      "thead=0 tw=196",
-    );
-    assertEnvOutput(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
-      ["--json"],
-      '"default_output_headroom":0',
-    );
-    assertEnvOutput(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
-      ["--json"],
-      '"default_output_iterations":1',
-    );
-  };
-  assertTextHeadroomOutputSelfTests();
-  const assertJsonMaxFailureShapeSelfTests = () => {
-    assertEnvFailure(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
-      ["--json"],
-      "context_anomaly_runbook_density_json_too_long",
-    );
-    assertEnvFailureOutput(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
-      ["--json"],
-      ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
-    );
-    assertEnvFailureExcludes(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
-      ["--json"],
-      '"default_output_iterations"',
-    );
-  };
-  assertJsonMaxFailureShapeSelfTests();
-  const assertJsonHeadroomMinFailureShapeSelfTests = () => {
-    assertEnvFailure(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-      ["--json"],
-      "context_anomaly_runbook_density_json_too_long",
-    );
-    assertEnvFailureOutput(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-      ["--json"],
-      ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
-    );
-    assertEnvFailureExcludes(
-      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-      ["--json"],
-      '"default_output_iterations"',
-    );
-  };
-  assertJsonHeadroomMinFailureShapeSelfTests();
-  const assertJsonBudgetIssueMutationSelfTest = () => {
-    assertSelfTest(
-      jsonBudgetIssue(successPayload(result, workflowResult, 10), 10) ?? {
-        code: "ok",
-      },
-      "context_anomaly_runbook_density_json_too_long",
-    );
-  };
-  assertJsonBudgetIssueMutationSelfTest();
-  const assertHelpIncludesSelfTests = () => {
-    for (const expected of [
-      "default",
-      "--json",
-      "--self-test",
-      "--help",
-      "context_anomaly_runbook_density_unknown_option",
-      "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX",
-    ]) {
-      assertHelpIncludes(expected);
-    }
-  };
-  assertHelpIncludesSelfTests();
-  const assertHelpLineWidthSelfTest = () => {
-    const tooWideHelpLine = helpLines.find(
-      (line) => line.length > maxHelpLineLength,
-    );
-    if (tooWideHelpLine) {
-      console.error("context_anomaly_runbook_density_self_test_help_failed");
-      console.error(`max_help_line_len=${maxHelpLineLength}`);
-      console.error(`actual_help_line_len=${tooWideHelpLine.length}`);
-      process.exit(1);
-    }
-  };
-  assertHelpLineWidthSelfTest();
-  const finishSelfTestOk = () => {
-    console.log("context_anomaly_runbook_density_self_test_ok");
-    process.exit(0);
-  };
-  finishSelfTestOk();
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`text_width_docs_checked`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`text_width_docs_checked`",
+        "missing_text_width_docs_checked_json_doc",
+      );
+    };
+    assertJsonFieldDocMutationSelfTests();
+    const assertJsonByteHelpCapMutationSelfTests = () => {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replace(`\`max_json_bytes=${defaultMaxJsonBytes}\``, ""),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+        `\`max_json_bytes=${defaultMaxJsonBytes}\``,
+        "missing_max_json_bytes_doc",
+      );
+      assertSelfTestMissing(
+        evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        `\`help<=${maxHelpLineLength}\``,
+        "missing_help_cap_doc",
+      );
+    };
+    assertJsonByteHelpCapMutationSelfTests();
+    const assertEnvLineAnchorMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(runbook.replaceAll("Env:", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "Env:line",
+        "missing_env_line_anchor",
+      );
+    };
+    assertEnvLineAnchorMutationSelfTest();
+    const assertSectionAnchorMutationSelfTests = () => {
+      assertSelfTest(
+        evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+      );
+      assertSelfTest(
+        evaluate(
+          runbook.replace("JSON:`alias_docs_checked`", "`alias_docs_checked`"),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+      );
+      assertSelfTest(
+        evaluate(
+          runbook.replace(
+            "Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
+            "`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
+          ),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+      );
+      assertSelfTest(
+        evaluate(
+          runbook.replace("Density failures cont.:", "Density failures merged:"),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+      );
+      assertSelfTest(
+        evaluate(
+          runbook.replace(
+            "Density doc failures cont.:",
+            "Density doc failures merged:",
+          ),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+      );
+    };
+    assertSectionAnchorMutationSelfTests();
+    const assertAliasGlossaryMutationSelfTests = () => {
+      assertSelfTest(
+        evaluate(runbook.replace("`fc`=failure codes", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "missing_fc_alias_glossary",
+      );
+      assertSelfTest(
+        evaluate(runbook.replace("`jhead`=JSON headroom", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "missing_jhead_alias_glossary",
+      );
+      assertSelfTest(
+        evaluate(runbook.replace("`adocs`=alias docs", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "missing_adocs_alias_glossary",
+      );
+      assertSelfTest(
+        evaluate(runbook.replace("`dlab`=density label width", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "missing_dlab_alias_glossary",
+      );
+    };
+    assertAliasGlossaryMutationSelfTests();
+    const assertWidthEnvPairMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replace("`tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
+        "missing_width_env_pair",
+      );
+    };
+    assertWidthEnvPairMutationSelfTest();
+    const assertTextHeadroomMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`thead>=8`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`thead>=8`",
+        "missing_default_text_headroom_doc",
+      );
+    };
+    assertTextHeadroomMutationSelfTest();
+    const assertJsonErrorShapeMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`ok:false`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`ok:false`",
+        "missing_json_error_shape_doc",
+      );
+    };
+    assertJsonErrorShapeMutationSelfTest();
+    const assertFailureSuccessFieldMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(runbook.replace("`no-succ`", ""), maxLines),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`no-succ`",
+        "missing_json_failure_success_field_doc",
+      );
+    };
+    assertFailureSuccessFieldMutationSelfTest();
+    const assertStaleFailureAliasMutationSelfTest = () => {
+      const staleFailureAliasResult = evaluate(
+        runbook.replace("`no-succ`", "`no-success`"),
+        maxLines,
+      );
+      assertSelfTestMissing(
+        staleFailureAliasResult,
+        "context_anomaly_runbook_density_missing_output_docs",
+        "stale:no-success",
+        "stale_json_failure_success_field_alias",
+      );
+    };
+    assertStaleFailureAliasMutationSelfTest();
+    const assertJsonErrorHelpAdjacencyMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replace(
+            "`ok:false`;`no-succ`;h:`help<=120`",
+            "`ok:false`;`no-succ`;x:`help<=120`",
+          ),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "`ok:false`;`no-succ`;h:`help<=120`",
+        "missing_json_error_help_adjacency_doc",
+      );
+    };
+    assertJsonErrorHelpAdjacencyMutationSelfTest();
+    const assertJsonHeadroomEnvPairMutationSelfTest = () => {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replace(
+            "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`",
+            "`jhead` has headroom",
+          ),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_output_docs",
+        "jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
+        "missing_jhead_env_pair",
+      );
+    };
+    assertJsonHeadroomEnvPairMutationSelfTest();
+    const assertPlainEnvDocMutationSelfTests = () => {
+      for (const [envIndex, envName] of requiredPlainEnvDocs.entries()) {
+        assertSelfTestMissing(
+          evaluate(
+            runbook.replaceAll(
+              `\`${envName}\``,
+              `\`DRIFTED_ENV_DOC_${envIndex}\``,
+            ),
+            maxLines,
+          ),
+          "context_anomaly_runbook_density_missing_env_docs",
+          envName,
+          `drifted_${envName}`,
+        );
+      }
+    };
+    assertPlainEnvDocMutationSelfTests();
+    const assertWorkflowCommandMutationSelfTests = () => {
+      for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
+        assertSelfTestMissing(
+          evaluateWorkflow(
+            workflow.replace(
+              `          ${command}\n`,
+              `          drifted_workflow_command_${commandIndex}\n`,
+            ),
+          ),
+          "context_anomaly_runbook_density_workflow_missing_commands",
+          command,
+          `drifted_workflow_command_${commandIndex}`,
+        );
+      }
+    };
+    assertWorkflowCommandMutationSelfTests();
+    const assertEnvLimitFailureSelfTests = () => {
+      assertEnvFailure(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
+        [],
+        "context_anomaly_runbook_density_too_many_lines",
+      );
+      assertEnvFailure(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
+        [],
+        "context_anomaly_runbook_density_row_too_wide",
+      );
+    };
+    assertEnvLimitFailureSelfTests();
+    const assertSoftRowOutputSelfTests = () => {
+      assertEnvOutput(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
+        [],
+        "soft=over",
+      );
+      assertEnvOutput(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
+        ["--json"],
+        '"row_soft_ok":false',
+      );
+    };
+    assertSoftRowOutputSelfTests();
+    const assertProseTextEnvFailureSelfTests = () => {
+      assertEnvFailure(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX: "10" },
+        [],
+        "context_anomaly_runbook_density_prose_too_wide",
+      );
+      assertEnvFailure(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "10" },
+        [],
+        "context_anomaly_runbook_density_text_too_wide",
+      );
+      assertEnvFailure(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+        [],
+        "context_anomaly_runbook_density_text_too_wide",
+      );
+      assertEnvFailure(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+        ["--json"],
+        "context_anomaly_runbook_density_text_too_wide",
+      );
+    };
+    assertProseTextEnvFailureSelfTests();
+    const assertTextJsonFailureShapeSelfTests = () => {
+      assertEnvFailureOutput(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+        ["--json"],
+        [
+          '"ok":false',
+          '"code":"context_anomaly_runbook_density_text_too_wide"',
+          '"default_output_len":197',
+          '"max_default_output_len":195',
+        ],
+      );
+      assertEnvFailureExcludes(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+        ["--json"],
+        '"default_output_iterations"',
+      );
+    };
+    assertTextJsonFailureShapeSelfTests();
+    const assertTextHeadroomOutputSelfTests = () => {
+      assertEnvOutput(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
+        [],
+        "thead=0 tw=196",
+      );
+      assertEnvOutput(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
+        ["--json"],
+        '"default_output_headroom":0',
+      );
+      assertEnvOutput(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
+        ["--json"],
+        '"default_output_iterations":1',
+      );
+    };
+    assertTextHeadroomOutputSelfTests();
+    const assertJsonMaxFailureShapeSelfTests = () => {
+      assertEnvFailure(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
+        ["--json"],
+        "context_anomaly_runbook_density_json_too_long",
+      );
+      assertEnvFailureOutput(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
+        ["--json"],
+        ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
+      );
+      assertEnvFailureExcludes(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
+        ["--json"],
+        '"default_output_iterations"',
+      );
+    };
+    assertJsonMaxFailureShapeSelfTests();
+    const assertJsonHeadroomMinFailureShapeSelfTests = () => {
+      assertEnvFailure(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
+        ["--json"],
+        "context_anomaly_runbook_density_json_too_long",
+      );
+      assertEnvFailureOutput(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
+        ["--json"],
+        ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
+      );
+      assertEnvFailureExcludes(
+        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
+        ["--json"],
+        '"default_output_iterations"',
+      );
+    };
+    assertJsonHeadroomMinFailureShapeSelfTests();
+    const assertJsonBudgetIssueMutationSelfTest = () => {
+      assertSelfTest(
+        jsonBudgetIssue(successPayload(result, workflowResult, 10), 10) ?? {
+          code: "ok",
+        },
+        "context_anomaly_runbook_density_json_too_long",
+      );
+    };
+    assertJsonBudgetIssueMutationSelfTest();
+    const assertHelpIncludesSelfTests = () => {
+      for (const expected of [
+        "default",
+        "--json",
+        "--self-test",
+        "--help",
+        "context_anomaly_runbook_density_unknown_option",
+        "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX",
+      ]) {
+        assertHelpIncludes(expected);
+      }
+    };
+    assertHelpIncludesSelfTests();
+    const assertHelpLineWidthSelfTest = () => {
+      const tooWideHelpLine = helpLines.find(
+        (line) => line.length > maxHelpLineLength,
+      );
+      if (tooWideHelpLine) {
+        console.error("context_anomaly_runbook_density_self_test_help_failed");
+        console.error(`max_help_line_len=${maxHelpLineLength}`);
+        console.error(`actual_help_line_len=${tooWideHelpLine.length}`);
+        process.exit(1);
+      }
+    };
+    assertHelpLineWidthSelfTest();
+    const finishSelfTestOk = () => {
+      console.log("context_anomaly_runbook_density_self_test_ok");
+      process.exit(0);
+    };
+    finishSelfTestOk();
   };
   runContextAnomalyDensitySelfTests();
 }
