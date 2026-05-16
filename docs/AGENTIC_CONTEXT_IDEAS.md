@@ -404,12 +404,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper label-count adoption | Reuses the missing-detail helper for the compact `lbl` output label mutation. | The `lbl` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers label-count detail checks. |
 | Context anomaly drilldown density missing-detail helper env-label adoption | Reuses the missing-detail helper for the compact `env` output label mutation. | The `env` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers env label detail checks. |
 | Context anomaly drilldown density missing-detail helper adocs-label adoption | Reuses the missing-detail helper for the compact `adocs` output label mutation. | The `adocs` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers alias-doc label detail checks. |
+| Context anomaly drilldown density missing-detail helper workflow-label adoption | Reuses the missing-detail helper for the compact `wf` output label mutation. | The `wf` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers workflow label detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper workflow-label adoption | Reuses the missing-detail helper for the compact `wf` output label mutation. | Convert the `wf` output-label mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers workflow label detail checks. |
+| Context anomaly drilldown density missing-detail helper output label sweep | Finishes exact-detail coverage for the compact output label mutation cluster. | Inspect remaining output-label mutations and convert any still using bare `assertSelfTest`. | Compact metric: no output growth; correctness metric: every output-label mutation has a named missing-detail assertion. |
 
 ## Research Rules
 
