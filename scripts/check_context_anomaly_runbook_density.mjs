@@ -2107,26 +2107,31 @@ if (args.includes("--self-test")) {
     };
     assertSectionAnchorMutationSelfTests();
     const assertAliasGlossaryMutationSelfTests = () => {
-      assertSelfTest(
-        evaluate(runbook.replace("`fc`=failure codes", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "missing_fc_alias_glossary",
-      );
-      assertSelfTest(
-        evaluate(runbook.replace("`jhead`=JSON headroom", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "missing_jhead_alias_glossary",
-      );
-      assertSelfTest(
-        evaluate(runbook.replace("`adocs`=alias docs", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "missing_adocs_alias_glossary",
-      );
-      assertSelfTest(
-        evaluate(runbook.replace("`dlab`=density label width", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "missing_dlab_alias_glossary",
-      );
+      const aliasGlossaryDocs = [
+        {
+          caseName: "missing_fc_alias_glossary",
+          docText: "`fc`=failure codes",
+        },
+        {
+          caseName: "missing_jhead_alias_glossary",
+          docText: "`jhead`=JSON headroom",
+        },
+        {
+          caseName: "missing_adocs_alias_glossary",
+          docText: "`adocs`=alias docs",
+        },
+        {
+          caseName: "missing_dlab_alias_glossary",
+          docText: "`dlab`=density label width",
+        },
+      ];
+      for (const { caseName, docText } of aliasGlossaryDocs) {
+        assertSelfTest(
+          evaluate(runbook.replace(docText, ""), maxLines),
+          "context_anomaly_runbook_density_missing_output_docs",
+          caseName,
+        );
+      }
     };
     assertAliasGlossaryMutationSelfTests();
     const assertWidthEnvPairMutationSelfTest = () => {
