@@ -1664,12 +1664,14 @@ if (args.includes("--self-test")) {
     "`text_width_docs_checked`",
     "missing_text_width_docs_checked_json_doc",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace(`\`max_json_bytes=${defaultMaxJsonBytes}\``, ""),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
+    `\`max_json_bytes=${defaultMaxJsonBytes}\``,
+    "missing_max_json_bytes_doc",
   );
   assertSelfTest(
     evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
