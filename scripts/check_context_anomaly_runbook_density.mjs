@@ -1517,10 +1517,10 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
-  const expectedInvariantArrayDetail = "array,detail";
-  const expectedInvariantScalarDetail = "scalar";
   const invariantArrayDetailSample = ["array", "detail"];
   const invariantScalarDetailSample = "scalar";
+  const expectedInvariantArrayDetail = "array,detail";
+  const expectedInvariantScalarDetail = "scalar";
   const actualInvariantArrayDetail = invariantDetailValue(
     invariantArrayDetailSample,
   );
