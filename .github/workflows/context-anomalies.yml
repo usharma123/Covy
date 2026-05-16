@@ -63,6 +63,7 @@ jobs:
         run: |
           node scripts/audit_context_anomaly_hidden_samples.mjs --help
           node scripts/audit_context_anomaly_hidden_samples.mjs | tee context-anomaly-hidden-sample-audit.txt
+          node scripts/audit_context_anomaly_hidden_samples.mjs --json > context-anomaly-hidden-sample-audit.json
           if [ "$STRICT_AUDIT" = "true" ]; then
             node scripts/audit_context_anomaly_hidden_samples.mjs --strict
           fi
@@ -85,7 +86,7 @@ jobs:
         run: |
           target/debug/Packet28 dashboard --root . --json > context-anomaly-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-dashboard.json
           target/debug/Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json > context-anomaly-fixture-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-fixture-dashboard.json
-          audit_mode_line="$(grep '^audit_mode=' context-anomaly-hidden-sample-audit.txt || true)"
+          audit_mode_line="$(jq -r '"audit_mode=\(.audit_mode) verifier=\(if .verifier.ok then "ok" else "failed" end) high=\(.verifier.high) max_high=\(.verifier.max_high)"' context-anomaly-hidden-sample-audit.json 2>/dev/null || grep '^audit_mode=' context-anomaly-hidden-sample-audit.txt || true)"
           audit_output_checksum="$(node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt)"
           trend_repair_hint="$(jq -r '.trend_repair_hint // empty' context-anomalies.json)"
           hidden_sample_jq='def cat_escape: gsub("%"; "%25") | gsub("="; "%3D") | gsub(";"; "%3B") | gsub("\n"; "%0A"); def signal_escape: gsub("%"; "%25") | gsub(";"; "%3B") | gsub("\n"; "%0A"); map((.category | cat_escape) + "=" + (.signal | signal_escape)) | join(";")'

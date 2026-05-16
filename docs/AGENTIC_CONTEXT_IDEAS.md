@@ -125,12 +125,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown checksum helper self-test | Prevents the audit checksum helper from drifting while workflow summaries still rely on it. | The default audit now checks `--checksum` against a temporary `abc` fixture with a known SHA-256 digest. | Evidence: default audit output remains seven lines and includes `checksum-helper`; helper digest is compared with an independent known value. |
 | Context anomaly drilldown checksum read failure | Gives CI a compact, parseable error when the audit artifact file is missing. | `--checksum` now catches file-read failures and emits a named two-line error instead of a Node stack trace. | Evidence: missing-file output stays at two lines; valid checksum output remains only the digest. |
 | Context anomaly drilldown audit JSON output | Lets automation consume audit mode, formatter budget, checksum, and digest counts without parsing text lines. | The audit script now supports `--json` success output and structured strict/verifier failure output while preserving default text output. | Evidence: JSON output stays under 512 bytes; JSON fields match the default audit lines for mode, budget, checksum, verifier counts, and digest count. |
+| Context anomaly drilldown audit JSON workflow summary | Removes text-line parsing from the workflow summary audit fields. | The context-anomalies workflow now writes `context-anomaly-hidden-sample-audit.json` and derives the summary audit mode line from that JSON with a text fallback. | Evidence: summary line count does not grow; JSON-derived mode matches the previous text summary shape while the audit checksum helper remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit JSON workflow summary | Removes text-line parsing from the workflow summary audit fields. | Have the context-anomalies workflow read audit mode and checksum inputs from audit JSON where possible. | Compact metric: summary line count does not grow; correctness metric: JSON-derived mode and checksum match existing summary output. |
+| Context anomaly drilldown audit pipefail guard | Prevents the workflow audit step from passing when the audited command fails before `tee`. | Add `set -o pipefail` to the audit workflow step. | Compact metric: no summary growth; correctness metric: a failing audit command makes the step fail despite `tee`. |
 
 ## Research Rules
 
