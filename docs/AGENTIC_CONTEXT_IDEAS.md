@@ -118,12 +118,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit mode docs | Helps agents interpret the audit output mode without reading script logic. | The context anomaly runbook now ties `audit_mode=tolerant` to `--max-high 2` and `audit_mode=strict` to `--max-high 0`. | Evidence: runbook remains under 45 lines and documents both mode-to-threshold mappings. |
 | Context anomaly drilldown audit mode workflow summary | Makes the default audit mode visible in workflow logs and summaries. | The context-anomalies workflow now tees default audit output and appends its `audit_mode=...` line to the GitHub summary. | Evidence: summary grows by one line; local render extracts `audit_mode=tolerant verifier=ok high=2 max_high=2` from the audit output. |
 | Context anomaly drilldown audit output artifact | Lets maintainers inspect the exact audit output when workflow summaries are truncated. | The context-anomalies workflow now uploads `context-anomaly-hidden-sample-audit.txt` as the `context-anomaly-hidden-sample-audit` artifact. | Evidence: default audit artifact content is seven lines and contains the same audit mode line used in the summary. |
+| Context anomaly drilldown audit artifact runbook note | Helps maintainers find the uploaded audit output from failed workflow runs. | The context anomaly runbook now names the `context-anomaly-hidden-sample-audit` artifact and its source file. | Evidence: runbook remains under 45 lines and the note names both artifact and `context-anomaly-hidden-sample-audit.txt`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit artifact runbook note | Helps maintainers find the uploaded audit output from failed workflow runs. | Document the `context-anomaly-hidden-sample-audit` artifact in the context anomaly runbook. | Compact metric: runbook remains under 45 lines; correctness metric: note names the artifact and source file. |
+| Context anomaly drilldown audit artifact checksum | Lets maintainers confirm an uploaded audit artifact matches the summary without downloading it first. | Add an audit artifact checksum line to the workflow summary. | Compact metric: one summary line under 100 characters; correctness metric: checksum is computed from `context-anomaly-hidden-sample-audit.txt`. |
 
 ## Research Rules
 
