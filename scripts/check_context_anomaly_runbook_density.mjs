@@ -476,13 +476,22 @@ if (args.includes("--self-test")) {
     console.error("headroom_did_not_change_after_payload_growth");
     process.exit(1);
   }
-  const parsedDefaultOutput = parseDefaultOutput(
-    renderDefaultOutputWithWidth(baselinePayload, result, baselineHeadroom),
+  const defaultOutputLine = renderDefaultOutputWithWidth(
+    baselinePayload,
+    result,
+    baselineHeadroom,
   );
+  const parsedDefaultOutput = parseDefaultOutput(defaultOutputLine);
   const defaultOutputError = defaultOutputParseIssue(parsedDefaultOutput, result);
   if (defaultOutputError) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(defaultOutputError);
+    process.exit(1);
+  }
+  if (parsedDefaultOutput.text_width !== String(defaultOutputLine.length)) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_text_width=${defaultOutputLine.length}`);
+    console.error(`actual_text_width=${parsedDefaultOutput.text_width}`);
     process.exit(1);
   }
   if (parseDefaultOutput("bad_prefix lines=44/44") !== null) {
