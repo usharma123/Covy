@@ -507,6 +507,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     anc: String(resultDetails.density_doc_anchors_checked),
     soft: resultDetails.row_soft_ok ? "ok" : "over",
     parsed: String(resultDetails.parsed_fields_checked),
+    wdocs: String(resultDetails.text_width_docs_checked),
   };
   for (const [field, expected] of Object.entries(expectedValues)) {
     if (parsed[field] !== expected) {
@@ -727,6 +728,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected=missing_default_output_field=wdocs`);
     console.error(`actual=${missingTextWidthDocsError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleTextWidthDocsError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ wdocs=\d+/, " wdocs=0")),
+    result,
+  );
+  if (staleTextWidthDocsError !== "default_output_parse_mismatch=wdocs") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=wdocs");
+    console.error(`actual=${staleTextWidthDocsError ?? "ok"}`);
     process.exit(1);
   }
   const staleDensityDocCountError = defaultOutputParseIssue(
