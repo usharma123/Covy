@@ -497,12 +497,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation field identity predicate | Names the parser-field identity comparison. | Extracted `defaultOutputMutationFieldsMirrorParserFields(mutationFields)` for the joined field list comparison. | Evidence: no runtime output growth; identity comparison stays single-source. |
 | Context anomaly drilldown density self-test default output mutation expected field list helper | Names the expected parser field list used by identity diagnostics. | Extracted `expectedDefaultOutputMutationFields()` returning `defaultTextFields`. | Evidence: no runtime output growth; expected identity list stays single-source. |
 | Context anomaly drilldown density self-test default output mutation actual field list helper | Names the actual mutation field list sampled for identity checks. | Extracted `actualDefaultOutputMutationFields()` returning `defaultOutputMutationFields()`. | Evidence: no runtime output growth; actual identity list stays single-source. |
+| Context anomaly drilldown density self-test default output mutation field identity sample | Keeps expected and actual identity field lists sampled together. | Extracted `defaultOutputMutationFieldIdentitySample()` returning expected and actual field lists. | Evidence: no runtime output growth; identity comparison and diagnostics share sampled lists. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation field identity sample | Keeps expected and actual identity field lists sampled together. | Extract `defaultOutputMutationFieldIdentitySample()` returning expected and actual field lists. | Compact metric: no runtime output growth; correctness metric: identity comparison and diagnostics share sampled lists. |
+| Context anomaly drilldown density self-test default output mutation field identity match helper | Makes the identity predicate name describe the sampled comparison. | Rename `defaultOutputMutationFieldsMirrorParserFields(sample)` to `defaultOutputMutationFieldIdentityMatches(sample)`. | Compact metric: no runtime output growth; correctness metric: identity predicate remains single-source. |
 
 ## Research Rules
 

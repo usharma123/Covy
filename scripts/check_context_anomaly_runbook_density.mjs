@@ -1691,18 +1691,23 @@ if (args.includes("--self-test")) {
     actual_default_output_mutation_fields: sample.actualMutationFields,
   });
   const expectedDefaultOutputMutationFields = () => defaultTextFields;
-  const defaultOutputMutationFieldIdentityDetails = (mutationFields) => ({
-    expected_default_output_mutation_fields: expectedDefaultOutputMutationFields(),
-    actual_default_output_mutation_fields: mutationFields,
-  });
   const actualDefaultOutputMutationFields = () => defaultOutputMutationFields();
-  const defaultOutputMutationFieldsMirrorParserFields = (mutationFields) =>
-    mutationFields.join(",") === expectedDefaultOutputMutationFields().join(",");
+  const defaultOutputMutationFieldIdentitySample = () => ({
+    expectedMutationFields: expectedDefaultOutputMutationFields(),
+    actualMutationFields: actualDefaultOutputMutationFields(),
+  });
+  const defaultOutputMutationFieldIdentityDetails = (sample) => ({
+    expected_default_output_mutation_fields: sample.expectedMutationFields,
+    actual_default_output_mutation_fields: sample.actualMutationFields,
+  });
+  const defaultOutputMutationFieldsMirrorParserFields = (sample) =>
+    sample.actualMutationFields.join(",") ===
+    sample.expectedMutationFields.join(",");
   const assertDefaultOutputMutationFieldsMirrorParserFields = () => {
-    const mutationFields = actualDefaultOutputMutationFields();
-    if (!defaultOutputMutationFieldsMirrorParserFields(mutationFields)) {
+    const identitySample = defaultOutputMutationFieldIdentitySample();
+    if (!defaultOutputMutationFieldsMirrorParserFields(identitySample)) {
       failDefaultOutputMutation(
-        defaultOutputMutationFieldIdentityDetails(mutationFields),
+        defaultOutputMutationFieldIdentityDetails(identitySample),
       );
     }
   };
