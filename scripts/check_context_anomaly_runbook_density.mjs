@@ -1566,30 +1566,29 @@ if (args.includes("--self-test")) {
   const missingStaleMutationFields = defaultTextFields.filter(
     (field) => staleDefaultOutputValues[field] === undefined,
   );
+  const failDefaultOutputMutation = (details) => {
+    failSelfTestInvariant(details);
+  };
   if (missingStaleMutationFields.length > 0) {
-    console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error(
-      `missing_stale_mutation_fields=${missingStaleMutationFields.join(",")}`,
-    );
-    process.exit(1);
+    failDefaultOutputMutation({
+      missing_stale_mutation_fields: missingStaleMutationFields,
+    });
   }
   const assertDefaultOutputMutation = (field, staleValue) => {
     const fieldPattern = new RegExp(` ${field}=\\S+`);
     const missingOutputLine = defaultOutputLine.replace(fieldPattern, "");
     if (missingOutputLine === defaultOutputLine) {
-      console.error("context_anomaly_runbook_density_self_test_failed");
-      console.error(`missing_mutation_noop=${field}`);
-      process.exit(1);
+      failDefaultOutputMutation({ missing_mutation_noop: field });
     }
     const missingFieldError = defaultOutputParseIssue(
       parseDefaultOutput(missingOutputLine),
       defaultParseDetails,
     );
     if (missingFieldError !== `missing_default_output_field=${field}`) {
-      console.error("context_anomaly_runbook_density_self_test_failed");
-      console.error(`expected=missing_default_output_field=${field}`);
-      console.error(`actual=${missingFieldError ?? "ok"}`);
-      process.exit(1);
+      failDefaultOutputMutation({
+        expected: `missing_default_output_field=${field}`,
+        actual: missingFieldError ?? "ok",
+      });
     }
     const staleOutputLine = defaultOutputLine.replace(
       fieldPattern,
@@ -1599,19 +1598,17 @@ if (args.includes("--self-test")) {
       staleOutputLine === defaultOutputLine ||
       staleValue === parsedDefaultOutput[field]
     ) {
-      console.error("context_anomaly_runbook_density_self_test_failed");
-      console.error(`stale_mutation_noop=${field}`);
-      process.exit(1);
+      failDefaultOutputMutation({ stale_mutation_noop: field });
     }
     const staleFieldError = defaultOutputParseIssue(
       parseDefaultOutput(staleOutputLine),
       defaultParseDetails,
     );
     if (staleFieldError !== `default_output_parse_mismatch=${field}`) {
-      console.error("context_anomaly_runbook_density_self_test_failed");
-      console.error(`expected=default_output_parse_mismatch=${field}`);
-      console.error(`actual=${staleFieldError ?? "ok"}`);
-      process.exit(1);
+      failDefaultOutputMutation({
+        expected: `default_output_parse_mismatch=${field}`,
+        actual: staleFieldError ?? "ok",
+      });
     }
   };
   const assertDefaultOutputMutations = () => {
