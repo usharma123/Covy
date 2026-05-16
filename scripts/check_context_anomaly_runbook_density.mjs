@@ -921,6 +921,14 @@ if (args.includes("--self-test")) {
     console.error(jsonPayloadError);
     process.exit(1);
   }
+  if (baselinePayload.density_label_line_width !== actualDensityLabelLineLength) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_json_dlab=${actualDensityLabelLineLength}`);
+    console.error(
+      `actual_json_dlab=${baselinePayload.density_label_line_width}`,
+    );
+    process.exit(1);
+  }
   const jsonParityFieldOrder = Object.keys(
     jsonPayloadParityExpectedFields(result, {
       default_output_headroom: defaultOutputHeadroom,
