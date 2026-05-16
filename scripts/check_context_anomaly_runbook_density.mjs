@@ -1574,12 +1574,14 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`key=value`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
+    defaultOutputDocPhrase,
+    "swapped_env_lbl_output_order",
   );
   assertSelfTestMissing(
     evaluate(
