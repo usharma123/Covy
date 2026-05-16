@@ -85,12 +85,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown summary drift smoke | Gives maintainers a local command for checking hidden-sample summary fixtures without waiting for CI. | `scripts/check_context_anomaly_hidden_samples.mjs` now compares the delimiter fixture against the checked-in expected line and prints a one-line success summary. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs`; exits nonzero on drift and prints one `context_anomaly_hidden_sample_fixture_ok=...` line on success. |
 | Context anomaly drilldown runbook command table | Helps agents choose the right context anomaly command without scanning prose. | The context anomaly runbook now has a four-row command table for live verify, fixture replay, formatter smoke, and digest inspection. | Evidence: runbook remains under 45 lines; `verify context-anomalies`, fixture dashboard replay, smoke script, and digest commands all have local validation paths. |
 | Context anomaly drilldown table CI excerpt | Makes the runbook command table visible from GitHub summaries when context anomaly checks run. | The context-anomalies workflow summary now prints the formatter smoke result and labels the runbook link as the command table. | Evidence: summary grows by one line; workflow runs `node scripts/check_context_anomaly_hidden_samples.mjs` before writing the summary and fails on formatter drift. |
+| Context anomaly drilldown fixture freshness | Prevents the delimiter fixture from becoming invisible when the workflow path filters change. | The context-anomalies workflow path filters now include the hidden-sample smoke script while fixture files remain covered by `docs/context-anomalies/**`. | Evidence: two path-filter entries were added; fixture docs and smoke-script changes both trigger the workflow. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown fixture freshness | Prevents the delimiter fixture from becoming invisible when the workflow path filters change. | Add the hidden-sample delimiter fixture files and smoke script to the context-anomalies workflow path filters. | Compact metric: path filter adds at most three entries; correctness metric: fixture or smoke-script changes trigger the context anomaly workflow. |
+| Context anomaly drilldown summary budget gate | Prevents fixture smoke lines from becoming too long for GitHub summaries. | Add a length check to the smoke script so the escaped hidden-sample summary stays under the workflow summary cap. | Compact metric: smoke summary under 256 characters; correctness metric: script exits nonzero when the escaped fixture exceeds the budget. |
 
 ## Research Rules
 
