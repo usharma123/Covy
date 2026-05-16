@@ -564,6 +564,7 @@ fn run_memory_lint(args: MemoryLintVerifyArgs) -> Result<i32> {
         &root,
     ));
     let payload = verify_memory_lint_payload(&root, &fixture_path)?;
+    crate::cmd_dashboard::record_memory_lint_history(&root, &payload)?;
     let ok = payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
 
     if args.json {

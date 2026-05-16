@@ -60,6 +60,7 @@ struct DashboardReport {
     windsurf_doctor_status: String,
     handoff_readiness: HandoffReadinessTile,
     reducer_drift: ReducerDriftTile,
+    memory_lint: MemoryLintTile,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -105,6 +106,24 @@ struct ReducerDriftHistoryRecord {
     case_count: u64,
     issue_count: u64,
     failing_families: Vec<String>,
+    issue_kinds: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct MemoryLintTile {
+    run_count: usize,
+    latest_status: String,
+    latest_issue_count: usize,
+    latest_issue_kinds: Vec<String>,
+    recurring_issue_kinds: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct MemoryLintHistoryRecord {
+    created_at_unix_ms: i64,
+    ok: bool,
+    memory_count: u64,
+    issue_count: u64,
     issue_kinds: Vec<String>,
 }
 
@@ -159,6 +178,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
     let transcripts = transcript_stats()?;
     let handoff_readiness = handoff_readiness_tile(&root)?;
     let reducer_drift = reducer_drift_tile(&root)?;
+    let memory_lint = memory_lint_tile(&root)?;
     let windsurf_rules = root.join(".windsurf").join("rules").join("packet28.md");
     let windsurf_status = if windsurf_rules.exists() {
         "rules_present"
@@ -196,6 +216,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         windsurf_doctor_status: windsurf_status.to_string(),
         handoff_readiness,
         reducer_drift,
+        memory_lint,
     };
 
     let format = args.format.trim().to_ascii_lowercase();
@@ -259,6 +280,14 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
             "reducer_drift_latest_issue_count={}",
             report.reducer_drift.latest_issue_count
         );
+        println!(
+            "memory_lint_latest_status={}",
+            report.memory_lint.latest_status
+        );
+        println!(
+            "memory_lint_latest_issue_count={}",
+            report.memory_lint.latest_issue_count
+        );
     }
     Ok(0)
 }
@@ -270,6 +299,22 @@ pub(crate) fn handoff_readiness_payload(root: &Path) -> Result<Value> {
 pub(crate) fn record_reducer_drift_history(root: &Path, payload: &Value) -> Result<()> {
     let record = reducer_drift_history_record(payload);
     let path = reducer_drift_history_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut line = serde_json::to_string(&record)?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(line.as_bytes())?;
+    Ok(())
+}
+
+pub(crate) fn record_memory_lint_history(root: &Path, payload: &Value) -> Result<()> {
+    let record = memory_lint_history_record(payload);
+    let path = memory_lint_history_path(root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -325,6 +370,34 @@ fn reducer_drift_history_record(payload: &Value) -> ReducerDriftHistoryRecord {
     }
 }
 
+fn memory_lint_history_record(payload: &Value) -> MemoryLintHistoryRecord {
+    let mut issue_kinds = BTreeSet::<String>::new();
+    if let Some(issues) = payload
+        .get("lint")
+        .and_then(|lint| lint.get("issues"))
+        .and_then(Value::as_array)
+    {
+        for issue in issues {
+            if let Some(kind) = issue.get("kind").and_then(Value::as_str) {
+                issue_kinds.insert(kind.to_string());
+            }
+        }
+    }
+    MemoryLintHistoryRecord {
+        created_at_unix_ms: now_unix_ms(),
+        ok: payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        memory_count: payload
+            .get("memory_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        issue_count: payload
+            .get("issue_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        issue_kinds: issue_kinds.into_iter().collect(),
+    }
+}
+
 fn reducer_drift_tile(root: &Path) -> Result<ReducerDriftTile> {
     let records = load_reducer_drift_history(root, 32)?;
     if records.is_empty() {
@@ -354,6 +427,35 @@ fn reducer_drift_tile(root: &Path) -> Result<ReducerDriftTile> {
     })
 }
 
+fn memory_lint_tile(root: &Path) -> Result<MemoryLintTile> {
+    let records = load_memory_lint_history(root, 32)?;
+    if records.is_empty() {
+        return Ok(MemoryLintTile {
+            latest_status: "none".to_string(),
+            ..MemoryLintTile::default()
+        });
+    }
+    let latest = records.last().expect("non-empty memory lint history");
+    let mut counts = BTreeMap::<String, usize>::new();
+    for record in &records {
+        for kind in &record.issue_kinds {
+            *counts.entry(kind.clone()).or_default() += 1;
+        }
+    }
+    let recurring_issue_kinds = counts
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(kind, _)| kind.clone())
+        .collect::<Vec<_>>();
+    Ok(MemoryLintTile {
+        run_count: records.len(),
+        latest_status: if latest.ok { "ready" } else { "blocked" }.to_string(),
+        latest_issue_count: latest.issue_count as usize,
+        latest_issue_kinds: latest.issue_kinds.clone(),
+        recurring_issue_kinds,
+    })
+}
+
 fn load_reducer_drift_history(root: &Path, limit: usize) -> Result<Vec<ReducerDriftHistoryRecord>> {
     let path = reducer_drift_history_path(root);
     let Ok(raw) = fs::read_to_string(path) else {
@@ -369,8 +471,27 @@ fn load_reducer_drift_history(root: &Path, limit: usize) -> Result<Vec<ReducerDr
     Ok(records)
 }
 
+fn load_memory_lint_history(root: &Path, limit: usize) -> Result<Vec<MemoryLintHistoryRecord>> {
+    let path = memory_lint_history_path(root);
+    let Ok(raw) = fs::read_to_string(path) else {
+        return Ok(Vec::new());
+    };
+    let mut records = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<MemoryLintHistoryRecord>(line).ok())
+        .collect::<Vec<_>>();
+    if records.len() > limit {
+        records = records.split_off(records.len().saturating_sub(limit));
+    }
+    Ok(records)
+}
+
 fn reducer_drift_history_path(root: &Path) -> std::path::PathBuf {
     root.join(".packet28").join("reducer-drift-history.jsonl")
+}
+
+fn memory_lint_history_path(root: &Path) -> std::path::PathBuf {
+    root.join(".packet28").join("memory-lint-history.jsonl")
 }
 
 fn handoff_readiness_tile(root: &Path) -> Result<HandoffReadinessTile> {
@@ -664,6 +785,10 @@ fn render_dashboard_tui(report: &DashboardReport, panel: DashboardPanel) -> Stri
                 "reducer_drift_latest_status={}\nreducer_drift_latest_issue_count={}\n",
                 report.reducer_drift.latest_status, report.reducer_drift.latest_issue_count
             ));
+            out.push_str(&format!(
+                "memory_lint_latest_status={}\nmemory_lint_latest_issue_count={}\n",
+                report.memory_lint.latest_status, report.memory_lint.latest_issue_count
+            ));
             out.push_str("handoff_latest_blockers:\n");
             push_tui_list(
                 &mut out,
@@ -823,6 +948,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
         "Reducer drift",
         &report.reducer_drift.latest_status,
     );
+    push_metric(&mut html, "Memory lint", &report.memory_lint.latest_status);
     html.push_str("</section>");
 
     html.push_str("<h2>Memory Topics</h2><table><tr><th>Topic</th><th>Count</th></tr>");
@@ -898,6 +1024,25 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     ));
     html.push_str("</table>");
 
+    html.push_str("<h2>Memory Lint</h2><table><tr><th>Signal</th><th>Value</th></tr>");
+    html.push_str(&format!(
+        "<tr><td>Latest status</td><td>{}</td></tr>",
+        escape_html(&report.memory_lint.latest_status)
+    ));
+    html.push_str(&format!(
+        "<tr><td>Latest issues</td><td>{}</td></tr>",
+        report.memory_lint.latest_issue_count
+    ));
+    html.push_str(&format!(
+        "<tr><td>Latest issue kinds</td><td><code>{}</code></td></tr>",
+        escape_html(&report.memory_lint.latest_issue_kinds.join(","))
+    ));
+    html.push_str(&format!(
+        "<tr><td>Recurring issues</td><td><code>{}</code></td></tr>",
+        escape_html(&report.memory_lint.recurring_issue_kinds.join(","))
+    ));
+    html.push_str("</table>");
+
     html.push_str("<h2>Integration Health</h2><table><tr><th>Integration</th><th>Status</th></tr>");
     for (name, status) in &report.integration_health {
         html.push_str(&format!(
@@ -955,6 +1100,28 @@ mod tests {
         })
     }
 
+    fn memory_lint_payload(ok: bool, issue_count: u64) -> Value {
+        let issues = if issue_count == 0 {
+            Vec::new()
+        } else {
+            vec![serde_json::json!({
+                "memory_id": 1,
+                "kind": "runtime_specific_memory",
+                "detail": "mentions windsurf"
+            })]
+        };
+        serde_json::json!({
+            "ok": ok,
+            "memory_count": 2,
+            "issue_count": issue_count,
+            "lint": {
+                "memory_count": 2,
+                "issue_count": issue_count,
+                "issues": issues
+            }
+        })
+    }
+
     #[test]
     fn reducer_drift_tile_reports_recurring_and_cleared_latest_failure() {
         let root = tempfile::tempdir().unwrap();
@@ -969,6 +1136,23 @@ mod tests {
         assert_eq!(tile.latest_issue_count, 0);
         assert!(tile.latest_failing_families.is_empty());
         assert_eq!(tile.recurring_issue_kinds, vec!["missing_marker"]);
+        assert!(serde_json::to_string(&tile).unwrap().len() < 768);
+    }
+
+    #[test]
+    fn memory_lint_tile_reports_recurring_and_cleared_latest_issue() {
+        let root = tempfile::tempdir().unwrap();
+        record_memory_lint_history(root.path(), &memory_lint_payload(false, 1)).unwrap();
+        record_memory_lint_history(root.path(), &memory_lint_payload(false, 1)).unwrap();
+        record_memory_lint_history(root.path(), &memory_lint_payload(true, 0)).unwrap();
+
+        let tile = memory_lint_tile(root.path()).unwrap();
+
+        assert_eq!(tile.run_count, 3);
+        assert_eq!(tile.latest_status, "ready");
+        assert_eq!(tile.latest_issue_count, 0);
+        assert!(tile.latest_issue_kinds.is_empty());
+        assert_eq!(tile.recurring_issue_kinds, vec!["runtime_specific_memory"]);
         assert!(serde_json::to_string(&tile).unwrap().len() < 768);
     }
 }
