@@ -1,0 +1,51 @@
+name: Handoff Readiness
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/handoff-readiness.yml"
+      - "docs/AGENTIC_CONTEXT_IDEAS.md"
+      - "crates/suite-cli/src/cmd_dashboard.rs"
+      - "crates/suite-cli/src/cmd_verify.rs"
+      - "crates/suite-cli/src/cmd_mcp.rs"
+      - "crates/suite-cli/src/cmd_mcp_native.rs"
+      - "crates/suite-cli/tests/e2e_smoke.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/handoff-readiness.yml"
+      - "docs/AGENTIC_CONTEXT_IDEAS.md"
+      - "crates/suite-cli/src/cmd_dashboard.rs"
+      - "crates/suite-cli/src/cmd_verify.rs"
+      - "crates/suite-cli/src/cmd_mcp.rs"
+      - "crates/suite-cli/src/cmd_mcp_native.rs"
+      - "crates/suite-cli/tests/e2e_smoke.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-handoffs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Packet28 CLI
+        run: cargo build -p suite-cli
+
+      - name: Verify handoff readiness
+        run: target/debug/Packet28 verify handoffs --root . --max-regressions 0
