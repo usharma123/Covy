@@ -2257,26 +2257,29 @@ if (args.includes("--self-test")) {
     );
   };
   assertSoftRowOutputSelfTests();
-  assertEnvFailure(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX: "10" },
-    [],
-    "context_anomaly_runbook_density_prose_too_wide",
-  );
-  assertEnvFailure(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "10" },
-    [],
-    "context_anomaly_runbook_density_text_too_wide",
-  );
-  assertEnvFailure(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-    [],
-    "context_anomaly_runbook_density_text_too_wide",
-  );
-  assertEnvFailure(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-    ["--json"],
-    "context_anomaly_runbook_density_text_too_wide",
-  );
+  const assertProseTextEnvFailureSelfTests = () => {
+    assertEnvFailure(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX: "10" },
+      [],
+      "context_anomaly_runbook_density_prose_too_wide",
+    );
+    assertEnvFailure(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "10" },
+      [],
+      "context_anomaly_runbook_density_text_too_wide",
+    );
+    assertEnvFailure(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+      [],
+      "context_anomaly_runbook_density_text_too_wide",
+    );
+    assertEnvFailure(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+      ["--json"],
+      "context_anomaly_runbook_density_text_too_wide",
+    );
+  };
+  assertProseTextEnvFailureSelfTests();
   assertEnvFailureOutput(
     { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
     ["--json"],
