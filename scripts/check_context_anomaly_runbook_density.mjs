@@ -779,6 +779,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${missingLabelError ?? "ok"}`);
     process.exit(1);
   }
+  const missingPhraseCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ phrases=\d+/, "")),
+    result,
+  );
+  if (missingPhraseCountError !== "missing_default_output_field=phrases") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=phrases`);
+    console.error(`actual=${missingPhraseCountError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingTextWidthDocsError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ wdocs=\d+/, "")),
     result,
