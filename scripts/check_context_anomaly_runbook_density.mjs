@@ -783,8 +783,14 @@ if (args.includes("--self-test")) {
   }
   for (const field of defaultTextFields) {
     const fieldPattern = new RegExp(` ${field}=\\S+`);
+    const missingOutputLine = defaultOutputLine.replace(fieldPattern, "");
+    if (missingOutputLine === defaultOutputLine) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`missing_mutation_noop=${field}`);
+      process.exit(1);
+    }
     const missingFieldError = defaultOutputParseIssue(
-      parseDefaultOutput(defaultOutputLine.replace(fieldPattern, "")),
+      parseDefaultOutput(missingOutputLine),
       defaultParseDetails,
     );
     if (missingFieldError !== `missing_default_output_field=${field}`) {
@@ -793,13 +799,20 @@ if (args.includes("--self-test")) {
       console.error(`actual=${missingFieldError ?? "ok"}`);
       process.exit(1);
     }
+    const staleOutputLine = defaultOutputLine.replace(
+      fieldPattern,
+      ` ${field}=${staleDefaultOutputValues[field]}`,
+    );
+    if (
+      staleOutputLine === defaultOutputLine ||
+      staleDefaultOutputValues[field] === parsedDefaultOutput[field]
+    ) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`stale_mutation_noop=${field}`);
+      process.exit(1);
+    }
     const staleFieldError = defaultOutputParseIssue(
-      parseDefaultOutput(
-        defaultOutputLine.replace(
-          fieldPattern,
-          ` ${field}=${staleDefaultOutputValues[field]}`,
-        ),
-      ),
+      parseDefaultOutput(staleOutputLine),
       defaultParseDetails,
     );
     if (staleFieldError !== `default_output_parse_mismatch=${field}`) {
