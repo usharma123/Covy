@@ -1679,17 +1679,18 @@ if (args.includes("--self-test")) {
   const expectedDefaultOutputMutationFieldCount = () =>
     defaultOutputMutationFields().length;
   const actualDefaultOutputMutationFieldCount = () => defaultTextFields.length;
+  const defaultOutputMutationFieldCountDetails = () => ({
+    expected_default_output_mutation_fields:
+      expectedDefaultOutputMutationFieldCount(),
+    actual_default_output_mutation_fields:
+      actualDefaultOutputMutationFieldCount(),
+  });
   const assertDefaultOutputMutationFieldCount = () => {
     if (
       actualDefaultOutputMutationFieldCount() !==
       expectedDefaultOutputMutationFieldCount()
     ) {
-      failDefaultOutputMutation({
-        expected_default_output_mutation_fields:
-          expectedDefaultOutputMutationFieldCount(),
-        actual_default_output_mutation_fields:
-          actualDefaultOutputMutationFieldCount(),
-      });
+      failDefaultOutputMutation(defaultOutputMutationFieldCountDetails());
     }
   };
   const assertDefaultOutputMutations = () => {
