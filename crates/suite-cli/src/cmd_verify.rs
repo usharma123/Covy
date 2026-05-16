@@ -23,6 +23,8 @@ pub enum VerifyCommands {
     Handoffs(HandoffVerifyArgs),
     /// Verify reducer output keeps decisive markers from golden raw fixtures
     ReducerDrift(ReducerDriftVerifyArgs),
+    /// Verify cross-agent memory lint fixtures catch stale runtime-specific advice
+    MemoryLint(MemoryLintVerifyArgs),
 }
 
 #[derive(Args)]
@@ -76,6 +78,18 @@ pub struct ReducerDriftVerifyArgs {
     #[arg(long, default_value = ".")]
     pub root: String,
     #[arg(long, default_value = "docs/reducer-drift/fixtures.json")]
+    pub fixture: String,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct MemoryLintVerifyArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long, default_value = "docs/memory-lint/fixtures.json")]
     pub fixture: String,
     #[arg(long)]
     pub json: bool,
@@ -177,6 +191,74 @@ struct ReducerDriftCase {
     required_markers: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct MemoryLintFixture {
+    memories: Vec<MemoryLintFixtureMemory>,
+    hook_events: Vec<MemoryLintFixtureHookEvent>,
+    expected_issue_count: usize,
+    expected_issue_kinds: Vec<String>,
+    clean_memory_ids: Vec<i64>,
+}
+
+impl Default for MemoryLintFixture {
+    fn default() -> Self {
+        Self {
+            memories: Vec::new(),
+            hook_events: Vec::new(),
+            expected_issue_count: 0,
+            expected_issue_kinds: Vec::new(),
+            clean_memory_ids: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct MemoryLintFixtureMemory {
+    id: i64,
+    content: String,
+    tags: Option<String>,
+    topic: String,
+    importance: String,
+    keywords: Option<String>,
+    project: Option<String>,
+    source: Option<String>,
+    raw_excerpt: Option<String>,
+}
+
+impl Default for MemoryLintFixtureMemory {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            content: String::new(),
+            tags: None,
+            topic: "general".to_string(),
+            importance: "medium".to_string(),
+            keywords: None,
+            project: None,
+            source: None,
+            raw_excerpt: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct MemoryLintFixtureHookEvent {
+    runtime: String,
+    event_kind: String,
+}
+
+impl Default for MemoryLintFixtureHookEvent {
+    fn default() -> Self {
+        Self {
+            runtime: String::new(),
+            event_kind: String::new(),
+        }
+    }
+}
+
 impl Default for ReducerDriftCase {
     fn default() -> Self {
         Self {
@@ -212,6 +294,7 @@ pub fn run(args: VerifyArgs) -> Result<i32> {
         VerifyCommands::Experiments(args) => run_experiments(args),
         VerifyCommands::Handoffs(args) => run_handoffs(args),
         VerifyCommands::ReducerDrift(args) => run_reducer_drift(args),
+        VerifyCommands::MemoryLint(args) => run_memory_lint(args),
     }
 }
 
@@ -473,6 +556,45 @@ fn run_reducer_drift(args: ReducerDriftVerifyArgs) -> Result<i32> {
     }
 }
 
+fn run_memory_lint(args: MemoryLintVerifyArgs) -> Result<i32> {
+    let cwd = crate::cmd_common::caller_cwd()?;
+    let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
+    let fixture_path = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(
+        &args.fixture,
+        &root,
+    ));
+    let payload = verify_memory_lint_payload(&root, &fixture_path)?;
+    let ok = payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
+
+    if args.json {
+        crate::cmd_common::emit_json(&payload, args.pretty)?;
+    } else {
+        println!("memory_lint_fixture={}", fixture_path.display());
+        println!(
+            "memory_lint_issues={}",
+            payload
+                .get("issue_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default()
+        );
+        println!("memory_lint_ok={ok}");
+        if let Some(issues) = payload
+            .get("expectation_issues")
+            .and_then(serde_json::Value::as_array)
+        {
+            for issue in issues {
+                eprintln!("FAIL memory_lint_expectation: {issue}");
+            }
+        }
+    }
+
+    if ok {
+        Ok(0)
+    } else {
+        Ok(1)
+    }
+}
+
 pub(crate) fn verify_experiments_payload(
     root: &Path,
     manifest_path: &Path,
@@ -503,6 +625,94 @@ pub(crate) fn verify_experiments_payload(
         payload["scores"] = json!(score_experiment_manifest(root, &manifest, &issues));
     }
     Ok(payload)
+}
+
+pub(crate) fn verify_memory_lint_payload(
+    root: &Path,
+    fixture_path: &Path,
+) -> Result<serde_json::Value> {
+    let fixture_raw = std::fs::read_to_string(fixture_path)
+        .with_context(|| format!("failed to read '{}'", fixture_path.display()))?;
+    let fixture: MemoryLintFixture = serde_json::from_str(&fixture_raw)
+        .with_context(|| format!("failed to parse '{}'", fixture_path.display()))?;
+    let memories = fixture
+        .memories
+        .iter()
+        .map(memory_lint_fixture_record)
+        .collect::<Vec<_>>();
+    let hook_events = fixture
+        .hook_events
+        .iter()
+        .map(memory_lint_fixture_hook_event)
+        .collect::<Vec<_>>();
+    let report = crate::memory_store::lint_memory_records(root, &memories, &hook_events);
+    let mut expectation_issues = Vec::new();
+    if report.issue_count < fixture.expected_issue_count {
+        expectation_issues.push(format!(
+            "expected at least {} issue(s), got {}",
+            fixture.expected_issue_count, report.issue_count
+        ));
+    }
+    for kind in &fixture.expected_issue_kinds {
+        if !report.issues.iter().any(|issue| issue.kind == *kind) {
+            expectation_issues.push(format!("missing expected issue kind '{kind}'"));
+        }
+    }
+    for clean_id in &fixture.clean_memory_ids {
+        if report
+            .issues
+            .iter()
+            .any(|issue| issue.memory_id == *clean_id)
+        {
+            expectation_issues.push(format!("clean memory {clean_id} produced an issue"));
+        }
+    }
+    Ok(json!({
+        "ok": expectation_issues.is_empty(),
+        "fixture": fixture_path.display().to_string(),
+        "memory_count": report.memory_count,
+        "issue_count": report.issue_count,
+        "expected_issue_count": fixture.expected_issue_count,
+        "expected_issue_kinds": fixture.expected_issue_kinds,
+        "clean_memory_ids": fixture.clean_memory_ids,
+        "expectation_issues": expectation_issues,
+        "lint": report,
+    }))
+}
+
+fn memory_lint_fixture_record(
+    memory: &MemoryLintFixtureMemory,
+) -> crate::memory_store::MemoryRecord {
+    crate::memory_store::MemoryRecord {
+        id: memory.id,
+        content: memory.content.clone(),
+        tags: memory.tags.clone(),
+        topic: memory.topic.clone(),
+        importance: memory.importance.clone(),
+        keywords: memory.keywords.clone(),
+        project: memory.project.clone(),
+        source: memory.source.clone(),
+        raw_excerpt: memory.raw_excerpt.clone(),
+        weight: 1.0,
+        recall_score: None,
+        created_at_unix_ms: 1,
+        updated_at_unix_ms: 1,
+    }
+}
+
+fn memory_lint_fixture_hook_event(
+    event: &MemoryLintFixtureHookEvent,
+) -> crate::memory_store::HookEventRecord {
+    crate::memory_store::HookEventRecord {
+        id: 0,
+        runtime: event.runtime.clone(),
+        event_kind: event.event_kind.clone(),
+        session_id: None,
+        task_id: None,
+        matcher: None,
+        payload_json: "{}".to_string(),
+        created_at_unix_ms: 1,
+    }
 }
 
 pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_json::Value> {
@@ -1126,5 +1336,49 @@ mod tests {
         assert_eq!(payload["ok"], false);
         assert_eq!(payload["issues"][0]["kind"], "missing_marker");
         assert_eq!(payload["issues"][0]["detail"], "FAIL removed_failure");
+    }
+
+    #[test]
+    fn verify_memory_lint_fixture_flags_stale_runtime_memory_only() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("docs")).unwrap();
+        std::fs::write(root.path().join("docs/current.md"), "ok").unwrap();
+        let fixture_path = root.path().join("memory-lint.json");
+        std::fs::write(
+            &fixture_path,
+            r#"{
+              "memories": [
+                {
+                  "id": 1,
+                  "content": "Windsurf must use transparent rewrite hooks documented in docs/missing.md",
+                  "tags": "agent-specific",
+                  "topic": "runtime",
+                  "importance": "medium",
+                  "source": "fixture"
+                },
+                {
+                  "id": 2,
+                  "content": "Project reducers preserve raw artifacts; see docs/current.md for evidence.",
+                  "topic": "general",
+                  "importance": "medium",
+                  "source": "fixture"
+                }
+              ],
+              "expected_issue_count": 3,
+              "expected_issue_kinds": [
+                "runtime_specific_memory",
+                "stale_path",
+                "unsupported_runtime_assumption"
+              ],
+              "clean_memory_ids": [2]
+            }"#,
+        )
+        .unwrap();
+
+        let payload = verify_memory_lint_payload(root.path(), &fixture_path).unwrap();
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["issue_count"], 3);
+        assert!(payload["expectation_issues"].as_array().unwrap().is_empty());
+        assert!(serde_json::to_string(&payload["lint"]).unwrap().len() < 768);
     }
 }

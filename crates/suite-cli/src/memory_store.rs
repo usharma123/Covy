@@ -2667,7 +2667,7 @@ fn filter_memory_records(
         .collect()
 }
 
-fn lint_memory_records(
+pub(crate) fn lint_memory_records(
     root: &Path,
     memories: &[MemoryRecord],
     hook_events: &[HookEventRecord],

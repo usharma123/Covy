@@ -1,0 +1,29 @@
+{
+  "memories": [
+    {
+      "id": 1,
+      "content": "Windsurf must use transparent rewrite hooks documented in docs/missing.md",
+      "tags": "agent-specific",
+      "topic": "runtime",
+      "importance": "medium",
+      "source": "fixture"
+    },
+    {
+      "id": 2,
+      "content": "Project reducers preserve raw artifacts; see docs/packet28_goal.md for evidence.",
+      "topic": "general",
+      "importance": "medium",
+      "source": "fixture"
+    }
+  ],
+  "hook_events": [],
+  "expected_issue_count": 3,
+  "expected_issue_kinds": [
+    "runtime_specific_memory",
+    "stale_path",
+    "unsupported_runtime_assumption"
+  ],
+  "clean_memory_ids": [
+    2
+  ]
+}

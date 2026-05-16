@@ -53,7 +53,8 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Memory lint CI gate | Keeps stale runtime-specific memories from accumulating silently. | Add a CI workflow or verifier mode that runs memory lint against curated repository memory fixtures rather than a developer's private `~/.packet28` store. | Compact metric: CI summary under 768 bytes; correctness metric: stale runtime-specific fixture fails while generic project memory passes. |
+| Memory lint CI gate | Keeps stale runtime-specific memories from accumulating silently. | `Packet28 verify memory-lint` checks curated repository fixtures under `docs/memory-lint`, and `.github/workflows/memory-lint.yml` runs the verifier when memory lint code or fixtures change. | Evidence: `verify_memory_lint_fixture_flags_stale_runtime_memory_only`; default fixture flags stale Windsurf hook advice while preserving generic project memory. |
+| Memory lint dashboard tile | Shows whether remembered advice is getting cleaner across runtime-specific lint checks. | Persist memory-lint verifier summaries and surface latest/recurring categories in `Packet28 dashboard`. | Compact metric: dashboard tile under 768 bytes; correctness metric: repeated stale runtime-specific fixture appears as recurring while later clean fixture clears latest failure. |
 
 ## Research Rules
 
