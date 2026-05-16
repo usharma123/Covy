@@ -365,12 +365,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density failure docs alias refresh | Keeps the idea ledger wording aligned with the compact `no-succ` runbook token. | Completed failure-field docs rows now name `no-succ`. | Evidence: no runtime output growth; ledger and runbook wording agree. |
 | Context anomaly drilldown density failure docs alias stale-word guard | Prevents the runbook from drifting back to the longer `no-success` token. | Density self-test now fails if the stale backtick `no-success` alias appears. | Evidence: no output growth; stale long token fails self-test. |
 | Context anomaly drilldown density failure docs alias stale-word detail | Makes stale alias failures easier to diagnose. | Self-test now asserts stale alias failures include `stale:no-success` in missing-doc details. | Evidence: no output growth; stale alias detail is reported. |
+| Context anomaly drilldown density stale alias detail helper | Avoids duplicating evaluate calls as stale-alias detail checks grow. | Stale-alias self-test now reuses one mutation result for both code and missing-detail assertions. | Evidence: no output growth; stale alias check remains single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density stale alias detail helper | Avoids duplicating evaluate calls as stale-alias detail checks grow. | Factor stale alias self-test into one result variable used for both code and missing-detail assertions. | Compact metric: no output growth; correctness metric: stale alias check remains single-source. |
+| Context anomaly drilldown density stale alias helper pattern | Makes future mutation-detail checks easier to keep single-source. | Add a tiny helper for asserting a mutation code plus required missing-detail text. | Compact metric: no output growth; correctness metric: mutation detail checks share one helper. |
 
 ## Research Rules
 

@@ -1743,14 +1743,14 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_json_failure_success_field_doc",
   );
-  assertSelfTest(
-    evaluate(runbook.replace("`no-succ`", "`no-success`"), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "stale_json_failure_success_field_alias",
-  );
   const staleFailureAliasResult = evaluate(
     runbook.replace("`no-succ`", "`no-success`"),
     maxLines,
+  );
+  assertSelfTest(
+    staleFailureAliasResult,
+    "context_anomaly_runbook_density_missing_output_docs",
+    "stale_json_failure_success_field_alias",
   );
   if (!staleFailureAliasResult.missing?.includes("stale:no-success")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
