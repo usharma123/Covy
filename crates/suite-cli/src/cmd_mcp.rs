@@ -43,7 +43,7 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
     handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
-    Packet28GlobArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
+    Packet28GlobArgs, Packet28HandoffDiffArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
     Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
     Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
     Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs, Packet28WriteIntentionArgs,
@@ -700,6 +700,20 @@ fn handle_method(
                             "context_version": {"type":"string"},
                             "next_prompt": {"type":"string"},
                             "budget_tokens": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.handoff_diff",
+                    "description": "Compare two stored Packet28 handoff context artifacts and report compact objective, next-action, evidence, and debt-signal deltas.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "left_artifact_id": {"type":"string"},
+                            "left_context_version": {"type":"string"},
+                            "right_artifact_id": {"type":"string"},
+                            "right_context_version": {"type":"string"}
                         }
                     }
                 },
@@ -1643,6 +1657,23 @@ fn handle_tool_call(
             )?;
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_prompt_pressure(root, request)?
+        }
+        "packet28.handoff_diff" => {
+            let mut request: Packet28HandoffDiffArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request
+                    .left_artifact_id
+                    .as_deref()
+                    .or(request.left_context_version.as_deref())
+                    .or(request.right_artifact_id.as_deref())
+                    .or(request.right_context_version.as_deref()),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_handoff_diff(root, request)?
         }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
@@ -2633,6 +2664,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 prompt pressure={pressure} remaining_tokens={remaining}.")
         }
+        "packet28.handoff_diff" => {
+            let delta_count = payload
+                .get("delta_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let top_delta = payload
+                .get("top_delta")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            format!("Packet28 handoff diff delta_count={delta_count} top_delta={top_delta}.")
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
@@ -3029,6 +3071,7 @@ mod tests {
             "packet28_handoff",
             "packet28_verify_handoff",
             "packet28_prompt_pressure",
+            "packet28_handoff_diff",
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
@@ -3248,6 +3291,58 @@ mod tests {
                 .unwrap()
                 .len()
                 < 768
+        );
+    }
+
+    #[test]
+    fn handoff_diff_reports_changed_next_action_as_top_delta() {
+        let root = tempfile::tempdir().unwrap();
+        let task_id = "task-handoff-diff";
+        for (context_version, next_action) in [
+            ("ctx-before", "run cargo check before editing"),
+            ("ctx-after", "edit cmd_mcp_native.rs before cargo check"),
+        ] {
+            let path = task_version_json_path(root.path(), task_id, context_version);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                serde_json::to_vec_pretty(&json!({
+                    "context_version": context_version,
+                    "artifact_id": context_version,
+                    "brief": "## Task Objective\nFinish the handoff diff verifier.",
+                    "sections": [{"id": "context_debt", "title": "Context Debt", "body": "none"}],
+                    "evidence_artifact_ids": ["artifact-1"],
+                    "next_action_summary": next_action
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.handoff_diff",
+                "arguments": {
+                    "task_id": task_id,
+                    "left_context_version": "ctx-before",
+                    "right_context_version": "ctx-after"
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["top_delta"], "next_action");
+        assert_eq!(
+            response["structuredContent"]["deltas"][0]["field"],
+            "next_action"
+        );
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 1024
         );
     }
 

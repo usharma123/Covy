@@ -184,6 +184,16 @@ pub(crate) struct Packet28PromptPressureArgs {
     pub(crate) budget_tokens: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffDiffArgs {
+    pub(crate) task_id: String,
+    pub(crate) left_artifact_id: Option<String>,
+    pub(crate) left_context_version: Option<String>,
+    pub(crate) right_artifact_id: Option<String>,
+    pub(crate) right_context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1366,6 +1376,160 @@ pub(crate) fn handle_packet28_prompt_pressure(
         "largest_removable_sections": largest_removable_sections,
         "summary": format!("prompt_pressure={pressure} total_tokens={total_tokens} remaining_tokens={remaining_tokens}"),
     }))
+}
+
+pub(crate) fn handle_packet28_handoff_diff(
+    root: &Path,
+    args: Packet28HandoffDiffArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.handoff_diff requires task_id"));
+    }
+    let left_artifact_id = args
+        .left_artifact_id
+        .or(args.left_context_version)
+        .ok_or_else(|| {
+            anyhow!("packet28.handoff_diff requires left_artifact_id or left_context_version")
+        })?;
+    let right_artifact_id = args
+        .right_artifact_id
+        .or(args.right_context_version)
+        .ok_or_else(|| {
+            anyhow!("packet28.handoff_diff requires right_artifact_id or right_context_version")
+        })?;
+    let left = read_handoff_payload(root, task_id, &left_artifact_id, "handoff diff")?;
+    let right = read_handoff_payload(root, task_id, &right_artifact_id, "handoff diff")?;
+    let mut deltas = Vec::new();
+    push_handoff_delta(
+        &mut deltas,
+        "next_action",
+        handoff_next_action(&left),
+        handoff_next_action(&right),
+    );
+    push_handoff_delta(
+        &mut deltas,
+        "objective",
+        handoff_objective(&left),
+        handoff_objective(&right),
+    );
+    push_handoff_delta(
+        &mut deltas,
+        "evidence_handles",
+        handoff_evidence_handle_summary(&left),
+        handoff_evidence_handle_summary(&right),
+    );
+    push_handoff_delta(
+        &mut deltas,
+        "debt_signal",
+        handoff_debt_signal(&left).to_string(),
+        handoff_debt_signal(&right).to_string(),
+    );
+    let top_delta = deltas
+        .first()
+        .and_then(|delta| delta.get("field"))
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    Ok(json!({
+        "task_id": task_id,
+        "left_artifact_id": left_artifact_id,
+        "right_artifact_id": right_artifact_id,
+        "delta_count": deltas.len(),
+        "top_delta": top_delta,
+        "deltas": deltas,
+        "summary": format!("handoff_diff delta_count={} top_delta={top_delta}", deltas.len()),
+    }))
+}
+
+fn read_handoff_payload(
+    root: &Path,
+    task_id: &str,
+    artifact_id: &str,
+    label: &str,
+) -> Result<Value> {
+    let path = task_version_json_path(root, task_id, artifact_id);
+    let bytes = fs::read(&path).with_context(|| {
+        format!(
+            "failed to read stored {label} context artifact '{}'",
+            path.display()
+        )
+    })?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn push_handoff_delta(deltas: &mut Vec<Value>, field: &str, left: String, right: String) {
+    if left != right {
+        deltas.push(json!({
+            "field": field,
+            "left": compact_handoff_text(&left),
+            "right": compact_handoff_text(&right),
+        }));
+    }
+}
+
+fn compact_handoff_text(value: &str) -> String {
+    let value = value.trim();
+    let mut compact = String::new();
+    for ch in value.chars().take(120) {
+        compact.push(ch);
+    }
+    if value.chars().count() > 120 {
+        compact.push_str("...");
+    }
+    compact
+}
+
+fn handoff_objective(payload: &Value) -> String {
+    payload
+        .get("brief")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .lines()
+        .find(|line| !line.trim().is_empty() && !line.contains("Task Objective"))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn handoff_next_action(payload: &Value) -> String {
+    payload
+        .get("next_action_summary")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            payload
+                .get("latest_intention")
+                .filter(|value| !value.is_null())
+                .map(Value::to_string)
+        })
+        .unwrap_or_default()
+}
+
+fn handoff_evidence_handle_summary(payload: &Value) -> String {
+    let artifact_id = payload
+        .get("artifact_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let evidence_count = payload
+        .get("evidence_artifact_ids")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    format!("artifact_id={artifact_id} evidence_count={evidence_count}")
+}
+
+fn handoff_debt_signal(payload: &Value) -> bool {
+    section_exists(payload, "context_debt")
+        || section_exists(payload, "evidence_freshness")
+        || payload
+            .get("changed_paths_since_checkpoint")
+            .and_then(Value::as_array)
+            .is_some_and(|paths| !paths.is_empty())
+        || payload
+            .get("open_questions")
+            .and_then(Value::as_array)
+            .is_some_and(|questions| !questions.is_empty())
 }
 
 fn section_exists(payload: &Value, id: &str) -> bool {
