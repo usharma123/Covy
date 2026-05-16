@@ -499,6 +499,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     cmds: String(resultDetails.commands_checked),
     labels: String(resultDetails.output_labels_checked),
     dphr: String(resultDetails.density_doc_phrases_checked),
+    anc: String(resultDetails.density_doc_anchors_checked),
     soft: resultDetails.row_soft_ok ? "ok" : "over",
     parsed: String(resultDetails.parsed_fields_checked),
   };
@@ -728,6 +729,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=dphr");
     console.error(`actual=${staleDensityDocCountError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleDensityDocAnchorError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ anc=\d+/, " anc=0")),
+    result,
+  );
+  if (staleDensityDocAnchorError !== "default_output_parse_mismatch=anc") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=anc");
+    console.error(`actual=${staleDensityDocAnchorError ?? "ok"}`);
     process.exit(1);
   }
   const staleSoftStatusError = defaultOutputParseIssue(
