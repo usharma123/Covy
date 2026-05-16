@@ -285,12 +285,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON headroom parser coverage | Proves parser validation checks rendered JSON headroom, not just field presence. | Default output parsing now verifies `json`, and self-test mutates `json=0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale JSON headroom fails parser validation. |
 | Context anomaly drilldown density JSON headroom missing-field self-test | Proves parser validation rejects omitted JSON headroom, not just stale values. | Density self-test now removes `json` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted JSON headroom fails parser validation. |
 | Context anomaly drilldown density text-width parser coverage | Proves parser validation checks rendered text width, not just field presence. | Default output parsing now verifies `width`, and self-test mutates `width=0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale text width fails parser validation. |
+| Context anomaly drilldown density text-width missing-field self-test | Proves parser validation rejects omitted text width, not just stale values. | Density self-test now removes `width` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted text width fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text-width missing-field self-test | Proves parser validation rejects omitted text width, not just stale values. | Remove `width` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted text width fails parser validation. |
+| Context anomaly drilldown density alias-doc missing-field self-test | Proves parser validation rejects omitted alias-doc counts, not just stale values. | Remove `adocs` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted alias-doc count fails parser validation. |
 
 ## Research Rules
 

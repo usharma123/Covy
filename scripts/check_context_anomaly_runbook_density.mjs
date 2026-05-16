@@ -853,6 +853,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${missingTextWidthDocsError ?? "ok"}`);
     process.exit(1);
   }
+  const missingTextWidthError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ width=\d+/, "")),
+    defaultParseDetails,
+  );
+  if (missingTextWidthError !== "missing_default_output_field=width") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=width`);
+    console.error(`actual=${missingTextWidthError ?? "ok"}`);
+    process.exit(1);
+  }
   const staleTextWidthDocsError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ wdocs=\d+/, " wdocs=0")),
     result,
