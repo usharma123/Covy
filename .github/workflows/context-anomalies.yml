@@ -58,12 +58,13 @@ jobs:
           target/debug/Packet28 dashboard --root . --json > context-anomaly-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-dashboard.json
           target/debug/Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json > context-anomaly-fixture-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-fixture-dashboard.json
           trend_repair_hint="$(jq -r '.trend_repair_hint // empty' context-anomalies.json)"
+          hidden_sample_jq='def cat_escape: gsub("%"; "%25") | gsub("="; "%3D") | gsub(";"; "%3B") | gsub("\n"; "%0A"); def signal_escape: gsub("%"; "%25") | gsub(";"; "%3B") | gsub("\n"; "%0A"); map((.category | cat_escape) + "=" + (.signal | signal_escape)) | join(";")'
           {
             echo "### Context anomalies"
             echo "- anomalies: $(jq -r '.anomaly_count // 0' context-anomalies.json)"
             echo "- high: $(jq -r '.high_count // 0' context-anomalies.json)"
             echo "- hidden: $(jq -r '(.hidden_categories // []) | join(",")' context-anomalies.json)"
-            echo "- hidden samples: $(jq -r '(.hidden_samples // []) | map(.category + "=" + .signal) | join(";")' context-anomalies.json | cut -c1-256)"
+            echo "- hidden samples: $(jq -r "(.hidden_samples // []) | $hidden_sample_jq" context-anomalies.json | cut -c1-256)"
             echo "- trend status: $(jq -r '.context_anomalies.latest_status // "none"' context-anomaly-dashboard.json)"
             echo "- recurring hidden: $(jq -r '(.context_anomalies.recurring_hidden_categories // []) | join(",")' context-anomaly-dashboard.json)"
             echo "- trend latest age ms: $(jq -r '.context_anomalies.latest_age_ms // 0' context-anomaly-dashboard.json)"
@@ -74,7 +75,7 @@ jobs:
             echo "### Context anomaly fixture trend"
             echo "- fixture status: $(jq -r '.context_anomalies.latest_status // "none"' context-anomaly-fixture-dashboard.json)"
             echo "- fixture recurring hidden: $(jq -r '(.context_anomalies.recurring_hidden_categories // []) | join(",")' context-anomaly-fixture-dashboard.json)"
-            echo "- fixture hidden samples: $(jq -r '(.context_anomalies.recurring_hidden_samples // []) | map(.category + "=" + .signal) | join(";")' context-anomaly-fixture-dashboard.json | cut -c1-256)"
+            echo "- fixture hidden samples: $(jq -r "(.context_anomalies.recurring_hidden_samples // []) | $hidden_sample_jq" context-anomaly-fixture-dashboard.json | cut -c1-256)"
             echo "- fixture oldest recurring hidden age ms: $(jq -r '.context_anomalies.oldest_recurring_hidden_age_ms // 0' context-anomaly-fixture-dashboard.json)"
             echo "- runbook: docs/context-anomalies/RUNBOOK.md"
           } >> "$GITHUB_STEP_SUMMARY"

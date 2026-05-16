@@ -1573,9 +1573,27 @@ fn escape_html(value: &str) -> String {
 fn context_hidden_sample_summary(samples: &[ContextHiddenSample]) -> String {
     samples
         .iter()
-        .map(|sample| format!("{}={}", sample.category, sample.signal))
+        .map(|sample| {
+            format!(
+                "{}={}",
+                escape_context_hidden_summary_segment(&sample.category, true),
+                escape_context_hidden_summary_segment(&sample.signal, false)
+            )
+        })
         .collect::<Vec<_>>()
         .join(";")
+}
+
+fn escape_context_hidden_summary_segment(value: &str, escape_equals: bool) -> String {
+    let escaped = value
+        .replace('%', "%25")
+        .replace('\n', "%0A")
+        .replace(';', "%3B");
+    if escape_equals {
+        escaped.replace('=', "%3D")
+    } else {
+        escaped
+    }
 }
 
 #[cfg(test)]
@@ -1988,6 +2006,23 @@ mod tests {
             serde_json::to_string(&samples).unwrap().len() < 512,
             "sample summary should stay compact"
         );
+    }
+
+    #[test]
+    fn context_hidden_sample_summary_escapes_pair_delimiters() {
+        let samples = vec![ContextHiddenSample {
+            category: "fallback_provenance".to_string(),
+            signal: "recent_fallbacks=1 latest_reason=alpha=beta;next=retry\nsource=run-savings"
+                .to_string(),
+        }];
+
+        let summary = context_hidden_sample_summary(&samples);
+
+        assert_eq!(summary.split(';').count(), 1);
+        assert!(summary.starts_with("fallback_provenance=recent_fallbacks=1"));
+        assert!(summary.contains("alpha=beta%3Bnext=retry%0Asource=run-savings"));
+        assert!(!summary.contains(";next=retry"));
+        assert!(summary.len() < 256);
     }
 
     #[test]
