@@ -416,12 +416,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper failure sweep dedupe | Avoids redundant failure-code mutations after adding the table-driven failure sweep. | Removed the single workflow failure-code duplicate mutation now covered by `requiredFailureCodes`. | Evidence: self-test stays green; no duplicate case coverage remains for failure docs. |
 | Context anomaly drilldown density missing-detail helper env-doc detail adoption | Extends exact missing-detail coverage to required env var docs. | The JSON max env-doc mutation now asserts `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX` appears in `missing`. | Evidence: no output growth; env-doc mutations report exact missing vars. |
 | Context anomaly drilldown density missing-detail helper env-doc sweep | Extends exact-detail coverage across plain required env var docs. | Self-test now mutates every `requiredPlainEnvDocs` entry and asserts that exact env var appears in `missing`. | Evidence: no output growth; plain env-doc drift reports exact missing vars. |
+| Context anomaly drilldown density missing-detail helper env-doc sweep dedupe | Avoids redundant env-doc mutations after adding the table-driven env sweep. | Removed the single JSON max env-doc duplicate mutation now covered by `requiredPlainEnvDocs`. | Evidence: self-test stays green; no duplicate case coverage remains for env docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper env-doc sweep dedupe | Avoids redundant env-doc mutations after adding the table-driven env sweep. | Remove the single JSON max env-doc duplicate mutation now covered by `requiredPlainEnvDocs`. | Compact metric: self-test stays green; correctness metric: no duplicate case coverage remains for env docs. |
+| Context anomaly drilldown density missing-detail helper plain env docs count guard | Makes the env-doc sweep boundary explicit and guarded. | Assert `requiredPlainEnvDocs.length` equals `requiredEnvDocs.length - 2` so the paired `tw`/`jhead` env docs remain intentionally excluded. | Compact metric: no output growth; correctness metric: sweep exclusions are explicit. |
 
 ## Research Rules
 

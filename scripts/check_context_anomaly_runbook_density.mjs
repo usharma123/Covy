@@ -1857,15 +1857,6 @@ if (args.includes("--self-test")) {
     "jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
     "missing_jhead_env_pair",
   );
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace("`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX`", ""),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_env_docs",
-    "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX",
-    "missing_json_max_env_doc_detail",
-  );
   for (const [envIndex, envName] of requiredPlainEnvDocs.entries()) {
     assertSelfTestMissing(
       evaluate(
