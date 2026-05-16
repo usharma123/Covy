@@ -988,6 +988,23 @@ if (args.includes("--self-test")) {
     console.error("exact_width_artifacts_did_not_converge");
     process.exit(1);
   }
+  const lowWidthArtifacts = buildSuccessArtifacts(
+    result,
+    workflowResult,
+    maxJsonBytes,
+    195,
+  );
+  const lowWidthIssue = defaultOutputIssue(
+    lowWidthArtifacts.payload,
+    result,
+    lowWidthArtifacts.jsonHeadroom,
+    195,
+  );
+  if (lowWidthIssue?.code !== "context_anomaly_runbook_density_text_too_wide") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("low_width_artifact_issue_missing");
+    process.exit(1);
+  }
   const jsonPayloadError = jsonPayloadParityIssue(baselinePayload, result, {
     default_output_headroom: defaultOutputHeadroom,
   });
