@@ -46,4 +46,16 @@ jobs:
         run: cargo build -p suite-cli
 
       - name: Verify context anomaly thresholds
-        run: target/debug/Packet28 verify context-anomalies --root . --max-high 0 --json
+        run: |
+          set -o pipefail
+          target/debug/Packet28 verify context-anomalies --root . --max-high 0 --json | tee context-anomalies.json
+
+      - name: Summarize context anomalies
+        if: always()
+        run: |
+          {
+            echo "### Context anomalies"
+            echo "- anomalies: $(jq -r '.anomaly_count // 0' context-anomalies.json)"
+            echo "- high: $(jq -r '.high_count // 0' context-anomalies.json)"
+            echo "- hidden: $(jq -r '(.hidden_categories // []) | join(",")' context-anomalies.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
