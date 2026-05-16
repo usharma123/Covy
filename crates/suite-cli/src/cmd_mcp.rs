@@ -43,8 +43,9 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
     handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
-    Packet28GlobArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs, Packet28SearchArgs,
-    Packet28SearchFastArgs, Packet28ValidatePlanArgs, Packet28WriteIntentionArgs,
+    Packet28GlobArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs,
+    Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
+    Packet28ValidatePlanArgs, Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -741,6 +742,20 @@ fn handle_method(
                             "focus_paths": {"type":"array","items":{"type":"string"}},
                             "focus_symbols": {"type":"array","items":{"type":"string"}},
                             "budget_tokens": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.recommend_next_tool",
+                    "description": "Recommend one or two next Packet28 commands using local ROI, failure-advice, and focused freshness signals.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "query": {"type":"string"},
+                            "focus_paths": {"type":"array","items":{"type":"string"}},
+                            "focus_symbols": {"type":"array","items":{"type":"string"}},
+                            "max_recommendations": {"type":"integer","minimum":1,"maximum":4}
                         }
                     }
                 },
@@ -1572,6 +1587,18 @@ fn handle_tool_call(
             )?;
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_action_critic(root, request)?
+        }
+        "packet28.recommend_next_tool" => {
+            let mut request: Packet28RecommendNextToolArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request.query.as_deref(),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_recommend_next_tool(root, request)?
         }
         "packet28.verify_experiments" => {
             let request: VerifyExperimentsToolArgs = serde_json::from_value(arguments)?;
@@ -2520,6 +2547,20 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 action critic returned {warning_count} warning(s).")
         }
+        "packet28.recommend_next_tool" => {
+            let recommendation_count = payload
+                .get("recommendations")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            let token_estimate = payload
+                .get("token_estimate")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!(
+                "Packet28 recommended {recommendation_count} next tool(s), estimated {token_estimate} tokens."
+            )
+        }
         "packet28.verify_experiments" => {
             let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
             let experiments = payload
@@ -2840,6 +2881,7 @@ mod tests {
             "packet28_handoff",
             "packet28_validate_plan",
             "packet28_action_critic",
+            "packet28_recommend_next_tool",
             "packet28_verify_experiments",
             "packet28_hypothesis_add",
             "packet28_hypothesis_list",
@@ -2952,5 +2994,92 @@ mod tests {
         assert_eq!(response["structuredContent"]["ok"], true);
         assert_eq!(response["structuredContent"]["experiment_count"], 1);
         assert_eq!(response["structuredContent"]["issue_count"], 0);
+    }
+
+    #[test]
+    fn recommend_next_tool_changes_with_focus_freshness_and_roi() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".packet28")).unwrap();
+        std::fs::write(
+            root.path().join(".packet28/run-savings.jsonl"),
+            [
+                json!({
+                    "command": "Packet28 run -- cargo test",
+                    "cwd": root.path().display().to_string(),
+                    "family": "rust",
+                    "canonical_kind": "cargo_test",
+                    "exit_code": 0,
+                    "raw_est_tokens": 1200,
+                    "reduced_est_tokens": 100,
+                    "savings_percent": 91.7,
+                    "fallback_reason": null,
+                    "failure_fingerprint": null,
+                    "changed_paths": ["src/lib.rs"],
+                    "timestamp_unix_ms": 20
+                })
+                .to_string(),
+                json!({
+                    "command": "Packet28 run -- npm test",
+                    "cwd": root.path().display().to_string(),
+                    "family": "node",
+                    "canonical_kind": "npm_test",
+                    "exit_code": 0,
+                    "raw_est_tokens": 300,
+                    "reduced_est_tokens": 100,
+                    "savings_percent": 66.7,
+                    "fallback_reason": null,
+                    "failure_fingerprint": null,
+                    "changed_paths": [],
+                    "timestamp_unix_ms": 10
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+
+        let roi = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.recommend_next_tool",
+                "arguments": {
+                    "task_id": "task-route",
+                    "query": "what should I run next",
+                    "max_recommendations": 1
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            roi["structuredContent"]["recommendations"][0]["command"],
+            "Packet28 run -- cargo test"
+        );
+        assert!(roi["structuredContent"]["token_estimate"].as_u64().unwrap() < 256);
+
+        let focused = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.recommend_next_tool",
+                "arguments": {
+                    "task_id": "task-route",
+                    "focus_paths": ["src/lib.rs"],
+                    "max_recommendations": 1
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            focused["structuredContent"]["recommendations"][0]["risk"],
+            "stale_focus_evidence"
+        );
+        assert!(
+            focused["structuredContent"]["recommendations"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("packet28.read_regions")
+        );
     }
 }

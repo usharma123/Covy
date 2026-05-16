@@ -18,12 +18,12 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Verification intent critic | Catches premature finalization before commit/push/merge-style actions. | Action critic now emits `verification_gap` when choose-tool context asks to commit, push, finish, or finalize without recent test/build/diff evidence in the task snapshot. | Evidence: `choose_tool_action_critic_flags_finalization_without_recent_verification`. |
 | Context budget preflight | Prevents agents from asking for broad context under tiny budgets and then acting on incomplete evidence. | Broker context now emits a `budget_preflight` warning in `budget_notes` when an explicit low `budget_tokens` request includes broad search/read sections without focus paths or symbols; budget-pruning notes merge into the same section when both warnings apply. | Evidence: `budget_preflight_warns_on_low_budget_broad_context_without_focus`; warning disappears with focused paths or default budget. |
 | Experiment replay scorer | Turns experiment artifacts into a repeatable scorecard instead of static summaries. | `Packet28 verify experiments --score` now emits compact per-workflow reproducibility, artifact backing, fallback clarity, and freshness scores alongside manifest issues. | Evidence: `verify_experiments_score_passes_backed_artifact_under_compact_budget`; `verify_experiments_score_fails_missing_evidence_below_threshold`. |
+| Agent route recommender | Uses ROI, failure advice, and freshness to suggest the next Packet28 command directly. | MCP `packet28.recommend_next_tool` now returns compact command recommendations using local run-savings ROI, repeated-failure success advice, and focused changed-path freshness. | Evidence: `recommend_next_tool_changes_with_focus_freshness_and_roi`; recommendation payload token estimate stays below 256 in the focused fixture. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Agent route recommender | Uses ROI, failure advice, and freshness to suggest the next Packet28 command directly. | Add `packet28.recommend_next_tool` that returns one or two commands with evidence and expected savings/risk. | Compact metric: recommendation payload token estimate; correctness metric: selected command changes when ROI/failure/freshness signals change. |
 | Handoff contradiction detector | Flags handoff packets that contain unresolved assumptions contradicted by later tool evidence. | Compare active hypotheses, latest reads, and failed commands during `prepare_handoff`. | Compact metric: contradiction count; correctness metric: synthetic handoff with rejected hypothesis emits a warning. |
 
 ## Research Rules

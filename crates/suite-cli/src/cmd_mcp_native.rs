@@ -141,6 +141,16 @@ pub(crate) struct Packet28ActionCriticArgs {
     pub(crate) budget_tokens: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28RecommendNextToolArgs {
+    pub(crate) task_id: String,
+    pub(crate) query: Option<String>,
+    pub(crate) focus_paths: Vec<String>,
+    pub(crate) focus_symbols: Vec<String>,
+    pub(crate) max_recommendations: Option<usize>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -153,6 +163,16 @@ impl Default for Packet28ActionCriticArgs {
             budget_tokens: None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct ToolRecommendation {
+    command: String,
+    reason: String,
+    evidence: Vec<String>,
+    expected_savings_tokens: u64,
+    risk: String,
+    score: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -1256,6 +1276,183 @@ pub(crate) fn handle_packet28_action_critic(
         "warnings": warnings,
         "section": section,
     }))
+}
+
+pub(crate) fn handle_packet28_recommend_next_tool(
+    root: &Path,
+    args: Packet28RecommendNextToolArgs,
+) -> Result<Value> {
+    let records = crate::savings_analytics::load_run_savings(root, 200)?;
+    let mut recommendations = Vec::new();
+    if let Some(recommendation) = recommend_focus_refresh(&records, &args.focus_paths) {
+        recommendations.push(recommendation);
+    }
+    if let Some(recommendation) = recommend_failure_fix(&records) {
+        recommendations.push(recommendation);
+    }
+    if let Some(recommendation) = recommend_high_roi_route(&records) {
+        recommendations.push(recommendation);
+    }
+    if recommendations.is_empty() {
+        recommendations.push(default_context_recommendation(&args));
+    }
+    recommendations.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| b.expected_savings_tokens.cmp(&a.expected_savings_tokens))
+            .then_with(|| a.command.cmp(&b.command))
+    });
+    recommendations.dedup_by(|a, b| a.command == b.command);
+    let max_recommendations = args.max_recommendations.unwrap_or(2).clamp(1, 4);
+    recommendations.truncate(max_recommendations);
+    let token_estimate = recommendations
+        .iter()
+        .map(|recommendation| {
+            recommendation.command.len()
+                + recommendation.reason.len()
+                + recommendation
+                    .evidence
+                    .iter()
+                    .map(String::len)
+                    .sum::<usize>()
+                + recommendation.risk.len()
+        })
+        .sum::<usize>()
+        .saturating_add(3)
+        / 4;
+    Ok(json!({
+        "task_id": args.task_id,
+        "recommendation_count": recommendations.len(),
+        "token_estimate": token_estimate,
+        "recommendations": recommendations.iter().map(|recommendation| {
+            json!({
+                "command": recommendation.command,
+                "reason": recommendation.reason,
+                "evidence": recommendation.evidence,
+                "expected_savings_tokens": recommendation.expected_savings_tokens,
+                "risk": recommendation.risk,
+                "score": recommendation.score,
+            })
+        }).collect::<Vec<_>>(),
+    }))
+}
+
+fn recommend_focus_refresh(
+    records: &[crate::savings_analytics::RunSavingsRecord],
+    focus_paths: &[String],
+) -> Option<ToolRecommendation> {
+    let focus_paths = focus_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    if focus_paths.is_empty() {
+        return None;
+    }
+    let changed = records
+        .iter()
+        .flat_map(|record| &record.changed_paths)
+        .find(|path| {
+            focus_paths
+                .iter()
+                .any(|focus| path == focus || path.starts_with(focus))
+        })?;
+    Some(ToolRecommendation {
+        command: format!("packet28.read_regions path={changed} regions=[]"),
+        reason: "refresh focused path evidence before relying on cached context".to_string(),
+        evidence: vec![format!("recent changed path matched focus: {changed}")],
+        expected_savings_tokens: 0,
+        risk: "stale_focus_evidence".to_string(),
+        score: 95,
+    })
+}
+
+fn recommend_failure_fix(
+    records: &[crate::savings_analytics::RunSavingsRecord],
+) -> Option<ToolRecommendation> {
+    let failed = records.iter().find(|record| {
+        record.exit_code != 0
+            && record
+                .failure_fingerprint
+                .as_deref()
+                .is_some_and(|fingerprint| !fingerprint.trim().is_empty())
+    })?;
+    let success = records.iter().find(|candidate| {
+        candidate.cwd == failed.cwd
+            && candidate.exit_code == 0
+            && candidate.timestamp_unix_ms >= failed.timestamp_unix_ms
+    })?;
+    Some(ToolRecommendation {
+        command: success.command.clone(),
+        reason: "reuse the latest successful same-directory command after a matching failure"
+            .to_string(),
+        evidence: vec![
+            format!(
+                "failure_fingerprint={}",
+                failed.failure_fingerprint.as_deref().unwrap_or_default()
+            ),
+            format!("success_after_failure={}", success.command),
+        ],
+        expected_savings_tokens: success
+            .raw_est_tokens
+            .saturating_sub(success.reduced_est_tokens),
+        risk: "repeated_failure".to_string(),
+        score: 90,
+    })
+}
+
+fn recommend_high_roi_route(
+    records: &[crate::savings_analytics::RunSavingsRecord],
+) -> Option<ToolRecommendation> {
+    let best = records
+        .iter()
+        .filter(|record| record.exit_code == 0 && record.fallback_reason.is_none())
+        .max_by_key(|record| {
+            record
+                .raw_est_tokens
+                .saturating_sub(record.reduced_est_tokens)
+        })?;
+    let saved = best.raw_est_tokens.saturating_sub(best.reduced_est_tokens);
+    if saved == 0 {
+        return None;
+    }
+    Some(ToolRecommendation {
+        command: best.command.clone(),
+        reason: format!("prefer high-ROI Packet28 route for {}", best.family),
+        evidence: vec![format!(
+            "saved_tokens={} savings_percent={:.1}",
+            saved, best.savings_percent
+        )],
+        expected_savings_tokens: saved,
+        risk: "low".to_string(),
+        score: 70_u64.saturating_add((saved / 100).min(20)),
+    })
+}
+
+fn default_context_recommendation(args: &Packet28RecommendNextToolArgs) -> ToolRecommendation {
+    let query = args
+        .query
+        .as_deref()
+        .filter(|query| !query.trim().is_empty())
+        .unwrap_or("current task context");
+    let focus = if args.focus_paths.is_empty() {
+        String::new()
+    } else {
+        format!(" paths={}", args.focus_paths.join(","))
+    };
+    ToolRecommendation {
+        command: format!("packet28.search query={query:?}{focus}"),
+        reason: "start with compact Packet28 search because no local ROI or failure advice exists"
+            .to_string(),
+        evidence: vec!["no run-savings records available".to_string()],
+        expected_savings_tokens: 0,
+        risk: "unknown_roi".to_string(),
+        score: if args.focus_symbols.is_empty() {
+            50
+        } else {
+            55
+        },
+    }
 }
 
 pub(crate) fn handle_packet28_write_intention(
