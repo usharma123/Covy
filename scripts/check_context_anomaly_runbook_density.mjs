@@ -12,6 +12,13 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
+const helpLines = [
+  "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
+  "default: validate runbook line budget and required command entries",
+  "--json: print ok, line_count, max_lines, and commands_checked",
+  "--self-test: verify line-budget and missing-command failure modes",
+  "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
+];
 const args = process.argv.slice(2);
 const unknownArgs = args.filter(
   (arg) => !["--json", "--self-test", "--help"].includes(arg),
@@ -22,15 +29,7 @@ if (unknownArgs.length > 0) {
   process.exit(2);
 }
 if (args.includes("--help")) {
-  console.log(
-    [
-      "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
-      "default: validate runbook line budget and required command entries",
-      "--json: print ok, line_count, max_lines, and commands_checked",
-      "--self-test: verify line-budget and missing-command failure modes",
-      "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
-    ].join("\n"),
-  );
+  console.log(helpLines.join("\n"));
   process.exit(0);
 }
 
@@ -124,6 +123,15 @@ function assertEnvFailure(env, expectedCode) {
   process.exit(1);
 }
 
+function assertHelpIncludes(expected) {
+  const help = helpLines.join("\n");
+  if (!help.includes(expected)) {
+    console.error("context_anomaly_runbook_density_self_test_help_failed");
+    console.error(`missing=${expected}`);
+    process.exit(1);
+  }
+}
+
 const runbook = readFileSync(runbookPath, "utf8");
 const result = evaluate(runbook, maxLines);
 if (args.includes("--self-test")) {
@@ -154,6 +162,15 @@ if (args.includes("--self-test")) {
     { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
     "context_anomaly_runbook_density_too_many_lines",
   );
+  for (const expected of [
+    "default",
+    "--json",
+    "--self-test",
+    "--help",
+    "context_anomaly_runbook_density_unknown_option",
+  ]) {
+    assertHelpIncludes(expected);
+  }
   console.log("context_anomaly_runbook_density_self_test_ok");
   process.exit(0);
 }

@@ -162,12 +162,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density env docs repair | Restores explicit runbook naming for the density line-budget env var after failure docs. | The runbook density row now includes `P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES` alongside density failure codes. | Evidence: runbook remains under 45 lines and the env var name matches script configuration. |
 | Context anomaly drilldown runbook density help docs repair | Restores explicit runbook mention of `--help` after density env/failure docs. | The runbook density row again notes that `--help` lists checker modes while preserving env and failure-code docs. | Evidence: runbook remains under 45 lines and documented help behavior matches checker output. |
 | Context anomaly drilldown runbook density unknown-option docs | Helps agents recognize typoed density checker flags quickly. | The density checker help now documents `context_anomaly_runbook_density_unknown_option` for bad flags. | Evidence: help stays five lines and `--bad-flag` exits with the documented error. |
+| Context anomaly drilldown runbook density help self-test | Proves density checker help keeps listing every supported mode and typo behavior. | The density checker self-test now verifies help text contains default, `--json`, `--self-test`, `--help`, and the unknown-option code. | Evidence: self-test output remains one line and help drift fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density help self-test | Proves density checker help keeps listing every supported mode and typo behavior. | Extend self-test to verify help output contains default, `--json`, `--self-test`, `--help`, and the unknown-option code. | Compact metric: self-test output remains one line; correctness metric: help drift fails self-test. |
+| Context anomaly drilldown runbook density JSON byte cap | Prevents density checker JSON from growing into noisy local output. | Add a JSON byte cap to the density checker. | Compact metric: JSON output remains under an explicit byte cap; correctness metric: required command coverage remains intact. |
 
 ## Research Rules
 
