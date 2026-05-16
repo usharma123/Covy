@@ -13,7 +13,7 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
-const defaultMaxJsonBytes = 480;
+const defaultMaxJsonBytes = 512;
 const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
     String(defaultMaxJsonBytes),
@@ -121,6 +121,7 @@ const requiredOutputDocPhrases = [
   `\`key=value\`: ${defaultOutputFieldOrder
     .map((label) => `\`${label}\``)
     .join(", ")};`,
+  "`output_doc_phrases_checked`",
   "`alias_docs_checked`",
   "`row_soft_ok`",
   "`row_soft_max`",
@@ -128,7 +129,7 @@ const requiredOutputDocPhrases = [
   "`density_doc_anchors_checked`",
   "`parsed_fields_checked`",
   "`text_width_docs_checked`",
-  "`max_json_bytes=480`",
+  "`max_json_bytes=512`",
   "`help<=120`",
 ];
 const requiredAliasDocPhrases = [
@@ -412,6 +413,7 @@ function successPayload(result, workflow, jsonBudget) {
     max_density_prose_line_allowed: result.max_density_prose_line_allowed,
     commands_checked: result.commands_checked,
     failure_codes_checked: result.failure_codes_checked,
+    output_doc_phrases_checked: result.output_doc_phrases_checked,
     alias_docs_checked: result.alias_docs_checked,
     density_doc_phrases_checked: result.density_doc_phrases_checked,
     density_doc_anchors_checked: result.density_doc_anchors_checked,
@@ -649,7 +651,7 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const widenedJsonProseResult = evaluate(
-    runbook.replace("JSON:", `JSON:${" widened".repeat(32)}`),
+    runbook.replace("JSON:", `JSON:${" widened".repeat(24)}`),
     maxLines,
   );
   if (
@@ -682,6 +684,8 @@ if (args.includes("--self-test")) {
   }
   const baselinePayload = successPayload(result, workflowResult, maxJsonBytes);
   if (
+    baselinePayload.output_doc_phrases_checked !==
+      result.output_doc_phrases_checked ||
     baselinePayload.alias_docs_checked !== result.alias_docs_checked ||
     baselinePayload.row_soft_ok !== result.row_soft_ok ||
     baselinePayload.row_soft_max !== result.row_soft_max ||
