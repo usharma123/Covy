@@ -20,7 +20,7 @@ const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
   "default: validate runbook line budget and required command entries",
   "--json: print ok, budgets, commands_checked, and max_json_bytes under a byte cap",
-  "--self-test: verify line-budget and missing-command failure modes",
+  "--self-test: verify line-budget, missing-command, and JSON byte failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
 ];
 const args = process.argv.slice(2);
@@ -188,6 +188,10 @@ if (args.includes("--self-test")) {
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
     "context_anomaly_runbook_density_too_many_lines",
+  );
+  assertSelfTest(
+    jsonBudgetIssue(successPayload(result, 10), 10) ?? { code: "ok" },
+    "context_anomaly_runbook_density_json_too_long",
   );
   for (const expected of [
     "default",
