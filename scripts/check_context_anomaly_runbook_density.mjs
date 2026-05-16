@@ -908,6 +908,27 @@ if (args.includes("--self-test")) {
     );
     process.exit(1);
   }
+  const jsonWidthFieldSequence = [
+    "density_label_line_width",
+    "default_output_headroom",
+    "text_width_docs_checked",
+  ];
+  const actualJsonWidthFieldSequence = payloadParityFieldOrder.filter((field) =>
+    jsonWidthFieldSequence.includes(field),
+  );
+  if (
+    actualJsonWidthFieldSequence.join(",") !==
+    jsonWidthFieldSequence.join(",")
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_json_width_field_order=${jsonWidthFieldSequence.join(",")}`,
+    );
+    console.error(
+      `actual_json_width_field_order=${actualJsonWidthFieldSequence.join(",")}`,
+    );
+    process.exit(1);
+  }
   // Stale JSON values must differ from the rendered payload; the helper below
   // fails fast if any mutation becomes a no-op.
   const staleJsonPayloadValues = {
