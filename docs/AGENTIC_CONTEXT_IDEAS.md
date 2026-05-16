@@ -439,12 +439,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper formatter expected helper | Removes manual expected array formatter spelling from the self-test. | `expectedInvariantArrayDetail` is now derived with `invariantArrayDetailSample.join(",")`. | Evidence: no runtime output growth; expected array format follows the sample. |
 | Context anomaly drilldown density self-test invariant helper scalar expectation reuse | Removes manual expected scalar formatter spelling from the self-test. | `expectedInvariantScalarDetail` is now set from `invariantScalarDetailSample`. | Evidence: no runtime output growth; expected scalar format follows the sample. |
 | Context anomaly drilldown density self-test invariant helper sample scope lift | Keeps formatter self-test samples near the formatter helper. | Moved invariant detail sample constants next to `invariantDetailValue`. | Evidence: no runtime output growth; formatter samples stay close to formatter code. |
+| Context anomaly drilldown density self-test invariant helper expected scope lift | Keeps formatter expected values near the formatter samples. | Moved `expectedInvariantArrayDetail` and `expectedInvariantScalarDetail` next to the sample constants. | Evidence: no runtime output growth; formatter expectations stay close to formatter samples. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test invariant helper expected scope lift | Keeps formatter expected values near the formatter samples. | Move expected invariant detail constants next to the sample constants. | Compact metric: no runtime output growth; correctness metric: formatter expectations stay close to formatter samples. |
+| Context anomaly drilldown density self-test invariant helper actual helper | Keeps actual formatter values in one small helper for the self-test. | Extract an `invariantDetailFormatSamples()` helper returning actual array/scalar formatter outputs. | Compact metric: no runtime output growth; correctness metric: formatter actuals stay single-source. |
 
 ## Research Rules
 
