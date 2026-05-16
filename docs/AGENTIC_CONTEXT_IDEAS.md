@@ -248,12 +248,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density prose anchor parser coverage | Proves parser validation tracks the new `anc` count. | Default output parsing now verifies `anc`, and self-test mutates `anc=0` to require a field-specific mismatch. | Evidence: default output stays under text cap; stale `anc` fails parser validation. |
 | Context anomaly drilldown density prose anchor JSON parity | Lets JSON consumers inspect standalone prose-anchor coverage without parsing default text. | JSON success output now includes `density_doc_anchors_checked` with a documented 448-byte cap. | Evidence: JSON stays under budget; JSON count equals required line-prefix count. |
 | Context anomaly drilldown density prose anchor JSON docs | Helps maintainers discover `density_doc_anchors_checked` without inspecting checker source. | The runbook now documents `density_doc_anchors_checked`, and the checker self-tests removal of that field doc. | Evidence: prose remains under width budget; removing the field doc fails output-doc coverage. |
+| Context anomaly drilldown density JSON prose docs split | Keeps the growing JSON field list readable after adding anchor coverage. | The runbook keeps JSON field docs on a split `JSON:` prose line while env docs remain on `Env:`. | Evidence: `prose=329` stays below 360; all JSON field docs still pass. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON prose docs split | Keeps the growing JSON field list readable after adding anchor coverage. | Split or compress JSON field docs while preserving every guarded JSON field name. | Compact metric: prose remains under 360; correctness metric: all JSON field docs still pass. |
+| Context anomaly drilldown density text width headroom recovery | Restores default-output width margin after adding `anc` and `parsed`. | Compress one or more default labels while preserving parser coverage. | Compact metric: `width` drops below 185; correctness metric: parser and docs still cover every label. |
 
 ## Research Rules
 
