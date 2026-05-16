@@ -1524,12 +1524,11 @@ if (args.includes("--self-test")) {
     requiredPlainEnvDocs.length !==
     requiredEnvDocs.length - pairedEnvDocExclusionCount
   ) {
-    console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error(
-      `expected_plain_env_docs=${requiredEnvDocs.length - pairedEnvDocExclusionCount}`,
-    );
-    console.error(`actual_plain_env_docs=${requiredPlainEnvDocs.length}`);
-    process.exit(1);
+    failSelfTestInvariant({
+      expected_plain_env_docs:
+        requiredEnvDocs.length - pairedEnvDocExclusionCount,
+      actual_plain_env_docs: requiredPlainEnvDocs.length,
+    });
   }
   for (const excludedEnvName of pairedEnvDocExclusions) {
     if (requiredPlainEnvDocs.includes(excludedEnvName)) {
