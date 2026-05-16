@@ -24,7 +24,7 @@ const maxTableRowLength = Number.parseInt(
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
   "default: validate runbook line budget, row width, command entries, failure-code docs, and workflow density commands",
-  "--json: print ok, budgets, max_table_row, commands_checked, and max_json_bytes",
+  "--json: print ok, budgets, max_table_row, commands_checked, failure_codes_checked, and max_json_bytes",
   "--self-test: verify line, width, missing-command, and JSON byte failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
 ];
@@ -126,6 +126,7 @@ function evaluate(runbook, lineBudget) {
     max_table_row: maxActualTableRowLength,
     max_table_row_allowed: maxTableRowLength,
     commands_checked: requiredCommands.length,
+    failure_codes_checked: requiredFailureCodes.length,
   };
 }
 
@@ -211,6 +212,7 @@ function successPayload(result, jsonBudget) {
     max_table_row: result.max_table_row,
     max_table_row_allowed: result.max_table_row_allowed,
     commands_checked: result.commands_checked,
+    failure_codes_checked: result.failure_codes_checked,
     max_json_bytes: jsonBudget,
   };
 }
@@ -241,6 +243,12 @@ if (args.includes("--self-test")) {
   if (!workflowResult.ok) {
     console.error("context_anomaly_runbook_density_self_test_baseline_failed");
     console.error(`code=${workflowResult.code}`);
+    process.exit(1);
+  }
+  if (result.failure_codes_checked !== requiredFailureCodes.length) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_failure_codes=${requiredFailureCodes.length}`);
+    console.error(`actual_failure_codes=${result.failure_codes_checked}`);
     process.exit(1);
   }
   assertSelfTest(
@@ -342,5 +350,6 @@ if (args.includes("--json")) {
 } else {
   console.log(
     `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines} max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed} commands=${payload.commands_checked}`,
+    `failure_codes=${payload.failure_codes_checked}`,
   );
 }

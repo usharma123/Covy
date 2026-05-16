@@ -175,12 +175,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density workflow failure docs | Helps maintainers repair workflow command coverage failures without reading checker source. | The runbook density row now documents `context_anomaly_runbook_density_workflow_missing_commands`. | Evidence: runbook stays under line and row budgets and the failure name matches checker output. |
 | Context anomaly drilldown density failure-code coverage | Prevents checker failure docs from drifting as named failures are added. | The density checker now requires documented runbook density failure codes and self-tests the workflow failure-code doc. | Evidence: default output stays one line and removing the workflow failure code from the runbook fails `context_anomaly_runbook_density_missing_failure_docs`. |
 | Context anomaly drilldown density missing-doc failure docs | Helps maintainers recognize when the runbook is missing a checker failure-code doc. | The runbook density row now documents `context_anomaly_runbook_density_missing_failure_docs`, and the checker requires that doc entry. | Evidence: runbook stays under line and row budgets and the failure name matches checker output. |
+| Context anomaly drilldown density failure-code count output | Helps automation confirm the checker is guarding the expected number of failure-code docs. | Density default and JSON success output now include `failure_codes_checked`. | Evidence: default and JSON outputs stay under byte budgets and the count matches the required failure-code list. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density failure-code count output | Helps automation confirm the checker is guarding the expected number of failure-code docs. | Add `failure_codes_checked` to density default and JSON success output. | Compact metric: default and JSON outputs stay under byte budgets; correctness metric: count matches the required failure-code list. |
+| Context anomaly drilldown density workflow count output | Helps automation confirm workflow command coverage stayed wired into the checker. | Add `workflow_commands_checked` to density default and JSON success output. | Compact metric: default and JSON outputs stay under byte budgets; correctness metric: count matches the required workflow command list. |
 
 ## Research Rules
 
