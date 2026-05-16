@@ -110,11 +110,22 @@ const defaultOutputFieldOrder = [
   "wf",
   "prose",
   "json",
+  "jpar",
   "wdocs",
   "width",
 ];
 const requiredOutputLabels = [...defaultOutputFieldOrder];
 const defaultTextFields = [...defaultOutputFieldOrder];
+const jsonPayloadParityFieldOrder = [
+  "output_doc_phrases_checked",
+  "alias_docs_checked",
+  "density_doc_phrases_checked",
+  "density_doc_anchors_checked",
+  "parsed_fields_checked",
+  "text_width_docs_checked",
+  "row_soft_ok",
+  "row_soft_max",
+];
 const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
@@ -136,6 +147,7 @@ const requiredAliasDocPhrases = [
   "`fc`=failure codes",
   "`wf`=workflow commands",
   "`json`=remaining JSON headroom",
+  "`jpar`=JSON parity",
   "`adocs`=alias docs",
   "`wdocs`=width docs",
 ];
@@ -304,6 +316,7 @@ function evaluate(runbook, lineBudget) {
     density_doc_phrases_checked: requiredDensityDocPhrases.length,
     density_doc_anchors_checked: requiredDensityDocLinePrefixes.length,
     parsed_fields_checked: defaultTextFields.length,
+    json_parity_fields_checked: jsonPayloadParityFieldOrder.length,
     text_width_docs_checked: hasTextWidthEnvDoc ? 1 : 0,
   };
 }
@@ -427,7 +440,7 @@ function successPayload(result, workflow, jsonBudget) {
 }
 
 function jsonPayloadParityExpectedFields(result) {
-  return {
+  const values = {
     output_doc_phrases_checked: result.output_doc_phrases_checked,
     alias_docs_checked: result.alias_docs_checked,
     density_doc_phrases_checked: result.density_doc_phrases_checked,
@@ -437,6 +450,9 @@ function jsonPayloadParityExpectedFields(result) {
     row_soft_ok: result.row_soft_ok,
     row_soft_max: result.row_soft_max,
   };
+  return Object.fromEntries(
+    jsonPayloadParityFieldOrder.map((field) => [field, values[field]]),
+  );
 }
 
 function jsonPayloadParityIssue(payload, result) {
@@ -500,6 +516,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json=${jsonHeadroom}`,
+    `jpar=${resultDetails.json_parity_fields_checked}`,
     `wdocs=${resultDetails.text_width_docs_checked}`,
     textWidth === undefined ? null : `width=${textWidth}`,
   ]
@@ -542,6 +559,7 @@ function defaultOutputExpectedValues(resultDetails) {
     labels: String(resultDetails.output_labels_checked),
     phrases: String(resultDetails.output_doc_phrases_checked),
     prose: `${resultDetails.max_density_prose_line}/${resultDetails.max_density_prose_line_allowed}`,
+    jpar: String(resultDetails.json_parity_fields_checked),
     adocs: String(resultDetails.alias_docs_checked),
     dphr: String(resultDetails.density_doc_phrases_checked),
     anc: String(resultDetails.density_doc_anchors_checked),
@@ -693,6 +711,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected_text_width_docs=1");
     console.error(`actual_text_width_docs=${result.text_width_docs_checked}`);
+    process.exit(1);
+  }
+  if (result.json_parity_fields_checked !== jsonPayloadParityFieldOrder.length) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_json_parity_fields=${jsonPayloadParityFieldOrder.length}`,
+    );
+    console.error(
+      `actual_json_parity_fields=${result.json_parity_fields_checked}`,
+    );
     process.exit(1);
   }
   if (
@@ -889,6 +917,7 @@ if (args.includes("--self-test")) {
     adocs: "0",
     dphr: "0",
     anc: "0",
+    jpar: "0",
     soft: "over",
     parsed: "0",
     width: "0",
