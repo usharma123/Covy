@@ -2155,16 +2155,19 @@ if (args.includes("--self-test")) {
     );
   };
   assertFailureSuccessFieldMutationSelfTest();
-  const staleFailureAliasResult = evaluate(
-    runbook.replace("`no-succ`", "`no-success`"),
-    maxLines,
-  );
-  assertSelfTestMissing(
-    staleFailureAliasResult,
-    "context_anomaly_runbook_density_missing_output_docs",
-    "stale:no-success",
-    "stale_json_failure_success_field_alias",
-  );
+  const assertStaleFailureAliasMutationSelfTest = () => {
+    const staleFailureAliasResult = evaluate(
+      runbook.replace("`no-succ`", "`no-success`"),
+      maxLines,
+    );
+    assertSelfTestMissing(
+      staleFailureAliasResult,
+      "context_anomaly_runbook_density_missing_output_docs",
+      "stale:no-success",
+      "stale_json_failure_success_field_alias",
+    );
+  };
+  assertStaleFailureAliasMutationSelfTest();
   assertSelfTestMissing(
     evaluate(
       runbook.replace(
