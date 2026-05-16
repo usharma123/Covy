@@ -201,12 +201,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default output width guard | Prevents the growing default density text line from becoming too wide for logs. | The density checker now enforces `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` for default text output. | Evidence: default output stays one line under the width cap and forced low width fails `context_anomaly_runbook_density_text_too_wide`. |
 | Context anomaly drilldown density default output width metric | Helps automation see default text width headroom before the guard fails. | Default density output now reports final rendered `text_width`. | Evidence: default output remains under `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` and value matches rendered output length. |
 | Context anomaly drilldown density text width self-test | Proves reported `text_width` is the final rendered line length, including itself. | Density self-test now compares parsed `text_width` with rendered default output length. | Evidence: self-test output stays one line and width changes if labels grow. |
+| Context anomaly drilldown density text width docs | Helps maintainers interpret text width failures without reading checker code. | The runbook now documents `text_width` next to `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Evidence: runbook remains within line/prose/table budgets and label plus env match checker output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text width docs | Helps maintainers interpret text width failures without reading checker code. | Document `text_width` and `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` together in the runbook density row. | Compact metric: runbook remains within line/prose/table budgets; correctness metric: label and env match checker output. |
+| Context anomaly drilldown density text width docs coverage | Prevents the width metric docs from drifting away from the text-width guard. | Have the density checker require `text_width` and `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` in the same runbook line. | Compact metric: default output stays one line; correctness metric: splitting the pair fails missing output docs. |
 
 ## Research Rules
 
