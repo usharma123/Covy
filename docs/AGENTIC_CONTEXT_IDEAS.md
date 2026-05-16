@@ -249,12 +249,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density prose anchor JSON parity | Lets JSON consumers inspect standalone prose-anchor coverage without parsing default text. | JSON success output now includes `density_doc_anchors_checked` with a documented 448-byte cap. | Evidence: JSON stays under budget; JSON count equals required line-prefix count. |
 | Context anomaly drilldown density prose anchor JSON docs | Helps maintainers discover `density_doc_anchors_checked` without inspecting checker source. | The runbook now documents `density_doc_anchors_checked`, and the checker self-tests removal of that field doc. | Evidence: prose remains under width budget; removing the field doc fails output-doc coverage. |
 | Context anomaly drilldown density JSON prose docs split | Keeps the growing JSON field list readable after adding anchor coverage. | The runbook keeps JSON field docs on a split `JSON:` prose line while env docs remain on `Env:`. | Evidence: `prose=329` stays below 360; all JSON field docs still pass. |
+| Context anomaly drilldown density text width headroom recovery | Restores default-output width margin after adding `anc` and `parsed`. | Default text now uses `adocs` and `wdocs` compact aliases while JSON keeps full field names. | Evidence: `width` drops below 185; parser and docs still cover every label. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text width headroom recovery | Restores default-output width margin after adding `anc` and `parsed`. | Compress one or more default labels while preserving parser coverage. | Compact metric: `width` drops below 185; correctness metric: parser and docs still cover every label. |
+| Context anomaly drilldown density text alias glossary refresh | Helps maintainers map the new `adocs` and `wdocs` aliases without reading checker source. | Extend the compact alias glossary for the new default-text labels. | Compact metric: row remains under soft target; correctness metric: required alias docs cover the new labels. |
 
 ## Research Rules
 

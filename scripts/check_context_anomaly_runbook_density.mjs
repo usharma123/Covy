@@ -105,13 +105,13 @@ const requiredOutputLabels = [
   "env",
   "labels",
   "phrases",
-  "alias_docs",
+  "adocs",
   "dphr",
   "anc",
   "soft",
   "parsed",
   "width",
-  "width_docs",
+  "wdocs",
 ];
 const defaultTextFields = [...requiredOutputLabels];
 const requiredOutputDocPhrases = [
@@ -451,7 +451,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `env=${resultDetails.env_docs_checked}`,
     `labels=${resultDetails.output_labels_checked}`,
     `phrases=${resultDetails.output_doc_phrases_checked}`,
-    `alias_docs=${resultDetails.alias_docs_checked}`,
+    `adocs=${resultDetails.alias_docs_checked}`,
     `dphr=${resultDetails.density_doc_phrases_checked}`,
     `anc=${resultDetails.density_doc_anchors_checked}`,
     `soft=${resultDetails.row_soft_ok ? "ok" : "over"}`,
@@ -459,7 +459,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json=${jsonHeadroom}`,
-    `width_docs=${resultDetails.text_width_docs_checked}`,
+    `wdocs=${resultDetails.text_width_docs_checked}`,
     textWidth === undefined ? null : `width=${textWidth}`,
   ]
     .filter(Boolean)
@@ -713,15 +713,15 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const missingTextWidthDocsError = defaultOutputParseIssue(
-    parseDefaultOutput(defaultOutputLine.replace(/ width_docs=\d+/, "")),
+    parseDefaultOutput(defaultOutputLine.replace(/ wdocs=\d+/, "")),
     result,
   );
   if (
     missingTextWidthDocsError !==
-    "missing_default_output_field=width_docs"
+    "missing_default_output_field=wdocs"
   ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error(`expected=missing_default_output_field=width_docs`);
+    console.error(`expected=missing_default_output_field=wdocs`);
     console.error(`actual=${missingTextWidthDocsError ?? "ok"}`);
     process.exit(1);
   }
@@ -822,7 +822,7 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`alias_docs`", ""), maxLines),
+    evaluate(runbook.replace("`adocs`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
