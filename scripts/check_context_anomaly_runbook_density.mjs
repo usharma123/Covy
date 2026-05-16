@@ -435,7 +435,7 @@ function assertSelfTestMissing(result, expectedCode, expectedMissing, caseName) 
 function failSelfTestInvariant(details) {
   console.error("context_anomaly_runbook_density_self_test_failed");
   for (const [key, value] of Object.entries(details)) {
-    console.error(`${key}=${value}`);
+    console.error(`${key}=${Array.isArray(value) ? value.join(",") : value}`);
   }
   process.exit(1);
 }
