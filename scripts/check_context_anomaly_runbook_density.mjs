@@ -1674,11 +1674,9 @@ if (args.includes("--self-test")) {
   const assertDefaultOutputMutations = () => {
     assertStaleDefaultOutputValuesCovered();
     for (const field of defaultTextFields) {
-      const mutationCase = defaultOutputMutationCase(field);
-      assertDefaultOutputMutation(
-        mutationCase.field,
-        mutationCase.staleValue,
-      );
+      const { field: mutationField, staleValue } =
+        defaultOutputMutationCase(field);
+      assertDefaultOutputMutation(mutationField, staleValue);
     }
   };
   assertDefaultOutputMutations();
