@@ -1500,12 +1500,6 @@ if (args.includes("--self-test")) {
     evaluate(runbook, result.line_count - 1),
     "context_anomaly_runbook_density_too_many_lines",
   );
-  assertSelfTestMissing(
-    evaluate(runbook.replace(requiredCommands[0], ""), maxLines),
-    "context_anomaly_runbook_density_missing_commands",
-    requiredCommands[0],
-    "missing_first_required_command_detail",
-  );
   for (const [commandIndex, command] of requiredCommands.entries()) {
     assertSelfTestMissing(
       evaluate(
@@ -1517,28 +1511,6 @@ if (args.includes("--self-test")) {
       `drifted_required_command_${commandIndex}`,
     );
   }
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace(
-        "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
-        "",
-      ),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_commands",
-    "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
-    "missing_workflow_self_test_command_detail",
-  );
-  assertSelfTest(
-    evaluate(
-      runbook.replace(
-        "node scripts/check_context_anomaly_runbook_density.mjs --json",
-        "",
-      ),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_commands",
-  );
   assertSelfTestMissing(
     evaluate(
       runbook.replace(
@@ -1896,15 +1868,6 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_env_docs",
-  );
-  assertSelfTest(
-    evaluateWorkflow(
-      workflow.replace(
-        "          node scripts/check_context_anomaly_runbook_density.mjs\n",
-        "",
-      ),
-    ),
-    "context_anomaly_runbook_density_workflow_missing_commands",
   );
   for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
     assertSelfTestMissing(
