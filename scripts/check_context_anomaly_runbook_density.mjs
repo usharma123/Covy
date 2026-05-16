@@ -2128,12 +2128,15 @@ if (args.includes("--self-test")) {
     );
   };
   assertWidthEnvPairMutationSelfTest();
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`thead>=8`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "`thead>=8`",
-    "missing_default_text_headroom_doc",
-  );
+  const assertTextHeadroomMutationSelfTest = () => {
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`thead>=8`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "`thead>=8`",
+      "missing_default_text_headroom_doc",
+    );
+  };
+  assertTextHeadroomMutationSelfTest();
   assertSelfTestMissing(
     evaluate(runbook.replace("`ok:false`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
