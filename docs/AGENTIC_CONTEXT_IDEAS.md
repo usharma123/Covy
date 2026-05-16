@@ -692,12 +692,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test alias glossary table order | Keeps the alias glossary table beside the loop that executes it. | Verified `aliasGlossaryDocs` is defined inside `assertAliasGlossaryMutationSelfTests()` immediately before the doc-text/case-name loop. | Evidence: no runtime output growth; alias glossary rows remain adjacent to their assertion loop. |
 | Context anomaly drilldown density self-test alias glossary row helper | Names the per-row execution of alias glossary mutations. | Extracted the loop body in `assertAliasGlossaryMutationSelfTests()` into `assertAliasGlossaryMutation(aliasGlossaryDoc)`. | Evidence: no runtime output growth; every alias glossary row still removes the intended doc text and uses its case name. |
 | Context anomaly drilldown density self-test alias glossary row helper order | Keeps the alias glossary row helper beside the table it executes. | Verified `assertAliasGlossaryMutation(aliasGlossaryDoc)` is defined after `aliasGlossaryDocs` and used by the following loop. | Evidence: no runtime output growth; row helper remains local to alias glossary mutations. |
+| Context anomaly drilldown density self-test alias glossary post-helper audit | Checks whether alias glossary coverage is decomposed enough after table and row-helper extraction. | Re-scanned `assertAliasGlossaryMutationSelfTests()` and kept its table/helper/loop shape while moving the next target to width env-pair coverage. | Evidence: no runtime output growth; next target is based on the current alias glossary helper shape. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test alias glossary post-helper audit | Checks whether alias glossary coverage is decomposed enough after table and row-helper extraction. | Re-scan `assertAliasGlossaryMutationSelfTests()` and decide whether to keep the table/helper/loop local or move to width env-pair coverage. | Compact metric: no runtime output growth; correctness metric: next target is based on the current alias glossary helper shape. |
+| Context anomaly drilldown density self-test width env-pair helper audit | Checks whether the width env-pair helper is already minimal. | Re-scan `assertWidthEnvPairMutationSelfTest()` and decide whether to keep its single assertion separate or group it with text-headroom coverage. | Compact metric: no runtime output growth; correctness metric: next target reflects the current adjacent helper shape. |
 
 ## Research Rules
 
