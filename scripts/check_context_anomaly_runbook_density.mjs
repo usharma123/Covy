@@ -454,6 +454,29 @@ function assertEnvFailureOutput(env, commandArgs, expectedTexts) {
   process.exit(1);
 }
 
+function assertEnvFailureExcludes(env, commandArgs, forbiddenText) {
+  try {
+    const output = execFileSync(process.execPath, [scriptPath, ...commandArgs], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    console.error("context_anomaly_runbook_density_self_test_env_failed");
+    console.error(`expected_failure_without=${forbiddenText}`);
+    console.error(`actual=${output.trim()}`);
+    process.exit(1);
+  } catch (error) {
+    const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    if (!output.includes(forbiddenText)) {
+      return;
+    }
+    console.error("context_anomaly_runbook_density_self_test_env_failed");
+    console.error(`forbidden=${forbiddenText}`);
+    console.error(`actual=${output.trim()}`);
+    process.exit(1);
+  }
+}
+
 function assertEnvOutput(env, commandArgs, expectedText) {
   const output = execFileSync(process.execPath, [scriptPath, ...commandArgs], {
     encoding: "utf8",
@@ -1795,6 +1818,11 @@ if (args.includes("--self-test")) {
       '"default_output_len":197',
       '"max_default_output_len":195',
     ],
+  );
+  assertEnvFailureExcludes(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+    ["--json"],
+    '"default_output_iterations"',
   );
   assertEnvOutput(
     { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
