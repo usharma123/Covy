@@ -666,12 +666,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field presence helper name | Aligns the table helper name with the mutation self-test naming style. | Renamed `assertRequiredJsonFieldDocs(requiredJsonFieldDocs)` to `assertJsonFieldDocPresenceMutationSelfTests(requiredJsonFieldDocs)`. | Evidence: no runtime output growth; table-driven field-doc coverage still uses the same case names. |
 | Context anomaly drilldown density self-test JSON field presence helper order | Keeps the renamed table helper near both table invocations. | Verified `assertJsonFieldDocPresenceMutationSelfTests(requiredJsonFieldDocs)` is defined before the order helper and called on both sides of the order-helper invocation. | Evidence: no runtime output growth; table-driven coverage remains split around order-swap coverage. |
 | Context anomaly drilldown density self-test JSON field presence table names | Gives the leading and trailing JSON field-doc tables explicit names. | Extracted the two inline arrays passed to `assertJsonFieldDocPresenceMutationSelfTests(...)` into `leadingJsonFieldDocs` and `trailingJsonFieldDocs`. | Evidence: no runtime output growth; named tables preserve the leading/order/trailing sequence. |
+| Context anomaly drilldown density self-test JSON field presence table name order | Keeps the named field-doc tables beside their call sequence. | Verified `leadingJsonFieldDocs` and `trailingJsonFieldDocs` are defined immediately before the presence/order/presence call sequence. | Evidence: no runtime output growth; named tables remain adjacent to the calls that consume them. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field presence table name order | Keeps the named field-doc tables beside their call sequence. | Verify `leadingJsonFieldDocs` and `trailingJsonFieldDocs` are defined immediately before the presence/order/presence call sequence. | Compact metric: no runtime output growth; correctness metric: named tables remain adjacent to the calls that consume them. |
+| Context anomaly drilldown density self-test JSON field post-table grouping audit | Checks whether the JSON field-doc helper still has mixed concerns after table extraction. | Re-scan `assertJsonFieldDocMutationSelfTests()` after the table refactor and identify whether the remaining split should be field-presence, field-order, or byte/help docs. | Compact metric: no runtime output growth; correctness metric: next grouping decision is based on the current helper shape. |
 
 ## Research Rules
 
