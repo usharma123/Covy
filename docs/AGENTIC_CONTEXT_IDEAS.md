@@ -488,12 +488,14 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation count sample naming | Makes count sample properties match diagnostic terminology. | Renamed sample properties from `expectedCount`/`actualCount` to `expectedMutationFields`/`actualMutationFields`. | Evidence: no runtime output growth; count sample naming mirrors diagnostics. |
 | Context anomaly drilldown density self-test default output mutation count helper order | Keeps count helpers ordered sample, mismatch, details, assertion. | Reordered count helper declarations so sample creation appears before mismatch and diagnostics consumption. | Evidence: no runtime output growth; count helper order mirrors assertion flow. |
 | Context anomaly drilldown density self-test default output mutation count assertion details | Makes count assertion failure body a single named expression. | Inlined the details helper call into `failDefaultOutputMutationFieldCount(sample)`. | Evidence: no runtime output growth; count assertion failure stays single-source. |
+| Context anomaly drilldown density self-test default output mutation count failure order | Keeps count failure helper next to the assertion that uses it. | Verified `failDefaultOutputMutationFieldCount(sample)` sits directly above `assertDefaultOutputMutationFieldCount()`. | Evidence: no runtime output growth; failure helper remains adjacent to its only caller. |
+| Context anomaly drilldown density self-test default output mutation actual count source | Makes the actual mutation count reflect the stale value map. | Changed `actualDefaultOutputMutationFieldCount()` to count `staleDefaultOutputValues` keys instead of the expected field list. | Evidence: no runtime output growth; count invariant can detect extra stale mutation entries. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation count failure order | Keeps count failure helper next to the assertion that uses it. | Move `failDefaultOutputMutationFieldCount(sample)` directly above `assertDefaultOutputMutationFieldCount()`. | Compact metric: no runtime output growth; correctness metric: failure helper remains adjacent to its only caller. |
+| Context anomaly drilldown density self-test default output mutation count actual helper name | Makes actual count source explicit in the helper name. | Rename `actualDefaultOutputMutationFieldCount()` to `actualStaleDefaultOutputValueCount()`. | Compact metric: no runtime output growth; correctness metric: actual count source is visible at the callsite. |
 
 ## Research Rules
 

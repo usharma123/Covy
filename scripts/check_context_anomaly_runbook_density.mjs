@@ -1678,7 +1678,8 @@ if (args.includes("--self-test")) {
   const defaultOutputMutationFields = () => defaultTextFields;
   const expectedDefaultOutputMutationFieldCount = () =>
     defaultOutputMutationFields().length;
-  const actualDefaultOutputMutationFieldCount = () => defaultTextFields.length;
+  const actualDefaultOutputMutationFieldCount = () =>
+    Object.keys(staleDefaultOutputValues).length;
   const defaultOutputMutationFieldCountSample = () => ({
     expectedMutationFields: expectedDefaultOutputMutationFieldCount(),
     actualMutationFields: actualDefaultOutputMutationFieldCount(),
