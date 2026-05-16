@@ -99,9 +99,6 @@ const requiredOutputLabels = [
   "row",
   "cmds",
   "fc",
-  "wf",
-  "prose",
-  "json",
   "env",
   "labels",
   "phrases",
@@ -110,8 +107,11 @@ const requiredOutputLabels = [
   "anc",
   "soft",
   "parsed",
-  "width",
+  "wf",
+  "prose",
+  "json",
   "wdocs",
+  "width",
 ];
 const defaultTextFields = [...requiredOutputLabels];
 const requiredOutputDocPhrases = [
@@ -750,6 +750,13 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const parsedDefaultOutput = parseDefaultOutput(defaultOutputLine);
+  const parsedDefaultOutputFields = Object.keys(parsedDefaultOutput);
+  if (parsedDefaultOutputFields.join(",") !== defaultTextFields.join(",")) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_field_order=${defaultTextFields.join(",")}`);
+    console.error(`actual_field_order=${parsedDefaultOutputFields.join(",")}`);
+    process.exit(1);
+  }
   const defaultOutputError = defaultOutputParseIssue(
     parsedDefaultOutput,
     defaultParseDetails,

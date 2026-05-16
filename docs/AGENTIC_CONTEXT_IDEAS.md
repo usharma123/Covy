@@ -295,12 +295,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density mutation table optional-field docs | Helps maintainers understand why `wf`, `json`, and `width` require enriched parse details. | The checker now comments that derived default-output fields still need exact parser parity values. | Evidence: runbook output remains unchanged; future maintainers can identify optional parse-detail fields. |
 | Context anomaly drilldown density mutation stale-map docs | Helps maintainers add compact fields without guessing how stale mutation values are chosen. | The checker now comments that stale values must be parseable, field-specific, and guarded against no-op mutations. | Evidence: runbook output remains unchanged; stale mutation values remain auditable. |
 | Context anomaly drilldown density mutation table helper extraction | Makes the self-test mutation loop easier to reuse as compact output fields evolve. | The self-test now uses a local helper for the repeated missing/stale mutation checks. | Evidence: self-test output remains one line; mutation table coverage remains unchanged. |
+| Context anomaly drilldown density mutation table field-order audit | Keeps compact output parsing deterministic as fields are added or reordered. | The checker now aligns `defaultTextFields` with renderer order and self-tests parsed key order. | Evidence: self-test output remains one line; field-order drift fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density mutation table field-order audit | Keeps compact output parsing deterministic as fields are added or reordered. | Assert parsed default output keys appear in the same order as `defaultTextFields`. | Compact metric: self-test output remains one line; correctness metric: field-order drift fails self-test. |
+| Context anomaly drilldown density render-order helper | Prevents future drift between label declarations and renderer array ordering. | Introduce a single render-order constant used by both default text fields and renderer checks. | Compact metric: default output remains unchanged; correctness metric: label-order source is singular. |
 
 ## Research Rules
 
