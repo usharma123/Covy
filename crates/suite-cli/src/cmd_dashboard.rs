@@ -64,6 +64,20 @@ struct DashboardReport {
 }
 
 #[derive(Debug, Serialize, Default)]
+pub(crate) struct ContextAnomalyDigest {
+    pub(crate) anomaly_count: usize,
+    pub(crate) anomalies: Vec<ContextAnomaly>,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub(crate) struct ContextAnomaly {
+    pub(crate) category: String,
+    pub(crate) severity: String,
+    pub(crate) signal: String,
+    pub(crate) next_check: String,
+}
+
+#[derive(Debug, Serialize, Default)]
 struct TokenSavings {
     raw_est_tokens: u64,
     reduced_est_tokens: u64,
@@ -492,6 +506,89 @@ fn reducer_drift_history_path(root: &Path) -> std::path::PathBuf {
 
 fn memory_lint_history_path(root: &Path) -> std::path::PathBuf {
     root.join(".packet28").join("memory-lint-history.jsonl")
+}
+
+pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest> {
+    let handoff = handoff_readiness_tile(root)?;
+    let reducer = reducer_drift_tile(root)?;
+    let memory = memory_lint_tile(root)?;
+    let mut anomalies = Vec::new();
+
+    if handoff.regression_count > 0 || handoff.latest_status == "blocked" {
+        let blockers = if handoff.latest_blocking_categories.is_empty() {
+            "unknown".to_string()
+        } else {
+            handoff.latest_blocking_categories.join(",")
+        };
+        anomalies.push(ContextAnomaly {
+            category: "handoff_readiness".to_string(),
+            severity: if handoff.regression_count > 0 {
+                "high"
+            } else {
+                "medium"
+            }
+            .to_string(),
+            signal: format!(
+                "latest_status={} blockers={} regressions={}",
+                handoff.latest_status, blockers, handoff.regression_count
+            ),
+            next_check: "Packet28 verify handoffs --root . --max-regressions 0".to_string(),
+        });
+    }
+
+    if reducer.latest_issue_count > 0 || !reducer.recurring_issue_kinds.is_empty() {
+        let issue_kinds = if reducer.recurring_issue_kinds.is_empty() {
+            "latest".to_string()
+        } else {
+            reducer.recurring_issue_kinds.join(",")
+        };
+        anomalies.push(ContextAnomaly {
+            category: "reducer_drift".to_string(),
+            severity: if reducer.latest_issue_count > 0 {
+                "high"
+            } else {
+                "medium"
+            }
+            .to_string(),
+            signal: format!(
+                "latest_issues={} recurring={}",
+                reducer.latest_issue_count, issue_kinds
+            ),
+            next_check: "Packet28 verify reducer-drift --root . --json".to_string(),
+        });
+    }
+
+    if memory.latest_issue_count > 0 || !memory.recurring_issue_kinds.is_empty() {
+        let issue_kinds = if memory.latest_issue_kinds.is_empty() {
+            memory.recurring_issue_kinds.join(",")
+        } else {
+            memory.latest_issue_kinds.join(",")
+        };
+        anomalies.push(ContextAnomaly {
+            category: "memory_lint".to_string(),
+            severity: if memory.latest_issue_count > 0 {
+                "high"
+            } else {
+                "medium"
+            }
+            .to_string(),
+            signal: format!(
+                "latest_issues={} kinds={}",
+                memory.latest_issue_count, issue_kinds
+            ),
+            next_check: "Packet28 verify memory-lint --root . --json".to_string(),
+        });
+    }
+
+    anomalies.sort_by_key(|anomaly| match anomaly.severity.as_str() {
+        "high" => 0,
+        "medium" => 1,
+        _ => 2,
+    });
+    Ok(ContextAnomalyDigest {
+        anomaly_count: anomalies.len(),
+        anomalies,
+    })
 }
 
 fn handoff_readiness_tile(root: &Path) -> Result<HandoffReadinessTile> {
@@ -1154,5 +1251,23 @@ mod tests {
         assert!(tile.latest_issue_kinds.is_empty());
         assert_eq!(tile.recurring_issue_kinds, vec!["runtime_specific_memory"]);
         assert!(serde_json::to_string(&tile).unwrap().len() < 768);
+    }
+
+    #[test]
+    fn context_anomaly_digest_ranks_drift_and_memory_with_next_checks() {
+        let root = tempfile::tempdir().unwrap();
+        record_reducer_drift_history(root.path(), &drift_payload(false, 1)).unwrap();
+        record_memory_lint_history(root.path(), &memory_lint_payload(false, 1)).unwrap();
+
+        let digest = context_anomaly_digest(root.path()).unwrap();
+
+        assert_eq!(digest.anomaly_count, 2);
+        assert_eq!(digest.anomalies[0].category, "reducer_drift");
+        assert_eq!(digest.anomalies[0].severity, "high");
+        assert!(digest.anomalies[0].next_check.contains("reducer-drift"));
+        assert_eq!(digest.anomalies[1].category, "memory_lint");
+        assert_eq!(digest.anomalies[1].severity, "high");
+        assert!(digest.anomalies[1].next_check.contains("memory-lint"));
+        assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
     }
 }

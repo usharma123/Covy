@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::{
     cmd_agent_prompt, cmd_build, cmd_compact, cmd_context, cmd_cover, cmd_daemon, cmd_dashboard,
-    cmd_diff, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook,
+    cmd_diff, cmd_digest, cmd_discover, cmd_doctor, cmd_feedback, cmd_graph, cmd_guard, cmd_hook,
     cmd_hypothesis, cmd_impact, cmd_init, cmd_learn, cmd_map, cmd_map_query, cmd_map_repo, cmd_mcp,
     cmd_memory, cmd_packet, cmd_plan, cmd_proxy, cmd_run, cmd_setup, cmd_shard, cmd_shell,
     cmd_stack, cmd_system, cmd_transcript, cmd_verify, cmd_wakeup,
@@ -284,6 +284,8 @@ pub enum Commands {
     Hypothesis(cmd_hypothesis::HypothesisArgs),
     /// Show local Packet28 savings, memory, feedback, graph, and integration health
     Dashboard(cmd_dashboard::DashboardArgs),
+    /// Rank local context anomalies that could mislead an agent
+    Digest(cmd_digest::DigestArgs),
     /// Emit repo-local agent instruction fragments that describe how to use Packet28
     AgentPrompt(cmd_agent_prompt::AgentPromptArgs),
     /// Run Packet28 as an MCP stdio server

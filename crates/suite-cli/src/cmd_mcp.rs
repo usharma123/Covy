@@ -1180,6 +1180,14 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.context_anomalies",
+                    "description": "Rank compact context anomalies from dashboard quality signals and return next-check commands.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
                     "name": "packet28.memory_consolidate",
                     "description": "Consolidate local Packet28 memories for a topic into one deterministic summary memory.",
                     "inputSchema": {
@@ -2236,6 +2244,9 @@ fn handle_tool_call(
         "packet28.memory_lint" => {
             let request: MemoryLintToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(lint_memories(root, request.limit.unwrap_or(200))?)?
+        }
+        "packet28.context_anomalies" => {
+            serde_json::to_value(crate::cmd_dashboard::context_anomaly_digest(root)?)?
         }
         "packet28.memory_consolidate" => {
             let request: MemoryConsolidateToolArgs = serde_json::from_value(arguments)?;
@@ -3541,6 +3552,7 @@ mod tests {
             "packet28_doctor",
             "packet28_memory_list",
             "packet28_memory_lint",
+            "packet28_context_anomalies",
             "packet28_memory_embed",
             "packet28_memory_extract_patterns",
             "packet28_feedback_search",
@@ -3567,6 +3579,45 @@ mod tests {
                 "{required} missing from tools/list"
             );
         }
+    }
+
+    #[test]
+    fn context_anomalies_tool_reports_dashboard_quality_signals() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        crate::cmd_dashboard::record_memory_lint_history(
+            root.path(),
+            &json!({
+                "ok": false,
+                "memory_count": 1,
+                "issue_count": 1,
+                "lint": {
+                    "issues": [{
+                        "kind": "runtime_specific_memory",
+                        "detail": "mentions windsurf"
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.context_anomalies",
+                "arguments": {}
+            }),
+        )
+        .unwrap();
+
+        let content = &response["structuredContent"];
+        assert_eq!(content["anomaly_count"], 1);
+        assert_eq!(content["anomalies"][0]["category"], "memory_lint");
+        assert!(content["anomalies"][0]["next_check"]
+            .as_str()
+            .unwrap()
+            .contains("memory-lint"));
     }
 
     #[test]
