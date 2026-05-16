@@ -614,12 +614,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON error-shape wrapper | Names the JSON `ok:false` error-shape documentation assertion. | Extracted `assertJsonErrorShapeMutationSelfTest()` around the `ok:false` assertion. | Evidence: no runtime output growth; JSON error-shape coverage still fails when removed. |
 | Context anomaly drilldown density self-test JSON error-shape order | Keeps JSON error-shape coverage before failure-success field docs. | Verified `assertJsonErrorShapeMutationSelfTest()` sits after text-headroom coverage and before the `no-succ` assertion. | Evidence: no runtime output growth; JSON error-shape coverage remains before failure-success field coverage. |
 | Context anomaly drilldown density self-test failure-success wrapper | Names the JSON `no-succ` failure-success field documentation assertion. | Extracted `assertFailureSuccessFieldMutationSelfTest()` around the `no-succ` assertion. | Evidence: no runtime output growth; failure-success field coverage still fails when removed. |
+| Context anomaly drilldown density self-test failure-success order | Keeps failure-success field coverage before stale alias detection. | Verified `assertFailureSuccessFieldMutationSelfTest()` sits after JSON error-shape coverage and before `staleFailureAliasResult`. | Evidence: no runtime output growth; failure-success field coverage remains before stale alias coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test failure-success order | Keeps failure-success field coverage before stale alias detection. | Verify `assertFailureSuccessFieldMutationSelfTest()` sits after JSON error-shape coverage and before `staleFailureAliasResult`. | Compact metric: no runtime output growth; correctness metric: failure-success field coverage remains before stale alias coverage. |
+| Context anomaly drilldown density self-test stale alias wrapper | Names the stale `no-success` alias detection assertion. | Extract `assertStaleFailureAliasMutationSelfTest()` around `staleFailureAliasResult` and its missing-alias assertion. | Compact metric: no runtime output growth; correctness metric: stale alias coverage still fails when alias spelling regresses. |
 
 ## Research Rules
 
