@@ -13,7 +13,7 @@ Use this command table before treating a compact anomaly summary as complete:
 | Audit formatter flow | `node scripts/audit_context_anomaly_hidden_samples.mjs` | Runs the smoke modes, fixture dashboard, digest, and verifier checks; add `--json` for compact fields. |
 | Audit release gate | `node scripts/audit_context_anomaly_hidden_samples.mjs --strict` | Uses release-like `--max-high 0` for the verifier check. |
 | List audit modes | `node scripts/audit_context_anomaly_hidden_samples.mjs --help` | Lists tolerant, strict, JSON, and checksum modes in under six lines. |
-| Check summary budget | `node scripts/check_context_anomaly_summary_budget.mjs --self-test` | Prints one success line; `--help` lists default, JSON, self-test, and help modes. |
+| Check summary budget | `node scripts/check_context_anomaly_summary_budget.mjs --self-test` | Prints one success line; tune with `P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINES`, `P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINE`, and `P28_CONTEXT_ANOMALY_SUMMARY_JSON_MAX`. |
 | Read summary budget | `node scripts/check_context_anomaly_summary_budget.mjs --json` | Emits budgets, labels, and `max_json_bytes`. |
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 
