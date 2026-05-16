@@ -454,12 +454,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output noop detail helper | Keeps no-op mutation diagnostic detail keys behind named helpers. | Extracted `missingMutationNoopDetails()` and `staleMutationNoopDetails()` before calling `failDefaultOutputMutation()`. | Evidence: no runtime output growth; no-op mutation diagnostics remain field-specific. |
 | Context anomaly drilldown density self-test default output mismatch detail helper | Keeps expected/actual mutation diagnostic details behind one helper. | Extracted `defaultOutputMutationMismatchDetails()` for expected/actual parser mismatch diagnostics. | Evidence: no runtime output growth; mismatch diagnostics remain field-specific. |
 | Context anomaly drilldown density self-test default output expected detail helper | Keeps default output expected diagnostic strings behind named builders. | Extracted helpers for missing-field and stale-field expected diagnostic strings used by `defaultOutputMutationMismatchDetails()`. | Evidence: no runtime output growth; expected diagnostics remain field-specific. |
+| Context anomaly drilldown density self-test default output actual fallback helper | Keeps parser fallback text behind one named helper. | Extracted `defaultOutputMutationActualDetail()` for the `actual ?? "ok"` fallback used by mismatch details. | Evidence: no runtime output growth; actual diagnostics retain the ok fallback consistently. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output actual fallback helper | Keeps parser fallback text behind one named helper. | Extract a `defaultOutputMutationActualDetail()` helper for the `actual ?? "ok"` fallback used by mismatch details. | Compact metric: no runtime output growth; correctness metric: actual diagnostics retain the ok fallback consistently. |
+| Context anomaly drilldown density self-test default output missing stale helper | Keeps stale mutation coverage diagnostics behind one named detail helper. | Extract a `missingStaleMutationFieldsDetails()` helper for missing stale mutation field diagnostics. | Compact metric: no runtime output growth; correctness metric: stale mutation coverage diagnostics remain field-specific. |
 
 ## Research Rules
 

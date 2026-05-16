@@ -1575,9 +1575,10 @@ if (args.includes("--self-test")) {
   const staleMutationNoopDetails = (field) => ({
     stale_mutation_noop: field,
   });
+  const defaultOutputMutationActualDetail = (actual) => actual ?? "ok";
   const defaultOutputMutationMismatchDetails = (expected, actual) => ({
     expected,
-    actual: actual ?? "ok",
+    actual: defaultOutputMutationActualDetail(actual),
   });
   const missingDefaultOutputFieldExpectation = (field) =>
     `missing_default_output_field=${field}`;
