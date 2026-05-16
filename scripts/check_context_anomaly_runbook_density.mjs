@@ -820,6 +820,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${missingPhraseCountError ?? "ok"}`);
     process.exit(1);
   }
+  const missingAliasDocCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ adocs=\d+/, "")),
+    result,
+  );
+  if (missingAliasDocCountError !== "missing_default_output_field=adocs") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=adocs`);
+    console.error(`actual=${missingAliasDocCountError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingProseValueError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ prose=\S+/, "")),
     result,
