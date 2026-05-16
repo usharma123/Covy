@@ -1005,6 +1005,15 @@ if (args.includes("--self-test")) {
     console.error("low_width_artifact_issue_missing");
     process.exit(1);
   }
+  if (
+    lowWidthIssue.default_output_len !==
+      lowWidthArtifacts.defaultOutputLine.length ||
+    lowWidthIssue.max_default_output_len !== 195
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("low_width_artifact_issue_details_mismatch");
+    process.exit(1);
+  }
   const jsonPayloadError = jsonPayloadParityIssue(baselinePayload, result, {
     default_output_headroom: defaultOutputHeadroom,
   });
