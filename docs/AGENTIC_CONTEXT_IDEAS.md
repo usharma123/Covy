@@ -141,12 +141,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown summary budget help workflow log | Keeps the summary-budget checker usage visible in CI logs without expanding summaries. | The context-anomalies workflow now runs the summary-budget checker `--help` mode before self-test. | Evidence: no GitHub summary growth; help output lists default, `--json`, `--self-test`, and `--help`. |
 | Context anomaly drilldown summary budget help docs | Helps agents discover all summary-budget checker modes from the runbook. | The runbook summary-budget row now notes that `--help` lists default, JSON, self-test, and help modes. | Evidence: runbook remains under 45 lines and documented modes match help output. |
 | Context anomaly drilldown summary budget unknown-option docs | Helps agents recognize typoed checker flags quickly. | The summary-budget checker help now documents `context_anomaly_summary_budget_unknown_option` for bad flags. | Evidence: help stays five lines and `--bad-flag` exits with the documented error. |
+| Context anomaly drilldown summary budget JSON byte cap | Prevents summary-budget JSON from growing into another noisy artifact. | Summary-budget `--json` output now enforces `P28_CONTEXT_ANOMALY_SUMMARY_JSON_MAX` with a 768-byte default and reports `max_json_bytes`. | Evidence: JSON output is under the explicit cap; forced low cap fails with `context_anomaly_summary_budget_json_too_long` while required labels remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown summary budget JSON byte cap | Prevents summary-budget JSON from growing into another noisy artifact. | Add a byte budget to the checker JSON output or self-test. | Compact metric: JSON output remains under an explicit byte cap; correctness metric: required labels remain covered. |
+| Context anomaly drilldown summary budget JSON byte self-test | Proves the summary-budget JSON byte cap fails when the payload grows beyond budget. | Add byte-cap failure coverage to the checker self-test. | Compact metric: self-test output remains one line; correctness metric: forced low byte cap reports `context_anomaly_summary_budget_json_too_long`. |
 
 ## Research Rules
 
