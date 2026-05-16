@@ -427,12 +427,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper paired env expected count docs | Keeps ledger wording aligned with the expected-count constant. | Completed expected-count row now mentions `expectedPairedEnvDocExclusionCount` explicitly. | Evidence: no runtime output growth; docs match guard code. |
 | Context anomaly drilldown density self-test invariant helper | Reduces bespoke failure-printing branches in invariant guards. | Added `failSelfTestInvariant` and migrated the paired-env count guard to it. | Evidence: no runtime output growth; invariant diagnostics stay named. |
 | Context anomaly drilldown density self-test invariant helper plain-env count adoption | Reuses the invariant helper for the plain env-doc count guard. | The `requiredPlainEnvDocs.length` guard now uses `failSelfTestInvariant`. | Evidence: no runtime output growth; both env count guards share diagnostics. |
+| Context anomaly drilldown density self-test invariant helper exclusion adoption | Reuses the invariant helper for paired-env exclusion membership failures. | The `unexpected_plain_env_doc` guard now uses `failSelfTestInvariant`. | Evidence: no runtime output growth; all env sweep boundary guards share diagnostics. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test invariant helper exclusion adoption | Reuses the invariant helper for paired-env exclusion membership failures. | Migrate the `unexpected_plain_env_doc` guard to `failSelfTestInvariant`. | Compact metric: no runtime output growth; correctness metric: all env sweep boundary guards share diagnostics. |
+| Context anomaly drilldown density self-test invariant helper array detail | Makes invariant helper diagnostics match existing array-detail formatting. | Teach `failSelfTestInvariant` to join array values like `fail()` does. | Compact metric: no runtime output growth; correctness metric: helper supports scalar and array details. |
 
 ## Research Rules
 

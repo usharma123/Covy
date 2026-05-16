@@ -1532,9 +1532,9 @@ if (args.includes("--self-test")) {
   }
   for (const excludedEnvName of pairedEnvDocExclusions) {
     if (requiredPlainEnvDocs.includes(excludedEnvName)) {
-      console.error("context_anomaly_runbook_density_self_test_failed");
-      console.error(`unexpected_plain_env_doc=${excludedEnvName}`);
-      process.exit(1);
+      failSelfTestInvariant({
+        unexpected_plain_env_doc: excludedEnvName,
+      });
     }
   }
   assertSelfTest(
