@@ -26,8 +26,12 @@ pub fn run(args: DigestArgs) -> Result<i32> {
     println!("anomaly_count={}", digest.anomaly_count);
     for anomaly in digest.anomalies {
         println!(
-            "anomaly category={} severity={} signal={} next_check={}",
-            anomaly.category, anomaly.severity, anomaly.signal, anomaly.next_check
+            "anomaly category={} severity={} signal={} next_check={} repair_hint={}",
+            anomaly.category,
+            anomaly.severity,
+            anomaly.signal,
+            anomaly.next_check,
+            anomaly.repair_hint
         );
     }
     Ok(0)

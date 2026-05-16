@@ -75,6 +75,7 @@ pub(crate) struct ContextAnomaly {
     pub(crate) severity: String,
     pub(crate) signal: String,
     pub(crate) next_check: String,
+    pub(crate) repair_hint: String,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -533,6 +534,9 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
                 handoff.latest_status, blockers, handoff.regression_count
             ),
             next_check: "Packet28 verify handoffs --root . --max-regressions 0".to_string(),
+            repair_hint:
+                "refresh the handoff packet with existing paths, runnable checks, and current env"
+                    .to_string(),
         });
     }
 
@@ -555,6 +559,8 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
                 reducer.latest_issue_count, issue_kinds
             ),
             next_check: "Packet28 verify reducer-drift --root . --json".to_string(),
+            repair_hint: "update reducer fixtures or restore missing decisive compact markers"
+                .to_string(),
         });
     }
 
@@ -577,6 +583,9 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
                 memory.latest_issue_count, issue_kinds
             ),
             next_check: "Packet28 verify memory-lint --root . --json".to_string(),
+            repair_hint:
+                "remove stale runtime-specific memories or add hook evidence for the runtime"
+                    .to_string(),
         });
     }
 
@@ -1265,9 +1274,11 @@ mod tests {
         assert_eq!(digest.anomalies[0].category, "reducer_drift");
         assert_eq!(digest.anomalies[0].severity, "high");
         assert!(digest.anomalies[0].next_check.contains("reducer-drift"));
+        assert!(digest.anomalies[0].repair_hint.contains("compact markers"));
         assert_eq!(digest.anomalies[1].category, "memory_lint");
         assert_eq!(digest.anomalies[1].severity, "high");
         assert!(digest.anomalies[1].next_check.contains("memory-lint"));
+        assert!(digest.anomalies[1].repair_hint.contains("stale runtime"));
         assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
     }
 }

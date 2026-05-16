@@ -3644,6 +3644,10 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("memory-lint"));
+        assert!(content["anomalies"][0]["repair_hint"]
+            .as_str()
+            .unwrap()
+            .contains("stale runtime"));
     }
 
     #[test]
@@ -3685,6 +3689,10 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("memory-lint"));
+        assert!(content["anomalies"][0]["repair_hint"]
+            .as_str()
+            .unwrap()
+            .contains("stale runtime"));
         assert!(serde_json::to_string(content).unwrap().len() < 1024);
     }
 
