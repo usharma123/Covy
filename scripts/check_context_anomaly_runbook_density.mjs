@@ -1776,7 +1776,7 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_json_error_help_adjacency_doc",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace(
         "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`",
@@ -1785,6 +1785,7 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
+    "jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
     "missing_jhead_env_pair",
   );
   assertSelfTest(
