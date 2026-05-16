@@ -13,9 +13,9 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
-// 544 keeps full-field JSON parity output compact while preserving the
-// explicit headroom gate after adding json_parity_fields_checked.
-const defaultMaxJsonBytes = 544;
+// 576 keeps full-field JSON parity output compact while preserving the
+// explicit headroom gate after adding density_label_line_width.
+const defaultMaxJsonBytes = 576;
 const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
     String(defaultMaxJsonBytes),
@@ -111,6 +111,7 @@ const defaultOutputFieldOrder = [
   "parsed",
   "wf",
   "prose",
+  "dlab",
   "jhead",
   "jpar",
   "wdocs",
@@ -125,6 +126,7 @@ const jsonPayloadParityFieldOrder = [
   "density_doc_anchors_checked",
   "parsed_fields_checked",
   "json_parity_fields_checked",
+  "density_label_line_width",
   "text_width_docs_checked",
   "row_soft_ok",
   "row_soft_max",
@@ -143,8 +145,9 @@ const requiredOutputDocPhrases = [
   "`density_doc_anchors_checked`",
   "`parsed_fields_checked`",
   "`json_parity_fields_checked`",
+  "`density_label_line_width`",
   "`text_width_docs_checked`",
-  "`max_json_bytes=544`",
+  "`max_json_bytes=576`",
   "`help<=120`",
 ];
 const requiredAliasDocPhrases = [
@@ -154,6 +157,7 @@ const requiredAliasDocPhrases = [
   "`jpar`=JSON parity",
   "`adocs`=alias docs",
   "`wdocs`=width docs",
+  "`dlab`=density label width",
 ];
 const requiredDensityDocPhrases = [
   "Env:",
@@ -332,6 +336,7 @@ function evaluate(runbook, lineBudget) {
     density_doc_anchors_checked: requiredDensityDocLinePrefixes.length,
     parsed_fields_checked: defaultTextFields.length,
     json_parity_fields_checked: jsonPayloadParityFieldOrder.length,
+    density_label_line_width: densityLabelLineLength(runbook),
     text_width_docs_checked: hasTextWidthEnvDoc ? 1 : 0,
   };
 }
@@ -455,6 +460,7 @@ function successPayload(result, workflow, jsonBudget) {
     density_doc_anchors_checked: result.density_doc_anchors_checked,
     parsed_fields_checked: result.parsed_fields_checked,
     json_parity_fields_checked: result.json_parity_fields_checked,
+    density_label_line_width: result.density_label_line_width,
     text_width_docs_checked: result.text_width_docs_checked,
     row_soft_ok: result.row_soft_ok,
     row_soft_max: result.row_soft_max,
@@ -471,6 +477,7 @@ function jsonPayloadParityExpectedFields(result) {
     density_doc_anchors_checked: result.density_doc_anchors_checked,
     parsed_fields_checked: result.parsed_fields_checked,
     json_parity_fields_checked: result.json_parity_fields_checked,
+    density_label_line_width: result.density_label_line_width,
     text_width_docs_checked: result.text_width_docs_checked,
     row_soft_ok: result.row_soft_ok,
     row_soft_max: result.row_soft_max,
@@ -540,6 +547,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `parsed=${resultDetails.parsed_fields_checked}`,
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
+    `dlab=${resultDetails.density_label_line_width}`,
     `jhead=${jsonHeadroom}`,
     `jpar=${resultDetails.json_parity_fields_checked}`,
     `wdocs=${resultDetails.text_width_docs_checked}`,
@@ -584,6 +592,7 @@ function defaultOutputExpectedValues(resultDetails) {
     labels: String(resultDetails.output_labels_checked),
     phrases: String(resultDetails.output_doc_phrases_checked),
     prose: `${resultDetails.max_density_prose_line}/${resultDetails.max_density_prose_line_allowed}`,
+    dlab: String(resultDetails.density_label_line_width),
     jpar: String(resultDetails.json_parity_fields_checked),
     adocs: String(resultDetails.alias_docs_checked),
     dphr: String(resultDetails.density_doc_phrases_checked),
@@ -720,7 +729,7 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const widenedJsonProseResult = evaluate(
-    runbook.replace("JSON:", `JSON:${" widened".repeat(24)}`),
+    runbook.replace("JSON:", `JSON:${" widened".repeat(8)}`),
     maxLines,
   );
   if (
@@ -815,6 +824,7 @@ if (args.includes("--self-test")) {
     density_doc_anchors_checked: 0,
     parsed_fields_checked: 0,
     json_parity_fields_checked: 0,
+    density_label_line_width: 0,
     text_width_docs_checked: 0,
   };
   const missingJsonParityMutationFields = Object.keys(
@@ -961,6 +971,7 @@ if (args.includes("--self-test")) {
     adocs: "0",
     dphr: "0",
     anc: "0",
+    dlab: "0",
     jpar: "0",
     soft: "over",
     parsed: "0",
@@ -1154,7 +1165,10 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("JSON:`row_soft_ok`", "`row_soft_ok`"), maxLines),
+    evaluate(
+      runbook.replace("JSON:`alias_docs_checked`", "`alias_docs_checked`"),
+      maxLines,
+    ),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
