@@ -17,7 +17,9 @@ const maxSummaryLength = Number.parseInt(
   process.env.P28_HIDDEN_SAMPLE_SUMMARY_MAX ?? "256",
   10,
 );
-const jsonOutput = process.argv.includes("--json");
+const args = process.argv.slice(2);
+const jsonOutput = args.includes("--json");
+const selfTest = args.includes("--self-test");
 
 function escapeSegment(value, escapeEquals) {
   let escaped = value
@@ -46,6 +48,38 @@ const samples = JSON.parse(readFileSync(fixturePath, "utf8"));
 const actual = summarize(samples);
 const expected = readFileSync(expectedPath, "utf8").trim();
 
+function jsonPayload(summary, maxLength) {
+  return {
+    ok: true,
+    actual_len: summary.length,
+    max_len: maxLength,
+    summary,
+  };
+}
+
+if (selfTest) {
+  const payload = jsonPayload(actual, maxSummaryLength);
+  const lowBudget = actual.length - 1;
+  if (actual !== expected) {
+    console.error("context_anomaly_hidden_sample_self_test_mismatch");
+    process.exit(1);
+  }
+  if (
+    payload.actual_len !== actual.length ||
+    payload.max_len !== maxSummaryLength ||
+    payload.summary !== actual
+  ) {
+    console.error("context_anomaly_hidden_sample_self_test_json_drift");
+    process.exit(1);
+  }
+  if (actual.length <= lowBudget) {
+    console.error("context_anomaly_hidden_sample_self_test_budget_drift");
+    process.exit(1);
+  }
+  console.log("context_anomaly_hidden_sample_self_test_ok");
+  process.exit(0);
+}
+
 if (actual !== expected) {
   console.error("context_anomaly_hidden_sample_fixture_mismatch");
   console.error(`expected=${expected}`);
@@ -61,14 +95,7 @@ if (actual.length > maxSummaryLength) {
 }
 
 if (jsonOutput) {
-  console.log(
-    JSON.stringify({
-      ok: true,
-      actual_len: actual.length,
-      max_len: maxSummaryLength,
-      summary: actual,
-    }),
-  );
+  console.log(JSON.stringify(jsonPayload(actual, maxSummaryLength)));
 } else {
   console.log(`context_anomaly_hidden_sample_fixture_ok=${actual}`);
 }

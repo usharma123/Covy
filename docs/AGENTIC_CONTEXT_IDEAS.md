@@ -90,12 +90,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown budget workflow summary | Makes the enforced formatter budget visible when the context anomaly workflow runs. | The smoke script now has `--json` output and the workflow summary reports formatter budget as `actual/max`. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs --json` returns `actual_len`, `max_len`, and summary; workflow uses that JSON for both formatter smoke and budget lines. |
 | Context anomaly drilldown budget runbook note | Helps agents interpret workflow formatter budget lines without reading the script. | The context anomaly runbook now explains that workflow formatter budget lines map to smoke script `actual_len` and `max_len` fields. | Evidence: runbook remains under 45 lines and documents the `actual/max` notation next to the smoke command. |
 | Context anomaly drilldown JSON smoke docs | Lets agents use machine-readable smoke output directly in automation. | The context anomaly runbook command table now documents `node scripts/check_context_anomaly_hidden_samples.mjs --json` and its fields. | Evidence: runbook remains under 45 lines; JSON smoke output includes `actual_len`, `max_len`, and escaped `summary`. |
+| Context anomaly drilldown script self-test flag | Makes the smoke script independently verify its normal, JSON, and budget-failure modes. | The hidden-sample smoke script now has `--self-test`, which checks fixture equality, JSON payload fields, and an intentionally low budget. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` prints one success line; the runbook documents the self-test command. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown script self-test flag | Makes the smoke script independently verify its normal, JSON, and budget-failure modes. | Add a `--self-test` mode to the smoke script that checks fixture equality, JSON fields, and an intentionally low budget. | Compact metric: one success line; correctness metric: self-test fails if any mode drifts. |
+| Context anomaly drilldown self-test workflow gate | Makes CI use the smoke script's own self-test before rendering formatter summaries. | Run `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` inside the context-anomalies workflow summary step. | Compact metric: no added summary lines; correctness metric: workflow fails if script self-test detects formatter drift. |
 
 ## Research Rules
 
