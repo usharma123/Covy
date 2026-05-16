@@ -436,6 +436,9 @@ function invariantDetailValue(value) {
   return Array.isArray(value) ? value.join(",") : value;
 }
 
+const invariantArrayDetailSample = ["array", "detail"];
+const invariantScalarDetailSample = "scalar";
+
 function failSelfTestInvariant(details) {
   console.error("context_anomaly_runbook_density_self_test_failed");
   for (const [key, value] of Object.entries(details)) {
@@ -1517,8 +1520,6 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
-  const invariantArrayDetailSample = ["array", "detail"];
-  const invariantScalarDetailSample = "scalar";
   const expectedInvariantArrayDetail = invariantArrayDetailSample.join(",");
   const expectedInvariantScalarDetail = invariantScalarDetailSample;
   const actualInvariantArrayDetail = invariantDetailValue(
