@@ -91,6 +91,7 @@ jobs:
           target/debug/Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json > context-anomaly-fixture-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-fixture-dashboard.json
           audit_mode_line="$(jq -r '"audit_mode=\(.audit_mode) verifier=\(if .verifier.ok then "ok" else "failed" end) high=\(.verifier.high) max_high=\(.verifier.max_high)"' context-anomaly-hidden-sample-audit.json 2>/dev/null || grep '^audit_mode=' context-anomaly-hidden-sample-audit.txt || true)"
           audit_output_checksum="$(node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt)"
+          audit_json_checksum="$(node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.json)"
           trend_repair_hint="$(jq -r '.trend_repair_hint // empty' context-anomalies.json)"
           hidden_sample_jq='def cat_escape: gsub("%"; "%25") | gsub("="; "%3D") | gsub(";"; "%3B") | gsub("\n"; "%0A"); def signal_escape: gsub("%"; "%25") | gsub(";"; "%3B") | gsub("\n"; "%0A"); map((.category | cat_escape) + "=" + (.signal | signal_escape)) | join(";")'
           hidden_sample_fixture_summary="$(jq -r "$hidden_sample_jq" docs/context-anomalies/hidden-samples-delimiters.json)"
@@ -122,6 +123,7 @@ jobs:
             echo "- fixture oldest recurring hidden age ms: $(jq -r '.context_anomalies.oldest_recurring_hidden_age_ms // 0' context-anomaly-fixture-dashboard.json)"
             echo "- audit mode: $audit_mode_line"
             echo "- audit checksum: $audit_output_checksum"
+            echo "- audit json checksum: $audit_json_checksum"
             echo "- formatter smoke: context_anomaly_hidden_sample_fixture_ok=$hidden_sample_smoke"
             echo "- formatter budget: $hidden_sample_smoke_len/$hidden_sample_smoke_max"
             echo "- formatter checksum: $hidden_sample_checksum"

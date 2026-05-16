@@ -129,12 +129,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit pipefail guard | Prevents the workflow audit step from passing when the audited command fails before `tee`. | The context-anomalies audit workflow step now sets `pipefail` before piping audit output through `tee`. | Evidence: no summary growth; a failing command in a `pipefail` pipeline exits nonzero despite `tee`. |
 | Context anomaly drilldown audit JSON artifact | Lets maintainers inspect structured audit details from workflow runs, not only line text. | The `context-anomaly-hidden-sample-audit` artifact now uploads both text and JSON audit outputs. | Evidence: no summary growth; uploaded JSON parses and matches the text artifact mode line. |
 | Context anomaly drilldown audit JSON artifact docs | Helps maintainers know the audit artifact includes both text and structured JSON. | The runbook artifact note now names both `context-anomaly-hidden-sample-audit.txt` and `.json`. | Evidence: runbook remains under 45 lines and the note matches workflow artifact paths. |
+| Context anomaly drilldown audit JSON checksum summary | Lets maintainers confirm the structured audit artifact matches the run without downloading it. | The context-anomalies workflow summary now prints a SHA-256 checksum for `context-anomaly-hidden-sample-audit.json`. | Evidence: the new summary line is under 100 characters; checksum helper reproduces the uploaded JSON digest. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit JSON checksum summary | Lets maintainers confirm the structured audit artifact matches the run without downloading it. | Add a workflow summary checksum for `context-anomaly-hidden-sample-audit.json`. | Compact metric: one summary line under 100 characters; correctness metric: checksum helper reproduces the uploaded JSON digest. |
+| Context anomaly drilldown audit JSON checksum docs | Helps maintainers reproduce the structured audit artifact checksum locally. | Add the JSON checksum command to the runbook artifact note. | Compact metric: runbook remains under 45 lines; correctness metric: command matches the workflow checksum helper invocation. |
 
 ## Research Rules
 
