@@ -45,12 +45,13 @@ use crate::cmd_mcp::native_tools::{
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
     Packet28GlobArgs, Packet28HandoffCompressionArgs, Packet28HandoffDependencyLintArgs,
     Packet28HandoffDiffArgs, Packet28HandoffEnvironmentLintArgs, Packet28HandoffFixPlanArgs,
-    Packet28HandoffLintAllArgs, Packet28HandoffLintTrendArgs, Packet28HandoffPathLintArgs,
-    Packet28HandoffRepairVerifyArgs, Packet28HandoffStaleCommandLintArgs,
-    Packet28HandoffTestLintArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
-    Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
-    Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
-    Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs, Packet28WriteIntentionArgs,
+    Packet28HandoffLintAllArgs, Packet28HandoffLintRegressionArgs, Packet28HandoffLintTrendArgs,
+    Packet28HandoffPathLintArgs, Packet28HandoffRepairVerifyArgs,
+    Packet28HandoffStaleCommandLintArgs, Packet28HandoffTestLintArgs, Packet28PatchRiskArgs,
+    Packet28PrepareHandoffArgs, Packet28PromptPressureArgs, Packet28ReadRegionsArgs,
+    Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
+    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
+    Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -836,6 +837,18 @@ fn handle_method(
                 {
                     "name": "packet28.handoff_lint_trends",
                     "description": "Report recurring, cleared, and latest blocking handoff lint categories across stored task artifacts.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "artifact_ids": {"type":"array","items":{"type":"string"}},
+                            "max_artifacts": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.handoff_lint_regressions",
+                    "description": "Detect handoff lint categories that were cleared and then reappeared in the latest artifact.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1948,6 +1961,12 @@ fn handle_tool_call(
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_handoff_lint_trends(root, request)?
         }
+        "packet28.handoff_lint_regressions" => {
+            let mut request: Packet28HandoffLintRegressionArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_handoff_lint_regressions(root, request)?
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
             request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
@@ -3027,6 +3046,13 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 handoff lint trends artifacts={artifact_count}.")
         }
+        "packet28.handoff_lint_regressions" => {
+            let regression_count = payload
+                .get("regression_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 handoff lint regressions count={regression_count}.")
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
@@ -3434,6 +3460,7 @@ mod tests {
             "packet28_handoff_fix_plan",
             "packet28_handoff_repair_verify",
             "packet28_handoff_lint_trends",
+            "packet28_handoff_lint_regressions",
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
@@ -4388,6 +4415,76 @@ mod tests {
                 .unwrap()
                 .len()
                 < 768
+        );
+    }
+
+    #[test]
+    fn handoff_lint_regressions_flags_reintroduced_category() {
+        let root = tempfile::tempdir().unwrap();
+        let task_id = "task-handoff-lint-regressions";
+        for (context_version, body) in [
+            (
+                "ctx-regression-1",
+                "cargo test -p suite-cli env_backed_test $PACKET28_REGRESSION_MISSING_ENV_12345",
+            ),
+            (
+                "ctx-regression-2",
+                "cargo test -p suite-cli env_backed_test",
+            ),
+            (
+                "ctx-regression-3",
+                "cargo test -p suite-cli env_backed_test $PACKET28_REGRESSION_MISSING_ENV_12345",
+            ),
+        ] {
+            let path = task_version_json_path(root.path(), task_id, context_version);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                serde_json::to_vec_pretty(&json!({
+                    "context_version": context_version,
+                    "artifact_id": context_version,
+                    "brief": "## Task Objective\nDetect handoff lint regressions.",
+                    "sections": [{
+                        "id": "verification",
+                        "title": "Verification",
+                        "body": body
+                    }],
+                    "changed_paths_since_checkpoint": ["src/lib.rs"],
+                    "next_action_summary": "gate reintroduced handoff blockers"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.handoff_lint_regressions",
+                "arguments": {
+                    "task_id": task_id,
+                    "artifact_ids": ["ctx-regression-1", "ctx-regression-2", "ctx-regression-3"]
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["ok"], false);
+        assert_eq!(response["structuredContent"]["regression_count"], 1);
+        assert_eq!(
+            response["structuredContent"]["regressions"][0]["category"],
+            "environment"
+        );
+        assert_eq!(
+            response["structuredContent"]["regressions"][0]["latest_artifact_id"],
+            "ctx-regression-3"
+        );
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 512
         );
     }
 

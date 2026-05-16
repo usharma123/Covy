@@ -278,6 +278,14 @@ pub(crate) struct Packet28HandoffLintTrendArgs {
     pub(crate) max_artifacts: Option<usize>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffLintRegressionArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_ids: Vec<String>,
+    pub(crate) max_artifacts: Option<usize>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -2074,6 +2082,76 @@ pub(crate) fn handle_packet28_handoff_lint_trends(
                 !lint_latest_category_contains(&latest_categories, category)
             }).count()
         ),
+    }))
+}
+
+pub(crate) fn handle_packet28_handoff_lint_regressions(
+    root: &Path,
+    args: Packet28HandoffLintRegressionArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!(
+            "packet28.handoff_lint_regressions requires task_id"
+        ));
+    }
+    let max_artifacts = args.max_artifacts.unwrap_or(8).clamp(1, 24);
+    let artifact_ids = if args.artifact_ids.is_empty() {
+        discover_handoff_artifact_ids(root, task_id, max_artifacts)?
+    } else {
+        args.artifact_ids
+            .into_iter()
+            .filter(|id| !id.trim().is_empty())
+            .take(max_artifacts)
+            .collect()
+    };
+    let mut snapshots = Vec::<(String, Vec<String>)>::new();
+    for artifact_id in &artifact_ids {
+        let lint = handle_packet28_handoff_lint_all(
+            root,
+            Packet28HandoffLintAllArgs {
+                task_id: task_id.to_string(),
+                artifact_id: Some(artifact_id.clone()),
+                context_version: None,
+            },
+        )?;
+        snapshots.push((artifact_id.clone(), lint_failing_categories(&lint)));
+    }
+    let latest_artifact_id = snapshots
+        .last()
+        .map(|(artifact_id, _)| artifact_id.clone())
+        .unwrap_or_default();
+    let latest_categories = snapshots
+        .last()
+        .map(|(_, categories)| categories.clone())
+        .unwrap_or_default();
+    let mut regressions = Vec::new();
+    for category in &latest_categories {
+        let mut seen_before = false;
+        let mut cleared_before_latest = false;
+        for (_, categories) in snapshots.iter().take(snapshots.len().saturating_sub(1)) {
+            if categories.iter().any(|candidate| candidate == category) {
+                seen_before = true;
+            } else if seen_before {
+                cleared_before_latest = true;
+            }
+        }
+        if seen_before && cleared_before_latest {
+            regressions.push(json!({
+                "category": category,
+                "latest_artifact_id": latest_artifact_id,
+                "reason": "category was previously cleared and reappeared in the latest artifact",
+            }));
+        }
+    }
+    let regression_count = regressions.len();
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_count": snapshots.len(),
+        "ok": regression_count == 0,
+        "regression_count": regression_count,
+        "regressions": regressions,
+        "summary": format!("handoff_lint_regressions count={regression_count}"),
     }))
 }
 
