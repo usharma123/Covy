@@ -669,12 +669,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field presence table name order | Keeps the named field-doc tables beside their call sequence. | Verified `leadingJsonFieldDocs` and `trailingJsonFieldDocs` are defined immediately before the presence/order/presence call sequence. | Evidence: no runtime output growth; named tables remain adjacent to the calls that consume them. |
 | Context anomaly drilldown density self-test JSON field post-table grouping audit | Checks whether the JSON field-doc helper still has mixed concerns after table extraction. | Re-scanned `assertJsonFieldDocMutationSelfTests()` after the table refactor and found byte/help docs already separated; the next grouping target is the repeated order-swap assertions. | Evidence: no runtime output growth; next grouping decision is based on the current helper shape. |
 | Context anomaly drilldown density self-test JSON field order mutation table | Makes the two JSON field-order swap assertions data-driven. | Extracted the two swapped-order cases in `assertJsonFieldOrderDocMutationSelfTests()` into a `jsonFieldOrderMutations` table with original, swapped, expected-missing, and case-name fields. | Evidence: no runtime output growth; both swapped-order case names and expected-missing docs stay explicit. |
+| Context anomaly drilldown density self-test JSON field order mutation table order | Keeps the order-mutation table adjacent to the constants it uses. | Verified `jsonFieldOrderMutations` is defined after the original/swapped order-doc constants and immediately before the loop that executes those cases. | Evidence: no runtime output growth; table rows remain adjacent to the mutation loop. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field order mutation table order | Keeps the order-mutation table adjacent to the constants it uses. | Verify `jsonFieldOrderMutations` is defined after the original/swapped order-doc constants and immediately before the loop that executes those cases. | Compact metric: no runtime output growth; correctness metric: table rows remain adjacent to the mutation loop. |
+| Context anomaly drilldown density self-test JSON field order expected-missing audit | Confirms the shared expected-missing doc in the order table is intentional. | Verify both `jsonFieldOrderMutations` rows carry explicit `expectedMissingDoc` and that the second row still points at the full JSON order doc, not only the swapped pair. | Compact metric: no runtime output growth; correctness metric: expected-missing semantics stay documented before any rename. |
 
 ## Research Rules
 
