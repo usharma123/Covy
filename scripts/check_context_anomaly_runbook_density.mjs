@@ -1669,9 +1669,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replaceAll("Env:", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "Env:line",
+    "missing_env_line_anchor",
   );
   assertSelfTest(
     evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),

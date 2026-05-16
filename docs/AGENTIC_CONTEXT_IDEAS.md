@@ -372,12 +372,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density stale alias helper missing-detail actuals | Makes missing-detail failures show what the checker did report. | `assertSelfTestMissing` now prints `actual_missing` when the expected detail is absent. | Evidence: no output growth; helper failures include actual details. |
 | Context anomaly drilldown density missing-detail helper adoption | Reuses the missing-detail helper for another mutation with meaningful `missing` details. | The text-width env pair mutation now uses `assertSelfTestMissing` for `tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Evidence: no output growth; helper covers multiple mutation types. |
 | Context anomaly drilldown density missing-detail helper jhead adoption | Reuses the missing-detail helper for the JSON-headroom env pair mutation. | The `jhead` env pair mutation now uses `assertSelfTestMissing` for `jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`. | Evidence: no output growth; helper covers both text and JSON env pairs. |
+| Context anomaly drilldown density missing-detail helper line-anchor adoption | Reuses the missing-detail helper for line-anchor failures that report compact detail strings. | The `Env:` line-prefix mutation now uses `assertSelfTestMissing` for `Env:line`. | Evidence: no output growth; helper covers line-prefix details. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper line-anchor adoption | Reuses the missing-detail helper for line-anchor failures that report compact detail strings. | Convert one `Env:`/`JSON:` line-prefix mutation to require its `line` detail. | Compact metric: no output growth; correctness metric: helper covers line-prefix details. |
+| Context anomaly drilldown density missing-detail helper JSON order adoption | Reuses the missing-detail helper for JSON docs order mutations with specific missing phrases. | Convert the default-output headroom JSON docs order mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers docs-order detail checks. |
 
 ## Research Rules
 
