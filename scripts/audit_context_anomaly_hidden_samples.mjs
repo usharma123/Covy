@@ -2,7 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -75,6 +75,20 @@ const packetEnv = {
   ...process.env,
   HOME: mkdtempSync(join(tmpdir(), "p28-context-anomaly-audit-")),
 };
+
+const checksumFixturePath = join(packetEnv.HOME, "checksum-fixture.txt");
+writeFileSync(checksumFixturePath, "abc");
+const checksumFixture = run("node", [
+  "scripts/audit_context_anomaly_hidden_samples.mjs",
+  "--checksum",
+  checksumFixturePath,
+]);
+if (
+  checksumFixture !==
+  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+) {
+  throw new Error("checksum helper output drifted");
+}
 
 const smoke = run("node", ["scripts/check_context_anomaly_hidden_samples.mjs"]);
 if (!smoke.startsWith("context_anomaly_hidden_sample_fixture_ok=")) {
@@ -181,7 +195,9 @@ const digest = JSON.parse(
 );
 
 console.log("context_anomaly_hidden_sample_audit_ok");
-console.log("smoke_modes=default,json,self-test,help,budget-fail,bad-flag");
+console.log(
+  "smoke_modes=default,json,self-test,help,budget-fail,bad-flag,checksum-helper",
+);
 console.log(`formatter_budget=${smokeJson.actual_len}/${smokeJson.max_len}`);
 console.log(`formatter_checksum=${smokeJson.checksum}`);
 console.log(

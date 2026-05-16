@@ -122,12 +122,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit artifact checksum | Lets maintainers confirm an uploaded audit artifact matches the summary without downloading it first. | The context-anomalies workflow summary now prints a SHA-256 checksum computed from `context-anomaly-hidden-sample-audit.txt`. | Evidence: audit checksum summary line is under 100 characters and is computed from the seven-line audit artifact. |
 | Context anomaly drilldown audit artifact checksum docs | Helps maintainers reproduce the audit artifact checksum locally. | The context anomaly runbook now includes the same Node SHA-256 command the workflow uses for `context-anomaly-hidden-sample-audit.txt`. | Evidence: runbook remains under 45 lines; local command reproduces the workflow audit checksum. |
 | Context anomaly drilldown artifact checksum helper | Avoids duplicating a long Node checksum one-liner between workflow and docs. | The audit script now supports `--checksum <path>`, and the workflow plus runbook use that helper for audit artifact hashing. | Evidence: helper output is one 64-character digest; workflow and runbook both call `node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt`. |
+| Context anomaly drilldown checksum helper self-test | Prevents the audit checksum helper from drifting while workflow summaries still rely on it. | The default audit now checks `--checksum` against a temporary `abc` fixture with a known SHA-256 digest. | Evidence: default audit output remains seven lines and includes `checksum-helper`; helper digest is compared with an independent known value. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown checksum helper self-test | Prevents the audit checksum helper from drifting while workflow summaries still rely on it. | Make the audit command exercise `--checksum` against a temporary audit artifact or fixture. | Compact metric: default audit output remains seven lines; correctness metric: helper digest is compared with an independent SHA-256 value. |
+| Context anomaly drilldown checksum read failure | Gives CI a compact, parseable error when the audit artifact file is missing. | Catch `--checksum` file-read failures and emit a named two-line error instead of a Node stack trace. | Compact metric: missing-file output stays under three lines; correctness metric: existing valid checksum output remains only the digest. |
 
 ## Research Rules
 
