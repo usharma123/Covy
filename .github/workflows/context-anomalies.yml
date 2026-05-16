@@ -8,6 +8,7 @@ on:
       - "docs/context-anomalies/**"
       - "scripts/audit_context_anomaly_hidden_samples.mjs"
       - "scripts/check_context_anomaly_hidden_samples.mjs"
+      - "scripts/check_context_anomaly_summary_budget.mjs"
       - "crates/suite-cli/src/cmd_dashboard.rs"
       - "crates/suite-cli/src/cmd_digest.rs"
       - "crates/suite-cli/src/cmd_mcp.rs"
@@ -23,6 +24,7 @@ on:
       - "docs/context-anomalies/**"
       - "scripts/audit_context_anomaly_hidden_samples.mjs"
       - "scripts/check_context_anomaly_hidden_samples.mjs"
+      - "scripts/check_context_anomaly_summary_budget.mjs"
       - "crates/suite-cli/src/cmd_dashboard.rs"
       - "crates/suite-cli/src/cmd_digest.rs"
       - "crates/suite-cli/src/cmd_mcp.rs"
@@ -50,6 +52,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check context anomaly summary budget
+        run: node scripts/check_context_anomaly_summary_budget.mjs --self-test
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
