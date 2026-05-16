@@ -163,6 +163,7 @@ function evaluate(runbook, lineBudget) {
         !line.startsWith("|") &&
         (line.startsWith("Density ") ||
           line.startsWith("Env:") ||
+          line.startsWith("JSON:") ||
           line.includes("context_anomaly_runbook_density_")),
     );
   const maxActualDensityProseLineLength = Math.max(
@@ -574,7 +575,7 @@ if (args.includes("--self-test")) {
   const widenedEnvProseResult = evaluate(
     runbook.replace(
       "Env:",
-      "Env: widened",
+      "Env: widened-env-prose-width-sentinel-extra-long",
     ),
     maxLines,
   );
