@@ -1973,24 +1973,27 @@ if (args.includes("--self-test")) {
           {
             caseName: "swapped_default_output_headroom_json_doc_order",
             expectedFullOrderDoc: jsonHeadroomOrderDoc,
-            originalDoc: jsonHeadroomOrderDoc,
-            swappedDoc: swappedJsonHeadroomOrderDoc,
+            originalOrderDoc: jsonHeadroomOrderDoc,
+            swappedOrderDoc: swappedJsonHeadroomOrderDoc,
           },
           {
             caseName: "swapped_default_output_iterations_json_doc_order",
             expectedFullOrderDoc: jsonHeadroomOrderDoc,
-            originalDoc: jsonIterationsTextWidthPairDoc,
-            swappedDoc: swappedJsonIterationsTextWidthPairDoc,
+            originalOrderDoc: jsonIterationsTextWidthPairDoc,
+            swappedOrderDoc: swappedJsonIterationsTextWidthPairDoc,
           },
         ];
         for (const {
           caseName,
           expectedFullOrderDoc,
-          originalDoc,
-          swappedDoc,
+          originalOrderDoc,
+          swappedOrderDoc,
         } of jsonFieldOrderMutations) {
           assertSelfTestMissing(
-            evaluate(runbook.replace(originalDoc, swappedDoc), maxLines),
+            evaluate(
+              runbook.replace(originalOrderDoc, swappedOrderDoc),
+              maxLines,
+            ),
             "context_anomaly_runbook_density_missing_output_docs",
             expectedFullOrderDoc,
             caseName,
