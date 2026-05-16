@@ -697,6 +697,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${staleDensityDocCountError ?? "ok"}`);
     process.exit(1);
   }
+  const staleSoftStatusError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ soft=\w+/, " soft=over")),
+    result,
+  );
+  if (staleSoftStatusError !== "default_output_parse_mismatch=soft") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=soft");
+    console.error(`actual=${staleSoftStatusError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingDensityDocCountError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ dphr=\d+/, "")),
     result,
