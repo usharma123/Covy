@@ -263,12 +263,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density prose anchor count refresh | Keeps `anc` meaningful after adding failure continuation anchors. | Default and JSON output now report four required prose line anchors, and self-test ties the count to `requiredDensityDocLinePrefixes.length`. | Evidence: default output remains under text cap; `anc` and JSON anchor count equal the required line-prefix count. |
 | Context anomaly drilldown density prose anchor missing-field self-test | Proves the parser rejects omitted prose-anchor counts, not just stale values. | Density self-test now removes `anc` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted anchor count fails parser validation. |
 | Context anomaly drilldown density parsed count missing-field self-test | Proves the parser rejects omitted parser-field counts, not just stale values. | Density self-test now removes `parsed` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted parser-field count fails parser validation. |
+| Context anomaly drilldown density parsed stale-count self-test | Proves the parser rejects stale parser-field counts, not just omitted values. | Density self-test now mutates rendered default output to `parsed=0` and requires a field-specific mismatch. | Evidence: self-test output remains one line; stale parser-field count fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density parsed stale-count self-test | Proves the parser rejects stale parser-field counts, not just omitted values. | Mutate rendered default output to `parsed=0` in self-test and require a field-specific mismatch. | Compact metric: self-test output remains one line; correctness metric: stale parser-field count fails parser validation. |
+| Context anomaly drilldown density soft missing-field self-test | Proves the parser rejects omitted soft-row status, not just stale values. | Remove `soft` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted soft-row status fails parser validation. |
 
 ## Research Rules
 
