@@ -142,12 +142,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown summary budget help docs | Helps agents discover all summary-budget checker modes from the runbook. | The runbook summary-budget row now notes that `--help` lists default, JSON, self-test, and help modes. | Evidence: runbook remains under 45 lines and documented modes match help output. |
 | Context anomaly drilldown summary budget unknown-option docs | Helps agents recognize typoed checker flags quickly. | The summary-budget checker help now documents `context_anomaly_summary_budget_unknown_option` for bad flags. | Evidence: help stays five lines and `--bad-flag` exits with the documented error. |
 | Context anomaly drilldown summary budget JSON byte cap | Prevents summary-budget JSON from growing into another noisy artifact. | Summary-budget `--json` output now enforces `P28_CONTEXT_ANOMALY_SUMMARY_JSON_MAX` with a 768-byte default and reports `max_json_bytes`. | Evidence: JSON output is under the explicit cap; forced low cap fails with `context_anomaly_summary_budget_json_too_long` while required labels remain covered. |
+| Context anomaly drilldown summary budget JSON byte self-test | Proves the summary-budget JSON byte cap fails when the payload grows beyond budget. | The summary-budget self-test now verifies a forced low JSON byte cap reports `context_anomaly_summary_budget_json_too_long`. | Evidence: self-test output remains one line and covers the byte-cap failure code. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown summary budget JSON byte self-test | Proves the summary-budget JSON byte cap fails when the payload grows beyond budget. | Add byte-cap failure coverage to the checker self-test. | Compact metric: self-test output remains one line; correctness metric: forced low byte cap reports `context_anomaly_summary_budget_json_too_long`. |
+| Context anomaly drilldown summary budget byte docs | Helps maintainers tune the summary-budget checker without reading script code. | Document `P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINES`, `P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINE`, and `P28_CONTEXT_ANOMALY_SUMMARY_JSON_MAX`. | Compact metric: runbook remains under 45 lines; correctness metric: env var names match script configuration. |
 
 ## Research Rules
 

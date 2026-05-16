@@ -33,7 +33,7 @@ if (args.includes("--help")) {
       "Usage: node scripts/check_context_anomaly_summary_budget.mjs [--json|--self-test|--help]",
       "default: validate workflow summary line count and template width",
       "--json: print ok, budgets, labels, and max_json_bytes under a byte cap",
-      "--self-test: verify line, width, and missing-label failure modes",
+      "--self-test: verify line, width, missing-label, and JSON byte failure modes",
       "--help: print this help; bad flags fail with context_anomaly_summary_budget_unknown_option",
     ].join("\n"),
   );
@@ -156,6 +156,31 @@ function assertSelfTest(result, expectedCode) {
   }
 }
 
+function successPayload(result, jsonBudget) {
+  return {
+    ok: true,
+    line_count: result.line_count,
+    max_lines: result.max_lines,
+    max_template_line: result.max_template_line,
+    max_template_line_allowed: result.max_template_line_allowed,
+    max_json_bytes: jsonBudget,
+    labels: result.labels,
+  };
+}
+
+function jsonBudgetIssue(payload, jsonBudget) {
+  const json = JSON.stringify(payload);
+  if (json.length <= jsonBudget) {
+    return null;
+  }
+  return {
+    ok: false,
+    code: "context_anomaly_summary_budget_json_too_long",
+    actual_bytes: json.length,
+    max_json_bytes: jsonBudget,
+  };
+}
+
 const result = evaluate(workflowText, maxLines, maxTemplateLineLength);
 if (args.includes("--self-test")) {
   if (!result.ok) {
@@ -182,6 +207,10 @@ if (args.includes("--self-test")) {
     ),
     "context_anomaly_summary_budget_missing_labels",
   );
+  assertSelfTest(
+    jsonBudgetIssue(successPayload(result, 10), 10) ?? { code: "ok" },
+    "context_anomaly_summary_budget_json_too_long",
+  );
   console.log("context_anomaly_summary_budget_self_test_ok");
   process.exit(0);
 }
@@ -191,24 +220,14 @@ if (!result.ok) {
   fail(code, details);
 }
 
-const payload = {
-  ok: true,
-  line_count: result.line_count,
-  max_lines: result.max_lines,
-  max_template_line: result.max_template_line,
-  max_template_line_allowed: result.max_template_line_allowed,
-  max_json_bytes: maxJsonBytes,
-  labels: result.labels,
-};
+const payload = successPayload(result, maxJsonBytes);
 if (args.includes("--json")) {
-  const json = JSON.stringify(payload);
-  if (json.length > maxJsonBytes) {
-    fail("context_anomaly_summary_budget_json_too_long", {
-      actual_bytes: json.length,
-      max_json_bytes: maxJsonBytes,
-    });
+  const issue = jsonBudgetIssue(payload, maxJsonBytes);
+  if (issue) {
+    const { code, ok, ...details } = issue;
+    fail(code, details);
   }
-  console.log(json);
+  console.log(JSON.stringify(payload));
 } else {
   console.log(
     `context_anomaly_summary_budget_ok lines=${payload.line_count}/${payload.max_lines} max_template_line=${payload.max_template_line}/${payload.max_template_line_allowed}`,
