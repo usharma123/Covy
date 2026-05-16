@@ -1617,9 +1617,10 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`parsed_fields_checked`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`density_label_line_width`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`density_label_line_width`",
     "missing_density_label_line_width_json_doc",
   );
   assertSelfTestMissing(
