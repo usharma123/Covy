@@ -47,12 +47,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Reducer drift CI workflow | Keeps compact-output regressions visible in repository automation. | `.github/workflows/reducer-drift.yml` builds Packet28 and runs `target/debug/Packet28 verify reducer-drift --root . --json` when reducer core, verifier, MCP, or drift fixtures change. | Evidence: workflow file plus local `target/debug/Packet28 verify reducer-drift --root . --json`; default fixture reports two cases and zero issues. |
 | Cross-agent memory lint | Finds memories that are useful to one runtime but confusing or stale for another. | `Packet28 memory lint --root <path>` scans local memories plus hook-event runtime evidence for runtime-specific advice, stale repo paths, and unsupported hook/rewrite assumptions. | Evidence: `memory_lint_flags_stale_runtime_specific_memory_and_preserves_generic_memory`; isolated CLI smoke flags a stale Windsurf hook memory while preserving a generic project memory, with JSON under 768 bytes. |
 | Cross-agent memory lint MCP surface | Lets agents audit memory context before recall without shelling out. | MCP `packet28.memory_lint` runs the same local memory lint against the MCP root and returns compact issue counts plus sample issues. | Evidence: tool-list alias coverage includes `packet28_memory_lint`; CLI/core lint fixture proves stale runtime-specific memory is flagged while generic memory is preserved. |
+| Reducer drift trend dashboard | Shows whether reducer regressions are isolated or recurring across command families. | `Packet28 verify reducer-drift` appends compact history records under `.packet28`, and `Packet28 dashboard` surfaces latest drift status, latest issue count, failing families, and recurring issue kinds across JSON, text, TUI, and HTML output. | Evidence: `reducer_drift_tile_reports_recurring_and_cleared_latest_failure`; repeated rust-test missing-marker failures remain recurring after a later passing run clears latest failure. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Reducer drift trend dashboard | Shows whether reducer regressions are isolated or recurring across command families. | Persist reducer-drift verification summaries by family and add a dashboard tile for latest failures and recurring missing-marker categories. | Compact metric: dashboard tile under 768 bytes; correctness metric: repeated rust-test marker loss appears as recurring while a later pass clears latest failure. |
+| Memory lint CI gate | Keeps stale runtime-specific memories from accumulating silently. | Add a CI workflow or verifier mode that runs memory lint against curated repository memory fixtures rather than a developer's private `~/.packet28` store. | Compact metric: CI summary under 768 bytes; correctness metric: stale runtime-specific fixture fails while generic project memory passes. |
 
 ## Research Rules
 

@@ -423,6 +423,7 @@ fn run_reducer_drift(args: ReducerDriftVerifyArgs) -> Result<i32> {
         &root,
     ));
     let payload = verify_reducer_drift_payload(&fixture_path)?;
+    crate::cmd_dashboard::record_reducer_drift_history(&root, &payload)?;
     let ok = payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
 
     if args.json {

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::Result;
 use clap::Args;
 use packet28_daemon_core::{load_task_registry, task_artifact_dir};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::memory_store::{
@@ -59,6 +59,7 @@ struct DashboardReport {
     integration_health: BTreeMap<String, String>,
     windsurf_doctor_status: String,
     handoff_readiness: HandoffReadinessTile,
+    reducer_drift: ReducerDriftTile,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -86,6 +87,25 @@ struct HandoffReadinessTile {
     latest_blocking_categories: Vec<String>,
     recurring_categories: Vec<String>,
     regression_count: usize,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct ReducerDriftTile {
+    run_count: usize,
+    latest_status: String,
+    latest_issue_count: usize,
+    latest_failing_families: Vec<String>,
+    recurring_issue_kinds: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct ReducerDriftHistoryRecord {
+    created_at_unix_ms: i64,
+    ok: bool,
+    case_count: u64,
+    issue_count: u64,
+    failing_families: Vec<String>,
+    issue_kinds: Vec<String>,
 }
 
 pub fn run(args: DashboardArgs) -> Result<i32> {
@@ -138,6 +158,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
     let feedback = feedback_stats()?;
     let transcripts = transcript_stats()?;
     let handoff_readiness = handoff_readiness_tile(&root)?;
+    let reducer_drift = reducer_drift_tile(&root)?;
     let windsurf_rules = root.join(".windsurf").join("rules").join("packet28.md");
     let windsurf_status = if windsurf_rules.exists() {
         "rules_present"
@@ -174,6 +195,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         integration_health,
         windsurf_doctor_status: windsurf_status.to_string(),
         handoff_readiness,
+        reducer_drift,
     };
 
     let format = args.format.trim().to_ascii_lowercase();
@@ -229,12 +251,126 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
             "handoff_regression_count={}",
             report.handoff_readiness.regression_count
         );
+        println!(
+            "reducer_drift_latest_status={}",
+            report.reducer_drift.latest_status
+        );
+        println!(
+            "reducer_drift_latest_issue_count={}",
+            report.reducer_drift.latest_issue_count
+        );
     }
     Ok(0)
 }
 
 pub(crate) fn handoff_readiness_payload(root: &Path) -> Result<Value> {
     Ok(serde_json::to_value(handoff_readiness_tile(root)?)?)
+}
+
+pub(crate) fn record_reducer_drift_history(root: &Path, payload: &Value) -> Result<()> {
+    let record = reducer_drift_history_record(payload);
+    let path = reducer_drift_history_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut line = serde_json::to_string(&record)?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(line.as_bytes())?;
+    Ok(())
+}
+
+fn reducer_drift_history_record(payload: &Value) -> ReducerDriftHistoryRecord {
+    let mut case_family = BTreeMap::<String, String>::new();
+    if let Some(summaries) = payload.get("summaries").and_then(Value::as_array) {
+        for summary in summaries {
+            if let (Some(case_id), Some(family)) = (
+                summary.get("case_id").and_then(Value::as_str),
+                summary.get("family").and_then(Value::as_str),
+            ) {
+                case_family.insert(case_id.to_string(), family.to_string());
+            }
+        }
+    }
+    let mut failing_families = BTreeSet::<String>::new();
+    let mut issue_kinds = BTreeSet::<String>::new();
+    if let Some(issues) = payload.get("issues").and_then(Value::as_array) {
+        for issue in issues {
+            if let Some(kind) = issue.get("kind").and_then(Value::as_str) {
+                issue_kinds.insert(kind.to_string());
+            }
+            if let Some(case_id) = issue.get("case_id").and_then(Value::as_str) {
+                if let Some(family) = case_family.get(case_id) {
+                    failing_families.insert(family.clone());
+                }
+            }
+        }
+    }
+    ReducerDriftHistoryRecord {
+        created_at_unix_ms: now_unix_ms(),
+        ok: payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        case_count: payload
+            .get("case_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        issue_count: payload
+            .get("issue_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        failing_families: failing_families.into_iter().collect(),
+        issue_kinds: issue_kinds.into_iter().collect(),
+    }
+}
+
+fn reducer_drift_tile(root: &Path) -> Result<ReducerDriftTile> {
+    let records = load_reducer_drift_history(root, 32)?;
+    if records.is_empty() {
+        return Ok(ReducerDriftTile {
+            latest_status: "none".to_string(),
+            ..ReducerDriftTile::default()
+        });
+    }
+    let latest = records.last().expect("non-empty reducer drift history");
+    let mut counts = BTreeMap::<String, usize>::new();
+    for record in &records {
+        for kind in &record.issue_kinds {
+            *counts.entry(kind.clone()).or_default() += 1;
+        }
+    }
+    let recurring_issue_kinds = counts
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(kind, _)| kind.clone())
+        .collect::<Vec<_>>();
+    Ok(ReducerDriftTile {
+        run_count: records.len(),
+        latest_status: if latest.ok { "ready" } else { "blocked" }.to_string(),
+        latest_issue_count: latest.issue_count as usize,
+        latest_failing_families: latest.failing_families.clone(),
+        recurring_issue_kinds,
+    })
+}
+
+fn load_reducer_drift_history(root: &Path, limit: usize) -> Result<Vec<ReducerDriftHistoryRecord>> {
+    let path = reducer_drift_history_path(root);
+    let Ok(raw) = fs::read_to_string(path) else {
+        return Ok(Vec::new());
+    };
+    let mut records = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<ReducerDriftHistoryRecord>(line).ok())
+        .collect::<Vec<_>>();
+    if records.len() > limit {
+        records = records.split_off(records.len().saturating_sub(limit));
+    }
+    Ok(records)
+}
+
+fn reducer_drift_history_path(root: &Path) -> std::path::PathBuf {
+    root.join(".packet28").join("reducer-drift-history.jsonl")
 }
 
 fn handoff_readiness_tile(root: &Path) -> Result<HandoffReadinessTile> {
@@ -415,6 +551,13 @@ fn category_was_cleared_then_reintroduced(records: &[Vec<String>], category: &st
     false
 }
 
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
+}
+
 fn record_dashboard_route_roi(
     route_roi: &mut BTreeMap<String, DashboardRouteRoi>,
     record: &crate::savings_analytics::RunSavingsRecord,
@@ -516,6 +659,10 @@ fn render_dashboard_tui(report: &DashboardReport, panel: DashboardPanel) -> Stri
             out.push_str(&format!(
                 "handoff_latest_status={}\nhandoff_regression_count={}\n",
                 report.handoff_readiness.latest_status, report.handoff_readiness.regression_count
+            ));
+            out.push_str(&format!(
+                "reducer_drift_latest_status={}\nreducer_drift_latest_issue_count={}\n",
+                report.reducer_drift.latest_status, report.reducer_drift.latest_issue_count
             ));
             out.push_str("handoff_latest_blockers:\n");
             push_tui_list(
@@ -671,6 +818,11 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
         "Handoff regressions",
         &report.handoff_readiness.regression_count.to_string(),
     );
+    push_metric(
+        &mut html,
+        "Reducer drift",
+        &report.reducer_drift.latest_status,
+    );
     html.push_str("</section>");
 
     html.push_str("<h2>Memory Topics</h2><table><tr><th>Topic</th><th>Count</th></tr>");
@@ -727,6 +879,25 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     ));
     html.push_str("</table>");
 
+    html.push_str("<h2>Reducer Drift</h2><table><tr><th>Signal</th><th>Value</th></tr>");
+    html.push_str(&format!(
+        "<tr><td>Latest status</td><td>{}</td></tr>",
+        escape_html(&report.reducer_drift.latest_status)
+    ));
+    html.push_str(&format!(
+        "<tr><td>Latest issues</td><td>{}</td></tr>",
+        report.reducer_drift.latest_issue_count
+    ));
+    html.push_str(&format!(
+        "<tr><td>Failing families</td><td><code>{}</code></td></tr>",
+        escape_html(&report.reducer_drift.latest_failing_families.join(","))
+    ));
+    html.push_str(&format!(
+        "<tr><td>Recurring issues</td><td><code>{}</code></td></tr>",
+        escape_html(&report.reducer_drift.recurring_issue_kinds.join(","))
+    ));
+    html.push_str("</table>");
+
     html.push_str("<h2>Integration Health</h2><table><tr><th>Integration</th><th>Status</th></tr>");
     for (name, status) in &report.integration_health {
         html.push_str(&format!(
@@ -754,4 +925,50 @@ fn escape_html(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn drift_payload(ok: bool, issue_count: u64) -> Value {
+        let issues = if issue_count == 0 {
+            Vec::new()
+        } else {
+            vec![serde_json::json!({
+                "case_id": "cargo-failing-test-name",
+                "kind": "missing_marker",
+                "detail": "FAIL drift_marker"
+            })]
+        };
+        serde_json::json!({
+            "ok": ok,
+            "case_count": 1,
+            "issue_count": issue_count,
+            "issues": issues,
+            "summaries": [{
+                "case_id": "cargo-failing-test-name",
+                "family": "rust",
+                "canonical_kind": "rust_test",
+                "summary": "cargo test reported 0 passed and 1 failed"
+            }]
+        })
+    }
+
+    #[test]
+    fn reducer_drift_tile_reports_recurring_and_cleared_latest_failure() {
+        let root = tempfile::tempdir().unwrap();
+        record_reducer_drift_history(root.path(), &drift_payload(false, 1)).unwrap();
+        record_reducer_drift_history(root.path(), &drift_payload(false, 1)).unwrap();
+        record_reducer_drift_history(root.path(), &drift_payload(true, 0)).unwrap();
+
+        let tile = reducer_drift_tile(root.path()).unwrap();
+
+        assert_eq!(tile.run_count, 3);
+        assert_eq!(tile.latest_status, "ready");
+        assert_eq!(tile.latest_issue_count, 0);
+        assert!(tile.latest_failing_families.is_empty());
+        assert_eq!(tile.recurring_issue_kinds, vec!["missing_marker"]);
+        assert!(serde_json::to_string(&tile).unwrap().len() < 768);
+    }
 }
