@@ -315,12 +315,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label prose recovery | Restores density-label line headroom after linking `jhead` to its env knob. | The density-label prose line now removes non-semantic spaces around compact label pairs while preserving required docs. | Evidence: density-label line shrinks; required label docs still pass. |
 | Context anomaly drilldown density label prose spacing guard | Prevents future edits from re-expanding compact label prose. | Self-test now mutates compact label separators back to spaced form and requires density-label width growth. | Evidence: spacing mutation is non-noop; compact label line remains the shorter baseline. |
 | Context anomaly drilldown density label width metric | Gives maintainers a direct number for label-line pressure instead of inferring from global prose max. | Default output now reports `dlab`, JSON reports `density_label_line_width`, and parser/JSON parity require both. | Evidence: text output stays under width cap; JSON/default fields match the measured label width. |
+| Context anomaly drilldown density label width docs guard | Helps maintainers preserve the meaning of the new `dlab` field without reading checker source. | Self-test now has a dedicated missing-alias mutation for `dlab` docs. | Evidence: docs stay inside row cap; missing `dlab` alias fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label width docs guard | Helps maintainers preserve the meaning of the new `dlab` field without reading checker source. | Add a dedicated self-test mutation for the `dlab` alias documentation. | Compact metric: docs stay inside row cap; correctness metric: missing `dlab` alias fails self-test. |
+| Context anomaly drilldown density label width JSON docs guard | Helps JSON consumers find the full `density_label_line_width` field without source reading. | Add a dedicated self-test mutation for the JSON field doc phrase. | Compact metric: JSON prose stays below current prose max; correctness metric: missing field docs fail self-test. |
 
 ## Research Rules
 

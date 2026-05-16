@@ -1214,6 +1214,11 @@ if (args.includes("--self-test")) {
     "missing_adocs_alias_glossary",
   );
   assertSelfTest(
+    evaluate(runbook.replace("`dlab`=density label width", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "missing_dlab_alias_glossary",
+  );
+  assertSelfTest(
     evaluate(
       runbook.replace(
         "`width` is capped by `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`",
