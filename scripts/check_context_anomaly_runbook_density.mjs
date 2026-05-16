@@ -1673,9 +1673,11 @@ if (args.includes("--self-test")) {
     `\`max_json_bytes=${defaultMaxJsonBytes}\``,
     "missing_max_json_bytes_doc",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    `\`help<=${maxHelpLineLength}\``,
+    "missing_help_cap_doc",
   );
   assertSelfTestMissing(
     evaluate(runbook.replaceAll("Env:", ""), maxLines),

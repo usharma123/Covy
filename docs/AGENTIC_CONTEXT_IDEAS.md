@@ -379,12 +379,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper width-field adoption | Reuses the missing-detail helper for another single JSON field-doc removal mutation. | The `text_width_docs_checked` JSON field-doc mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers width field-doc detail checks. |
 | Context anomaly drilldown density missing-detail helper headroom-field adoption | Reuses the missing-detail helper for the remaining headroom JSON field-doc removal mutation. | The `default_output_headroom` JSON field-doc mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers headroom field-doc detail checks. |
 | Context anomaly drilldown density missing-detail helper JSON cap doc adoption | Reuses the missing-detail helper for the compact JSON byte-cap docs mutation. | The `max_json_bytes=640` docs mutation now uses `assertSelfTestMissing` for its numeric docs token. | Evidence: no output growth; helper covers numeric docs detail checks. |
+| Context anomaly drilldown density missing-detail helper help-cap doc adoption | Reuses the missing-detail helper for the compact help-width docs mutation. | The `help<=120` docs mutation now uses `assertSelfTestMissing` for its numeric docs token. | Evidence: no output growth; helper covers help-cap docs detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper help-cap doc adoption | Reuses the missing-detail helper for the compact help-width docs mutation. | Convert the `help<=120` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers help-cap docs detail checks. |
+| Context anomaly drilldown density missing-detail helper text-headroom doc adoption | Reuses the missing-detail helper for the compact text-headroom docs mutation. | Convert the `thead>=8` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers text-headroom docs detail checks. |
 
 ## Research Rules
 
