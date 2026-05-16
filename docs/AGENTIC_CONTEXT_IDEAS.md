@@ -289,12 +289,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density alias-doc missing-field self-test | Proves parser validation rejects omitted alias-doc counts, not just stale values. | Density self-test now removes `adocs` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted alias-doc count fails parser validation. |
 | Context anomaly drilldown density parser coverage audit | Prevents future compact fields from being added without stale-value parser coverage. | Density self-test now compares expected parser-value keys with every default output label. | Evidence: self-test output remains one line; missing parser expectation fails self-test. |
 | Context anomaly drilldown density parser mutation table | Reduces repeated self-test boilerplate so future compact fields get stale and missing mutations consistently. | Density self-test now runs a table-driven missing/stale mutation sweep for every default output label. | Evidence: self-test output remains one line; every field-specific mutation failure remains covered. |
+| Context anomaly drilldown density parser mutation cleanup | Removes duplicated parser mutation assertions now that a table-driven sweep covers every compact field. | Deleted the legacy one-off default-output mutation checks covered by the table. | Evidence: self-test output remains one line; table-driven mutations still cover every default output label. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density parser mutation cleanup | Removes duplicated parser mutation assertions now that a table-driven sweep covers every compact field. | Delete the legacy one-off default-output mutation checks covered by the table. | Compact metric: self-test output remains one line; correctness metric: table-driven mutations still cover every default output label. |
+| Context anomaly drilldown density stale-value safety audit | Prevents the mutation table from using a stale value that accidentally equals the current rendered value. | Assert every table stale value differs from the parsed default output value before testing mismatch behavior. | Compact metric: self-test output remains one line; correctness metric: stale mutation values cannot become no-ops. |
 
 ## Research Rules
 
