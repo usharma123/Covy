@@ -2334,21 +2334,24 @@ if (args.includes("--self-test")) {
     );
   };
   assertJsonMaxFailureShapeSelfTests();
-  assertEnvFailure(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-    ["--json"],
-    "context_anomaly_runbook_density_json_too_long",
-  );
-  assertEnvFailureOutput(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-    ["--json"],
-    ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
-  );
-  assertEnvFailureExcludes(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-    ["--json"],
-    '"default_output_iterations"',
-  );
+  const assertJsonHeadroomMinFailureShapeSelfTests = () => {
+    assertEnvFailure(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
+      ["--json"],
+      "context_anomaly_runbook_density_json_too_long",
+    );
+    assertEnvFailureOutput(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
+      ["--json"],
+      ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
+    );
+    assertEnvFailureExcludes(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
+      ["--json"],
+      '"default_output_iterations"',
+    );
+  };
+  assertJsonHeadroomMinFailureShapeSelfTests();
   assertSelfTest(
     jsonBudgetIssue(successPayload(result, workflowResult, 10), 10) ?? {
       code: "ok",

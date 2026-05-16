@@ -637,12 +637,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test text headroom output order | Keeps text headroom outputs before JSON max failures. | Verified `assertTextHeadroomOutputSelfTests()` sits after text JSON failure shape coverage and before `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX` failure coverage. | Evidence: no runtime output growth; text headroom output remains before JSON max failure coverage. |
 | Context anomaly drilldown density self-test JSON max shape wrapper | Names JSON max failure code, shape, and iteration exclusion checks. | Extracted `assertJsonMaxFailureShapeSelfTests()` around `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX` failure, output, and exclusion assertions. | Evidence: no runtime output growth; JSON max failure shape remains covered. |
 | Context anomaly drilldown density self-test JSON max shape order | Keeps JSON max failure shape before JSON headroom-min checks. | Verified `assertJsonMaxFailureShapeSelfTests()` sits after text headroom output coverage and before `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` failure coverage. | Evidence: no runtime output growth; JSON max failure shape remains before headroom-min coverage. |
+| Context anomaly drilldown density self-test JSON headroom-min wrapper | Names JSON headroom-min failure code, shape, and iteration exclusion checks. | Extracted `assertJsonHeadroomMinFailureShapeSelfTests()` around `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` failure, output, and exclusion assertions. | Evidence: no runtime output growth; JSON headroom-min failure shape remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON headroom-min wrapper | Names JSON headroom-min failure code, shape, and iteration exclusion checks. | Extract `assertJsonHeadroomMinFailureShapeSelfTests()` around `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` failure, output, and exclusion assertions. | Compact metric: no runtime output growth; correctness metric: JSON headroom-min failure shape remains covered. |
+| Context anomaly drilldown density self-test JSON headroom-min order | Keeps JSON headroom-min failure shape before direct budget unit coverage. | Verify `assertJsonHeadroomMinFailureShapeSelfTests()` sits after JSON max failure shape coverage and before the direct `jsonBudgetIssue()` assertion. | Compact metric: no runtime output growth; correctness metric: JSON headroom-min failure shape remains before direct budget coverage. |
 
 ## Research Rules
 
