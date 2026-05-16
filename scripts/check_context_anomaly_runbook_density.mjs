@@ -1536,6 +1536,17 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_workflow_missing_commands",
     "missing_workflow_failure_doc_detail",
   );
+  for (const [failureCodeIndex, failureCode] of requiredFailureCodes.entries()) {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replace(failureCode, `drifted_failure_code_${failureCodeIndex}`),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_failure_docs",
+      failureCode,
+      `drifted_${failureCode}`,
+    );
+  }
   assertSelfTestMissing(
     evaluate(runbook.replaceAll("`wf`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
