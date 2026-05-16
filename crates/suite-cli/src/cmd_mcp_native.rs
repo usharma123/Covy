@@ -204,6 +204,14 @@ pub(crate) struct Packet28HandoffCompressionArgs {
     pub(crate) budget_tokens: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffDependencyLintArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1516,6 +1524,45 @@ pub(crate) fn handle_packet28_handoff_compress(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_lint_dependencies(
+    root: &Path,
+    args: Packet28HandoffDependencyLintArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!(
+            "packet28.handoff_lint_dependencies requires task_id"
+        ));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.handoff_lint_dependencies requires artifact_id or context_version")
+    })?;
+    let payload = read_handoff_payload(root, task_id, &artifact_id, "handoff dependency lint")?;
+    let available_artifacts = available_handoff_artifacts(&payload);
+    let referenced_artifacts = referenced_handoff_artifacts(&payload);
+    let mut issues = Vec::new();
+    for reference in referenced_artifacts {
+        if !available_artifacts
+            .iter()
+            .any(|available| available == &reference)
+        {
+            issues.push(json!({
+                "kind": "missing_artifact",
+                "reference": reference,
+                "reason": "referenced artifact handle is absent from artifact_id and evidence_artifact_ids",
+            }));
+        }
+    }
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "ok": issues.is_empty(),
+        "issue_count": issues.len(),
+        "issues": issues,
+        "summary": format!("handoff_dependency_lint issue_count={}", issues.len()),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -1530,6 +1577,59 @@ fn read_handoff_payload(
         )
     })?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn available_handoff_artifacts(payload: &Value) -> Vec<String> {
+    let mut artifacts = Vec::new();
+    if let Some(artifact_id) = payload.get("artifact_id").and_then(Value::as_str) {
+        append_unique(&mut artifacts, artifact_id.to_string());
+    }
+    if let Some(ids) = payload
+        .get("evidence_artifact_ids")
+        .and_then(Value::as_array)
+    {
+        for id in ids.iter().filter_map(Value::as_str) {
+            append_unique(&mut artifacts, id.to_string());
+        }
+    }
+    artifacts
+}
+
+fn referenced_handoff_artifacts(payload: &Value) -> Vec<String> {
+    let mut references = Vec::new();
+    collect_artifact_references(
+        payload
+            .get("brief")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        &mut references,
+    );
+    if let Some(sections) = payload.get("sections").and_then(Value::as_array) {
+        for section in sections {
+            collect_artifact_references(
+                section
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                &mut references,
+            );
+        }
+    }
+    references
+}
+
+fn collect_artifact_references(text: &str, references: &mut Vec<String>) {
+    for token in text.split_whitespace() {
+        let token = token.trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '`' | '\'' | '"' | ',' | '.' | ';' | ':' | ')' | '(' | '[' | ']'
+            )
+        });
+        if token.starts_with("artifact-") || token.starts_with("raw-") {
+            append_unique(references, token.to_string());
+        }
+    }
 }
 
 fn section_identifier(section: &Value) -> String {
