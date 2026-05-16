@@ -16,6 +16,8 @@ use crate::memory_store::{
 };
 use crate::savings_analytics::load_run_savings;
 
+const MAX_CONTEXT_ANOMALIES: usize = 4;
+
 #[derive(Args)]
 pub struct DashboardArgs {
     #[arg(long, default_value = ".")]
@@ -629,15 +631,41 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
         });
     }
 
-    anomalies.sort_by_key(|anomaly| match anomaly.severity.as_str() {
-        "high" => 0,
-        "medium" => 1,
-        _ => 2,
-    });
+    finalize_context_anomalies(&mut anomalies);
     Ok(ContextAnomalyDigest {
         anomaly_count: anomalies.len(),
         anomalies,
     })
+}
+
+fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) {
+    anomalies.sort_by_key(|anomaly| {
+        (
+            context_anomaly_severity_rank(&anomaly.severity),
+            context_anomaly_category_rank(&anomaly.category),
+            anomaly.category.clone(),
+        )
+    });
+    anomalies.truncate(MAX_CONTEXT_ANOMALIES);
+}
+
+fn context_anomaly_severity_rank(severity: &str) -> usize {
+    match severity {
+        "high" => 0,
+        "medium" => 1,
+        _ => 2,
+    }
+}
+
+fn context_anomaly_category_rank(category: &str) -> usize {
+    match category {
+        "handoff_readiness" => 0,
+        "reducer_drift" => 1,
+        "memory_lint" => 2,
+        "stale_changed_paths" => 3,
+        "fallback_provenance" => 4,
+        _ => 99,
+    }
 }
 
 fn handoff_readiness_tile(root: &Path) -> Result<HandoffReadinessTile> {
@@ -1269,6 +1297,16 @@ mod tests {
         })
     }
 
+    fn anomaly(category: &str, severity: &str) -> ContextAnomaly {
+        ContextAnomaly {
+            category: category.to_string(),
+            severity: severity.to_string(),
+            signal: "fixture".to_string(),
+            next_check: "Packet28 digest --json".to_string(),
+            repair_hint: "fixture hint".to_string(),
+        }
+    }
+
     #[test]
     fn reducer_drift_tile_reports_recurring_and_cleared_latest_failure() {
         let root = tempfile::tempdir().unwrap();
@@ -1397,5 +1435,31 @@ mod tests {
             .repair_hint
             .contains("reread changed paths"));
         assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn context_anomaly_finalizer_caps_mediums_after_high_anomalies() {
+        let mut anomalies = vec![
+            anomaly("fallback_provenance", "medium"),
+            anomaly("stale_changed_paths", "medium"),
+            anomaly("memory_lint", "high"),
+            anomaly("extra_medium_a", "medium"),
+            anomaly("reducer_drift", "high"),
+            anomaly("extra_medium_b", "medium"),
+        ];
+
+        finalize_context_anomalies(&mut anomalies);
+
+        assert_eq!(anomalies.len(), MAX_CONTEXT_ANOMALIES);
+        assert_eq!(anomalies[0].category, "reducer_drift");
+        assert_eq!(anomalies[1].category, "memory_lint");
+        assert!(anomalies
+            .iter()
+            .take(2)
+            .all(|anomaly| anomaly.severity == "high"));
+        assert!(anomalies
+            .iter()
+            .all(|anomaly| anomaly.category != "extra_medium_b"));
+        assert!(serde_json::to_string(&anomalies).unwrap().len() < 1024);
     }
 }
