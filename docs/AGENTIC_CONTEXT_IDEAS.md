@@ -264,12 +264,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density prose anchor missing-field self-test | Proves the parser rejects omitted prose-anchor counts, not just stale values. | Density self-test now removes `anc` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted anchor count fails parser validation. |
 | Context anomaly drilldown density parsed count missing-field self-test | Proves the parser rejects omitted parser-field counts, not just stale values. | Density self-test now removes `parsed` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted parser-field count fails parser validation. |
 | Context anomaly drilldown density parsed stale-count self-test | Proves the parser rejects stale parser-field counts, not just omitted values. | Density self-test now mutates rendered default output to `parsed=0` and requires a field-specific mismatch. | Evidence: self-test output remains one line; stale parser-field count fails parser validation. |
+| Context anomaly drilldown density soft missing-field self-test | Proves the parser rejects omitted soft-row status, not just stale values. | Density self-test now removes `soft` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted soft-row status fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density soft missing-field self-test | Proves the parser rejects omitted soft-row status, not just stale values. | Remove `soft` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted soft-row status fails parser validation. |
+| Context anomaly drilldown density command count parser coverage | Proves parser validation checks command-count drift, not only label/docs counts. | Mutate `cmds=0` in rendered default output and require a field-specific mismatch. | Compact metric: self-test output remains one line; correctness metric: stale command count fails parser validation. |
 
 ## Research Rules
 
