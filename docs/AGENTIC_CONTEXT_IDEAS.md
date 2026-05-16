@@ -644,12 +644,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test help includes wrapper | Names required help-output token checks. | Extracted `assertHelpIncludesSelfTests()` around the required help token loop. | Evidence: no runtime output growth; help output still covers modes, unknown-option code, and soft-row env docs. |
 | Context anomaly drilldown density self-test help includes order | Keeps help-token coverage before help line-width checks. | Verified `assertHelpIncludesSelfTests()` sits after direct JSON budget coverage and before the `tooWideHelpLine` check. | Evidence: no runtime output growth; help token coverage remains before help width coverage. |
 | Context anomaly drilldown density self-test help width wrapper | Names max help-line width self-test coverage. | Extracted `assertHelpLineWidthSelfTest()` around the `tooWideHelpLine` check. | Evidence: no runtime output growth; help width failures still report line length diagnostics. |
+| Context anomaly drilldown density self-test help width order | Keeps help width checks before self-test success output. | Verified `assertHelpLineWidthSelfTest()` sits after help-token coverage and before the `context_anomaly_runbook_density_self_test_ok` success log. | Evidence: no runtime output growth; help width coverage remains before success output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test help width order | Keeps help width checks before self-test success output. | Verify `assertHelpLineWidthSelfTest()` sits after help-token coverage and before the `context_anomaly_runbook_density_self_test_ok` success log. | Compact metric: no runtime output growth; correctness metric: help width coverage remains before success output. |
+| Context anomaly drilldown density self-test terminal helper audit | Finds remaining unnamed self-test assertions after the help-width wrapper. | Audit the terminal `--self-test` block for direct assertions that should become named helpers or mark the block fully grouped. | Compact metric: no runtime output growth; correctness metric: remaining self-test coverage has named ownership or an explicit no-op audit record. |
 
 ## Research Rules
 
