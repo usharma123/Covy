@@ -498,6 +498,22 @@ fn verify_experiment_manifest(
                 detail: experiment.fallback_reasons.join("; "),
             });
         }
+        if experiment.allow_fallbacks {
+            for reason in experiment
+                .fallback_reasons
+                .iter()
+                .map(|reason| reason.trim())
+                .filter(|reason| !reason.is_empty())
+            {
+                if !artifact_evidence.contains(reason) {
+                    issues.push(ExperimentIssue {
+                        experiment_id: issue_id.to_string(),
+                        kind: "missing_fallback_artifact_evidence".to_string(),
+                        detail: reason.to_string(),
+                    });
+                }
+            }
+        }
     }
     issues
 }

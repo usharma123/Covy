@@ -2329,7 +2329,7 @@ fn test_verify_experiments_checks_manifest_evidence() {
     fs::create_dir_all(root.path().join("docs/experiments/runtime-live")).unwrap();
     fs::write(
         root.path().join("docs/experiments/runtime-live/SMOKE.md"),
-        "raw smoke evidence\nsaved_tokens: 32\n",
+        "raw smoke evidence\nsaved_tokens: 32\nunsupported fallback\n",
     )
     .unwrap();
     let manifest = root.path().join("experiments.json");
@@ -2414,6 +2414,46 @@ fn test_verify_experiments_checks_manifest_evidence() {
             "\"kind\":\"missing_runtime_version\"",
         ))
         .stdout(predicate::str::contains("\"kind\":\"unexpected_fallback\""));
+
+    fs::write(
+        &manifest,
+        r#"{
+  "experiments": [
+    {
+      "id": "bad-allowed-fallback",
+      "workflow": "Claude Code hook smoke",
+      "commands": ["Packet28 doctor --json"],
+      "artifacts": ["docs/experiments/runtime-live/SMOKE.md"],
+      "metrics": [
+        {"name": "saved_tokens", "value": 32, "min": 10, "evidence": ["saved_tokens: 32"]}
+      ],
+      "fallback_reasons": ["not present in artifact"],
+      "allow_fallbacks": true,
+      "runtime_versions": [
+        {"name": "claude-code", "version": "2.1.139"}
+      ]
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    suite_cmd()
+        .current_dir(root.path())
+        .args([
+            "verify",
+            "experiments",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "\"kind\":\"missing_fallback_artifact_evidence\"",
+        ));
 
     fs::write(
         &manifest,
