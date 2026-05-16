@@ -522,12 +522,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation identity field sample name | Makes the expected/actual identity field sample helper align with sampled identity field naming. | Renamed `defaultOutputMutationFieldIdentitySample()` to `defaultOutputMutationIdentityFieldSample()`. | Evidence: no runtime output growth; sample helper still returns expected and actual mutation fields. |
 | Context anomaly drilldown density self-test default output mutation identity field sample order | Keeps identity field sample construction beside its details consumer. | Verified `defaultOutputMutationIdentityFieldSample()` sits above `defaultOutputMutationIdentityFieldDetails(sample)`. | Evidence: no runtime output growth; sample construction remains adjacent to diagnostics using its shape. |
 | Context anomaly drilldown density self-test default output mutation expected identity fields helper name | Makes expected-field helper naming match the identity field sample. | Renamed `expectedDefaultOutputMutationFields()` to `expectedDefaultOutputMutationIdentityFields()`. | Evidence: no runtime output growth; identity sample still uses parser field list for expected fields. |
+| Context anomaly drilldown density self-test default output mutation actual identity fields helper name | Makes actual-field helper naming match the identity field sample. | Renamed `actualDefaultOutputMutationFields()` to `actualDefaultOutputMutationIdentityFields()`. | Evidence: no runtime output growth; identity sample still uses mutation field helper for actual fields. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation actual identity fields helper name | Makes actual-field helper naming match the identity field sample. | Rename `actualDefaultOutputMutationFields()` to `actualDefaultOutputMutationIdentityFields()`. | Compact metric: no runtime output growth; correctness metric: identity sample still uses mutation field helper for actual fields. |
+| Context anomaly drilldown density self-test default output mutation identity fields helper order | Keeps expected and actual identity field helpers beside the sample using them. | Verify expected and actual identity field helpers sit directly above `defaultOutputMutationIdentityFieldSample()`. | Compact metric: no runtime output growth; correctness metric: expected/actual sources remain adjacent to their sample object. |
 
 ## Research Rules
 
