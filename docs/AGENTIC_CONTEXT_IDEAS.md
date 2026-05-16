@@ -91,12 +91,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown budget runbook note | Helps agents interpret workflow formatter budget lines without reading the script. | The context anomaly runbook now explains that workflow formatter budget lines map to smoke script `actual_len` and `max_len` fields. | Evidence: runbook remains under 45 lines and documents the `actual/max` notation next to the smoke command. |
 | Context anomaly drilldown JSON smoke docs | Lets agents use machine-readable smoke output directly in automation. | The context anomaly runbook command table now documents `node scripts/check_context_anomaly_hidden_samples.mjs --json` and its fields. | Evidence: runbook remains under 45 lines; JSON smoke output includes `actual_len`, `max_len`, and escaped `summary`. |
 | Context anomaly drilldown script self-test flag | Makes the smoke script independently verify its normal, JSON, and budget-failure modes. | The hidden-sample smoke script now has `--self-test`, which checks fixture equality, JSON payload fields, and an intentionally low budget. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` prints one success line; the runbook documents the self-test command. |
+| Context anomaly drilldown self-test workflow gate | Makes CI use the smoke script's own self-test before rendering formatter summaries. | The context-anomalies workflow now runs `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` before collecting formatter JSON. | Evidence: no summary lines were added; workflow fails before summary rendering if the script self-test detects drift. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown self-test workflow gate | Makes CI use the smoke script's own self-test before rendering formatter summaries. | Run `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` inside the context-anomalies workflow summary step. | Compact metric: no added summary lines; correctness metric: workflow fails if script self-test detects formatter drift. |
+| Context anomaly drilldown script option guard | Prevents typoed smoke-script flags from silently running the default formatter path. | Reject unknown command-line options in `scripts/check_context_anomaly_hidden_samples.mjs`. | Compact metric: no change to success output; correctness metric: `--bad-flag` exits nonzero with a clear error. |
 
 ## Research Rules
 

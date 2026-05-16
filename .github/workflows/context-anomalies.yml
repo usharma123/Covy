@@ -63,6 +63,7 @@ jobs:
           hidden_sample_jq='def cat_escape: gsub("%"; "%25") | gsub("="; "%3D") | gsub(";"; "%3B") | gsub("\n"; "%0A"); def signal_escape: gsub("%"; "%25") | gsub(";"; "%3B") | gsub("\n"; "%0A"); map((.category | cat_escape) + "=" + (.signal | signal_escape)) | join(";")'
           hidden_sample_fixture_summary="$(jq -r "$hidden_sample_jq" docs/context-anomalies/hidden-samples-delimiters.json)"
           test "$hidden_sample_fixture_summary" = "$(cat docs/context-anomalies/hidden-samples-delimiters.summary)"
+          node scripts/check_context_anomaly_hidden_samples.mjs --self-test
           hidden_sample_smoke_json="$(node scripts/check_context_anomaly_hidden_samples.mjs --json)"
           hidden_sample_smoke="$(printf '%s\n' "$hidden_sample_smoke_json" | jq -r '.summary')"
           hidden_sample_smoke_len="$(printf '%s\n' "$hidden_sample_smoke_json" | jq -r '.actual_len')"
