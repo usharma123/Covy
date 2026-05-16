@@ -11,6 +11,7 @@ Use this command table before treating a compact anomaly summary as complete:
 | Self-test formatter | `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` | Prints one `context_anomaly_hidden_sample_self_test_ok` line. |
 | List formatter modes | `node scripts/check_context_anomaly_hidden_samples.mjs --help` | Lists every accepted mode in under eight lines. |
 | Audit formatter flow | `node scripts/audit_context_anomaly_hidden_samples.mjs` | Runs the smoke modes, fixture dashboard, digest, and verifier checks. |
+| Audit release gate | `node scripts/audit_context_anomaly_hidden_samples.mjs --strict` | Uses release-like `--max-high 0` for the verifier check. |
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 
 `Packet28 dashboard --root . --json` reads live history and reports latest status, high count, hidden categories, and recurring hidden categories.

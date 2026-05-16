@@ -108,12 +108,14 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit workflow path | Keeps the audit script covered by the context-anomalies workflow triggers. | The context-anomalies workflow path filters now include `scripts/audit_context_anomaly_hidden_samples.mjs` for pull requests and pushes. | Evidence: two path-filter entries were added, so audit script changes trigger the workflow. |
 | Context anomaly drilldown audit workflow execution | Makes CI run the same one-command local smoke audit instead of only the lower-level pieces. | The context-anomalies workflow now runs `node scripts/audit_context_anomaly_hidden_samples.mjs` after building Packet28. | Evidence: audit step adds no summary lines and fails the workflow if the local hidden-sample audit fails. |
 | Context anomaly drilldown audit threshold docs | Helps agents understand why the audit script allows two live high anomalies while the workflow threshold step remains stricter. | The context anomaly runbook now distinguishes the audit script's `--max-high 2` smoke tolerance from the workflow release gate's `--max-high 0`. | Evidence: runbook remains under 45 lines and names both thresholds next to the audit command context. |
+| Context anomaly drilldown audit strict-mode flag | Lets agents run the audit script with the same strict high-anomaly budget as release CI. | `scripts/audit_context_anomaly_hidden_samples.mjs --strict` now uses `--max-high 0` for the verifier check while default mode remains tolerant at `--max-high 2`. | Evidence: default audit still passes; strict mode exits nonzero with `context_anomaly_hidden_sample_audit_strict_failed`, `high=2`, and `max_high=0` in the current live state. |
+| Context anomaly drilldown audit option guard | Prevents typoed audit-script flags from silently using tolerant mode. | The audit script now rejects unknown command-line options before running smoke or verifier checks. | Evidence: default audit output is unchanged; `node scripts/audit_context_anomaly_hidden_samples.mjs --bad-flag` exits nonzero with `context_anomaly_hidden_sample_audit_unknown_option`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit strict-mode flag | Lets agents run the audit script with the same strict high-anomaly budget as release CI. | Add a `--strict` flag to the audit script that uses `--max-high 0` for the verifier check. | Compact metric: strict failure output stays under eight lines; correctness metric: default audit remains tolerant while strict mode matches release threshold. |
+| Context anomaly drilldown audit help | Gives agents a compact usage string for tolerant and strict audit modes. | Add `--help` output to `scripts/audit_context_anomaly_hidden_samples.mjs` listing default and `--strict` modes. | Compact metric: help output under six lines; correctness metric: help lists every accepted flag and exits zero. |
 
 ## Research Rules
 

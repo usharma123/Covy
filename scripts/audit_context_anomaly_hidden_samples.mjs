@@ -26,6 +26,16 @@ function expectFailure(command, args, expected, options = {}) {
   throw new Error(`expected ${command} ${args.join(" ")} to fail`);
 }
 
+const args = process.argv.slice(2);
+const unknownArgs = args.filter((arg) => !["--strict"].includes(arg));
+if (unknownArgs.length > 0) {
+  console.error("context_anomaly_hidden_sample_audit_unknown_option");
+  console.error(`option=${unknownArgs[0]}`);
+  process.exit(2);
+}
+const strictMode = args.includes("--strict");
+const maxHigh = strictMode ? "0" : "2";
+
 const packetEnv = {
   ...process.env,
   HOME: mkdtempSync(join(tmpdir(), "p28-context-anomaly-audit-")),
@@ -76,18 +86,37 @@ expectFailure(
 );
 
 const verifier = JSON.parse(
-  run("target/debug/Packet28", [
-    "verify",
-    "context-anomalies",
-    "--root",
-    ".",
-    "--max-high",
-    "2",
-    "--json",
-  ], { env: packetEnv }),
+  (() => {
+    try {
+      return run("target/debug/Packet28", [
+        "verify",
+        "context-anomalies",
+        "--root",
+        ".",
+        "--max-high",
+        maxHigh,
+        "--json",
+      ], { env: packetEnv });
+    } catch (error) {
+      const output = (error.stdout ?? "").trim();
+      if (output) {
+        return output;
+      }
+      throw error;
+    }
+  })(),
 );
 if (!verifier.ok) {
-  throw new Error("context anomaly verifier did not pass");
+  if (strictMode) {
+    console.error("context_anomaly_hidden_sample_audit_strict_failed");
+    console.error(`high=${verifier.high_count}`);
+    console.error(`max_high=${verifier.max_high}`);
+    process.exit(1);
+  }
+  console.error("context_anomaly_hidden_sample_audit_verifier_failed");
+  console.error(`high=${verifier.high_count}`);
+  console.error(`max_high=${verifier.max_high}`);
+  process.exit(1);
 }
 
 const dashboard = JSON.parse(
@@ -121,5 +150,5 @@ console.log(`formatter_checksum=${smokeJson.checksum}`);
 console.log(
   `fixture_dashboard=${contextTile.latest_status} recurring_hidden=${contextTile.recurring_hidden_categories.join(",")}`,
 );
-console.log(`verifier=ok high=${verifier.high_count}`);
+console.log(`verifier=ok high=${verifier.high_count} max_high=${maxHigh}`);
 console.log(`digest_anomalies=${digest.anomaly_count}`);
