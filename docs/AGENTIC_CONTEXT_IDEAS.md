@@ -79,12 +79,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown workflow summary | Makes capped anomaly source samples visible in CI without opening dashboard JSON. | The context-anomalies workflow now appends compact live and fixture hidden-sample summaries, capped to 256 characters. | Evidence: fixture hidden sample summary reports `fallback_provenance=recent_fallbacks=1`; summary extraction is capped with `cut -c1-256`. |
 | Context anomaly drilldown runbook update | Explains how to interpret hidden-sample drilldowns from dashboard and CI. | The context anomaly runbook now documents `hidden_samples`, `recurring_hidden_samples`, and the fallback provenance fixture sample. | Evidence: runbook remains under 45 lines and documents both sample fields plus `fallback_provenance=recent_fallbacks=1`. |
 | Context anomaly drilldown source ordering | Makes hidden sample summaries deterministic when multiple records mention the same category. | Recurring hidden-category samples now have a regression test proving newer history samples win over older samples. | Evidence: `context_anomaly_tile_uses_latest_hidden_category_sample`; newer fallback provenance signal replaces the older signal while tile samples stay under 512 bytes. |
+| Context anomaly drilldown sample truncation | Prevents noisy source strings from bloating recurring hidden-sample summaries. | Long hidden sample signals now have a regression test and the context anomaly runbook documents the 120-character budget. | Evidence: `context_hidden_samples_truncate_long_signals`; fallback provenance samples preserve `recent_fallbacks=1` and `latest_reason=` while staying under 120 characters. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown sample truncation | Prevents noisy source strings from bloating recurring hidden-sample summaries. | Add a regression test for long hidden sample signals and document the truncation budget. | Compact metric: each sample signal stays under 120 characters; correctness metric: truncated fallback provenance samples remain attributable to the original source. |
+| Context anomaly drilldown summary escaping | Keeps hidden sample summaries parseable when source signals contain delimiters. | Add a test for semicolon and equals signs in hidden sample signals, then escape or JSON-render summaries if needed. | Compact metric: CI summary line remains under 256 characters; correctness metric: delimiter-heavy fallback reasons do not create fake category/sample pairs. |
 
 ## Research Rules
 

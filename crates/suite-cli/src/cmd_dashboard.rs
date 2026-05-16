@@ -1963,6 +1963,34 @@ mod tests {
     }
 
     #[test]
+    fn context_hidden_samples_truncate_long_signals() {
+        let long_reason = format!(
+            "recent_fallbacks=1 latest_reason={} source=run-savings",
+            "x".repeat(240)
+        );
+        let hidden = vec![ContextAnomaly {
+            category: "fallback_provenance".to_string(),
+            severity: "medium".to_string(),
+            signal: long_reason,
+            next_check: "Packet28 gain --failures".to_string(),
+            repair_hint: "inspect fallback provenance before treating output as success"
+                .to_string(),
+        }];
+
+        let samples = context_hidden_samples(&hidden);
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].category, "fallback_provenance");
+        assert!(samples[0].signal.len() <= 120);
+        assert!(samples[0].signal.contains("recent_fallbacks=1"));
+        assert!(samples[0].signal.contains("latest_reason="));
+        assert!(
+            serde_json::to_string(&samples).unwrap().len() < 512,
+            "sample summary should stay compact"
+        );
+    }
+
+    #[test]
     fn context_anomaly_tile_reports_hidden_category_drilldown_sample() {
         let root = tempfile::tempdir().unwrap();
         let payload = serde_json::json!({
