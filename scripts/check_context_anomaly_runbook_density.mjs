@@ -1763,6 +1763,7 @@ if (args.includes("--self-test")) {
   const assertDefaultOutputMutationSelfTest = () => {
     assertDefaultOutputMutations();
   };
+  const runContextAnomalyDensitySelfTests = () => {
   assertDefaultOutputMutationSelfTest();
   const assertInvariantDetailFormatSelfTest = () => {
     assertInvariantDetailFormats();
@@ -2391,6 +2392,8 @@ if (args.includes("--self-test")) {
     process.exit(0);
   };
   finishSelfTestOk();
+  };
+  runContextAnomalyDensitySelfTests();
 }
 
 if (!result.ok) {
