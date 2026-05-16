@@ -166,12 +166,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density JSON byte cap | Prevents density checker JSON from growing into noisy local output. | Runbook density `--json` output now enforces `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX` with a 256-byte default and reports `max_json_bytes`. | Evidence: JSON output remains under the explicit cap and required command coverage remains intact. |
 | Context anomaly drilldown runbook density JSON byte self-test | Proves the density JSON byte cap fails when output exceeds budget. | The density checker self-test now verifies a forced low JSON byte cap reports `context_anomaly_runbook_density_json_too_long`. | Evidence: self-test output remains one line and covers the byte-cap failure code. |
 | Context anomaly drilldown runbook density JSON env self-test | Proves the density JSON byte env knob is wired to the JSON failure gate. | The density checker self-test now shells back with `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX=10 --json`. | Evidence: self-test output remains one line and forced env reports `context_anomaly_runbook_density_json_too_long`. |
+| Context anomaly drilldown runbook density JSON failure docs | Helps maintainers understand the density JSON byte-cap failure. | The runbook density row now documents `context_anomaly_runbook_density_json_too_long`. | Evidence: runbook remains under 45 lines and the failure name matches checker output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density JSON failure docs | Helps maintainers understand the density JSON byte-cap failure. | Document `context_anomaly_runbook_density_json_too_long` in the runbook density row. | Compact metric: runbook remains under 45 lines; correctness metric: failure name matches checker output. |
+| Context anomaly drilldown density row width audit | Prevents the runbook table row itself from becoming unreadably wide. | Add density checker coverage for maximum command-table row width. | Compact metric: checker output stays one line; correctness metric: over-wide rows fail with a named error. |
 
 ## Research Rules
 
