@@ -333,12 +333,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-headroom JSON exact-cap parity | Proves JSON `default_output_headroom` follows exact-width text-cap convergence too. | Self-test now runs JSON output at `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=196` and expects `default_output_headroom`:0. | Evidence: JSON output stays under cap; JSON and text headroom agree at zero. |
 | Context anomaly drilldown density text-headroom JSON low-cap failure | Proves JSON mode fails before emitting stale `default_output_headroom` when text output is too wide. | JSON mode now shares the fixed-point text-width guard before emitting payloads. | Evidence: no output growth; JSON mode fails at text cap 195. |
 | Context anomaly drilldown density text-headroom JSON low-cap error shape | Helps automation distinguish JSON-mode text-cap failures from success payloads. | Self-test now checks the JSON low-cap failure contains `ok:false` and the text-width failure code. | Evidence: error JSON stays compact; failure shape is machine-readable. |
+| Context anomaly drilldown density text-headroom env helper reuse | Reduces boilerplate as env failure shape checks grow. | JSON cap and JSON-headroom env failures now reuse the multi-text failure-shape helper. | Evidence: self-test output stays one line; failure checks remain exact. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text-headroom env helper reuse | Reduces boilerplate as env failure shape checks grow. | Reuse the new multi-text env failure helper for existing JSON env failure checks where useful. | Compact metric: self-test output stays one line; correctness metric: failure checks remain exact. |
+| Context anomaly drilldown density JSON error shape docs | Helps maintainers know JSON failures are machine-readable, not plain stderr. | Document that JSON-mode budget failures emit `ok:false` with a failure code. | Compact metric: runbook row/prose stay under caps; correctness metric: docs mention JSON error shape. |
 
 ## Research Rules
 

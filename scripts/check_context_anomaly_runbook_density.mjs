@@ -1530,10 +1530,20 @@ if (args.includes("--self-test")) {
     ["--json"],
     "context_anomaly_runbook_density_json_too_long",
   );
+  assertEnvFailureOutput(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
+    ["--json"],
+    ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
+  );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
     ["--json"],
     "context_anomaly_runbook_density_json_too_long",
+  );
+  assertEnvFailureOutput(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
+    ["--json"],
+    ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
   );
   assertSelfTest(
     jsonBudgetIssue(successPayload(result, workflowResult, 10), 10) ?? {
