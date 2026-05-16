@@ -1906,6 +1906,19 @@ if (args.includes("--self-test")) {
     ),
     "context_anomaly_runbook_density_workflow_missing_commands",
   );
+  for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
+    assertSelfTestMissing(
+      evaluateWorkflow(
+        workflow.replace(
+          `          ${command}\n`,
+          `          drifted_workflow_command_${commandIndex}\n`,
+        ),
+      ),
+      "context_anomaly_runbook_density_workflow_missing_commands",
+      command,
+      `drifted_workflow_command_${commandIndex}`,
+    );
+  }
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
     [],

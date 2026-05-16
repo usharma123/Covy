@@ -411,12 +411,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper command-doc detail adoption | Extends exact missing-detail coverage from failure docs to command docs. | The first required-command docs mutation now asserts that exact command appears in `missing`. | Evidence: no output growth; command-doc mutations report exact missing commands. |
 | Context anomaly drilldown density missing-detail helper command-doc sweep | Extends exact-detail coverage across every required command doc. | Self-test now mutates every `requiredCommands` entry and asserts that exact command appears in `missing`. | Evidence: no output growth; every command-doc drift reports its exact missing command. |
 | Context anomaly drilldown density missing-detail helper workflow-command detail adoption | Extends exact missing-detail coverage from required commands to workflow commands. | The workflow self-test command mutation now asserts that exact command appears in `missing`. | Evidence: no output growth; workflow command mutations report exact missing commands. |
+| Context anomaly drilldown density missing-detail helper workflow-command sweep | Extends exact-detail coverage across every required workflow command doc. | Self-test now mutates every `requiredWorkflowDensityCommands` entry and asserts that exact command appears in `missing`. | Evidence: no output growth; every workflow-command drift reports its exact missing command. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper workflow-command sweep | Extends exact-detail coverage across every required workflow command doc. | Add table-driven workflow-command docs mutations for all `requiredWorkflowDensityCommands`. | Compact metric: no output growth; correctness metric: every workflow-command drift reports its exact missing command. |
+| Context anomaly drilldown density missing-detail helper command sweep dedupe | Avoids redundant command mutations after adding required and workflow command sweeps. | Remove single-command duplicate mutations now covered by table-driven sweeps. | Compact metric: self-test stays green; correctness metric: no duplicate case coverage remains for command docs. |
 
 ## Research Rules
 
