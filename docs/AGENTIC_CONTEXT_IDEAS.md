@@ -538,12 +538,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation joined string helper order | Keeps joined string producer and sampled wrapper adjacent. | Verified `joinedDefaultOutputMutationIdentityFieldStrings(sample)` sits above `sampleJoinedDefaultOutputMutationIdentityFieldStrings(sample)`. | Evidence: no runtime output growth; joined string producer remains near its sampled wrapper. |
 | Context anomaly drilldown density self-test default output mutation joined string comparator name | Makes the comparator name match the joined string payload. | Renamed `joinedDefaultOutputMutationIdentityFieldsMatch(joinedIdentityFields)` to `joinedDefaultOutputMutationIdentityFieldStringsMatch(joinedIdentityFields)`. | Evidence: no runtime output growth; sampled predicate still compares joined string equality. |
 | Context anomaly drilldown density self-test default output mutation sampled identity fields predicate name | Makes the sampled predicate name match its joined-string comparison. | Renamed `sampledDefaultOutputMutationIdentityFieldsMatch(sample)` to `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)`. | Evidence: no runtime output growth; identity assertion still uses the same predicate result. |
+| Context anomaly drilldown density self-test default output mutation sampled string predicate order | Keeps sampled joined-string predicate beside the assertion branch. | Verified `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)` sits directly above the identity failure helper. | Evidence: no runtime output growth; predicate remains adjacent to the mismatch branch. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation sampled string predicate order | Keeps sampled joined-string predicate beside the assertion branch. | Verify `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)` sits directly above the identity failure helper. | Compact metric: no runtime output growth; correctness metric: predicate remains adjacent to the mismatch branch. |
+| Context anomaly drilldown density self-test default output mutation joined string predicate local name | Makes the sampled predicate local describe joined string payloads. | Rename `joinedIdentityFields` to `joinedIdentityFieldStrings` inside `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)`. | Compact metric: no runtime output growth; correctness metric: predicate still passes the joined string payload to the comparator. |
 
 ## Research Rules
 
