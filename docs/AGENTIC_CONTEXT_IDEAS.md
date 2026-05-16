@@ -328,12 +328,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-headroom JSON parity order guard | Keeps the emitted JSON field near related width fields, not only the docs phrase. | Self-test now asserts the emitted parity field sequence `density_label_line_width`, `default_output_headroom`, `text_width_docs_checked`. | Evidence: JSON output stays under cap; payload order drift fails self-test. |
 | Context anomaly drilldown density text-headroom parser order guard | Keeps compact `thead` near `tw` in the default output, matching how agents read text slack. | Self-test now asserts the parsed default-output suffix is `thead`,`tw`. | Evidence: default output stays under cap; text-order drift fails self-test. |
 | Context anomaly drilldown density text-headroom docs suffix guard | Keeps the documented key list aligned with the default-output `thead`,`tw` suffix. | Self-test now swaps `thead` and `tw` in the runbook key list and expects output-doc failure. | Evidence: row stays under soft cap; docs suffix drift fails output-doc coverage. |
+| Context anomaly drilldown density text-headroom low-cap regression | Proves the fixed-point text renderer still fails cleanly when `thead` cannot fit. | Self-test now forces `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=195`, just below the exact-width success boundary. | Evidence: no output growth; low cap fails after `thead` convergence. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text-headroom low-cap regression | Proves the fixed-point text renderer still fails cleanly when `thead` cannot fit. | Add an env self-test near the current width that forces text output below the rendered width and checks the text-width failure. | Compact metric: no output growth; correctness metric: low cap fails after `thead` convergence. |
+| Context anomaly drilldown density text-headroom positive-cap regression | Proves the fixed-point text renderer still succeeds with a narrow but sufficient cap. | Add an env self-test at the current rendered width to confirm `thead=0` remains parseable and successful. | Compact metric: no output growth; correctness metric: exact-width cap succeeds with zero headroom. |
 
 ## Research Rules
 
