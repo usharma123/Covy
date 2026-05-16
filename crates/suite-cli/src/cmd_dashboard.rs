@@ -74,7 +74,15 @@ pub(crate) struct ContextAnomalyDigest {
     pub(crate) anomaly_count: usize,
     pub(crate) truncated_count: usize,
     pub(crate) hidden_categories: Vec<String>,
+    #[serde(skip_serializing)]
+    pub(crate) hidden_samples: Vec<ContextHiddenSample>,
     pub(crate) anomalies: Vec<ContextAnomaly>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub(crate) struct ContextHiddenSample {
+    pub(crate) category: String,
+    pub(crate) signal: String,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -151,6 +159,7 @@ struct ContextAnomalyTile {
     oldest_recurring_hidden_age_ms: u64,
     latest_hidden_categories: Vec<String>,
     recurring_hidden_categories: Vec<String>,
+    recurring_hidden_samples: Vec<ContextHiddenSample>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -163,12 +172,14 @@ struct MemoryLintHistoryRecord {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
 struct ContextAnomalyHistoryRecord {
     created_at_unix_ms: i64,
     ok: bool,
     anomaly_count: u64,
     high_count: u64,
     hidden_categories: Vec<String>,
+    hidden_samples: Vec<ContextHiddenSample>,
 }
 
 pub fn run(args: DashboardArgs) -> Result<i32> {
@@ -355,6 +366,10 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
             "context_anomaly_oldest_recurring_hidden_age_ms={}",
             report.context_anomalies.oldest_recurring_hidden_age_ms
         );
+        println!(
+            "context_anomaly_recurring_hidden_samples={}",
+            context_hidden_sample_summary(&report.context_anomalies.recurring_hidden_samples)
+        );
     }
     Ok(0)
 }
@@ -501,6 +516,18 @@ fn context_anomaly_history_record(payload: &Value) -> ContextAnomalyHistoryRecor
             .filter_map(Value::as_str)
             .map(str::to_string)
             .collect(),
+        hidden_samples: payload
+            .get("hidden_samples")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|sample| {
+                Some(ContextHiddenSample {
+                    category: sample.get("category")?.as_str()?.to_string(),
+                    signal: sample.get("signal")?.as_str()?.to_string(),
+                })
+            })
+            .collect(),
     }
 }
 
@@ -585,6 +612,7 @@ fn context_anomaly_tile(root: &Path, history_path: Option<&Path>) -> Result<Cont
         oldest_recurring_hidden_age_ms,
         latest_hidden_categories: latest.hidden_categories.clone(),
         recurring_hidden_categories: recurring_context_hidden_categories(&records),
+        recurring_hidden_samples: recurring_context_hidden_samples(&records),
     })
 }
 
@@ -757,11 +785,17 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
         });
     }
 
-    let hidden_categories = finalize_context_anomalies(&mut anomalies);
+    let hidden_anomalies = finalize_context_anomalies(&mut anomalies);
+    let hidden_categories = hidden_anomalies
+        .iter()
+        .map(|anomaly| anomaly.category.clone())
+        .collect::<Vec<_>>();
+    let hidden_samples = context_hidden_samples(&hidden_anomalies);
     Ok(ContextAnomalyDigest {
         anomaly_count: anomalies.len(),
         truncated_count: hidden_categories.len(),
         hidden_categories,
+        hidden_samples,
         anomalies,
     })
 }
@@ -810,6 +844,28 @@ fn recurring_context_hidden_categories(records: &[ContextAnomalyHistoryRecord]) 
         .collect()
 }
 
+fn recurring_context_hidden_samples(
+    records: &[ContextAnomalyHistoryRecord],
+) -> Vec<ContextHiddenSample> {
+    let recurring = recurring_context_hidden_categories(records)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let mut samples = BTreeMap::<String, String>::new();
+    for record in records.iter().rev() {
+        for sample in &record.hidden_samples {
+            if recurring.contains(&sample.category) {
+                samples
+                    .entry(sample.category.clone())
+                    .or_insert_with(|| sample.signal.clone());
+            }
+        }
+    }
+    samples
+        .into_iter()
+        .map(|(category, signal)| ContextHiddenSample { category, signal })
+        .collect()
+}
+
 fn context_anomaly_age_summary(records: &[ContextAnomalyHistoryRecord], now_ms: i64) -> (u64, u64) {
     let Some(latest) = records.last() else {
         return (0, 0);
@@ -834,7 +890,7 @@ fn context_anomaly_age_summary(records: &[ContextAnomalyHistoryRecord], now_ms: 
     (latest_age_ms, oldest_recurring_hidden_age_ms)
 }
 
-fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) -> Vec<String> {
+fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) -> Vec<ContextAnomaly> {
     anomalies.sort_by_key(|anomaly| {
         (
             context_anomaly_severity_rank(&anomaly.severity),
@@ -845,10 +901,19 @@ fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) -> Vec<String
     if anomalies.len() <= MAX_CONTEXT_ANOMALIES {
         return Vec::new();
     }
-    anomalies
-        .split_off(MAX_CONTEXT_ANOMALIES)
+    anomalies.split_off(MAX_CONTEXT_ANOMALIES)
+}
+
+fn context_hidden_samples(hidden_anomalies: &[ContextAnomaly]) -> Vec<ContextHiddenSample> {
+    let mut samples = BTreeMap::<String, String>::new();
+    for anomaly in hidden_anomalies {
+        samples
+            .entry(anomaly.category.clone())
+            .or_insert_with(|| anomaly.signal.chars().take(120).collect());
+    }
+    samples
         .into_iter()
-        .map(|anomaly| anomaly.category)
+        .map(|(category, signal)| ContextHiddenSample { category, signal })
         .collect()
 }
 
@@ -1168,11 +1233,12 @@ fn render_dashboard_tui(report: &DashboardReport, panel: DashboardPanel) -> Stri
                 report.memory_lint.latest_status, report.memory_lint.latest_issue_count
             ));
             out.push_str(&format!(
-                "context_anomaly_latest_status={}\ncontext_anomaly_latest_high_count={}\ncontext_anomaly_latest_age_ms={}\ncontext_anomaly_oldest_recurring_hidden_age_ms={}\n",
+                "context_anomaly_latest_status={}\ncontext_anomaly_latest_high_count={}\ncontext_anomaly_latest_age_ms={}\ncontext_anomaly_oldest_recurring_hidden_age_ms={}\ncontext_anomaly_recurring_hidden_samples={}\n",
                 report.context_anomalies.latest_status,
                 report.context_anomalies.latest_high_count,
                 report.context_anomalies.latest_age_ms,
-                report.context_anomalies.oldest_recurring_hidden_age_ms
+                report.context_anomalies.oldest_recurring_hidden_age_ms,
+                context_hidden_sample_summary(&report.context_anomalies.recurring_hidden_samples)
             ));
             out.push_str("handoff_latest_blockers:\n");
             push_tui_list(
@@ -1467,6 +1533,12 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
                 .join(",")
         )
     ));
+    html.push_str(&format!(
+        "<tr><td>Recurring hidden samples</td><td><code>{}</code></td></tr>",
+        escape_html(&context_hidden_sample_summary(
+            &report.context_anomalies.recurring_hidden_samples
+        ))
+    ));
     html.push_str("</table>");
 
     html.push_str("<h2>Integration Health</h2><table><tr><th>Integration</th><th>Status</th></tr>");
@@ -1496,6 +1568,14 @@ fn escape_html(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+fn context_hidden_sample_summary(samples: &[ContextHiddenSample]) -> String {
+    samples
+        .iter()
+        .map(|sample| format!("{}={}", sample.category, sample.signal))
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 #[cfg(test)]
@@ -1812,7 +1892,10 @@ mod tests {
             .iter()
             .all(|anomaly| anomaly.category != "extra_medium_b"));
         assert_eq!(
-            hidden,
+            hidden
+                .iter()
+                .map(|anomaly| anomaly.category.as_str())
+                .collect::<Vec<_>>(),
             vec!["fallback_provenance", "extra_medium_a", "extra_medium_b"]
         );
         assert!(serde_json::to_string(&anomalies).unwrap().len() < 1024);
@@ -1869,9 +1952,48 @@ mod tests {
             digest.hidden_categories,
             vec!["stale_changed_paths", "fallback_provenance"]
         );
+        assert!(digest
+            .hidden_samples
+            .iter()
+            .any(|sample| sample.category == "fallback_provenance"
+                && sample.signal.contains("unsupported_family")));
         assert_eq!(digest.anomalies[0].category, "reducer_drift");
         assert_eq!(digest.anomalies[1].category, "memory_lint");
         assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn context_anomaly_tile_reports_hidden_category_drilldown_sample() {
+        let root = tempfile::tempdir().unwrap();
+        let payload = serde_json::json!({
+            "ok": true,
+            "anomaly_count": 3,
+            "high_count": 1,
+            "hidden_categories": ["fallback_provenance"],
+            "hidden_samples": [{
+                "category": "fallback_provenance",
+                "signal": "recent_fallbacks=1 latest_reason=fff failed"
+            }]
+        });
+        record_context_anomaly_history(root.path(), &payload).unwrap();
+        record_context_anomaly_history(root.path(), &payload).unwrap();
+
+        let tile = context_anomaly_tile(root.path(), None).unwrap();
+
+        assert_eq!(tile.recurring_hidden_samples.len(), 1);
+        assert_eq!(
+            tile.recurring_hidden_samples[0].category,
+            "fallback_provenance"
+        );
+        assert!(tile.recurring_hidden_samples[0]
+            .signal
+            .contains("recent_fallbacks=1"));
+        assert!(
+            serde_json::to_string(&tile.recurring_hidden_samples)
+                .unwrap()
+                .len()
+                < 512
+        );
     }
 
     #[test]

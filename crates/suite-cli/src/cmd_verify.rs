@@ -730,6 +730,8 @@ pub(crate) fn verify_context_anomalies_payload(
         "max_high": max_high,
         "anomaly_count": digest.anomaly_count,
         "high_count": high_count,
+        "hidden_categories": digest.hidden_categories,
+        "hidden_samples": digest.hidden_samples,
         "anomalies": digest.anomalies,
     });
     if let Some(max_trend_age_ms) = max_trend_age_ms {
