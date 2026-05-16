@@ -443,12 +443,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper actual helper | Keeps actual formatter values in one small helper for the self-test. | Extracted `invariantDetailFormatSamples()` to return actual array/scalar formatter outputs. | Evidence: no runtime output growth; formatter actuals stay single-source. |
 | Context anomaly drilldown density self-test invariant helper expected helper | Keeps expected formatter values behind a shape that mirrors the actual helper. | Extracted `expectedInvariantDetailFormats()` to return expected array/scalar formatter outputs. | Evidence: no runtime output growth; formatter expected values stay single-source. |
 | Context anomaly drilldown density self-test invariant helper comparison helper | Keeps formatter mismatch logic in one named check. | Extracted `invariantDetailFormatsMismatch()` to compare expected and actual formatter output objects. | Evidence: no runtime output growth; mismatch logic is single-source. |
+| Context anomaly drilldown density self-test invariant helper diagnostic helper | Keeps formatter mismatch diagnostics in one named shape. | Extracted `invariantDetailFormatMismatchDetails()` to return expected/actual diagnostic fields. | Evidence: no runtime output growth; formatter diagnostic keys stay single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test invariant helper diagnostic helper | Keeps formatter mismatch diagnostics in one named shape. | Extract an `invariantDetailFormatMismatchDetails()` helper that returns expected/actual diagnostic fields. | Compact metric: no runtime output growth; correctness metric: formatter diagnostic keys stay single-source. |
+| Context anomaly drilldown density self-test invariant helper assertion helper | Makes formatter self-test read as one named assertion. | Extract an `assertInvariantDetailFormats()` helper that builds expected/actual format objects, compares them, and reports diagnostics. | Compact metric: no runtime output growth; correctness metric: formatter assertion path is single-source. |
 
 ## Research Rules
 

@@ -466,6 +466,19 @@ function invariantDetailFormatsMismatch(expectedFormats, actualFormats) {
   );
 }
 
+function invariantDetailFormatMismatchDetails(expectedFormats, actualFormats) {
+  return {
+    expected_invariant_array_detail_format:
+      expectedFormats.expectedInvariantArrayDetail,
+    expected_invariant_scalar_detail_format:
+      expectedFormats.expectedInvariantScalarDetail,
+    actual_invariant_array_detail_format:
+      actualFormats.actualInvariantArrayDetail,
+    actual_invariant_scalar_detail_format:
+      actualFormats.actualInvariantScalarDetail,
+  };
+}
+
 function failSelfTestInvariant(details) {
   console.error("context_anomaly_runbook_density_self_test_failed");
   for (const [key, value] of Object.entries(details)) {
@@ -1555,16 +1568,12 @@ if (args.includes("--self-test")) {
       actualInvariantFormats,
     )
   ) {
-    failSelfTestInvariant({
-      expected_invariant_array_detail_format:
-        expectedInvariantFormats.expectedInvariantArrayDetail,
-      expected_invariant_scalar_detail_format:
-        expectedInvariantFormats.expectedInvariantScalarDetail,
-      actual_invariant_array_detail_format:
-        actualInvariantFormats.actualInvariantArrayDetail,
-      actual_invariant_scalar_detail_format:
-        actualInvariantFormats.actualInvariantScalarDetail,
-    });
+    failSelfTestInvariant(
+      invariantDetailFormatMismatchDetails(
+        expectedInvariantFormats,
+        actualInvariantFormats,
+      ),
+    );
   }
   if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
     failSelfTestInvariant({
