@@ -30,7 +30,7 @@ const maxDensityProseLineLength = Number.parseInt(
   10,
 );
 const maxDefaultOutputLength = Number.parseInt(
-  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX ?? "220",
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX ?? "240",
   10,
 );
 const helpLines = [
@@ -96,6 +96,7 @@ const requiredOutputLabels = [
   "output_labels",
   "output_doc_phrases",
   "text_width",
+  "text_width_docs",
 ];
 const requiredOutputDocPhrases = ["key=value"];
 const requiredEnvDocs = [
@@ -226,6 +227,7 @@ function evaluate(runbook, lineBudget) {
     env_docs_checked: requiredEnvDocs.length,
     output_labels_checked: requiredOutputLabels.length,
     output_doc_phrases_checked: requiredOutputDocPhrases.length,
+    text_width_docs_checked: hasTextWidthEnvDoc ? 1 : 0,
   };
 }
 
@@ -362,6 +364,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `workflow_commands=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json_headroom=${jsonHeadroom}`,
+    `text_width_docs=${resultDetails.text_width_docs_checked}`,
     textWidth === undefined ? null : `text_width=${textWidth}`,
   ]
     .filter(Boolean)
@@ -405,6 +408,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     "workflow_commands",
     "prose",
     "json_headroom",
+    "text_width_docs",
     "text_width",
   ];
   for (const field of expectedTextFields) {
@@ -462,6 +466,12 @@ if (args.includes("--self-test")) {
     console.error(
       `actual_output_doc_phrases=${result.output_doc_phrases_checked}`,
     );
+    process.exit(1);
+  }
+  if (result.text_width_docs_checked !== 1) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected_text_width_docs=1");
+    console.error(`actual_text_width_docs=${result.text_width_docs_checked}`);
     process.exit(1);
   }
   if (
