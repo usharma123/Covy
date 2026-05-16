@@ -366,12 +366,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density failure docs alias stale-word guard | Prevents the runbook from drifting back to the longer `no-success` token. | Density self-test now fails if the stale backtick `no-success` alias appears. | Evidence: no output growth; stale long token fails self-test. |
 | Context anomaly drilldown density failure docs alias stale-word detail | Makes stale alias failures easier to diagnose. | Self-test now asserts stale alias failures include `stale:no-success` in missing-doc details. | Evidence: no output growth; stale alias detail is reported. |
 | Context anomaly drilldown density stale alias detail helper | Avoids duplicating evaluate calls as stale-alias detail checks grow. | Stale-alias self-test now reuses one mutation result for both code and missing-detail assertions. | Evidence: no output growth; stale alias check remains single-source. |
+| Context anomaly drilldown density stale alias helper pattern | Makes future mutation-detail checks easier to keep single-source. | Self-test now has `assertSelfTestMissing` for expected code plus missing-detail checks. | Evidence: no output growth; mutation detail checks share one helper. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density stale alias helper pattern | Makes future mutation-detail checks easier to keep single-source. | Add a tiny helper for asserting a mutation code plus required missing-detail text. | Compact metric: no output growth; correctness metric: mutation detail checks share one helper. |
+| Context anomaly drilldown density stale alias helper case index | Preserves self-test case indexing when using the missing-detail helper. | Verify `assertSelfTestMissing` increments through `assertSelfTest` rather than adding separate counters. | Compact metric: no output growth; correctness metric: failure reports keep stable case indexes. |
 
 ## Research Rules
 
