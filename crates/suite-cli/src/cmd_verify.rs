@@ -18,6 +18,8 @@ pub enum VerifyCommands {
     Filters(FilterVerifyArgs),
     /// Verify experiment manifests reference concrete evidence artifacts
     Experiments(ExperimentVerifyArgs),
+    /// Verify handoff lint readiness for CI logs
+    Handoffs(HandoffVerifyArgs),
 }
 
 #[derive(Args)]
@@ -50,6 +52,20 @@ pub struct ExperimentVerifyArgs {
     pub pretty: bool,
     #[arg(long)]
     pub score: bool,
+}
+
+#[derive(Args)]
+pub struct HandoffVerifyArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long, default_value_t = 0)]
+    pub max_regressions: u64,
+    #[arg(long)]
+    pub require_ready: bool,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +159,7 @@ pub fn run(args: VerifyArgs) -> Result<i32> {
     match args.command {
         VerifyCommands::Filters(args) => run_filters(args),
         VerifyCommands::Experiments(args) => run_experiments(args),
+        VerifyCommands::Handoffs(args) => run_handoffs(args),
     }
 }
 
@@ -299,6 +316,44 @@ fn run_experiments(args: ExperimentVerifyArgs) -> Result<i32> {
                 );
             }
         }
+    }
+
+    if ok {
+        Ok(0)
+    } else {
+        Ok(1)
+    }
+}
+
+fn run_handoffs(args: HandoffVerifyArgs) -> Result<i32> {
+    let cwd = crate::cmd_common::caller_cwd()?;
+    let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
+    let summary = crate::cmd_dashboard::handoff_readiness_payload(&root)?;
+    let regression_count = summary
+        .get("regression_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    let latest_status = summary
+        .get("latest_status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("none");
+    let ok = regression_count <= args.max_regressions
+        && (!args.require_ready || latest_status == "ready" || latest_status == "none");
+    let payload = json!({
+        "ok": ok,
+        "max_regressions": args.max_regressions,
+        "require_ready": args.require_ready,
+        "handoff_readiness": summary,
+    });
+
+    if args.json {
+        crate::cmd_common::emit_json(&payload, args.pretty)?;
+    } else {
+        println!("handoff_latest_status={latest_status}");
+        println!("handoff_regression_count={regression_count}");
+        println!("handoff_max_regressions={}", args.max_regressions);
+        println!("handoff_require_ready={}", args.require_ready);
+        println!("handoff_ok={ok}");
     }
 
     if ok {

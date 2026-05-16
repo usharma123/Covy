@@ -233,6 +233,10 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
     Ok(0)
 }
 
+pub(crate) fn handoff_readiness_payload(root: &Path) -> Result<Value> {
+    Ok(serde_json::to_value(handoff_readiness_tile(root)?)?)
+}
+
 fn handoff_readiness_tile(root: &Path) -> Result<HandoffReadinessTile> {
     let mut records = Vec::<Vec<String>>::new();
     for task_id in dashboard_task_ids(root)? {
