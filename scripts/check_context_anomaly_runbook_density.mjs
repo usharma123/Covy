@@ -1556,9 +1556,11 @@ if (args.includes("--self-test")) {
     "phr",
     "missing_phr_output_label",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replaceAll("`adocs`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "adocs",
+    "missing_adocs_output_label",
   );
   assertSelfTestMissing(
     evaluate(runbook.replace("`dphr`", ""), maxLines),
