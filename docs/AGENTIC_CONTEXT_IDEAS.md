@@ -149,12 +149,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown summary budget env failure docs | Helps maintainers understand which failure code maps to each summary-budget env knob. | The runbook summary-budget row now names the low line, width, and JSON budget failure codes. | Evidence: runbook remains under 45 lines and failure codes match checker output. |
 | Context anomaly drilldown summary budget env docs repair | Restores explicit runbook naming for the env vars after adding failure-code docs. | The runbook read-summary-budget row now names the three `P28_CONTEXT_ANOMALY_SUMMARY_*` env vars. | Evidence: runbook remains under 45 lines and env var names match script configuration. |
 | Context anomaly drilldown summary budget help docs repair | Restores explicit runbook mention of `--help` after env var repair. | The runbook summary-budget row again notes that `--help` lists checker modes while preserving env and failure-code docs. | Evidence: runbook remains under 45 lines and documented help behavior matches checker output. |
+| Context anomaly drilldown runbook density audit | Prevents the context anomaly runbook from exceeding its line budget as command rows grow. | `scripts/check_context_anomaly_runbook_density.mjs` now checks the runbook line budget and required command strings. | Evidence: default output reports `lines=44/44` and all required context anomaly commands are present. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density audit | Prevents the context anomaly runbook from exceeding its line budget as command rows grow. | Add a local check that enforces the runbook line budget and required command names. | Compact metric: runbook remains under 45 lines; correctness metric: required commands are present. |
+| Context anomaly drilldown runbook density self-test | Proves the runbook density checker catches line-budget and missing-command regressions. | Add a self-test mode with forced low line budget and a missing-command fixture. | Compact metric: self-test output is one line; correctness metric: both failure codes are exercised. |
 
 ## Research Rules
 
