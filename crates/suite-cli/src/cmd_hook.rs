@@ -10,8 +10,9 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 use packet28_daemon_core::{
     daemon_dir, hook_runtime_config_path, load_task_registry, now_unix, task_artifact_dir,
-    ActiveTaskRecord, HookBoundaryKind, HookEventKind, HookIngestRequest, HookLifecycleEvent,
-    HookLifecycleKind, HookReducerCacheEntry, HookReducerPacket, HookRuntimeConfig, TaskRecord,
+    ActiveTaskRecord, BrokerAction, BrokerGetContextRequest, HookBoundaryKind, HookEventKind,
+    HookIngestRequest, HookLifecycleEvent, HookLifecycleKind, HookReducerCacheEntry,
+    HookReducerPacket, HookRuntimeConfig, TaskRecord,
 };
 use packet28_reducer_core::{
     classify_command, classify_command_argv, reduce_command_output, CommandReducerSpec,
@@ -258,9 +259,17 @@ fn process_claude_hook_payload(
         payload,
         response.additional_context.as_deref(),
     )?;
+    let action_critic = build_pretool_action_critic(root, event_kind, payload, &task_id)
+        .unwrap_or_else(|_| Vec::new());
     Ok(ClaudeHookOutcome {
         exit_code: if response.block_stop { 2 } else { 0 },
-        body: render_hook_output(event_kind, rewrite, &response, additional_context)?,
+        body: render_hook_output(
+            event_kind,
+            rewrite,
+            &response,
+            additional_context,
+            &action_critic,
+        )?,
     })
 }
 
@@ -1754,6 +1763,7 @@ fn render_hook_output(
     rewrite: Option<Value>,
     response: &packet28_daemon_core::HookIngestResponse,
     session_start_context: Option<String>,
+    action_critic: &[String],
 ) -> Result<Option<String>> {
     match event_kind {
         HookEventKind::SessionStart => {
@@ -1767,12 +1777,26 @@ fn render_hook_output(
             }
         }
         HookEventKind::PreToolUse => {
+            let critic_reason = render_action_critic_reason(action_critic);
             if let Some(updated_input) = rewrite {
-                return Ok(Some(serde_json::to_string(&json!({
+                let mut hook_output = json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "allow",
                         "updatedInput": updated_input,
+                    }
+                });
+                if let Some(reason) = critic_reason {
+                    hook_output["hookSpecificOutput"]["permissionDecisionReason"] = json!(reason);
+                }
+                return Ok(Some(serde_json::to_string(&hook_output)?));
+            }
+            if let Some(reason) = critic_reason {
+                return Ok(Some(serde_json::to_string(&json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "permissionDecisionReason": reason,
                     }
                 }))?));
             }
@@ -1802,6 +1826,62 @@ fn render_hook_output(
         _ => {}
     }
     Ok(None)
+}
+
+fn build_pretool_action_critic(
+    root: &Path,
+    event_kind: HookEventKind,
+    payload: &Value,
+    task_id: &str,
+) -> Result<Vec<String>> {
+    if !matches!(event_kind, HookEventKind::PreToolUse) {
+        return Ok(Vec::new());
+    }
+    let Some(command) = runtime_command(payload).filter(|command| !command.trim().is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+    let response = crate::broker_client::get_context(
+        root,
+        BrokerGetContextRequest {
+            task_id: task_id.to_string(),
+            action: Some(BrokerAction::ChooseTool),
+            query: Some(command),
+            tool_name: json_string(payload, "tool_name"),
+            include_sections: vec!["action_critic".to_string()],
+            max_sections: Some(1),
+            default_max_items_per_section: Some(4),
+            persist_artifacts: Some(false),
+            ..BrokerGetContextRequest::default()
+        },
+    )?;
+    Ok(response
+        .sections
+        .iter()
+        .find(|section| section.id == "action_critic")
+        .map(|section| {
+            section
+                .body
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(|line| line.trim_start_matches("- ").to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default())
+}
+
+fn render_action_critic_reason(lines: &[String]) -> Option<String> {
+    if lines.is_empty() {
+        return None;
+    }
+    let joined = lines
+        .iter()
+        .take(3)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(format!("Packet28 action critic: {joined}"))
 }
 
 fn build_session_start_additional_context(
@@ -2626,6 +2706,51 @@ mod tests {
         assert!(command.contains("hook reducer-runner"));
         assert!(command.contains("--family git"));
         assert!(command.contains("--kind git_status"));
+    }
+
+    #[test]
+    fn pretool_hook_output_surfaces_action_critic_without_rewrite() {
+        let body = render_hook_output(
+            HookEventKind::PreToolUse,
+            None,
+            &packet28_daemon_core::HookIngestResponse::default(),
+            None,
+            &["destructive_command: inspect scope first".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        let payload: Value = serde_json::from_str(&body).unwrap();
+        let output = &payload["hookSpecificOutput"];
+        assert_eq!(output["hookEventName"], "PreToolUse");
+        assert_eq!(output["permissionDecision"], "allow");
+        assert!(output["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("Packet28 action critic"));
+    }
+
+    #[test]
+    fn pretool_hook_output_preserves_rewrite_with_action_critic() {
+        let body = render_hook_output(
+            HookEventKind::PreToolUse,
+            Some(json!({"command": "Packet28 hook reducer-runner -- git status"})),
+            &packet28_daemon_core::HookIngestResponse::default(),
+            None,
+            &["broad_search: add focus_paths".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        let payload: Value = serde_json::from_str(&body).unwrap();
+        let output = &payload["hookSpecificOutput"];
+        assert_eq!(output["permissionDecision"], "allow");
+        assert_eq!(
+            output["updatedInput"]["command"],
+            "Packet28 hook reducer-runner -- git status"
+        );
+        assert!(output["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("broad_search"));
     }
 
     #[test]
