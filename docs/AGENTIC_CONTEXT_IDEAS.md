@@ -398,12 +398,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper key-value adoption | Reuses the missing-detail helper for the base compact `key=value` docs token. | The `key=value` mutation now uses `assertSelfTestMissing` for the base output docs token. | Evidence: no output growth; helper covers base output docs detail checks. |
 | Context anomaly drilldown density missing-detail helper soft-label adoption | Reuses the missing-detail helper for the compact `soft` output label mutation. | The `soft` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers output-label detail checks. |
 | Context anomaly drilldown density missing-detail helper prose-label adoption | Reuses the missing-detail helper for the compact `prs` output label mutation. | The `prs` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers prose label detail checks. |
+| Context anomaly drilldown density missing-detail helper anchor-label adoption | Reuses the missing-detail helper for the compact `anc` output label mutation. | The `anc` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers anchor label detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper anchor-label adoption | Reuses the missing-detail helper for the compact `anc` output label mutation. | Convert the `anc` output-label mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers anchor label detail checks. |
+| Context anomaly drilldown density missing-detail helper density-phrase-label adoption | Reuses the missing-detail helper for the compact `dphr` output label mutation. | Convert the `dphr` output-label mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers density phrase label detail checks. |
 
 ## Research Rules
 
