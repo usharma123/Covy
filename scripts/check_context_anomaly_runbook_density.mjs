@@ -1780,7 +1780,7 @@ if (args.includes("--self-test")) {
     "stale:no-success",
     "stale_json_failure_success_field_alias",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace(
         "`ok:false`;`no-succ`;h:`help<=120`",
@@ -1789,6 +1789,7 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`ok:false`;`no-succ`;h:`help<=120`",
     "missing_json_error_help_adjacency_doc",
   );
   assertSelfTestMissing(
