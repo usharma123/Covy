@@ -1940,7 +1940,9 @@ if (args.includes("--self-test")) {
     };
     assertJsonFieldNameDocMutationSelfTest();
     const assertJsonFieldDocMutationSelfTests = () => {
-      const assertRequiredJsonFieldDocs = (requiredJsonFieldDocs) => {
+      const assertJsonFieldDocPresenceMutationSelfTests = (
+        requiredJsonFieldDocs,
+      ) => {
         for (const [fieldDoc, caseName] of requiredJsonFieldDocs) {
           assertSelfTestMissing(
             evaluate(runbook.replace(fieldDoc, ""), maxLines),
@@ -1992,7 +1994,7 @@ if (args.includes("--self-test")) {
           "swapped_default_output_iterations_json_doc_order",
         );
       };
-      assertRequiredJsonFieldDocs([
+      assertJsonFieldDocPresenceMutationSelfTests([
         ["`alias_docs_checked`", "missing_alias_docs_checked_json_doc"],
         ["`row_soft_ok`", "missing_row_soft_ok_json_doc"],
         [
@@ -2022,7 +2024,7 @@ if (args.includes("--self-test")) {
         ],
       ]);
       assertJsonFieldOrderDocMutationSelfTests();
-      assertRequiredJsonFieldDocs([
+      assertJsonFieldDocPresenceMutationSelfTests([
         ["`text_width_docs_checked`", "missing_text_width_docs_checked_json_doc"],
       ]);
     };
