@@ -496,13 +496,16 @@ function defaultOutputParseIssue(parsed, resultDetails) {
       return `missing_default_output_field=${field}`;
     }
   }
-  if (
-    parsed.cmds !== String(resultDetails.commands_checked) ||
-    parsed.labels !== String(resultDetails.output_labels_checked) ||
-    parsed.dphr !== String(resultDetails.density_doc_phrases_checked) ||
-    parsed.soft !== (resultDetails.row_soft_ok ? "ok" : "over")
-  ) {
-    return "default_output_parse_mismatch";
+  const expectedValues = {
+    cmds: String(resultDetails.commands_checked),
+    labels: String(resultDetails.output_labels_checked),
+    dphr: String(resultDetails.density_doc_phrases_checked),
+    soft: resultDetails.row_soft_ok ? "ok" : "over",
+  };
+  for (const [field, expected] of Object.entries(expectedValues)) {
+    if (parsed[field] !== expected) {
+      return `default_output_parse_mismatch=${field}`;
+    }
   }
   return null;
 }
@@ -688,9 +691,9 @@ if (args.includes("--self-test")) {
     parseDefaultOutput(defaultOutputLine.replace(/ dphr=\d+/, " dphr=0")),
     result,
   );
-  if (staleDensityDocCountError !== "default_output_parse_mismatch") {
+  if (staleDensityDocCountError !== "default_output_parse_mismatch=dphr") {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error("expected=default_output_parse_mismatch");
+    console.error("expected=default_output_parse_mismatch=dphr");
     console.error(`actual=${staleDensityDocCountError ?? "ok"}`);
     process.exit(1);
   }

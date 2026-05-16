@@ -235,12 +235,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density glossary count refresh | Keeps the `dphr` density-doc count meaningful after adding the compact label glossary. | Default output parsing now verifies `dphr` equals the required density-doc phrase count. | Evidence: default output remains under text cap; parser rejects stale `dphr` values. |
 | Context anomaly drilldown density glossary stale-count self-test | Proves the default parser rejects stale density-doc counts after glossary growth. | Density self-test now mutates rendered default output to `dphr=0` and requires a parse mismatch. | Evidence: self-test output remains one line; stale glossary counts fail parser validation. |
 | Context anomaly drilldown density glossary missing-field self-test | Proves the parser rejects omitted density-doc counts, not just stale values. | Density self-test now removes the `dphr` field from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted glossary counts fail parser validation. |
+| Context anomaly drilldown density parser mismatch diagnostics | Makes default-output parser failures easier to debug when a count drifts. | Parser mismatches now return field-specific diagnostics such as `default_output_parse_mismatch=dphr`. | Evidence: success output is unchanged; self-test expects the field-specific stale-`dphr` diagnostic. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density parser mismatch diagnostics | Makes default-output parser failures easier to debug when a count drifts. | Include the stale or missing field name in mismatch diagnostics without widening success output. | Compact metric: success output unchanged; correctness metric: self-test expects the field-specific diagnostic. |
+| Context anomaly drilldown density parser mismatch breadth | Proves field-specific parser diagnostics work beyond `dphr`. | Mutate another parsed field, such as `soft`, and require `default_output_parse_mismatch=soft`. | Compact metric: success output unchanged; correctness metric: multiple mismatch fields produce field-specific diagnostics. |
 
 ## Research Rules
 
