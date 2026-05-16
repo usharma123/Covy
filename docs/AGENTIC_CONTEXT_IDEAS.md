@@ -433,12 +433,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper format expected constant | Avoids duplicating expected formatter strings in the invariant detail self-test. | Extracted expected scalar and array formatter outputs into named constants. | Evidence: no runtime output growth; formatter self-test expectations are named. |
 | Context anomaly drilldown density self-test invariant helper format expected labels | Makes formatter self-test failure fields distinguish scalar and array expectations. | Split expected formatter diagnostics into `expected_invariant_array_detail_format` and `expected_invariant_scalar_detail_format`. | Evidence: no runtime output growth; formatter failures identify which expectation broke. |
 | Context anomaly drilldown density self-test invariant helper actual labels | Makes formatter self-test actual fields distinguish scalar and array outputs. | Split actual formatter diagnostics into `actual_invariant_array_detail_format` and `actual_invariant_scalar_detail_format`. | Evidence: no runtime output growth; formatter failures identify which output broke. |
+| Context anomaly drilldown density self-test invariant helper formatter values reuse | Avoids recomputing formatter values inside the invariant detail self-test. | `actualInvariantArrayDetail` and `actualInvariantScalarDetail` are reused in both the condition and diagnostics. | Evidence: no runtime output growth; actual values are single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test invariant helper formatter values reuse | Avoids recomputing formatter values inside the invariant detail self-test. | Reuse `actualInvariantArrayDetail` and `actualInvariantScalarDetail` in the condition and diagnostics. | Compact metric: no runtime output growth; correctness metric: actual values are single-source. |
+| Context anomaly drilldown density self-test invariant helper sample constants | Avoids duplicating formatter sample literals in the invariant detail self-test. | Extract the sample array and scalar values used by `invariantDetailValue`. | Compact metric: no runtime output growth; correctness metric: formatter samples are single-source. |
 
 ## Research Rules
 
