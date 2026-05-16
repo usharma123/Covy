@@ -196,6 +196,7 @@ const pairedEnvDocExclusions = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
 ];
+const pairedEnvDocExclusionCount = pairedEnvDocExclusions.length;
 const requiredPlainEnvDocs = requiredEnvDocs.filter(
   (envName) => !pairedEnvDocExclusions.includes(envName),
 );
@@ -1503,17 +1504,22 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
-  if (pairedEnvDocExclusions.length !== 2) {
+  if (pairedEnvDocExclusionCount !== 2) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected_paired_env_doc_exclusions=2");
     console.error(
-      `actual_paired_env_doc_exclusions=${pairedEnvDocExclusions.length}`,
+      `actual_paired_env_doc_exclusions=${pairedEnvDocExclusionCount}`,
     );
     process.exit(1);
   }
-  if (requiredPlainEnvDocs.length !== requiredEnvDocs.length - 2) {
+  if (
+    requiredPlainEnvDocs.length !==
+    requiredEnvDocs.length - pairedEnvDocExclusionCount
+  ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error(`expected_plain_env_docs=${requiredEnvDocs.length - 2}`);
+    console.error(
+      `expected_plain_env_docs=${requiredEnvDocs.length - pairedEnvDocExclusionCount}`,
+    );
     console.error(`actual_plain_env_docs=${requiredPlainEnvDocs.length}`);
     process.exit(1);
   }
