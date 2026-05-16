@@ -173,12 +173,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density row width workflow evidence | Keeps row-width budget evidence visible in workflow logs. | The context-anomalies workflow now runs the default density check between help and self-test so logs show `max_table_row`. | Evidence: no GitHub summary growth; local default output remains one line and reports current `max_table_row`. |
 | Context anomaly drilldown density workflow command coverage | Prevents CI log evidence from silently dropping the default density check. | The density checker self-test now asserts the workflow still runs help, default, and self-test density modes. | Evidence: self-test output stays one line and removing the workflow default density command fails `context_anomaly_runbook_density_workflow_missing_commands`. |
 | Context anomaly drilldown density workflow failure docs | Helps maintainers repair workflow command coverage failures without reading checker source. | The runbook density row now documents `context_anomaly_runbook_density_workflow_missing_commands`. | Evidence: runbook stays under line and row budgets and the failure name matches checker output. |
+| Context anomaly drilldown density failure-code coverage | Prevents checker failure docs from drifting as named failures are added. | The density checker now requires documented runbook density failure codes and self-tests the workflow failure-code doc. | Evidence: default output stays one line and removing the workflow failure code from the runbook fails `context_anomaly_runbook_density_missing_failure_docs`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density failure-code coverage | Prevents checker failure docs from drifting as named failures are added. | Have the density checker require its documented failure codes in the runbook row. | Compact metric: default output stays one line; correctness metric: removing the workflow failure code from the runbook fails a named missing-doc check. |
+| Context anomaly drilldown density missing-doc failure docs | Helps maintainers recognize when the runbook is missing a checker failure-code doc. | Add `context_anomaly_runbook_density_missing_failure_docs` to the runbook density failure docs. | Compact metric: runbook stays under line and row budgets; correctness metric: failure name matches checker output. |
 
 ## Research Rules
 

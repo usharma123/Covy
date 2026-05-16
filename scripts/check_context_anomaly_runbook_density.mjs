@@ -23,7 +23,7 @@ const maxTableRowLength = Number.parseInt(
 );
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
-  "default: validate runbook line budget, row width, required command entries, and workflow density commands",
+  "default: validate runbook line budget, row width, command entries, failure-code docs, and workflow density commands",
   "--json: print ok, budgets, max_table_row, commands_checked, and max_json_bytes",
   "--self-test: verify line, width, missing-command, and JSON byte failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
@@ -63,6 +63,13 @@ const requiredWorkflowDensityCommands = [
   "node scripts/check_context_anomaly_runbook_density.mjs",
   "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
 ];
+const requiredFailureCodes = [
+  "context_anomaly_runbook_density_too_many_lines",
+  "context_anomaly_runbook_density_row_too_wide",
+  "context_anomaly_runbook_density_missing_commands",
+  "context_anomaly_runbook_density_workflow_missing_commands",
+  "context_anomaly_runbook_density_json_too_long",
+];
 
 function evaluate(runbook, lineBudget) {
   const lineCount = runbook.endsWith("\n")
@@ -77,6 +84,9 @@ function evaluate(runbook, lineBudget) {
   );
   const missingCommands = requiredCommands.filter(
     (command) => !runbook.includes(command),
+  );
+  const missingFailureCodes = requiredFailureCodes.filter(
+    (code) => !runbook.includes(code),
   );
   if (lineCount > lineBudget) {
     return {
@@ -99,6 +109,13 @@ function evaluate(runbook, lineBudget) {
       ok: false,
       code: "context_anomaly_runbook_density_missing_commands",
       missing: missingCommands,
+    };
+  }
+  if (missingFailureCodes.length > 0) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_missing_failure_docs",
+      missing: missingFailureCodes,
     };
   }
   return {
@@ -252,6 +269,16 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_commands",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace(
+        "context_anomaly_runbook_density_workflow_missing_commands",
+        "",
+      ),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_failure_docs",
   );
   assertSelfTest(
     evaluateWorkflow(
