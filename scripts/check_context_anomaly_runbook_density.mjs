@@ -1618,6 +1618,12 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTestMissing(
+    evaluate(runbook.replace("`json_parity_fields_checked`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "`json_parity_fields_checked`",
+    "missing_json_parity_fields_checked_json_doc",
+  );
+  assertSelfTestMissing(
     evaluate(runbook.replace("`density_label_line_width`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
     "`density_label_line_width`",

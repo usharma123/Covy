@@ -385,12 +385,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper JSON success-field adoption | Reuses the missing-detail helper for compact JSON failure success-field exclusion docs. | The `no-succ` docs mutation now uses `assertSelfTestMissing` for its compact exclusion token. | Evidence: no output growth; helper covers success-field exclusion docs detail checks. |
 | Context anomaly drilldown density missing-detail helper JSON adjacency adoption | Reuses the missing-detail helper for compact JSON error/help adjacency docs. | The `ok:false`;`no-succ`;h:`help<=120` mutation now uses `assertSelfTestMissing` for the full adjacency phrase. | Evidence: no output growth; helper covers adjacency docs detail checks. |
 | Context anomaly drilldown density missing-detail helper dlab field adoption | Reuses the missing-detail helper for the density-label-width JSON field docs mutation. | The `density_label_line_width` JSON field-doc mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers density label field-doc detail checks. |
+| Context anomaly drilldown density missing-detail helper JSON parity field adoption | Closes a missing self-test mutation for the JSON parity field-doc token. | Added a `json_parity_fields_checked` JSON field-doc mutation using `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers parity field-doc detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper JSON parity field adoption | Reuses the missing-detail helper for the JSON parity field-doc mutation. | Convert the `json_parity_fields_checked` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers parity field-doc detail checks. |
+| Context anomaly drilldown density missing-detail helper parsed field adoption | Reuses the missing-detail helper for parsed-field JSON docs. | Convert the `parsed_fields_checked` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers parsed-field docs detail checks. |
 
 ## Research Rules
 
