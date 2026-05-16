@@ -583,12 +583,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test env docs top-level call order | Keeps the environment documentation self-test wrapper beside its assertion call. | Verified `assertEnvDocInvariantSelfTest()` sits directly after `assertInvariantDetailFormatSelfTest()` and wraps the only environment documentation top-level call. | Evidence: no runtime output growth; environment documentation invariants still run after invariant detail checks. |
 | Context anomaly drilldown density self-test line-count boundary wrapper | Names the line-count overflow boundary self-test. | Extracted `assertLineCountBoundarySelfTest()` around the `context_anomaly_runbook_density_too_many_lines` assertion. | Evidence: no runtime output growth; self-test still verifies the line-count overflow error label after env-doc invariants. |
 | Context anomaly drilldown density self-test line-count boundary order | Keeps the line-count boundary wrapper beside the env-doc invariant self-test. | Verified `assertLineCountBoundarySelfTest()` sits directly after `assertEnvDocInvariantSelfTest()` and before required-command mutation checks. | Evidence: no runtime output growth; line-count overflow check remains before command coverage mutations. |
+| Context anomaly drilldown density self-test required command mutation wrapper | Names the required-command mutation coverage loop. | Extracted `assertRequiredCommandMutationSelfTests()` around the `requiredCommands.entries()` missing-command assertions. | Evidence: no runtime output growth; self-test still verifies every required command fails when drifted. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test required command mutation wrapper | Names the required-command mutation coverage loop. | Extract `assertRequiredCommandMutationSelfTests()` around the `requiredCommands.entries()` missing-command assertions. | Compact metric: no runtime output growth; correctness metric: self-test still verifies every required command fails when drifted. |
+| Context anomaly drilldown density self-test required command mutation order | Keeps required-command mutation checks before failure-code mutation checks. | Verify `assertRequiredCommandMutationSelfTests()` sits directly after `assertLineCountBoundarySelfTest()` and before required failure-code mutations. | Compact metric: no runtime output growth; correctness metric: command mutation coverage remains before failure-code coverage. |
 
 ## Research Rules
 

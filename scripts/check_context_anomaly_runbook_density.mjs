@@ -1779,17 +1779,23 @@ if (args.includes("--self-test")) {
     );
   };
   assertLineCountBoundarySelfTest();
-  for (const [commandIndex, command] of requiredCommands.entries()) {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replaceAll(command, `drifted_required_command_${commandIndex}`),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_commands",
-      command,
-      `drifted_required_command_${commandIndex}`,
-    );
-  }
+  const assertRequiredCommandMutationSelfTests = () => {
+    for (const [commandIndex, command] of requiredCommands.entries()) {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replaceAll(
+            command,
+            `drifted_required_command_${commandIndex}`,
+          ),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_commands",
+        command,
+        `drifted_required_command_${commandIndex}`,
+      );
+    }
+  };
+  assertRequiredCommandMutationSelfTests();
   for (const [failureCodeIndex, failureCode] of requiredFailureCodes.entries()) {
     assertSelfTestMissing(
       evaluate(
