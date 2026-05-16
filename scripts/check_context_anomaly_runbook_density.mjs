@@ -192,6 +192,13 @@ const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
 ];
+const requiredPlainEnvDocs = requiredEnvDocs.filter(
+  (envName) =>
+    ![
+      "P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
+      "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
+    ].includes(envName),
+);
 
 function evaluate(runbook, lineBudget) {
   const lineCount = runbook.endsWith("\n")
@@ -1859,6 +1866,17 @@ if (args.includes("--self-test")) {
     "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX",
     "missing_json_max_env_doc_detail",
   );
+  for (const [envIndex, envName] of requiredPlainEnvDocs.entries()) {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replaceAll(`\`${envName}\``, `\`DRIFTED_ENV_DOC_${envIndex}\``),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_env_docs",
+      envName,
+      `drifted_${envName}`,
+    );
+  }
   for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
     assertSelfTestMissing(
       evaluateWorkflow(
