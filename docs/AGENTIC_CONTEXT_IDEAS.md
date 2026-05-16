@@ -429,12 +429,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper plain-env count adoption | Reuses the invariant helper for the plain env-doc count guard. | The `requiredPlainEnvDocs.length` guard now uses `failSelfTestInvariant`. | Evidence: no runtime output growth; both env count guards share diagnostics. |
 | Context anomaly drilldown density self-test invariant helper exclusion adoption | Reuses the invariant helper for paired-env exclusion membership failures. | The `unexpected_plain_env_doc` guard now uses `failSelfTestInvariant`. | Evidence: no runtime output growth; all env sweep boundary guards share diagnostics. |
 | Context anomaly drilldown density self-test invariant helper array detail | Makes invariant helper diagnostics match existing array-detail formatting. | `failSelfTestInvariant` now joins array values the same way the main `fail` printer does. | Evidence: no runtime output growth; helper supports scalar and array details. |
+| Context anomaly drilldown density self-test invariant helper array detail guard | Proves invariant helper array formatting stays compact and deterministic. | Added `invariantDetailValue` plus a self-test assertion for comma-joined arrays and scalar passthrough. | Evidence: no runtime output growth; array details render comma-separated. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test invariant helper array detail guard | Proves invariant helper array formatting stays compact and deterministic. | Add a tiny self-test formatter helper or assertion for array-valued invariant details. | Compact metric: no runtime output growth; correctness metric: array details render comma-separated. |
+| Context anomaly drilldown density self-test invariant helper format expected constant | Avoids duplicating expected formatter strings in the invariant detail self-test. | Extract expected scalar and array formatter outputs into local constants. | Compact metric: no runtime output growth; correctness metric: formatter self-test expectations are named. |
 
 ## Research Rules
 

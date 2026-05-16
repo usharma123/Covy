@@ -432,10 +432,14 @@ function assertSelfTestMissing(result, expectedCode, expectedMissing, caseName) 
   }
 }
 
+function invariantDetailValue(value) {
+  return Array.isArray(value) ? value.join(",") : value;
+}
+
 function failSelfTestInvariant(details) {
   console.error("context_anomaly_runbook_density_self_test_failed");
   for (const [key, value] of Object.entries(details)) {
-    console.error(`${key}=${Array.isArray(value) ? value.join(",") : value}`);
+    console.error(`${key}=${invariantDetailValue(value)}`);
   }
   process.exit(1);
 }
@@ -1512,6 +1516,18 @@ if (args.includes("--self-test")) {
   };
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
+  }
+  if (
+    invariantDetailValue(["array", "detail"]) !== "array,detail" ||
+    invariantDetailValue("scalar") !== "scalar"
+  ) {
+    failSelfTestInvariant({
+      expected_invariant_detail_format: "array,detail;scalar",
+      actual_invariant_detail_format: [
+        invariantDetailValue(["array", "detail"]),
+        invariantDetailValue("scalar"),
+      ],
+    });
   }
   if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
     failSelfTestInvariant({
