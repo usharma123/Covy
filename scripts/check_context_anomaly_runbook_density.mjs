@@ -120,6 +120,7 @@ const requiredOutputDocPhrases = [
   "`row_soft_ok`",
   "`row_soft_max`",
   "`density_doc_phrases_checked`",
+  "`parsed_fields_checked`",
   "`max_json_bytes=416`",
   "`help<=120`",
 ];
@@ -803,6 +804,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`density_doc_phrases_checked`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`parsed_fields_checked`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
