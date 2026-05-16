@@ -98,12 +98,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown fixture checksum | Lets agents detect accidental hidden-sample fixture edits even when expected summary still matches. | The delimiter fixture now has a checked-in SHA-256 file verified by the hidden-sample smoke script before summary comparison. | Evidence: checksum artifact is 65 bytes with newline; smoke script fails with `context_anomaly_hidden_sample_fixture_checksum_mismatch` when fixture content drifts. |
 | Context anomaly drilldown checksum self-test | Proves the smoke script's checksum failure path without editing checked-in fixtures. | The smoke script self-test now exercises the checksum mismatch guard with a known-wrong checksum. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` remains one success line and fails if checksum mismatch code drifts. |
 | Context anomaly drilldown checksum docs | Helps agents repair fixture-checksum failures without reverse-engineering the hash command. | The context anomaly runbook now includes the exact checksum refresh command for the delimiter fixture. | Evidence: runbook remains under 45 lines; `shasum -a 256 ... | awk '{print $1}'` reproduces `hidden-samples-delimiters.sha256`. |
+| Context anomaly drilldown checksum workflow note | Makes checksum enforcement visible from CI summaries when fixture smoke runs. | The context-anomalies workflow summary now prints the enforced hidden-sample checksum file path after formatter smoke budget. | Evidence: summary grows by one line and the checksum line is emitted only after the smoke self-test succeeds. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown checksum workflow note | Makes checksum enforcement visible from CI summaries when fixture smoke runs. | Add checksum status or checksum path to the context-anomalies workflow summary. | Compact metric: summary grows by at most one line; correctness metric: summary line appears only after checksum self-test passes. |
+| Context anomaly drilldown checksum status value | Lets CI readers confirm the actual checksum without opening the file. | Print the checked-in checksum value in the context-anomalies workflow summary, capped to the 64-character digest. | Compact metric: summary line remains under 100 characters; correctness metric: value matches the checked-in SHA-256 file. |
 
 ## Research Rules
 

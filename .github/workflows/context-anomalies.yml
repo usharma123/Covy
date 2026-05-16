@@ -89,5 +89,6 @@ jobs:
             echo "- fixture oldest recurring hidden age ms: $(jq -r '.context_anomalies.oldest_recurring_hidden_age_ms // 0' context-anomaly-fixture-dashboard.json)"
             echo "- formatter smoke: context_anomaly_hidden_sample_fixture_ok=$hidden_sample_smoke"
             echo "- formatter budget: $hidden_sample_smoke_len/$hidden_sample_smoke_max"
+            echo "- formatter checksum: docs/context-anomalies/hidden-samples-delimiters.sha256"
             echo "- command table: docs/context-anomalies/RUNBOOK.md"
           } >> "$GITHUB_STEP_SUMMARY"
