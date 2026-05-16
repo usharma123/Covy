@@ -759,6 +759,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${staleCommandCountError ?? "ok"}`);
     process.exit(1);
   }
+  const staleLabelCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ labels=\d+/, " labels=0")),
+    result,
+  );
+  if (staleLabelCountError !== "default_output_parse_mismatch=labels") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=labels");
+    console.error(`actual=${staleLabelCountError ?? "ok"}`);
+    process.exit(1);
+  }
   const staleDensityDocCountError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ dphr=\d+/, " dphr=0")),
     result,

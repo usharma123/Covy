@@ -266,12 +266,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density parsed stale-count self-test | Proves the parser rejects stale parser-field counts, not just omitted values. | Density self-test now mutates rendered default output to `parsed=0` and requires a field-specific mismatch. | Evidence: self-test output remains one line; stale parser-field count fails parser validation. |
 | Context anomaly drilldown density soft missing-field self-test | Proves the parser rejects omitted soft-row status, not just stale values. | Density self-test now removes `soft` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted soft-row status fails parser validation. |
 | Context anomaly drilldown density command count parser coverage | Proves parser validation checks command-count drift, not only label/docs counts. | Density self-test now mutates `cmds=0` and requires `default_output_parse_mismatch=cmds`. | Evidence: self-test output remains one line; stale command count fails parser validation. |
+| Context anomaly drilldown density label count parser coverage | Proves parser validation checks output-label count drift. | Density self-test now mutates `labels=0` and requires `default_output_parse_mismatch=labels`. | Evidence: self-test output remains one line; stale label count fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label count parser coverage | Proves parser validation checks output-label count drift. | Mutate `labels=0` in rendered default output and require a field-specific mismatch. | Compact metric: self-test output remains one line; correctness metric: stale label count fails parser validation. |
+| Context anomaly drilldown density env count parser coverage | Proves parser validation checks env-doc count drift. | Add `env` to parsed mismatch checks and reject stale env-doc counts. | Compact metric: self-test output remains one line; correctness metric: stale env count fails parser validation. |
 
 ## Research Rules
 
