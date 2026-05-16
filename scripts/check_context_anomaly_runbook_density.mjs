@@ -1519,17 +1519,17 @@ if (args.includes("--self-test")) {
   }
   const expectedInvariantArrayDetail = "array,detail";
   const expectedInvariantScalarDetail = "scalar";
+  const actualInvariantArrayDetail = invariantDetailValue(["array", "detail"]);
+  const actualInvariantScalarDetail = invariantDetailValue("scalar");
   if (
-    invariantDetailValue(["array", "detail"]) !== expectedInvariantArrayDetail ||
-    invariantDetailValue("scalar") !== expectedInvariantScalarDetail
+    actualInvariantArrayDetail !== expectedInvariantArrayDetail ||
+    actualInvariantScalarDetail !== expectedInvariantScalarDetail
   ) {
     failSelfTestInvariant({
       expected_invariant_array_detail_format: expectedInvariantArrayDetail,
       expected_invariant_scalar_detail_format: expectedInvariantScalarDetail,
-      actual_invariant_detail_format: [
-        invariantDetailValue(["array", "detail"]),
-        invariantDetailValue("scalar"),
-      ],
+      actual_invariant_array_detail_format: actualInvariantArrayDetail,
+      actual_invariant_scalar_detail_format: actualInvariantScalarDetail,
     });
   }
   if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
