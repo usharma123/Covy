@@ -847,6 +847,45 @@ fn choose_tool_action_critic_flags_missing_intent_and_risky_commands() {
 }
 
 #[test]
+fn choose_tool_action_critic_flags_finalization_without_recent_verification() {
+    let missing_verification = build_action_critic_lines(
+        &BrokerGetContextRequest {
+            action: Some(BrokerAction::ChooseTool),
+            query: Some("commit and push this change".to_string()),
+            ..BrokerGetContextRequest::default()
+        },
+        &suite_packet_core::AgentSnapshotPayload::default(),
+        &[],
+    );
+    assert!(missing_verification
+        .iter()
+        .any(|line| line.contains("verification_gap")));
+
+    let verified = build_action_critic_lines(
+        &BrokerGetContextRequest {
+            action: Some(BrokerAction::ChooseTool),
+            query: Some("commit and push this change".to_string()),
+            ..BrokerGetContextRequest::default()
+        },
+        &suite_packet_core::AgentSnapshotPayload {
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-1".to_string(),
+                sequence: 1,
+                tool_name: "cargo test".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        &[],
+    );
+    assert!(!verified
+        .iter()
+        .any(|line| line.contains("verification_gap")));
+}
+
+#[test]
 fn edit_action_critic_flags_missing_scope_and_unread_paths() {
     let missing_scope = build_action_critic_lines(
         &BrokerGetContextRequest {

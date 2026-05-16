@@ -890,7 +890,9 @@ pub(crate) fn build_action_critic_lines(
     focus_symbols: &[String],
 ) -> Vec<String> {
     match request.action.unwrap_or(BrokerAction::Plan) {
-        BrokerAction::ChooseTool => build_choose_tool_action_critic_lines(request, focus_symbols),
+        BrokerAction::ChooseTool => {
+            build_choose_tool_action_critic_lines(request, snapshot, focus_symbols)
+        }
         BrokerAction::Edit => build_edit_action_critic_lines(request, snapshot, focus_symbols),
         _ => Vec::new(),
     }
@@ -898,6 +900,7 @@ pub(crate) fn build_action_critic_lines(
 
 fn build_choose_tool_action_critic_lines(
     request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
     focus_symbols: &[String],
 ) -> Vec<String> {
     let mut lines = Vec::new();
@@ -923,6 +926,12 @@ fn build_choose_tool_action_critic_lines(
     if !has_scope && broad_search_risk(&lower_query) {
         lines.push(
             "- broad_search: add focus_paths or focus_symbols before launching a repository-wide search"
+                .to_string(),
+        );
+    }
+    if finalization_intent(&lower_query) && !has_recent_verification_evidence(snapshot) {
+        lines.push(
+            "- verification_gap: cite or run focused test/build/diff evidence before finalizing, committing, or pushing"
                 .to_string(),
         );
     }
@@ -1143,6 +1152,27 @@ fn broad_search_risk(query: &str) -> bool {
         || query.contains(" grep ")
         || query.contains("search the repo")
         || query.contains("search repository")
+}
+
+fn finalization_intent(query: &str) -> bool {
+    let query = query.trim();
+    query.contains("commit")
+        || query.contains("push")
+        || query.contains("finalize")
+        || query.contains("finish")
+        || query.contains("done")
+        || query.contains("ready to merge")
+}
+
+fn has_recent_verification_evidence(snapshot: &suite_packet_core::AgentSnapshotPayload) -> bool {
+    snapshot.recent_tool_invocations.iter().any(|invocation| {
+        matches!(
+            invocation.operation_kind,
+            suite_packet_core::ToolOperationKind::Test
+                | suite_packet_core::ToolOperationKind::Build
+                | suite_packet_core::ToolOperationKind::Diff
+        )
+    })
 }
 
 pub(crate) fn render_brief(
