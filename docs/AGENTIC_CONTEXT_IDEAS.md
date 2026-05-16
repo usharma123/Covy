@@ -154,12 +154,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density workflow gate | Keeps runbook density regressions visible in CI. | The context-anomalies workflow now runs the runbook density checker self-test and path filters include the checker script. | Evidence: no summary growth; local self-test passes and workflow YAML includes the new script path. |
 | Context anomaly drilldown runbook density help workflow log | Keeps runbook density checker usage visible in CI logs without expanding summaries. | The context-anomalies workflow now runs the density checker `--help` mode before self-test. | Evidence: no GitHub summary growth; help output lists default, `--json`, `--self-test`, and `--help`. |
 | Context anomaly drilldown runbook density help docs | Helps agents discover density checker modes from the runbook. | The runbook command table now lists `node scripts/check_context_anomaly_runbook_density.mjs --self-test` and notes that `--help` lists modes. | Evidence: runbook remains under 45 lines after folding checksum prose; documented modes match help output. |
+| Context anomaly drilldown runbook density self-coverage | Makes the density checker protect its own runbook command row. | The density checker required-command list now includes `node scripts/check_context_anomaly_runbook_density.mjs --self-test`. | Evidence: checker output stays one line and self-test proves removing the density row fails the missing-command check. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density self-coverage | Makes the density checker protect its own runbook command row. | Add the density checker command to its required command list. | Compact metric: checker output stays one line; correctness metric: removing the density row fails the missing-command check. |
+| Context anomaly drilldown runbook density JSON docs | Helps automation consumers understand the density checker payload. | Document density checker `--json` fields in the runbook row or nearby prose. | Compact metric: runbook remains under 45 lines; correctness metric: documented fields match checker JSON output. |
 
 ## Research Rules
 
