@@ -1705,7 +1705,7 @@ if (args.includes("--self-test")) {
     actualJoinedMutationFieldString: sample.actualMutationFields.join(","),
     expectedJoinedMutationFieldString: sample.expectedMutationFields.join(","),
   });
-  const joinedDefaultOutputMutationIdentityFieldStringsMatch = (
+  const defaultOutputMutationIdentityFieldStringPairMatches = (
     joinedIdentityFieldStrings,
   ) =>
     joinedIdentityFieldStrings.actualJoinedMutationFieldString ===
@@ -1715,7 +1715,7 @@ if (args.includes("--self-test")) {
   const sampledDefaultOutputMutationIdentityFieldStringsMatch = (sample) => {
     const joinedIdentityFieldStrings =
       sampleDefaultOutputMutationIdentityFieldStringPair(sample);
-    return joinedDefaultOutputMutationIdentityFieldStringsMatch(
+    return defaultOutputMutationIdentityFieldStringPairMatches(
       joinedIdentityFieldStrings,
     );
   };
