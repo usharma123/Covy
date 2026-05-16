@@ -502,6 +502,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
   const expectedValues = {
     cmds: String(resultDetails.commands_checked),
     labels: String(resultDetails.output_labels_checked),
+    adocs: String(resultDetails.alias_docs_checked),
     dphr: String(resultDetails.density_doc_phrases_checked),
     anc: String(resultDetails.density_doc_anchors_checked),
     soft: resultDetails.row_soft_ok ? "ok" : "over",
@@ -735,6 +736,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=dphr");
     console.error(`actual=${staleDensityDocCountError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleAliasDocCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ adocs=\d+/, " adocs=0")),
+    result,
+  );
+  if (staleAliasDocCountError !== "default_output_parse_mismatch=adocs") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=adocs");
+    console.error(`actual=${staleAliasDocCountError ?? "ok"}`);
     process.exit(1);
   }
   const staleDensityDocAnchorError = defaultOutputParseIssue(
