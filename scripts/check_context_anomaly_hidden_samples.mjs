@@ -18,6 +18,14 @@ const maxSummaryLength = Number.parseInt(
   10,
 );
 const args = process.argv.slice(2);
+const unknownArgs = args.filter(
+  (arg) => !["--json", "--self-test"].includes(arg),
+);
+if (unknownArgs.length > 0) {
+  console.error("context_anomaly_hidden_sample_unknown_option");
+  console.error(`option=${unknownArgs[0]}`);
+  process.exit(2);
+}
 const jsonOutput = args.includes("--json");
 const selfTest = args.includes("--self-test");
 
