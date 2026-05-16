@@ -1706,8 +1706,10 @@ if (args.includes("--self-test")) {
   const failDefaultOutputMutationFieldIdentity = (sample) => {
     failDefaultOutputMutation(defaultOutputMutationFieldIdentityDetails(sample));
   };
+  const sampleDefaultOutputMutationFieldIdentity = () =>
+    defaultOutputMutationFieldIdentitySample();
   const assertDefaultOutputMutationFieldIdentity = () => {
-    const identityFieldSample = defaultOutputMutationFieldIdentitySample();
+    const identityFieldSample = sampleDefaultOutputMutationFieldIdentity();
     if (!defaultOutputMutationFieldIdentityMatches(identityFieldSample)) {
       failDefaultOutputMutationFieldIdentity(identityFieldSample);
     }
