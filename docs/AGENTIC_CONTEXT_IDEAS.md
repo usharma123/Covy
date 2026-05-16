@@ -134,12 +134,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit artifact fallback | Keeps the workflow summary useful if audit artifact creation fails before checksum files exist. | Audit checksum summary fields now fall back to `missing-audit-text` or `missing-audit-json` when artifact files are absent. | Evidence: summary line count does not grow; missing artifact checksum commands report named placeholders instead of failing the summary step. |
 | Context anomaly drilldown audit artifact fallback docs | Helps maintainers interpret placeholder audit checksums in failed workflow summaries. | The runbook artifact note now explains `missing-audit-text/json` placeholders. | Evidence: runbook remains under 45 lines and placeholders match workflow fallback strings. |
 | Context anomaly drilldown audit summary field budget | Prevents the growing context anomaly summary from becoming noisy in failed CI runs. | `scripts/check_context_anomaly_summary_budget.mjs` now checks workflow summary line count, template width, and required audit, fixture, trend, and formatter labels. | Evidence: default output reports `lines=22/24`; JSON output stays compact and includes all required labels. |
+| Context anomaly drilldown audit summary budget self-test | Proves the summary-budget checker catches both noisy summaries and missing fields. | The summary-budget checker now has `--self-test` for low line budget, low width budget, and missing-label fixtures. | Evidence: self-test output is one line and verifies each expected failure code. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit summary budget self-test | Proves the summary-budget checker catches both noisy summaries and missing fields. | Add a self-test mode that exercises low line budget, low width budget, and missing-label fixtures. | Compact metric: self-test output is one line; correctness metric: each expected failure mode is verified. |
+| Context anomaly drilldown audit summary budget workflow gate | Keeps workflow summary sprawl caught in CI, not just locally. | Run the summary-budget checker in the context-anomalies workflow and path filters. | Compact metric: no summary growth; correctness metric: workflow fails if summary budget or required labels drift. |
 
 ## Research Rules
 

@@ -15,7 +15,9 @@ const maxTemplateLineLength = Number.parseInt(
   10,
 );
 const args = process.argv.slice(2);
-const unknownArgs = args.filter((arg) => !["--json", "--help"].includes(arg));
+const unknownArgs = args.filter(
+  (arg) => !["--json", "--self-test", "--help"].includes(arg),
+);
 if (unknownArgs.length > 0) {
   console.error("context_anomaly_summary_budget_unknown_option");
   console.error(`option=${unknownArgs[0]}`);
@@ -24,9 +26,10 @@ if (unknownArgs.length > 0) {
 if (args.includes("--help")) {
   console.log(
     [
-      "Usage: node scripts/check_context_anomaly_summary_budget.mjs [--json|--help]",
+      "Usage: node scripts/check_context_anomaly_summary_budget.mjs [--json|--self-test|--help]",
       "default: validate workflow summary line count and template width",
       "--json: print ok, line_count, max_lines, max_template_line, and labels",
+      "--self-test: verify line, width, and missing-label failure modes",
       "--help: print this help",
     ].join("\n"),
   );
@@ -83,15 +86,50 @@ function lineLabel(line) {
   return (splitIndex >= 0 ? line.slice(0, splitIndex) : line).trimEnd();
 }
 
-const summaryLines = extractSummaryLines(readFileSync(workflowPath, "utf8"));
-const labels = summaryLines.map(lineLabel);
-const missingLabels = requiredLabels.filter(
-  (required) => !labels.some((label) => label.startsWith(required)),
-);
-const maxActualTemplateLineLength = Math.max(
-  0,
-  ...summaryLines.map((line) => line.length),
-);
+function evaluate(workflowText, lineBudget, widthBudget) {
+  const summaryLines = extractSummaryLines(workflowText);
+  const labels = summaryLines.map(lineLabel);
+  const missingLabels = requiredLabels.filter(
+    (required) => !labels.some((label) => label.startsWith(required)),
+  );
+  const maxActualTemplateLineLength = Math.max(
+    0,
+    ...summaryLines.map((line) => line.length),
+  );
+  if (summaryLines.length > lineBudget) {
+    return {
+      ok: false,
+      code: "context_anomaly_summary_budget_too_many_lines",
+      line_count: summaryLines.length,
+      max_lines: lineBudget,
+    };
+  }
+  if (maxActualTemplateLineLength > widthBudget) {
+    return {
+      ok: false,
+      code: "context_anomaly_summary_budget_line_too_long",
+      max_template_line: maxActualTemplateLineLength,
+      max_template_line_allowed: widthBudget,
+    };
+  }
+  if (missingLabels.length > 0) {
+    return {
+      ok: false,
+      code: "context_anomaly_summary_budget_missing_labels",
+      missing: missingLabels,
+    };
+  }
+  return {
+    ok: true,
+    line_count: summaryLines.length,
+    max_lines: lineBudget,
+    max_template_line: maxActualTemplateLineLength,
+    max_template_line_allowed: widthBudget,
+    labels,
+  };
+}
+
+const workflowText = readFileSync(workflowPath, "utf8");
 
 function fail(code, details) {
   if (args.includes("--json")) {
@@ -105,31 +143,57 @@ function fail(code, details) {
   process.exit(1);
 }
 
-if (summaryLines.length > maxLines) {
-  fail("context_anomaly_summary_budget_too_many_lines", {
-    line_count: summaryLines.length,
-    max_lines: maxLines,
-  });
+function assertSelfTest(result, expectedCode) {
+  if (result.code !== expectedCode) {
+    console.error("context_anomaly_summary_budget_self_test_failed");
+    console.error(`expected=${expectedCode}`);
+    console.error(`actual=${result.code ?? "ok"}`);
+    process.exit(1);
+  }
 }
-if (maxActualTemplateLineLength > maxTemplateLineLength) {
-  fail("context_anomaly_summary_budget_line_too_long", {
-    max_template_line: maxActualTemplateLineLength,
-    max_template_line_allowed: maxTemplateLineLength,
-  });
+
+const result = evaluate(workflowText, maxLines, maxTemplateLineLength);
+if (args.includes("--self-test")) {
+  if (!result.ok) {
+    console.error("context_anomaly_summary_budget_self_test_baseline_failed");
+    console.error(`code=${result.code}`);
+    process.exit(1);
+  }
+  assertSelfTest(
+    evaluate(workflowText, result.line_count - 1, maxTemplateLineLength),
+    "context_anomaly_summary_budget_too_many_lines",
+  );
+  assertSelfTest(
+    evaluate(workflowText, maxLines, result.max_template_line - 1),
+    "context_anomaly_summary_budget_line_too_long",
+  );
+  assertSelfTest(
+    evaluate(
+      workflowText.replace(
+        /\n\s+echo "- audit checksum: \$audit_output_checksum"/,
+        "",
+      ),
+      maxLines,
+      maxTemplateLineLength,
+    ),
+    "context_anomaly_summary_budget_missing_labels",
+  );
+  console.log("context_anomaly_summary_budget_self_test_ok");
+  process.exit(0);
 }
-if (missingLabels.length > 0) {
-  fail("context_anomaly_summary_budget_missing_labels", {
-    missing: missingLabels,
-  });
+
+if (!result.ok) {
+  const { code, ok, ...details } = result;
+  fail(code, details);
 }
 
 const payload = {
   ok: true,
-  line_count: summaryLines.length,
-  max_lines: maxLines,
-  max_template_line: maxActualTemplateLineLength,
-  max_template_line_allowed: maxTemplateLineLength,
-  labels,
+  line_count: result.line_count,
+  max_lines: result.max_lines,
+  max_template_line: result.max_template_line,
+  max_template_line_allowed: result.max_template_line_allowed,
+  labels: result.labels,
 };
 if (args.includes("--json")) {
   console.log(JSON.stringify(payload));
