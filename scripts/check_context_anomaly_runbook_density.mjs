@@ -2209,11 +2209,14 @@ if (args.includes("--self-test")) {
     };
     assertJsonErrorHelpAdjacencyMutationSelfTest();
     const assertJsonHeadroomEnvPairMutationSelfTest = () => {
+      const jsonHeadroomEnvPairDoc =
+        "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`";
+      const driftedJsonHeadroomEnvPairDoc = "`jhead` has headroom";
       assertSelfTestMissing(
         evaluate(
           runbook.replace(
-            "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`",
-            "`jhead` has headroom",
+            jsonHeadroomEnvPairDoc,
+            driftedJsonHeadroomEnvPairDoc,
           ),
           maxLines,
         ),
