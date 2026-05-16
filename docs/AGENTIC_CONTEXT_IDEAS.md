@@ -77,12 +77,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly trend docs cross-link | Helps agents find the runbook from product docs and CI summaries. | Product docs and the context-anomalies workflow summary now link to `docs/context-anomalies/RUNBOOK.md`. | Evidence: one runbook line was added to each surface and both point to `docs/context-anomalies/RUNBOOK.md`. |
 | Context anomaly hidden-category drilldown | Lets agents move from a recurring hidden category to the concrete source that was capped. | Context anomaly digests now preserve one compact hidden sample per capped category, history records store those samples, and the dashboard trend tile reports recurring hidden samples. | Evidence: `context_anomaly_tile_reports_hidden_category_drilldown_sample`; hidden `fallback_provenance` points to its fallback signal sample under 512 bytes. |
 | Context anomaly drilldown workflow summary | Makes capped anomaly source samples visible in CI without opening dashboard JSON. | The context-anomalies workflow now appends compact live and fixture hidden-sample summaries, capped to 256 characters. | Evidence: fixture hidden sample summary reports `fallback_provenance=recent_fallbacks=1`; summary extraction is capped with `cut -c1-256`. |
+| Context anomaly drilldown runbook update | Explains how to interpret hidden-sample drilldowns from dashboard and CI. | The context anomaly runbook now documents `hidden_samples`, `recurring_hidden_samples`, and the fallback provenance fixture sample. | Evidence: runbook remains under 45 lines and documents both sample fields plus `fallback_provenance=recent_fallbacks=1`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook update | Explains how to interpret hidden-sample drilldowns from dashboard and CI. | Update the context anomaly runbook with the hidden sample fields and an example fallback provenance sample. | Compact metric: runbook remains under 45 lines; correctness metric: documents `hidden_samples` and `recurring_hidden_samples`. |
+| Context anomaly drilldown source ordering | Makes hidden sample summaries deterministic when multiple records mention the same category. | Add a test that latest history samples win over older samples for recurring hidden categories. | Compact metric: tile samples under 512 bytes; correctness metric: newer fallback provenance sample replaces older fallback sample. |
 
 ## Research Rules
 
