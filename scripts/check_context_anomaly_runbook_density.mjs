@@ -196,6 +196,7 @@ const pairedEnvDocExclusions = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
 ];
+const expectedPairedEnvDocExclusionCount = 2;
 const pairedEnvDocExclusionCount = pairedEnvDocExclusions.length;
 const requiredPlainEnvDocs = requiredEnvDocs.filter(
   (envName) => !pairedEnvDocExclusions.includes(envName),
@@ -1504,9 +1505,11 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
-  if (pairedEnvDocExclusionCount !== 2) {
+  if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error("expected_paired_env_doc_exclusion_count=2");
+    console.error(
+      `expected_paired_env_doc_exclusion_count=${expectedPairedEnvDocExclusionCount}`,
+    );
     console.error(
       `actual_paired_env_doc_exclusion_count=${pairedEnvDocExclusionCount}`,
     );

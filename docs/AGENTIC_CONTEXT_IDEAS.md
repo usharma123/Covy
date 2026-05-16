@@ -423,12 +423,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper paired env exclusion count guard | Guards the size of the paired-env exclusion list directly. | Self-test now asserts `pairedEnvDocExclusions.length === 2` before deriving the plain env-doc count. | Evidence: no output growth; count guard follows the exclusion source. |
 | Context anomaly drilldown density missing-detail helper paired env exclusion count reuse | Avoids duplicating the paired exclusion count literal across guards. | Added `pairedEnvDocExclusionCount`, reused by the direct count guard and plain-env derived count. | Evidence: no output growth; count arithmetic is single-source. |
 | Context anomaly drilldown density missing-detail helper paired env exclusion count name | Makes the count guard failure name match the single-source variable. | Count guard diagnostics now print `expected_paired_env_doc_exclusion_count` and `actual_paired_env_doc_exclusion_count`. | Evidence: no output growth; failure diagnostics match variable names. |
+| Context anomaly drilldown density missing-detail helper paired env expected count constant | Names the expected paired-env exclusion count instead of embedding `2` in diagnostics. | Added `expectedPairedEnvDocExclusionCount`, reused by the paired-env count guard diagnostic. | Evidence: no output growth; expected count is single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper paired env expected count constant | Names the expected paired-env exclusion count instead of embedding `2` in diagnostics. | Extract `expectedPairedEnvDocExclusionCount` and reuse it in the count guard. | Compact metric: no output growth; correctness metric: expected count is single-source. |
+| Context anomaly drilldown density missing-detail helper paired env count derived doc | Aligns ledger wording with the expected-count constant. | Update the completed count guard row to reference `expectedPairedEnvDocExclusionCount` instead of literal `2`. | Compact metric: no runtime output growth; correctness metric: docs match guard code. |
 
 ## Research Rules
 
