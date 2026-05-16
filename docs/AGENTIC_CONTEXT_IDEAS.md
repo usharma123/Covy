@@ -461,12 +461,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output missing line helper | Names the mutation that removes a default-output field. | Extracted `defaultOutputWithoutField(line, field)` for the missing-field mutation case. | Evidence: no runtime output growth; missing-field checks still remove only the targeted token. |
 | Context anomaly drilldown density self-test default output stale line helper | Names the mutation that replaces a default-output field. | Extracted `defaultOutputWithStaleField(line, field, staleValue)` for the stale-field mutation case. | Evidence: no runtime output growth; stale-field checks still replace only the targeted token. |
 | Context anomaly drilldown density self-test default output pattern locality | Removes stale local regex state after line mutation helpers own replacement. | Dropped the local `fieldPattern` binding from `assertDefaultOutputMutation()` after both line mutation helpers use `defaultOutputFieldPattern()`. | Evidence: no runtime output growth; mutation checks still target field-specific tokens. |
+| Context anomaly drilldown density self-test default output parsed value helper | Names the current parsed default-output value check. | Extracted `parsedDefaultOutputFieldValue(field)` for the stale no-op comparison. | Evidence: no runtime output growth; stale no-op checks still compare against the parsed current value. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output parsed value helper | Names the current parsed default-output value check. | Extract a `parsedDefaultOutputFieldValue(field)` helper for the stale no-op comparison. | Compact metric: no runtime output growth; correctness metric: stale no-op checks still compare against the parsed current value. |
+| Context anomaly drilldown density self-test default output stale noop helper | Names the stale mutation no-op predicate. | Extract an `isDefaultOutputStaleMutationNoop(line, staleLine, field, staleValue)` helper for the stale mutation guard. | Compact metric: no runtime output growth; correctness metric: stale no-op checks still guard unchanged lines and current-value collisions. |
 
 ## Research Rules
 

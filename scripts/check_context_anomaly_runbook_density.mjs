@@ -1592,6 +1592,7 @@ if (args.includes("--self-test")) {
     expected,
     actual: defaultOutputMutationActualDetail(actual),
   });
+  const parsedDefaultOutputFieldValue = (field) => parsedDefaultOutput[field];
   if (missingStaleMutationFields.length > 0) {
     failDefaultOutputMutation(
       missingStaleMutationFieldsDetails(missingStaleMutationFields),
@@ -1623,7 +1624,7 @@ if (args.includes("--self-test")) {
     );
     if (
       staleOutputLine === defaultOutputLine ||
-      staleValue === parsedDefaultOutput[field]
+      staleValue === parsedDefaultOutputFieldValue(field)
     ) {
       failDefaultOutputMutation(staleMutationNoopDetails(field));
     }
