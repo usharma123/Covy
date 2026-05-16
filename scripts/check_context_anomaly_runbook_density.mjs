@@ -1706,7 +1706,7 @@ if (args.includes("--self-test")) {
   const failDefaultOutputMutationFieldIdentity = (sample) => {
     failDefaultOutputMutation(defaultOutputMutationFieldIdentityDetails(sample));
   };
-  const sampleDefaultOutputMutationFieldIdentity = () =>
+  const sampleDefaultOutputMutationIdentityFields = () =>
     defaultOutputMutationFieldIdentitySample();
   const assertSampledDefaultOutputMutationFieldIdentityFields = (sample) => {
     if (!defaultOutputMutationFieldIdentityMatches(sample)) {
@@ -1714,7 +1714,7 @@ if (args.includes("--self-test")) {
     }
   };
   const assertSampledDefaultOutputMutationFieldIdentity = () => {
-    const sampledIdentityFields = sampleDefaultOutputMutationFieldIdentity();
+    const sampledIdentityFields = sampleDefaultOutputMutationIdentityFields();
     assertSampledDefaultOutputMutationFieldIdentityFields(sampledIdentityFields);
   };
   const assertDefaultOutputMutationFieldIdentity = () => {
