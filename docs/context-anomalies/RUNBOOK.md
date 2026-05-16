@@ -17,7 +17,7 @@ Use this command table before treating a compact anomaly summary as complete:
 
 `Packet28 dashboard --root . --json` reads live history and reports latest status, high count, hidden categories, and recurring hidden categories.
 
-The audit script uses `verify context-anomalies --max-high 2` so local smoke can pass with known live quality debt. The workflow threshold step still runs the stricter release gate with `--max-high 0`.
+The audit script uses `verify context-anomalies --max-high 2` so local smoke can pass with known live quality debt and reports `audit_mode=tolerant`. The workflow threshold step and strict audit mode use `--max-high 0` and report `audit_mode=strict`.
 
 Manual workflow dispatch has a `strict_audit` input that also runs `node scripts/audit_context_anomaly_hidden_samples.mjs --strict`.
 
