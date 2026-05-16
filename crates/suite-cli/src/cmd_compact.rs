@@ -13,6 +13,7 @@ use packet28_daemon_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::memory_store::{record_feedback_with_metadata, FeedbackInput, FeedbackRecord};
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
 };
@@ -235,6 +236,9 @@ pub struct AnalyticsArgs {
     /// Show failed or fallback runs (RTK-compatible alias for --format failures)
     #[arg(short = 'F', long)]
     pub failures: bool,
+    /// Persist confirmed repeated failure advice into local feedback memory
+    #[arg(long)]
+    pub remember_advice: bool,
     /// Show daily savings buckets (RTK-compatible alias for --format daily)
     #[arg(short, long)]
     pub daily: bool,
@@ -347,6 +351,7 @@ struct GainSummary {
     savings_pct: f64,
     by_route: BTreeMap<String, usize>,
     route_roi: BTreeMap<String, GainRouteRoi>,
+    remembered_failure_advice_count: usize,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -984,6 +989,9 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         }
     }
     let run_savings = load_run_savings(&root, args.limit)?;
+    if args.remember_advice {
+        summary.remembered_failure_advice_count = remember_failure_advice(&run_savings)?.len();
+    }
     for record in &run_savings {
         summary.invocation_count += 1;
         summary.raw_est_tokens += record.raw_est_tokens;
@@ -1011,6 +1019,12 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         print_gain_history(&run_savings);
     } else if format == "failures" {
         print_gain_failures(&run_savings);
+        if args.remember_advice {
+            println!(
+                "remembered_failure_advice_count={}",
+                summary.remembered_failure_advice_count
+            );
+        }
     } else if format == "daily" {
         print_gain_buckets(&run_savings, GainBucketKind::Daily);
     } else if format == "weekly" {
@@ -1673,6 +1687,60 @@ fn print_gain_failures(records: &[RunSavingsRecord]) {
             csv_cell(&record.command)
         );
     }
+}
+
+fn remember_failure_advice(records: &[RunSavingsRecord]) -> Result<Vec<FeedbackRecord>> {
+    let repeat_counts = failure_repeat_counts(records);
+    let mut remembered = Vec::new();
+    let mut seen_fingerprints = BTreeMap::<String, ()>::new();
+    for record in records
+        .iter()
+        .filter(|record| record.exit_code != 0 || record.fallback_reason.is_some())
+    {
+        let Some(fingerprint) = record.failure_fingerprint.as_deref() else {
+            continue;
+        };
+        let repeat_count = repeat_counts.get(fingerprint).copied().unwrap_or(0);
+        if repeat_count <= 1 || seen_fingerprints.contains_key(fingerprint) {
+            continue;
+        }
+        let Some(next_success) = next_success_record(records, record) else {
+            continue;
+        };
+        let changed_paths = next_success.changed_paths.join(";");
+        let correction = failure_fix_advice(
+            repeat_count,
+            next_success.command.as_str(),
+            changed_paths.as_str(),
+        );
+        let context = format!(
+            "failure_fingerprint={fingerprint}\nrepeat_count={repeat_count}\nfailed_command={}\nnext_success_command={}\nnext_success_changed_paths={changed_paths}",
+            record.command, next_success.command
+        );
+        let feedback = record_feedback_with_metadata(FeedbackInput {
+            subject: &format!("failure_fingerprint:{fingerprint}"),
+            correction: &correction,
+            topic: Some("failure-advice"),
+            context: Some(&context),
+            predicted: Some(&record.command),
+            reason: Some("confirmed by later successful same-directory run"),
+            source: Some("packet28.gain.failures"),
+            project: Some(&record.cwd),
+        })?;
+        seen_fingerprints.insert(fingerprint.to_string(), ());
+        remembered.push(feedback);
+    }
+    Ok(remembered)
+}
+
+fn failure_repeat_counts(records: &[RunSavingsRecord]) -> BTreeMap<String, usize> {
+    let mut repeat_counts = BTreeMap::<String, usize>::new();
+    for record in records {
+        if let Some(fingerprint) = record.failure_fingerprint.as_deref() {
+            *repeat_counts.entry(fingerprint.to_string()).or_insert(0) += 1;
+        }
+    }
+    repeat_counts
 }
 
 fn failure_fix_advice(

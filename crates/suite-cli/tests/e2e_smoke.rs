@@ -1656,6 +1656,7 @@ fn test_run_reduces_git_status() {
 #[test]
 fn test_gain_reports_failed_and_fallback_runs() {
     let root = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     std::process::Command::new("git")
         .arg("init")
         .current_dir(root.path())
@@ -1664,6 +1665,7 @@ fn test_gain_reports_failed_and_fallback_runs() {
     std::fs::create_dir_all(root.path().join("src")).unwrap();
     suite_cmd()
         .current_dir(root.path())
+        .env("HOME", home.path())
         .args([
             "run",
             "--root",
@@ -1682,6 +1684,7 @@ fn test_gain_reports_failed_and_fallback_runs() {
         ));
     suite_cmd()
         .current_dir(root.path())
+        .env("HOME", home.path())
         .args([
             "run",
             "--root",
@@ -1699,6 +1702,7 @@ fn test_gain_reports_failed_and_fallback_runs() {
         ));
     suite_cmd()
         .current_dir(root.path())
+        .env("HOME", home.path())
         .args([
             "run",
             "--root",
@@ -1714,6 +1718,7 @@ fn test_gain_reports_failed_and_fallback_runs() {
 
     suite_cmd()
         .current_dir(root.path())
+        .env("HOME", home.path())
         .args([
             "gain",
             "--root",
@@ -1737,6 +1742,33 @@ fn test_gain_reports_failed_and_fallback_runs() {
 
     suite_cmd()
         .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "gain",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--format",
+            "failures",
+            "--remember-advice",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "remembered_failure_advice_count=1",
+        ));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args(["feedback", "search", "packet28 fix"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("repeated failure: retry with"))
+        .stdout(predicate::str::contains("failure_fingerprint:"));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
         .args([
             "gain",
             "--root",
