@@ -590,12 +590,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test output label mutation wrapper | Names the repeated output-label mutation assertions. | Extracted `assertOutputLabelMutationSelfTests()` around the `wf`, `env`, and related output documentation assertions. | Evidence: no runtime output growth; self-test still verifies required output label docs fail when removed. |
 | Context anomaly drilldown density self-test output label mutation order | Keeps output-label mutation checks before key/value output docs. | Verified `assertOutputLabelMutationSelfTests()` sits directly after failure-code mutations and before the `key=value` output-doc assertion. | Evidence: no runtime output growth; output-label coverage remains before key/value output docs. |
 | Context anomaly drilldown density self-test key/value output doc wrapper | Names the key/value output documentation mutation assertion. | Extracted `assertKeyValueOutputDocMutationSelfTest()` around the `key=value` output-doc removal assertion. | Evidence: no runtime output growth; key/value output doc coverage still fails when removed. |
+| Context anomaly drilldown density self-test key/value output doc order | Keeps the key/value output doc mutation beside output-label mutations. | Verified `assertKeyValueOutputDocMutationSelfTest()` sits directly after `assertOutputLabelMutationSelfTests()` and before default output phrase mutations. | Evidence: no runtime output growth; key/value output doc coverage remains before default-output phrase coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test key/value output doc order | Keeps the key/value output doc mutation beside output-label mutations. | Verify `assertKeyValueOutputDocMutationSelfTest()` sits directly after `assertOutputLabelMutationSelfTests()` and before default output phrase mutations. | Compact metric: no runtime output growth; correctness metric: key/value output doc coverage remains before default-output phrase coverage. |
+| Context anomaly drilldown density self-test default output phrase mutation wrapper | Names the default-output phrase mutation loop. | Extract `assertDefaultOutputPhraseMutationSelfTests()` around the `defaultOutputFieldOrder` phrase drift assertions. | Compact metric: no runtime output growth; correctness metric: default-output phrase coverage still fails for each drifted field label. |
 
 ## Research Rules
 
