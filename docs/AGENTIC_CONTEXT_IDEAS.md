@@ -622,12 +622,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON headroom env-pair wrapper | Names the `jhead` env-pair documentation assertion. | Extracted `assertJsonHeadroomEnvPairMutationSelfTest()` around the `jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` assertion. | Evidence: no runtime output growth; JSON headroom env-pair coverage still fails when diluted. |
 | Context anomaly drilldown density self-test JSON headroom env-pair order | Keeps JSON headroom env-pair coverage before plain env-doc coverage. | Verified `assertJsonHeadroomEnvPairMutationSelfTest()` sits after error/help adjacency coverage and before the `requiredPlainEnvDocs` loop. | Evidence: no runtime output growth; JSON headroom env-pair coverage remains before plain env-doc coverage. |
 | Context anomaly drilldown density self-test plain env-doc wrapper | Names the required plain env-doc drift loop. | Extracted `assertPlainEnvDocMutationSelfTests()` around the `requiredPlainEnvDocs` mutation loop. | Evidence: no runtime output growth; plain env-doc coverage still fails when env docs drift. |
+| Context anomaly drilldown density self-test plain env-doc order | Keeps plain env-doc coverage before workflow command coverage. | Verified `assertPlainEnvDocMutationSelfTests()` sits after JSON headroom env-pair coverage and before the `requiredWorkflowDensityCommands` loop. | Evidence: no runtime output growth; plain env-doc coverage remains before workflow command coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test plain env-doc order | Keeps plain env-doc coverage before workflow command coverage. | Verify `assertPlainEnvDocMutationSelfTests()` sits after JSON headroom env-pair coverage and before the `requiredWorkflowDensityCommands` loop. | Compact metric: no runtime output growth; correctness metric: plain env-doc coverage remains before workflow command coverage. |
+| Context anomaly drilldown density self-test workflow command wrapper | Names the required workflow command drift loop. | Extract `assertWorkflowCommandMutationSelfTests()` around the `requiredWorkflowDensityCommands` mutation loop. | Compact metric: no runtime output growth; correctness metric: workflow command coverage still fails when commands drift. |
 
 ## Research Rules
 
