@@ -118,6 +118,9 @@ const defaultTextFields = [...defaultOutputFieldOrder];
 const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
+  `\`key=value\`: ${defaultOutputFieldOrder
+    .map((label) => `\`${label}\``)
+    .join(", ")};`,
   "`alias_docs_checked`",
   "`row_soft_ok`",
   "`row_soft_max`",
@@ -931,6 +934,13 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`key=value`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace("`env`, `labels`", "`labels`, `env`"),
+      maxLines,
+    ),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
