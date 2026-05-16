@@ -663,12 +663,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field order helper order | Keeps the extracted JSON field-order helper beside the field-doc group it specializes. | Verified `assertJsonFieldOrderDocMutationSelfTests()` is defined and called inside `assertJsonFieldDocMutationSelfTests()` before the final `text_width_docs_checked` field-presence check. | Evidence: no runtime output growth; order-swap coverage remains local to JSON field docs. |
 | Context anomaly drilldown density self-test JSON field presence table | Replaces repeated JSON field-presence assertions with a compact data table. | Extracted repeated field-presence docs in `assertJsonFieldDocMutationSelfTests()` into `assertRequiredJsonFieldDocs(requiredJsonFieldDocs)` calls around the order helper. | Evidence: no runtime output growth; every existing JSON field-doc case name remains covered. |
 | Context anomaly drilldown density self-test JSON field presence table order | Keeps the table-driven field docs and order helper in a deliberate sequence. | Verified `assertRequiredJsonFieldDocs(...)` runs for leading JSON fields, then `assertJsonFieldOrderDocMutationSelfTests()`, then the trailing `text_width_docs_checked` field doc. | Evidence: no runtime output growth; the order-helper still stays between leading and trailing field-doc checks. |
+| Context anomaly drilldown density self-test JSON field presence helper name | Aligns the table helper name with the mutation self-test naming style. | Renamed `assertRequiredJsonFieldDocs(requiredJsonFieldDocs)` to `assertJsonFieldDocPresenceMutationSelfTests(requiredJsonFieldDocs)`. | Evidence: no runtime output growth; table-driven field-doc coverage still uses the same case names. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field presence helper name | Aligns the table helper name with the mutation self-test naming style. | Rename `assertRequiredJsonFieldDocs(requiredJsonFieldDocs)` to `assertJsonFieldDocPresenceMutationSelfTests(requiredJsonFieldDocs)`. | Compact metric: no runtime output growth; correctness metric: table-driven field-doc coverage still uses the same case names. |
+| Context anomaly drilldown density self-test JSON field presence helper order | Keeps the renamed table helper near both table invocations. | Verify `assertJsonFieldDocPresenceMutationSelfTests(requiredJsonFieldDocs)` is defined before the order helper and called on both sides of the order-helper invocation. | Compact metric: no runtime output growth; correctness metric: table-driven coverage remains split around order-swap coverage. |
 
 ## Research Rules
 
