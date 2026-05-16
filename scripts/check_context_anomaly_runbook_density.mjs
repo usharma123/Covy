@@ -12,10 +12,14 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
+const maxJsonBytes = Number.parseInt(
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ?? "256",
+  10,
+);
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
   "default: validate runbook line budget and required command entries",
-  "--json: print ok, line_count, max_lines, and commands_checked",
+  "--json: print ok, budgets, commands_checked, and max_json_bytes under a byte cap",
   "--self-test: verify line-budget and missing-command failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
 ];
@@ -132,6 +136,29 @@ function assertHelpIncludes(expected) {
   }
 }
 
+function successPayload(result, jsonBudget) {
+  return {
+    ok: true,
+    line_count: result.line_count,
+    max_lines: result.max_lines,
+    commands_checked: result.commands_checked,
+    max_json_bytes: jsonBudget,
+  };
+}
+
+function jsonBudgetIssue(payload, jsonBudget) {
+  const json = JSON.stringify(payload);
+  if (json.length <= jsonBudget) {
+    return null;
+  }
+  return {
+    ok: false,
+    code: "context_anomaly_runbook_density_json_too_long",
+    actual_bytes: json.length,
+    max_json_bytes: jsonBudget,
+  };
+}
+
 const runbook = readFileSync(runbookPath, "utf8");
 const result = evaluate(runbook, maxLines);
 if (args.includes("--self-test")) {
@@ -180,13 +207,13 @@ if (!result.ok) {
   fail(code, details);
 }
 
-const payload = {
-  ok: true,
-  line_count: result.line_count,
-  max_lines: result.max_lines,
-  commands_checked: result.commands_checked,
-};
+const payload = successPayload(result, maxJsonBytes);
 if (args.includes("--json")) {
+  const issue = jsonBudgetIssue(payload, maxJsonBytes);
+  if (issue) {
+    const { code, ok, ...details } = issue;
+    fail(code, details);
+  }
   console.log(JSON.stringify(payload));
 } else {
   console.log(
