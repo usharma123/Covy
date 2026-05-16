@@ -2183,18 +2183,21 @@ if (args.includes("--self-test")) {
     );
   };
   assertJsonErrorHelpAdjacencyMutationSelfTest();
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace(
-        "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`",
-        "`jhead` has headroom",
+  const assertJsonHeadroomEnvPairMutationSelfTest = () => {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replace(
+          "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`",
+          "`jhead` has headroom",
+        ),
+        maxLines,
       ),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
-    "missing_jhead_env_pair",
-  );
+      "context_anomaly_runbook_density_missing_output_docs",
+      "jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
+      "missing_jhead_env_pair",
+    );
+  };
+  assertJsonHeadroomEnvPairMutationSelfTest();
   for (const [envIndex, envName] of requiredPlainEnvDocs.entries()) {
     assertSelfTestMissing(
       evaluate(
