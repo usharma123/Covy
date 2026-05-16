@@ -338,12 +338,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON error shape order guard | Keeps the JSON error-shape note adjacent to the help-width note for compact triage. | Self-test now requires the compact `ok:false`;`h:` adjacency phrase. | Evidence: JSON prose remains under cap; docs shape order drift fails coverage. |
 | Context anomaly drilldown density prose recovery after JSON error docs | Restores prose headroom after adding JSON error-shape docs. | The guarded error/help shape note now moves from the long JSON field list to the shorter density-label prose line. | Evidence: prose max drops below 300; all JSON docs guards still pass. |
 | Context anomaly drilldown density label-line prose recovery after error docs | Restores label-line margin after moving error/help shape docs there. | The density-label prose line now drops the nonessential `err:` prefix while preserving the guarded error/help phrase. | Evidence: label-line width drops; JSON error/help docs still pass. |
+| Context anomaly drilldown density label-width docs parity | Keeps `dlab` meaningful after moving error/help docs onto the label line. | Self-test now asserts `density_label_line_width` equals the actual `Density labels:` line length. | Evidence: no output growth; reported label width matches the runbook line. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label-width docs parity | Keeps `dlab` meaningful after moving error/help docs onto the label line. | Add a self-test assertion that `density_label_line_width` equals the actual `Density labels:` line length. | Compact metric: no output growth; correctness metric: reported label width matches the runbook line. |
+| Context anomaly drilldown density label-width output parity | Proves compact default output `dlab` is not only internally counted. | Add a parsed-output assertion that `dlab` equals the actual `Density labels:` line length. | Compact metric: no output growth; correctness metric: parsed `dlab` matches runbook text. |
 
 ## Research Rules
 

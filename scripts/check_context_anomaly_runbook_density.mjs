@@ -807,6 +807,13 @@ if (args.includes("--self-test")) {
     );
     process.exit(1);
   }
+  const actualDensityLabelLineLength = densityLabelLineLength(runbook);
+  if (result.density_label_line_width !== actualDensityLabelLineLength) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_density_label_width=${actualDensityLabelLineLength}`);
+    console.error(`actual_density_label_width=${result.density_label_line_width}`);
+    process.exit(1);
+  }
   if (result.parsed_fields_checked !== defaultTextFields.length) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_parsed_fields=${defaultTextFields.length}`);
