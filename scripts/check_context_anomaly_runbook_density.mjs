@@ -24,7 +24,7 @@ const maxTableRowLength = Number.parseInt(
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
   "default: validate runbook line budget, row width, command entries, failure-code docs, and workflow density commands",
-  "--json: print ok, budgets, max_table_row, commands_checked, failure_codes_checked, and max_json_bytes",
+  "--json: print ok, budgets, max_table_row, commands_checked, failure_codes_checked, workflow_commands_checked, and max_json_bytes",
   "--self-test: verify line, width, missing-command, and JSON byte failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
 ];
@@ -204,7 +204,7 @@ function assertHelpIncludes(expected) {
   }
 }
 
-function successPayload(result, jsonBudget) {
+function successPayload(result, workflow, jsonBudget) {
   return {
     ok: true,
     line_count: result.line_count,
@@ -213,6 +213,7 @@ function successPayload(result, jsonBudget) {
     max_table_row_allowed: result.max_table_row_allowed,
     commands_checked: result.commands_checked,
     failure_codes_checked: result.failure_codes_checked,
+    workflow_commands_checked: workflow.workflow_commands_checked,
     max_json_bytes: jsonBudget,
   };
 }
@@ -249,6 +250,19 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_failure_codes=${requiredFailureCodes.length}`);
     console.error(`actual_failure_codes=${result.failure_codes_checked}`);
+    process.exit(1);
+  }
+  if (
+    workflowResult.workflow_commands_checked !==
+    requiredWorkflowDensityCommands.length
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_workflow_commands=${requiredWorkflowDensityCommands.length}`,
+    );
+    console.error(
+      `actual_workflow_commands=${workflowResult.workflow_commands_checked}`,
+    );
     process.exit(1);
   }
   assertSelfTest(
@@ -314,7 +328,9 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_json_too_long",
   );
   assertSelfTest(
-    jsonBudgetIssue(successPayload(result, 10), 10) ?? { code: "ok" },
+    jsonBudgetIssue(successPayload(result, workflowResult, 10), 10) ?? {
+      code: "ok",
+    },
     "context_anomaly_runbook_density_json_too_long",
   );
   for (const expected of [
@@ -339,7 +355,7 @@ if (!workflowResult.ok) {
   fail(code, details);
 }
 
-const payload = successPayload(result, maxJsonBytes);
+const payload = successPayload(result, workflowResult, maxJsonBytes);
 if (args.includes("--json")) {
   const issue = jsonBudgetIssue(payload, maxJsonBytes);
   if (issue) {
@@ -351,5 +367,6 @@ if (args.includes("--json")) {
   console.log(
     `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines} max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed} commands=${payload.commands_checked}`,
     `failure_codes=${payload.failure_codes_checked}`,
+    `workflow_commands=${payload.workflow_commands_checked}`,
   );
 }
