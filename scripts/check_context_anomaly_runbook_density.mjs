@@ -514,6 +514,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     env: String(resultDetails.env_docs_checked),
     labels: String(resultDetails.output_labels_checked),
     phrases: String(resultDetails.output_doc_phrases_checked),
+    prose: `${resultDetails.max_density_prose_line}/${resultDetails.max_density_prose_line_allowed}`,
     adocs: String(resultDetails.alias_docs_checked),
     dphr: String(resultDetails.density_doc_phrases_checked),
     anc: String(resultDetails.density_doc_anchors_checked),
@@ -852,6 +853,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=lines");
     console.error(`actual=${staleLineValueError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleProseValueError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ prose=\S+/, " prose=0/0")),
+    result,
+  );
+  if (staleProseValueError !== "default_output_parse_mismatch=prose") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=prose");
+    console.error(`actual=${staleProseValueError ?? "ok"}`);
     process.exit(1);
   }
   const staleCommandCountError = defaultOutputParseIssue(
