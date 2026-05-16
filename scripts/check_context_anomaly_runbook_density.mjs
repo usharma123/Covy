@@ -1517,7 +1517,7 @@ if (args.includes("--self-test")) {
       `drifted_required_command_${commandIndex}`,
     );
   }
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace(
         "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
@@ -1526,6 +1526,8 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_commands",
+    "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
+    "missing_workflow_self_test_command_detail",
   );
   assertSelfTest(
     evaluate(
