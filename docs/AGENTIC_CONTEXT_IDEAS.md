@@ -630,12 +630,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test soft-row output wrapper | Names the row soft-limit text and JSON output checks. | Extracted `assertSoftRowOutputSelfTests()` around the two `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX` output assertions. | Evidence: no runtime output growth; soft-row output remains covered in text and JSON modes. |
 | Context anomaly drilldown density self-test soft-row output order | Keeps soft-row output checks before prose/text env failures. | Verified `assertSoftRowOutputSelfTests()` sits after hard env limit coverage and before `P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX` failure coverage. | Evidence: no runtime output growth; soft-row output coverage remains before prose/text env failures. |
 | Context anomaly drilldown density self-test prose/text env wrapper | Names prose and text-width env failure checks. | Extracted `assertProseTextEnvFailureSelfTests()` around `P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX` and `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` failure assertions. | Evidence: no runtime output growth; prose and text env failures remain covered. |
+| Context anomaly drilldown density self-test prose/text env order | Keeps prose/text failure checks before text JSON shape checks. | Verified `assertProseTextEnvFailureSelfTests()` sits after soft-row output coverage and before `assertEnvFailureOutput()` for `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Evidence: no runtime output growth; prose/text failures remain before text JSON shape coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test prose/text env order | Keeps prose/text failure checks before text JSON shape checks. | Verify `assertProseTextEnvFailureSelfTests()` sits after soft-row output coverage and before `assertEnvFailureOutput()` for `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Compact metric: no runtime output growth; correctness metric: prose/text failures remain before text JSON shape coverage. |
+| Context anomaly drilldown density self-test text JSON shape wrapper | Names text-width JSON failure output and exclusion checks. | Extract `assertTextJsonFailureShapeSelfTests()` around `assertEnvFailureOutput()` and `assertEnvFailureExcludes()` for `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Compact metric: no runtime output growth; correctness metric: text JSON failure shape remains covered. |
 
 ## Research Rules
 
