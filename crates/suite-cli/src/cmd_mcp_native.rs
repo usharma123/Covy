@@ -166,6 +166,14 @@ pub(crate) struct Packet28PatchRiskArgs {
     pub(crate) paths: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28VerifyHandoffArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1198,6 +1206,94 @@ pub(crate) fn handle_packet28_fetch_context(
         payload["response_mode"] = json!("full");
     }
     Ok(payload)
+}
+
+pub(crate) fn handle_packet28_verify_handoff(
+    root: &Path,
+    args: Packet28VerifyHandoffArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.verify_handoff requires task_id"));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.verify_handoff requires artifact_id or context_version")
+    })?;
+    let path = task_version_json_path(root, task_id, &artifact_id);
+    let bytes = fs::read(&path).with_context(|| {
+        format!(
+            "failed to read stored handoff context artifact '{}'",
+            path.display()
+        )
+    })?;
+    let payload: Value = serde_json::from_slice(&bytes)?;
+    let mut missing = Vec::new();
+    let brief = payload
+        .get("brief")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !brief.contains("Task Objective") && !brief.contains("task_objective") {
+        missing.push("objective".to_string());
+    }
+    let has_next_action = payload
+        .get("next_action_summary")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        || payload
+            .get("latest_intention")
+            .is_some_and(|value| !value.is_null());
+    if !has_next_action {
+        missing.push("next_action".to_string());
+    }
+    let has_debt_signal = section_exists(&payload, "context_debt")
+        || section_exists(&payload, "evidence_freshness")
+        || payload
+            .get("changed_paths_since_checkpoint")
+            .and_then(Value::as_array)
+            .is_some_and(|paths| !paths.is_empty())
+        || payload
+            .get("open_questions")
+            .and_then(Value::as_array)
+            .is_some_and(|questions| !questions.is_empty());
+    if !has_debt_signal {
+        missing.push("debt_signal".to_string());
+    }
+    let has_evidence_handle = payload
+        .get("artifact_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        || payload
+            .get("evidence_artifact_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|ids| !ids.is_empty());
+    if !has_evidence_handle {
+        missing.push("evidence_handle".to_string());
+    }
+    let score = 100_u64.saturating_sub((missing.len() as u64).saturating_mul(25));
+    let ready = missing.is_empty();
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "ready": ready,
+        "score": score,
+        "missing": missing,
+        "summary": if ready {
+            "handoff_replay_ready"
+        } else {
+            "handoff_replay_incomplete"
+        },
+    }))
+}
+
+fn section_exists(payload: &Value, id: &str) -> bool {
+    payload
+        .get("sections")
+        .and_then(Value::as_array)
+        .is_some_and(|sections| {
+            sections
+                .iter()
+                .any(|section| section.get("id").and_then(Value::as_str) == Some(id))
+        })
 }
 
 pub(crate) fn handle_packet28_prepare_handoff(

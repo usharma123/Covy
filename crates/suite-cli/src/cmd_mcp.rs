@@ -45,7 +45,8 @@ use crate::cmd_mcp::native_tools::{
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
     Packet28GlobArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs,
     Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
-    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28WriteIntentionArgs,
+    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
+    Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -673,6 +674,18 @@ fn handle_method(
                             "artifact_id": {"type":"string"},
                             "context_version": {"type":"string"},
                             "response_mode": {"type":"string","enum":["slim","full"]}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.verify_handoff",
+                    "description": "Verify a stored Packet28 handoff context artifact has enough objective, next-action, debt, and evidence signal for replay.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "artifact_id": {"type":"string"},
+                            "context_version": {"type":"string"}
                         }
                     }
                 },
@@ -1586,6 +1599,21 @@ fn handle_tool_call(
             )?;
             track_task(session, root, &request.task_id)?;
             handle_packet28_fetch_context(root, request)?
+        }
+        "packet28.verify_handoff" => {
+            let mut request: Packet28VerifyHandoffArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request
+                    .artifact_id
+                    .as_deref()
+                    .or(request.context_version.as_deref()),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_verify_handoff(root, request)?
         }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
@@ -2554,6 +2582,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or("unknown");
             format!("Packet28 fetched broker context artifact {artifact_id}.")
         }
+        "packet28.verify_handoff" => {
+            let ready = payload
+                .get("ready")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let score = payload
+                .get("score")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 handoff replay ready={ready} score={score}.")
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
@@ -2948,6 +2987,7 @@ mod tests {
             "packet28_reduce",
             "packet28_rewrite",
             "packet28_handoff",
+            "packet28_verify_handoff",
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
@@ -3065,6 +3105,56 @@ mod tests {
         assert_eq!(response["structuredContent"]["ok"], true);
         assert_eq!(response["structuredContent"]["experiment_count"], 1);
         assert_eq!(response["structuredContent"]["issue_count"], 0);
+    }
+
+    #[test]
+    fn verify_handoff_fails_when_next_action_is_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let task_id = "task-handoff-replay";
+        let context_version = "ctx-missing-next";
+        let path = task_version_json_path(root.path(), task_id, context_version);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "context_version": context_version,
+                "artifact_id": context_version,
+                "brief": "## Task Objective\nFinish the replay verifier.",
+                "sections": [{"id": "context_debt", "title": "Context Debt", "body": "- debt_summary: stale_paths=0 open_questions=0 unverified_edits=0 contradictions=0"}],
+                "evidence_artifact_ids": ["artifact-1"],
+                "next_action_summary": null,
+                "latest_intention": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.verify_handoff",
+                "arguments": {
+                    "task_id": task_id,
+                    "context_version": context_version
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["ready"], false);
+        assert_eq!(response["structuredContent"]["score"], 75);
+        assert!(response["structuredContent"]["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|missing| missing == "next_action"));
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 512
+        );
     }
 
     #[test]
