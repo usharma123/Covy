@@ -177,12 +177,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-doc failure docs | Helps maintainers recognize when the runbook is missing a checker failure-code doc. | The runbook density row now documents `context_anomaly_runbook_density_missing_failure_docs`, and the checker requires that doc entry. | Evidence: runbook stays under line and row budgets and the failure name matches checker output. |
 | Context anomaly drilldown density failure-code count output | Helps automation confirm the checker is guarding the expected number of failure-code docs. | Density default and JSON success output now include `failure_codes_checked`. | Evidence: default and JSON outputs stay under byte budgets and the count matches the required failure-code list. |
 | Context anomaly drilldown density workflow count output | Helps automation confirm workflow command coverage stayed wired into the checker. | Density default and JSON success output now include `workflow_commands_checked`. | Evidence: default and JSON outputs stay under byte budgets and the count matches the required workflow command list. |
+| Context anomaly drilldown density output count docs repair | Keeps runbook field docs aligned as compact success output grows. | The runbook density row now documents default text labels `failure_codes` and `workflow_commands`. | Evidence: runbook stays under line and row budgets and labels match default checker output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output count docs repair | Keeps runbook field docs aligned as compact success output grows. | Document the default text `failure_codes` and `workflow_commands` labels in the density runbook row. | Compact metric: runbook stays under line and row budgets; correctness metric: labels match default checker output. |
+| Context anomaly drilldown density output docs coverage | Prevents default-output label docs from drifting after future output changes. | Have the density checker require `failure_codes` and `workflow_commands` in the runbook. | Compact metric: default output stays one line; correctness metric: removing either label from the runbook fails a named missing-doc check. |
 
 ## Research Rules
 
