@@ -1519,8 +1519,14 @@ if (args.includes("--self-test")) {
   }
   const expectedInvariantArrayDetail = "array,detail";
   const expectedInvariantScalarDetail = "scalar";
-  const actualInvariantArrayDetail = invariantDetailValue(["array", "detail"]);
-  const actualInvariantScalarDetail = invariantDetailValue("scalar");
+  const invariantArrayDetailSample = ["array", "detail"];
+  const invariantScalarDetailSample = "scalar";
+  const actualInvariantArrayDetail = invariantDetailValue(
+    invariantArrayDetailSample,
+  );
+  const actualInvariantScalarDetail = invariantDetailValue(
+    invariantScalarDetailSample,
+  );
   if (
     actualInvariantArrayDetail !== expectedInvariantArrayDetail ||
     actualInvariantScalarDetail !== expectedInvariantScalarDetail
