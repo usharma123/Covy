@@ -2386,8 +2386,11 @@ if (args.includes("--self-test")) {
     }
   };
   assertHelpLineWidthSelfTest();
-  console.log("context_anomaly_runbook_density_self_test_ok");
-  process.exit(0);
+  const finishSelfTestOk = () => {
+    console.log("context_anomaly_runbook_density_self_test_ok");
+    process.exit(0);
+  };
+  finishSelfTestOk();
 }
 
 if (!result.ok) {
