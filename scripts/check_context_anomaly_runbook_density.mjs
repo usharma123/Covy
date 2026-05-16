@@ -2198,17 +2198,23 @@ if (args.includes("--self-test")) {
     );
   };
   assertJsonHeadroomEnvPairMutationSelfTest();
-  for (const [envIndex, envName] of requiredPlainEnvDocs.entries()) {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replaceAll(`\`${envName}\``, `\`DRIFTED_ENV_DOC_${envIndex}\``),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_env_docs",
-      envName,
-      `drifted_${envName}`,
-    );
-  }
+  const assertPlainEnvDocMutationSelfTests = () => {
+    for (const [envIndex, envName] of requiredPlainEnvDocs.entries()) {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replaceAll(
+            `\`${envName}\``,
+            `\`DRIFTED_ENV_DOC_${envIndex}\``,
+          ),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_env_docs",
+        envName,
+        `drifted_${envName}`,
+      );
+    }
+  };
+  assertPlainEnvDocMutationSelfTests();
   for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
     assertSelfTestMissing(
       evaluateWorkflow(
