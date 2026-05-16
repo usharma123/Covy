@@ -260,6 +260,16 @@ pub(crate) struct Packet28HandoffFixPlanArgs {
     pub(crate) context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffRepairVerifyArgs {
+    pub(crate) task_id: String,
+    pub(crate) before_artifact_id: Option<String>,
+    pub(crate) before_context_version: Option<String>,
+    pub(crate) after_artifact_id: Option<String>,
+    pub(crate) after_context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1923,6 +1933,68 @@ pub(crate) fn handle_packet28_handoff_fix_plan(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_repair_verify(
+    root: &Path,
+    args: Packet28HandoffRepairVerifyArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.handoff_repair_verify requires task_id"));
+    }
+    let before_artifact_id = args
+        .before_artifact_id
+        .or(args.before_context_version)
+        .ok_or_else(|| {
+            anyhow!("packet28.handoff_repair_verify requires before_artifact_id or before_context_version")
+        })?;
+    let after_artifact_id = args
+        .after_artifact_id
+        .or(args.after_context_version)
+        .ok_or_else(|| {
+            anyhow!("packet28.handoff_repair_verify requires after_artifact_id or after_context_version")
+        })?;
+    let before = handle_packet28_handoff_lint_all(
+        root,
+        Packet28HandoffLintAllArgs {
+            task_id: task_id.to_string(),
+            artifact_id: Some(before_artifact_id.clone()),
+            context_version: None,
+        },
+    )?;
+    let after = handle_packet28_handoff_lint_all(
+        root,
+        Packet28HandoffLintAllArgs {
+            task_id: task_id.to_string(),
+            artifact_id: Some(after_artifact_id.clone()),
+            context_version: None,
+        },
+    )?;
+    let before_categories = lint_failing_categories(&before);
+    let after_categories = lint_failing_categories(&after);
+    let cleared_categories: Vec<String> = before_categories
+        .iter()
+        .filter(|category| !after_categories.iter().any(|after| after == *category))
+        .cloned()
+        .collect();
+    let regressed_categories: Vec<String> = after_categories
+        .iter()
+        .filter(|category| !before_categories.iter().any(|before| before == *category))
+        .cloned()
+        .collect();
+    let verified = after_categories.is_empty();
+    let cleared_count = cleared_categories.len();
+    Ok(json!({
+        "task_id": task_id,
+        "before_artifact_id": before_artifact_id,
+        "after_artifact_id": after_artifact_id,
+        "verified": verified,
+        "cleared_categories": cleared_categories,
+        "remaining_categories": after_categories,
+        "regressed_categories": regressed_categories,
+        "summary": format!("handoff_repair_verify verified={verified} cleared={cleared_count}"),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -2284,6 +2356,19 @@ fn handoff_fix_actions_from_lint(lint: &Value) -> Vec<Value> {
 
 fn path_search_fragment(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).replace('\'', "")
+}
+
+fn lint_failing_categories(lint: &Value) -> Vec<String> {
+    lint.get("failing_categories")
+        .and_then(Value::as_array)
+        .map(|categories| {
+            categories
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn is_env_var_start(ch: char) -> bool {

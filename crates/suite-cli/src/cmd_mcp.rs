@@ -45,11 +45,12 @@ use crate::cmd_mcp::native_tools::{
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
     Packet28GlobArgs, Packet28HandoffCompressionArgs, Packet28HandoffDependencyLintArgs,
     Packet28HandoffDiffArgs, Packet28HandoffEnvironmentLintArgs, Packet28HandoffFixPlanArgs,
-    Packet28HandoffLintAllArgs, Packet28HandoffPathLintArgs, Packet28HandoffStaleCommandLintArgs,
-    Packet28HandoffTestLintArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
-    Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
-    Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
-    Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs, Packet28WriteIntentionArgs,
+    Packet28HandoffLintAllArgs, Packet28HandoffPathLintArgs, Packet28HandoffRepairVerifyArgs,
+    Packet28HandoffStaleCommandLintArgs, Packet28HandoffTestLintArgs, Packet28PatchRiskArgs,
+    Packet28PrepareHandoffArgs, Packet28PromptPressureArgs, Packet28ReadRegionsArgs,
+    Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
+    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
+    Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -815,6 +816,20 @@ fn handle_method(
                             "task_id": {"type":"string"},
                             "artifact_id": {"type":"string"},
                             "context_version": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.handoff_repair_verify",
+                    "description": "Compare handoff lint categories before and after a repair and report cleared, remaining, and regressed categories.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "before_artifact_id": {"type":"string"},
+                            "before_context_version": {"type":"string"},
+                            "after_artifact_id": {"type":"string"},
+                            "after_context_version": {"type":"string"}
                         }
                     }
                 },
@@ -1898,6 +1913,23 @@ fn handle_tool_call(
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_handoff_fix_plan(root, request)?
         }
+        "packet28.handoff_repair_verify" => {
+            let mut request: Packet28HandoffRepairVerifyArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request
+                    .after_artifact_id
+                    .as_deref()
+                    .or(request.after_context_version.as_deref())
+                    .or(request.before_artifact_id.as_deref())
+                    .or(request.before_context_version.as_deref()),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_handoff_repair_verify(root, request)?
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
             request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
@@ -2963,6 +2995,13 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 handoff fix plan action_count={action_count}.")
         }
+        "packet28.handoff_repair_verify" => {
+            let verified = payload
+                .get("verified")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            format!("Packet28 handoff repair verified={verified}.")
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
@@ -3368,6 +3407,7 @@ mod tests {
             "packet28_handoff_lint_environment",
             "packet28_handoff_lint_all",
             "packet28_handoff_fix_plan",
+            "packet28_handoff_repair_verify",
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
@@ -4163,6 +4203,86 @@ mod tests {
             response["structuredContent"]["actions"][1]["command"],
             "cargo test missing_command_test"
         );
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 768
+        );
+    }
+
+    #[test]
+    fn handoff_repair_verify_reports_cleared_categories() {
+        let root = tempfile::tempdir().unwrap();
+        let task_id = "task-handoff-repair-verify";
+        let before_context_version = "ctx-repair-before";
+        let after_context_version = "ctx-repair-after";
+        let existing_path = root.path().join("docs/existing.md");
+        std::fs::create_dir_all(existing_path.parent().unwrap()).unwrap();
+        std::fs::write(&existing_path, "fixed path").unwrap();
+        for (context_version, body, path_ref) in [
+            (
+                before_context_version,
+                "Run missing_command_test after setup.\ncargo test -p suite-cli env_backed_test $PACKET28_REPAIR_VERIFY_MISSING_ENV_12345",
+                "docs/missing.md",
+            ),
+            (
+                after_context_version,
+                "cargo test -p suite-cli missing_command_test",
+                "docs/existing.md",
+            ),
+        ] {
+            let path = task_version_json_path(root.path(), task_id, context_version);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                serde_json::to_vec_pretty(&json!({
+                    "context_version": context_version,
+                    "artifact_id": context_version,
+                    "brief": format!("## Task Objective\nRepair handoff reference {path_ref}."),
+                    "sections": [{
+                        "id": "verification",
+                        "title": "Verification",
+                        "body": body
+                    }],
+                    "changed_paths_since_checkpoint": ["src/lib.rs"],
+                    "next_action_summary": "verify repaired handoff"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.handoff_repair_verify",
+                "arguments": {
+                    "task_id": task_id,
+                    "before_context_version": before_context_version,
+                    "after_context_version": after_context_version
+                }
+            }),
+        )
+        .unwrap();
+        let cleared = response["structuredContent"]["cleared_categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert_eq!(response["structuredContent"]["verified"], true);
+        assert_eq!(cleared, vec!["paths", "tests", "environment"]);
+        assert!(response["structuredContent"]["remaining_categories"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(response["structuredContent"]["regressed_categories"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         assert!(
             serde_json::to_string(&response["structuredContent"])
                 .unwrap()
