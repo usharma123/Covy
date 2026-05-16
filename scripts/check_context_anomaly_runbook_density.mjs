@@ -1736,6 +1736,11 @@ if (args.includes("--self-test")) {
     "missing_json_error_shape_doc",
   );
   assertSelfTest(
+    evaluate(runbook.replace("`no-success`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "missing_json_failure_success_field_doc",
+  );
+  assertSelfTest(
     evaluate(
       runbook.replace(
         "`ok:false`;`no-success`;h:`help<=120`",

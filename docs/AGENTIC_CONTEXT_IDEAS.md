@@ -360,12 +360,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point env helper negative assertion reuse | Makes future failure-shape tests able to assert absent success-only fields. | JSON byte-cap failure self-test now also excludes `default_output_iterations`. | Evidence: self-test output stays one line; failure payloads omit success-only fields. |
 | Context anomaly drilldown density JSON headroom failure success-field exclusion | Keeps oversized-headroom JSON failures from looking like success payloads. | JSON-headroom failure self-test now excludes `default_output_iterations`. | Evidence: self-test output stays one line; headroom failure omits success-only fields. |
 | Context anomaly drilldown density JSON failure-field docs | Helps maintainers understand success-only fields are intentionally absent from failure payloads. | Runbook JSON error docs now include guarded `no-success` wording. | Evidence: prose stays under cap; docs mention success-field exclusion. |
+| Context anomaly drilldown density JSON failure-field docs guard | Prevents the success-field exclusion note from drifting out of docs. | Self-test now has a dedicated missing-doc mutation for the `no-success` JSON error note. | Evidence: prose stays under cap; missing exclusion docs fail coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON failure-field docs guard | Prevents the success-field exclusion note from drifting out of docs. | Add a dedicated missing-doc mutation for the `no-success` JSON error note. | Compact metric: prose stays under cap; correctness metric: missing exclusion docs fail coverage. |
+| Context anomaly drilldown density label prose recovery after failure docs | Restores label-line margin after adding `no-success`. | Compact the label/error prose line while preserving guarded JSON failure docs. | Compact metric: `dlab` drops below 205; correctness metric: error docs guards still pass. |
 
 ## Research Rules
 
