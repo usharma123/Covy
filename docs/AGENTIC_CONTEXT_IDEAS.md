@@ -500,12 +500,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation field identity sample | Keeps expected and actual identity field lists sampled together. | Extracted `defaultOutputMutationFieldIdentitySample()` returning expected and actual field lists. | Evidence: no runtime output growth; identity comparison and diagnostics share sampled lists. |
 | Context anomaly drilldown density self-test default output mutation field identity match helper | Makes the identity predicate name describe the sampled comparison. | Renamed `defaultOutputMutationFieldsMirrorParserFields(sample)` to `defaultOutputMutationFieldIdentityMatches(sample)`. | Evidence: no runtime output growth; identity predicate remains single-source. |
 | Context anomaly drilldown density self-test default output mutation field identity assertion name | Makes assertion name describe the sampled identity check. | Renamed `assertDefaultOutputMutationFieldsMirrorParserFields()` to `assertDefaultOutputMutationFieldIdentity()`. | Evidence: no runtime output growth; identity assertion remains single-source. |
+| Context anomaly drilldown density self-test default output mutation field identity failure helper | Makes identity assertion failure a single named path. | Extracted `failDefaultOutputMutationFieldIdentity(sample)` wrapping identity diagnostics. | Evidence: no runtime output growth; identity failure remains single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation field identity failure helper | Makes identity assertion failure a single named path. | Extract `failDefaultOutputMutationFieldIdentity(sample)` wrapping identity diagnostics. | Compact metric: no runtime output growth; correctness metric: identity failure remains single-source. |
+| Context anomaly drilldown density self-test default output mutation field identity helper order | Keeps identity failure helper next to its assertion. | Move `failDefaultOutputMutationFieldIdentity(sample)` directly above `assertDefaultOutputMutationFieldIdentity()`. | Compact metric: no runtime output growth; correctness metric: identity failure helper remains adjacent to its only caller. |
 
 ## Research Rules
 

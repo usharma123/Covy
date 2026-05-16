@@ -1703,12 +1703,13 @@ if (args.includes("--self-test")) {
   const defaultOutputMutationFieldIdentityMatches = (sample) =>
     sample.actualMutationFields.join(",") ===
     sample.expectedMutationFields.join(",");
+  const failDefaultOutputMutationFieldIdentity = (sample) => {
+    failDefaultOutputMutation(defaultOutputMutationFieldIdentityDetails(sample));
+  };
   const assertDefaultOutputMutationFieldIdentity = () => {
     const identitySample = defaultOutputMutationFieldIdentitySample();
     if (!defaultOutputMutationFieldIdentityMatches(identitySample)) {
-      failDefaultOutputMutation(
-        defaultOutputMutationFieldIdentityDetails(identitySample),
-      );
+      failDefaultOutputMutationFieldIdentity(identitySample);
     }
   };
   const failDefaultOutputMutationFieldCount = (sample) => {
