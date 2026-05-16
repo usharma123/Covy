@@ -96,12 +96,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown script help | Gives agents a compact usage string for hidden-sample smoke script modes. | The hidden-sample smoke script now supports `--help`, and the runbook command table lists it. | Evidence: help output is five lines, exits zero, and lists default, `--json`, `--self-test`, and `--help` modes. |
 | Context anomaly drilldown help workflow guard | Keeps documented smoke-script modes visible in CI logs without expanding the step summary. | The context-anomalies workflow now runs the smoke script `--help` mode before self-test and JSON summary extraction. | Evidence: no summary lines were added; help output stays five lines and CI fails if help mode breaks. |
 | Context anomaly drilldown fixture checksum | Lets agents detect accidental hidden-sample fixture edits even when expected summary still matches. | The delimiter fixture now has a checked-in SHA-256 file verified by the hidden-sample smoke script before summary comparison. | Evidence: checksum artifact is 65 bytes with newline; smoke script fails with `context_anomaly_hidden_sample_fixture_checksum_mismatch` when fixture content drifts. |
+| Context anomaly drilldown checksum self-test | Proves the smoke script's checksum failure path without editing checked-in fixtures. | The smoke script self-test now exercises the checksum mismatch guard with a known-wrong checksum. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` remains one success line and fails if checksum mismatch code drifts. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown checksum self-test | Proves the smoke script's checksum failure path without editing checked-in fixtures. | Add a self-test branch that computes a known-wrong fixture checksum and requires the mismatch guard to fire. | Compact metric: self-test output remains one line; correctness metric: checksum mismatch mode is covered by `--self-test`. |
+| Context anomaly drilldown checksum docs | Helps agents repair fixture-checksum failures without reverse-engineering the hash command. | Add the exact checksum refresh command to the context anomaly runbook. | Compact metric: runbook remains under 45 lines; correctness metric: command reproduces `hidden-samples-delimiters.sha256`. |
 
 ## Research Rules
 

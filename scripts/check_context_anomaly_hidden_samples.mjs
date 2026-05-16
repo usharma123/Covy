@@ -69,13 +69,25 @@ function summarize(samples) {
     .join(";");
 }
 
+function checksumError(expected, actual) {
+  if (actual === expected) {
+    return null;
+  }
+  return {
+    code: "context_anomaly_hidden_sample_fixture_checksum_mismatch",
+    expected,
+    actual,
+  };
+}
+
 const fixtureRaw = readFileSync(fixturePath, "utf8");
 const actualChecksum = createHash("sha256").update(fixtureRaw).digest("hex");
 const expectedChecksum = readFileSync(checksumPath, "utf8").trim();
-if (actualChecksum !== expectedChecksum) {
-  console.error("context_anomaly_hidden_sample_fixture_checksum_mismatch");
-  console.error(`expected=${expectedChecksum}`);
-  console.error(`actual=${actualChecksum}`);
+const liveChecksumError = checksumError(expectedChecksum, actualChecksum);
+if (liveChecksumError) {
+  console.error(liveChecksumError.code);
+  console.error(`expected=${liveChecksumError.expected}`);
+  console.error(`actual=${liveChecksumError.actual}`);
   process.exit(1);
 }
 
@@ -105,6 +117,13 @@ if (selfTest) {
     payload.summary !== actual
   ) {
     console.error("context_anomaly_hidden_sample_self_test_json_drift");
+    process.exit(1);
+  }
+  if (
+    checksumError("0".repeat(64), actualChecksum)?.code !==
+    "context_anomaly_hidden_sample_fixture_checksum_mismatch"
+  ) {
+    console.error("context_anomaly_hidden_sample_self_test_checksum_drift");
     process.exit(1);
   }
   if (actual.length <= lowBudget) {
