@@ -101,7 +101,13 @@ const requiredOutputLabels = [
   "width",
   "width_docs",
 ];
-const requiredOutputDocPhrases = ["`key=value`", "JSON keeps full field names"];
+const requiredOutputDocPhrases = [
+  "`key=value`",
+  "JSON keeps full field names",
+  "`fc`=failure codes",
+  "`wf`=workflow commands",
+  "`json`=JSON headroom",
+];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
@@ -267,9 +273,15 @@ function fail(code, details) {
   process.exit(1);
 }
 
-function assertSelfTest(result, expectedCode) {
+let selfTestCaseIndex = 0;
+function assertSelfTest(result, expectedCode, caseName = "") {
+  selfTestCaseIndex += 1;
   if (result.code !== expectedCode) {
     console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`case_index=${selfTestCaseIndex}`);
+    if (caseName) {
+      console.error(`case=${caseName}`);
+    }
     console.error(`expected=${expectedCode}`);
     console.error(`actual=${result.code ?? "ok"}`);
     process.exit(1);
@@ -596,7 +608,7 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_failure_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`wf`", ""), maxLines),
+    evaluate(runbook.replaceAll("`wf`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
@@ -620,6 +632,11 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
+    evaluate(runbook.replace("`fc`=failure codes", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "missing_fc_alias_glossary",
+  );
+  assertSelfTest(
     evaluate(
       runbook.replace(
         "`width` is capped by `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`",
@@ -628,6 +645,7 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
+    "missing_width_env_pair",
   );
   assertSelfTest(
     evaluate(
