@@ -545,7 +545,7 @@ if (args.includes("--self-test")) {
   }
   const widenedEnvProseResult = evaluate(
     runbook.replace(
-      "Density envs:",
+      "Density env:",
       "Density envs: widened-env-prose-width-sentinel",
     ),
     maxLines,
