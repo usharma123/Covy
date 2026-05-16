@@ -752,6 +752,63 @@ if (args.includes("--self-test")) {
     console.error("malformed_default_output_prefix_accepted");
     process.exit(1);
   }
+  const staleDefaultOutputValues = {
+    lines: "0/0",
+    row: "0/0",
+    cmds: "0",
+    fc: "0",
+    wf: "0",
+    prose: "0/0",
+    json: "0",
+    env: "0",
+    labels: "0",
+    phrases: "0",
+    adocs: "0",
+    dphr: "0",
+    anc: "0",
+    soft: "over",
+    parsed: "0",
+    width: "0",
+    wdocs: "0",
+  };
+  const missingStaleMutationFields = defaultTextFields.filter(
+    (field) => staleDefaultOutputValues[field] === undefined,
+  );
+  if (missingStaleMutationFields.length > 0) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `missing_stale_mutation_fields=${missingStaleMutationFields.join(",")}`,
+    );
+    process.exit(1);
+  }
+  for (const field of defaultTextFields) {
+    const fieldPattern = new RegExp(` ${field}=\\S+`);
+    const missingFieldError = defaultOutputParseIssue(
+      parseDefaultOutput(defaultOutputLine.replace(fieldPattern, "")),
+      defaultParseDetails,
+    );
+    if (missingFieldError !== `missing_default_output_field=${field}`) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`expected=missing_default_output_field=${field}`);
+      console.error(`actual=${missingFieldError ?? "ok"}`);
+      process.exit(1);
+    }
+    const staleFieldError = defaultOutputParseIssue(
+      parseDefaultOutput(
+        defaultOutputLine.replace(
+          fieldPattern,
+          ` ${field}=${staleDefaultOutputValues[field]}`,
+        ),
+      ),
+      defaultParseDetails,
+    );
+    if (staleFieldError !== `default_output_parse_mismatch=${field}`) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`expected=default_output_parse_mismatch=${field}`);
+      console.error(`actual=${staleFieldError ?? "ok"}`);
+      process.exit(1);
+    }
+  }
   const missingLineValueError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ lines=\S+/, "")),
     result,
