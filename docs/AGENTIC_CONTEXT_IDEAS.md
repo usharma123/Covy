@@ -205,12 +205,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text width docs coverage | Prevents the width metric docs from drifting away from the text-width guard. | The density checker now requires `text_width` and `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` in the same runbook line. | Evidence: default output stays one line and splitting the pair fails missing output docs. |
 | Context anomaly drilldown density text width pair output | Helps automation see that the text-width doc pair is explicitly covered. | Default density output now reports `text_width_docs=1` while JSON remains unchanged. | Evidence: default output remains under text width cap and count follows the paired-doc requirement. |
 | Context anomaly drilldown density text width pair self-test | Proves `text_width_docs=1` is tied to the paired-doc requirement. | Density self-test now asserts text-width paired-doc count and rejects default output missing `text_width_docs`. | Evidence: self-test output stays one line and splitting the pair changes the count or fails docs coverage. |
+| Context anomaly drilldown density text output compact aliases | Reduces default text width while preserving parseable labels. | Density default output now uses compact aliases such as `cmds`, `fc`, `wf`, `json`, and `width` while JSON keeps full field names. | Evidence: `width` drops below 210, parser self-test passes, and required alias docs still pass. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text output compact aliases | Reduces default text width while preserving parseable labels. | Consider shortening low-value count labels or moving secondary counts behind `--json` if default text nears cap again. | Compact metric: `text_width` drops below 210; correctness metric: parser and required docs still pass. |
+| Context anomaly drilldown density alias docs repair | Helps maintainers map compact default labels back to their meaning. | Add a compact runbook phrase explaining that JSON keeps full field names while default text uses aliases. | Compact metric: runbook remains within line/prose/table budgets; correctness metric: phrase matches current default and JSON outputs. |
 
 ## Research Rules
 

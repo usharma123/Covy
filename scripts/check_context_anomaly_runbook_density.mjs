@@ -30,7 +30,7 @@ const maxDensityProseLineLength = Number.parseInt(
   10,
 );
 const maxDefaultOutputLength = Number.parseInt(
-  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX ?? "240",
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX ?? "210",
   10,
 );
 const helpLines = [
@@ -88,15 +88,18 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_json_too_long",
 ];
 const requiredOutputLabels = [
-  "failure_codes",
-  "workflow_commands",
+  "lines",
+  "row",
+  "cmds",
+  "fc",
+  "wf",
   "prose",
-  "json_headroom",
-  "env_docs",
-  "output_labels",
-  "output_doc_phrases",
-  "text_width",
-  "text_width_docs",
+  "json",
+  "env",
+  "labels",
+  "phrases",
+  "width",
+  "width_docs",
 ];
 const requiredOutputDocPhrases = ["key=value"];
 const requiredEnvDocs = [
@@ -146,7 +149,7 @@ function evaluate(runbook, lineBudget) {
     .split("\n")
     .some(
       (line) =>
-        line.includes("`text_width`") &&
+        line.includes("`width`") &&
         line.includes("`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`"),
     );
   const missingEnvDocs = requiredEnvDocs.filter(
@@ -203,7 +206,7 @@ function evaluate(runbook, lineBudget) {
         ...missingOutputDocPhrases,
         ...(hasTextWidthEnvDoc
           ? []
-          : ["text_width:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
+          : ["width:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
       ],
     };
   }
@@ -355,17 +358,17 @@ function defaultOutputIssue(payload, resultDetails, jsonHeadroom) {
 function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
   return [
     `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines}`,
-    `max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed}`,
-    `commands=${payload.commands_checked}`,
-    `failure_codes=${payload.failure_codes_checked}`,
-    `env_docs=${resultDetails.env_docs_checked}`,
-    `output_labels=${resultDetails.output_labels_checked}`,
-    `output_doc_phrases=${resultDetails.output_doc_phrases_checked}`,
-    `workflow_commands=${payload.workflow_commands_checked}`,
+    `row=${payload.max_table_row}/${payload.max_table_row_allowed}`,
+    `cmds=${payload.commands_checked}`,
+    `fc=${payload.failure_codes_checked}`,
+    `env=${resultDetails.env_docs_checked}`,
+    `labels=${resultDetails.output_labels_checked}`,
+    `phrases=${resultDetails.output_doc_phrases_checked}`,
+    `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
-    `json_headroom=${jsonHeadroom}`,
-    `text_width_docs=${resultDetails.text_width_docs_checked}`,
-    textWidth === undefined ? null : `text_width=${textWidth}`,
+    `json=${jsonHeadroom}`,
+    `width_docs=${resultDetails.text_width_docs_checked}`,
+    textWidth === undefined ? null : `width=${textWidth}`,
   ]
     .filter(Boolean)
     .join(" ");
@@ -399,17 +402,17 @@ function parseDefaultOutput(line) {
 function defaultOutputParseIssue(parsed, resultDetails) {
   const expectedTextFields = [
     "lines",
-    "max_table_row",
-    "commands",
-    "failure_codes",
-    "env_docs",
-    "output_labels",
-    "output_doc_phrases",
-    "workflow_commands",
+    "row",
+    "cmds",
+    "fc",
+    "env",
+    "labels",
+    "phrases",
+    "wf",
     "prose",
-    "json_headroom",
-    "text_width_docs",
-    "text_width",
+    "json",
+    "width_docs",
+    "width",
   ];
   for (const field of expectedTextFields) {
     if (!parsed?.[field]) {
@@ -417,8 +420,8 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     }
   }
   if (
-    parsed.commands !== String(resultDetails.commands_checked) ||
-    parsed.output_labels !== String(resultDetails.output_labels_checked)
+    parsed.cmds !== String(resultDetails.commands_checked) ||
+    parsed.labels !== String(resultDetails.output_labels_checked)
   ) {
     return "default_output_parse_mismatch";
   }
@@ -515,10 +518,10 @@ if (args.includes("--self-test")) {
     console.error(defaultOutputError);
     process.exit(1);
   }
-  if (parsedDefaultOutput.text_width !== String(defaultOutputLine.length)) {
+  if (parsedDefaultOutput.width !== String(defaultOutputLine.length)) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_text_width=${defaultOutputLine.length}`);
-    console.error(`actual_text_width=${parsedDefaultOutput.text_width}`);
+    console.error(`actual_text_width=${parsedDefaultOutput.width}`);
     process.exit(1);
   }
   if (parseDefaultOutput("bad_prefix lines=44/44") !== null) {
@@ -529,28 +532,28 @@ if (args.includes("--self-test")) {
   const missingLabelError = defaultOutputParseIssue(
     parseDefaultOutput(
       renderDefaultOutput(baselinePayload, result, baselineHeadroom).replace(
-        / output_labels=\d+/,
+        / labels=\d+/,
         "",
       ),
     ),
     result,
   );
-  if (missingLabelError !== "missing_default_output_field=output_labels") {
+  if (missingLabelError !== "missing_default_output_field=labels") {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error(`expected=missing_default_output_field=output_labels`);
+    console.error(`expected=missing_default_output_field=labels`);
     console.error(`actual=${missingLabelError ?? "ok"}`);
     process.exit(1);
   }
   const missingTextWidthDocsError = defaultOutputParseIssue(
-    parseDefaultOutput(defaultOutputLine.replace(/ text_width_docs=\d+/, "")),
+    parseDefaultOutput(defaultOutputLine.replace(/ width_docs=\d+/, "")),
     result,
   );
   if (
     missingTextWidthDocsError !==
-    "missing_default_output_field=text_width_docs"
+    "missing_default_output_field=width_docs"
   ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error(`expected=missing_default_output_field=text_width_docs`);
+    console.error(`expected=missing_default_output_field=width_docs`);
     console.error(`actual=${missingTextWidthDocsError ?? "ok"}`);
     process.exit(1);
   }
@@ -593,19 +596,19 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_failure_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`workflow_commands`", ""), maxLines),
+    evaluate(runbook.replace("`wf`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`env_docs`", ""), maxLines),
+    evaluate(runbook.replace("`env`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`output_labels`", ""), maxLines),
+    evaluate(runbook.replace("`labels`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("`output_doc_phrases`", ""), maxLines),
+    evaluate(runbook.replace("`phrases`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
@@ -615,8 +618,8 @@ if (args.includes("--self-test")) {
   assertSelfTest(
     evaluate(
       runbook.replace(
-        "`text_width` is capped by `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`",
-        "`text_width` has a text cap",
+        "`width` is capped by `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`",
+        "`width` has a text cap",
       ),
       maxLines,
     ),
