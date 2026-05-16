@@ -712,6 +712,16 @@ if (args.includes("--self-test")) {
     console.error("malformed_default_output_prefix_accepted");
     process.exit(1);
   }
+  const missingEnvError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ env=\d+/, "")),
+    result,
+  );
+  if (missingEnvError !== "missing_default_output_field=env") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=env`);
+    console.error(`actual=${missingEnvError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingLabelError = defaultOutputParseIssue(
     parseDefaultOutput(
       renderDefaultOutput(baselinePayload, result, baselineHeadroom).replace(
