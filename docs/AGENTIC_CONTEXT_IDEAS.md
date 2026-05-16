@@ -478,12 +478,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation sweep callback | Names the per-field mutation assertion callback. | Extracted `assertDefaultOutputMutationCase(field)` to build the mutation case and call `assertDefaultOutputMutation()`. | Evidence: no runtime output growth; per-field mutation sweep stays explicit. |
 | Context anomaly drilldown density self-test default output mutation sweep forEach | Makes the mutation sweep a named callback over fields. | Replaced the explicit loop with `defaultTextFields.forEach(assertDefaultOutputMutationCase)`. | Evidence: no runtime output growth; every default field is still swept. |
 | Context anomaly drilldown density self-test default output mutation sweep coverage helper | Names the field list used by the mutation sweep. | Extracted `defaultOutputMutationFields()` returning `defaultTextFields` before calling `forEach`. | Evidence: no runtime output growth; sweep field list remains single-source. |
+| Context anomaly drilldown density self-test default output mutation field count helper | Names the expected mutation sweep size. | Extracted `expectedDefaultOutputMutationFieldCount()` from `defaultOutputMutationFields().length` for a self-test invariant. | Evidence: no runtime output growth; mutation sweep size remains tied to the field list. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation field count helper | Names the expected mutation sweep size. | Extract `expectedDefaultOutputMutationFieldCount()` from `defaultOutputMutationFields().length` for a self-test invariant. | Compact metric: no runtime output growth; correctness metric: mutation sweep size remains tied to the field list. |
+| Context anomaly drilldown density self-test default output mutation actual count helper | Names the actual mutation sweep size beside the expected count. | Extract `actualDefaultOutputMutationFieldCount()` for the `defaultTextFields.length` side of the count invariant. | Compact metric: no runtime output growth; correctness metric: mutation count diagnostics remain explicit. |
 
 ## Research Rules
 

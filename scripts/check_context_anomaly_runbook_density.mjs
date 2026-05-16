@@ -1676,8 +1676,20 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutation(mutationField, staleValue);
   };
   const defaultOutputMutationFields = () => defaultTextFields;
+  const expectedDefaultOutputMutationFieldCount = () =>
+    defaultOutputMutationFields().length;
+  const assertDefaultOutputMutationFieldCount = () => {
+    if (defaultTextFields.length !== expectedDefaultOutputMutationFieldCount()) {
+      failDefaultOutputMutation({
+        expected_default_output_mutation_fields:
+          expectedDefaultOutputMutationFieldCount(),
+        actual_default_output_mutation_fields: defaultTextFields.length,
+      });
+    }
+  };
   const assertDefaultOutputMutations = () => {
     assertStaleDefaultOutputValuesCovered();
+    assertDefaultOutputMutationFieldCount();
     defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase);
   };
   assertDefaultOutputMutations();
