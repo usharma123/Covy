@@ -196,12 +196,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default output parser failure | Proves malformed default density text fails the parser instead of being accepted silently. | Density self-test now rejects malformed prefixes and missing output-label fields. | Evidence: self-test output stays one line and malformed prefix or missing labels fails parser validation. |
 | Context anomaly drilldown density default output docs | Helps maintainers know the default text output is intentionally parseable. | The runbook now notes that density default output is one-line `key=value` text. | Evidence: runbook remains within line/prose/table budgets and note matches parser expectations. |
 | Context anomaly drilldown density default output docs coverage | Prevents parseable-output docs from drifting after text-output changes. | The density checker now requires the runbook `key=value` parseability note. | Evidence: default output stays one line and removing `key=value` fails missing output docs. |
+| Context anomaly drilldown density output docs phrase count | Helps automation see how many non-label output doc phrases are guarded. | Default density output now reports `output_doc_phrases` while JSON remains unchanged. | Evidence: default output stays one line and count matches the required output doc phrase list. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output docs phrase count | Helps automation see how many non-label output doc phrases are guarded. | Report `output_doc_phrases` in default density output without growing JSON. | Compact metric: default output stays one line; correctness metric: count matches required output doc phrase list. |
+| Context anomaly drilldown density output docs phrase count self-test | Proves the default `output_doc_phrases` count is tied to required phrase docs. | Add a self-test assertion for output doc phrase count and label coverage. | Compact metric: self-test output stays one line; correctness metric: changing required phrases changes expected count. |
 
 ## Research Rules
 

@@ -89,6 +89,7 @@ const requiredOutputLabels = [
   "json_headroom",
   "env_docs",
   "output_labels",
+  "output_doc_phrases",
 ];
 const requiredOutputDocPhrases = ["key=value"];
 const requiredEnvDocs = [
@@ -200,6 +201,7 @@ function evaluate(runbook, lineBudget) {
     failure_codes_checked: requiredFailureCodes.length,
     env_docs_checked: requiredEnvDocs.length,
     output_labels_checked: requiredOutputLabels.length,
+    output_doc_phrases_checked: requiredOutputDocPhrases.length,
   };
 }
 
@@ -319,6 +321,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom) {
     `failure_codes=${payload.failure_codes_checked}`,
     `env_docs=${resultDetails.env_docs_checked}`,
     `output_labels=${resultDetails.output_labels_checked}`,
+    `output_doc_phrases=${resultDetails.output_doc_phrases_checked}`,
     `workflow_commands=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json_headroom=${jsonHeadroom}`,
@@ -341,6 +344,7 @@ function defaultOutputIssue(parsed, resultDetails) {
     "failure_codes",
     "env_docs",
     "output_labels",
+    "output_doc_phrases",
     "workflow_commands",
     "prose",
     "json_headroom",
@@ -390,6 +394,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_output_labels=${requiredOutputLabels.length}`);
     console.error(`actual_output_labels=${result.output_labels_checked}`);
+    process.exit(1);
+  }
+  if (result.output_doc_phrases_checked !== requiredOutputDocPhrases.length) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_output_doc_phrases=${requiredOutputDocPhrases.length}`,
+    );
+    console.error(
+      `actual_output_doc_phrases=${result.output_doc_phrases_checked}`,
+    );
     process.exit(1);
   }
   if (
