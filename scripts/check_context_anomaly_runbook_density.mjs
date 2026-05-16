@@ -507,6 +507,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     }
   }
   const expectedValues = {
+    row: `${resultDetails.max_table_row}/${resultDetails.max_table_row_allowed}`,
     cmds: String(resultDetails.commands_checked),
     fc: String(resultDetails.failure_codes_checked),
     env: String(resultDetails.env_docs_checked),
@@ -810,6 +811,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=wdocs");
     console.error(`actual=${staleTextWidthDocsError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleRowValueError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ row=\S+/, " row=0/0")),
+    result,
+  );
+  if (staleRowValueError !== "default_output_parse_mismatch=row") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=row");
+    console.error(`actual=${staleRowValueError ?? "ok"}`);
     process.exit(1);
   }
   const staleCommandCountError = defaultOutputParseIssue(
