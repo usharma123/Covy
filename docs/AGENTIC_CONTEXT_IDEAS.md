@@ -123,12 +123,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit artifact checksum docs | Helps maintainers reproduce the audit artifact checksum locally. | The context anomaly runbook now includes the same Node SHA-256 command the workflow uses for `context-anomaly-hidden-sample-audit.txt`. | Evidence: runbook remains under 45 lines; local command reproduces the workflow audit checksum. |
 | Context anomaly drilldown artifact checksum helper | Avoids duplicating a long Node checksum one-liner between workflow and docs. | The audit script now supports `--checksum <path>`, and the workflow plus runbook use that helper for audit artifact hashing. | Evidence: helper output is one 64-character digest; workflow and runbook both call `node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt`. |
 | Context anomaly drilldown checksum helper self-test | Prevents the audit checksum helper from drifting while workflow summaries still rely on it. | The default audit now checks `--checksum` against a temporary `abc` fixture with a known SHA-256 digest. | Evidence: default audit output remains seven lines and includes `checksum-helper`; helper digest is compared with an independent known value. |
+| Context anomaly drilldown checksum read failure | Gives CI a compact, parseable error when the audit artifact file is missing. | `--checksum` now catches file-read failures and emits a named two-line error instead of a Node stack trace. | Evidence: missing-file output stays at two lines; valid checksum output remains only the digest. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown checksum read failure | Gives CI a compact, parseable error when the audit artifact file is missing. | Catch `--checksum` file-read failures and emit a named two-line error instead of a Node stack trace. | Compact metric: missing-file output stays under three lines; correctness metric: existing valid checksum output remains only the digest. |
+| Context anomaly drilldown audit JSON output | Lets automation consume audit mode, formatter budget, checksum, and digest counts without parsing text lines. | Add `--json` output to the audit script while preserving default text output. | Compact metric: JSON output stays under 512 bytes; correctness metric: JSON fields match the default audit lines. |
 
 ## Research Rules
 

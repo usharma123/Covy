@@ -64,9 +64,15 @@ if (printHelp) {
   process.exit(0);
 }
 if (checksumPath) {
-  process.stdout.write(
-    createHash("sha256").update(readFileSync(checksumPath)).digest("hex"),
-  );
+  try {
+    process.stdout.write(
+      createHash("sha256").update(readFileSync(checksumPath)).digest("hex"),
+    );
+  } catch {
+    console.error("context_anomaly_hidden_sample_audit_checksum_read_failed");
+    console.error(`path=${checksumPath}`);
+    process.exit(1);
+  }
   process.exit(0);
 }
 const maxHigh = strictMode ? "0" : "2";
