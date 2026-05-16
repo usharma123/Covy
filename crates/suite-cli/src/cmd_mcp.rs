@@ -11,10 +11,11 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 use packet28_daemon_core::{
     load_task_events, task_artifact_dir, task_brief_markdown_path, task_state_json_path,
-    task_version_json_path, BrokerPlanStep, BrokerPrepareHandoffRequest, BrokerResponseMode,
-    BrokerTaskStatusRequest, BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
-    BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
-    BrokerWriteStateResponse, DaemonRequest, DaemonResponse, TaskRecord,
+    task_version_json_path, BrokerAction, BrokerPlanStep, BrokerPrepareHandoffRequest,
+    BrokerResponseMode, BrokerTaskStatusRequest, BrokerTaskStatusResponse,
+    BrokerValidatePlanRequest, BrokerWriteOp, BrokerWriteStateBatchRequest,
+    BrokerWriteStateBatchResponse, BrokerWriteStateRequest, BrokerWriteStateResponse,
+    DaemonRequest, DaemonResponse, TaskRecord,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -40,9 +41,9 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_fetch_context, handle_packet28_fetch_raw_output,
     handle_packet28_fetch_tool_result, handle_packet28_glob, handle_packet28_prepare_handoff,
     handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
-    handle_packet28_validate_plan, handle_packet28_write_intention, Packet28FetchContextArgs,
-    Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs, Packet28GlobArgs,
-    Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs, Packet28SearchArgs,
+    handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
+    Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
+    Packet28GlobArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs, Packet28SearchArgs,
     Packet28SearchFastArgs, Packet28ValidatePlanArgs, Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
@@ -722,6 +723,23 @@ fn handle_method(
                             },
                             "require_read_before_edit": {"type":"boolean"},
                             "require_test_gate": {"type":"boolean"},
+                            "budget_tokens": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.action_critic",
+                    "description": "Return focused Packet28 action-critic warnings before choosing a tool or editing focused files.",
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["task_id", "action"],
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "action": {"type":"string","enum":["choose_tool","edit"]},
+                            "query": {"type":"string"},
+                            "tool_name": {"type":"string"},
+                            "focus_paths": {"type":"array","items":{"type":"string"}},
+                            "focus_symbols": {"type":"array","items":{"type":"string"}},
                             "budget_tokens": {"type":"integer","minimum":1}
                         }
                     }
@@ -1542,6 +1560,18 @@ fn handle_tool_call(
             request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
             track_task(session, root, &request.task_id)?;
             handle_packet28_validate_plan(root, request)?
+        }
+        "packet28.action_critic" => {
+            let mut request: Packet28ActionCriticArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request.query.as_deref().or(request.tool_name.as_deref()),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_action_critic(root, request)?
         }
         "packet28.verify_experiments" => {
             let request: VerifyExperimentsToolArgs = serde_json::from_value(arguments)?;
@@ -2481,6 +2511,14 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 plan validation valid={valid} violations={violations} warnings={warnings}.")
         }
+        "packet28.action_critic" => {
+            let warning_count = payload
+                .get("warnings")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            format!("Packet28 action critic returned {warning_count} warning(s).")
+        }
         "packet28.verify_experiments" => {
             let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
             let experiments = payload
@@ -2800,6 +2838,7 @@ mod tests {
             "packet28_rewrite",
             "packet28_handoff",
             "packet28_validate_plan",
+            "packet28_action_critic",
             "packet28_verify_experiments",
             "packet28_hypothesis_add",
             "packet28_hypothesis_list",

@@ -129,6 +129,32 @@ pub(crate) struct Packet28ValidatePlanArgs {
     pub(crate) budget_tokens: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub(crate) struct Packet28ActionCriticArgs {
+    pub(crate) task_id: String,
+    pub(crate) action: BrokerAction,
+    pub(crate) query: Option<String>,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) focus_paths: Vec<String>,
+    pub(crate) focus_symbols: Vec<String>,
+    pub(crate) budget_tokens: Option<u64>,
+}
+
+impl Default for Packet28ActionCriticArgs {
+    fn default() -> Self {
+        Self {
+            task_id: String::new(),
+            action: BrokerAction::ChooseTool,
+            query: None,
+            tool_name: None,
+            focus_paths: Vec::new(),
+            focus_symbols: Vec::new(),
+            budget_tokens: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct Packet28WriteIntentionArgs {
@@ -1176,6 +1202,60 @@ pub(crate) fn handle_packet28_validate_plan(
         },
     )?;
     Ok(serde_json::to_value(response)?)
+}
+
+pub(crate) fn handle_packet28_action_critic(
+    root: &Path,
+    args: Packet28ActionCriticArgs,
+) -> Result<Value> {
+    if args.task_id.trim().is_empty() {
+        return Err(anyhow!("packet28.action_critic requires task_id"));
+    }
+    if !matches!(args.action, BrokerAction::ChooseTool | BrokerAction::Edit) {
+        return Err(anyhow!(
+            "packet28.action_critic action must be choose_tool or edit"
+        ));
+    }
+    let response = crate::broker_client::get_context(
+        root,
+        packet28_daemon_core::BrokerGetContextRequest {
+            task_id: args.task_id.clone(),
+            action: Some(args.action),
+            focus_paths: args.focus_paths,
+            focus_symbols: args.focus_symbols,
+            tool_name: args.tool_name,
+            query: args.query,
+            include_sections: vec!["action_critic".to_string()],
+            max_sections: Some(1),
+            default_max_items_per_section: Some(8),
+            budget_tokens: args.budget_tokens,
+            persist_artifacts: Some(false),
+            ..packet28_daemon_core::BrokerGetContextRequest::default()
+        },
+    )?;
+    let section = response
+        .sections
+        .iter()
+        .find(|section| section.id == "action_critic");
+    let warnings = section
+        .map(|section| {
+            section
+                .body
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(|line| line.trim_start_matches("- ").to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(json!({
+        "task_id": args.task_id,
+        "action": args.action,
+        "context_version": response.context_version,
+        "warning_count": warnings.len(),
+        "warnings": warnings,
+        "section": section,
+    }))
 }
 
 pub(crate) fn handle_packet28_write_intention(

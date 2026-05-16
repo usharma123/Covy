@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use blake3::Hasher;
 use packet28_daemon_core::{
-    BrokerPrepareHandoffRequest, BrokerPrepareHandoffResponse, BrokerTaskStatusRequest,
-    BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerValidatePlanResponse, BrokerWriteOp,
-    BrokerWriteStateRequest, BrokerWriteStateResponse, DaemonRequest, DaemonResponse,
-    HookIngestRequest, HookIngestResponse, TaskAwaitHandoffRequest, TaskAwaitHandoffResponse,
-    TaskMarkHandoffConsumedRequest, TaskMarkHandoffConsumedResponse,
+    BrokerGetContextRequest, BrokerGetContextResponse, BrokerPrepareHandoffRequest,
+    BrokerPrepareHandoffResponse, BrokerTaskStatusRequest, BrokerTaskStatusResponse,
+    BrokerValidatePlanRequest, BrokerValidatePlanResponse, BrokerWriteOp, BrokerWriteStateRequest,
+    BrokerWriteStateResponse, DaemonRequest, DaemonResponse, HookIngestRequest, HookIngestResponse,
+    TaskAwaitHandoffRequest, TaskAwaitHandoffResponse, TaskMarkHandoffConsumedRequest,
+    TaskMarkHandoffConsumedResponse,
 };
 
 pub fn resolve_root(root: &str) -> PathBuf {
@@ -34,6 +35,21 @@ pub fn prepare_handoff(
     ensure_daemon(root)?;
     match crate::cmd_daemon::send_request(root, &DaemonRequest::BrokerPrepareHandoff { request })? {
         DaemonResponse::BrokerPrepareHandoff { response } => Ok(response),
+        DaemonResponse::Error { message } => Err(anyhow!(message)),
+        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+    }
+}
+
+pub fn get_context(
+    root: &Path,
+    request: BrokerGetContextRequest,
+) -> Result<BrokerGetContextResponse> {
+    if request.task_id.trim().is_empty() {
+        return Err(anyhow!("broker get_context requires task_id"));
+    }
+    ensure_daemon(root)?;
+    match crate::cmd_daemon::send_request(root, &DaemonRequest::BrokerGetContext { request })? {
+        DaemonResponse::BrokerGetContext { response } => Ok(response),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
