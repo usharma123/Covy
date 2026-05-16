@@ -749,6 +749,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${staleTextWidthDocsError ?? "ok"}`);
     process.exit(1);
   }
+  const staleCommandCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ cmds=\d+/, " cmds=0")),
+    result,
+  );
+  if (staleCommandCountError !== "default_output_parse_mismatch=cmds") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=cmds");
+    console.error(`actual=${staleCommandCountError ?? "ok"}`);
+    process.exit(1);
+  }
   const staleDensityDocCountError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ dphr=\d+/, " dphr=0")),
     result,
