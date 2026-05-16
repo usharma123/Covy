@@ -1153,6 +1153,11 @@ if (args.includes("--self-test")) {
     "missing_fc_alias_glossary",
   );
   assertSelfTest(
+    evaluate(runbook.replace("`jhead`=JSON headroom", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "missing_jhead_alias_glossary",
+  );
+  assertSelfTest(
     evaluate(runbook.replace("`adocs`=alias docs", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_adocs_alias_glossary",

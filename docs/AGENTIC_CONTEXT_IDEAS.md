@@ -310,12 +310,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON parity count JSON output | Lets JSON consumers see the parity-field count without parsing compact text. | JSON now includes `json_parity_fields_checked`, and the runbook documents the field under a 544-byte JSON cap. | Evidence: JSON stays under 544 bytes; JSON parity count matches expected map. |
 | Context anomaly drilldown density JSON cap docs refresh | Keeps density JSON budget docs honest after adding JSON parity count output. | The checker now documents why `max_json_bytes` is 544 while the runbook still requires the exact cap phrase. | Evidence: runbook stays within row/prose caps; JSON cap docs match output. |
 | Context anomaly drilldown density JSON headroom default output | Lets agents see actual JSON byte headroom directly instead of inferring from `json` alias docs. | Compact output now uses `jhead` for JSON headroom, with parser and runbook alias coverage. | Evidence: output remains under text cap; headroom field stays parser-checked. |
+| Context anomaly drilldown density JSON headroom alias docs | Helps maintainers map `jhead` without reading checker source. | Density self-test now has a dedicated missing-alias check for `jhead` docs. | Evidence: runbook stays under row/prose caps; missing `jhead` docs fail self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON headroom alias docs | Helps maintainers map `jhead` without reading checker source. | Add or verify dedicated `jhead` alias docs and stale/missing alias self-test coverage. | Compact metric: runbook stays under row/prose caps; correctness metric: missing `jhead` docs fail self-test. |
+| Context anomaly drilldown density JSON headroom alias JSON docs | Helps JSON consumers connect `jhead` text output to the `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` guard. | Add a compact docs/self-test link between `jhead` and the JSON headroom env knob. | Compact metric: runbook stays under row/prose caps; correctness metric: missing headroom link fails self-test. |
 
 ## Research Rules
 
