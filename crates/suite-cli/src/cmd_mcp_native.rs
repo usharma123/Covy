@@ -244,6 +244,14 @@ pub(crate) struct Packet28HandoffEnvironmentLintArgs {
     pub(crate) context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffLintAllArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1765,6 +1773,117 @@ pub(crate) fn handle_packet28_handoff_lint_environment(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_lint_all(
+    root: &Path,
+    args: Packet28HandoffLintAllArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.handoff_lint_all requires task_id"));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.handoff_lint_all requires artifact_id or context_version")
+    })?;
+    let checks = vec![
+        handoff_lint_check(
+            "replay",
+            handle_packet28_verify_handoff(
+                root,
+                Packet28VerifyHandoffArgs {
+                    task_id: task_id.to_string(),
+                    artifact_id: Some(artifact_id.clone()),
+                    context_version: None,
+                },
+            )?,
+        ),
+        handoff_lint_check(
+            "dependencies",
+            handle_packet28_handoff_lint_dependencies(
+                root,
+                Packet28HandoffDependencyLintArgs {
+                    task_id: task_id.to_string(),
+                    artifact_id: Some(artifact_id.clone()),
+                    context_version: None,
+                },
+            )?,
+        ),
+        handoff_lint_check(
+            "paths",
+            handle_packet28_handoff_lint_paths(
+                root,
+                Packet28HandoffPathLintArgs {
+                    task_id: task_id.to_string(),
+                    artifact_id: Some(artifact_id.clone()),
+                    context_version: None,
+                },
+            )?,
+        ),
+        handoff_lint_check(
+            "tests",
+            handle_packet28_handoff_lint_tests(
+                root,
+                Packet28HandoffTestLintArgs {
+                    task_id: task_id.to_string(),
+                    artifact_id: Some(artifact_id.clone()),
+                    context_version: None,
+                },
+            )?,
+        ),
+        handoff_lint_check(
+            "stale_commands",
+            handle_packet28_handoff_lint_stale_commands(
+                root,
+                Packet28HandoffStaleCommandLintArgs {
+                    task_id: task_id.to_string(),
+                    artifact_id: Some(artifact_id.clone()),
+                    context_version: None,
+                },
+            )?,
+        ),
+        handoff_lint_check(
+            "environment",
+            handle_packet28_handoff_lint_environment(
+                root,
+                Packet28HandoffEnvironmentLintArgs {
+                    task_id: task_id.to_string(),
+                    artifact_id: Some(artifact_id.clone()),
+                    context_version: None,
+                },
+            )?,
+        ),
+    ];
+    let failing_categories: Vec<String> = checks
+        .iter()
+        .filter(|check| !check.get("ok").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|check| {
+            check
+                .get("category")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    let issue_count: u64 = checks
+        .iter()
+        .map(|check| {
+            check
+                .get("issue_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+        })
+        .sum();
+    let ok = failing_categories.is_empty();
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "ok": ok,
+        "status": if ok { "ready" } else { "blocked" },
+        "issue_count": issue_count,
+        "failing_categories": failing_categories,
+        "checks": checks,
+        "summary": format!("handoff_lint_all status={} issue_count={issue_count}", if ok { "ready" } else { "blocked" }),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -2005,6 +2124,55 @@ fn command_env_vars(command: &str) -> Vec<String> {
         index = end;
     }
     vars
+}
+
+fn handoff_lint_check(category: &str, payload: Value) -> Value {
+    let ok = payload
+        .get("ok")
+        .and_then(Value::as_bool)
+        .or_else(|| payload.get("ready").and_then(Value::as_bool))
+        .unwrap_or(false);
+    let issue_count = payload
+        .get("issue_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| {
+            payload
+                .get("missing")
+                .and_then(Value::as_array)
+                .map(|missing| missing.len() as u64)
+                .unwrap_or_default()
+        });
+    let references = payload
+        .get("issues")
+        .and_then(Value::as_array)
+        .map(|issues| {
+            issues
+                .iter()
+                .filter_map(|issue| issue.get("reference").and_then(Value::as_str))
+                .take(3)
+                .map(|reference| json!(reference))
+                .collect::<Vec<Value>>()
+        })
+        .or_else(|| {
+            payload
+                .get("missing")
+                .and_then(Value::as_array)
+                .map(|missing| {
+                    missing
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .take(3)
+                        .map(|reference| json!(reference))
+                        .collect::<Vec<Value>>()
+                })
+        })
+        .unwrap_or_default();
+    json!({
+        "category": category,
+        "ok": ok,
+        "issue_count": issue_count,
+        "references": references,
+    })
 }
 
 fn is_env_var_start(ch: char) -> bool {
