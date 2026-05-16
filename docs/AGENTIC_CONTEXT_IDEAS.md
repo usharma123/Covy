@@ -469,12 +469,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output stale assertion helper | Keeps stale-field mutation checks under one named assertion. | Extracted `assertDefaultOutputStaleMutation(field, staleValue)` for the stale-line no-op and parser mismatch checks. | Evidence: no runtime output growth; stale-field mutation coverage remains field-specific. |
 | Context anomaly drilldown density self-test default output assertion order helper | Keeps missing/stale default-output mutation assertions declared near the combined assertion. | Kept `assertDefaultOutputMutation()` beside `assertDefaultOutputMutations()` after its missing/stale helpers. | Evidence: no runtime output growth; mutation assertion flow remains missing then stale. |
 | Context anomaly drilldown density self-test default output stale value helper | Names stale default-output value lookup in the mutation sweep. | Extracted `staleDefaultOutputValue(field)` for the per-field stale mutation value lookup. | Evidence: no runtime output growth; stale value lookup remains field-specific. |
+| Context anomaly drilldown density self-test default output stale value coverage helper | Names the stale value coverage check before mutation assertions run. | Extracted `assertStaleDefaultOutputValuesCovered()` around the missing stale mutation fields check. | Evidence: no runtime output growth; stale mutation value coverage remains field-specific. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output stale value coverage helper | Names the stale value coverage check before mutation assertions run. | Extract an `assertStaleDefaultOutputValuesCovered()` helper around the missing stale mutation fields check. | Compact metric: no runtime output growth; correctness metric: stale mutation value coverage remains field-specific. |
+| Context anomaly drilldown density self-test default output stale coverage order helper | Keeps stale value coverage inside the grouped mutation assertion. | Move `assertStaleDefaultOutputValuesCovered()` beside the mutation sweep helper to make coverage happen at the group boundary. | Compact metric: no runtime output growth; correctness metric: stale coverage remains checked before per-field mutations. |
 
 ## Research Rules
 
