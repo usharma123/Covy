@@ -1590,9 +1590,10 @@ if (args.includes("--self-test")) {
     defaultOutputDocPhrase,
     "swapped_dlab_jhead_output_order",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`thead`, `tw`", "`tw`, `thead`"), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    defaultOutputDocPhrase,
     "swapped_thead_tw_output_order",
   );
   assertSelfTestMissing(

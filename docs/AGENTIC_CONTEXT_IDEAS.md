@@ -393,12 +393,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper alias-docs field adoption | Reuses the missing-detail helper for alias-docs JSON docs. | The `alias_docs_checked` docs mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers alias-docs field detail checks. |
 | Context anomaly drilldown density missing-detail helper JSON full-name adoption | Reuses the missing-detail helper for the JSON full-field-name prose guard. | The `JSON keeps full field names` mutation now uses `assertSelfTestMissing` for its prose phrase. | Evidence: no output growth; helper covers prose phrase detail checks. |
 | Context anomaly drilldown density missing-detail helper output-order adoption | Reuses the missing-detail helper for compact output order docs. | The `dlab`, `jhead` output-order mutation now uses a single-sourced `defaultOutputDocPhrase` missing-detail assertion. | Evidence: no output growth; helper covers order-doc detail checks. |
+| Context anomaly drilldown density missing-detail helper tail-order adoption | Reuses the missing-detail helper for the final compact output order pair. | The `thead`, `tw` output-order mutation now uses the single-sourced `defaultOutputDocPhrase` missing-detail assertion. | Evidence: no output growth; helper covers tail order-doc detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper tail-order adoption | Reuses the missing-detail helper for the final compact output order pair. | Convert the `thead`, `tw` output-order mutation to `assertSelfTestMissing` using `defaultOutputDocPhrase`. | Compact metric: no output growth; correctness metric: helper covers tail order-doc detail checks. |
+| Context anomaly drilldown density missing-detail helper label-order adoption | Reuses the missing-detail helper for the compact `env`, `lbl` output order docs. | Convert the `env`, `lbl` output-order mutation to `assertSelfTestMissing` using `defaultOutputDocPhrase`. | Compact metric: no output growth; correctness metric: helper covers label order-doc detail checks. |
 
 ## Research Rules
 
