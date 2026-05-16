@@ -234,6 +234,49 @@
           "version": "0.2.52"
         }
       ]
+    },
+    {
+      "id": "release-smoke-v0.2.54",
+      "workflow": "Packet28 release smoke for published npm package and install path",
+      "commands": [
+        "cargo test --workspace",
+        "npm view packet28@0.2.54 version",
+        "npm install -g packet28@0.2.54",
+        "packet28 --version",
+        "packet28 rewrite \"git status --short\"",
+        "packet28 setup --runtime gemini --root <isolated-root> --yes",
+        "packet28 doctor --agent gemini --root <isolated-root> --json"
+      ],
+      "artifacts": [
+        "docs/experiments/release-smoke/V0_2_54.md"
+      ],
+      "metrics": [
+        {
+          "name": "release_workflow_passed",
+          "value": 1,
+          "min": 1
+        },
+        {
+          "name": "npm_package_version_match",
+          "value": 1,
+          "min": 1
+        },
+        {
+          "name": "isolated_install_smoke_passed",
+          "value": 1,
+          "min": 1
+        }
+      ],
+      "runtime_versions": [
+        {
+          "name": "packet28",
+          "version": "0.2.54"
+        },
+        {
+          "name": "npm-package",
+          "version": "packet28@0.2.54"
+        }
+      ]
     }
   ]
 }

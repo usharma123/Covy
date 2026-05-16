@@ -49,4 +49,5 @@ jobs:
             --require-workflow "Packet28 repeatable fixture-suite smoke across Rust, Node, and docs repositories" \
             --require-workflow "Optional fff MCP search backend comparison and adapter smoke" \
             --require-workflow "Packet28 broker plan validation CLI with mapped test-gate score evidence" \
-            --require-workflow "Packet28 code-navigation experiment on ClaudeCode main source snapshot"
+            --require-workflow "Packet28 code-navigation experiment on ClaudeCode main source snapshot" \
+            --require-workflow "Packet28 release smoke for published npm package and install path"
