@@ -420,12 +420,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper plain env docs count guard | Makes the env-doc sweep boundary explicit and guarded. | Self-test now asserts `requiredPlainEnvDocs.length` equals `requiredEnvDocs.length - 2` for the `tw`/`jhead` pair-doc exclusions. | Evidence: no output growth; sweep exclusions are explicit. |
 | Context anomaly drilldown density missing-detail helper paired env exclusion guard | Guards the names excluded from the plain env-doc sweep. | Self-test now asserts `requiredPlainEnvDocs` excludes `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` and `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`. | Evidence: no output growth; pair-doc exclusions are name-specific. |
 | Context anomaly drilldown density missing-detail helper plain env exclusion single-source | Removes duplicate excluded-env names between the filter and self-test guard. | Extracted `pairedEnvDocExclusions`, reused by `requiredPlainEnvDocs` and the exclusion guard. | Evidence: no output growth; exclusions are single-source. |
+| Context anomaly drilldown density missing-detail helper paired env exclusion count guard | Guards the size of the paired-env exclusion list directly. | Self-test now asserts `pairedEnvDocExclusions.length === 2` before deriving the plain env-doc count. | Evidence: no output growth; count guard follows the exclusion source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper paired env exclusion count guard | Guards the size of the paired-env exclusion list directly. | Assert `pairedEnvDocExclusions.length === 2` before deriving the plain env-doc count. | Compact metric: no output growth; correctness metric: count guard follows the exclusion source. |
+| Context anomaly drilldown density missing-detail helper paired env exclusion count reuse | Avoids duplicating the paired exclusion count literal across guards. | Extract `pairedEnvDocExclusionCount` for the direct count guard and plain-env derived count. | Compact metric: no output growth; correctness metric: count arithmetic is single-source. |
 
 ## Research Rules
 

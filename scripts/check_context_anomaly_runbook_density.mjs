@@ -1503,6 +1503,14 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
+  if (pairedEnvDocExclusions.length !== 2) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected_paired_env_doc_exclusions=2");
+    console.error(
+      `actual_paired_env_doc_exclusions=${pairedEnvDocExclusions.length}`,
+    );
+    process.exit(1);
+  }
   if (requiredPlainEnvDocs.length !== requiredEnvDocs.length - 2) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_plain_env_docs=${requiredEnvDocs.length - 2}`);
