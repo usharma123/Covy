@@ -570,6 +570,15 @@ fn run_search_execution_for_query(
     action: BrokerAction,
 ) -> SearchExecution {
     let snapshot = suite_packet_core::AgentSnapshotPayload::default();
+    run_search_execution_for_query_with_snapshot(root, query, action, &snapshot)
+}
+
+fn run_search_execution_for_query_with_snapshot(
+    root: &std::path::Path,
+    query: &str,
+    action: BrokerAction,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> SearchExecution {
     let request = BrokerGetContextRequest {
         task_id: "task-search".to_string(),
         action: Some(action),
@@ -580,7 +589,7 @@ fn run_search_execution_for_query(
     build_reducer_search_execution(SearchExecutionArgs {
         state: None,
         root,
-        snapshot: &snapshot,
+        snapshot,
         request: &request,
         query_focus: &query_focus,
         action,
@@ -711,6 +720,42 @@ fn broad_generic_tokens_do_not_outrank_exact_symbol_hits() {
         Some("src/request.rs")
     );
     assert!(execution.files[0].exact_symbol_hits > 0);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn search_ranking_prefers_fresh_changed_path_over_stale_changed_path() {
+    let root = std::env::temp_dir().join(format!(
+        "packet28d-search-freshness-rank-{}",
+        std::process::id()
+    ));
+    write_search_fixture(
+        &root,
+        &[
+            ("src/a_stale.rs", "fn shared_term() {}\n"),
+            ("src/z_fresh.rs", "fn shared_term() {}\n"),
+        ],
+    );
+    let snapshot = suite_packet_core::AgentSnapshotPayload {
+        files_read: vec!["src/z_fresh.rs".to_string()],
+        changed_paths_since_checkpoint: vec![
+            "src/a_stale.rs".to_string(),
+            "src/z_fresh.rs".to_string(),
+        ],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+
+    let execution = run_search_execution_for_query_with_snapshot(
+        &root,
+        "shared_term",
+        BrokerAction::Inspect,
+        &snapshot,
+    );
+    assert_eq!(
+        execution.files.first().map(|file| file.path.as_str()),
+        Some("src/z_fresh.rs")
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

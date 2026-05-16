@@ -838,6 +838,7 @@ fn apply_search_candidate_results(
 
 fn rank_reducer_search_files(
     mut files: Vec<ReducerSearchFile>,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
     max_files: usize,
 ) -> Vec<ReducerSearchFile> {
     files.sort_by(|a, b| {
@@ -857,12 +858,39 @@ fn rank_reducer_search_files(
                     .len()
                     .cmp(&a.matched_phase_indexes.len())
             })
+            .then_with(|| {
+                freshness_rank_for_search_path(snapshot, &b.path)
+                    .cmp(&freshness_rank_for_search_path(snapshot, &a.path))
+            })
             .then_with(|| b.definition_hits.cmp(&a.definition_hits))
             .then_with(|| b.match_count.cmp(&a.match_count))
             .then_with(|| a.path.cmp(&b.path))
     });
     files.truncate(max_files.max(1));
     files
+}
+
+fn freshness_rank_for_search_path(
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    path: &str,
+) -> u8 {
+    let normalized = path.trim().trim_start_matches("./");
+    let changed = snapshot
+        .changed_paths_since_checkpoint
+        .iter()
+        .any(|changed| changed.trim().trim_start_matches("./") == normalized);
+    if !changed {
+        return 1;
+    }
+    let freshly_read = snapshot
+        .files_read
+        .iter()
+        .any(|read| read.trim().trim_start_matches("./") == normalized);
+    if freshly_read {
+        2
+    } else {
+        0
+    }
 }
 
 pub(crate) fn preferred_search_regions(file: &ReducerSearchFile) -> Vec<String> {
@@ -903,7 +931,7 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
         }
     }
     let mut reducer_files =
-        rank_reducer_search_files(files_by_path.into_values().collect(), max_files);
+        rank_reducer_search_files(files_by_path.into_values().collect(), snapshot, max_files);
     let mut evidence_by_file = build_reducer_search_evidence(
         state,
         root,
@@ -924,7 +952,8 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
         for candidate in &plan.phases[1].candidates {
             apply_search_candidate_results(root, &requested_paths, candidate, &mut files_by_path);
         }
-        reducer_files = rank_reducer_search_files(files_by_path.into_values().collect(), max_files);
+        reducer_files =
+            rank_reducer_search_files(files_by_path.into_values().collect(), snapshot, max_files);
         evidence_by_file = build_reducer_search_evidence(
             state,
             root,
