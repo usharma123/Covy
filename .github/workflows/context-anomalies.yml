@@ -61,6 +61,7 @@ jobs:
           hidden_sample_jq='def cat_escape: gsub("%"; "%25") | gsub("="; "%3D") | gsub(";"; "%3B") | gsub("\n"; "%0A"); def signal_escape: gsub("%"; "%25") | gsub(";"; "%3B") | gsub("\n"; "%0A"); map((.category | cat_escape) + "=" + (.signal | signal_escape)) | join(";")'
           hidden_sample_fixture_summary="$(jq -r "$hidden_sample_jq" docs/context-anomalies/hidden-samples-delimiters.json)"
           test "$hidden_sample_fixture_summary" = "$(cat docs/context-anomalies/hidden-samples-delimiters.summary)"
+          hidden_sample_smoke="$(node scripts/check_context_anomaly_hidden_samples.mjs)"
           {
             echo "### Context anomalies"
             echo "- anomalies: $(jq -r '.anomaly_count // 0' context-anomalies.json)"
@@ -79,5 +80,6 @@ jobs:
             echo "- fixture recurring hidden: $(jq -r '(.context_anomalies.recurring_hidden_categories // []) | join(",")' context-anomaly-fixture-dashboard.json)"
             echo "- fixture hidden samples: $(jq -r "(.context_anomalies.recurring_hidden_samples // []) | $hidden_sample_jq" context-anomaly-fixture-dashboard.json | cut -c1-256)"
             echo "- fixture oldest recurring hidden age ms: $(jq -r '.context_anomalies.oldest_recurring_hidden_age_ms // 0' context-anomaly-fixture-dashboard.json)"
-            echo "- runbook: docs/context-anomalies/RUNBOOK.md"
+            echo "- formatter smoke: $hidden_sample_smoke"
+            echo "- command table: docs/context-anomalies/RUNBOOK.md"
           } >> "$GITHUB_STEP_SUMMARY"

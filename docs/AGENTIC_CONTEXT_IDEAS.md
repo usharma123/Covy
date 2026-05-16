@@ -84,12 +84,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown summary golden fixture | Prevents Rust and workflow hidden-sample summary encoders from drifting apart. | A delimiter-heavy hidden-sample fixture now has a checked-in expected summary used by both a Rust unit test and workflow jq check. | Evidence: `context_hidden_sample_summary_matches_delimiter_fixture`; workflow summary step validates the same fixture before writing hidden sample lines. |
 | Context anomaly drilldown summary drift smoke | Gives maintainers a local command for checking hidden-sample summary fixtures without waiting for CI. | `scripts/check_context_anomaly_hidden_samples.mjs` now compares the delimiter fixture against the checked-in expected line and prints a one-line success summary. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs`; exits nonzero on drift and prints one `context_anomaly_hidden_sample_fixture_ok=...` line on success. |
 | Context anomaly drilldown runbook command table | Helps agents choose the right context anomaly command without scanning prose. | The context anomaly runbook now has a four-row command table for live verify, fixture replay, formatter smoke, and digest inspection. | Evidence: runbook remains under 45 lines; `verify context-anomalies`, fixture dashboard replay, smoke script, and digest commands all have local validation paths. |
+| Context anomaly drilldown table CI excerpt | Makes the runbook command table visible from GitHub summaries when context anomaly checks run. | The context-anomalies workflow summary now prints the formatter smoke result and labels the runbook link as the command table. | Evidence: summary grows by one line; workflow runs `node scripts/check_context_anomaly_hidden_samples.mjs` before writing the summary and fails on formatter drift. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown table CI excerpt | Makes the runbook command table visible from GitHub summaries when context anomaly checks run. | Add the formatter smoke command result and runbook command-table pointer to the context-anomalies workflow summary. | Compact metric: summary grows by at most two lines; correctness metric: workflow fails before summary write if the formatter smoke drifts. |
+| Context anomaly drilldown fixture freshness | Prevents the delimiter fixture from becoming invisible when the workflow path filters change. | Add the hidden-sample delimiter fixture files and smoke script to the context-anomalies workflow path filters. | Compact metric: path filter adds at most three entries; correctness metric: fixture or smoke-script changes trigger the context anomaly workflow. |
 
 ## Research Rules
 
