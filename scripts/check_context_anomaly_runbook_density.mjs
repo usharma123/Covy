@@ -718,6 +718,8 @@ if (args.includes("--self-test")) {
   const jsonParityFieldOrder = Object.keys(
     jsonPayloadParityExpectedFields(result),
   );
+  // Keep parity expectations in success-payload order so JSON readers see the
+  // same field sequence that the self-test validates.
   const payloadParityFieldOrder = Object.keys(baselinePayload).filter((field) =>
     jsonParityFieldOrder.includes(field),
   );
