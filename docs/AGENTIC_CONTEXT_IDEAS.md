@@ -406,12 +406,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper adocs-label adoption | Reuses the missing-detail helper for the compact `adocs` output label mutation. | The `adocs` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers alias-doc label detail checks. |
 | Context anomaly drilldown density missing-detail helper workflow-label adoption | Reuses the missing-detail helper for the compact `wf` output label mutation. | The `wf` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers workflow label detail checks. |
 | Context anomaly drilldown density missing-detail helper output label sweep | Finishes exact-detail coverage for the compact output label mutation cluster. | Self-test now mutates every label inside `defaultOutputDocPhrase` and asserts the exact phrase is reported missing. | Evidence: no output growth; every output-label position has a named missing-detail assertion. |
+| Context anomaly drilldown density missing-detail helper failure-doc detail adoption | Extends exact missing-detail coverage from output docs to failure-code docs. | The workflow failure-code docs mutation now asserts `context_anomaly_runbook_density_workflow_missing_commands` appears in `missing`. | Evidence: no output growth; failure-doc mutations report exact missing codes. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper failure-doc detail adoption | Extends exact missing-detail coverage from output docs to failure-code docs. | Convert one failure-code docs mutation to assert its missing failure code detail. | Compact metric: no output growth; correctness metric: failure-doc mutations report exact missing codes. |
+| Context anomaly drilldown density missing-detail helper failure-doc sweep | Extends exact-detail coverage across every required failure-code doc. | Add table-driven failure-code docs mutations for all `requiredFailureCodes`. | Compact metric: no output growth; correctness metric: every failure-code doc drift reports its exact missing code. |
 
 ## Research Rules
 

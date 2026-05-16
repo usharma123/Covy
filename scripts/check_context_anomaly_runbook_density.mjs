@@ -1524,7 +1524,7 @@ if (args.includes("--self-test")) {
     ),
     "context_anomaly_runbook_density_missing_commands",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace(
         "context_anomaly_runbook_density_workflow_missing_commands",
@@ -1533,6 +1533,8 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_failure_docs",
+    "context_anomaly_runbook_density_workflow_missing_commands",
+    "missing_workflow_failure_doc_detail",
   );
   assertSelfTestMissing(
     evaluate(runbook.replaceAll("`wf`", ""), maxLines),
