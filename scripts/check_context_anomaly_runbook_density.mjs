@@ -1601,9 +1601,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`alias_docs_checked`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`row_soft_ok`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`row_soft_ok`",
+    "missing_row_soft_ok_json_doc",
   );
   assertSelfTestMissing(
     evaluate(runbook.replace("`density_doc_phrases_checked`", ""), maxLines),
