@@ -1144,6 +1144,62 @@ fn build_budget_notes_section_is_empty_without_budget_pruning() {
 }
 
 #[test]
+fn budget_preflight_warns_on_low_budget_broad_context_without_focus() {
+    let limits =
+        resolve_effective_limits(BrokerAction::Inspect, None, None, None, &BTreeMap::new());
+    let allowed_sections = filter_requested_section_ids(
+        BrokerAction::Inspect,
+        &["budget_notes".to_string(), "search_evidence".to_string()],
+        &[],
+    );
+    let request = BrokerGetContextRequest {
+        action: Some(BrokerAction::Inspect),
+        budget_tokens: Some(128),
+        include_sections: vec!["budget_notes".to_string(), "search_evidence".to_string()],
+        ..BrokerGetContextRequest::default()
+    };
+    let snapshot = suite_packet_core::AgentSnapshotPayload::default();
+    let focus_symbols = Vec::<String>::new();
+
+    let section = build_budget_preflight_section(
+        &request,
+        &snapshot,
+        &focus_symbols,
+        &allowed_sections,
+        &limits,
+    )
+    .expect("low broad request should produce a budget preflight warning");
+    assert!(section.body.contains("budget_preflight"));
+    assert!(section.body.contains("add focus_paths or focus_symbols"));
+
+    let scoped_request = BrokerGetContextRequest {
+        focus_paths: vec!["src/lib.rs".to_string()],
+        ..request.clone()
+    };
+    assert!(build_budget_preflight_section(
+        &scoped_request,
+        &snapshot,
+        &focus_symbols,
+        &allowed_sections,
+        &limits,
+    )
+    .is_none());
+
+    let roomy_request = BrokerGetContextRequest {
+        budget_tokens: Some(broker_default_budget_tokens()),
+        ..request
+    };
+    assert!(build_budget_preflight_section(
+        &roomy_request,
+        &snapshot,
+        &focus_symbols,
+        &allowed_sections,
+        &limits,
+    )
+    .is_none());
+}
+
+#[test]
 fn postprocess_selected_sections_adds_budget_notes_and_compacts_tool_activity() {
     let limits =
         resolve_effective_limits(BrokerAction::Inspect, None, None, None, &BTreeMap::new());

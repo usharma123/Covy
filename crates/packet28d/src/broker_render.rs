@@ -263,6 +263,54 @@ pub(crate) fn prune_sections_for_budget(
     (selected, pruned)
 }
 
+pub(crate) fn build_budget_preflight_section(
+    request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    focus_symbols: &[String],
+    allowed_sections: &HashSet<String>,
+    effective_limits: &BrokerEffectiveLimits,
+) -> Option<BrokerSection> {
+    if !allowed_sections.contains("budget_notes") {
+        return None;
+    }
+    let Some(budget_tokens) = request.budget_tokens else {
+        return None;
+    };
+    let low_budget_threshold = 256_u64.max(broker_default_budget_tokens() / 4);
+    if budget_tokens > low_budget_threshold {
+        return None;
+    }
+    let wants_broad_context = allowed_sections.contains("search_evidence")
+        || allowed_sections.contains("code_evidence")
+        || allowed_sections.contains("relevant_context");
+    if !wants_broad_context {
+        return None;
+    }
+
+    let snapshot_focus_paths =
+        merged_unique(&snapshot.focus_paths, &snapshot.checkpoint_focus_paths);
+    let focus_paths = merged_unique(&snapshot_focus_paths, &request.focus_paths);
+    let snapshot_focus_symbols =
+        merged_unique(&snapshot.focus_symbols, &snapshot.checkpoint_focus_symbols);
+    let focus_symbols = merged_unique(&snapshot_focus_symbols, focus_symbols);
+    if !focus_paths.is_empty() || !focus_symbols.is_empty() {
+        return None;
+    }
+
+    Some(BrokerSection {
+        id: "budget_notes".to_string(),
+        title: "Budget Notes".to_string(),
+        body: truncate_lines(
+            vec![format!(
+                "- budget_preflight: low budget ({budget_tokens} tokens) with broad evidence/context request; add focus_paths or focus_symbols"
+            )],
+            section_item_limit(effective_limits, "budget_notes"),
+        ),
+        priority: 1,
+        source_kind: BrokerSourceKind::Derived,
+    })
+}
+
 pub(crate) fn build_broker_sections(
     root: &Path,
     state: &Arc<Mutex<DaemonState>>,
@@ -304,6 +352,16 @@ pub(crate) fn build_broker_sections(
             priority: 1,
             source_kind: BrokerSourceKind::Derived,
         });
+    }
+
+    if let Some(section) = build_budget_preflight_section(
+        request,
+        snapshot,
+        &focus_symbols,
+        &allowed_sections,
+        &effective_limits,
+    ) {
+        sections.push(section);
     }
 
     if allowed_sections.contains("action_critic") {

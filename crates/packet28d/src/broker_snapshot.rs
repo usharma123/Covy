@@ -321,6 +321,22 @@ pub(crate) fn postprocess_selected_sections(
     }
 
     if let Some(note) = build_budget_notes_section(pruned, effective_limits) {
+        if let Some(existing) = sections
+            .iter_mut()
+            .find(|section| section.id == "budget_notes")
+        {
+            let mut lines = existing
+                .body
+                .lines()
+                .chain(note.body.lines())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            existing.body = truncate_lines(
+                std::mem::take(&mut lines),
+                section_item_limit(effective_limits, "budget_notes"),
+            );
+            return sections;
+        }
         if sections.len() >= effective_limits.max_sections {
             if let Some(idx) = sections
                 .iter()
