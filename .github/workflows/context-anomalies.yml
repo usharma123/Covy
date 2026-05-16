@@ -30,6 +30,12 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
   workflow_dispatch:
+    inputs:
+      strict_audit:
+        description: "Run the hidden-sample audit with release-like --max-high 0"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -52,9 +58,14 @@ jobs:
         run: cargo build -p suite-cli
 
       - name: Audit context anomaly hidden samples
+        env:
+          STRICT_AUDIT: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_audit || false }}
         run: |
           node scripts/audit_context_anomaly_hidden_samples.mjs --help
           node scripts/audit_context_anomaly_hidden_samples.mjs
+          if [ "$STRICT_AUDIT" = "true" ]; then
+            node scripts/audit_context_anomaly_hidden_samples.mjs --strict
+          fi
 
       - name: Verify context anomaly thresholds
         run: |

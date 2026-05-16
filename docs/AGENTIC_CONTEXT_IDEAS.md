@@ -112,12 +112,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit option guard | Prevents typoed audit-script flags from silently using tolerant mode. | The audit script now rejects unknown command-line options before running smoke or verifier checks. | Evidence: default audit output is unchanged; `node scripts/audit_context_anomaly_hidden_samples.mjs --bad-flag` exits nonzero with `context_anomaly_hidden_sample_audit_unknown_option`. |
 | Context anomaly drilldown audit help | Gives agents a compact usage string for tolerant and strict audit modes. | The audit script now supports `--help`, and the runbook command table lists it. | Evidence: help output is four lines, exits zero, and lists default, `--strict`, and `--help` modes. |
 | Context anomaly drilldown audit help workflow log | Keeps the one-command audit usage visible in context-anomalies CI logs without expanding summaries. | The context-anomalies workflow now prints audit script `--help` before running the default audit step. | Evidence: no summary growth; help output is four lines and CI fails if audit help breaks. |
+| Context anomaly drilldown strict audit workflow option | Lets maintainers opt into strict audit mode without editing scripts. | `workflow_dispatch` now has a `strict_audit` boolean that runs `scripts/audit_context_anomaly_hidden_samples.mjs --strict` after the default audit. | Evidence: default workflow behavior is unchanged; local strict command exits nonzero with current high anomalies, matching release threshold behavior. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown strict audit workflow option | Lets maintainers opt into strict audit mode without editing scripts. | Add a workflow-dispatch input or environment switch that runs `scripts/audit_context_anomaly_hidden_samples.mjs --strict`. | Compact metric: no default summary growth; correctness metric: strict switch fails on current live high anomalies. |
+| Context anomaly drilldown strict audit runbook note | Helps maintainers discover the manual strict audit workflow option. | Document the context-anomalies workflow `strict_audit` dispatch input in the runbook. | Compact metric: runbook remains under 45 lines; correctness metric: note names the workflow input and strict command. |
 
 ## Research Rules
 
