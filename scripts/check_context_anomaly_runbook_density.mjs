@@ -135,6 +135,7 @@ const requiredDensityDocPhrases = [
   "`JSON:`=fields",
   "`h:`=help",
 ];
+const requiredDensityDocLinePrefixes = ["JSON:"];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
@@ -187,6 +188,9 @@ function evaluate(runbook, lineBudget) {
   );
   const missingDensityDocPhrases = requiredDensityDocPhrases.filter(
     (phrase) => !runbook.includes(phrase),
+  );
+  const missingDensityDocLinePrefixes = requiredDensityDocLinePrefixes.filter(
+    (prefix) => !runbook.split("\n").some((line) => line.startsWith(prefix)),
   );
   const hasTextWidthEnvDoc = runbook
     .split("\n")
@@ -241,6 +245,7 @@ function evaluate(runbook, lineBudget) {
     missingOutputDocPhrases.length > 0 ||
     missingAliasDocPhrases.length > 0 ||
     missingDensityDocPhrases.length > 0 ||
+    missingDensityDocLinePrefixes.length > 0 ||
     !hasTextWidthEnvDoc
   ) {
     return {
@@ -251,6 +256,7 @@ function evaluate(runbook, lineBudget) {
         ...missingOutputDocPhrases,
         ...missingAliasDocPhrases,
         ...missingDensityDocPhrases,
+        ...missingDensityDocLinePrefixes.map((prefix) => `${prefix}line`),
         ...(hasTextWidthEnvDoc
           ? []
           : ["width:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
@@ -841,6 +847,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("JSON:`row_soft_ok`", "`row_soft_ok`"), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
