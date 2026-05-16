@@ -1580,14 +1580,17 @@ if (args.includes("--self-test")) {
     expected,
     actual: defaultOutputMutationActualDetail(actual),
   });
+  const missingStaleMutationFieldsDetails = (fields) => ({
+    missing_stale_mutation_fields: fields,
+  });
   const missingDefaultOutputFieldExpectation = (field) =>
     `missing_default_output_field=${field}`;
   const staleDefaultOutputFieldExpectation = (field) =>
     `default_output_parse_mismatch=${field}`;
   if (missingStaleMutationFields.length > 0) {
-    failDefaultOutputMutation({
-      missing_stale_mutation_fields: missingStaleMutationFields,
-    });
+    failDefaultOutputMutation(
+      missingStaleMutationFieldsDetails(missingStaleMutationFields),
+    );
   }
   const assertDefaultOutputMutation = (field, staleValue) => {
     const fieldPattern = new RegExp(` ${field}=\\S+`);
