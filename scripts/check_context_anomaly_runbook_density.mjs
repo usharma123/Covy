@@ -1706,10 +1706,10 @@ if (args.includes("--self-test")) {
     expectedJoinedMutationFields: sample.expectedMutationFields.join(","),
   });
   const joinedDefaultOutputMutationIdentityFieldStringsMatch = (
-    joinedIdentityFields,
+    joinedIdentityFieldStrings,
   ) =>
-    joinedIdentityFields.actualJoinedMutationFields ===
-    joinedIdentityFields.expectedJoinedMutationFields;
+    joinedIdentityFieldStrings.actualJoinedMutationFields ===
+    joinedIdentityFieldStrings.expectedJoinedMutationFields;
   const sampleJoinedDefaultOutputMutationIdentityFieldStrings = (sample) =>
     joinedDefaultOutputMutationIdentityFieldStrings(sample);
   const sampledDefaultOutputMutationIdentityFieldStringsMatch = (sample) => {
