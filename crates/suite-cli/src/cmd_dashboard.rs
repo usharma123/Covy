@@ -16,7 +16,7 @@ use crate::memory_store::{
 };
 use crate::savings_analytics::load_run_savings;
 
-const MAX_CONTEXT_ANOMALIES: usize = 4;
+const MAX_CONTEXT_ANOMALIES: usize = 3;
 
 #[derive(Args)]
 pub struct DashboardArgs {
@@ -68,6 +68,8 @@ struct DashboardReport {
 #[derive(Debug, Serialize, Default)]
 pub(crate) struct ContextAnomalyDigest {
     pub(crate) anomaly_count: usize,
+    pub(crate) truncated_count: usize,
+    pub(crate) hidden_categories: Vec<String>,
     pub(crate) anomalies: Vec<ContextAnomaly>,
 }
 
@@ -537,9 +539,7 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
                 handoff.latest_status, blockers, handoff.regression_count
             ),
             next_check: "Packet28 verify handoffs --root . --max-regressions 0".to_string(),
-            repair_hint:
-                "refresh the handoff packet with existing paths, runnable checks, and current env"
-                    .to_string(),
+            repair_hint: "refresh handoff with existing paths and runnable checks".to_string(),
         });
     }
 
@@ -562,8 +562,7 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
                 reducer.latest_issue_count, issue_kinds
             ),
             next_check: "Packet28 verify reducer-drift --root . --json".to_string(),
-            repair_hint: "update reducer fixtures or restore missing decisive compact markers"
-                .to_string(),
+            repair_hint: "update fixtures or restore compact markers".to_string(),
         });
     }
 
@@ -586,9 +585,7 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
                 memory.latest_issue_count, issue_kinds
             ),
             next_check: "Packet28 verify memory-lint --root . --json".to_string(),
-            repair_hint:
-                "remove stale runtime-specific memories or add hook evidence for the runtime"
-                    .to_string(),
+            repair_hint: "remove stale runtime memories or add hook evidence".to_string(),
         });
     }
 
@@ -607,7 +604,7 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
             severity: "medium".to_string(),
             signal: format!("changed_paths={}", changed_paths.join(",")),
             next_check: format!("packet28.read_regions path={first_path} regions=[]"),
-            repair_hint: "reread changed paths before relying on earlier context".to_string(),
+            repair_hint: "reread changed paths before using earlier context".to_string(),
         });
     }
 
@@ -626,19 +623,21 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
                 reason
             ),
             next_check: "Packet28 gain --failures".to_string(),
-            repair_hint: "inspect fallback provenance before treating reduced output as successful"
+            repair_hint: "inspect fallback provenance before treating output as success"
                 .to_string(),
         });
     }
 
-    finalize_context_anomalies(&mut anomalies);
+    let hidden_categories = finalize_context_anomalies(&mut anomalies);
     Ok(ContextAnomalyDigest {
         anomaly_count: anomalies.len(),
+        truncated_count: hidden_categories.len(),
+        hidden_categories,
         anomalies,
     })
 }
 
-fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) {
+fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) -> Vec<String> {
     anomalies.sort_by_key(|anomaly| {
         (
             context_anomaly_severity_rank(&anomaly.severity),
@@ -646,7 +645,14 @@ fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) {
             anomaly.category.clone(),
         )
     });
-    anomalies.truncate(MAX_CONTEXT_ANOMALIES);
+    if anomalies.len() <= MAX_CONTEXT_ANOMALIES {
+        return Vec::new();
+    }
+    anomalies
+        .split_off(MAX_CONTEXT_ANOMALIES)
+        .into_iter()
+        .map(|anomaly| anomaly.category)
+        .collect()
 }
 
 fn context_anomaly_severity_rank(severity: &str) -> usize {
@@ -1448,7 +1454,7 @@ mod tests {
             anomaly("extra_medium_b", "medium"),
         ];
 
-        finalize_context_anomalies(&mut anomalies);
+        let hidden = finalize_context_anomalies(&mut anomalies);
 
         assert_eq!(anomalies.len(), MAX_CONTEXT_ANOMALIES);
         assert_eq!(anomalies[0].category, "reducer_drift");
@@ -1460,6 +1466,66 @@ mod tests {
         assert!(anomalies
             .iter()
             .all(|anomaly| anomaly.category != "extra_medium_b"));
+        assert_eq!(
+            hidden,
+            vec!["fallback_provenance", "extra_medium_a", "extra_medium_b"]
+        );
         assert!(serde_json::to_string(&anomalies).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn context_anomaly_digest_reports_hidden_categories_after_cap() {
+        let root = tempfile::tempdir().unwrap();
+        record_reducer_drift_history(root.path(), &drift_payload(false, 1)).unwrap();
+        record_memory_lint_history(root.path(), &memory_lint_payload(false, 1)).unwrap();
+        let handoff_path = task_artifact_dir(root.path(), "task-hidden-categories")
+            .join("versions")
+            .join("ctx-hidden.json");
+        std::fs::create_dir_all(handoff_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &handoff_path,
+            serde_json::to_vec(&serde_json::json!({
+                "brief": "Review docs/missing-handoff-path.md before handoff.",
+                "next_action_summary": "prepare the handoff packet"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        for index in 0..3 {
+            record_run_savings(
+                root.path(),
+                &RunSavingsRecord {
+                    command: format!("Packet28 run -- cargo test {index}"),
+                    cwd: root.path().display().to_string(),
+                    family: "rust".to_string(),
+                    canonical_kind: "cargo_test".to_string(),
+                    exit_code: 0,
+                    raw_est_tokens: 900,
+                    reduced_est_tokens: 200,
+                    savings_percent: 77.0,
+                    fallback_reason: if index == 0 {
+                        Some("unsupported_family".to_string())
+                    } else {
+                        None
+                    },
+                    failure_fingerprint: None,
+                    changed_paths: vec![format!("src/lib{index}.rs")],
+                    timestamp_unix_ms: index + 1,
+                },
+            )
+            .unwrap();
+        }
+
+        let digest = context_anomaly_digest(root.path()).unwrap();
+
+        assert_eq!(digest.anomaly_count, MAX_CONTEXT_ANOMALIES);
+        assert_eq!(digest.truncated_count, 2);
+        assert_eq!(
+            digest.hidden_categories,
+            vec!["stale_changed_paths", "fallback_provenance"]
+        );
+        assert_eq!(digest.anomalies[0].category, "reducer_drift");
+        assert_eq!(digest.anomalies[1].category, "memory_lint");
+        assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
     }
 }
