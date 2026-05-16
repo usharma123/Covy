@@ -344,12 +344,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label-width spaced regression parity | Ensures the spacing-regression mutation also changes the computed `dlab` value. | The spacing self-test now compares compact and spaced label widths through `evaluate()`. | Evidence: no output growth; widened label mutation increases reported `dlab`. |
 | Context anomaly drilldown density label-width JSON spaced regression parity | Ensures spaced-label regressions would change JSON-facing width too. | Self-test now builds a success payload for the spaced-label mutation and requires JSON `density_label_line_width` to grow. | Evidence: no output growth; widened label mutation increases JSON `density_label_line_width`. |
 | Context anomaly drilldown density fixed-point convergence guard | Proves the text/JSON headroom builder converges before returning payloads. | Self-test now rebuilds success artifacts and requires identical payload, output line, and headroom values. | Evidence: no output growth; fixed-point artifacts are stable. |
+| Context anomaly drilldown density fixed-point narrow-cap convergence | Proves the fixed-point builder also converges at the exact-width boundary. | The success-artifact builder now accepts a text budget, and self-test checks stable `thead=0 tw=196` artifacts. | Evidence: no output growth; exact-width artifacts are stable. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fixed-point narrow-cap convergence | Proves the fixed-point builder also converges at the exact-width boundary. | Add a self-test around the 196-character text cap path that checks stable `thead=0` artifacts. | Compact metric: no output growth; correctness metric: exact-width artifacts are stable. |
+| Context anomaly drilldown density fixed-point low-cap artifact guard | Proves the parameterized artifact path reports a text-width issue below the exact-width boundary. | Add a direct `defaultOutputIssue` assertion using the 195-character text budget. | Compact metric: no output growth; correctness metric: artifact path fails below exact width. |
 
 ## Research Rules
 

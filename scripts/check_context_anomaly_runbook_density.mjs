@@ -554,30 +554,45 @@ function jsonHeadroomBytes(payload, jsonBudget) {
   return jsonBudget - JSON.stringify(payload).length;
 }
 
-function defaultOutputIssue(payload, resultDetails, jsonHeadroom) {
-  const line = renderDefaultOutputWithWidth(payload, resultDetails, jsonHeadroom);
-  if (line.length > maxDefaultOutputLength) {
+function defaultOutputIssue(
+  payload,
+  resultDetails,
+  jsonHeadroom,
+  textBudget = maxDefaultOutputLength,
+) {
+  const line = renderDefaultOutputWithWidth(
+    payload,
+    resultDetails,
+    jsonHeadroom,
+    textBudget,
+  );
+  if (line.length > textBudget) {
     return {
       ok: false,
       code: "context_anomaly_runbook_density_text_too_wide",
       default_output_len: line.length,
-      max_default_output_len: maxDefaultOutputLength,
+      max_default_output_len: textBudget,
     };
   }
   return null;
 }
 
-function buildSuccessArtifacts(resultDetails, workflow, jsonBudget) {
+function buildSuccessArtifacts(
+  resultDetails,
+  workflow,
+  jsonBudget,
+  textBudget = maxDefaultOutputLength,
+) {
   let payload = successPayload(resultDetails, workflow, jsonBudget, 0);
   let jsonHeadroom = jsonHeadroomBytes(payload, jsonBudget);
   let defaultOutputLine = renderDefaultOutputWithWidth(
     payload,
     resultDetails,
     jsonHeadroom,
+    textBudget,
   );
   for (let i = 0; i < 5; i += 1) {
-    const defaultOutputHeadroom =
-      maxDefaultOutputLength - defaultOutputLine.length;
+    const defaultOutputHeadroom = textBudget - defaultOutputLine.length;
     const nextPayload = successPayload(
       resultDetails,
       workflow,
@@ -589,6 +604,7 @@ function buildSuccessArtifacts(resultDetails, workflow, jsonBudget) {
       nextPayload,
       resultDetails,
       nextJsonHeadroom,
+      textBudget,
     );
     if (
       JSON.stringify(nextPayload) === JSON.stringify(payload) &&
@@ -606,8 +622,7 @@ function buildSuccessArtifacts(resultDetails, workflow, jsonBudget) {
     jsonHeadroom = nextJsonHeadroom;
     defaultOutputLine = nextDefaultOutputLine;
   }
-  const defaultOutputHeadroom =
-    maxDefaultOutputLength - defaultOutputLine.length;
+  const defaultOutputHeadroom = textBudget - defaultOutputLine.length;
   return { payload, jsonHeadroom, defaultOutputLine, defaultOutputHeadroom };
 }
 
@@ -644,7 +659,12 @@ function renderDefaultOutput(
     .join(" ");
 }
 
-function renderDefaultOutputWithWidth(payload, resultDetails, jsonHeadroom) {
+function renderDefaultOutputWithWidth(
+  payload,
+  resultDetails,
+  jsonHeadroom,
+  textBudget = maxDefaultOutputLength,
+) {
   let textWidth = 0;
   let textHeadroom = 0;
   let line = renderDefaultOutput(
@@ -656,7 +676,7 @@ function renderDefaultOutputWithWidth(payload, resultDetails, jsonHeadroom) {
   );
   for (let i = 0; i < 5; i += 1) {
     const nextTextWidth = line.length;
-    const nextTextHeadroom = maxDefaultOutputLength - nextTextWidth;
+    const nextTextHeadroom = textBudget - nextTextWidth;
     const next = renderDefaultOutput(
       payload,
       resultDetails,
@@ -950,6 +970,22 @@ if (args.includes("--self-test")) {
   ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("success_artifacts_did_not_converge");
+    process.exit(1);
+  }
+  const exactWidthArtifacts = buildSuccessArtifacts(
+    result,
+    workflowResult,
+    maxJsonBytes,
+    196,
+  );
+  if (
+    exactWidthArtifacts.defaultOutputHeadroom !== 0 ||
+    exactWidthArtifacts.defaultOutputLine.length !== 196 ||
+    !exactWidthArtifacts.defaultOutputLine.includes("thead=0 tw=196") ||
+    exactWidthArtifacts.payload.default_output_headroom !== 0
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("exact_width_artifacts_did_not_converge");
     process.exit(1);
   }
   const jsonPayloadError = jsonPayloadParityIssue(baselinePayload, result, {
