@@ -1703,7 +1703,7 @@ if (args.includes("--self-test")) {
   const defaultOutputMutationFieldIdentityMatches = (sample) =>
     sample.actualMutationFields.join(",") ===
     sample.expectedMutationFields.join(",");
-  const assertDefaultOutputMutationFieldsMirrorParserFields = () => {
+  const assertDefaultOutputMutationFieldIdentity = () => {
     const identitySample = defaultOutputMutationFieldIdentitySample();
     if (!defaultOutputMutationFieldIdentityMatches(identitySample)) {
       failDefaultOutputMutation(
@@ -1722,7 +1722,7 @@ if (args.includes("--self-test")) {
   };
   const assertDefaultOutputMutations = () => {
     assertStaleDefaultOutputValuesCovered();
-    assertDefaultOutputMutationFieldsMirrorParserFields();
+    assertDefaultOutputMutationFieldIdentity();
     assertDefaultOutputMutationFieldCount();
     defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase);
   };
