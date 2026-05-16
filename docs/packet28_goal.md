@@ -124,6 +124,7 @@ Acceptance tests must prove:
 - unsupported commands pass through safely
 - raw output remains recoverable
 - compact output is materially smaller than raw output for noisy commands
+- reducer drift fixtures fail when compact output loses decisive status counts or failing-test lines
 - hook-driven operation works where Packet28 claims transparent runtime support
 
 ### 3. ICM Memory, Graph, And Feedback Parity

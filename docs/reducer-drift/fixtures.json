@@ -1,0 +1,35 @@
+{
+  "cases": [
+    {
+      "id": "cargo-failing-test-name",
+      "command_argv": [
+        "cargo",
+        "test",
+        "-p",
+        "suite-cli",
+        "drift_marker"
+      ],
+      "stdout": "running 1 test\ntest drift_marker ... FAILED\n\nfailures:\n\n---- drift_marker stdout ----\nthread 'drift_marker' panicked at crates/suite-cli/src/lib.rs:12:5:\nassertion failed: left == right\n\nfailures:\n    drift_marker\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n",
+      "stderr": "",
+      "exit_code": 101,
+      "required_markers": [
+        "cargo test reported 0 passed and 1 failed",
+        "FAIL drift_marker"
+      ]
+    },
+    {
+      "id": "git-status-counts",
+      "command_argv": [
+        "git",
+        "status"
+      ],
+      "stdout": "On branch main\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n\tmodified:   crates/suite-cli/src/cmd_verify.rs\n\nUntracked files:\n  (use \"git add <file>...\" to include in what will be committed)\n\tdocs/reducer-drift/fixtures.json\n",
+      "stderr": "",
+      "exit_code": 0,
+      "required_markers": [
+        "git status: 1 modified",
+        "Untracked (1)"
+      ]
+    }
+  ]
+}

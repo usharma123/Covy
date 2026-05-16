@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use packet28_reducer_core::{classify_command_argv, reduce_command_output};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -20,6 +21,8 @@ pub enum VerifyCommands {
     Experiments(ExperimentVerifyArgs),
     /// Verify handoff lint readiness for CI logs
     Handoffs(HandoffVerifyArgs),
+    /// Verify reducer output keeps decisive markers from golden raw fixtures
+    ReducerDrift(ReducerDriftVerifyArgs),
 }
 
 #[derive(Args)]
@@ -62,6 +65,18 @@ pub struct HandoffVerifyArgs {
     pub max_regressions: u64,
     #[arg(long)]
     pub require_ready: bool,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct ReducerDriftVerifyArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long, default_value = "docs/reducer-drift/fixtures.json")]
+    pub fixture: String,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -139,6 +154,42 @@ struct ExperimentRuntimeVersion {
     version: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct ReducerDriftFixture {
+    cases: Vec<ReducerDriftCase>,
+}
+
+impl Default for ReducerDriftFixture {
+    fn default() -> Self {
+        Self { cases: Vec::new() }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct ReducerDriftCase {
+    id: String,
+    command_argv: Vec<String>,
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+    required_markers: Vec<String>,
+}
+
+impl Default for ReducerDriftCase {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            command_argv: Vec::new(),
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+            required_markers: Vec::new(),
+        }
+    }
+}
+
 impl Default for ExperimentRuntimeVersion {
     fn default() -> Self {
         Self {
@@ -160,6 +211,7 @@ pub fn run(args: VerifyArgs) -> Result<i32> {
         VerifyCommands::Filters(args) => run_filters(args),
         VerifyCommands::Experiments(args) => run_experiments(args),
         VerifyCommands::Handoffs(args) => run_handoffs(args),
+        VerifyCommands::ReducerDrift(args) => run_reducer_drift(args),
     }
 }
 
@@ -363,6 +415,63 @@ fn run_handoffs(args: HandoffVerifyArgs) -> Result<i32> {
     }
 }
 
+fn run_reducer_drift(args: ReducerDriftVerifyArgs) -> Result<i32> {
+    let cwd = crate::cmd_common::caller_cwd()?;
+    let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
+    let fixture_path = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(
+        &args.fixture,
+        &root,
+    ));
+    let payload = verify_reducer_drift_payload(&fixture_path)?;
+    let ok = payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
+
+    if args.json {
+        crate::cmd_common::emit_json(&payload, args.pretty)?;
+    } else {
+        println!("reducer_drift_fixture={}", fixture_path.display());
+        println!(
+            "reducer_drift_cases={}",
+            payload
+                .get("case_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default()
+        );
+        println!(
+            "reducer_drift_issues={}",
+            payload
+                .get("issue_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default()
+        );
+        println!("reducer_drift_ok={ok}");
+        if let Some(issues) = payload.get("issues").and_then(serde_json::Value::as_array) {
+            for issue in issues {
+                eprintln!(
+                    "FAIL [{}] {}: {}",
+                    issue
+                        .get("case_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unknown>"),
+                    issue
+                        .get("kind")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("issue"),
+                    issue
+                        .get("detail")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                );
+            }
+        }
+    }
+
+    if ok {
+        Ok(0)
+    } else {
+        Ok(1)
+    }
+}
+
 pub(crate) fn verify_experiments_payload(
     root: &Path,
     manifest_path: &Path,
@@ -393,6 +502,104 @@ pub(crate) fn verify_experiments_payload(
         payload["scores"] = json!(score_experiment_manifest(root, &manifest, &issues));
     }
     Ok(payload)
+}
+
+pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_json::Value> {
+    let fixture_raw = std::fs::read_to_string(fixture_path)
+        .with_context(|| format!("failed to read '{}'", fixture_path.display()))?;
+    let fixture: ReducerDriftFixture = serde_json::from_str(&fixture_raw)
+        .with_context(|| format!("failed to parse '{}'", fixture_path.display()))?;
+    let mut issues = Vec::new();
+    let mut summaries = Vec::new();
+
+    if fixture.cases.is_empty() {
+        issues.push(json!({
+            "case_id": "<fixture>",
+            "kind": "missing_cases",
+            "detail": "fixture must contain at least one reducer drift case",
+        }));
+    }
+
+    for (index, case) in fixture.cases.iter().enumerate() {
+        let id = case.id.trim();
+        let case_id = if id.is_empty() {
+            format!("<case-{index}>")
+        } else {
+            id.to_string()
+        };
+        if id.is_empty() {
+            issues.push(json!({
+                "case_id": case_id,
+                "kind": "missing_id",
+                "detail": "case id is required",
+            }));
+        }
+        if case.command_argv.is_empty() {
+            issues.push(json!({
+                "case_id": case_id,
+                "kind": "missing_command_argv",
+                "detail": "command_argv must contain the command and arguments",
+            }));
+            continue;
+        }
+        if case.required_markers.is_empty() {
+            issues.push(json!({
+                "case_id": case_id,
+                "kind": "missing_required_markers",
+                "detail": "required_markers must name reducer output that cannot drift away",
+            }));
+        }
+
+        let command = case.command_argv.join(" ");
+        let Some(spec) = classify_command_argv(&command, &case.command_argv) else {
+            issues.push(json!({
+                "case_id": case_id,
+                "kind": "unclassified_command",
+                "detail": command,
+            }));
+            continue;
+        };
+        let reduction = reduce_command_output(&spec, &case.stdout, &case.stderr, case.exit_code)?;
+        let reduced_text = if reduction.compact_preview.trim().is_empty() {
+            reduction.summary.clone()
+        } else {
+            format!("{}\n{}", reduction.summary, reduction.compact_preview)
+        };
+        for marker in &case.required_markers {
+            let marker = marker.trim();
+            if marker.is_empty() {
+                issues.push(json!({
+                    "case_id": case_id,
+                    "kind": "empty_marker",
+                    "detail": "required marker is empty",
+                }));
+            } else if !reduced_text.contains(marker) {
+                issues.push(json!({
+                    "case_id": case_id,
+                    "kind": "missing_marker",
+                    "detail": marker,
+                }));
+            }
+        }
+        summaries.push(json!({
+            "case_id": case_id,
+            "family": reduction.family,
+            "canonical_kind": reduction.canonical_kind,
+            "failed": reduction.failed,
+            "exit_code": reduction.exit_code,
+            "summary": reduction.summary,
+            "compact_preview": reduction.compact_preview,
+        }));
+    }
+
+    Ok(json!({
+        "ok": issues.is_empty(),
+        "fixture": fixture_path.display().to_string(),
+        "case_count": fixture.cases.len(),
+        "issue_count": issues.len(),
+        "issues": issues,
+        "summaries": summaries,
+    }))
 }
 
 fn score_experiment_manifest(
@@ -860,5 +1067,63 @@ mod tests {
         assert_eq!(score["passing"], false);
         assert!(score["score"].as_u64().unwrap() < 80);
         assert!(serde_json::to_string(score).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn verify_reducer_drift_keeps_failing_test_markers_under_compact_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture_path = root.path().join("reducer-drift.json");
+        std::fs::write(
+            &fixture_path,
+            r#"{
+              "cases": [{
+                "id": "cargo-failing-test",
+                "command_argv": ["cargo", "test", "-p", "suite-cli", "drift_marker"],
+                "stdout": "running 1 test\ntest drift_marker ... FAILED\n\nfailures:\n\n---- drift_marker stdout ----\nthread 'drift_marker' panicked at crates/suite-cli/src/lib.rs:12:5:\nassertion failed: left == right\n\nfailures:\n    drift_marker\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n",
+                "stderr": "",
+                "exit_code": 101,
+                "required_markers": [
+                  "cargo test reported 0 passed and 1 failed",
+                  "FAIL drift_marker"
+                ]
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        let payload = verify_reducer_drift_payload(&fixture_path).unwrap();
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["issue_count"], 0);
+        assert!(
+            serde_json::to_string(&payload["summaries"][0])
+                .unwrap()
+                .len()
+                < 1024
+        );
+    }
+
+    #[test]
+    fn verify_reducer_drift_flags_missing_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture_path = root.path().join("reducer-drift.json");
+        std::fs::write(
+            &fixture_path,
+            r#"{
+              "cases": [{
+                "id": "removed-failing-line",
+                "command_argv": ["cargo", "test", "removed_failure"],
+                "stdout": "running 1 test\ntest removed_failure ... FAILED\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n",
+                "stderr": "",
+                "exit_code": 101,
+                "required_markers": ["FAIL removed_failure"]
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        let payload = verify_reducer_drift_payload(&fixture_path).unwrap();
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["issues"][0]["kind"], "missing_marker");
+        assert_eq!(payload["issues"][0]["detail"], "FAIL removed_failure");
     }
 }
