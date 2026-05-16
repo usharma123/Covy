@@ -453,12 +453,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output missing diagnostic helper | Gives missing-field default output diagnostics one named failure path. | Extracted `failDefaultOutputMutation()` for the repeated self-test failure header and expected/actual lines. | Evidence: no runtime output growth; default output mutation diagnostics stay consistent. |
 | Context anomaly drilldown density self-test default output noop detail helper | Keeps no-op mutation diagnostic detail keys behind named helpers. | Extracted `missingMutationNoopDetails()` and `staleMutationNoopDetails()` before calling `failDefaultOutputMutation()`. | Evidence: no runtime output growth; no-op mutation diagnostics remain field-specific. |
 | Context anomaly drilldown density self-test default output mismatch detail helper | Keeps expected/actual mutation diagnostic details behind one helper. | Extracted `defaultOutputMutationMismatchDetails()` for expected/actual parser mismatch diagnostics. | Evidence: no runtime output growth; mismatch diagnostics remain field-specific. |
+| Context anomaly drilldown density self-test default output expected detail helper | Keeps default output expected diagnostic strings behind named builders. | Extracted helpers for missing-field and stale-field expected diagnostic strings used by `defaultOutputMutationMismatchDetails()`. | Evidence: no runtime output growth; expected diagnostics remain field-specific. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output expected detail helper | Keeps default output expected diagnostic strings behind named builders. | Extract helpers for missing-field and stale-field expected diagnostic strings used by `defaultOutputMutationMismatchDetails()`. | Compact metric: no runtime output growth; correctness metric: expected diagnostics remain field-specific. |
+| Context anomaly drilldown density self-test default output actual fallback helper | Keeps parser fallback text behind one named helper. | Extract a `defaultOutputMutationActualDetail()` helper for the `actual ?? "ok"` fallback used by mismatch details. | Compact metric: no runtime output growth; correctness metric: actual diagnostics retain the ok fallback consistently. |
 
 ## Research Rules
 

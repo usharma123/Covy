@@ -1579,6 +1579,10 @@ if (args.includes("--self-test")) {
     expected,
     actual: actual ?? "ok",
   });
+  const missingDefaultOutputFieldExpectation = (field) =>
+    `missing_default_output_field=${field}`;
+  const staleDefaultOutputFieldExpectation = (field) =>
+    `default_output_parse_mismatch=${field}`;
   if (missingStaleMutationFields.length > 0) {
     failDefaultOutputMutation({
       missing_stale_mutation_fields: missingStaleMutationFields,
@@ -1594,10 +1598,12 @@ if (args.includes("--self-test")) {
       parseDefaultOutput(missingOutputLine),
       defaultParseDetails,
     );
-    if (missingFieldError !== `missing_default_output_field=${field}`) {
+    const expectedMissingFieldError =
+      missingDefaultOutputFieldExpectation(field);
+    if (missingFieldError !== expectedMissingFieldError) {
       failDefaultOutputMutation(
         defaultOutputMutationMismatchDetails(
-          `missing_default_output_field=${field}`,
+          expectedMissingFieldError,
           missingFieldError,
         ),
       );
@@ -1616,10 +1622,11 @@ if (args.includes("--self-test")) {
       parseDefaultOutput(staleOutputLine),
       defaultParseDetails,
     );
-    if (staleFieldError !== `default_output_parse_mismatch=${field}`) {
+    const expectedStaleFieldError = staleDefaultOutputFieldExpectation(field);
+    if (staleFieldError !== expectedStaleFieldError) {
       failDefaultOutputMutation(
         defaultOutputMutationMismatchDetails(
-          `default_output_parse_mismatch=${field}`,
+          expectedStaleFieldError,
           staleFieldError,
         ),
       );
