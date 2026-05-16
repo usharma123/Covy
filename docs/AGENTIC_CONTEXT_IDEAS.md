@@ -695,12 +695,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test alias glossary post-helper audit | Checks whether alias glossary coverage is decomposed enough after table and row-helper extraction. | Re-scanned `assertAliasGlossaryMutationSelfTests()` and kept its table/helper/loop shape while moving the next target to width env-pair coverage. | Evidence: no runtime output growth; next target is based on the current alias glossary helper shape. |
 | Context anomaly drilldown density self-test width env-pair helper audit | Checks whether the width env-pair helper is already minimal. | Re-scanned `assertWidthEnvPairMutationSelfTest()` and kept its single width env-pair assertion separate before moving to text-headroom coverage. | Evidence: no runtime output growth; next target reflects the current adjacent helper shape. |
 | Context anomaly drilldown density self-test text-headroom helper audit | Checks whether the text-headroom helper is already minimal. | Re-scanned `assertTextHeadroomMutationSelfTest()` and kept its single text-headroom assertion separate before moving to JSON error-shape coverage. | Evidence: no runtime output growth; next target reflects the current adjacent helper shape. |
+| Context anomaly drilldown density self-test JSON error-shape helper audit | Checks whether the JSON error-shape helper is already minimal. | Re-scanned `assertJsonErrorShapeMutationSelfTest()` and kept its single JSON error-shape assertion separate before moving to failure-success field coverage. | Evidence: no runtime output growth; next target reflects the current adjacent helper shape. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON error-shape helper audit | Checks whether the JSON error-shape helper is already minimal. | Re-scan `assertJsonErrorShapeMutationSelfTest()` and decide whether to keep its single assertion separate or group it with failure-success field coverage. | Compact metric: no runtime output growth; correctness metric: next target reflects the current adjacent helper shape. |
+| Context anomaly drilldown density self-test failure-success helper audit | Checks whether the failure-success field helper is already minimal. | Re-scan `assertFailureSuccessFieldMutationSelfTest()` and decide whether to keep its single assertion separate or group it with stale-alias coverage. | Compact metric: no runtime output growth; correctness metric: next target reflects the current adjacent helper shape. |
 
 ## Research Rules
 
