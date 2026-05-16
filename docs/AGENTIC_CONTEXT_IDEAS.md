@@ -548,12 +548,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation string pair helper order | Keeps field-string pair producer and sampled wrapper adjacent. | Verified `defaultOutputMutationIdentityFieldStringPair(sample)` sits above `sampleDefaultOutputMutationIdentityFieldStringPair(sample)`. | Evidence: no runtime output growth; sampled wrapper remains adjacent to the pair producer. |
 | Context anomaly drilldown density self-test default output mutation string pair comparator name | Makes comparator naming match the field-string pair payload. | Renamed `joinedDefaultOutputMutationIdentityFieldStringsMatch(joinedIdentityFieldStrings)` to `defaultOutputMutationIdentityFieldStringPairMatches(joinedIdentityFieldStrings)`. | Evidence: no runtime output growth; sampled predicate still compares actual and expected joined field strings. |
 | Context anomaly drilldown density self-test default output mutation string pair comparator input name | Makes comparator input naming match the pair helper. | Renamed comparator parameter `joinedIdentityFieldStrings` to `fieldStringPair`. | Evidence: no runtime output growth; comparator still checks the same pair fields. |
+| Context anomaly drilldown density self-test default output mutation sampled pair local name | Makes sampled predicate local naming match the pair helper. | Renamed local `joinedIdentityFieldStrings` to `fieldStringPair` inside `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)`. | Evidence: no runtime output growth; sampled predicate still passes the same pair to the comparator. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation sampled pair local name | Makes sampled predicate local naming match the pair helper. | Rename local `joinedIdentityFieldStrings` to `fieldStringPair` inside `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)`. | Compact metric: no runtime output growth; correctness metric: sampled predicate still passes the same pair to the comparator. |
+| Context anomaly drilldown density self-test default output mutation sampled pair predicate name | Makes sampled predicate naming match the field-string pair comparison. | Rename `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)` to `sampledDefaultOutputMutationIdentityFieldStringPairMatches(sample)`. | Compact metric: no runtime output growth; correctness metric: identity assertion still consumes the same predicate result. |
 
 ## Research Rules
 
