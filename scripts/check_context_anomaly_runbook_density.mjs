@@ -1994,46 +1994,49 @@ if (args.includes("--self-test")) {
         "`default_output_iterations`",
         "missing_default_output_iterations_json_doc",
       );
-      const jsonHeadroomOrderDoc = [
-        "`density_label_line_width`",
-        "`default_output_headroom`",
-        "`default_output_iterations`",
-        "`text_width_docs_checked`",
-      ].join(",");
-      const swappedJsonHeadroomOrderDoc = [
-        "`density_label_line_width`",
-        "`text_width_docs_checked`",
-        "`default_output_iterations`",
-        "`default_output_headroom`",
-      ].join(",");
-      const jsonIterationsTextWidthPairDoc =
-        "`default_output_iterations`,`text_width_docs_checked`";
-      const swappedJsonIterationsTextWidthPairDoc =
-        "`text_width_docs_checked`,`default_output_iterations`";
-      assertSelfTestMissing(
-        evaluate(
-          runbook.replace(
-            jsonHeadroomOrderDoc,
-            swappedJsonHeadroomOrderDoc,
+      const assertJsonFieldOrderDocMutationSelfTests = () => {
+        const jsonHeadroomOrderDoc = [
+          "`density_label_line_width`",
+          "`default_output_headroom`",
+          "`default_output_iterations`",
+          "`text_width_docs_checked`",
+        ].join(",");
+        const swappedJsonHeadroomOrderDoc = [
+          "`density_label_line_width`",
+          "`text_width_docs_checked`",
+          "`default_output_iterations`",
+          "`default_output_headroom`",
+        ].join(",");
+        const jsonIterationsTextWidthPairDoc =
+          "`default_output_iterations`,`text_width_docs_checked`";
+        const swappedJsonIterationsTextWidthPairDoc =
+          "`text_width_docs_checked`,`default_output_iterations`";
+        assertSelfTestMissing(
+          evaluate(
+            runbook.replace(
+              jsonHeadroomOrderDoc,
+              swappedJsonHeadroomOrderDoc,
+            ),
+            maxLines,
           ),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-        jsonHeadroomOrderDoc,
-        "swapped_default_output_headroom_json_doc_order",
-      );
-      assertSelfTestMissing(
-        evaluate(
-          runbook.replace(
-            jsonIterationsTextWidthPairDoc,
-            swappedJsonIterationsTextWidthPairDoc,
+          "context_anomaly_runbook_density_missing_output_docs",
+          jsonHeadroomOrderDoc,
+          "swapped_default_output_headroom_json_doc_order",
+        );
+        assertSelfTestMissing(
+          evaluate(
+            runbook.replace(
+              jsonIterationsTextWidthPairDoc,
+              swappedJsonIterationsTextWidthPairDoc,
+            ),
+            maxLines,
           ),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-        jsonHeadroomOrderDoc,
-        "swapped_default_output_iterations_json_doc_order",
-      );
+          "context_anomaly_runbook_density_missing_output_docs",
+          jsonHeadroomOrderDoc,
+          "swapped_default_output_iterations_json_doc_order",
+        );
+      };
+      assertJsonFieldOrderDocMutationSelfTests();
       assertSelfTestMissing(
         evaluate(runbook.replace("`text_width_docs_checked`", ""), maxLines),
         "context_anomaly_runbook_density_missing_output_docs",
