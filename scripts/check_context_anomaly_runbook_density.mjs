@@ -441,6 +441,15 @@ const invariantScalarDetailSample = "scalar";
 const expectedInvariantArrayDetail = invariantArrayDetailSample.join(",");
 const expectedInvariantScalarDetail = invariantScalarDetailSample;
 
+function invariantDetailFormatSamples() {
+  return {
+    actualInvariantArrayDetail: invariantDetailValue(invariantArrayDetailSample),
+    actualInvariantScalarDetail: invariantDetailValue(
+      invariantScalarDetailSample,
+    ),
+  };
+}
+
 function failSelfTestInvariant(details) {
   console.error("context_anomaly_runbook_density_self_test_failed");
   for (const [key, value] of Object.entries(details)) {
@@ -1522,12 +1531,8 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
-  const actualInvariantArrayDetail = invariantDetailValue(
-    invariantArrayDetailSample,
-  );
-  const actualInvariantScalarDetail = invariantDetailValue(
-    invariantScalarDetailSample,
-  );
+  const { actualInvariantArrayDetail, actualInvariantScalarDetail } =
+    invariantDetailFormatSamples();
   if (
     actualInvariantArrayDetail !== expectedInvariantArrayDetail ||
     actualInvariantScalarDetail !== expectedInvariantScalarDetail
