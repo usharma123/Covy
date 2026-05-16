@@ -1796,17 +1796,26 @@ if (args.includes("--self-test")) {
     }
   };
   assertRequiredCommandMutationSelfTests();
-  for (const [failureCodeIndex, failureCode] of requiredFailureCodes.entries()) {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace(failureCode, `drifted_failure_code_${failureCodeIndex}`),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_failure_docs",
+  const assertRequiredFailureCodeMutationSelfTests = () => {
+    for (const [
+      failureCodeIndex,
       failureCode,
-      `drifted_${failureCode}`,
-    );
-  }
+    ] of requiredFailureCodes.entries()) {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replace(
+            failureCode,
+            `drifted_failure_code_${failureCodeIndex}`,
+          ),
+          maxLines,
+        ),
+        "context_anomaly_runbook_density_missing_failure_docs",
+        failureCode,
+        `drifted_${failureCode}`,
+      );
+    }
+  };
+  assertRequiredFailureCodeMutationSelfTests();
   assertSelfTestMissing(
     evaluate(runbook.replaceAll("`wf`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
