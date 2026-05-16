@@ -39,9 +39,10 @@ const maxDefaultOutputLength = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX ?? "210",
   10,
 );
+const maxHelpLineLength = 120;
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
-  "default: validate runbook line budget, row width, soft row env P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX, docs, and workflow density commands",
+  "default: validate lines, rows, soft env P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX, docs, and workflow commands",
   "--json: print ok, budgets, width metrics, command counts, and max_json_bytes",
   "--self-test: verify line, width, missing-command, and JSON byte/headroom failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
@@ -806,6 +807,15 @@ if (args.includes("--self-test")) {
     "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX",
   ]) {
     assertHelpIncludes(expected);
+  }
+  const tooWideHelpLine = helpLines.find(
+    (line) => line.length > maxHelpLineLength,
+  );
+  if (tooWideHelpLine) {
+    console.error("context_anomaly_runbook_density_self_test_help_failed");
+    console.error(`max_help_line_len=${maxHelpLineLength}`);
+    console.error(`actual_help_line_len=${tooWideHelpLine.length}`);
+    process.exit(1);
   }
   console.log("context_anomaly_runbook_density_self_test_ok");
   process.exit(0);

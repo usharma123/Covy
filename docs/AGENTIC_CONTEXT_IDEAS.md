@@ -221,12 +221,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density row soft-target JSON parity | Lets automation consumers inspect row soft-target status without parsing text output. | JSON success output now includes `row_soft_ok` and `row_soft_max` with a documented 352-byte cap. | Evidence: JSON stays under budget; JSON soft status matches default `soft` output and runbook docs guard the field names. |
 | Context anomaly drilldown density row soft-target JSON env smoke | Proves JSON soft-target status flips when the soft row env is lowered. | Density self-test now runs with `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX=10 --json` and expects `row_soft_ok=false`. | Evidence: JSON remains under budget; text and JSON soft status agree for the same env. |
 | Context anomaly drilldown density row soft-target help docs | Helps maintainers discover the soft row target without reading script source. | Checker help now mentions `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX` while staying at five lines. | Evidence: self-test requires the env name in help; `--help` remains compact. |
+| Context anomaly drilldown density help width guard | Prevents compact help from becoming a single unreadable long line as env docs grow. | Density self-test now enforces a 120-character max help line and shortens the soft-env help wording. | Evidence: `--help` remains five lines; overly long help lines fail self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density help width guard | Prevents compact help from becoming a single unreadable long line as env docs grow. | Add a max help-line width check to self-test. | Compact metric: `--help` remains five lines; correctness metric: overly long help lines fail self-test. |
+| Context anomaly drilldown density help width docs | Helps maintainers understand why help wording is intentionally compressed. | Mention the help width budget in the runbook density row or nearby prose without growing the row past soft target. | Compact metric: runbook row stays under soft target; correctness metric: docs match the 120-character help guard. |
 
 ## Research Rules
 
