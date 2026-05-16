@@ -1500,9 +1500,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook, result.line_count - 1),
     "context_anomaly_runbook_density_too_many_lines",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace(requiredCommands[0], ""), maxLines),
     "context_anomaly_runbook_density_missing_commands",
+    requiredCommands[0],
+    "missing_first_required_command_detail",
   );
   assertSelfTest(
     evaluate(
