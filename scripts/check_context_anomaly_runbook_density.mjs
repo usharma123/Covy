@@ -2146,12 +2146,15 @@ if (args.includes("--self-test")) {
     );
   };
   assertJsonErrorShapeMutationSelfTest();
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`no-succ`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "`no-succ`",
-    "missing_json_failure_success_field_doc",
-  );
+  const assertFailureSuccessFieldMutationSelfTest = () => {
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`no-succ`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "`no-succ`",
+      "missing_json_failure_success_field_doc",
+    );
+  };
+  assertFailureSuccessFieldMutationSelfTest();
   const staleFailureAliasResult = evaluate(
     runbook.replace("`no-succ`", "`no-success`"),
     maxLines,
