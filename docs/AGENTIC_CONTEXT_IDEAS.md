@@ -381,12 +381,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper JSON cap doc adoption | Reuses the missing-detail helper for the compact JSON byte-cap docs mutation. | The `max_json_bytes=640` docs mutation now uses `assertSelfTestMissing` for its numeric docs token. | Evidence: no output growth; helper covers numeric docs detail checks. |
 | Context anomaly drilldown density missing-detail helper help-cap doc adoption | Reuses the missing-detail helper for the compact help-width docs mutation. | The `help<=120` docs mutation now uses `assertSelfTestMissing` for its numeric docs token. | Evidence: no output growth; helper covers help-cap docs detail checks. |
 | Context anomaly drilldown density missing-detail helper text-headroom doc adoption | Reuses the missing-detail helper for the compact text-headroom docs mutation. | The `thead>=8` docs mutation now uses `assertSelfTestMissing` for its numeric docs token. | Evidence: no output growth; helper covers text-headroom docs detail checks. |
+| Context anomaly drilldown density missing-detail helper JSON error-shape adoption | Reuses the missing-detail helper for compact JSON error-shape docs. | The `ok:false` docs mutation now uses `assertSelfTestMissing` for its error-shape token. | Evidence: no output growth; helper covers error-shape docs detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper JSON error-shape adoption | Reuses the missing-detail helper for compact JSON error-shape docs. | Convert the `ok:false` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers error-shape docs detail checks. |
+| Context anomaly drilldown density missing-detail helper JSON success-field adoption | Reuses the missing-detail helper for compact JSON failure success-field exclusion docs. | Convert the `no-succ` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers success-field exclusion docs detail checks. |
 
 ## Research Rules
 

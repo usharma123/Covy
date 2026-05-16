@@ -1758,9 +1758,10 @@ if (args.includes("--self-test")) {
     "`thead>=8`",
     "missing_default_text_headroom_doc",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`ok:false`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`ok:false`",
     "missing_json_error_shape_doc",
   );
   assertSelfTest(
