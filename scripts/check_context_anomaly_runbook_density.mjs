@@ -113,7 +113,7 @@ const requiredOutputDocPhrases = [
 const requiredAliasDocPhrases = [
   "`fc`=failure codes",
   "`wf`=workflow commands",
-  "`json`=JSON headroom",
+  "`json`=remaining JSON headroom",
 ];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
