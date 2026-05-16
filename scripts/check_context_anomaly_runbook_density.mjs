@@ -1585,6 +1585,17 @@ if (args.includes("--self-test")) {
     "swapped_default_output_headroom_json_doc_order",
   );
   assertSelfTest(
+    evaluate(
+      runbook.replace(
+        "`default_output_iterations`,`text_width_docs_checked`",
+        "`text_width_docs_checked`,`default_output_iterations`",
+      ),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "swapped_default_output_iterations_json_doc_order",
+  );
+  assertSelfTest(
     evaluate(runbook.replace("`text_width_docs_checked`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
