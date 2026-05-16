@@ -124,6 +124,7 @@ const requiredAliasDocPhrases = [
   "`wf`=workflow commands",
   "`json`=remaining JSON headroom",
 ];
+const requiredDensityDocPhrases = ["Density env:"];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
@@ -170,6 +171,9 @@ function evaluate(runbook, lineBudget) {
     (phrase) => !runbook.includes(phrase),
   );
   const missingAliasDocPhrases = requiredAliasDocPhrases.filter(
+    (phrase) => !runbook.includes(phrase),
+  );
+  const missingDensityDocPhrases = requiredDensityDocPhrases.filter(
     (phrase) => !runbook.includes(phrase),
   );
   const hasTextWidthEnvDoc = runbook
@@ -224,6 +228,7 @@ function evaluate(runbook, lineBudget) {
     missingOutputLabels.length > 0 ||
     missingOutputDocPhrases.length > 0 ||
     missingAliasDocPhrases.length > 0 ||
+    missingDensityDocPhrases.length > 0 ||
     !hasTextWidthEnvDoc
   ) {
     return {
@@ -233,6 +238,7 @@ function evaluate(runbook, lineBudget) {
         ...missingOutputLabels,
         ...missingOutputDocPhrases,
         ...missingAliasDocPhrases,
+        ...missingDensityDocPhrases,
         ...(hasTextWidthEnvDoc
           ? []
           : ["width:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
@@ -546,7 +552,7 @@ if (args.includes("--self-test")) {
   const widenedEnvProseResult = evaluate(
     runbook.replace(
       "Density env:",
-      "Density envs: widened-env-prose-width-sentinel",
+      "Density env: widened-env-prose-width-sentinel",
     ),
     maxLines,
   );
@@ -740,6 +746,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("Density env:", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
