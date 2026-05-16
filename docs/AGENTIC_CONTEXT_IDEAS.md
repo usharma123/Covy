@@ -363,12 +363,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON failure-field docs guard | Prevents the success-field exclusion note from drifting out of docs. | Self-test now has a dedicated missing-doc mutation for the compact `no-succ` JSON error note. | Evidence: prose stays under cap; missing exclusion docs fail coverage. |
 | Context anomaly drilldown density label prose recovery after failure docs | Restores label-line margin after adding the success-field exclusion note. | The guarded exclusion token now compacts to `no-succ` while preserving error-shape coverage. | Evidence: `dlab` drops below 205; error docs guards still pass. |
 | Context anomaly drilldown density failure docs alias refresh | Keeps the idea ledger wording aligned with the compact `no-succ` runbook token. | Completed failure-field docs rows now name `no-succ`. | Evidence: no runtime output growth; ledger and runbook wording agree. |
+| Context anomaly drilldown density failure docs alias stale-word guard | Prevents the runbook from drifting back to the longer `no-success` token. | Density self-test now fails if the stale backtick `no-success` alias appears. | Evidence: no output growth; stale long token fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density failure docs alias stale-word guard | Prevents the runbook from drifting back to the longer `no-success` token. | Add a self-test assertion that the compact runbook docs do not contain `no-success`. | Compact metric: no output growth; correctness metric: stale long token fails self-test. |
+| Context anomaly drilldown density failure docs alias stale-word detail | Makes stale alias failures easier to diagnose. | Add a dedicated missing-output-docs detail string for `stale:no-success` and assert it in self-test. | Compact metric: no output growth; correctness metric: stale alias detail is reported. |
 
 ## Research Rules
 

@@ -252,6 +252,7 @@ function evaluate(runbook, lineBudget) {
         line.includes("`jhead`") &&
         line.includes("`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`"),
     );
+  const hasStaleFailureAlias = runbook.includes("`no-success`");
   const missingEnvDocs = requiredEnvDocs.filter(
     (envName) => !runbook.includes(`\`${envName}\``),
   );
@@ -300,7 +301,8 @@ function evaluate(runbook, lineBudget) {
     missingDensityDocPhrases.length > 0 ||
     missingDensityDocLinePrefixes.length > 0 ||
     !hasTextWidthEnvDoc ||
-    !hasJsonHeadroomEnvDoc
+    !hasJsonHeadroomEnvDoc ||
+    hasStaleFailureAlias
   ) {
     return {
       ok: false,
@@ -317,6 +319,7 @@ function evaluate(runbook, lineBudget) {
         ...(hasJsonHeadroomEnvDoc
           ? []
           : ["jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN"]),
+        ...(hasStaleFailureAlias ? ["stale:no-success"] : []),
       ],
     };
   }
@@ -1739,6 +1742,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`no-succ`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_json_failure_success_field_doc",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`no-succ`", "`no-success`"), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "stale_json_failure_success_field_alias",
   );
   assertSelfTest(
     evaluate(
