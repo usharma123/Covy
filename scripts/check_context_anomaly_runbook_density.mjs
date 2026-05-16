@@ -616,6 +616,7 @@ function buildSuccessArtifacts(
         jsonHeadroom,
         defaultOutputLine,
         defaultOutputHeadroom,
+        iterations: i + 1,
       };
     }
     payload = nextPayload;
@@ -623,7 +624,13 @@ function buildSuccessArtifacts(
     defaultOutputLine = nextDefaultOutputLine;
   }
   const defaultOutputHeadroom = textBudget - defaultOutputLine.length;
-  return { payload, jsonHeadroom, defaultOutputLine, defaultOutputHeadroom };
+  return {
+    payload,
+    jsonHeadroom,
+    defaultOutputLine,
+    defaultOutputHeadroom,
+    iterations: 5,
+  };
 }
 
 function renderDefaultOutput(
@@ -972,6 +979,11 @@ if (args.includes("--self-test")) {
     console.error("success_artifacts_did_not_converge");
     process.exit(1);
   }
+  if (baselineArtifacts.iterations > 3) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`success_artifacts_iterations=${baselineArtifacts.iterations}`);
+    process.exit(1);
+  }
   const exactWidthArtifacts = buildSuccessArtifacts(
     result,
     workflowResult,
@@ -991,6 +1003,11 @@ if (args.includes("--self-test")) {
     console.error(
       `actual_exact_width_json_headroom=${exactWidthArtifacts.payload.default_output_headroom}`,
     );
+    process.exit(1);
+  }
+  if (exactWidthArtifacts.iterations > 3) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`exact_width_iterations=${exactWidthArtifacts.iterations}`);
     process.exit(1);
   }
   const lowWidthArtifacts = buildSuccessArtifacts(
