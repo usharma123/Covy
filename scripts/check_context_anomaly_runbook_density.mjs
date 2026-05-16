@@ -1052,6 +1052,23 @@ if (args.includes("--self-test")) {
     console.error(`actual_field_order=${parsedDefaultOutputFields.join(",")}`);
     process.exit(1);
   }
+  const expectedDefaultOutputSuffix = ["thead", "tw"];
+  const actualDefaultOutputSuffix = parsedDefaultOutputFields.slice(
+    -expectedDefaultOutputSuffix.length,
+  );
+  if (
+    actualDefaultOutputSuffix.join(",") !==
+    expectedDefaultOutputSuffix.join(",")
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_default_output_suffix=${expectedDefaultOutputSuffix.join(",")}`,
+    );
+    console.error(
+      `actual_default_output_suffix=${actualDefaultOutputSuffix.join(",")}`,
+    );
+    process.exit(1);
+  }
   const defaultOutputError = defaultOutputParseIssue(
     parsedDefaultOutput,
     defaultParseDetails,

@@ -326,12 +326,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-headroom JSON docs guard | Prevents the full `default_output_headroom` JSON field from becoming an undocumented implementation detail. | Self-test now has a dedicated missing-doc mutation for the `default_output_headroom` phrase. | Evidence: JSON prose stays under current prose max; missing field docs fail self-test. |
 | Context anomaly drilldown density text-headroom JSON order guard | Keeps `default_output_headroom` near related JSON width fields instead of drifting in docs. | Self-test now swaps `default_output_headroom` and `text_width_docs_checked` in the JSON docs line. | Evidence: JSON prose stays under current prose max; docs-order drift fails output-doc coverage. |
 | Context anomaly drilldown density text-headroom JSON parity order guard | Keeps the emitted JSON field near related width fields, not only the docs phrase. | Self-test now asserts the emitted parity field sequence `density_label_line_width`, `default_output_headroom`, `text_width_docs_checked`. | Evidence: JSON output stays under cap; payload order drift fails self-test. |
+| Context anomaly drilldown density text-headroom parser order guard | Keeps compact `thead` near `tw` in the default output, matching how agents read text slack. | Self-test now asserts the parsed default-output suffix is `thead`,`tw`. | Evidence: default output stays under cap; text-order drift fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text-headroom parser order guard | Keeps compact `thead` near `tw` in the default output, matching how agents read text slack. | Add a dedicated parser-order assertion for the `thead`,`tw` suffix. | Compact metric: default output stays under cap; correctness metric: text-order drift fails self-test. |
+| Context anomaly drilldown density text-headroom docs suffix guard | Keeps the documented key list aligned with the default-output `thead`,`tw` suffix. | Add a dedicated self-test mutation that swaps `thead` and `tw` in the runbook key list. | Compact metric: row stays under soft cap; correctness metric: docs suffix drift fails output-doc coverage. |
 
 ## Research Rules
 
