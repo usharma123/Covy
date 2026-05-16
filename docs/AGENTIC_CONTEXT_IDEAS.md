@@ -88,12 +88,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown fixture freshness | Prevents the delimiter fixture from becoming invisible when the workflow path filters change. | The context-anomalies workflow path filters now include the hidden-sample smoke script while fixture files remain covered by `docs/context-anomalies/**`. | Evidence: two path-filter entries were added; fixture docs and smoke-script changes both trigger the workflow. |
 | Context anomaly drilldown summary budget gate | Prevents fixture smoke lines from becoming too long for GitHub summaries. | The hidden-sample smoke script now fails when the escaped fixture summary exceeds a 256-character budget. | Evidence: normal smoke output stays under 256 characters; `P28_HIDDEN_SAMPLE_SUMMARY_MAX=10 node scripts/check_context_anomaly_hidden_samples.mjs` exits nonzero with `context_anomaly_hidden_sample_fixture_too_long`. |
 | Context anomaly drilldown budget workflow summary | Makes the enforced formatter budget visible when the context anomaly workflow runs. | The smoke script now has `--json` output and the workflow summary reports formatter budget as `actual/max`. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs --json` returns `actual_len`, `max_len`, and summary; workflow uses that JSON for both formatter smoke and budget lines. |
+| Context anomaly drilldown budget runbook note | Helps agents interpret workflow formatter budget lines without reading the script. | The context anomaly runbook now explains that workflow formatter budget lines map to smoke script `actual_len` and `max_len` fields. | Evidence: runbook remains under 45 lines and documents the `actual/max` notation next to the smoke command. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown budget runbook note | Helps agents interpret workflow formatter budget lines without reading the script. | Add the `actual/max` formatter budget meaning to the context anomaly runbook command table or sample note. | Compact metric: runbook remains under 45 lines; correctness metric: note matches the script JSON fields. |
+| Context anomaly drilldown JSON smoke docs | Lets agents use machine-readable smoke output directly in automation. | Document `node scripts/check_context_anomaly_hidden_samples.mjs --json` in the runbook or command table. | Compact metric: runbook remains under 45 lines; correctness metric: documented JSON fields match script output. |
 
 ## Research Rules
 
