@@ -30,7 +30,7 @@ if (args.includes("--help")) {
       "default: validate workflow summary line count and template width",
       "--json: print ok, line_count, max_lines, max_template_line, and labels",
       "--self-test: verify line, width, and missing-label failure modes",
-      "--help: print this help",
+      "--help: print this help; bad flags fail with context_anomaly_summary_budget_unknown_option",
     ].join("\n"),
   );
   process.exit(0);
