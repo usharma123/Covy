@@ -1708,11 +1708,16 @@ if (args.includes("--self-test")) {
   };
   const sampleDefaultOutputMutationFieldIdentity = () =>
     defaultOutputMutationFieldIdentitySample();
-  const assertDefaultOutputMutationFieldIdentity = () => {
-    const identityFieldSample = sampleDefaultOutputMutationFieldIdentity();
+  const assertDefaultOutputMutationFieldIdentitySample = (
+    identityFieldSample,
+  ) => {
     if (!defaultOutputMutationFieldIdentityMatches(identityFieldSample)) {
       failDefaultOutputMutationFieldIdentity(identityFieldSample);
     }
+  };
+  const assertDefaultOutputMutationFieldIdentity = () => {
+    const identityFieldSample = sampleDefaultOutputMutationFieldIdentity();
+    assertDefaultOutputMutationFieldIdentitySample(identityFieldSample);
   };
   const failDefaultOutputMutationFieldCount = (sample) => {
     failDefaultOutputMutation(defaultOutputMutationFieldCountDetails(sample));
