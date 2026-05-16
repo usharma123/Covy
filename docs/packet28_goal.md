@@ -142,6 +142,7 @@ Implement or complete:
 Acceptance tests must prove:
 
 - memory recall works through CLI and MCP
+- memory lint flags stale runtime-specific advice without rejecting generic project memories
 - feedback is searchable and summarized
 - graph relations are inspectable
 - consolidation does not erase important source metadata

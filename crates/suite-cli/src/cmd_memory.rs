@@ -4,10 +4,10 @@ use clap::{Args, Subcommand, ValueEnum};
 use crate::memory_store::{
     consolidate_memories, decay_memories, delete_pending_extractions, embed_memories,
     enqueue_pending_extraction, extract_memory_patterns, forget_memories_by_topic, forget_memory,
-    list_memories_filtered, list_pending_extractions, local_store_stats, memory_health,
-    memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
-    store_memory_with_metadata, update_memory, MemoryListQuery, MemoryRecallQuery,
-    MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput,
+    lint_memories, list_memories_filtered, list_pending_extractions, local_store_stats,
+    memory_health, memory_topics, process_pending_extractions, prune_memories,
+    recall_memories_filtered, store_memory_with_metadata, update_memory, MemoryListQuery,
+    MemoryRecallQuery, MemoryStoreInput, MemoryUpdateInput, PendingExtractionInput,
 };
 
 #[derive(Args)]
@@ -31,6 +31,7 @@ pub enum MemoryCommands {
     Consolidate(MemoryConsolidateArgs),
     Embed(MemoryEmbedArgs),
     ExtractPatterns(MemoryExtractPatternsArgs),
+    Lint(MemoryLintArgs),
     Pending(MemoryPendingArgs),
 }
 
@@ -251,6 +252,18 @@ pub struct MemoryExtractPatternsArgs {
 }
 
 #[derive(Args)]
+pub struct MemoryLintArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long, default_value_t = 200)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
 pub struct MemoryPendingEnqueueArgs {
     #[arg(allow_hyphen_values = true)]
     pub raw_output: String,
@@ -318,6 +331,7 @@ pub fn run(args: MemoryArgs) -> Result<i32> {
         MemoryCommands::Consolidate(args) => run_consolidate(args),
         MemoryCommands::Embed(args) => run_embed(args),
         MemoryCommands::ExtractPatterns(args) => run_extract_patterns(args),
+        MemoryCommands::Lint(args) => run_lint(args),
         MemoryCommands::Pending(args) => run_pending(args),
     }
 }
@@ -630,6 +644,28 @@ fn run_extract_patterns(args: MemoryExtractPatternsArgs) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+fn run_lint(args: MemoryLintArgs) -> Result<i32> {
+    let cwd = crate::cmd_common::caller_cwd()?;
+    let root = std::path::PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
+    let report = lint_memories(&root, args.limit)?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(&report)?, args.pretty)?;
+    } else {
+        println!("{}", report.summary);
+        for issue in report.issues {
+            eprintln!(
+                "FAIL [{}] {}: {}",
+                issue.memory_id, issue.kind, issue.detail
+            );
+        }
+    }
+    if report.issue_count == 0 {
+        Ok(0)
+    } else {
+        Ok(1)
+    }
 }
 
 fn run_pending(args: MemoryPendingArgs) -> Result<i32> {
