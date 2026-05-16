@@ -119,12 +119,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit mode workflow summary | Makes the default audit mode visible in workflow logs and summaries. | The context-anomalies workflow now tees default audit output and appends its `audit_mode=...` line to the GitHub summary. | Evidence: summary grows by one line; local render extracts `audit_mode=tolerant verifier=ok high=2 max_high=2` from the audit output. |
 | Context anomaly drilldown audit output artifact | Lets maintainers inspect the exact audit output when workflow summaries are truncated. | The context-anomalies workflow now uploads `context-anomaly-hidden-sample-audit.txt` as the `context-anomaly-hidden-sample-audit` artifact. | Evidence: default audit artifact content is seven lines and contains the same audit mode line used in the summary. |
 | Context anomaly drilldown audit artifact runbook note | Helps maintainers find the uploaded audit output from failed workflow runs. | The context anomaly runbook now names the `context-anomaly-hidden-sample-audit` artifact and its source file. | Evidence: runbook remains under 45 lines and the note names both artifact and `context-anomaly-hidden-sample-audit.txt`. |
+| Context anomaly drilldown audit artifact checksum | Lets maintainers confirm an uploaded audit artifact matches the summary without downloading it first. | The context-anomalies workflow summary now prints a SHA-256 checksum computed from `context-anomaly-hidden-sample-audit.txt`. | Evidence: audit checksum summary line is under 100 characters and is computed from the seven-line audit artifact. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit artifact checksum | Lets maintainers confirm an uploaded audit artifact matches the summary without downloading it first. | Add an audit artifact checksum line to the workflow summary. | Compact metric: one summary line under 100 characters; correctness metric: checksum is computed from `context-anomaly-hidden-sample-audit.txt`. |
+| Context anomaly drilldown audit artifact checksum docs | Helps maintainers reproduce the audit artifact checksum locally. | Add the audit artifact checksum command to the runbook. | Compact metric: runbook remains under 45 lines; correctness metric: command matches the workflow checksum computation. |
 
 ## Research Rules
 
