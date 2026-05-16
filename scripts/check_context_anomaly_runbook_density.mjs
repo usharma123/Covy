@@ -14,7 +14,7 @@ const maxLines = Number.parseInt(
   10,
 );
 const maxJsonBytes = Number.parseInt(
-  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ?? "288",
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ?? "320",
   10,
 );
 const minJsonHeadroomBytes = Number.parseInt(
@@ -105,6 +105,7 @@ const requiredOutputLabels = [
 const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
+  "`alias_docs_checked`",
 ];
 const requiredAliasDocPhrases = [
   "`fc`=failure codes",
@@ -340,6 +341,7 @@ function successPayload(result, workflow, jsonBudget) {
     max_density_prose_line_allowed: result.max_density_prose_line_allowed,
     commands_checked: result.commands_checked,
     failure_codes_checked: result.failure_codes_checked,
+    alias_docs_checked: result.alias_docs_checked,
     workflow_commands_checked: workflow.workflow_commands_checked,
     max_json_bytes: jsonBudget,
   };
@@ -650,6 +652,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("JSON keeps full field names", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`alias_docs_checked`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
