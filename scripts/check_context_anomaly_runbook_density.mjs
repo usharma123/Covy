@@ -153,6 +153,7 @@ const requiredOutputDocPhrases = [
   "`text_width_docs_checked`",
   "`density_label_line_width`,`default_output_headroom`,`text_width_docs_checked`",
   "`ok:false`",
+  "`ok:false`;h:`help<=120`",
   "`max_json_bytes=592`",
   "`thead>=8`",
   "`help<=120`",
@@ -1448,6 +1449,14 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`ok:false`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_json_error_shape_doc",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace("`ok:false`;h:`help<=120`", "`ok:false`;x:`help<=120`"),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "missing_json_error_help_adjacency_doc",
   );
   assertSelfTest(
     evaluate(
