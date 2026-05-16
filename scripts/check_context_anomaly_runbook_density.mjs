@@ -487,6 +487,24 @@ function failSelfTestInvariant(details) {
   process.exit(1);
 }
 
+function assertInvariantDetailFormats() {
+  const expectedInvariantFormats = expectedInvariantDetailFormats();
+  const actualInvariantFormats = invariantDetailFormatSamples();
+  if (
+    invariantDetailFormatsMismatch(
+      expectedInvariantFormats,
+      actualInvariantFormats,
+    )
+  ) {
+    failSelfTestInvariant(
+      invariantDetailFormatMismatchDetails(
+        expectedInvariantFormats,
+        actualInvariantFormats,
+      ),
+    );
+  }
+}
+
 function assertEnvFailure(env, commandArgs, expectedCode) {
   try {
     execFileSync(process.execPath, [scriptPath, ...commandArgs], {
@@ -1560,21 +1578,7 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
-  const expectedInvariantFormats = expectedInvariantDetailFormats();
-  const actualInvariantFormats = invariantDetailFormatSamples();
-  if (
-    invariantDetailFormatsMismatch(
-      expectedInvariantFormats,
-      actualInvariantFormats,
-    )
-  ) {
-    failSelfTestInvariant(
-      invariantDetailFormatMismatchDetails(
-        expectedInvariantFormats,
-        actualInvariantFormats,
-      ),
-    );
-  }
+  assertInvariantDetailFormats();
   if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
     failSelfTestInvariant({
       expected_paired_env_doc_exclusion_count:
