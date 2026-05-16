@@ -424,12 +424,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper paired env exclusion count reuse | Avoids duplicating the paired exclusion count literal across guards. | Added `pairedEnvDocExclusionCount`, reused by the direct count guard and plain-env derived count. | Evidence: no output growth; count arithmetic is single-source. |
 | Context anomaly drilldown density missing-detail helper paired env exclusion count name | Makes the count guard failure name match the single-source variable. | Count guard diagnostics now print `expected_paired_env_doc_exclusion_count` and `actual_paired_env_doc_exclusion_count`. | Evidence: no output growth; failure diagnostics match variable names. |
 | Context anomaly drilldown density missing-detail helper paired env expected count constant | Names the expected paired-env exclusion count instead of embedding `2` in diagnostics. | Added `expectedPairedEnvDocExclusionCount`, reused by the paired-env count guard diagnostic. | Evidence: no output growth; expected count is single-source. |
+| Context anomaly drilldown density missing-detail helper paired env expected count docs | Keeps ledger wording aligned with the expected-count constant. | Completed expected-count row now mentions `expectedPairedEnvDocExclusionCount` explicitly. | Evidence: no runtime output growth; docs match guard code. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper paired env expected count docs | Keeps ledger wording aligned with the expected-count constant. | Update the expected-count row to mention `expectedPairedEnvDocExclusionCount` explicitly. | Compact metric: no runtime output growth; correctness metric: docs match guard code. |
+| Context anomaly drilldown density self-test invariant helper | Reduces bespoke failure-printing branches in invariant guards. | Add a small helper for self-test invariant failures and migrate one guard. | Compact metric: no runtime output growth; correctness metric: invariant diagnostics stay named. |
 
 ## Research Rules
 
