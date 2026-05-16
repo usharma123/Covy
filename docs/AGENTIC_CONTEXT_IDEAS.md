@@ -641,12 +641,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON headroom-min order | Keeps JSON headroom-min failure shape before direct budget unit coverage. | Verified `assertJsonHeadroomMinFailureShapeSelfTests()` sits after JSON max failure shape coverage and before the direct `jsonBudgetIssue()` assertion. | Evidence: no runtime output growth; JSON headroom-min failure shape remains before direct budget coverage. |
 | Context anomaly drilldown density self-test direct JSON budget wrapper | Names direct `jsonBudgetIssue()` unit coverage. | Extracted `assertJsonBudgetIssueMutationSelfTest()` around the direct `jsonBudgetIssue(successPayload(...), 10)` assertion. | Evidence: no runtime output growth; direct JSON budget coverage still returns the too-long code. |
 | Context anomaly drilldown density self-test direct JSON budget order | Keeps direct JSON budget coverage before help output coverage. | Verified `assertJsonBudgetIssueMutationSelfTest()` sits after JSON headroom-min coverage and before the help includes loop. | Evidence: no runtime output growth; direct JSON budget coverage remains before help output coverage. |
+| Context anomaly drilldown density self-test help includes wrapper | Names required help-output token checks. | Extracted `assertHelpIncludesSelfTests()` around the required help token loop. | Evidence: no runtime output growth; help output still covers modes, unknown-option code, and soft-row env docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test help includes wrapper | Names required help-output token checks. | Extract `assertHelpIncludesSelfTests()` around the required help token loop. | Compact metric: no runtime output growth; correctness metric: help output still covers modes, unknown-option code, and soft-row env docs. |
+| Context anomaly drilldown density self-test help includes order | Keeps help-token coverage before help line-width checks. | Verify `assertHelpIncludesSelfTests()` sits after direct JSON budget coverage and before the `tooWideHelpLine` check. | Compact metric: no runtime output growth; correctness metric: help token coverage remains before help width coverage. |
 
 ## Research Rules
 

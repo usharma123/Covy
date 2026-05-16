@@ -2361,16 +2361,19 @@ if (args.includes("--self-test")) {
     );
   };
   assertJsonBudgetIssueMutationSelfTest();
-  for (const expected of [
-    "default",
-    "--json",
-    "--self-test",
-    "--help",
-    "context_anomaly_runbook_density_unknown_option",
-    "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX",
-  ]) {
-    assertHelpIncludes(expected);
-  }
+  const assertHelpIncludesSelfTests = () => {
+    for (const expected of [
+      "default",
+      "--json",
+      "--self-test",
+      "--help",
+      "context_anomaly_runbook_density_unknown_option",
+      "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX",
+    ]) {
+      assertHelpIncludes(expected);
+    }
+  };
+  assertHelpIncludesSelfTests();
   const tooWideHelpLine = helpLines.find(
     (line) => line.length > maxHelpLineLength,
   );
