@@ -502,12 +502,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation field identity assertion name | Makes assertion name describe the sampled identity check. | Renamed `assertDefaultOutputMutationFieldsMirrorParserFields()` to `assertDefaultOutputMutationFieldIdentity()`. | Evidence: no runtime output growth; identity assertion remains single-source. |
 | Context anomaly drilldown density self-test default output mutation field identity failure helper | Makes identity assertion failure a single named path. | Extracted `failDefaultOutputMutationFieldIdentity(sample)` wrapping identity diagnostics. | Evidence: no runtime output growth; identity failure remains single-source. |
 | Context anomaly drilldown density self-test default output mutation field identity helper order | Keeps identity failure helper next to its assertion. | Verified `failDefaultOutputMutationFieldIdentity(sample)` sits directly above `assertDefaultOutputMutationFieldIdentity()`. | Evidence: no runtime output growth; identity failure helper remains adjacent to its only caller. |
+| Context anomaly drilldown density self-test default output mutation field identity sample local name | Makes sampled identity fields obvious at the assertion site. | Renamed `identitySample` to `identityFieldSample` in `assertDefaultOutputMutationFieldIdentity()`. | Evidence: no runtime output growth; assertion callsites still use the sampled identity fields. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation field identity sample local name | Makes sampled identity fields obvious at the assertion site. | Rename `identitySample` to `identityFieldSample` in `assertDefaultOutputMutationFieldIdentity()`. | Compact metric: no runtime output growth; correctness metric: assertion callsites still use the sampled identity fields. |
+| Context anomaly drilldown density self-test default output mutation field identity sample use helper | Makes the assertion's sample acquisition a named local step. | Extract `sampleDefaultOutputMutationFieldIdentity()` wrapping `defaultOutputMutationFieldIdentitySample()` for the assertion path. | Compact metric: no runtime output growth; correctness metric: identity assertion keeps one sample acquisition call. |
 
 ## Research Rules
 
