@@ -508,6 +508,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
   }
   const expectedValues = {
     cmds: String(resultDetails.commands_checked),
+    fc: String(resultDetails.failure_codes_checked),
     env: String(resultDetails.env_docs_checked),
     labels: String(resultDetails.output_labels_checked),
     adocs: String(resultDetails.alias_docs_checked),
@@ -778,6 +779,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=cmds");
     console.error(`actual=${staleCommandCountError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleFailureCodeCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ fc=\d+/, " fc=0")),
+    result,
+  );
+  if (staleFailureCodeCountError !== "default_output_parse_mismatch=fc") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=fc");
+    console.error(`actual=${staleFailureCodeCountError ?? "ok"}`);
     process.exit(1);
   }
   const staleEnvCountError = defaultOutputParseIssue(
