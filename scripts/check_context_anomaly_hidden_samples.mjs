@@ -17,6 +17,7 @@ const maxSummaryLength = Number.parseInt(
   process.env.P28_HIDDEN_SAMPLE_SUMMARY_MAX ?? "256",
   10,
 );
+const jsonOutput = process.argv.includes("--json");
 
 function escapeSegment(value, escapeEquals) {
   let escaped = value
@@ -59,4 +60,15 @@ if (actual.length > maxSummaryLength) {
   process.exit(1);
 }
 
-console.log(`context_anomaly_hidden_sample_fixture_ok=${actual}`);
+if (jsonOutput) {
+  console.log(
+    JSON.stringify({
+      ok: true,
+      actual_len: actual.length,
+      max_len: maxSummaryLength,
+      summary: actual,
+    }),
+  );
+} else {
+  console.log(`context_anomaly_hidden_sample_fixture_ok=${actual}`);
+}
