@@ -13,6 +13,7 @@ Use this command table before treating a compact anomaly summary as complete:
 | Audit formatter flow | `node scripts/audit_context_anomaly_hidden_samples.mjs` | Runs the smoke modes, fixture dashboard, digest, and verifier checks; add `--json` for compact fields. |
 | Audit release gate | `node scripts/audit_context_anomaly_hidden_samples.mjs --strict` | Uses release-like `--max-high 0` for the verifier check. |
 | List audit modes | `node scripts/audit_context_anomaly_hidden_samples.mjs --help` | Lists tolerant, strict, JSON, and checksum modes in under six lines. |
+| Check summary budget | `node scripts/check_context_anomaly_summary_budget.mjs --self-test` | Prints one `context_anomaly_summary_budget_self_test_ok` line. |
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 
 `Packet28 dashboard --root . --json` reads live history and reports latest status, high count, hidden categories, and recurring hidden categories.
@@ -37,8 +38,6 @@ The smoke script also checks `docs/context-anomalies/hidden-samples-delimiters.s
 
 Refresh that checksum with `shasum -a 256 docs/context-anomalies/hidden-samples-delimiters.json | awk '{print $1}' > docs/context-anomalies/hidden-samples-delimiters.sha256`.
 
-Workflow formatter budget lines use `actual/max`, matching the smoke script JSON fields `actual_len` and `max_len`; formatter checksum lines match the JSON `checksum`.
-
-The JSON `checksum` is verified before success output and equals `hidden-samples-delimiters.sha256`.
+Workflow formatter budget lines use `actual/max`, matching the smoke script JSON fields `actual_len` and `max_len`; formatter checksum lines match the JSON `checksum`, which is verified before success output and equals `hidden-samples-delimiters.sha256`.
 
 Recurring hidden categories usually mean medium-severity sources are repeatedly being capped from the digest. Fix the underlying source or raise it into a visible dashboard tile before relying on the compact anomaly summary.

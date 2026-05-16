@@ -136,12 +136,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit summary field budget | Prevents the growing context anomaly summary from becoming noisy in failed CI runs. | `scripts/check_context_anomaly_summary_budget.mjs` now checks workflow summary line count, template width, and required audit, fixture, trend, and formatter labels. | Evidence: default output reports `lines=22/24`; JSON output stays compact and includes all required labels. |
 | Context anomaly drilldown audit summary budget self-test | Proves the summary-budget checker catches both noisy summaries and missing fields. | The summary-budget checker now has `--self-test` for low line budget, low width budget, and missing-label fixtures. | Evidence: self-test output is one line and verifies each expected failure code. |
 | Context anomaly drilldown audit summary budget workflow gate | Keeps workflow summary sprawl caught in CI, not just locally. | The context-anomalies workflow now runs the summary-budget checker self-test and path filters include the checker script. | Evidence: no summary growth; local self-test passes and workflow YAML includes the new script path. |
+| Context anomaly drilldown audit summary budget runbook command | Helps agents discover the local summary-budget check before editing the workflow summary. | The context anomaly runbook command table now lists `node scripts/check_context_anomaly_summary_budget.mjs --self-test`. | Evidence: runbook remains under 45 lines and the documented command matches the workflow gate. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit summary budget runbook command | Helps agents discover the local summary-budget check before editing the workflow summary. | Add the summary-budget checker to the context anomaly runbook command table. | Compact metric: runbook remains under 45 lines; correctness metric: documented command matches the workflow gate. |
+| Context anomaly drilldown summary budget JSON docs | Helps automation consumers understand the summary-budget checker fields. | Document summary-budget `--json` output in the runbook command table or nearby prose. | Compact metric: runbook remains under 45 lines; correctness metric: documented fields match checker JSON output. |
 
 ## Research Rules
 
