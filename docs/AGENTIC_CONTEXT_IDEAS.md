@@ -126,12 +126,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown checksum read failure | Gives CI a compact, parseable error when the audit artifact file is missing. | `--checksum` now catches file-read failures and emits a named two-line error instead of a Node stack trace. | Evidence: missing-file output stays at two lines; valid checksum output remains only the digest. |
 | Context anomaly drilldown audit JSON output | Lets automation consume audit mode, formatter budget, checksum, and digest counts without parsing text lines. | The audit script now supports `--json` success output and structured strict/verifier failure output while preserving default text output. | Evidence: JSON output stays under 512 bytes; JSON fields match the default audit lines for mode, budget, checksum, verifier counts, and digest count. |
 | Context anomaly drilldown audit JSON workflow summary | Removes text-line parsing from the workflow summary audit fields. | The context-anomalies workflow now writes `context-anomaly-hidden-sample-audit.json` and derives the summary audit mode line from that JSON with a text fallback. | Evidence: summary line count does not grow; JSON-derived mode matches the previous text summary shape while the audit checksum helper remains unchanged. |
+| Context anomaly drilldown audit pipefail guard | Prevents the workflow audit step from passing when the audited command fails before `tee`. | The context-anomalies audit workflow step now sets `pipefail` before piping audit output through `tee`. | Evidence: no summary growth; a failing command in a `pipefail` pipeline exits nonzero despite `tee`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit pipefail guard | Prevents the workflow audit step from passing when the audited command fails before `tee`. | Add `set -o pipefail` to the audit workflow step. | Compact metric: no summary growth; correctness metric: a failing audit command makes the step fail despite `tee`. |
+| Context anomaly drilldown audit JSON artifact | Lets maintainers inspect structured audit details from workflow runs, not only line text. | Upload `context-anomaly-hidden-sample-audit.json` alongside the text audit artifact. | Compact metric: no summary growth; correctness metric: uploaded JSON parses and matches the text artifact mode line. |
 
 ## Research Rules
 

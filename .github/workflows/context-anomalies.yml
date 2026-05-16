@@ -61,6 +61,7 @@ jobs:
         env:
           STRICT_AUDIT: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_audit || false }}
         run: |
+          set -o pipefail
           node scripts/audit_context_anomaly_hidden_samples.mjs --help
           node scripts/audit_context_anomaly_hidden_samples.mjs | tee context-anomaly-hidden-sample-audit.txt
           node scripts/audit_context_anomaly_hidden_samples.mjs --json > context-anomaly-hidden-sample-audit.json
