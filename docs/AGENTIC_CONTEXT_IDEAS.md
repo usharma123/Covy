@@ -682,12 +682,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON byte/help cap table | Replaces repeated JSON byte/help cap assertions with a compact table. | Extracted the two assertions in `assertJsonByteHelpCapMutationSelfTests()` into a `jsonByteHelpCapDocs` table with doc text and case name. | Evidence: no runtime output growth; max-json-bytes and help-cap docs still fail with their existing case names. |
 | Context anomaly drilldown density self-test JSON byte/help cap table order | Keeps the byte/help cap table beside the loop that executes it. | Verified `jsonByteHelpCapDocs` is defined inside `assertJsonByteHelpCapMutationSelfTests()` immediately before the `docText`/`caseName` loop. | Evidence: no runtime output growth; table rows remain adjacent to their assertion loop. |
 | Context anomaly drilldown density self-test JSON byte/help cap post-table audit | Checks whether the byte/help cap helper needs more decomposition after table extraction. | Re-scanned `assertJsonByteHelpCapMutationSelfTests()` after the table refactor and kept the table/loop local as the compact stopping point. | Evidence: no runtime output growth; next byte/help cap decision is based on current helper shape. |
+| Context anomaly drilldown density self-test env-line anchor helper audit | Checks whether the adjacent env-line anchor helper is already minimal. | Re-scanned `assertEnvLineAnchorMutationSelfTest()` and kept its single Env-line assertion separate while moving the next target to the larger section-anchor group. | Evidence: no runtime output growth; next target reflects the current adjacent helper shape. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test env-line anchor helper audit | Checks whether the adjacent env-line anchor helper is already minimal. | Re-scan `assertEnvLineAnchorMutationSelfTest()` and decide whether it should stay as a single assertion or be grouped with section-anchor coverage. | Compact metric: no runtime output growth; correctness metric: next target reflects the current adjacent helper shape. |
+| Context anomaly drilldown density self-test section-anchor table | Replaces repeated section-anchor mutation assertions with a table. | Extract the five mutations in `assertSectionAnchorMutationSelfTests()` into `sectionAnchorMutations` rows with original and replacement strings. | Compact metric: no runtime output growth; correctness metric: all section-anchor mutation cases still fail on missing output docs. |
 
 ## Research Rules
 
