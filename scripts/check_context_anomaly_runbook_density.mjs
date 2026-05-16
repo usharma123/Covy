@@ -329,6 +329,32 @@ function parseDefaultOutput(line) {
   return Object.fromEntries(parts.slice(1).map((part) => part.split("=")));
 }
 
+function defaultOutputIssue(parsed, resultDetails) {
+  const expectedTextFields = [
+    "lines",
+    "max_table_row",
+    "commands",
+    "failure_codes",
+    "env_docs",
+    "output_labels",
+    "workflow_commands",
+    "prose",
+    "json_headroom",
+  ];
+  for (const field of expectedTextFields) {
+    if (!parsed?.[field]) {
+      return `missing_default_output_field=${field}`;
+    }
+  }
+  if (
+    parsed.commands !== String(resultDetails.commands_checked) ||
+    parsed.output_labels !== String(resultDetails.output_labels_checked)
+  ) {
+    return "default_output_parse_mismatch";
+  }
+  return null;
+}
+
 const runbook = readFileSync(runbookPath, "utf8");
 const workflow = readFileSync(workflowPath, "utf8");
 const result = evaluate(runbook, maxLines);
@@ -394,30 +420,30 @@ if (args.includes("--self-test")) {
   const parsedDefaultOutput = parseDefaultOutput(
     renderDefaultOutput(baselinePayload, result, baselineHeadroom),
   );
-  const expectedTextFields = [
-    "lines",
-    "max_table_row",
-    "commands",
-    "failure_codes",
-    "env_docs",
-    "output_labels",
-    "workflow_commands",
-    "prose",
-    "json_headroom",
-  ];
-  for (const field of expectedTextFields) {
-    if (!parsedDefaultOutput?.[field]) {
-      console.error("context_anomaly_runbook_density_self_test_failed");
-      console.error(`missing_default_output_field=${field}`);
-      process.exit(1);
-    }
-  }
-  if (
-    parsedDefaultOutput.commands !== String(result.commands_checked) ||
-    parsedDefaultOutput.output_labels !== String(result.output_labels_checked)
-  ) {
+  const defaultOutputError = defaultOutputIssue(parsedDefaultOutput, result);
+  if (defaultOutputError) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error("default_output_parse_mismatch");
+    console.error(defaultOutputError);
+    process.exit(1);
+  }
+  if (parseDefaultOutput("bad_prefix lines=44/44") !== null) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("malformed_default_output_prefix_accepted");
+    process.exit(1);
+  }
+  const missingLabelError = defaultOutputIssue(
+    parseDefaultOutput(
+      renderDefaultOutput(baselinePayload, result, baselineHeadroom).replace(
+        / output_labels=\d+/,
+        "",
+      ),
+    ),
+    result,
+  );
+  if (missingLabelError !== "missing_default_output_field=output_labels") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=output_labels`);
+    console.error(`actual=${missingLabelError ?? "ok"}`);
     process.exit(1);
   }
   assertSelfTest(

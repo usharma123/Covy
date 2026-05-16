@@ -193,12 +193,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output label count | Helps automation confirm how many default text labels the checker is guarding. | Default density output now reports `output_labels` while JSON remains unchanged. | Evidence: default output stays one line and count matches the required output label list. |
 | Context anomaly drilldown density output label count self-test | Proves the default `output_labels` count is tied to the required label list. | Density self-test now asserts output label count and verifies removing the `output_labels` doc fails output-doc coverage. | Evidence: self-test output stays one line and changing required output labels changes expected count. |
 | Context anomaly drilldown density default output parser | Prevents future text-output labels from becoming hard to consume. | Density self-test now parses the default one-line output and verifies expected count and budget fields. | Evidence: default output remains one line and parser extracts all expected counts and budgets. |
+| Context anomaly drilldown density default output parser failure | Proves malformed default density text fails the parser instead of being accepted silently. | Density self-test now rejects malformed prefixes and missing output-label fields. | Evidence: self-test output stays one line and malformed prefix or missing labels fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default output parser failure | Proves malformed default density text fails the parser instead of being accepted silently. | Add a self-test malformed-line fixture for the default output parser. | Compact metric: self-test output stays one line; correctness metric: malformed prefix or missing labels fails parser validation. |
+| Context anomaly drilldown density default output docs | Helps maintainers know the default text output is intentionally parseable. | Add a compact runbook note that density default output is one-line `key=value` text. | Compact metric: runbook remains within line/prose/table budgets; correctness metric: note matches parser expectations. |
 
 ## Research Rules
 
