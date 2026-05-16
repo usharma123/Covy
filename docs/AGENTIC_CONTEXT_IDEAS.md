@@ -191,12 +191,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density env docs count output | Helps automation confirm how many env knobs the checker is guarding. | Default density output now reports `env_docs` while JSON remains unchanged. | Evidence: default output stays one line and the count matches the required env doc list. |
 | Context anomaly drilldown density env docs count self-test | Proves the default `env_docs` count is tied to the required env doc list. | Density self-test now asserts env doc count and verifies removing the `env_docs` output label fails output-doc coverage. | Evidence: self-test output stays one line and changing required env docs changes expected count. |
 | Context anomaly drilldown density output label count | Helps automation confirm how many default text labels the checker is guarding. | Default density output now reports `output_labels` while JSON remains unchanged. | Evidence: default output stays one line and count matches the required output label list. |
+| Context anomaly drilldown density output label count self-test | Proves the default `output_labels` count is tied to the required label list. | Density self-test now asserts output label count and verifies removing the `output_labels` doc fails output-doc coverage. | Evidence: self-test output stays one line and changing required output labels changes expected count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output label count self-test | Proves the default `output_labels` count is tied to the required label list. | Add a self-test assertion for output label count and verify removing the label doc fails. | Compact metric: self-test output stays one line; correctness metric: changing required output labels changes expected count. |
+| Context anomaly drilldown density default output parser | Prevents future text-output labels from becoming hard to consume. | Add a self-test parser for the default one-line density output and required labels. | Compact metric: default output remains one line; correctness metric: parser extracts all expected counts and budgets. |
 
 ## Research Rules
 

@@ -416,6 +416,10 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
+    evaluate(runbook.replace("`output_labels`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
     evaluate(
       runbook.replace("`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`", ""),
       maxLines,
