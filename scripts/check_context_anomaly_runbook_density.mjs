@@ -1728,8 +1728,8 @@ if (args.includes("--self-test")) {
     }
   };
   const assertSampledDefaultOutputMutationFieldIdentity = () => {
-    const sampledIdentityFields = sampleDefaultOutputMutationIdentityFields();
-    assertSampledDefaultOutputMutationIdentityFieldPair(sampledIdentityFields);
+    const sampledIdentityFieldPair = sampleDefaultOutputMutationIdentityFields();
+    assertSampledDefaultOutputMutationIdentityFieldPair(sampledIdentityFieldPair);
   };
   const assertDefaultOutputMutationFieldIdentity = () => {
     assertSampledDefaultOutputMutationFieldIdentity();

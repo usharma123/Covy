@@ -552,12 +552,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation sampled pair predicate name | Makes sampled predicate naming match the field-string pair comparison. | Renamed `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)` to `sampledDefaultOutputMutationIdentityFieldStringPairMatches(sample)`. | Evidence: no runtime output growth; identity assertion still consumes the same predicate result. |
 | Context anomaly drilldown density self-test default output mutation sampled pair predicate order | Keeps sampled pair predicate beside the assertion branch. | Verified `sampledDefaultOutputMutationIdentityFieldStringPairMatches(sample)` sits directly above the identity failure helper. | Evidence: no runtime output growth; sampled pair predicate remains adjacent to the mismatch branch. |
 | Context anomaly drilldown density self-test default output mutation sampled identity assertion pair name | Makes assertion helper naming match the pair predicate. | Renamed `assertSampledDefaultOutputMutationFieldIdentityFields(sample)` to `assertSampledDefaultOutputMutationIdentityFieldPair(sample)`. | Evidence: no runtime output growth; identity assertion still fails through the same helper on mismatch. |
+| Context anomaly drilldown density self-test default output mutation sampled assertion pair call name | Makes sampled wrapper callsite match the renamed assertion helper. | Renamed local `sampledIdentityFields` to `sampledIdentityFieldPair` in `assertSampledDefaultOutputMutationFieldIdentity()`. | Evidence: no runtime output growth; sampled wrapper still passes the same sample to the pair assertion. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation sampled assertion pair call name | Makes sampled wrapper callsite match the renamed assertion helper. | Rename local `sampledIdentityFields` to `sampledIdentityFieldPair` in `assertSampledDefaultOutputMutationFieldIdentity()`. | Compact metric: no runtime output growth; correctness metric: sampled wrapper still passes the same sample to the pair assertion. |
+| Context anomaly drilldown density self-test default output mutation sampled assertion pair call helper | Names the sampled wrapper's pair assertion call. | Extract `assertDefaultOutputMutationSampledIdentityFieldPair(sampledIdentityFieldPair)` wrapping the pair assertion. | Compact metric: no runtime output growth; correctness metric: sampled wrapper still delegates the same pair sample. |
 
 ## Research Rules
 
