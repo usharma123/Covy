@@ -617,6 +617,7 @@ fn run_context_anomalies(args: ContextAnomalyVerifyArgs) -> Result<i32> {
     let cwd = crate::cmd_common::caller_cwd()?;
     let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
     let payload = verify_context_anomalies_payload(&root, args.max_anomalies, args.max_high)?;
+    crate::cmd_dashboard::record_context_anomaly_history(&root, &payload)?;
     let ok = payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
 
     if args.json {

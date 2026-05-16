@@ -146,6 +146,15 @@ struct MemoryLintHistoryRecord {
     issue_kinds: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct ContextAnomalyHistoryRecord {
+    created_at_unix_ms: i64,
+    ok: bool,
+    anomaly_count: u64,
+    high_count: u64,
+    hidden_categories: Vec<String>,
+}
+
 pub fn run(args: DashboardArgs) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
     let savings = load_run_savings(&root, 100)?;
@@ -347,6 +356,22 @@ pub(crate) fn record_memory_lint_history(root: &Path, payload: &Value) -> Result
     Ok(())
 }
 
+pub(crate) fn record_context_anomaly_history(root: &Path, payload: &Value) -> Result<()> {
+    let record = context_anomaly_history_record(payload);
+    let path = context_anomaly_history_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut line = serde_json::to_string(&record)?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(line.as_bytes())?;
+    Ok(())
+}
+
 fn reducer_drift_history_record(payload: &Value) -> ReducerDriftHistoryRecord {
     let mut case_family = BTreeMap::<String, String>::new();
     if let Some(summaries) = payload.get("summaries").and_then(Value::as_array) {
@@ -414,6 +439,29 @@ fn memory_lint_history_record(payload: &Value) -> MemoryLintHistoryRecord {
             .and_then(Value::as_u64)
             .unwrap_or_default(),
         issue_kinds: issue_kinds.into_iter().collect(),
+    }
+}
+
+fn context_anomaly_history_record(payload: &Value) -> ContextAnomalyHistoryRecord {
+    ContextAnomalyHistoryRecord {
+        created_at_unix_ms: now_unix_ms(),
+        ok: payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        anomaly_count: payload
+            .get("anomaly_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        high_count: payload
+            .get("high_count")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        hidden_categories: payload
+            .get("hidden_categories")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
     }
 }
 
@@ -513,11 +561,16 @@ fn memory_lint_history_path(root: &Path) -> std::path::PathBuf {
     root.join(".packet28").join("memory-lint-history.jsonl")
 }
 
+fn context_anomaly_history_path(root: &Path) -> std::path::PathBuf {
+    root.join(".packet28").join("context-anomaly-history.jsonl")
+}
+
 pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest> {
     let savings = load_run_savings(root, 32)?;
     let handoff = handoff_readiness_tile(root)?;
     let reducer = reducer_drift_tile(root)?;
     let memory = memory_lint_tile(root)?;
+    let anomaly_history = load_context_anomaly_history(root, 32)?;
     let mut anomalies = Vec::new();
 
     if handoff.regression_count > 0 || handoff.latest_status == "blocked" {
@@ -628,6 +681,17 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
         });
     }
 
+    let recurring_hidden = recurring_context_hidden_categories(&anomaly_history);
+    if !recurring_hidden.is_empty() {
+        anomalies.push(ContextAnomaly {
+            category: "context_anomaly_trend".to_string(),
+            severity: "medium".to_string(),
+            signal: format!("recurring_hidden={}", recurring_hidden.join(",")),
+            next_check: "Packet28 verify context-anomalies --root . --json".to_string(),
+            repair_hint: "inspect recurring hidden anomaly categories".to_string(),
+        });
+    }
+
     let hidden_categories = finalize_context_anomalies(&mut anomalies);
     Ok(ContextAnomalyDigest {
         anomaly_count: anomalies.len(),
@@ -635,6 +699,38 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
         hidden_categories,
         anomalies,
     })
+}
+
+fn load_context_anomaly_history(
+    root: &Path,
+    limit: usize,
+) -> Result<Vec<ContextAnomalyHistoryRecord>> {
+    let path = context_anomaly_history_path(root);
+    let Ok(raw) = fs::read_to_string(path) else {
+        return Ok(Vec::new());
+    };
+    let mut records = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<ContextAnomalyHistoryRecord>(line).ok())
+        .collect::<Vec<_>>();
+    if records.len() > limit {
+        records = records.split_off(records.len().saturating_sub(limit));
+    }
+    Ok(records)
+}
+
+fn recurring_context_hidden_categories(records: &[ContextAnomalyHistoryRecord]) -> Vec<String> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for record in records {
+        for category in &record.hidden_categories {
+            *counts.entry(category.clone()).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(category, _)| category)
+        .collect()
 }
 
 fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) -> Vec<String> {
@@ -669,7 +765,8 @@ fn context_anomaly_category_rank(category: &str) -> usize {
         "reducer_drift" => 1,
         "memory_lint" => 2,
         "stale_changed_paths" => 3,
-        "fallback_provenance" => 4,
+        "context_anomaly_trend" => 4,
+        "fallback_provenance" => 5,
         _ => 99,
     }
 }
@@ -1526,6 +1623,28 @@ mod tests {
         );
         assert_eq!(digest.anomalies[0].category, "reducer_drift");
         assert_eq!(digest.anomalies[1].category, "memory_lint");
+        assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn context_anomaly_digest_reports_recurring_hidden_history() {
+        let root = tempfile::tempdir().unwrap();
+        let payload = serde_json::json!({
+            "ok": true,
+            "anomaly_count": 3,
+            "high_count": 1,
+            "hidden_categories": ["fallback_provenance"]
+        });
+        record_context_anomaly_history(root.path(), &payload).unwrap();
+        record_context_anomaly_history(root.path(), &payload).unwrap();
+
+        let digest = context_anomaly_digest(root.path()).unwrap();
+
+        assert_eq!(digest.anomaly_count, 1);
+        assert_eq!(digest.truncated_count, 0);
+        assert_eq!(digest.anomalies[0].category, "context_anomaly_trend");
+        assert_eq!(digest.anomalies[0].severity, "medium");
+        assert!(digest.anomalies[0].signal.contains("fallback_provenance"));
         assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
     }
 }
