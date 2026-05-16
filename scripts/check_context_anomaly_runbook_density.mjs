@@ -518,6 +518,9 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     parsed: String(resultDetails.parsed_fields_checked),
     wdocs: String(resultDetails.text_width_docs_checked),
   };
+  if (resultDetails.workflow_commands_checked !== undefined) {
+    expectedValues.wf = String(resultDetails.workflow_commands_checked);
+  }
   for (const [field, expected] of Object.entries(expectedValues)) {
     if (parsed[field] !== expected) {
       return `default_output_parse_mismatch=${field}`;
@@ -659,6 +662,10 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const baselinePayload = successPayload(result, workflowResult, maxJsonBytes);
+  const defaultParseDetails = {
+    ...result,
+    workflow_commands_checked: baselinePayload.workflow_commands_checked,
+  };
   if (
     baselinePayload.alias_docs_checked !== result.alias_docs_checked ||
     baselinePayload.row_soft_ok !== result.row_soft_ok ||
@@ -696,7 +703,10 @@ if (args.includes("--self-test")) {
     baselineHeadroom,
   );
   const parsedDefaultOutput = parseDefaultOutput(defaultOutputLine);
-  const defaultOutputError = defaultOutputParseIssue(parsedDefaultOutput, result);
+  const defaultOutputError = defaultOutputParseIssue(
+    parsedDefaultOutput,
+    defaultParseDetails,
+  );
   if (defaultOutputError) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(defaultOutputError);
@@ -799,6 +809,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=fc");
     console.error(`actual=${staleFailureCodeCountError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleWorkflowCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ wf=\d+/, " wf=0")),
+    defaultParseDetails,
+  );
+  if (staleWorkflowCountError !== "default_output_parse_mismatch=wf") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=wf");
+    console.error(`actual=${staleWorkflowCountError ?? "ok"}`);
     process.exit(1);
   }
   const staleEnvCountError = defaultOutputParseIssue(
