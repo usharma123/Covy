@@ -698,12 +698,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON error-shape helper audit | Checks whether the JSON error-shape helper is already minimal. | Re-scanned `assertJsonErrorShapeMutationSelfTest()` and kept its single JSON error-shape assertion separate before moving to failure-success field coverage. | Evidence: no runtime output growth; next target reflects the current adjacent helper shape. |
 | Context anomaly drilldown density self-test failure-success helper audit | Checks whether the failure-success field helper is already minimal. | Re-scanned `assertFailureSuccessFieldMutationSelfTest()` and kept its single `no-succ` doc assertion separate before moving to stale-alias coverage. | Evidence: no runtime output growth; next target reflects the current adjacent helper shape. |
 | Context anomaly drilldown density self-test stale-alias helper audit | Checks whether stale `no-success` alias coverage is already minimal. | Re-scanned `assertStaleFailureAliasMutationSelfTest()` and kept its named result local because the stale-alias mutation and expected diagnostic are explicit. | Evidence: no runtime output growth; stale-alias regression coverage stays explicit. |
+| Context anomaly drilldown density self-test JSON error/help adjacency helper audit | Checks whether JSON error/help adjacency coverage is already minimal. | Re-scanned `assertJsonErrorHelpAdjacencyMutationSelfTest()` and found the compact adjacency strings explicit but worth naming before the next env-pair helper. | Evidence: no runtime output growth; adjacency mutation remains explicit. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON error/help adjacency helper audit | Checks whether JSON error/help adjacency coverage is already minimal. | Re-scan `assertJsonErrorHelpAdjacencyMutationSelfTest()` and decide whether the compact adjacency strings need names before the next env-pair helper. | Compact metric: no runtime output growth; correctness metric: adjacency mutation remains explicit. |
+| Context anomaly drilldown density self-test JSON error/help adjacency string names | Names the compact adjacency doc and mutated doc strings. | Extract `jsonErrorHelpAdjacencyDoc` and `driftedJsonErrorHelpAdjacencyDoc` inside `assertJsonErrorHelpAdjacencyMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: original adjacency doc remains the expected-missing value. |
 
 ## Research Rules
 
