@@ -1675,9 +1675,10 @@ if (args.includes("--self-test")) {
     const { mutationField, staleValue } = defaultOutputMutationCase(field);
     assertDefaultOutputMutation(mutationField, staleValue);
   };
+  const defaultOutputMutationFields = () => defaultTextFields;
   const assertDefaultOutputMutations = () => {
     assertStaleDefaultOutputValuesCovered();
-    defaultTextFields.forEach(assertDefaultOutputMutationCase);
+    defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase);
   };
   assertDefaultOutputMutations();
   assertInvariantDetailFormats();
