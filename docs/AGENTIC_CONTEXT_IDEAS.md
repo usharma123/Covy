@@ -352,12 +352,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point convergence loop budget | Prevents future fixed-point fields from needing more silent iterations than expected. | Success artifacts now expose internal convergence iteration count, and self-test caps normal/exact-width paths at 3. | Evidence: no output growth; convergence remains bounded. |
 | Context anomaly drilldown density fixed-point convergence fallback detail | Makes rare non-convergence easier to debug if future fields destabilize the loop. | Iteration-budget failure output now includes rendered line length and headroom for normal and exact-width paths. | Evidence: no output growth; fallback failures carry enough detail. |
 | Context anomaly drilldown density fixed-point iteration JSON output | Helps agents see fixed-point convergence cost without reading self-test internals. | JSON now reports `default_output_iterations`, with parity and self-test coverage, while `max_json_bytes` rebalances to 640. | Evidence: default output stays under cap; JSON headroom stays above 24; reported count matches builder iterations. |
+| Context anomaly drilldown density fixed-point iteration JSON docs guard | Prevents `default_output_iterations` from becoming an undocumented JSON-only field. | Self-test now has a dedicated missing-doc mutation for the `default_output_iterations` phrase. | Evidence: JSON prose stays under cap; missing docs fail coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fixed-point iteration JSON docs guard | Prevents `default_output_iterations` from becoming an undocumented JSON-only field. | Add a dedicated self-test mutation for the `default_output_iterations` docs phrase. | Compact metric: JSON prose stays under cap; correctness metric: missing docs fail coverage. |
+| Context anomaly drilldown density fixed-point iteration JSON order guard | Keeps `default_output_iterations` between headroom and width docs in the JSON field list. | Add a dedicated self-test mutation that swaps `default_output_iterations` and `text_width_docs_checked`. | Compact metric: JSON prose stays under cap; correctness metric: docs-order drift fails coverage. |
 
 ## Research Rules
 
