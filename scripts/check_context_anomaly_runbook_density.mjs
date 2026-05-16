@@ -883,6 +883,19 @@ if (args.includes("--self-test")) {
     console.error("density_label_spacing_metric_did_not_grow");
     process.exit(1);
   }
+  const spacedDensityLabelPayload = buildSuccessArtifacts(
+    spacedDensityLabelResult,
+    workflowResult,
+    maxJsonBytes,
+  ).payload;
+  if (
+    spacedDensityLabelPayload.density_label_line_width <=
+    result.density_label_line_width
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("density_label_spacing_json_metric_did_not_grow");
+    process.exit(1);
+  }
   if (result.text_width_docs_checked !== 1) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected_text_width_docs=1");
