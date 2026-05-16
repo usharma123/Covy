@@ -600,12 +600,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field doc wrapper | Names the repeated specific JSON field documentation assertions. | Extracted `assertJsonFieldDocMutationSelfTests()` around alias, row, phrase, anchor, parsed, parity, label, headroom, iteration, and text-width JSON field docs. | Evidence: no runtime output growth; each required JSON field doc still fails when removed. |
 | Context anomaly drilldown density self-test JSON field doc order | Keeps specific JSON field docs before JSON byte/help cap docs. | Verified `assertJsonFieldDocMutationSelfTests()` sits directly after JSON field-name docs and before `max_json_bytes` documentation coverage. | Evidence: no runtime output growth; specific JSON field doc coverage remains before byte/help cap docs. |
 | Context anomaly drilldown density self-test JSON byte/help cap wrapper | Names the JSON byte limit and help cap documentation assertions. | Extracted `assertJsonByteHelpCapMutationSelfTests()` around `max_json_bytes` and `help<=...` documentation checks. | Evidence: no runtime output growth; JSON byte/help cap docs still fail when removed. |
+| Context anomaly drilldown density self-test JSON byte/help cap order | Keeps JSON byte/help cap docs before env-line anchor checks. | Verified `assertJsonByteHelpCapMutationSelfTests()` sits directly after JSON field docs and before `Env:` anchor coverage. | Evidence: no runtime output growth; byte/help cap coverage remains before env-line anchor coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON byte/help cap order | Keeps JSON byte/help cap docs before env-line anchor checks. | Verify `assertJsonByteHelpCapMutationSelfTests()` sits directly after JSON field docs and before `Env:` anchor coverage. | Compact metric: no runtime output growth; correctness metric: byte/help cap coverage remains before env-line anchor coverage. |
+| Context anomaly drilldown density self-test env-line anchor wrapper | Names the env-line anchor documentation assertion. | Extract `assertEnvLineAnchorMutationSelfTest()` around the `Env:` removal assertion. | Compact metric: no runtime output growth; correctness metric: env-line anchor coverage still fails when removed. |
 
 ## Research Rules
 
