@@ -140,7 +140,11 @@ const requiredDensityDocPhrases = [
   "`JSON:`=fields",
   "`h:`=help",
 ];
-const requiredDensityDocLinePrefixes = ["Env:", "JSON:"];
+const requiredDensityDocLinePrefixes = [
+  "Env:",
+  "JSON:",
+  "Density failures cont.:",
+];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
@@ -931,6 +935,13 @@ if (args.includes("--self-test")) {
         "Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
         "`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
       ),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace("Density failures cont.:", "Density failures merged:"),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",

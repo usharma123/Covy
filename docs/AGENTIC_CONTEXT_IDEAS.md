@@ -258,12 +258,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density width-doc JSON docs | Helps maintainers discover `text_width_docs_checked` without reading checker source. | The runbook now documents `text_width_docs_checked`, and the checker self-tests removal of that field doc. | Evidence: prose remains under width budget; removing the field doc fails output-doc coverage. |
 | Context anomaly drilldown density JSON field prose recovery two | Restores prose headroom after adding width-doc JSON docs. | The split `JSON:` prose line keeps width-doc JSON docs from becoming the widest density prose line. | Evidence: `prose=329` remains below 340; JSON field docs still pass. |
 | Context anomaly drilldown density failure prose recovery | Restores prose headroom now that the density failure line is the widest governed prose line. | The runbook now splits density failure-code docs across base and continuation lines while preserving every required code. | Evidence: `prose` drops below 310; required failure-code docs still pass. |
+| Context anomaly drilldown density failure continuation guard | Prevents future failure-code compaction from dropping the continuation line. | The density checker now requires the `Density failures cont.:` line and self-tests relabeling it away. | Evidence: no runbook growth; missing continuation line fails output-doc coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density failure continuation guard | Prevents future failure-code compaction from dropping the continuation line. | Require the `Density failures cont.:` line in the runbook and self-test its removal. | Compact metric: no runbook growth; correctness metric: missing continuation line fails output-doc coverage. |
+| Context anomaly drilldown density doc-failure continuation guard | Prevents future doc-failure compaction from dropping the doc-failure continuation line. | Require the `Density doc failures cont.:` line in the runbook and self-test its removal. | Compact metric: no runbook growth; correctness metric: missing doc-failure continuation line fails output-doc coverage. |
 
 ## Research Rules
 
