@@ -1743,9 +1743,9 @@ if (args.includes("--self-test")) {
     failDefaultOutputMutation(defaultOutputMutationFieldCountDetails(sample));
   };
   const assertDefaultOutputMutationFieldCount = () => {
-    const countSample = defaultOutputMutationFieldCountSample();
-    if (defaultOutputMutationFieldCountsMismatch(countSample)) {
-      failDefaultOutputMutationFieldCount(countSample);
+    const sample = defaultOutputMutationFieldCountSample();
+    if (defaultOutputMutationFieldCountsMismatch(sample)) {
+      failDefaultOutputMutationFieldCount(sample);
     }
   };
   const assertDefaultOutputMutations = () => {
