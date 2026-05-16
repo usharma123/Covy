@@ -442,12 +442,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper expected scope lift | Keeps formatter expected values near the formatter samples. | Moved `expectedInvariantArrayDetail` and `expectedInvariantScalarDetail` next to the sample constants. | Evidence: no runtime output growth; formatter expectations stay close to formatter samples. |
 | Context anomaly drilldown density self-test invariant helper actual helper | Keeps actual formatter values in one small helper for the self-test. | Extracted `invariantDetailFormatSamples()` to return actual array/scalar formatter outputs. | Evidence: no runtime output growth; formatter actuals stay single-source. |
 | Context anomaly drilldown density self-test invariant helper expected helper | Keeps expected formatter values behind a shape that mirrors the actual helper. | Extracted `expectedInvariantDetailFormats()` to return expected array/scalar formatter outputs. | Evidence: no runtime output growth; formatter expected values stay single-source. |
+| Context anomaly drilldown density self-test invariant helper comparison helper | Keeps formatter mismatch logic in one named check. | Extracted `invariantDetailFormatsMismatch()` to compare expected and actual formatter output objects. | Evidence: no runtime output growth; mismatch logic is single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test invariant helper comparison helper | Keeps formatter mismatch logic in one named check. | Extract an `invariantDetailFormatsMismatch()` helper that compares expected and actual formatter output objects. | Compact metric: no runtime output growth; correctness metric: mismatch logic becomes single-source. |
+| Context anomaly drilldown density self-test invariant helper diagnostic helper | Keeps formatter mismatch diagnostics in one named shape. | Extract an `invariantDetailFormatMismatchDetails()` helper that returns expected/actual diagnostic fields. | Compact metric: no runtime output growth; correctness metric: formatter diagnostic keys stay single-source. |
 
 ## Research Rules
 

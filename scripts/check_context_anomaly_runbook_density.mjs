@@ -457,6 +457,15 @@ function invariantDetailFormatSamples() {
   };
 }
 
+function invariantDetailFormatsMismatch(expectedFormats, actualFormats) {
+  return (
+    actualFormats.actualInvariantArrayDetail !==
+      expectedFormats.expectedInvariantArrayDetail ||
+    actualFormats.actualInvariantScalarDetail !==
+      expectedFormats.expectedInvariantScalarDetail
+  );
+}
+
 function failSelfTestInvariant(details) {
   console.error("context_anomaly_runbook_density_self_test_failed");
   for (const [key, value] of Object.entries(details)) {
@@ -1538,19 +1547,23 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
-  const { expectedInvariantArrayDetail, expectedInvariantScalarDetail } =
-    expectedInvariantDetailFormats();
-  const { actualInvariantArrayDetail, actualInvariantScalarDetail } =
-    invariantDetailFormatSamples();
+  const expectedInvariantFormats = expectedInvariantDetailFormats();
+  const actualInvariantFormats = invariantDetailFormatSamples();
   if (
-    actualInvariantArrayDetail !== expectedInvariantArrayDetail ||
-    actualInvariantScalarDetail !== expectedInvariantScalarDetail
+    invariantDetailFormatsMismatch(
+      expectedInvariantFormats,
+      actualInvariantFormats,
+    )
   ) {
     failSelfTestInvariant({
-      expected_invariant_array_detail_format: expectedInvariantArrayDetail,
-      expected_invariant_scalar_detail_format: expectedInvariantScalarDetail,
-      actual_invariant_array_detail_format: actualInvariantArrayDetail,
-      actual_invariant_scalar_detail_format: actualInvariantScalarDetail,
+      expected_invariant_array_detail_format:
+        expectedInvariantFormats.expectedInvariantArrayDetail,
+      expected_invariant_scalar_detail_format:
+        expectedInvariantFormats.expectedInvariantScalarDetail,
+      actual_invariant_array_detail_format:
+        actualInvariantFormats.actualInvariantArrayDetail,
+      actual_invariant_scalar_detail_format:
+        actualInvariantFormats.actualInvariantScalarDetail,
     });
   }
   if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
