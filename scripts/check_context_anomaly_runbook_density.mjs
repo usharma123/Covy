@@ -230,6 +230,13 @@ function evaluate(runbook, lineBudget) {
         line.includes("`width`") &&
         line.includes("`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`"),
     );
+  const hasJsonHeadroomEnvDoc = runbook
+    .split("\n")
+    .some(
+      (line) =>
+        line.includes("`jhead`") &&
+        line.includes("`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`"),
+    );
   const missingEnvDocs = requiredEnvDocs.filter(
     (envName) => !runbook.includes(`\`${envName}\``),
   );
@@ -277,7 +284,8 @@ function evaluate(runbook, lineBudget) {
     missingAliasDocPhrases.length > 0 ||
     missingDensityDocPhrases.length > 0 ||
     missingDensityDocLinePrefixes.length > 0 ||
-    !hasTextWidthEnvDoc
+    !hasTextWidthEnvDoc ||
+    !hasJsonHeadroomEnvDoc
   ) {
     return {
       ok: false,
@@ -291,6 +299,9 @@ function evaluate(runbook, lineBudget) {
         ...(hasTextWidthEnvDoc
           ? []
           : ["width:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
+        ...(hasJsonHeadroomEnvDoc
+          ? []
+          : ["jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN"]),
       ],
     };
   }
@@ -1175,7 +1186,18 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(
-      runbook.replace("`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`", ""),
+      runbook.replace(
+        "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`",
+        "`jhead` has headroom",
+      ),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "missing_jhead_env_pair",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace("`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX`", ""),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_env_docs",

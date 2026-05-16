@@ -311,12 +311,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON cap docs refresh | Keeps density JSON budget docs honest after adding JSON parity count output. | The checker now documents why `max_json_bytes` is 544 while the runbook still requires the exact cap phrase. | Evidence: runbook stays within row/prose caps; JSON cap docs match output. |
 | Context anomaly drilldown density JSON headroom default output | Lets agents see actual JSON byte headroom directly instead of inferring from `json` alias docs. | Compact output now uses `jhead` for JSON headroom, with parser and runbook alias coverage. | Evidence: output remains under text cap; headroom field stays parser-checked. |
 | Context anomaly drilldown density JSON headroom alias docs | Helps maintainers map `jhead` without reading checker source. | Density self-test now has a dedicated missing-alias check for `jhead` docs. | Evidence: runbook stays under row/prose caps; missing `jhead` docs fail self-test. |
+| Context anomaly drilldown density JSON headroom alias JSON docs | Helps JSON consumers connect `jhead` text output to the `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` guard. | Runbook density labels now link `jhead` to the JSON headroom env knob, and self-test requires the pair. | Evidence: runbook stays under row/prose caps; missing headroom link fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON headroom alias JSON docs | Helps JSON consumers connect `jhead` text output to the `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` guard. | Add a compact docs/self-test link between `jhead` and the JSON headroom env knob. | Compact metric: runbook stays under row/prose caps; correctness metric: missing headroom link fails self-test. |
+| Context anomaly drilldown density label prose recovery | Restores prose headroom after linking `jhead` to its env knob. | Compact the density-label prose line while preserving every required alias/doc pair. | Compact metric: prose width drops; correctness metric: required label docs still pass. |
 
 ## Research Rules
 
