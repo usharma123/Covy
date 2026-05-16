@@ -426,6 +426,25 @@ function successPayload(result, workflow, jsonBudget) {
   };
 }
 
+function jsonPayloadParityIssue(payload, result) {
+  const expectedFields = {
+    output_doc_phrases_checked: result.output_doc_phrases_checked,
+    alias_docs_checked: result.alias_docs_checked,
+    row_soft_ok: result.row_soft_ok,
+    row_soft_max: result.row_soft_max,
+    density_doc_phrases_checked: result.density_doc_phrases_checked,
+    density_doc_anchors_checked: result.density_doc_anchors_checked,
+    parsed_fields_checked: result.parsed_fields_checked,
+    text_width_docs_checked: result.text_width_docs_checked,
+  };
+  for (const [field, expected] of Object.entries(expectedFields)) {
+    if (payload[field] !== expected) {
+      return `json_payload_mismatch=${field}`;
+    }
+  }
+  return null;
+}
+
 function jsonBudgetIssue(payload, jsonBudget) {
   const json = JSON.stringify(payload);
   if (json.length + minJsonHeadroomBytes <= jsonBudget) {
@@ -683,22 +702,23 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const baselinePayload = successPayload(result, workflowResult, maxJsonBytes);
+  const jsonPayloadError = jsonPayloadParityIssue(baselinePayload, result);
+  if (jsonPayloadError) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(jsonPayloadError);
+    process.exit(1);
+  }
+  const staleJsonPhraseCountError = jsonPayloadParityIssue(
+    { ...baselinePayload, output_doc_phrases_checked: 0 },
+    result,
+  );
   if (
-    baselinePayload.output_doc_phrases_checked !==
-      result.output_doc_phrases_checked ||
-    baselinePayload.alias_docs_checked !== result.alias_docs_checked ||
-    baselinePayload.row_soft_ok !== result.row_soft_ok ||
-    baselinePayload.row_soft_max !== result.row_soft_max ||
-    baselinePayload.density_doc_phrases_checked !==
-      result.density_doc_phrases_checked ||
-    baselinePayload.density_doc_anchors_checked !==
-      result.density_doc_anchors_checked ||
-    baselinePayload.parsed_fields_checked !== result.parsed_fields_checked ||
-    baselinePayload.text_width_docs_checked !==
-      result.text_width_docs_checked
+    staleJsonPhraseCountError !==
+    "json_payload_mismatch=output_doc_phrases_checked"
   ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error("json_payload_mismatch");
+    console.error("expected=json_payload_mismatch=output_doc_phrases_checked");
+    console.error(`actual=${staleJsonPhraseCountError ?? "ok"}`);
     process.exit(1);
   }
   const baselineHeadroom = jsonHeadroomBytes(baselinePayload, maxJsonBytes);

@@ -299,12 +299,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density render-order helper | Prevents future drift between label declarations and renderer array ordering. | The checker now uses `defaultOutputFieldOrder` as the source for output labels and parser-order checks. | Evidence: default output remains unchanged; label-order source is singular. |
 | Context anomaly drilldown density render-order docs guard | Helps maintainers keep the runbook alias list in the same order agents see in compact output. | The checker now requires the runbook `key=value` label list to match `defaultOutputFieldOrder`. | Evidence: runbook stays within 44 lines; label-order docs drift fails self-test. |
 | Context anomaly drilldown density phrase-count refresh | Keeps the compact `phrases` count meaningful after adding the ordered label-list guard. | JSON now includes `output_doc_phrases_checked`, and the runbook documents the field under a 512-byte JSON cap. | Evidence: output remains one line; phrase count tracks required doc phrases in text and JSON. |
+| Context anomaly drilldown density JSON phrase-count self-test | Proves JSON phrase-count parity fails if `output_doc_phrases_checked` drifts. | Density self-test now mutates JSON payload `output_doc_phrases_checked` and requires a field-specific mismatch. | Evidence: JSON stays under 512 bytes; stale JSON phrase count fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON phrase-count self-test | Proves JSON phrase-count parity fails if `output_doc_phrases_checked` drifts. | Mutate the JSON success payload phrase count in self-test and require payload mismatch. | Compact metric: JSON stays under 512 bytes; correctness metric: stale JSON phrase count fails self-test. |
+| Context anomaly drilldown density JSON parity helper expansion | Gives every JSON parity field the same stale-value coverage as phrase count. | Table-drive JSON payload parity mutations for alias docs, density docs, anchors, parsed fields, width docs, and soft-row fields. | Compact metric: JSON stays under 512 bytes; correctness metric: stale JSON parity fields fail self-test. |
 
 ## Research Rules
 
