@@ -1764,7 +1764,10 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutations();
   };
   assertDefaultOutputMutationSelfTest();
-  assertInvariantDetailFormats();
+  const assertInvariantDetailFormatSelfTest = () => {
+    assertInvariantDetailFormats();
+  };
+  assertInvariantDetailFormatSelfTest();
   assertEnvDocInvariants();
   assertSelfTest(
     evaluate(runbook, result.line_count - 1),
