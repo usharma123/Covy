@@ -579,12 +579,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation top-level call order | Keeps the top-level self-test wrapper beside the assertion group it invokes. | Verified `assertDefaultOutputMutationSelfTest()` sits directly below `assertDefaultOutputMutations()` and is the only top-level default-output mutation callsite. | Evidence: no runtime output growth; top-level self-test wrapper remains adjacent to the full assertion group. |
 | Context anomaly drilldown density self-test invariant detail top-level call wrapper | Names the invariant detail format self-test call. | Extracted `assertInvariantDetailFormatSelfTest()` around `assertInvariantDetailFormats()`. | Evidence: no runtime output growth; self-test still invokes invariant detail format checks after default-output mutation checks. |
 | Context anomaly drilldown density self-test invariant detail top-level call order | Keeps the invariant detail self-test wrapper beside its assertion call. | Verified `assertInvariantDetailFormatSelfTest()` sits directly after `assertDefaultOutputMutationSelfTest()` and wraps the only invariant detail format top-level call. | Evidence: no runtime output growth; invariant detail checks still run after default-output mutation checks. |
+| Context anomaly drilldown density self-test env docs top-level call wrapper | Names the environment documentation invariant self-test call. | Extracted `assertEnvDocInvariantSelfTest()` around `assertEnvDocInvariants()`. | Evidence: no runtime output growth; self-test still invokes environment documentation invariants after invariant detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test env docs top-level call wrapper | Names the environment documentation invariant self-test call. | Extract `assertEnvDocInvariantSelfTest()` around `assertEnvDocInvariants()`. | Compact metric: no runtime output growth; correctness metric: self-test still invokes environment documentation invariants after invariant detail checks. |
+| Context anomaly drilldown density self-test env docs top-level call order | Keeps the environment documentation self-test wrapper beside its assertion call. | Verify `assertEnvDocInvariantSelfTest()` sits directly after `assertInvariantDetailFormatSelfTest()` and wraps the only environment documentation top-level call. | Compact metric: no runtime output growth; correctness metric: environment documentation invariants still run after invariant detail checks. |
 
 ## Research Rules
 
