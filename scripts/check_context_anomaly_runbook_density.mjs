@@ -2280,21 +2280,24 @@ if (args.includes("--self-test")) {
     );
   };
   assertProseTextEnvFailureSelfTests();
-  assertEnvFailureOutput(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-    ["--json"],
-    [
-      '"ok":false',
-      '"code":"context_anomaly_runbook_density_text_too_wide"',
-      '"default_output_len":197',
-      '"max_default_output_len":195',
-    ],
-  );
-  assertEnvFailureExcludes(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-    ["--json"],
-    '"default_output_iterations"',
-  );
+  const assertTextJsonFailureShapeSelfTests = () => {
+    assertEnvFailureOutput(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+      ["--json"],
+      [
+        '"ok":false',
+        '"code":"context_anomaly_runbook_density_text_too_wide"',
+        '"default_output_len":197',
+        '"max_default_output_len":195',
+      ],
+    );
+    assertEnvFailureExcludes(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+      ["--json"],
+      '"default_output_iterations"',
+    );
+  };
+  assertTextJsonFailureShapeSelfTests();
   assertEnvOutput(
     { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
     [],
