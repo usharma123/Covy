@@ -1598,7 +1598,6 @@ if (args.includes("--self-test")) {
     );
   }
   const assertDefaultOutputMutation = (field, staleValue) => {
-    const fieldPattern = defaultOutputFieldPattern(field);
     const missingOutputLine = defaultOutputWithoutField(defaultOutputLine, field);
     if (missingOutputLine === defaultOutputLine) {
       failDefaultOutputMutation(missingMutationNoopDetails(field));
