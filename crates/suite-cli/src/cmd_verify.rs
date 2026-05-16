@@ -99,6 +99,7 @@ struct ExperimentMetric {
     value: Option<f64>,
     min: Option<f64>,
     max: Option<f64>,
+    evidence: Vec<String>,
 }
 
 impl Default for ExperimentMetric {
@@ -108,6 +109,7 @@ impl Default for ExperimentMetric {
             value: None,
             min: None,
             max: None,
+            evidence: Vec::new(),
         }
     }
 }
@@ -409,6 +411,18 @@ fn verify_experiment_manifest(
                 });
             }
         }
+        let artifact_evidence = experiment
+            .artifacts
+            .iter()
+            .filter_map(|artifact| {
+                let artifact = artifact.trim();
+                if artifact.is_empty() {
+                    return None;
+                }
+                std::fs::read_to_string(root.join(artifact)).ok()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         for metric in &experiment.metrics {
             let metric_name = metric.name.trim();
             if metric_name.is_empty() {
@@ -441,6 +455,28 @@ fn verify_experiment_manifest(
                         experiment_id: issue_id.to_string(),
                         kind: "metric_above_max".to_string(),
                         detail: format!("{metric_name} value={value} max={max}"),
+                    });
+                }
+            }
+            let evidence = metric
+                .evidence
+                .iter()
+                .map(|evidence| evidence.trim())
+                .filter(|evidence| !evidence.is_empty())
+                .collect::<Vec<_>>();
+            if evidence.is_empty() {
+                issues.push(ExperimentIssue {
+                    experiment_id: issue_id.to_string(),
+                    kind: "missing_metric_evidence".to_string(),
+                    detail: metric_name.to_string(),
+                });
+            }
+            for evidence in evidence {
+                if !artifact_evidence.contains(evidence) {
+                    issues.push(ExperimentIssue {
+                        experiment_id: issue_id.to_string(),
+                        kind: "missing_metric_artifact_evidence".to_string(),
+                        detail: format!("{metric_name}: {evidence}"),
                     });
                 }
             }

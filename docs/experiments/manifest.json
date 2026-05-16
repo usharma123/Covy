@@ -16,7 +16,12 @@
         {
           "name": "runtime_smokes_passed",
           "value": 3,
-          "min": 3
+          "min": 3,
+          "evidence": [
+            "Claude Code `2.1.139`",
+            "Gemini CLI `0.30.0`",
+            "OpenCode `1.14.48`"
+          ]
         }
       ],
       "runtime_versions": [
@@ -49,17 +54,26 @@
         {
           "name": "packet28_average_savings_percent",
           "value": 94.44,
-          "min": 90
+          "min": 90,
+          "evidence": [
+            "Packet28 average savings percent: 94.44"
+          ]
         },
         {
           "name": "packet28_fallback_count",
           "value": 0,
-          "max": 0
+          "max": 0,
+          "evidence": [
+            "Packet28 fallback count: 0"
+          ]
         },
         {
           "name": "raw_artifact_recovery_available",
           "value": 54,
-          "min": 54
+          "min": 54,
+          "evidence": [
+            "Raw artifact recovery available: 54/54"
+          ]
         }
       ],
       "runtime_versions": [
@@ -84,22 +98,34 @@
         {
           "name": "packet28_fixture_runs",
           "value": 24,
-          "min": 24
+          "min": 24,
+          "evidence": [
+            "Packet28 runs: 24"
+          ]
         },
         {
           "name": "raw_artifact_recovery_available",
           "value": 24,
-          "min": 24
+          "min": 24,
+          "evidence": [
+            "Raw artifact recovery available: 24/24"
+          ]
         },
         {
           "name": "packet28_savings_percent",
           "value": 79.89,
-          "min": 75
+          "min": 75,
+          "evidence": [
+            "Packet28 savings percent: 79.89%"
+          ]
         },
         {
           "name": "indexed_search_hit_count",
           "value": 2,
-          "min": 2
+          "min": 2,
+          "evidence": [
+            "Indexed search hit rate: 2/6"
+          ]
         }
       ],
       "fallback_reasons": [
@@ -131,12 +157,18 @@
         {
           "name": "failed_rows",
           "value": 0,
-          "max": 0
+          "max": 0,
+          "evidence": [
+            "Failed rows excluding rg no-match status 1: 0"
+          ]
         },
         {
           "name": "fff_adapter_rows",
           "value": 27,
-          "min": 27
+          "min": 27,
+          "evidence": [
+            "| fff_mcp | 27 |"
+          ]
         }
       ],
       "runtime_versions": [
@@ -167,17 +199,26 @@
         {
           "name": "plan_validation_test_gate_score",
           "value": 100,
-          "min": 100
+          "min": 100,
+          "evidence": [
+            "`test_gate_score`: `100`"
+          ]
         },
         {
           "name": "plan_validation_violations",
           "value": 0,
-          "max": 0
+          "max": 0,
+          "evidence": [
+            "`violations`: `0`"
+          ]
         },
         {
           "name": "plan_validation_warnings",
           "value": 0,
-          "max": 0
+          "max": 0,
+          "evidence": [
+            "`warnings`: `0`"
+          ]
         }
       ],
       "runtime_versions": [
@@ -210,22 +251,34 @@
         {
           "name": "p28_compact_savings_percent",
           "value": 98.51,
-          "min": 98
+          "min": 98,
+          "evidence": [
+            "`p28 --compact` savings against native broad search stdout: 98.51%."
+          ]
         },
         {
           "name": "p28_indexed_control_savings_percent",
           "value": 71.49,
-          "min": 70
+          "min": 70,
+          "evidence": [
+            "Indexed `p28 tool_use` savings against native literal search: 71.49%."
+          ]
         },
         {
           "name": "daemon_index_ready",
           "value": 1,
-          "min": 1
+          "min": 1,
+          "evidence": [
+            "Daemon index ready: `true`"
+          ]
         },
         {
           "name": "p28_fallback_count",
           "value": 0,
-          "max": 0
+          "max": 0,
+          "evidence": [
+            "p28 fallback reason: `none`"
+          ]
         }
       ],
       "runtime_versions": [
@@ -254,17 +307,26 @@
         {
           "name": "release_workflow_passed",
           "value": 1,
-          "min": 1
+          "min": 1,
+          "evidence": [
+            "GitHub release workflow passed: yes"
+          ]
         },
         {
           "name": "npm_package_version_match",
           "value": 1,
-          "min": 1
+          "min": 1,
+          "evidence": [
+            "Published npm version matched the release tag: yes"
+          ]
         },
         {
           "name": "isolated_install_smoke_passed",
           "value": 1,
-          "min": 1
+          "min": 1,
+          "evidence": [
+            "Isolated global install smoke passed: yes"
+          ]
         }
       ],
       "runtime_versions": [

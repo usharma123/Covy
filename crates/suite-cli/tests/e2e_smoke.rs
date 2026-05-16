@@ -2329,7 +2329,7 @@ fn test_verify_experiments_checks_manifest_evidence() {
     fs::create_dir_all(root.path().join("docs/experiments/runtime-live")).unwrap();
     fs::write(
         root.path().join("docs/experiments/runtime-live/SMOKE.md"),
-        "raw smoke evidence\n",
+        "raw smoke evidence\nsaved_tokens: 32\n",
     )
     .unwrap();
     let manifest = root.path().join("experiments.json");
@@ -2351,6 +2351,7 @@ fn test_verify_experiments_checks_manifest_evidence() {
       "metrics": [
         {"name": "saved_tokens", "value": 5, "min": 10},
         {"name": "latency_ms", "value": 120, "max": 100},
+        {"name": "artifact_backed_metric", "value": 1, "min": 1, "evidence": ["not present in artifact"]},
         {"name": "missing-value"}
       ],
       "runtime_versions": [
@@ -2401,6 +2402,12 @@ fn test_verify_experiments_checks_manifest_evidence() {
         .stdout(predicate::str::contains("\"kind\":\"metric_below_min\""))
         .stdout(predicate::str::contains("\"kind\":\"metric_above_max\""))
         .stdout(predicate::str::contains(
+            "\"kind\":\"missing_metric_evidence\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"kind\":\"missing_metric_artifact_evidence\"",
+        ))
+        .stdout(predicate::str::contains(
             "\"kind\":\"missing_metric_value\"",
         ))
         .stdout(predicate::str::contains(
@@ -2418,7 +2425,7 @@ fn test_verify_experiments_checks_manifest_evidence() {
       "commands": ["Packet28 doctor --json"],
       "artifacts": ["docs/experiments/runtime-live/SMOKE.md"],
       "metrics": [
-        {"name": "saved_tokens", "value": 32, "min": 10}
+        {"name": "saved_tokens", "value": 32, "min": 10, "evidence": ["saved_tokens: 32"]}
       ],
       "runtime_versions": [
         {"name": "claude-code", "version": "2.1.139"}
