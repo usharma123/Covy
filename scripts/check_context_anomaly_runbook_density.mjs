@@ -1613,9 +1613,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`density_doc_anchors_checked`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`parsed_fields_checked`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`parsed_fields_checked`",
+    "missing_parsed_fields_checked_json_doc",
   );
   assertSelfTestMissing(
     evaluate(runbook.replace("`json_parity_fields_checked`", ""), maxLines),
