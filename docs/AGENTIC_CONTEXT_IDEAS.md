@@ -458,12 +458,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output missing stale helper | Keeps stale mutation coverage diagnostics behind one named detail helper. | Extracted `missingStaleMutationFieldsDetails()` for missing stale mutation field diagnostics. | Evidence: no runtime output growth; stale mutation coverage diagnostics remain field-specific. |
 | Context anomaly drilldown density self-test default output detail order helper | Keeps default-output diagnostic helper declarations ordered by failure flow. | Reordered local detail helpers to match missing-stale, no-op, expectation, mismatch, and actual fallback usage order. | Evidence: no runtime output growth; helper order mirrors self-test flow. |
 | Context anomaly drilldown density self-test default output field pattern helper | Keeps mutation regex construction behind a named helper. | Extracted `defaultOutputFieldPattern(field)` for the default-output field replacement regex. | Evidence: no runtime output growth; mutation checks still target field-specific tokens. |
+| Context anomaly drilldown density self-test default output missing line helper | Names the mutation that removes a default-output field. | Extracted `defaultOutputWithoutField(line, field)` for the missing-field mutation case. | Evidence: no runtime output growth; missing-field checks still remove only the targeted token. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output missing line helper | Names the mutation that removes a default-output field. | Extract a `defaultOutputWithoutField(line, field)` helper for the missing-field mutation case. | Compact metric: no runtime output growth; correctness metric: missing-field checks still remove only the targeted token. |
+| Context anomaly drilldown density self-test default output stale line helper | Names the mutation that replaces a default-output field. | Extract a `defaultOutputWithStaleField(line, field, staleValue)` helper for the stale-field mutation case. | Compact metric: no runtime output growth; correctness metric: stale-field checks still replace only the targeted token. |
 
 ## Research Rules
 
