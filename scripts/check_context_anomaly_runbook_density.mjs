@@ -515,6 +515,10 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
+    evaluate(runbook.replace("`output_doc_phrases`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
     evaluate(runbook.replace("`key=value`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );

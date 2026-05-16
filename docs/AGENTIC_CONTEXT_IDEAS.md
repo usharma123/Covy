@@ -197,12 +197,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default output docs | Helps maintainers know the default text output is intentionally parseable. | The runbook now notes that density default output is one-line `key=value` text. | Evidence: runbook remains within line/prose/table budgets and note matches parser expectations. |
 | Context anomaly drilldown density default output docs coverage | Prevents parseable-output docs from drifting after text-output changes. | The density checker now requires the runbook `key=value` parseability note. | Evidence: default output stays one line and removing `key=value` fails missing output docs. |
 | Context anomaly drilldown density output docs phrase count | Helps automation see how many non-label output doc phrases are guarded. | Default density output now reports `output_doc_phrases` while JSON remains unchanged. | Evidence: default output stays one line and count matches the required output doc phrase list. |
+| Context anomaly drilldown density output docs phrase count self-test | Proves the default `output_doc_phrases` count is tied to required phrase docs. | Density self-test now asserts output doc phrase count and verifies removing the `output_doc_phrases` label fails output-doc coverage. | Evidence: self-test output stays one line and changing required phrases changes expected count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output docs phrase count self-test | Proves the default `output_doc_phrases` count is tied to required phrase docs. | Add a self-test assertion for output doc phrase count and label coverage. | Compact metric: self-test output stays one line; correctness metric: changing required phrases changes expected count. |
+| Context anomaly drilldown density default output width guard | Prevents the growing default density text line from becoming too wide for logs. | Add an env-controlled max default-output width check to the density checker. | Compact metric: default output stays one line under the width cap; correctness metric: forced low width fails a named check. |
 
 ## Research Rules
 
