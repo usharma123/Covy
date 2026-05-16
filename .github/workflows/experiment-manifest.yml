@@ -42,4 +42,10 @@ jobs:
         run: cargo build -p suite-cli
 
       - name: Verify experiment manifest
-        run: target/debug/Packet28 verify experiments --root . --json
+        run: |
+          target/debug/Packet28 verify experiments --root . --json \
+            --require-workflow "Claude Code, Gemini, and OpenCode runtime integration smoke" \
+            --require-workflow "Packet28 real repository parity and indexed search evidence across packet28, ripgrep, and fd" \
+            --require-workflow "Optional fff MCP search backend comparison and adapter smoke" \
+            --require-workflow "Packet28 broker plan validation CLI with mapped test-gate score evidence" \
+            --require-workflow "Packet28 code-navigation experiment on ClaudeCode main source snapshot"
