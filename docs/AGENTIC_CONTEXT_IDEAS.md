@@ -573,12 +573,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation count failure payload order | Keeps the named count failure payload beside its report call. | Verified `const details = defaultOutputMutationFieldCountFailureDetails(sample)` is immediately passed to `failDefaultOutputMutation(details)`. | Evidence: no runtime output growth; failure helper still reports the same count details payload. |
 | Context anomaly drilldown density self-test default output mutation count assertion name | Makes the count assertion wrapper mirror its sample-based check. | Renamed `assertDefaultOutputMutationFieldCount()` to `assertDefaultOutputMutationFieldCountSample()`. | Evidence: no runtime output growth; default-output mutation group still runs the same count assertion path. |
 | Context anomaly drilldown density self-test default output mutation count assertion order | Keeps the renamed count assertion beside the default-output mutation group. | Verified `assertDefaultOutputMutationFieldCountSample()` remains directly before the per-field mutation case loop. | Evidence: no runtime output growth; mutation group still runs count assertion before per-field case assertions. |
+| Context anomaly drilldown density self-test default output mutation cases wrapper | Names the per-field mutation assertion loop as a group-level step. | Extracted `assertDefaultOutputMutationCases()` around `defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase)`. | Evidence: no runtime output growth; mutation group still runs the same per-field mutation cases after identity and count checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation cases wrapper | Names the per-field mutation assertion loop as a group-level step. | Extract `assertDefaultOutputMutationCases()` around `defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase)`. | Compact metric: no runtime output growth; correctness metric: mutation group still runs the same per-field mutation cases after identity and count checks. |
+| Context anomaly drilldown density self-test default output mutation cases wrapper order | Keeps the extracted mutation cases wrapper beside the public mutation assertion group. | Verify `assertDefaultOutputMutationCases()` sits directly above `assertDefaultOutputMutations()` and remains after identity/count checks. | Compact metric: no runtime output growth; correctness metric: cases wrapper remains adjacent to its only caller. |
 
 ## Research Rules
 

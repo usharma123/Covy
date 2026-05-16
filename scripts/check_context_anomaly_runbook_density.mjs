@@ -1751,11 +1751,14 @@ if (args.includes("--self-test")) {
       failDefaultOutputMutationFieldCount(sample);
     }
   };
+  const assertDefaultOutputMutationCases = () => {
+    defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase);
+  };
   const assertDefaultOutputMutations = () => {
     assertStaleDefaultOutputValuesCovered();
     assertDefaultOutputMutationIdentityFieldSample();
     assertDefaultOutputMutationFieldCountSample();
-    defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase);
+    assertDefaultOutputMutationCases();
   };
   assertDefaultOutputMutations();
   assertInvariantDetailFormats();
