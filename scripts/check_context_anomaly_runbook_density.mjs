@@ -2094,11 +2094,15 @@ if (args.includes("--self-test")) {
           replacementText: "Density doc failures merged:",
         },
       ];
-      for (const { originalText, replacementText } of sectionAnchorMutations) {
+      const assertSectionAnchorMutation = (sectionAnchorMutation) => {
+        const { originalText, replacementText } = sectionAnchorMutation;
         assertSelfTest(
           evaluate(runbook.replace(originalText, replacementText), maxLines),
           "context_anomaly_runbook_density_missing_output_docs",
         );
+      };
+      for (const sectionAnchorMutation of sectionAnchorMutations) {
+        assertSectionAnchorMutation(sectionAnchorMutation);
       }
     };
     assertSectionAnchorMutationSelfTests();
