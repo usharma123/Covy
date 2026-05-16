@@ -566,12 +566,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation public identity helper order | Keeps the renamed public identity wrapper beside the count assertion group. | Verified `assertDefaultOutputMutationIdentityFieldSample()` runs immediately before `assertDefaultOutputMutationFieldCount()` in the public mutation assertion group. | Evidence: no runtime output growth; default-output mutation group still runs identity before count and case assertions. |
 | Context anomaly drilldown density self-test default output mutation count local name | Makes the field-count assertion local match the concise sample naming used by identity checks. | Renamed local `countSample` to `sample` in `assertDefaultOutputMutationFieldCount()`. | Evidence: no runtime output growth; count assertion still compares and reports the same sample. |
 | Context anomaly drilldown density self-test default output mutation count local order | Keeps count sample acquisition beside its mismatch branch. | Verified `const sample = defaultOutputMutationFieldCountSample()` is immediately checked by `defaultOutputMutationFieldCountsMismatch(sample)`. | Evidence: no runtime output growth; count assertion still branches on the same sample before reporting it. |
+| Context anomaly drilldown density self-test default output mutation count failure helper order | Keeps the count failure helper beside the count assertion that calls it. | Verified `failDefaultOutputMutationFieldCount(sample)` sits directly above `assertDefaultOutputMutationFieldCount()`. | Evidence: no runtime output growth; count mismatch branch still reports through the adjacent failure helper. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation count failure helper order | Keeps the count failure helper beside the count assertion that calls it. | Verify `failDefaultOutputMutationFieldCount(sample)` sits directly above `assertDefaultOutputMutationFieldCount()`. | Compact metric: no runtime output growth; correctness metric: count mismatch branch still reports through the adjacent failure helper. |
+| Context anomaly drilldown density self-test default output mutation count failure details name | Names the count failure diagnostic payload before reporting it. | Extract `defaultOutputMutationFieldCountFailureDetails(sample)` around `defaultOutputMutationFieldCountDetails(sample)`. | Compact metric: no runtime output growth; correctness metric: count mismatch still reports the same expected and actual counts. |
 
 ## Research Rules
 
