@@ -475,12 +475,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation case helper | Names the per-field mutation case assembled by the sweep. | Extracted `defaultOutputMutationCase(field)` returning the field and stale value used by `assertDefaultOutputMutation()`. | Evidence: no runtime output growth; mutation cases remain field-specific. |
 | Context anomaly drilldown density self-test default output mutation case destructure | Keeps mutation-case use explicit at the assertion callsite. | Destructured `defaultOutputMutationCase(field)` into `mutationField` and `staleValue` before calling `assertDefaultOutputMutation()`. | Evidence: no runtime output growth; mutation case fields remain explicit. |
 | Context anomaly drilldown density self-test default output mutation case naming | Makes the mutation case field name distinct from loop state at construction time. | Returned `{ mutationField, staleValue }` from `defaultOutputMutationCase(field)` instead of `{ field, staleValue }`. | Evidence: no runtime output growth; mutation case fields stay explicit end-to-end. |
+| Context anomaly drilldown density self-test default output mutation sweep callback | Names the per-field mutation assertion callback. | Extracted `assertDefaultOutputMutationCase(field)` to build the mutation case and call `assertDefaultOutputMutation()`. | Evidence: no runtime output growth; per-field mutation sweep stays explicit. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation sweep callback | Names the per-field mutation assertion callback. | Extract an `assertDefaultOutputMutationCase(field)` helper that builds the mutation case and calls `assertDefaultOutputMutation()`. | Compact metric: no runtime output growth; correctness metric: per-field mutation sweep stays explicit. |
+| Context anomaly drilldown density self-test default output mutation sweep forEach | Makes the mutation sweep a named callback over fields. | Replace the explicit loop with `defaultTextFields.forEach(assertDefaultOutputMutationCase)`. | Compact metric: no runtime output growth; correctness metric: every default field is still swept. |
 
 ## Research Rules
 

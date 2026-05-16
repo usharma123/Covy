@@ -1671,11 +1671,14 @@ if (args.includes("--self-test")) {
     mutationField: field,
     staleValue: staleDefaultOutputValue(field),
   });
+  const assertDefaultOutputMutationCase = (field) => {
+    const { mutationField, staleValue } = defaultOutputMutationCase(field);
+    assertDefaultOutputMutation(mutationField, staleValue);
+  };
   const assertDefaultOutputMutations = () => {
     assertStaleDefaultOutputValuesCovered();
     for (const field of defaultTextFields) {
-      const { mutationField, staleValue } = defaultOutputMutationCase(field);
-      assertDefaultOutputMutation(mutationField, staleValue);
+      assertDefaultOutputMutationCase(field);
     }
   };
   assertDefaultOutputMutations();
