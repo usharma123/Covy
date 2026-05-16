@@ -1503,6 +1503,12 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
+  if (requiredPlainEnvDocs.length !== requiredEnvDocs.length - 2) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_plain_env_docs=${requiredEnvDocs.length - 2}`);
+    console.error(`actual_plain_env_docs=${requiredPlainEnvDocs.length}`);
+    process.exit(1);
+  }
   assertSelfTest(
     evaluate(runbook, result.line_count - 1),
     "context_anomaly_runbook_density_too_many_lines",
