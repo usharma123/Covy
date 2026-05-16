@@ -436,12 +436,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper formatter values reuse | Avoids recomputing formatter values inside the invariant detail self-test. | `actualInvariantArrayDetail` and `actualInvariantScalarDetail` are reused in both the condition and diagnostics. | Evidence: no runtime output growth; actual values are single-source. |
 | Context anomaly drilldown density self-test invariant helper sample constants | Avoids duplicating formatter sample literals in the invariant detail self-test. | Extracted `invariantArrayDetailSample` and `invariantScalarDetailSample` for `invariantDetailValue`. | Evidence: no runtime output growth; formatter samples are single-source. |
 | Context anomaly drilldown density self-test invariant helper sample expectation order | Makes formatter sample declarations mirror expected/actual flow. | Formatter self-test now declares sample values before expected and actual formatter outputs. | Evidence: no runtime output growth; formatter self-test is easier to audit. |
+| Context anomaly drilldown density self-test invariant helper formatter expected helper | Removes manual expected array formatter spelling from the self-test. | `expectedInvariantArrayDetail` is now derived with `invariantArrayDetailSample.join(",")`. | Evidence: no runtime output growth; expected array format follows the sample. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test invariant helper formatter expected helper | Removes manual expected array formatter spelling from the self-test. | Derive `expectedInvariantArrayDetail` with `invariantArrayDetailSample.join(",")`. | Compact metric: no runtime output growth; correctness metric: expected array format follows the sample. |
+| Context anomaly drilldown density self-test invariant helper scalar expectation reuse | Removes manual expected scalar formatter spelling from the self-test. | Set `expectedInvariantScalarDetail` from `invariantScalarDetailSample`. | Compact metric: no runtime output growth; correctness metric: expected scalar format follows the sample. |
 
 ## Research Rules
 

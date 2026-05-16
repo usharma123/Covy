@@ -1519,7 +1519,7 @@ if (args.includes("--self-test")) {
   }
   const invariantArrayDetailSample = ["array", "detail"];
   const invariantScalarDetailSample = "scalar";
-  const expectedInvariantArrayDetail = "array,detail";
+  const expectedInvariantArrayDetail = invariantArrayDetailSample.join(",");
   const expectedInvariantScalarDetail = "scalar";
   const actualInvariantArrayDetail = invariantDetailValue(
     invariantArrayDetailSample,
