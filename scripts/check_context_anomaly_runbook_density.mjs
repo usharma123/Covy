@@ -826,6 +826,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${missingProseValueError ?? "ok"}`);
     process.exit(1);
   }
+  const missingJsonHeadroomError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ json=\d+/, "")),
+    defaultParseDetails,
+  );
+  if (missingJsonHeadroomError !== "missing_default_output_field=json") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=json`);
+    console.error(`actual=${missingJsonHeadroomError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingTextWidthDocsError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ wdocs=\d+/, "")),
     result,
