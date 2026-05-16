@@ -494,12 +494,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation count expected helper name | Makes expected count source explicit in the helper name. | Renamed `expectedDefaultOutputMutationFieldCount()` to `expectedDefaultOutputMutationFieldListCount()`. | Evidence: no runtime output growth; expected count source is visible at the callsite. |
 | Context anomaly drilldown density self-test default output mutation count field list identity | Guards that the mutation field helper keeps returning the parser field list. | Added a self-test invariant comparing `defaultOutputMutationFields()` with `defaultTextFields`. | Evidence: no runtime output growth; mutation field helper remains tied to parser fields. |
 | Context anomaly drilldown density self-test default output mutation field identity details | Keeps field identity diagnostics behind one helper. | Extracted `defaultOutputMutationFieldIdentityDetails(mutationFields)` for expected/actual field list diagnostics. | Evidence: no runtime output growth; identity diagnostics stay consistent. |
+| Context anomaly drilldown density self-test default output mutation field identity predicate | Names the parser-field identity comparison. | Extracted `defaultOutputMutationFieldsMirrorParserFields(mutationFields)` for the joined field list comparison. | Evidence: no runtime output growth; identity comparison stays single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation field identity predicate | Names the parser-field identity comparison. | Extract `defaultOutputMutationFieldsMirrorParserFields(mutationFields)` for the joined field list comparison. | Compact metric: no runtime output growth; correctness metric: identity comparison stays single-source. |
+| Context anomaly drilldown density self-test default output mutation expected field list helper | Names the expected parser field list used by identity diagnostics. | Extract `expectedDefaultOutputMutationFields()` returning `defaultTextFields`. | Compact metric: no runtime output growth; correctness metric: expected identity list stays single-source. |
 
 ## Research Rules
 

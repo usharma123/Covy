@@ -1694,9 +1694,11 @@ if (args.includes("--self-test")) {
     expected_default_output_mutation_fields: defaultTextFields,
     actual_default_output_mutation_fields: mutationFields,
   });
+  const defaultOutputMutationFieldsMirrorParserFields = (mutationFields) =>
+    mutationFields.join(",") === defaultTextFields.join(",");
   const assertDefaultOutputMutationFieldsMirrorParserFields = () => {
     const mutationFields = defaultOutputMutationFields();
-    if (mutationFields.join(",") !== defaultTextFields.join(",")) {
+    if (!defaultOutputMutationFieldsMirrorParserFields(mutationFields)) {
       failDefaultOutputMutation(
         defaultOutputMutationFieldIdentityDetails(mutationFields),
       );
