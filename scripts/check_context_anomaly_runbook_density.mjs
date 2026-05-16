@@ -2125,12 +2125,16 @@ if (args.includes("--self-test")) {
           docText: "`dlab`=density label width",
         },
       ];
-      for (const { caseName, docText } of aliasGlossaryDocs) {
+      const assertAliasGlossaryMutation = (aliasGlossaryDoc) => {
+        const { caseName, docText } = aliasGlossaryDoc;
         assertSelfTest(
           evaluate(runbook.replace(docText, ""), maxLines),
           "context_anomaly_runbook_density_missing_output_docs",
           caseName,
         );
+      };
+      for (const aliasGlossaryDoc of aliasGlossaryDocs) {
+        assertAliasGlossaryMutation(aliasGlossaryDoc);
       }
     };
     assertAliasGlossaryMutationSelfTests();
