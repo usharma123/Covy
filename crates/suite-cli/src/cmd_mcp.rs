@@ -2916,7 +2916,11 @@ mod tests {
     fn verify_experiments_tool_returns_manifest_status() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("docs/experiments")).unwrap();
-        std::fs::write(root.path().join("docs/experiments/evidence.md"), "evidence").unwrap();
+        std::fs::write(
+            root.path().join("docs/experiments/evidence.md"),
+            "saved_tokens: 12\n",
+        )
+        .unwrap();
         std::fs::write(
             root.path().join("docs/experiments/manifest.json"),
             r#"{
@@ -2925,7 +2929,7 @@ mod tests {
                 "workflow": "MCP experiment audit",
                 "commands": ["Packet28 verify experiments --json"],
                 "artifacts": ["docs/experiments/evidence.md"],
-                "metrics": [{"name":"saved_tokens","value":12,"min":10}],
+                "metrics": [{"name":"saved_tokens","value":12,"min":10,"evidence":["saved_tokens: 12"]}],
                 "runtime_versions": [{"name":"packet28","version":"0.2.59"}]
               }]
             }"#,
