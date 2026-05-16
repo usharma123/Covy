@@ -471,12 +471,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output stale value helper | Names stale default-output value lookup in the mutation sweep. | Extracted `staleDefaultOutputValue(field)` for the per-field stale mutation value lookup. | Evidence: no runtime output growth; stale value lookup remains field-specific. |
 | Context anomaly drilldown density self-test default output stale value coverage helper | Names the stale value coverage check before mutation assertions run. | Extracted `assertStaleDefaultOutputValuesCovered()` around the missing stale mutation fields check. | Evidence: no runtime output growth; stale mutation value coverage remains field-specific. |
 | Context anomaly drilldown density self-test default output stale coverage order helper | Keeps stale value coverage inside the grouped mutation assertion. | Moved `assertStaleDefaultOutputValuesCovered()` beside the mutation sweep helper to make coverage happen at the group boundary. | Evidence: no runtime output growth; stale coverage remains checked before per-field mutations. |
+| Context anomaly drilldown density self-test default output mutation group order | Keeps default output mutation helpers ordered by sweep flow. | Reordered local helpers as coverage, missing assertion, stale assertion, combined assertion, sweep. | Evidence: no runtime output growth; helper order mirrors execution flow. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation group order | Keeps default output mutation helpers ordered by sweep flow. | Reorder local helpers as coverage, missing assertion, stale assertion, combined assertion, sweep. | Compact metric: no runtime output growth; correctness metric: helper order mirrors execution flow. |
+| Context anomaly drilldown density self-test default output mutation case helper | Names the per-field mutation case assembled by the sweep. | Extract a `defaultOutputMutationCase(field)` helper returning the field and stale value used by `assertDefaultOutputMutation()`. | Compact metric: no runtime output growth; correctness metric: mutation cases remain field-specific. |
 
 ## Research Rules
 
