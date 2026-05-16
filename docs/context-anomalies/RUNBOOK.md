@@ -15,7 +15,7 @@ Use this command table before treating a compact anomaly summary as complete:
 | List audit modes | `node scripts/audit_context_anomaly_hidden_samples.mjs --help` | Lists tolerant, strict, JSON, and checksum modes in under six lines. |
 | Check summary budget | `node scripts/check_context_anomaly_summary_budget.mjs --self-test` | Prints one success line; `--help` lists modes; low env budgets fail with `context_anomaly_summary_budget_too_many_lines`, `context_anomaly_summary_budget_line_too_long`, or `context_anomaly_summary_budget_json_too_long`. |
 | Read summary budget | `node scripts/check_context_anomaly_summary_budget.mjs --json` | Emits budgets, labels, and `max_json_bytes`; env knobs are `P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINES`, `P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINE`, and `P28_CONTEXT_ANOMALY_SUMMARY_JSON_MAX`. |
-| Check runbook density | `node scripts/check_context_anomaly_runbook_density.mjs --self-test` | Prints one success line; `--help` lists modes. |
+| Check runbook density | `node scripts/check_context_anomaly_runbook_density.mjs --self-test` | Prints one success line; `--json` emits `line_count`, `max_lines`, and `commands_checked`; `--help` lists modes. |
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 
 `Packet28 dashboard --root . --json` reads live history and reports latest status, high count, hidden categories, and recurring hidden categories.
