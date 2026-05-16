@@ -1582,6 +1582,7 @@ if (args.includes("--self-test")) {
     `missing_default_output_field=${field}`;
   const staleDefaultOutputFieldExpectation = (field) =>
     `default_output_parse_mismatch=${field}`;
+  const defaultOutputFieldPattern = (field) => new RegExp(` ${field}=\\S+`);
   const defaultOutputMutationActualDetail = (actual) => actual ?? "ok";
   const defaultOutputMutationMismatchDetails = (expected, actual) => ({
     expected,
@@ -1593,7 +1594,7 @@ if (args.includes("--self-test")) {
     );
   }
   const assertDefaultOutputMutation = (field, staleValue) => {
-    const fieldPattern = new RegExp(` ${field}=\\S+`);
+    const fieldPattern = defaultOutputFieldPattern(field);
     const missingOutputLine = defaultOutputLine.replace(fieldPattern, "");
     if (missingOutputLine === defaultOutputLine) {
       failDefaultOutputMutation(missingMutationNoopDetails(field));
