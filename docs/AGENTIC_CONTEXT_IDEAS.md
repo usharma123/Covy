@@ -446,12 +446,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper diagnostic helper | Keeps formatter mismatch diagnostics in one named shape. | Extracted `invariantDetailFormatMismatchDetails()` to return expected/actual diagnostic fields. | Evidence: no runtime output growth; formatter diagnostic keys stay single-source. |
 | Context anomaly drilldown density self-test invariant helper assertion helper | Makes formatter self-test read as one named assertion. | Extracted `assertInvariantDetailFormats()` to build expected/actual format objects, compare them, and report diagnostics. | Evidence: no runtime output growth; formatter assertion path is single-source. |
 | Context anomaly drilldown density self-test env exclusion assertion helper | Makes paired env exclusion checks read as named invariants. | Extracted `assertPairedEnvDocExclusionCount()` around the paired exclusion count check and diagnostics. | Evidence: no runtime output growth; paired exclusion invariant remains directly self-tested. |
+| Context anomaly drilldown density self-test plain env assertion helper | Makes plain env doc cardinality checks read as named invariants. | Extracted `assertRequiredPlainEnvDocCount()` around the plain env count check and diagnostics. | Evidence: no runtime output growth; plain env count invariant remains directly self-tested. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test plain env assertion helper | Makes plain env doc cardinality checks read as named invariants. | Extract an `assertRequiredPlainEnvDocCount()` helper around the plain env count check and diagnostics. | Compact metric: no runtime output growth; correctness metric: plain env count invariant remains directly self-tested. |
+| Context anomaly drilldown density self-test env exclusion membership helper | Makes excluded env membership checks read as one named invariant. | Extract an `assertPairedEnvDocExclusionsOmitted()` helper around the loop that rejects paired env names in plain docs. | Compact metric: no runtime output growth; correctness metric: paired env omissions remain directly self-tested. |
 
 ## Research Rules
 

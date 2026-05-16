@@ -515,6 +515,19 @@ function assertPairedEnvDocExclusionCount() {
   }
 }
 
+function assertRequiredPlainEnvDocCount() {
+  if (
+    requiredPlainEnvDocs.length !==
+    requiredEnvDocs.length - pairedEnvDocExclusionCount
+  ) {
+    failSelfTestInvariant({
+      expected_plain_env_docs:
+        requiredEnvDocs.length - pairedEnvDocExclusionCount,
+      actual_plain_env_docs: requiredPlainEnvDocs.length,
+    });
+  }
+}
+
 function assertEnvFailure(env, commandArgs, expectedCode) {
   try {
     execFileSync(process.execPath, [scriptPath, ...commandArgs], {
@@ -1590,16 +1603,7 @@ if (args.includes("--self-test")) {
   }
   assertInvariantDetailFormats();
   assertPairedEnvDocExclusionCount();
-  if (
-    requiredPlainEnvDocs.length !==
-    requiredEnvDocs.length - pairedEnvDocExclusionCount
-  ) {
-    failSelfTestInvariant({
-      expected_plain_env_docs:
-        requiredEnvDocs.length - pairedEnvDocExclusionCount,
-      actual_plain_env_docs: requiredPlainEnvDocs.length,
-    });
-  }
+  assertRequiredPlainEnvDocCount();
   for (const excludedEnvName of pairedEnvDocExclusions) {
     if (requiredPlainEnvDocs.includes(excludedEnvName)) {
       failSelfTestInvariant({
