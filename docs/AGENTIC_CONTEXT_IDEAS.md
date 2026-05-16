@@ -180,12 +180,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output count docs repair | Keeps runbook field docs aligned as compact success output grows. | The runbook density row now documents default text labels `failure_codes` and `workflow_commands`. | Evidence: runbook stays under line and row budgets and labels match default checker output. |
 | Context anomaly drilldown density output docs coverage | Prevents default-output label docs from drifting after future output changes. | The density checker now requires exact runbook docs for `failure_codes` and `workflow_commands`. | Evidence: default output stays one line and removing either label from the runbook fails `context_anomaly_runbook_density_missing_output_docs`. |
 | Context anomaly drilldown density failure row compression | Preserves room for new named failures without weakening runbook density checks. | The runbook density failure row now points to a compact prose failure-code list outside the table. | Evidence: runbook stays at 44 lines, required failure-code coverage still passes, and max table row drops below the prior 515-character edge. |
+| Context anomaly drilldown density prose width guard | Prevents compact prose fallback lines from becoming the new unreadable runbook hotspot. | The density checker now enforces `P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX` for non-table density failure lines. | Evidence: default output stays one line and forced low prose width fails `context_anomaly_runbook_density_prose_too_wide`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density prose width guard | Prevents compact prose fallback lines from becoming the new unreadable runbook hotspot. | Extend the density checker with a max prose-line width for non-table lines that mention density failures. | Compact metric: default output stays one line; correctness metric: overlong failure prose fails a named width check. |
+| Context anomaly drilldown density prose width docs | Helps maintainers tune and repair prose-width failures without reading checker source. | Document `P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX` and `context_anomaly_runbook_density_prose_too_wide` in the runbook density rows. | Compact metric: runbook stays under line and row budgets; correctness metric: env var and failure code match checker output. |
 
 ## Research Rules
 

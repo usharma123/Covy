@@ -21,9 +21,13 @@ const maxTableRowLength = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX ?? "520",
   10,
 );
+const maxDensityProseLineLength = Number.parseInt(
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX ?? "420",
+  10,
+);
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
-  "default: validate runbook line budget, row width, command entries, failure-code docs, and workflow density commands",
+  "default: validate runbook line budget, row width, density prose width, docs, and workflow density commands",
   "--json: print ok, budgets, max_table_row, commands_checked, failure_codes_checked, workflow_commands_checked, and max_json_bytes",
   "--self-test: verify line, width, missing-command, and JSON byte failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
@@ -70,6 +74,7 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_workflow_missing_commands",
   "context_anomaly_runbook_density_missing_failure_docs",
   "context_anomaly_runbook_density_missing_output_docs",
+  "context_anomaly_runbook_density_prose_too_wide",
   "context_anomaly_runbook_density_json_too_long",
 ];
 const requiredOutputLabels = ["failure_codes", "workflow_commands"];
@@ -84,6 +89,17 @@ function evaluate(runbook, lineBudget) {
   const maxActualTableRowLength = Math.max(
     0,
     ...tableRows.map((line) => line.length),
+  );
+  const densityProseLines = runbook
+    .split("\n")
+    .filter(
+      (line) =>
+        !line.startsWith("|") &&
+        line.includes("context_anomaly_runbook_density_"),
+    );
+  const maxActualDensityProseLineLength = Math.max(
+    0,
+    ...densityProseLines.map((line) => line.length),
   );
   const missingCommands = requiredCommands.filter(
     (command) => !runbook.includes(command),
@@ -108,6 +124,14 @@ function evaluate(runbook, lineBudget) {
       code: "context_anomaly_runbook_density_row_too_wide",
       max_table_row: maxActualTableRowLength,
       max_table_row_allowed: maxTableRowLength,
+    };
+  }
+  if (maxActualDensityProseLineLength > maxDensityProseLineLength) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_prose_too_wide",
+      max_density_prose_line: maxActualDensityProseLineLength,
+      max_density_prose_line_allowed: maxDensityProseLineLength,
     };
   }
   if (missingCommands.length > 0) {
@@ -337,6 +361,11 @@ if (args.includes("--self-test")) {
     { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
     [],
     "context_anomaly_runbook_density_row_too_wide",
+  );
+  assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX: "10" },
+    [],
+    "context_anomaly_runbook_density_prose_too_wide",
   );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
