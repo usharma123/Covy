@@ -13,7 +13,7 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
-const defaultMaxJsonBytes = 448;
+const defaultMaxJsonBytes = 480;
 const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
     String(defaultMaxJsonBytes),
@@ -123,7 +123,7 @@ const requiredOutputDocPhrases = [
   "`density_doc_phrases_checked`",
   "`density_doc_anchors_checked`",
   "`parsed_fields_checked`",
-  "`max_json_bytes=448`",
+  "`max_json_bytes=480`",
   "`help<=120`",
 ];
 const requiredAliasDocPhrases = [
@@ -406,6 +406,7 @@ function successPayload(result, workflow, jsonBudget) {
     density_doc_phrases_checked: result.density_doc_phrases_checked,
     density_doc_anchors_checked: result.density_doc_anchors_checked,
     parsed_fields_checked: result.parsed_fields_checked,
+    text_width_docs_checked: result.text_width_docs_checked,
     row_soft_ok: result.row_soft_ok,
     row_soft_max: result.row_soft_max,
     workflow_commands_checked: workflow.workflow_commands_checked,
@@ -658,7 +659,9 @@ if (args.includes("--self-test")) {
       result.density_doc_phrases_checked ||
     baselinePayload.density_doc_anchors_checked !==
       result.density_doc_anchors_checked ||
-    baselinePayload.parsed_fields_checked !== result.parsed_fields_checked
+    baselinePayload.parsed_fields_checked !== result.parsed_fields_checked ||
+    baselinePayload.text_width_docs_checked !==
+      result.text_width_docs_checked
   ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("json_payload_mismatch");
