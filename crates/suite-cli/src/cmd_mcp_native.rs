@@ -159,6 +159,13 @@ pub(crate) struct Packet28ValidateToolOutcomeArgs {
     pub(crate) focus_paths: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28PatchRiskArgs {
+    pub(crate) task_id: String,
+    pub(crate) paths: Vec<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1428,6 +1435,105 @@ pub(crate) fn handle_packet28_validate_tool_outcome(
         "evidence": evidence,
         "changed_paths": record.changed_paths,
     }))
+}
+
+pub(crate) fn handle_packet28_patch_risk(
+    root: &Path,
+    args: Packet28PatchRiskArgs,
+) -> Result<Value> {
+    let paths = args
+        .paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let mut score = 10_u64;
+    let mut reasons = Vec::new();
+    let mut required_checks = Vec::new();
+    if paths.is_empty() {
+        score = score.saturating_add(25);
+        reasons.push("missing_patch_scope".to_string());
+        required_checks.push("provide patch paths before editing".to_string());
+    }
+    let shared_paths = paths
+        .iter()
+        .filter(|path| patch_path_looks_shared(path))
+        .count();
+    if shared_paths > 0 {
+        score = score.saturating_add((shared_paths as u64).saturating_mul(20).min(40));
+        reasons.push(format!("shared_paths={shared_paths}"));
+    }
+    if paths.len() > 2 {
+        score = score.saturating_add(((paths.len() - 2) as u64).saturating_mul(8).min(24));
+        reasons.push(format!("multi_file_patch={}", paths.len()));
+    }
+
+    let testmap_path = root.join(".covy").join("state").join("testmap.bin");
+    let testmap = testy_core::pipeline_testmap::load_testmap(&testmap_path).ok();
+    if testmap.is_none() {
+        score = score.saturating_add(15);
+        reasons.push("missing_testmap".to_string());
+        required_checks.push("run or refresh testmap before broad edits".to_string());
+    }
+    let mut missing_mappings = 0_usize;
+    if let Some(testmap) = testmap.as_ref() {
+        for path in &paths {
+            if let Some(tests) = testmap.file_to_tests.get(path) {
+                required_checks.extend(tests.iter().take(2).map(|test| format!("run {test}")));
+            } else {
+                missing_mappings += 1;
+            }
+        }
+    }
+    if missing_mappings > 0 {
+        score = score.saturating_add((missing_mappings as u64).saturating_mul(15).min(30));
+        reasons.push(format!("missing_testmap_mappings={missing_mappings}"));
+        required_checks.push("run focused build/test fallback for unmapped paths".to_string());
+    }
+
+    let records = crate::savings_analytics::load_run_savings(root, 64)?;
+    let recent_failures = records
+        .iter()
+        .filter(|record| record.exit_code != 0 || record.fallback_reason.is_some())
+        .count();
+    if recent_failures > 0 {
+        score = score.saturating_add((recent_failures as u64).saturating_mul(10).min(30));
+        reasons.push(format!("recent_failures_or_fallbacks={recent_failures}"));
+    }
+    score = score.min(100);
+    required_checks.sort();
+    required_checks.dedup();
+    if required_checks.is_empty() {
+        required_checks.push("run mapped focused tests".to_string());
+    }
+    let risk = if score >= 70 {
+        "high"
+    } else if score >= 40 {
+        "medium"
+    } else {
+        "low"
+    };
+    Ok(json!({
+        "task_id": args.task_id,
+        "risk": risk,
+        "score": score,
+        "paths": paths,
+        "reasons": reasons,
+        "required_checks": required_checks,
+    }))
+}
+
+fn patch_path_looks_shared(path: &str) -> bool {
+    let path = path.trim();
+    let basename = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path);
+    matches!(
+        basename,
+        "lib.rs" | "main.rs" | "mod.rs" | "index.ts" | "index.tsx" | "package.json" | "Cargo.toml"
+    ) || path.split('/').count() <= 2
 }
 
 fn recommend_focus_refresh(

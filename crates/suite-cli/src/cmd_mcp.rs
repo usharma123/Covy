@@ -43,7 +43,7 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
     handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
-    Packet28GlobArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs,
+    Packet28GlobArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs,
     Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
     Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28WriteIntentionArgs,
 };
@@ -768,6 +768,17 @@ fn handle_method(
                             "task_id": {"type":"string"},
                             "command": {"type":"string"},
                             "focus_paths": {"type":"array","items":{"type":"string"}}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.patch_risk",
+                    "description": "Score pre-edit patch risk from path scope, cached testmap mappings, and recent failure/fallback records.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "paths": {"type":"array","items":{"type":"string"}}
                         }
                     }
                 },
@@ -1623,6 +1634,18 @@ fn handle_tool_call(
             )?;
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_validate_tool_outcome(root, request)?
+        }
+        "packet28.patch_risk" => {
+            let mut request: Packet28PatchRiskArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request.paths.first().map(String::as_str),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_patch_risk(root, request)?
         }
         "packet28.verify_experiments" => {
             let request: VerifyExperimentsToolArgs = serde_json::from_value(arguments)?;
@@ -2596,6 +2619,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or(false);
             format!("Packet28 tool outcome status={status} valid_success={valid}.")
         }
+        "packet28.patch_risk" => {
+            let risk = payload
+                .get("risk")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let score = payload
+                .get("score")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 patch risk={risk} score={score}.")
+        }
         "packet28.verify_experiments" => {
             let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
             let experiments = payload
@@ -2918,6 +2952,7 @@ mod tests {
             "packet28_action_critic",
             "packet28_recommend_next_tool",
             "packet28_validate_tool_outcome",
+            "packet28_patch_risk",
             "packet28_verify_experiments",
             "packet28_hypothesis_add",
             "packet28_hypothesis_list",
@@ -3163,5 +3198,61 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("fallback_reason="));
+    }
+
+    #[test]
+    fn patch_risk_requires_broader_checks_for_shared_unmapped_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let state_dir = root.path().join(".covy/state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let mut index = suite_packet_core::TestMapIndex::default();
+        index.file_to_tests.insert(
+            "src/leaf.rs".to_string(),
+            ["tests/leaf_test.rs".to_string()].into_iter().collect(),
+        );
+        testy_core::pipeline_testmap::write_testmap(&state_dir.join("testmap.bin"), &index)
+            .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+
+        let leaf = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.patch_risk",
+                "arguments": {
+                    "task_id": "task-risk",
+                    "paths": ["src/leaf.rs"]
+                }
+            }),
+        )
+        .unwrap();
+        let shared = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.patch_risk",
+                "arguments": {
+                    "task_id": "task-risk",
+                    "paths": ["src/lib.rs"]
+                }
+            }),
+        )
+        .unwrap();
+
+        assert!(
+            shared["structuredContent"]["score"].as_u64().unwrap()
+                > leaf["structuredContent"]["score"].as_u64().unwrap()
+        );
+        assert_eq!(shared["structuredContent"]["risk"], "medium");
+        assert!(shared["structuredContent"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "missing_testmap_mappings=1"));
+        assert!(leaf["structuredContent"]["required_checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check == "run tests/leaf_test.rs"));
     }
 }
