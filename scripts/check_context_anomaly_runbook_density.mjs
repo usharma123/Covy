@@ -719,6 +719,8 @@ if (args.includes("--self-test")) {
     json_headroom: baselineHeadroom,
     default_output_width: defaultOutputLine.length,
   };
+  // These fields are derived outside evaluate(), but parser parity still
+  // requires exact values for every compact default-output label.
   const requiredDefaultParseDetailFields = [
     "workflow_commands_checked",
     "json_headroom",
