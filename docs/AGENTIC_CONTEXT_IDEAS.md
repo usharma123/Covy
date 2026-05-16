@@ -620,12 +620,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test error/help adjacency wrapper | Names the JSON error/help adjacency documentation assertion. | Extracted `assertJsonErrorHelpAdjacencyMutationSelfTest()` around the `ok:false`;`no-succ`;h:`help<=120` adjacency assertion. | Evidence: no runtime output growth; error/help adjacency coverage still fails when the compact key changes. |
 | Context anomaly drilldown density self-test error/help adjacency order | Keeps error/help adjacency coverage before JSON headroom env-pair docs. | Verified `assertJsonErrorHelpAdjacencyMutationSelfTest()` sits after stale alias coverage and before the `jhead` env-pair assertion. | Evidence: no runtime output growth; error/help adjacency coverage remains before JSON headroom env-pair coverage. |
 | Context anomaly drilldown density self-test JSON headroom env-pair wrapper | Names the `jhead` env-pair documentation assertion. | Extracted `assertJsonHeadroomEnvPairMutationSelfTest()` around the `jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` assertion. | Evidence: no runtime output growth; JSON headroom env-pair coverage still fails when diluted. |
+| Context anomaly drilldown density self-test JSON headroom env-pair order | Keeps JSON headroom env-pair coverage before plain env-doc coverage. | Verified `assertJsonHeadroomEnvPairMutationSelfTest()` sits after error/help adjacency coverage and before the `requiredPlainEnvDocs` loop. | Evidence: no runtime output growth; JSON headroom env-pair coverage remains before plain env-doc coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON headroom env-pair order | Keeps JSON headroom env-pair coverage before plain env-doc coverage. | Verify `assertJsonHeadroomEnvPairMutationSelfTest()` sits after error/help adjacency coverage and before the `requiredPlainEnvDocs` loop. | Compact metric: no runtime output growth; correctness metric: JSON headroom env-pair coverage remains before plain env-doc coverage. |
+| Context anomaly drilldown density self-test plain env-doc wrapper | Names the required plain env-doc drift loop. | Extract `assertPlainEnvDocMutationSelfTests()` around the `requiredPlainEnvDocs` mutation loop. | Compact metric: no runtime output growth; correctness metric: plain env-doc coverage still fails when env docs drift. |
 
 ## Research Rules
 
