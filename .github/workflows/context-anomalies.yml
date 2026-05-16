@@ -52,7 +52,9 @@ jobs:
         run: cargo build -p suite-cli
 
       - name: Audit context anomaly hidden samples
-        run: node scripts/audit_context_anomaly_hidden_samples.mjs
+        run: |
+          node scripts/audit_context_anomaly_hidden_samples.mjs --help
+          node scripts/audit_context_anomaly_hidden_samples.mjs
 
       - name: Verify context anomaly thresholds
         run: |
