@@ -2052,44 +2052,47 @@ if (args.includes("--self-test")) {
     );
   };
   assertEnvLineAnchorMutationSelfTest();
-  assertSelfTest(
-    evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-  );
-  assertSelfTest(
-    evaluate(
-      runbook.replace("JSON:`alias_docs_checked`", "`alias_docs_checked`"),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-  );
-  assertSelfTest(
-    evaluate(
-      runbook.replace(
-        "Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
-        "`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
+  const assertSectionAnchorMutationSelfTests = () => {
+    assertSelfTest(
+      evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+    );
+    assertSelfTest(
+      evaluate(
+        runbook.replace("JSON:`alias_docs_checked`", "`alias_docs_checked`"),
+        maxLines,
       ),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-  );
-  assertSelfTest(
-    evaluate(
-      runbook.replace("Density failures cont.:", "Density failures merged:"),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-  );
-  assertSelfTest(
-    evaluate(
-      runbook.replace(
-        "Density doc failures cont.:",
-        "Density doc failures merged:",
+      "context_anomaly_runbook_density_missing_output_docs",
+    );
+    assertSelfTest(
+      evaluate(
+        runbook.replace(
+          "Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
+          "`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`",
+        ),
+        maxLines,
       ),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-  );
+      "context_anomaly_runbook_density_missing_output_docs",
+    );
+    assertSelfTest(
+      evaluate(
+        runbook.replace("Density failures cont.:", "Density failures merged:"),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_output_docs",
+    );
+    assertSelfTest(
+      evaluate(
+        runbook.replace(
+          "Density doc failures cont.:",
+          "Density doc failures merged:",
+        ),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_output_docs",
+    );
+  };
+  assertSectionAnchorMutationSelfTests();
   assertSelfTest(
     evaluate(runbook.replace("`fc`=failure codes", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
