@@ -1486,6 +1486,11 @@ if (args.includes("--self-test")) {
     [],
     "thead=0 tw=196",
   );
+  assertEnvOutput(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
+    ["--json"],
+    '"default_output_headroom":0',
+  );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
     ["--json"],
