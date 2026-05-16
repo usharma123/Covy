@@ -33,6 +33,7 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Handoff path linter | Finds handoff file-path references that will fail for a fresh worker. | MCP `packet28.handoff_lint_paths` scans brief and section text for repo-relative paths and flags references absent on disk and absent from changed-path metadata. | Evidence: `handoff_path_lint_flags_missing_path_reference`; compact lint output stays under 1KB and ignores existing changed paths. |
 | Handoff test linter | Finds handoff next actions that mention tests without runnable commands. | MCP `packet28.handoff_lint_tests` scans brief, next action, and sections for test-like names and flags names not backed by a test command line. | Evidence: `handoff_test_lint_flags_named_test_without_command`; compact lint output stays under 1KB and accepts command-backed tests. |
 | Handoff stale-command linter | Finds commands in a handoff that ran before the latest relevant edit. | MCP `packet28.handoff_lint_stale_commands` compares referenced test command lines against persisted task command/edit events and flags pre-edit verification. | Evidence: `handoff_stale_command_lint_flags_pre_edit_command`; compact lint output stays under 1KB and accepts post-edit commands. |
+| Handoff environment linter | Finds commands in a handoff that depend on missing env vars or tools. | MCP `packet28.handoff_lint_environment` checks referenced command lines for unset `$VARS` and missing executables before fresh-worker replay. | Evidence: `handoff_environment_lint_flags_missing_env_var`; compact lint output stays under 1KB and accepts a present tool command. |
 
 ## Next-Wave Backlog
 
@@ -40,7 +41,7 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 |---|---|---|---|
 | Reducer drift detector | Prevents compact reducers from silently losing decisive lines after upstream tool output changes. | Compare current reducer output against stored golden raw artifacts and flag missing error paths, counts, or command-status markers. | Compact metric: drift report under 1KB; correctness metric: fixture with removed failing-test line fails drift check. |
 | Cross-agent memory lint | Finds memories that are useful to one runtime but confusing or stale for another. | Scan local memories and runtime hook events for runtime-specific advice, stale paths, and unsupported integration assumptions. | Compact metric: lint summary under 768 bytes; correctness metric: fixture flags stale runtime-specific memory while preserving generic project memory. |
-| Handoff environment linter | Finds commands in a handoff that depend on missing env vars or tools. | Parse command lines for env vars and executable names, then flag missing local env/tool evidence before handoff. | Compact metric: environment lint under 1KB; correctness metric: fixture flags a missing env var but accepts a present tool command. |
+| Handoff linter aggregator | Runs all handoff linters and returns one bounded readiness decision. | Combine replay, dependency, path, test, stale-command, and environment lint summaries into one MCP response. | Compact metric: aggregate output under 1KB; correctness metric: fixture reports exactly the failing lint categories. |
 
 ## Research Rules
 

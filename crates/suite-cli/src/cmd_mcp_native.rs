@@ -236,6 +236,14 @@ pub(crate) struct Packet28HandoffStaleCommandLintArgs {
     pub(crate) context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffEnvironmentLintArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1709,6 +1717,54 @@ pub(crate) fn handle_packet28_handoff_lint_stale_commands(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_lint_environment(
+    root: &Path,
+    args: Packet28HandoffEnvironmentLintArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!(
+            "packet28.handoff_lint_environment requires task_id"
+        ));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.handoff_lint_environment requires artifact_id or context_version")
+    })?;
+    let payload = read_handoff_payload(root, task_id, &artifact_id, "handoff environment lint")?;
+    let command_refs = referenced_handoff_commands(&payload);
+    let mut issues = Vec::new();
+    for command in command_refs {
+        if let Some(executable) = command_executable(&command) {
+            if !executable_exists(&executable) {
+                issues.push(json!({
+                    "kind": "missing_tool",
+                    "reference": executable,
+                    "command": command,
+                    "reason": "command executable was not found on PATH",
+                }));
+            }
+        }
+        for env_var in command_env_vars(&command) {
+            if std::env::var_os(&env_var).is_none() {
+                issues.push(json!({
+                    "kind": "missing_env",
+                    "reference": env_var,
+                    "command": command,
+                    "reason": "command references an environment variable that is not set",
+                }));
+            }
+        }
+    }
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "ok": issues.is_empty(),
+        "issue_count": issues.len(),
+        "issues": issues,
+        "summary": format!("handoff_environment_lint issue_count={}", issues.len()),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -1902,6 +1958,61 @@ fn clean_command_reference(value: &str) -> String {
         .trim()
         .trim_matches(|ch: char| matches!(ch, '`' | '\'' | '"' | ',' | '.' | ';' | ')' | ']'))
         .to_string()
+}
+
+fn command_executable(command: &str) -> Option<String> {
+    command
+        .split_whitespace()
+        .find(|part| !part.contains('='))
+        .map(clean_command_token)
+        .filter(|part| !part.is_empty())
+}
+
+fn clean_command_token(token: &str) -> String {
+    token
+        .trim_matches(|ch: char| matches!(ch, '`' | '\'' | '"' | ',' | '.' | ';' | ')' | ']'))
+        .to_string()
+}
+
+fn executable_exists(executable: &str) -> bool {
+    if executable.contains('/') {
+        return Path::new(executable).exists();
+    }
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|path| path.join(executable).exists())
+    })
+}
+
+fn command_env_vars(command: &str) -> Vec<String> {
+    let mut vars = Vec::new();
+    let chars: Vec<char> = command.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] != '$' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        if start >= chars.len() || !is_env_var_start(chars[start]) {
+            index += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < chars.len() && is_env_var_char(chars[end]) {
+            end += 1;
+        }
+        append_unique(&mut vars, chars[start..end].iter().collect::<String>());
+        index = end;
+    }
+    vars
+}
+
+fn is_env_var_start(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_uppercase()
+}
+
+fn is_env_var_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_uppercase() || ch.is_ascii_digit()
 }
 
 fn is_test_name_reference(token: &str) -> bool {

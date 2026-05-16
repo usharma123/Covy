@@ -44,11 +44,12 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
     Packet28GlobArgs, Packet28HandoffCompressionArgs, Packet28HandoffDependencyLintArgs,
-    Packet28HandoffDiffArgs, Packet28HandoffPathLintArgs, Packet28HandoffStaleCommandLintArgs,
-    Packet28HandoffTestLintArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
-    Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
-    Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
-    Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs, Packet28WriteIntentionArgs,
+    Packet28HandoffDiffArgs, Packet28HandoffEnvironmentLintArgs, Packet28HandoffPathLintArgs,
+    Packet28HandoffStaleCommandLintArgs, Packet28HandoffTestLintArgs, Packet28PatchRiskArgs,
+    Packet28PrepareHandoffArgs, Packet28PromptPressureArgs, Packet28ReadRegionsArgs,
+    Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
+    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
+    Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -772,6 +773,18 @@ fn handle_method(
                 {
                     "name": "packet28.handoff_lint_stale_commands",
                     "description": "Lint a stored Packet28 handoff artifact for referenced commands that ran before the latest relevant edit event.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "artifact_id": {"type":"string"},
+                            "context_version": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.handoff_lint_environment",
+                    "description": "Lint a stored Packet28 handoff artifact for command references that depend on missing environment variables or executables.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1815,6 +1828,22 @@ fn handle_tool_call(
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_handoff_lint_stale_commands(root, request)?
         }
+        "packet28.handoff_lint_environment" => {
+            let mut request: Packet28HandoffEnvironmentLintArgs =
+                serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request
+                    .artifact_id
+                    .as_deref()
+                    .or(request.context_version.as_deref()),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_handoff_lint_environment(root, request)?
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
             request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
@@ -2855,6 +2884,13 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 handoff stale-command lint issue_count={issue_count}.")
         }
+        "packet28.handoff_lint_environment" => {
+            let issue_count = payload
+                .get("issue_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 handoff environment lint issue_count={issue_count}.")
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
@@ -3257,6 +3293,7 @@ mod tests {
             "packet28_handoff_lint_paths",
             "packet28_handoff_lint_tests",
             "packet28_handoff_lint_stale_commands",
+            "packet28_handoff_lint_environment",
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
@@ -3831,6 +3868,61 @@ mod tests {
         assert_eq!(
             response["structuredContent"]["issues"][0]["reference"],
             "cargo test -p suite-cli stale_command_test"
+        );
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 1024
+        );
+    }
+
+    #[test]
+    fn handoff_environment_lint_flags_missing_env_var() {
+        let root = tempfile::tempdir().unwrap();
+        let task_id = "task-handoff-environment-lint";
+        let context_version = "ctx-environment-lint";
+        let path = task_version_json_path(root.path(), task_id, context_version);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "context_version": context_version,
+                "artifact_id": context_version,
+                "brief": "## Task Objective\nCheck command environment.",
+                "sections": [{
+                    "id": "verification",
+                    "title": "Verification",
+                    "body": "cargo test -p suite-cli needs_env_test $PACKET28_ENV_LINT_SHOULD_BE_MISSING_12345\ncargo test -p suite-cli present_tool_test"
+                }],
+                "next_action_summary": "verify command environment before handoff"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.handoff_lint_environment",
+                "arguments": {
+                    "task_id": task_id,
+                    "context_version": context_version
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["ok"], false);
+        assert_eq!(response["structuredContent"]["issue_count"], 1);
+        assert_eq!(
+            response["structuredContent"]["issues"][0]["reference"],
+            "PACKET28_ENV_LINT_SHOULD_BE_MISSING_12345"
+        );
+        assert_eq!(
+            response["structuredContent"]["issues"][0]["kind"],
+            "missing_env"
         );
         assert!(
             serde_json::to_string(&response["structuredContent"])
