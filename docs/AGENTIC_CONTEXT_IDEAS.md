@@ -587,12 +587,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test required command mutation order | Keeps required-command mutation checks before failure-code mutation checks. | Verified `assertRequiredCommandMutationSelfTests()` sits directly after `assertLineCountBoundarySelfTest()` and before required failure-code mutations. | Evidence: no runtime output growth; command mutation coverage remains before failure-code coverage. |
 | Context anomaly drilldown density self-test failure code mutation wrapper | Names the required failure-code mutation coverage loop. | Extracted `assertRequiredFailureCodeMutationSelfTests()` around the `requiredFailureCodes.entries()` missing-failure assertions. | Evidence: no runtime output growth; self-test still verifies every required failure code fails when drifted. |
 | Context anomaly drilldown density self-test failure code mutation order | Keeps failure-code mutation checks before output-label mutation checks. | Verified `assertRequiredFailureCodeMutationSelfTests()` sits directly after command mutations and before output label mutation assertions. | Evidence: no runtime output growth; failure-code mutation coverage remains before output-doc coverage. |
+| Context anomaly drilldown density self-test output label mutation wrapper | Names the repeated output-label mutation assertions. | Extracted `assertOutputLabelMutationSelfTests()` around the `wf`, `env`, and related output documentation assertions. | Evidence: no runtime output growth; self-test still verifies required output label docs fail when removed. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test output label mutation wrapper | Names the repeated output-label mutation assertions. | Extract `assertOutputLabelMutationSelfTests()` around the `wf`, `env`, and related output documentation assertions. | Compact metric: no runtime output growth; correctness metric: self-test still verifies required output label docs fail when removed. |
+| Context anomaly drilldown density self-test output label mutation order | Keeps output-label mutation checks before key/value output docs. | Verify `assertOutputLabelMutationSelfTests()` sits directly after failure-code mutations and before the `key=value` output-doc assertion. | Compact metric: no runtime output growth; correctness metric: output-label coverage remains before key/value output docs. |
 
 ## Research Rules
 

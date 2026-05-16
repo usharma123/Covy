@@ -1816,60 +1816,63 @@ if (args.includes("--self-test")) {
     }
   };
   assertRequiredFailureCodeMutationSelfTests();
-  assertSelfTestMissing(
-    evaluate(runbook.replaceAll("`wf`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "wf",
-    "missing_wf_output_label",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`env`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "env",
-    "missing_env_output_label",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`lbl`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "lbl",
-    "missing_lbl_output_label",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`phr`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "phr",
-    "missing_phr_output_label",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replaceAll("`adocs`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "adocs",
-    "missing_adocs_output_label",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`dphr`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "dphr",
-    "missing_dphr_output_label",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`anc`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "anc",
-    "missing_anc_output_label",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`prs`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "prs",
-    "missing_prs_output_label",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`soft`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "soft",
-    "missing_soft_output_label",
-  );
+  const assertOutputLabelMutationSelfTests = () => {
+    assertSelfTestMissing(
+      evaluate(runbook.replaceAll("`wf`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "wf",
+      "missing_wf_output_label",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`env`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "env",
+      "missing_env_output_label",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`lbl`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "lbl",
+      "missing_lbl_output_label",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`phr`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "phr",
+      "missing_phr_output_label",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replaceAll("`adocs`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "adocs",
+      "missing_adocs_output_label",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`dphr`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "dphr",
+      "missing_dphr_output_label",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`anc`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "anc",
+      "missing_anc_output_label",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`prs`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "prs",
+      "missing_prs_output_label",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`soft`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "soft",
+      "missing_soft_output_label",
+    );
+  };
+  assertOutputLabelMutationSelfTests();
   assertSelfTestMissing(
     evaluate(runbook.replace("`key=value`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
