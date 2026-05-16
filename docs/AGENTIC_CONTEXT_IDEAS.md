@@ -624,12 +624,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test plain env-doc wrapper | Names the required plain env-doc drift loop. | Extracted `assertPlainEnvDocMutationSelfTests()` around the `requiredPlainEnvDocs` mutation loop. | Evidence: no runtime output growth; plain env-doc coverage still fails when env docs drift. |
 | Context anomaly drilldown density self-test plain env-doc order | Keeps plain env-doc coverage before workflow command coverage. | Verified `assertPlainEnvDocMutationSelfTests()` sits after JSON headroom env-pair coverage and before the `requiredWorkflowDensityCommands` loop. | Evidence: no runtime output growth; plain env-doc coverage remains before workflow command coverage. |
 | Context anomaly drilldown density self-test workflow command wrapper | Names the required workflow command drift loop. | Extracted `assertWorkflowCommandMutationSelfTests()` around the `requiredWorkflowDensityCommands` mutation loop. | Evidence: no runtime output growth; workflow command coverage still fails when commands drift. |
+| Context anomaly drilldown density self-test workflow command order | Keeps workflow command coverage before env limit checks. | Verified `assertWorkflowCommandMutationSelfTests()` sits after plain env-doc coverage and before the first `assertEnvFailure()` limit check. | Evidence: no runtime output growth; workflow command coverage remains before env limit coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test workflow command order | Keeps workflow command coverage before env limit checks. | Verify `assertWorkflowCommandMutationSelfTests()` sits after plain env-doc coverage and before the first `assertEnvFailure()` limit check. | Compact metric: no runtime output growth; correctness metric: workflow command coverage remains before env limit coverage. |
+| Context anomaly drilldown density self-test env limit wrapper | Names the max-line and row-width env failure checks. | Extract `assertEnvLimitFailureSelfTests()` around `P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES` and `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX` failure assertions. | Compact metric: no runtime output growth; correctness metric: env limit failures remain covered for line and row caps. |
 
 ## Research Rules
 
