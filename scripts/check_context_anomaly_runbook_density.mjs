@@ -735,7 +735,7 @@ if (args.includes("--self-test")) {
     );
     process.exit(1);
   }
-  for (const [field, staleValue] of Object.entries(staleJsonPayloadValues)) {
+  const assertJsonParityMutation = (field, staleValue) => {
     const missingJsonPayload = { ...baselinePayload };
     delete missingJsonPayload[field];
     const missingJsonPayloadError = jsonPayloadParityIssue(
@@ -763,6 +763,9 @@ if (args.includes("--self-test")) {
       console.error(`actual=${staleJsonPayloadError ?? "ok"}`);
       process.exit(1);
     }
+  };
+  for (const [field, staleValue] of Object.entries(staleJsonPayloadValues)) {
+    assertJsonParityMutation(field, staleValue);
   }
   const baselineHeadroom = jsonHeadroomBytes(baselinePayload, maxJsonBytes);
   if (baselineHeadroom < minJsonHeadroomBytes) {
