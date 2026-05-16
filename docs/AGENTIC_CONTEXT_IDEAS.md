@@ -312,12 +312,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON headroom default output | Lets agents see actual JSON byte headroom directly instead of inferring from `json` alias docs. | Compact output now uses `jhead` for JSON headroom, with parser and runbook alias coverage. | Evidence: output remains under text cap; headroom field stays parser-checked. |
 | Context anomaly drilldown density JSON headroom alias docs | Helps maintainers map `jhead` without reading checker source. | Density self-test now has a dedicated missing-alias check for `jhead` docs. | Evidence: runbook stays under row/prose caps; missing `jhead` docs fail self-test. |
 | Context anomaly drilldown density JSON headroom alias JSON docs | Helps JSON consumers connect `jhead` text output to the `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` guard. | Runbook density labels now link `jhead` to the JSON headroom env knob, and self-test requires the pair. | Evidence: runbook stays under row/prose caps; missing headroom link fails self-test. |
+| Context anomaly drilldown density label prose recovery | Restores density-label line headroom after linking `jhead` to its env knob. | The density-label prose line now removes non-semantic spaces around compact label pairs while preserving required docs. | Evidence: density-label line shrinks; required label docs still pass. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label prose recovery | Restores prose headroom after linking `jhead` to its env knob. | Compact the density-label prose line while preserving every required alias/doc pair. | Compact metric: prose width drops; correctness metric: required label docs still pass. |
+| Context anomaly drilldown density label prose spacing guard | Prevents future edits from re-expanding compact label prose. | Add a self-test mutation that reintroduces spaced label separators and requires density-label width growth. | Compact metric: density-label line remains compact; correctness metric: spacing regression is observable. |
 
 ## Research Rules
 
