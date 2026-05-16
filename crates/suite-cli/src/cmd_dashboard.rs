@@ -510,6 +510,7 @@ fn memory_lint_history_path(root: &Path) -> std::path::PathBuf {
 }
 
 pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest> {
+    let savings = load_run_savings(root, 32)?;
     let handoff = handoff_readiness_tile(root)?;
     let reducer = reducer_drift_tile(root)?;
     let memory = memory_lint_tile(root)?;
@@ -586,6 +587,26 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
             repair_hint:
                 "remove stale runtime-specific memories or add hook evidence for the runtime"
                     .to_string(),
+        });
+    }
+
+    let fallback_records = savings
+        .iter()
+        .filter(|record| record.fallback_reason.is_some())
+        .collect::<Vec<_>>();
+    if let Some(latest) = fallback_records.first() {
+        let reason = latest.fallback_reason.as_deref().unwrap_or("unknown");
+        anomalies.push(ContextAnomaly {
+            category: "fallback_provenance".to_string(),
+            severity: "medium".to_string(),
+            signal: format!(
+                "recent_fallbacks={} latest_reason={}",
+                fallback_records.len(),
+                reason
+            ),
+            next_check: "Packet28 gain --failures".to_string(),
+            repair_hint: "inspect fallback provenance before treating reduced output as successful"
+                .to_string(),
         });
     }
 
@@ -1181,6 +1202,7 @@ fn escape_html(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::savings_analytics::{record_run_savings, RunSavingsRecord};
 
     fn drift_payload(ok: bool, issue_count: u64) -> Value {
         let issues = if issue_count == 0 {
@@ -1279,6 +1301,45 @@ mod tests {
         assert_eq!(digest.anomalies[1].severity, "high");
         assert!(digest.anomalies[1].next_check.contains("memory-lint"));
         assert!(digest.anomalies[1].repair_hint.contains("stale runtime"));
+        assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn context_anomaly_digest_includes_medium_fallback_provenance() {
+        let root = tempfile::tempdir().unwrap();
+        record_reducer_drift_history(root.path(), &drift_payload(false, 1)).unwrap();
+        record_run_savings(
+            root.path(),
+            &RunSavingsRecord {
+                command: "p28 search --backend fff query".to_string(),
+                cwd: root.path().display().to_string(),
+                family: "search".to_string(),
+                canonical_kind: "search".to_string(),
+                exit_code: 0,
+                raw_est_tokens: 1200,
+                reduced_est_tokens: 200,
+                savings_percent: 83.0,
+                fallback_reason: Some(
+                    "fff auto preferred backend failed: launch error".to_string(),
+                ),
+                failure_fingerprint: None,
+                changed_paths: Vec::new(),
+                timestamp_unix_ms: 1,
+            },
+        )
+        .unwrap();
+
+        let digest = context_anomaly_digest(root.path()).unwrap();
+
+        assert_eq!(digest.anomaly_count, 2);
+        assert_eq!(digest.anomalies[0].category, "reducer_drift");
+        assert_eq!(digest.anomalies[0].severity, "high");
+        assert_eq!(digest.anomalies[1].category, "fallback_provenance");
+        assert_eq!(digest.anomalies[1].severity, "medium");
+        assert!(digest.anomalies[1].next_check.contains("gain --failures"));
+        assert!(digest.anomalies[1]
+            .repair_hint
+            .contains("fallback provenance"));
         assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
     }
 }
