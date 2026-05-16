@@ -441,6 +441,13 @@ const invariantScalarDetailSample = "scalar";
 const expectedInvariantArrayDetail = invariantArrayDetailSample.join(",");
 const expectedInvariantScalarDetail = invariantScalarDetailSample;
 
+function expectedInvariantDetailFormats() {
+  return {
+    expectedInvariantArrayDetail,
+    expectedInvariantScalarDetail,
+  };
+}
+
 function invariantDetailFormatSamples() {
   return {
     actualInvariantArrayDetail: invariantDetailValue(invariantArrayDetailSample),
@@ -1531,6 +1538,8 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
+  const { expectedInvariantArrayDetail, expectedInvariantScalarDetail } =
+    expectedInvariantDetailFormats();
   const { actualInvariantArrayDetail, actualInvariantScalarDetail } =
     invariantDetailFormatSamples();
   if (
