@@ -213,12 +213,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density alias glossary count split | Helps automation distinguish alias glossary coverage from general output-doc phrase coverage. | Default density output now reports `alias_docs` separately from `phrases`. | Evidence: default output remains within text width cap; `alias_docs` equals required alias map phrase count and self-test rejects a missing label. |
 | Context anomaly drilldown density alias glossary JSON parity | Helps JSON consumers see alias glossary coverage without parsing default text. | JSON success output now includes `alias_docs_checked` while preserving JSON headroom with a 320-byte cap. | Evidence: JSON stays under byte/headroom budgets; `alias_docs_checked` equals required alias map phrase count. |
 | Context anomaly drilldown density alias glossary JSON docs guard | Prevents JSON alias-count docs from drifting after parity output changes. | The density checker now requires the runbook to document `alias_docs_checked` as a JSON field and self-tests its removal. | Evidence: runbook remains within line/prose/table budgets; removing the JSON field doc fails output-doc coverage. |
+| Context anomaly drilldown density JSON budget docs refresh | Helps maintainers understand why the density JSON cap increased after adding full-field parity. | The runbook now documents `max_json_bytes=320`, and the density checker requires that default-cap phrase. | Evidence: runbook remains within row/prose budgets; docs match `max_json_bytes` output and removal fails output-doc coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON budget docs refresh | Helps maintainers understand why the density JSON cap increased after adding full-field parity. | Document the current 320-byte default cap and preserved headroom in the runbook density text. | Compact metric: runbook remains within row/prose budgets; correctness metric: docs match `max_json_bytes` output. |
+| Context anomaly drilldown density JSON budget headroom docs | Helps maintainers connect the `json` default-text alias to remaining JSON bytes after the 320-byte cap. | Document that the default `json` value is remaining JSON headroom. | Compact metric: runbook remains within row/prose budgets; correctness metric: docs match the `json` alias calculation. |
 
 ## Research Rules
 

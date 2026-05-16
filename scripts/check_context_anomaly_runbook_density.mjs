@@ -13,8 +13,10 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
+const defaultMaxJsonBytes = 320;
 const maxJsonBytes = Number.parseInt(
-  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ?? "320",
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
+    String(defaultMaxJsonBytes),
   10,
 );
 const minJsonHeadroomBytes = Number.parseInt(
@@ -106,6 +108,7 @@ const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
   "`alias_docs_checked`",
+  "`max_json_bytes=320`",
 ];
 const requiredAliasDocPhrases = [
   "`fc`=failure codes",
@@ -656,6 +659,13 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`alias_docs_checked`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace(`\`max_json_bytes=${defaultMaxJsonBytes}\``, ""),
+      maxLines,
+    ),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
