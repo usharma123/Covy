@@ -1593,9 +1593,11 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
     "swapped_thead_tw_output_order",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("JSON keeps full field names", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "JSON keeps full field names",
+    "missing_json_full_field_names_doc",
   );
   assertSelfTestMissing(
     evaluate(runbook.replace("`alias_docs_checked`", ""), maxLines),
