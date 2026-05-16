@@ -515,12 +515,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation sampled assertion call name | Makes the sample assertion call argument mirror the sampled local. | Renamed `assertDefaultOutputMutationFieldIdentitySample(sample)` to `assertSampledDefaultOutputMutationFieldIdentityFields(sample)` for the sampled field list payload. | Evidence: no runtime output growth; sampled assertion still routes mismatches through the same failure helper. |
 | Context anomaly drilldown density self-test default output mutation sampled fields helper name | Makes the sample helper name match the sampled fields payload. | Renamed `sampleDefaultOutputMutationFieldIdentity()` to `sampleDefaultOutputMutationIdentityFields()`. | Evidence: no runtime output growth; sampled assertion still samples the same expected/actual identity fields. |
 | Context anomaly drilldown density self-test default output mutation identity fields sample helper order | Keeps the identity fields sample helper next to its sampled assertion. | Verified `sampleDefaultOutputMutationIdentityFields()` sits above `assertSampledDefaultOutputMutationFieldIdentityFields()` and the sampled wrapper. | Evidence: no runtime output growth; sample helper remains near both field-list consumers. |
+| Context anomaly drilldown density self-test default output mutation sampled assertion field predicate name | Makes the predicate name match the sampled identity fields assertion. | Renamed `defaultOutputMutationFieldIdentityMatches(sample)` to `sampledDefaultOutputMutationIdentityFieldsMatch(sample)`. | Evidence: no runtime output growth; mismatch branch still gates the same failure helper. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation sampled assertion field predicate name | Makes the predicate name match the sampled identity fields assertion. | Rename `defaultOutputMutationFieldIdentityMatches(sample)` to `sampledDefaultOutputMutationIdentityFieldsMatch(sample)`. | Compact metric: no runtime output growth; correctness metric: mismatch branch still gates the same failure helper. |
+| Context anomaly drilldown density self-test default output mutation sampled assertion predicate order | Keeps the sampled identity fields predicate beside its assertion. | Verify `sampledDefaultOutputMutationIdentityFieldsMatch(sample)` sits directly above the identity failure and sampled assertion helpers. | Compact metric: no runtime output growth; correctness metric: predicate remains adjacent to the only mismatch branch. |
 
 ## Research Rules
 

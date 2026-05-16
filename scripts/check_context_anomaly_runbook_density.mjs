@@ -1700,7 +1700,7 @@ if (args.includes("--self-test")) {
     expected_default_output_mutation_fields: sample.expectedMutationFields,
     actual_default_output_mutation_fields: sample.actualMutationFields,
   });
-  const defaultOutputMutationFieldIdentityMatches = (sample) =>
+  const sampledDefaultOutputMutationIdentityFieldsMatch = (sample) =>
     sample.actualMutationFields.join(",") ===
     sample.expectedMutationFields.join(",");
   const failDefaultOutputMutationFieldIdentity = (sample) => {
@@ -1709,7 +1709,7 @@ if (args.includes("--self-test")) {
   const sampleDefaultOutputMutationIdentityFields = () =>
     defaultOutputMutationFieldIdentitySample();
   const assertSampledDefaultOutputMutationFieldIdentityFields = (sample) => {
-    if (!defaultOutputMutationFieldIdentityMatches(sample)) {
+    if (!sampledDefaultOutputMutationIdentityFieldsMatch(sample)) {
       failDefaultOutputMutationFieldIdentity(sample);
     }
   };
