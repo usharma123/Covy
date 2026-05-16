@@ -1731,12 +1731,13 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_dlab_alias_glossary",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace("`tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
+    "tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
     "missing_width_env_pair",
   );
   assertSelfTest(

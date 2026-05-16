@@ -370,12 +370,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density stale alias helper case index | Preserves self-test case indexing when using the missing-detail helper. | `assertSelfTestMissing` delegates through `assertSelfTest`, keeping the existing case-index path. | Evidence: no output growth; failure reports keep stable case indexes. |
 | Context anomaly drilldown density stale alias helper missing-detail case label | Makes missing-detail failures identify the same named mutation as code failures. | `assertSelfTestMissing` already prints `case=` from the shared helper branch. | Evidence: no output growth; helper failures name the mutation. |
 | Context anomaly drilldown density stale alias helper missing-detail actuals | Makes missing-detail failures show what the checker did report. | `assertSelfTestMissing` now prints `actual_missing` when the expected detail is absent. | Evidence: no output growth; helper failures include actual details. |
+| Context anomaly drilldown density missing-detail helper adoption | Reuses the missing-detail helper for another mutation with meaningful `missing` details. | The text-width env pair mutation now uses `assertSelfTestMissing` for `tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Evidence: no output growth; helper covers multiple mutation types. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper adoption | Reuses the missing-detail helper for another mutation with meaningful `missing` details. | Convert one existing output-doc missing-detail assertion to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers multiple mutation types. |
+| Context anomaly drilldown density missing-detail helper jhead adoption | Reuses the missing-detail helper for the JSON-headroom env pair mutation. | Convert the `jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers both text and JSON env pairs. |
 
 ## Research Rules
 
