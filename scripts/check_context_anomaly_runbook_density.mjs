@@ -1705,9 +1705,11 @@ if (args.includes("--self-test")) {
     actualJoinedMutationFields: sample.actualMutationFields.join(","),
     expectedJoinedMutationFields: sample.expectedMutationFields.join(","),
   });
-  const joinedDefaultOutputMutationIdentityFieldsMatch = (joinedFields) =>
-    joinedFields.actualJoinedMutationFields ===
-    joinedFields.expectedJoinedMutationFields;
+  const joinedDefaultOutputMutationIdentityFieldsMatch = (
+    joinedIdentityFields,
+  ) =>
+    joinedIdentityFields.actualJoinedMutationFields ===
+    joinedIdentityFields.expectedJoinedMutationFields;
   const sampleJoinedDefaultOutputMutationIdentityFields = (sample) =>
     joinedDefaultOutputMutationIdentityFields(sample);
   const sampledDefaultOutputMutationIdentityFieldsMatch = (sample) => {
