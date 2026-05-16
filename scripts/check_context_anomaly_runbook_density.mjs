@@ -2043,12 +2043,15 @@ if (args.includes("--self-test")) {
     );
   };
   assertJsonByteHelpCapMutationSelfTests();
-  assertSelfTestMissing(
-    evaluate(runbook.replaceAll("Env:", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "Env:line",
-    "missing_env_line_anchor",
-  );
+  const assertEnvLineAnchorMutationSelfTest = () => {
+    assertSelfTestMissing(
+      evaluate(runbook.replaceAll("Env:", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "Env:line",
+      "missing_env_line_anchor",
+    );
+  };
+  assertEnvLineAnchorMutationSelfTest();
   assertSelfTest(
     evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
