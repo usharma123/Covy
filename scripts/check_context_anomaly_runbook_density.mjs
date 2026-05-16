@@ -126,7 +126,12 @@ const requiredAliasDocPhrases = [
   "`wf`=workflow commands",
   "`json`=remaining JSON headroom",
 ];
-const requiredDensityDocPhrases = ["Env:"];
+const requiredDensityDocPhrases = [
+  "Env:",
+  "`Env:`=env",
+  "`JSON:`=fields",
+  "`h:`=help",
+];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
@@ -776,7 +781,11 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("Env:", ""), maxLines),
+    evaluate(runbook.replaceAll("Env:", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`JSON:`=fields", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(

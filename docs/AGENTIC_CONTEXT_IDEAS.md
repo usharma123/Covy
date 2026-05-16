@@ -231,12 +231,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density doc phrase JSON parity | Lets JSON consumers inspect density anchor coverage without parsing default text. | JSON success output now includes `density_doc_phrases_checked` with a documented 384-byte cap. | Evidence: JSON stays under budget; JSON count equals required density anchor count. |
 | Context anomaly drilldown density JSON field docs refresh | Helps maintainers see all non-obvious JSON-only density fields from the runbook. | The runbook now documents `density_doc_phrases_checked`, and the checker self-tests removal of that field doc. | Evidence: row remains under 480; removing the JSON field doc fails output-doc coverage. |
 | Context anomaly drilldown density JSON field prose recovery | Restores prose-width margin after adding the density-doc JSON field to the env/help line. | The env/help line now uses compact `Env:`, `JSON:`, and `h:` labels while preserving required field names. | Evidence: `prose` returns below 370; JSON field docs still pass. |
+| Context anomaly drilldown density env label glossary | Helps maintainers understand compact `Env:`, `JSON:`, and `h:` prose labels without expanding the table row. | The runbook now uses a short density-label glossary line, and the checker requires each glossary phrase. | Evidence: `prose` remains below 370; required env/help/JSON docs still pass. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density env label glossary | Helps maintainers understand compact `Env:`, `JSON:`, and `h:` prose labels without expanding the table row. | Add a terse glossary for the compact prose labels while staying below prose width budget. | Compact metric: `prose` remains below 370; correctness metric: required env/help/JSON docs still pass. |
+| Context anomaly drilldown density glossary count refresh | Keeps the `dphr` density-doc count meaningful after adding the compact label glossary. | Verify `dphr` and JSON density-doc counts reflect the added glossary phrases. | Compact metric: default output remains under text cap; correctness metric: `dphr` equals required density doc phrase count. |
 
 ## Research Rules
 
