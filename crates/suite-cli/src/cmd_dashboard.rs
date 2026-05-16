@@ -1569,6 +1569,29 @@ mod tests {
     }
 
     #[test]
+    fn context_anomaly_tile_reads_checked_in_trend_fixture() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture = include_str!("../../../docs/context-anomalies/history.jsonl");
+        let history_path = root
+            .path()
+            .join(".packet28")
+            .join("context-anomaly-history.jsonl");
+        std::fs::create_dir_all(history_path.parent().unwrap()).unwrap();
+        std::fs::write(&history_path, fixture).unwrap();
+
+        let tile = context_anomaly_tile(root.path()).unwrap();
+
+        assert!(fixture.len() < 512);
+        assert_eq!(tile.run_count, 3);
+        assert_eq!(tile.latest_status, "ready");
+        assert!(tile.latest_hidden_categories.is_empty());
+        assert_eq!(
+            tile.recurring_hidden_categories,
+            vec!["fallback_provenance"]
+        );
+    }
+
+    #[test]
     fn context_anomaly_digest_ranks_drift_and_memory_with_next_checks() {
         let root = tempfile::tempdir().unwrap();
         record_reducer_drift_history(root.path(), &drift_payload(false, 1)).unwrap();

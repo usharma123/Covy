@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/context-anomalies.yml"
       - "docs/AGENTIC_CONTEXT_IDEAS.md"
+      - "docs/context-anomalies/**"
       - "crates/suite-cli/src/cmd_dashboard.rs"
       - "crates/suite-cli/src/cmd_digest.rs"
       - "crates/suite-cli/src/cmd_mcp.rs"
@@ -17,6 +18,7 @@ on:
     paths:
       - ".github/workflows/context-anomalies.yml"
       - "docs/AGENTIC_CONTEXT_IDEAS.md"
+      - "docs/context-anomalies/**"
       - "crates/suite-cli/src/cmd_dashboard.rs"
       - "crates/suite-cli/src/cmd_digest.rs"
       - "crates/suite-cli/src/cmd_mcp.rs"
