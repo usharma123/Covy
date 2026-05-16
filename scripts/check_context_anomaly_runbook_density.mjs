@@ -1630,8 +1630,7 @@ if (args.includes("--self-test")) {
       );
     }
   };
-  const assertDefaultOutputMutation = (field, staleValue) => {
-    assertDefaultOutputMissingMutation(field);
+  const assertDefaultOutputStaleMutation = (field, staleValue) => {
     const staleOutputLine = defaultOutputWithStaleField(
       defaultOutputLine,
       field,
@@ -1660,6 +1659,10 @@ if (args.includes("--self-test")) {
         ),
       );
     }
+  };
+  const assertDefaultOutputMutation = (field, staleValue) => {
+    assertDefaultOutputMissingMutation(field);
+    assertDefaultOutputStaleMutation(field, staleValue);
   };
   const assertDefaultOutputMutations = () => {
     for (const field of defaultTextFields) {
