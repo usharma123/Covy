@@ -199,12 +199,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output docs phrase count | Helps automation see how many non-label output doc phrases are guarded. | Default density output now reports `output_doc_phrases` while JSON remains unchanged. | Evidence: default output stays one line and count matches the required output doc phrase list. |
 | Context anomaly drilldown density output docs phrase count self-test | Proves the default `output_doc_phrases` count is tied to required phrase docs. | Density self-test now asserts output doc phrase count and verifies removing the `output_doc_phrases` label fails output-doc coverage. | Evidence: self-test output stays one line and changing required phrases changes expected count. |
 | Context anomaly drilldown density default output width guard | Prevents the growing default density text line from becoming too wide for logs. | The density checker now enforces `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` for default text output. | Evidence: default output stays one line under the width cap and forced low width fails `context_anomaly_runbook_density_text_too_wide`. |
+| Context anomaly drilldown density default output width metric | Helps automation see default text width headroom before the guard fails. | Default density output now reports final rendered `text_width`. | Evidence: default output remains under `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` and value matches rendered output length. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default output width metric | Helps automation see default text width headroom before the guard fails. | Report `text_width` in the default density output if it fits the width cap. | Compact metric: default output remains under `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`; correctness metric: value matches rendered output length. |
+| Context anomaly drilldown density text width self-test | Proves reported `text_width` is the final rendered line length, including itself. | Add a self-test assertion comparing parsed `text_width` with rendered default output length. | Compact metric: self-test output stays one line; correctness metric: width changes if labels grow. |
 
 ## Research Rules
 

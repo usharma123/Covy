@@ -95,6 +95,7 @@ const requiredOutputLabels = [
   "env_docs",
   "output_labels",
   "output_doc_phrases",
+  "text_width",
 ];
 const requiredOutputDocPhrases = ["key=value"];
 const requiredEnvDocs = [
@@ -320,7 +321,7 @@ function jsonHeadroomBytes(payload, jsonBudget) {
 }
 
 function defaultOutputIssue(payload, resultDetails, jsonHeadroom) {
-  const line = renderDefaultOutput(payload, resultDetails, jsonHeadroom);
+  const line = renderDefaultOutputWithWidth(payload, resultDetails, jsonHeadroom);
   if (line.length > maxDefaultOutputLength) {
     return {
       ok: false,
@@ -332,7 +333,7 @@ function defaultOutputIssue(payload, resultDetails, jsonHeadroom) {
   return null;
 }
 
-function renderDefaultOutput(payload, resultDetails, jsonHeadroom) {
+function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
   return [
     `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines}`,
     `max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed}`,
@@ -344,7 +345,27 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom) {
     `workflow_commands=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json_headroom=${jsonHeadroom}`,
-  ].join(" ");
+    textWidth === undefined ? null : `text_width=${textWidth}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function renderDefaultOutputWithWidth(payload, resultDetails, jsonHeadroom) {
+  let line = renderDefaultOutput(payload, resultDetails, jsonHeadroom, 0);
+  for (let i = 0; i < 3; i += 1) {
+    const next = renderDefaultOutput(
+      payload,
+      resultDetails,
+      jsonHeadroom,
+      line.length,
+    );
+    if (next.length === line.length) {
+      return next;
+    }
+    line = next;
+  }
+  return line;
 }
 
 function parseDefaultOutput(line) {
@@ -367,6 +388,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     "workflow_commands",
     "prose",
     "json_headroom",
+    "text_width",
   ];
   for (const field of expectedTextFields) {
     if (!parsed?.[field]) {
@@ -455,7 +477,7 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const parsedDefaultOutput = parseDefaultOutput(
-    renderDefaultOutput(baselinePayload, result, baselineHeadroom),
+    renderDefaultOutputWithWidth(baselinePayload, result, baselineHeadroom),
   );
   const defaultOutputError = defaultOutputParseIssue(parsedDefaultOutput, result);
   if (defaultOutputError) {
@@ -630,5 +652,5 @@ if (args.includes("--json")) {
     const { code, ok, ...details } = defaultOutputWidthIssue;
     fail(code, details);
   }
-  console.log(renderDefaultOutput(payload, result, jsonHeadroom));
+  console.log(renderDefaultOutputWithWidth(payload, result, jsonHeadroom));
 }
