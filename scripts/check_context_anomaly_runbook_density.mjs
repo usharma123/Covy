@@ -1511,18 +1511,6 @@ if (args.includes("--self-test")) {
       `drifted_required_command_${commandIndex}`,
     );
   }
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace(
-        "context_anomaly_runbook_density_workflow_missing_commands",
-        "",
-      ),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_failure_docs",
-    "context_anomaly_runbook_density_workflow_missing_commands",
-    "missing_workflow_failure_doc_detail",
-  );
   for (const [failureCodeIndex, failureCode] of requiredFailureCodes.entries()) {
     assertSelfTestMissing(
       evaluate(

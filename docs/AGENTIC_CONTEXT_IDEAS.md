@@ -413,12 +413,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper workflow-command detail adoption | Extends exact missing-detail coverage from required commands to workflow commands. | The workflow self-test command mutation now asserts that exact command appears in `missing`. | Evidence: no output growth; workflow command mutations report exact missing commands. |
 | Context anomaly drilldown density missing-detail helper workflow-command sweep | Extends exact-detail coverage across every required workflow command doc. | Self-test now mutates every `requiredWorkflowDensityCommands` entry and asserts that exact command appears in `missing`. | Evidence: no output growth; every workflow-command drift reports its exact missing command. |
 | Context anomaly drilldown density missing-detail helper command sweep dedupe | Avoids redundant command mutations after adding required and workflow command sweeps. | Removed single-command duplicate mutations now covered by table-driven sweeps. | Evidence: self-test stays green; no duplicate case coverage remains for command docs. |
+| Context anomaly drilldown density missing-detail helper failure sweep dedupe | Avoids redundant failure-code mutations after adding the table-driven failure sweep. | Removed the single workflow failure-code duplicate mutation now covered by `requiredFailureCodes`. | Evidence: self-test stays green; no duplicate case coverage remains for failure docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper failure sweep dedupe | Avoids redundant failure-code mutations after adding the table-driven failure sweep. | Remove the single workflow failure-code duplicate mutation now covered by `requiredFailureCodes`. | Compact metric: self-test stays green; correctness metric: no duplicate case coverage remains for failure docs. |
+| Context anomaly drilldown density missing-detail helper env-doc detail adoption | Extends exact missing-detail coverage to required env var docs. | Convert one env-doc mutation to assert its missing env var detail. | Compact metric: no output growth; correctness metric: env-doc mutations report exact missing vars. |
 
 ## Research Rules
 
