@@ -120,11 +120,13 @@ const verifier = JSON.parse(
 if (!verifier.ok) {
   if (strictMode) {
     console.error("context_anomaly_hidden_sample_audit_strict_failed");
+    console.error("audit_mode=strict");
     console.error(`high=${verifier.high_count}`);
     console.error(`max_high=${verifier.max_high}`);
     process.exit(1);
   }
   console.error("context_anomaly_hidden_sample_audit_verifier_failed");
+  console.error("audit_mode=tolerant");
   console.error(`high=${verifier.high_count}`);
   console.error(`max_high=${verifier.max_high}`);
   process.exit(1);
@@ -161,5 +163,7 @@ console.log(`formatter_checksum=${smokeJson.checksum}`);
 console.log(
   `fixture_dashboard=${contextTile.latest_status} recurring_hidden=${contextTile.recurring_hidden_categories.join(",")}`,
 );
-console.log(`verifier=ok high=${verifier.high_count} max_high=${maxHigh}`);
+console.log(
+  `audit_mode=${strictMode ? "strict" : "tolerant"} verifier=ok high=${verifier.high_count} max_high=${maxHigh}`,
+);
 console.log(`digest_anomalies=${digest.anomaly_count}`);
