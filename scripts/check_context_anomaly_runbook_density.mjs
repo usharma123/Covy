@@ -417,6 +417,7 @@ function assertSelfTestMissing(result, expectedCode, expectedMissing, caseName) 
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`case=${caseName}`);
     console.error(`missing_detail=${expectedMissing}`);
+    console.error(`actual_missing=${result.missing?.join(",") ?? ""}`);
     process.exit(1);
   }
 }
