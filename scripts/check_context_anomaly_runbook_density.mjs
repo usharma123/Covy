@@ -538,6 +538,12 @@ function assertPairedEnvDocExclusionsOmitted() {
   }
 }
 
+function assertEnvDocInvariants() {
+  assertPairedEnvDocExclusionCount();
+  assertRequiredPlainEnvDocCount();
+  assertPairedEnvDocExclusionsOmitted();
+}
+
 function assertEnvFailure(env, commandArgs, expectedCode) {
   try {
     execFileSync(process.execPath, [scriptPath, ...commandArgs], {
@@ -1612,9 +1618,7 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
   assertInvariantDetailFormats();
-  assertPairedEnvDocExclusionCount();
-  assertRequiredPlainEnvDocCount();
-  assertPairedEnvDocExclusionsOmitted();
+  assertEnvDocInvariants();
   assertSelfTest(
     evaluate(runbook, result.line_count - 1),
     "context_anomaly_runbook_density_too_many_lines",
