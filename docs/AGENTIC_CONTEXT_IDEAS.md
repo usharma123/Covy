@@ -633,12 +633,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test prose/text env order | Keeps prose/text failure checks before text JSON shape checks. | Verified `assertProseTextEnvFailureSelfTests()` sits after soft-row output coverage and before `assertEnvFailureOutput()` for `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Evidence: no runtime output growth; prose/text failures remain before text JSON shape coverage. |
 | Context anomaly drilldown density self-test text JSON shape wrapper | Names text-width JSON failure output and exclusion checks. | Extracted `assertTextJsonFailureShapeSelfTests()` around `assertEnvFailureOutput()` and `assertEnvFailureExcludes()` for `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Evidence: no runtime output growth; text JSON failure shape remains covered. |
 | Context anomaly drilldown density self-test text JSON shape order | Keeps text JSON failure shape before text headroom outputs. | Verified `assertTextJsonFailureShapeSelfTests()` sits after prose/text env failures and before `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=196` output assertions. | Evidence: no runtime output growth; text JSON failure shape remains before headroom output coverage. |
+| Context anomaly drilldown density self-test text headroom output wrapper | Names text-width headroom text and JSON output checks. | Extracted `assertTextHeadroomOutputSelfTests()` around the `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=196` output assertions. | Evidence: no runtime output growth; text headroom output remains covered in text and JSON modes. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test text headroom output wrapper | Names text-width headroom text and JSON output checks. | Extract `assertTextHeadroomOutputSelfTests()` around the `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=196` output assertions. | Compact metric: no runtime output growth; correctness metric: text headroom output remains covered in text and JSON modes. |
+| Context anomaly drilldown density self-test text headroom output order | Keeps text headroom outputs before JSON max failures. | Verify `assertTextHeadroomOutputSelfTests()` sits after text JSON failure shape coverage and before `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX` failure coverage. | Compact metric: no runtime output growth; correctness metric: text headroom output remains before JSON max failure coverage. |
 
 ## Research Rules
 
