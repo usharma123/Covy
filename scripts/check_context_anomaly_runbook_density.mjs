@@ -1994,7 +1994,7 @@ if (args.includes("--self-test")) {
           "swapped_default_output_iterations_json_doc_order",
         );
       };
-      assertJsonFieldDocPresenceMutationSelfTests([
+      const leadingJsonFieldDocs = [
         ["`alias_docs_checked`", "missing_alias_docs_checked_json_doc"],
         ["`row_soft_ok`", "missing_row_soft_ok_json_doc"],
         [
@@ -2022,11 +2022,13 @@ if (args.includes("--self-test")) {
           "`default_output_iterations`",
           "missing_default_output_iterations_json_doc",
         ],
-      ]);
-      assertJsonFieldOrderDocMutationSelfTests();
-      assertJsonFieldDocPresenceMutationSelfTests([
+      ];
+      const trailingJsonFieldDocs = [
         ["`text_width_docs_checked`", "missing_text_width_docs_checked_json_doc"],
-      ]);
+      ];
+      assertJsonFieldDocPresenceMutationSelfTests(leadingJsonFieldDocs);
+      assertJsonFieldOrderDocMutationSelfTests();
+      assertJsonFieldDocPresenceMutationSelfTests(trailingJsonFieldDocs);
     };
     assertJsonFieldDocMutationSelfTests();
     const assertJsonByteHelpCapMutationSelfTests = () => {
