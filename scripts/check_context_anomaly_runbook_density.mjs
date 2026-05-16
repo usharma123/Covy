@@ -69,8 +69,10 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_missing_commands",
   "context_anomaly_runbook_density_workflow_missing_commands",
   "context_anomaly_runbook_density_missing_failure_docs",
+  "context_anomaly_runbook_density_missing_output_docs",
   "context_anomaly_runbook_density_json_too_long",
 ];
+const requiredOutputLabels = ["failure_codes", "workflow_commands"];
 
 function evaluate(runbook, lineBudget) {
   const lineCount = runbook.endsWith("\n")
@@ -88,6 +90,9 @@ function evaluate(runbook, lineBudget) {
   );
   const missingFailureCodes = requiredFailureCodes.filter(
     (code) => !runbook.includes(code),
+  );
+  const missingOutputLabels = requiredOutputLabels.filter(
+    (label) => !runbook.includes(`\`${label}\``),
   );
   if (lineCount > lineBudget) {
     return {
@@ -117,6 +122,13 @@ function evaluate(runbook, lineBudget) {
       ok: false,
       code: "context_anomaly_runbook_density_missing_failure_docs",
       missing: missingFailureCodes,
+    };
+  }
+  if (missingOutputLabels.length > 0) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_missing_output_docs",
+      missing: missingOutputLabels,
     };
   }
   return {
@@ -302,6 +314,10 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_failure_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`workflow_commands`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
     evaluateWorkflow(
