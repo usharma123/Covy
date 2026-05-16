@@ -672,12 +672,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field order mutation table order | Keeps the order-mutation table adjacent to the constants it uses. | Verified `jsonFieldOrderMutations` is defined after the original/swapped order-doc constants and immediately before the loop that executes those cases. | Evidence: no runtime output growth; table rows remain adjacent to the mutation loop. |
 | Context anomaly drilldown density self-test JSON field order expected-missing audit | Confirms the shared expected-missing doc in the order table is intentional. | Verified both `jsonFieldOrderMutations` rows carry explicit `expectedMissingDoc` and that the second row still points at the full JSON order doc, not only the swapped pair. | Evidence: no runtime output growth; expected-missing semantics stay documented before any rename. |
 | Context anomaly drilldown density self-test JSON field order expected full-doc name | Makes the shared expected-missing value describe the complete JSON order requirement. | Renamed the `expectedMissingDoc` table field to `expectedFullOrderDoc` in `jsonFieldOrderMutations`. | Evidence: no runtime output growth; both order-swap rows still assert against the complete JSON order doc. |
+| Context anomaly drilldown density self-test JSON field order expected full-doc order | Keeps the renamed full-order expectation visible in every mutation row. | Verified both `jsonFieldOrderMutations` entries define `expectedFullOrderDoc: jsonHeadroomOrderDoc` before the loop destructures and asserts it. | Evidence: no runtime output growth; full-order expectation remains explicit per row. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field order expected full-doc order | Keeps the renamed full-order expectation visible in every mutation row. | Verify both `jsonFieldOrderMutations` entries define `expectedFullOrderDoc: jsonHeadroomOrderDoc` before the loop destructures and asserts it. | Compact metric: no runtime output growth; correctness metric: full-order expectation remains explicit per row. |
+| Context anomaly drilldown density self-test JSON field order mutation row names | Makes row fields name order-doc mutation semantics instead of generic document values. | Rename `originalDoc` and `swappedDoc` to `originalOrderDoc` and `swappedOrderDoc` in `jsonFieldOrderMutations`. | Compact metric: no runtime output growth; correctness metric: each mutation row still replaces the intended order-doc string. |
 
 ## Research Rules
 
