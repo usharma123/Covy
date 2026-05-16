@@ -207,12 +207,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text width pair self-test | Proves `text_width_docs=1` is tied to the paired-doc requirement. | Density self-test now asserts text-width paired-doc count and rejects default output missing `text_width_docs`. | Evidence: self-test output stays one line and splitting the pair changes the count or fails docs coverage. |
 | Context anomaly drilldown density text output compact aliases | Reduces default text width while preserving parseable labels. | Density default output now uses compact aliases such as `cmds`, `fc`, `wf`, `json`, and `width` while JSON keeps full field names. | Evidence: `width` drops below 210, parser self-test passes, and required alias docs still pass. |
 | Context anomaly drilldown density alias docs repair | Helps maintainers map compact default labels back to their meaning. | The runbook now says JSON keeps full field names while default text uses one-line aliases. | Evidence: runbook remains within line/prose/table budgets and phrase matches current default and JSON outputs. |
+| Context anomaly drilldown density alias docs coverage | Prevents alias docs from drifting after compact text changes. | The density checker now requires the runbook phrase `JSON keeps full field names`. | Evidence: default output stays one line and removing the phrase fails missing output docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density alias docs coverage | Prevents alias docs from drifting after compact text changes. | Have the density checker require the phrase `JSON keeps full field names` in the runbook output docs. | Compact metric: default output stays one line; correctness metric: removing the phrase fails missing output docs. |
+| Context anomaly drilldown density output phrase count refresh | Keeps `phrases` count meaningful after alias-doc phrase coverage grows. | Verify default `phrases` count increments for the added alias-doc phrase and parser self-test still passes. | Compact metric: default output remains under width cap; correctness metric: `phrases` equals required output phrase count. |
 
 ## Research Rules
 

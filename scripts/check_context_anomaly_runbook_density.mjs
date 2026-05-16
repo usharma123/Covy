@@ -101,7 +101,7 @@ const requiredOutputLabels = [
   "width",
   "width_docs",
 ];
-const requiredOutputDocPhrases = ["key=value"];
+const requiredOutputDocPhrases = ["`key=value`", "JSON keeps full field names"];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
@@ -143,7 +143,7 @@ function evaluate(runbook, lineBudget) {
     (label) => !runbook.includes(`\`${label}\``),
   );
   const missingOutputDocPhrases = requiredOutputDocPhrases.filter(
-    (phrase) => !runbook.includes(`\`${phrase}\``),
+    (phrase) => !runbook.includes(phrase),
   );
   const hasTextWidthEnvDoc = runbook
     .split("\n")
@@ -613,6 +613,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`key=value`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("JSON keeps full field names", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
