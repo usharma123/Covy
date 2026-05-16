@@ -505,6 +505,16 @@ function assertInvariantDetailFormats() {
   }
 }
 
+function assertPairedEnvDocExclusionCount() {
+  if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
+    failSelfTestInvariant({
+      expected_paired_env_doc_exclusion_count:
+        expectedPairedEnvDocExclusionCount,
+      actual_paired_env_doc_exclusion_count: pairedEnvDocExclusionCount,
+    });
+  }
+}
+
 function assertEnvFailure(env, commandArgs, expectedCode) {
   try {
     execFileSync(process.execPath, [scriptPath, ...commandArgs], {
@@ -1579,13 +1589,7 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
   assertInvariantDetailFormats();
-  if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
-    failSelfTestInvariant({
-      expected_paired_env_doc_exclusion_count:
-        expectedPairedEnvDocExclusionCount,
-      actual_paired_env_doc_exclusion_count: pairedEnvDocExclusionCount,
-    });
-  }
+  assertPairedEnvDocExclusionCount();
   if (
     requiredPlainEnvDocs.length !==
     requiredEnvDocs.length - pairedEnvDocExclusionCount
