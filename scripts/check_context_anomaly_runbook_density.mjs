@@ -332,6 +332,20 @@ function assertEnvFailure(env, commandArgs, expectedCode) {
   process.exit(1);
 }
 
+function assertEnvOutput(env, commandArgs, expectedText) {
+  const output = execFileSync(process.execPath, [scriptPath, ...commandArgs], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (!output.includes(expectedText)) {
+    console.error("context_anomaly_runbook_density_self_test_env_output_failed");
+    console.error(`expected=${expectedText}`);
+    console.error(`actual=${output.trim()}`);
+    process.exit(1);
+  }
+}
+
 function assertHelpIncludes(expected) {
   const help = helpLines.join("\n");
   if (!help.includes(expected)) {
@@ -730,6 +744,11 @@ if (args.includes("--self-test")) {
     { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
     [],
     "context_anomaly_runbook_density_row_too_wide",
+  );
+  assertEnvOutput(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
+    [],
+    "soft=over",
   );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX: "10" },
