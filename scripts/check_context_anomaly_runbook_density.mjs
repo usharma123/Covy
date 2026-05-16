@@ -1709,8 +1709,8 @@ if (args.includes("--self-test")) {
     joinedFields.actualJoinedMutationFields ===
     joinedFields.expectedJoinedMutationFields;
   const sampledDefaultOutputMutationIdentityFieldsMatch = (sample) => {
-    const joinedFields = joinedDefaultOutputMutationIdentityFields(sample);
-    return joinedDefaultOutputMutationIdentityFieldsMatch(joinedFields);
+    const joinedIdentityFields = joinedDefaultOutputMutationIdentityFields(sample);
+    return joinedDefaultOutputMutationIdentityFieldsMatch(joinedIdentityFields);
   };
   const failDefaultOutputMutationFieldIdentity = (sample) => {
     failDefaultOutputMutation(defaultOutputMutationIdentityFieldDetails(sample));
