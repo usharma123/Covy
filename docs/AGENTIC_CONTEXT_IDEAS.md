@@ -616,12 +616,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test failure-success wrapper | Names the JSON `no-succ` failure-success field documentation assertion. | Extracted `assertFailureSuccessFieldMutationSelfTest()` around the `no-succ` assertion. | Evidence: no runtime output growth; failure-success field coverage still fails when removed. |
 | Context anomaly drilldown density self-test failure-success order | Keeps failure-success field coverage before stale alias detection. | Verified `assertFailureSuccessFieldMutationSelfTest()` sits after JSON error-shape coverage and before `staleFailureAliasResult`. | Evidence: no runtime output growth; failure-success field coverage remains before stale alias coverage. |
 | Context anomaly drilldown density self-test stale alias wrapper | Names the stale `no-success` alias detection assertion. | Extracted `assertStaleFailureAliasMutationSelfTest()` around `staleFailureAliasResult` and its missing-alias assertion. | Evidence: no runtime output growth; stale alias coverage still fails when alias spelling regresses. |
+| Context anomaly drilldown density self-test stale alias order | Keeps stale alias coverage before JSON error/help adjacency docs. | Verified `assertStaleFailureAliasMutationSelfTest()` sits after failure-success coverage and before the error/help adjacency assertion. | Evidence: no runtime output growth; stale alias coverage remains before error/help adjacency coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test stale alias order | Keeps stale alias coverage before JSON error/help adjacency docs. | Verify `assertStaleFailureAliasMutationSelfTest()` sits after failure-success coverage and before the `ok:false`;`no-succ`;h:`help<=120` adjacency assertion. | Compact metric: no runtime output growth; correctness metric: stale alias coverage remains before error/help adjacency coverage. |
+| Context anomaly drilldown density self-test error/help adjacency wrapper | Names the JSON error/help adjacency documentation assertion. | Extract `assertJsonErrorHelpAdjacencyMutationSelfTest()` around the `ok:false`;`no-succ`;h:`help<=120` adjacency assertion. | Compact metric: no runtime output growth; correctness metric: error/help adjacency coverage still fails when the compact key changes. |
 
 ## Research Rules
 
