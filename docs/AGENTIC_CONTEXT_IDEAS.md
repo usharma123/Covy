@@ -693,12 +693,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test alias glossary row helper | Names the per-row execution of alias glossary mutations. | Extracted the loop body in `assertAliasGlossaryMutationSelfTests()` into `assertAliasGlossaryMutation(aliasGlossaryDoc)`. | Evidence: no runtime output growth; every alias glossary row still removes the intended doc text and uses its case name. |
 | Context anomaly drilldown density self-test alias glossary row helper order | Keeps the alias glossary row helper beside the table it executes. | Verified `assertAliasGlossaryMutation(aliasGlossaryDoc)` is defined after `aliasGlossaryDocs` and used by the following loop. | Evidence: no runtime output growth; row helper remains local to alias glossary mutations. |
 | Context anomaly drilldown density self-test alias glossary post-helper audit | Checks whether alias glossary coverage is decomposed enough after table and row-helper extraction. | Re-scanned `assertAliasGlossaryMutationSelfTests()` and kept its table/helper/loop shape while moving the next target to width env-pair coverage. | Evidence: no runtime output growth; next target is based on the current alias glossary helper shape. |
+| Context anomaly drilldown density self-test width env-pair helper audit | Checks whether the width env-pair helper is already minimal. | Re-scanned `assertWidthEnvPairMutationSelfTest()` and kept its single width env-pair assertion separate before moving to text-headroom coverage. | Evidence: no runtime output growth; next target reflects the current adjacent helper shape. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test width env-pair helper audit | Checks whether the width env-pair helper is already minimal. | Re-scan `assertWidthEnvPairMutationSelfTest()` and decide whether to keep its single assertion separate or group it with text-headroom coverage. | Compact metric: no runtime output growth; correctness metric: next target reflects the current adjacent helper shape. |
+| Context anomaly drilldown density self-test text-headroom helper audit | Checks whether the text-headroom helper is already minimal. | Re-scan `assertTextHeadroomMutationSelfTest()` and decide whether to keep its single assertion separate or group it with adjacent JSON error-shape coverage. | Compact metric: no runtime output growth; correctness metric: next target reflects the current adjacent helper shape. |
 
 ## Research Rules
 
