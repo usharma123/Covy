@@ -456,12 +456,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output expected detail helper | Keeps default output expected diagnostic strings behind named builders. | Extracted helpers for missing-field and stale-field expected diagnostic strings used by `defaultOutputMutationMismatchDetails()`. | Evidence: no runtime output growth; expected diagnostics remain field-specific. |
 | Context anomaly drilldown density self-test default output actual fallback helper | Keeps parser fallback text behind one named helper. | Extracted `defaultOutputMutationActualDetail()` for the `actual ?? "ok"` fallback used by mismatch details. | Evidence: no runtime output growth; actual diagnostics retain the ok fallback consistently. |
 | Context anomaly drilldown density self-test default output missing stale helper | Keeps stale mutation coverage diagnostics behind one named detail helper. | Extracted `missingStaleMutationFieldsDetails()` for missing stale mutation field diagnostics. | Evidence: no runtime output growth; stale mutation coverage diagnostics remain field-specific. |
+| Context anomaly drilldown density self-test default output detail order helper | Keeps default-output diagnostic helper declarations ordered by failure flow. | Reordered local detail helpers to match missing-stale, no-op, expectation, mismatch, and actual fallback usage order. | Evidence: no runtime output growth; helper order mirrors self-test flow. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output detail order helper | Keeps default-output diagnostic helper declarations ordered by failure flow. | Reorder local detail helpers to match missing-stale, no-op, expectation, mismatch, and actual fallback usage order. | Compact metric: no runtime output growth; correctness metric: helper order mirrors self-test flow. |
+| Context anomaly drilldown density self-test default output field pattern helper | Keeps mutation regex construction behind a named helper. | Extract a `defaultOutputFieldPattern(field)` helper for the default-output field replacement regex. | Compact metric: no runtime output growth; correctness metric: mutation checks still target field-specific tokens. |
 
 ## Research Rules
 

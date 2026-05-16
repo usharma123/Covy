@@ -1569,24 +1569,24 @@ if (args.includes("--self-test")) {
   const failDefaultOutputMutation = (details) => {
     failSelfTestInvariant(details);
   };
+  const missingStaleMutationFieldsDetails = (fields) => ({
+    missing_stale_mutation_fields: fields,
+  });
   const missingMutationNoopDetails = (field) => ({
     missing_mutation_noop: field,
   });
   const staleMutationNoopDetails = (field) => ({
     stale_mutation_noop: field,
   });
+  const missingDefaultOutputFieldExpectation = (field) =>
+    `missing_default_output_field=${field}`;
+  const staleDefaultOutputFieldExpectation = (field) =>
+    `default_output_parse_mismatch=${field}`;
   const defaultOutputMutationActualDetail = (actual) => actual ?? "ok";
   const defaultOutputMutationMismatchDetails = (expected, actual) => ({
     expected,
     actual: defaultOutputMutationActualDetail(actual),
   });
-  const missingStaleMutationFieldsDetails = (fields) => ({
-    missing_stale_mutation_fields: fields,
-  });
-  const missingDefaultOutputFieldExpectation = (field) =>
-    `missing_default_output_field=${field}`;
-  const staleDefaultOutputFieldExpectation = (field) =>
-    `default_output_parse_mismatch=${field}`;
   if (missingStaleMutationFields.length > 0) {
     failDefaultOutputMutation(
       missingStaleMutationFieldsDetails(missingStaleMutationFields),
