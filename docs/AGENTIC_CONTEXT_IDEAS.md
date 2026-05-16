@@ -269,12 +269,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label count parser coverage | Proves parser validation checks output-label count drift. | Density self-test now mutates `labels=0` and requires `default_output_parse_mismatch=labels`. | Evidence: self-test output remains one line; stale label count fails parser validation. |
 | Context anomaly drilldown density env count parser coverage | Proves parser validation checks env-doc count drift. | Default output parsing now verifies `env`, and self-test mutates `env=0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale env count fails parser validation. |
 | Context anomaly drilldown density env missing-field self-test | Proves parser validation rejects omitted env-doc counts, not just stale values. | Density self-test now removes `env` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted env count fails parser validation. |
+| Context anomaly drilldown density command missing-field self-test | Proves parser validation rejects omitted command counts, not just stale values. | Density self-test now removes `cmds` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted command count fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density command missing-field self-test | Proves parser validation rejects omitted command counts, not just stale values. | Remove `cmds` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted command count fails parser validation. |
+| Context anomaly drilldown density failure-code count parser coverage | Proves parser validation checks failure-code count drift. | Add `fc` to parsed mismatch checks and reject stale failure-code counts. | Compact metric: self-test output remains one line; correctness metric: stale failure-code count fails parser validation. |
 
 ## Research Rules
 
