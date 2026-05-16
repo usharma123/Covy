@@ -508,6 +508,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
   }
   const expectedValues = {
     cmds: String(resultDetails.commands_checked),
+    env: String(resultDetails.env_docs_checked),
     labels: String(resultDetails.output_labels_checked),
     adocs: String(resultDetails.alias_docs_checked),
     dphr: String(resultDetails.density_doc_phrases_checked),
@@ -757,6 +758,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=cmds");
     console.error(`actual=${staleCommandCountError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleEnvCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ env=\d+/, " env=0")),
+    result,
+  );
+  if (staleEnvCountError !== "default_output_parse_mismatch=env") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=env");
+    console.error(`actual=${staleEnvCountError ?? "ok"}`);
     process.exit(1);
   }
   const staleLabelCountError = defaultOutputParseIssue(

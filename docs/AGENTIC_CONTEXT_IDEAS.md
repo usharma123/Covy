@@ -267,12 +267,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density soft missing-field self-test | Proves the parser rejects omitted soft-row status, not just stale values. | Density self-test now removes `soft` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted soft-row status fails parser validation. |
 | Context anomaly drilldown density command count parser coverage | Proves parser validation checks command-count drift, not only label/docs counts. | Density self-test now mutates `cmds=0` and requires `default_output_parse_mismatch=cmds`. | Evidence: self-test output remains one line; stale command count fails parser validation. |
 | Context anomaly drilldown density label count parser coverage | Proves parser validation checks output-label count drift. | Density self-test now mutates `labels=0` and requires `default_output_parse_mismatch=labels`. | Evidence: self-test output remains one line; stale label count fails parser validation. |
+| Context anomaly drilldown density env count parser coverage | Proves parser validation checks env-doc count drift. | Default output parsing now verifies `env`, and self-test mutates `env=0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale env count fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density env count parser coverage | Proves parser validation checks env-doc count drift. | Add `env` to parsed mismatch checks and reject stale env-doc counts. | Compact metric: self-test output remains one line; correctness metric: stale env count fails parser validation. |
+| Context anomaly drilldown density env missing-field self-test | Proves parser validation rejects omitted env-doc counts, not just stale values. | Remove `env` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted env count fails parser validation. |
 
 ## Research Rules
 
