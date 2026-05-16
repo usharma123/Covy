@@ -50,4 +50,15 @@ jobs:
         run: cargo build -p suite-cli
 
       - name: Verify memory lint fixtures
-        run: target/debug/Packet28 verify memory-lint --root . --json
+        run: |
+          set -o pipefail
+          target/debug/Packet28 verify memory-lint --root . --json | tee memory-lint.json
+
+      - name: Summarize memory lint
+        if: always()
+        run: |
+          {
+            echo "### Memory lint"
+            echo "- issues: $(jq -r '.issue_count // 0' memory-lint.json)"
+            echo "- expected kinds: $(jq -r '(.expected_issue_kinds // []) | join(",")' memory-lint.json)"
+          } >> "$GITHUB_STEP_SUMMARY"
