@@ -1772,10 +1772,13 @@ if (args.includes("--self-test")) {
     assertEnvDocInvariants();
   };
   assertEnvDocInvariantSelfTest();
-  assertSelfTest(
-    evaluate(runbook, result.line_count - 1),
-    "context_anomaly_runbook_density_too_many_lines",
-  );
+  const assertLineCountBoundarySelfTest = () => {
+    assertSelfTest(
+      evaluate(runbook, result.line_count - 1),
+      "context_anomaly_runbook_density_too_many_lines",
+    );
+  };
+  assertLineCountBoundarySelfTest();
   for (const [commandIndex, command] of requiredCommands.entries()) {
     assertSelfTestMissing(
       evaluate(
