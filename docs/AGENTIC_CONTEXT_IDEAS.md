@@ -543,12 +543,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation joined string comparator parameter name | Makes comparator parameter naming match joined string payloads. | Renamed comparator parameter `joinedIdentityFields` to `joinedIdentityFieldStrings`. | Evidence: no runtime output growth; comparator still checks actual joined string against expected joined string. |
 | Context anomaly drilldown density self-test default output mutation joined string comparator property names | Makes comparator property access read as joined string comparison. | Renamed joined string object keys to `actualJoinedMutationFieldString` and `expectedJoinedMutationFieldString`. | Evidence: no runtime output growth; comparator still compares actual joined string to expected joined string. |
 | Context anomaly drilldown density self-test default output mutation joined string property order | Keeps joined string property naming aligned between producer and comparator. | Verified producer and comparator both use `actualJoinedMutationFieldString` and `expectedJoinedMutationFieldString`. | Evidence: no runtime output growth; joined string keys stay consistent across producer and comparator. |
+| Context anomaly drilldown density self-test default output mutation joined string pair helper name | Makes the joined string helper describe its two-value payload. | Renamed `joinedDefaultOutputMutationIdentityFieldStrings(sample)` to `defaultOutputMutationIdentityFieldStringPair(sample)`. | Evidence: no runtime output growth; sampled predicate still receives actual and expected joined strings. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation joined string pair helper name | Makes the joined string helper describe its two-value payload. | Rename `joinedDefaultOutputMutationIdentityFieldStrings(sample)` to `defaultOutputMutationIdentityFieldStringPair(sample)`. | Compact metric: no runtime output growth; correctness metric: sampled predicate still receives actual and expected joined strings. |
+| Context anomaly drilldown density self-test default output mutation sampled string pair helper name | Makes the sampled wrapper mirror the field-string pair helper. | Rename `sampleJoinedDefaultOutputMutationIdentityFieldStrings(sample)` to `sampleDefaultOutputMutationIdentityFieldStringPair(sample)`. | Compact metric: no runtime output growth; correctness metric: sampled predicate still compares the same pair payload. |
 
 ## Research Rules
 
