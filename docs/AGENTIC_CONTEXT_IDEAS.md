@@ -94,12 +94,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown self-test workflow gate | Makes CI use the smoke script's own self-test before rendering formatter summaries. | The context-anomalies workflow now runs `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` before collecting formatter JSON. | Evidence: no summary lines were added; workflow fails before summary rendering if the script self-test detects drift. |
 | Context anomaly drilldown script option guard | Prevents typoed smoke-script flags from silently running the default formatter path. | The hidden-sample smoke script now rejects unknown command-line options before reading fixtures. | Evidence: success output is unchanged; `node scripts/check_context_anomaly_hidden_samples.mjs --bad-flag` exits nonzero with `context_anomaly_hidden_sample_unknown_option`. |
 | Context anomaly drilldown script help | Gives agents a compact usage string for hidden-sample smoke script modes. | The hidden-sample smoke script now supports `--help`, and the runbook command table lists it. | Evidence: help output is five lines, exits zero, and lists default, `--json`, `--self-test`, and `--help` modes. |
+| Context anomaly drilldown help workflow guard | Keeps documented smoke-script modes visible in CI logs without expanding the step summary. | The context-anomalies workflow now runs the smoke script `--help` mode before self-test and JSON summary extraction. | Evidence: no summary lines were added; help output stays five lines and CI fails if help mode breaks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown help workflow guard | Keeps documented smoke-script modes visible in CI logs without expanding the step summary. | Run `node scripts/check_context_anomaly_hidden_samples.mjs --help` in the workflow summary step before self-test. | Compact metric: no added summary lines; correctness metric: CI fails if help output breaks. |
+| Context anomaly drilldown fixture checksum | Lets agents detect accidental hidden-sample fixture edits even when expected summary still matches. | Add a small checksum field or file for the delimiter fixture and verify it in the smoke script. | Compact metric: checksum artifact under 80 bytes; correctness metric: script fails when fixture content changes without checksum update. |
 
 ## Research Rules
 
