@@ -2231,16 +2231,19 @@ if (args.includes("--self-test")) {
     }
   };
   assertWorkflowCommandMutationSelfTests();
-  assertEnvFailure(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
-    [],
-    "context_anomaly_runbook_density_too_many_lines",
-  );
-  assertEnvFailure(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
-    [],
-    "context_anomaly_runbook_density_row_too_wide",
-  );
+  const assertEnvLimitFailureSelfTests = () => {
+    assertEnvFailure(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
+      [],
+      "context_anomaly_runbook_density_too_many_lines",
+    );
+    assertEnvFailure(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
+      [],
+      "context_anomaly_runbook_density_row_too_wide",
+    );
+  };
+  assertEnvLimitFailureSelfTests();
   assertEnvOutput(
     { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
     [],
