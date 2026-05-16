@@ -287,12 +287,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-width parser coverage | Proves parser validation checks rendered text width, not just field presence. | Default output parsing now verifies `width`, and self-test mutates `width=0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale text width fails parser validation. |
 | Context anomaly drilldown density text-width missing-field self-test | Proves parser validation rejects omitted text width, not just stale values. | Density self-test now removes `width` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted text width fails parser validation. |
 | Context anomaly drilldown density alias-doc missing-field self-test | Proves parser validation rejects omitted alias-doc counts, not just stale values. | Density self-test now removes `adocs` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted alias-doc count fails parser validation. |
+| Context anomaly drilldown density parser coverage audit | Prevents future compact fields from being added without stale-value parser coverage. | Density self-test now compares expected parser-value keys with every default output label. | Evidence: self-test output remains one line; missing parser expectation fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density parser coverage audit | Prevents future compact fields from being added without stale-value parser coverage. | Add a self-test assertion that every default output label has an expected parser value. | Compact metric: self-test output remains one line; correctness metric: missing parser expectation fails self-test. |
+| Context anomaly drilldown density parser mutation table | Reduces repeated self-test boilerplate so future compact fields get stale and missing mutations consistently. | Replace repeated default-output mutation checks with a table-driven helper. | Compact metric: self-test output remains one line; correctness metric: existing field-specific mutation failures remain covered. |
 
 ## Research Rules
 

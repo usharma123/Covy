@@ -500,12 +500,7 @@ function parseDefaultOutput(line) {
   return Object.fromEntries(parts.slice(1).map((part) => part.split("=")));
 }
 
-function defaultOutputParseIssue(parsed, resultDetails) {
-  for (const field of defaultTextFields) {
-    if (!parsed?.[field]) {
-      return `missing_default_output_field=${field}`;
-    }
-  }
+function defaultOutputExpectedValues(resultDetails) {
   const expectedValues = {
     lines: `${resultDetails.line_count}/${resultDetails.max_lines}`,
     row: `${resultDetails.max_table_row}/${resultDetails.max_table_row_allowed}`,
@@ -531,6 +526,16 @@ function defaultOutputParseIssue(parsed, resultDetails) {
   if (resultDetails.default_output_width !== undefined) {
     expectedValues.width = String(resultDetails.default_output_width);
   }
+  return expectedValues;
+}
+
+function defaultOutputParseIssue(parsed, resultDetails) {
+  for (const field of defaultTextFields) {
+    if (!parsed?.[field]) {
+      return `missing_default_output_field=${field}`;
+    }
+  }
+  const expectedValues = defaultOutputExpectedValues(resultDetails);
   for (const [field, expected] of Object.entries(expectedValues)) {
     if (parsed[field] !== expected) {
       return `default_output_parse_mismatch=${field}`;
@@ -714,6 +719,18 @@ if (args.includes("--self-test")) {
     json_headroom: baselineHeadroom,
     default_output_width: defaultOutputLine.length,
   };
+  const expectedParserFields = Object.keys(
+    defaultOutputExpectedValues(defaultParseDetails),
+  ).sort();
+  const requiredParserFields = [...defaultTextFields].sort();
+  if (expectedParserFields.join(",") !== requiredParserFields.join(",")) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_parser_fields=${requiredParserFields.join(",")}`,
+    );
+    console.error(`actual_parser_fields=${expectedParserFields.join(",")}`);
+    process.exit(1);
+  }
   const parsedDefaultOutput = parseDefaultOutput(defaultOutputLine);
   const defaultOutputError = defaultOutputParseIssue(
     parsedDefaultOutput,
