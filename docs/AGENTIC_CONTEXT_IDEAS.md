@@ -76,12 +76,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly stale-trend workflow hint | Makes stale trend freshness failures actionable from GitHub step summaries. | The context-anomalies workflow now appends `trend_repair_hint` only when the verifier emits it. | Evidence: normal summary remains 12 lines without a hint; stale threshold failures surface the same hint as JSON output. |
 | Context anomaly trend docs cross-link | Helps agents find the runbook from product docs and CI summaries. | Product docs and the context-anomalies workflow summary now link to `docs/context-anomalies/RUNBOOK.md`. | Evidence: one runbook line was added to each surface and both point to `docs/context-anomalies/RUNBOOK.md`. |
 | Context anomaly hidden-category drilldown | Lets agents move from a recurring hidden category to the concrete source that was capped. | Context anomaly digests now preserve one compact hidden sample per capped category, history records store those samples, and the dashboard trend tile reports recurring hidden samples. | Evidence: `context_anomaly_tile_reports_hidden_category_drilldown_sample`; hidden `fallback_provenance` points to its fallback signal sample under 512 bytes. |
+| Context anomaly drilldown workflow summary | Makes capped anomaly source samples visible in CI without opening dashboard JSON. | The context-anomalies workflow now appends compact live and fixture hidden-sample summaries, capped to 256 characters. | Evidence: fixture hidden sample summary reports `fallback_provenance=recent_fallbacks=1`; summary extraction is capped with `cut -c1-256`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown workflow summary | Makes capped anomaly source samples visible in CI without opening dashboard JSON. | Add hidden sample summary extraction to the context-anomalies workflow step summary. | Compact metric: one summary line under 256 characters; correctness metric: fixture or synthetic hidden fallback provenance shows its fallback signal. |
+| Context anomaly drilldown runbook update | Explains how to interpret hidden-sample drilldowns from dashboard and CI. | Update the context anomaly runbook with the hidden sample fields and an example fallback provenance sample. | Compact metric: runbook remains under 45 lines; correctness metric: documents `hidden_samples` and `recurring_hidden_samples`. |
 
 ## Research Rules
 
