@@ -1683,9 +1683,9 @@ if (args.includes("--self-test")) {
     expectedCount: expectedDefaultOutputMutationFieldCount(),
     actualCount: actualDefaultOutputMutationFieldCount(),
   });
-  const defaultOutputMutationFieldCountDetails = (expectedCount, actualCount) => ({
-    expected_default_output_mutation_fields: expectedCount,
-    actual_default_output_mutation_fields: actualCount,
+  const defaultOutputMutationFieldCountDetails = (sample) => ({
+    expected_default_output_mutation_fields: sample.expectedCount,
+    actual_default_output_mutation_fields: sample.actualCount,
   });
   const defaultOutputMutationFieldCountsMismatch = (sample) =>
     sample.actualCount !== sample.expectedCount;
@@ -1693,10 +1693,7 @@ if (args.includes("--self-test")) {
     const countSample = defaultOutputMutationFieldCountSample();
     if (defaultOutputMutationFieldCountsMismatch(countSample)) {
       failDefaultOutputMutation(
-        defaultOutputMutationFieldCountDetails(
-          countSample.expectedCount,
-          countSample.actualCount,
-        ),
+        defaultOutputMutationFieldCountDetails(countSample),
       );
     }
   };

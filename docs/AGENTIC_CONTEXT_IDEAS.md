@@ -484,12 +484,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation count samples | Keeps count invariant expected and actual values single-read. | Stored expected/actual mutation counts in locals before comparison and diagnostics. | Evidence: no runtime output growth; count comparison and diagnostics use the same sampled values. |
 | Context anomaly drilldown density self-test default output mutation count sample helper | Names the expected/actual count sample object. | Extracted `defaultOutputMutationFieldCountSample()` returning expected and actual mutation field counts. | Evidence: no runtime output growth; count samples stay single-source. |
 | Context anomaly drilldown density self-test default output mutation count mismatch helper | Names the count mismatch predicate. | Extracted `defaultOutputMutationFieldCountsMismatch(sample)` for the actual-vs-expected comparison. | Evidence: no runtime output growth; count mismatch logic stays single-source. |
+| Context anomaly drilldown density self-test default output mutation count details sample | Lets count diagnostics consume the same sample object as the predicate. | Changed `defaultOutputMutationFieldCountDetails()` to accept the count sample object instead of separate expected/actual values. | Evidence: no runtime output growth; count diagnostics consume the same sample as comparison. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation count details sample | Lets count diagnostics consume the same sample object as the predicate. | Change `defaultOutputMutationFieldCountDetails()` to accept the count sample object instead of separate expected/actual values. | Compact metric: no runtime output growth; correctness metric: count diagnostics consume the same sample as comparison. |
+| Context anomaly drilldown density self-test default output mutation count sample naming | Makes count sample properties match diagnostic terminology. | Rename sample properties from `expectedCount`/`actualCount` to `expectedMutationFields`/`actualMutationFields`. | Compact metric: no runtime output growth; correctness metric: count sample naming mirrors diagnostics. |
 
 ## Research Rules
 
