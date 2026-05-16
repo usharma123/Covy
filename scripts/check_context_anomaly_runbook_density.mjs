@@ -743,6 +743,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${missingFailureCodeCountError ?? "ok"}`);
     process.exit(1);
   }
+  const missingWorkflowCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ wf=\d+/, "")),
+    defaultParseDetails,
+  );
+  if (missingWorkflowCountError !== "missing_default_output_field=wf") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=wf`);
+    console.error(`actual=${missingWorkflowCountError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingEnvError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ env=\d+/, "")),
     result,
