@@ -1994,28 +1994,44 @@ if (args.includes("--self-test")) {
         "`default_output_iterations`",
         "missing_default_output_iterations_json_doc",
       );
+      const jsonHeadroomOrderDoc = [
+        "`density_label_line_width`",
+        "`default_output_headroom`",
+        "`default_output_iterations`",
+        "`text_width_docs_checked`",
+      ].join(",");
+      const swappedJsonHeadroomOrderDoc = [
+        "`density_label_line_width`",
+        "`text_width_docs_checked`",
+        "`default_output_iterations`",
+        "`default_output_headroom`",
+      ].join(",");
+      const jsonIterationsTextWidthPairDoc =
+        "`default_output_iterations`,`text_width_docs_checked`";
+      const swappedJsonIterationsTextWidthPairDoc =
+        "`text_width_docs_checked`,`default_output_iterations`";
       assertSelfTestMissing(
         evaluate(
           runbook.replace(
-            "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
-            "`density_label_line_width`,`text_width_docs_checked`,`default_output_iterations`,`default_output_headroom`",
+            jsonHeadroomOrderDoc,
+            swappedJsonHeadroomOrderDoc,
           ),
           maxLines,
         ),
         "context_anomaly_runbook_density_missing_output_docs",
-        "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
+        jsonHeadroomOrderDoc,
         "swapped_default_output_headroom_json_doc_order",
       );
       assertSelfTestMissing(
         evaluate(
           runbook.replace(
-            "`default_output_iterations`,`text_width_docs_checked`",
-            "`text_width_docs_checked`,`default_output_iterations`",
+            jsonIterationsTextWidthPairDoc,
+            swappedJsonIterationsTextWidthPairDoc,
           ),
           maxLines,
         ),
         "context_anomaly_runbook_density_missing_output_docs",
-        "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
+        jsonHeadroomOrderDoc,
         "swapped_default_output_iterations_json_doc_order",
       );
       assertSelfTestMissing(
