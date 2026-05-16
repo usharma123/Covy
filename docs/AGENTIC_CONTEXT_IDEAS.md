@@ -676,12 +676,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field order mutation row names | Makes row fields name order-doc mutation semantics instead of generic document values. | Renamed `originalDoc` and `swappedDoc` to `originalOrderDoc` and `swappedOrderDoc` in `jsonFieldOrderMutations`. | Evidence: no runtime output growth; each mutation row still replaces the intended order-doc string. |
 | Context anomaly drilldown density self-test JSON field order mutation row name order | Keeps renamed order row fields aligned between table entries and loop destructuring. | Verified `originalOrderDoc` and `swappedOrderDoc` appear in both `jsonFieldOrderMutations` rows and in the loop destructuring used by `runbook.replace(...)`. | Evidence: no runtime output growth; row-field names stay consistent through execution. |
 | Context anomaly drilldown density self-test JSON field order mutation row helper | Names the per-row execution of JSON order mutations. | Extracted the loop body in `assertJsonFieldOrderDocMutationSelfTests()` into `assertJsonFieldOrderMutation(jsonFieldOrderMutation)`. | Evidence: no runtime output growth; each table row still executes the same replacement and case-name assertion. |
+| Context anomaly drilldown density self-test JSON field order mutation row helper order | Keeps the row helper beside the table it executes. | Verified `assertJsonFieldOrderMutation(jsonFieldOrderMutation)` is defined immediately after `jsonFieldOrderMutations` and used by the following loop. | Evidence: no runtime output growth; row helper remains local to the order mutation table. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field order mutation row helper order | Keeps the row helper beside the table it executes. | Verify `assertJsonFieldOrderMutation(jsonFieldOrderMutation)` is defined immediately after `jsonFieldOrderMutations` and used by the following loop. | Compact metric: no runtime output growth; correctness metric: row helper remains local to the order mutation table. |
+| Context anomaly drilldown density self-test JSON field order post-helper audit | Checks whether the JSON order helper is now decomposed enough. | Re-scan `assertJsonFieldOrderDocMutationSelfTests()` after the row-helper extraction and decide whether the remaining constants, table, and loop should stay local. | Compact metric: no runtime output growth; correctness metric: next decision is based on current helper shape rather than inertia. |
 
 ## Research Rules
 
