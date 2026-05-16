@@ -509,12 +509,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation field identity assertion wrapper shape | Keeps the top-level identity assertion as sample-then-assert. | Verified `assertDefaultOutputMutationFieldIdentity()` only samples identity fields and delegates to `assertDefaultOutputMutationFieldIdentitySample()`. | Evidence: no runtime output growth; top-level identity assertion remains a two-step wrapper. |
 | Context anomaly drilldown density self-test default output mutation field identity assertion sample parameter | Makes the sample assertion helper parameter match its diagnostic payload. | Renamed `identityFieldSample` to `sample` inside `assertDefaultOutputMutationFieldIdentitySample()`. | Evidence: no runtime output growth; match and failure helper consume the same sample parameter. |
 | Context anomaly drilldown density self-test default output mutation field identity sample assertion call helper | Makes the top-level assertion delegate through a named call helper. | Extracted `assertSampledDefaultOutputMutationFieldIdentity()` for sampling plus sample assertion. | Evidence: no runtime output growth; top-level default-output mutation checks still call one identity assertion helper. |
+| Context anomaly drilldown density self-test default output mutation field identity top-level wrapper | Keeps `assertDefaultOutputMutationFieldIdentity()` as the public group-level assertion hook. | Verified it delegates only to `assertSampledDefaultOutputMutationFieldIdentity()`. | Evidence: no runtime output growth; `assertDefaultOutputMutations()` still calls the public identity hook. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation field identity top-level wrapper | Keeps `assertDefaultOutputMutationFieldIdentity()` as the public group-level assertion hook. | Verify it delegates only to `assertSampledDefaultOutputMutationFieldIdentity()`. | Compact metric: no runtime output growth; correctness metric: `assertDefaultOutputMutations()` still calls the public identity hook. |
+| Context anomaly drilldown density self-test default output mutation sampled assertion order | Keeps sampled identity assertion beside the public wrapper. | Verify `assertSampledDefaultOutputMutationFieldIdentity()` sits directly above `assertDefaultOutputMutationFieldIdentity()`. | Compact metric: no runtime output growth; correctness metric: sampled assertion helper remains adjacent to its only caller. |
 
 ## Research Rules
 
