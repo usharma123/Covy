@@ -1940,60 +1940,16 @@ if (args.includes("--self-test")) {
     };
     assertJsonFieldNameDocMutationSelfTest();
     const assertJsonFieldDocMutationSelfTests = () => {
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`alias_docs_checked`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`alias_docs_checked`",
-        "missing_alias_docs_checked_json_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`row_soft_ok`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`row_soft_ok`",
-        "missing_row_soft_ok_json_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`density_doc_phrases_checked`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`density_doc_phrases_checked`",
-        "missing_density_doc_phrases_checked_json_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`density_doc_anchors_checked`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`density_doc_anchors_checked`",
-        "missing_density_doc_anchors_checked_json_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`parsed_fields_checked`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`parsed_fields_checked`",
-        "missing_parsed_fields_checked_json_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`json_parity_fields_checked`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`json_parity_fields_checked`",
-        "missing_json_parity_fields_checked_json_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`density_label_line_width`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`density_label_line_width`",
-        "missing_density_label_line_width_json_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`default_output_headroom`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`default_output_headroom`",
-        "missing_default_output_headroom_json_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`default_output_iterations`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`default_output_iterations`",
-        "missing_default_output_iterations_json_doc",
-      );
+      const assertRequiredJsonFieldDocs = (requiredJsonFieldDocs) => {
+        for (const [fieldDoc, caseName] of requiredJsonFieldDocs) {
+          assertSelfTestMissing(
+            evaluate(runbook.replace(fieldDoc, ""), maxLines),
+            "context_anomaly_runbook_density_missing_output_docs",
+            fieldDoc,
+            caseName,
+          );
+        }
+      };
       const assertJsonFieldOrderDocMutationSelfTests = () => {
         const jsonHeadroomOrderDoc = [
           "`density_label_line_width`",
@@ -2036,13 +1992,39 @@ if (args.includes("--self-test")) {
           "swapped_default_output_iterations_json_doc_order",
         );
       };
+      assertRequiredJsonFieldDocs([
+        ["`alias_docs_checked`", "missing_alias_docs_checked_json_doc"],
+        ["`row_soft_ok`", "missing_row_soft_ok_json_doc"],
+        [
+          "`density_doc_phrases_checked`",
+          "missing_density_doc_phrases_checked_json_doc",
+        ],
+        [
+          "`density_doc_anchors_checked`",
+          "missing_density_doc_anchors_checked_json_doc",
+        ],
+        ["`parsed_fields_checked`", "missing_parsed_fields_checked_json_doc"],
+        [
+          "`json_parity_fields_checked`",
+          "missing_json_parity_fields_checked_json_doc",
+        ],
+        [
+          "`density_label_line_width`",
+          "missing_density_label_line_width_json_doc",
+        ],
+        [
+          "`default_output_headroom`",
+          "missing_default_output_headroom_json_doc",
+        ],
+        [
+          "`default_output_iterations`",
+          "missing_default_output_iterations_json_doc",
+        ],
+      ]);
       assertJsonFieldOrderDocMutationSelfTests();
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`text_width_docs_checked`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`text_width_docs_checked`",
-        "missing_text_width_docs_checked_json_doc",
-      );
+      assertRequiredJsonFieldDocs([
+        ["`text_width_docs_checked`", "missing_text_width_docs_checked_json_doc"],
+      ]);
     };
     assertJsonFieldDocMutationSelfTests();
     const assertJsonByteHelpCapMutationSelfTests = () => {
