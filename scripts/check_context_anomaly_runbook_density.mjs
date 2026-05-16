@@ -2137,12 +2137,15 @@ if (args.includes("--self-test")) {
     );
   };
   assertTextHeadroomMutationSelfTest();
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`ok:false`", ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "`ok:false`",
-    "missing_json_error_shape_doc",
-  );
+  const assertJsonErrorShapeMutationSelfTest = () => {
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`ok:false`", ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "`ok:false`",
+      "missing_json_error_shape_doc",
+    );
+  };
+  assertJsonErrorShapeMutationSelfTest();
   assertSelfTestMissing(
     evaluate(runbook.replace("`no-succ`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
