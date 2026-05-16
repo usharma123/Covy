@@ -679,12 +679,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field order mutation row helper order | Keeps the row helper beside the table it executes. | Verified `assertJsonFieldOrderMutation(jsonFieldOrderMutation)` is defined immediately after `jsonFieldOrderMutations` and used by the following loop. | Evidence: no runtime output growth; row helper remains local to the order mutation table. |
 | Context anomaly drilldown density self-test JSON field order post-helper audit | Checks whether the JSON order helper is now decomposed enough. | Re-scanned `assertJsonFieldOrderDocMutationSelfTests()` after the row-helper extraction and kept the current constants, table, row helper, and loop local as a compact stopping point. | Evidence: no runtime output growth; next decision is based on the parent helper shape rather than inertia. |
 | Context anomaly drilldown density self-test JSON field parent post-order audit | Checks whether `assertJsonFieldDocMutationSelfTests()` still needs decomposition after order-helper cleanup. | Re-scanned the parent JSON field-doc helper and kept its presence/order/presence structure as the stopping point while moving the next target to the adjacent byte/help cap helper. | Evidence: no runtime output growth; next target is based on the parent helper shape. |
+| Context anomaly drilldown density self-test JSON byte/help cap table | Replaces repeated JSON byte/help cap assertions with a compact table. | Extracted the two assertions in `assertJsonByteHelpCapMutationSelfTests()` into a `jsonByteHelpCapDocs` table with doc text and case name. | Evidence: no runtime output growth; max-json-bytes and help-cap docs still fail with their existing case names. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON byte/help cap table | Replaces repeated JSON byte/help cap assertions with a compact table. | Extract the two assertions in `assertJsonByteHelpCapMutationSelfTests()` into a `jsonByteHelpCapDocs` table with doc text and case name. | Compact metric: no runtime output growth; correctness metric: max-json-bytes and help-cap docs still fail with their existing case names. |
+| Context anomaly drilldown density self-test JSON byte/help cap table order | Keeps the byte/help cap table beside the loop that executes it. | Verify `jsonByteHelpCapDocs` is defined inside `assertJsonByteHelpCapMutationSelfTests()` immediately before the `docText`/`caseName` loop. | Compact metric: no runtime output growth; correctness metric: table rows remain adjacent to their assertion loop. |
 
 ## Research Rules
 
