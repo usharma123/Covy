@@ -2168,18 +2168,21 @@ if (args.includes("--self-test")) {
     );
   };
   assertStaleFailureAliasMutationSelfTest();
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace(
-        "`ok:false`;`no-succ`;h:`help<=120`",
-        "`ok:false`;`no-succ`;x:`help<=120`",
+  const assertJsonErrorHelpAdjacencyMutationSelfTest = () => {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replace(
+          "`ok:false`;`no-succ`;h:`help<=120`",
+          "`ok:false`;`no-succ`;x:`help<=120`",
+        ),
+        maxLines,
       ),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "`ok:false`;`no-succ`;h:`help<=120`",
-    "missing_json_error_help_adjacency_doc",
-  );
+      "context_anomaly_runbook_density_missing_output_docs",
+      "`ok:false`;`no-succ`;h:`help<=120`",
+      "missing_json_error_help_adjacency_doc",
+    );
+  };
+  assertJsonErrorHelpAdjacencyMutationSelfTest();
   assertSelfTestMissing(
     evaluate(
       runbook.replace(
