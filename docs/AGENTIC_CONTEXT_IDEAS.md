@@ -627,12 +627,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test workflow command order | Keeps workflow command coverage before env limit checks. | Verified `assertWorkflowCommandMutationSelfTests()` sits after plain env-doc coverage and before the first `assertEnvFailure()` limit check. | Evidence: no runtime output growth; workflow command coverage remains before env limit coverage. |
 | Context anomaly drilldown density self-test env limit wrapper | Names the max-line and row-width env failure checks. | Extracted `assertEnvLimitFailureSelfTests()` around `P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES` and `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX` failure assertions. | Evidence: no runtime output growth; env limit failures remain covered for line and row caps. |
 | Context anomaly drilldown density self-test env limit order | Keeps hard env limit failures before soft-row outputs. | Verified `assertEnvLimitFailureSelfTests()` sits after workflow command coverage and before `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX` output assertions. | Evidence: no runtime output growth; hard env limit coverage remains before soft-row output coverage. |
+| Context anomaly drilldown density self-test soft-row output wrapper | Names the row soft-limit text and JSON output checks. | Extracted `assertSoftRowOutputSelfTests()` around the two `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX` output assertions. | Evidence: no runtime output growth; soft-row output remains covered in text and JSON modes. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test soft-row output wrapper | Names the row soft-limit text and JSON output checks. | Extract `assertSoftRowOutputSelfTests()` around the two `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX` output assertions. | Compact metric: no runtime output growth; correctness metric: soft-row output remains covered in text and JSON modes. |
+| Context anomaly drilldown density self-test soft-row output order | Keeps soft-row output checks before prose/text env failures. | Verify `assertSoftRowOutputSelfTests()` sits after hard env limit coverage and before `P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX` failure coverage. | Compact metric: no runtime output growth; correctness metric: soft-row output coverage remains before prose/text env failures. |
 
 ## Research Rules
 

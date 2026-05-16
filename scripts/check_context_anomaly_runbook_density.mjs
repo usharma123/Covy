@@ -2244,16 +2244,19 @@ if (args.includes("--self-test")) {
     );
   };
   assertEnvLimitFailureSelfTests();
-  assertEnvOutput(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
-    [],
-    "soft=over",
-  );
-  assertEnvOutput(
-    { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
-    ["--json"],
-    '"row_soft_ok":false',
-  );
+  const assertSoftRowOutputSelfTests = () => {
+    assertEnvOutput(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
+      [],
+      "soft=over",
+    );
+    assertEnvOutput(
+      { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
+      ["--json"],
+      '"row_soft_ok":false',
+    );
+  };
+  assertSoftRowOutputSelfTests();
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX: "10" },
     [],
