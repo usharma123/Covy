@@ -255,12 +255,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density alias JSON count self-test | Proves JSON alias count tracks the expanded alias glossary list. | Density self-test now verifies JSON payload `alias_docs_checked` equals the evaluated alias doc count. | Evidence: JSON stays under budget; JSON alias count equals required alias doc count. |
 | Context anomaly drilldown density width-doc parser coverage | Proves parser validation checks the compact `wdocs` count, not only field presence. | Default output parsing now verifies `wdocs`, and self-test mutates `wdocs=0` to require a field-specific mismatch. | Evidence: default output stays under text cap; stale `wdocs` fails parser validation. |
 | Context anomaly drilldown density width-doc JSON parity | Lets JSON consumers inspect width-doc coverage without parsing default text. | JSON success output now includes `text_width_docs_checked` with a documented 480-byte cap. | Evidence: JSON stays under budget; JSON count equals width-doc pair coverage. |
+| Context anomaly drilldown density width-doc JSON docs | Helps maintainers discover `text_width_docs_checked` without reading checker source. | The runbook now documents `text_width_docs_checked`, and the checker self-tests removal of that field doc. | Evidence: prose remains under width budget; removing the field doc fails output-doc coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density width-doc JSON docs | Helps maintainers discover `text_width_docs_checked` without reading checker source. | Document `text_width_docs_checked` with the compact JSON fields and self-test removal. | Compact metric: prose remains under width budget; correctness metric: removing the field doc fails output-doc coverage. |
+| Context anomaly drilldown density JSON field prose recovery two | Restores prose headroom after adding width-doc JSON docs. | Split or compress compact JSON field docs while preserving every guarded field name. | Compact metric: `prose` returns below 340; correctness metric: JSON field docs still pass. |
 
 ## Research Rules
 
