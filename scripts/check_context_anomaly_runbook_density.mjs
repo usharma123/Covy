@@ -81,7 +81,12 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_prose_too_wide",
   "context_anomaly_runbook_density_json_too_long",
 ];
-const requiredOutputLabels = ["failure_codes", "workflow_commands", "prose"];
+const requiredOutputLabels = [
+  "failure_codes",
+  "workflow_commands",
+  "prose",
+  "json_headroom",
+];
 
 function evaluate(runbook, lineBudget) {
   const lineCount = runbook.endsWith("\n")
@@ -415,6 +420,7 @@ if (!workflowResult.ok) {
 }
 
 const payload = successPayload(result, workflowResult, maxJsonBytes);
+const jsonHeadroomBytes = maxJsonBytes - JSON.stringify(payload).length;
 if (args.includes("--json")) {
   const issue = jsonBudgetIssue(payload, maxJsonBytes);
   if (issue) {
@@ -428,5 +434,6 @@ if (args.includes("--json")) {
     `failure_codes=${payload.failure_codes_checked}`,
     `workflow_commands=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
+    `json_headroom=${jsonHeadroomBytes}`,
   );
 }
