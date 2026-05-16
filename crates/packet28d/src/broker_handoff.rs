@@ -1,6 +1,6 @@
 use super::*;
 use crate::broker_context::compute_broker_response;
-use packet28_daemon_core::{BrokerHandoffDescriptor, BrokerHandoffStatus};
+use packet28_daemon_core::{BrokerHandoffDescriptor, BrokerHandoffReadiness, BrokerHandoffStatus};
 
 pub(crate) fn next_action_summary(
     manage: Option<&suite_packet_core::ContextManagePayload>,
@@ -107,6 +107,72 @@ fn handoff_contradiction_warnings(
     warnings.sort();
     warnings.dedup();
     warnings
+}
+
+fn handoff_readiness_score(
+    handoff_ready: bool,
+    warnings: &[String],
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    next_action_summary: Option<&str>,
+) -> BrokerHandoffReadiness {
+    let mut score = 100_u64;
+    let mut reasons = Vec::new();
+    if !handoff_ready {
+        score = score.saturating_sub(35);
+        reasons.push("handoff_not_ready".to_string());
+    }
+    if snapshot.latest_checkpoint_id.is_none() {
+        score = score.saturating_sub(20);
+        reasons.push("missing_checkpoint".to_string());
+    }
+    if !snapshot.open_questions.is_empty() {
+        score = score.saturating_sub(
+            (snapshot.open_questions.len() as u64)
+                .saturating_mul(10)
+                .min(25),
+        );
+        reasons.push(format!("open_questions={}", snapshot.open_questions.len()));
+    }
+    if !warnings.is_empty() {
+        score = score.saturating_sub((warnings.len() as u64).saturating_mul(25).min(50));
+        reasons.push(format!("contradictions={}", warnings.len()));
+    }
+    if next_action_summary
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        score = score.saturating_sub(10);
+        reasons.push("missing_next_action".to_string());
+    }
+    let has_dirty_state = !snapshot.changed_paths_since_checkpoint.is_empty()
+        || !snapshot.changed_symbols_since_checkpoint.is_empty()
+        || !snapshot.files_edited.is_empty();
+    let has_recent_verification = snapshot.recent_tool_invocations.iter().any(|tool| {
+        matches!(
+            tool.operation_kind,
+            suite_packet_core::ToolOperationKind::Build
+                | suite_packet_core::ToolOperationKind::Test
+                | suite_packet_core::ToolOperationKind::Diff
+        )
+    });
+    if has_dirty_state && !has_recent_verification {
+        score = score.saturating_sub(15);
+        reasons.push("missing_recent_verification".to_string());
+    }
+    let status = if score >= 85 {
+        "ready"
+    } else if score >= 60 {
+        "caution"
+    } else {
+        "blocked"
+    }
+    .to_string();
+    BrokerHandoffReadiness {
+        score,
+        status,
+        reasons,
+    }
 }
 
 pub(crate) fn latest_handoff_descriptor(
@@ -629,6 +695,12 @@ pub(crate) fn broker_prepare_handoff(
     let warnings = handoff_contradiction_warnings(&snapshot);
     let latest_intention = snapshot.latest_intention.clone();
     let next_action_summary = next_action_summary(None, &snapshot);
+    let readiness = handoff_readiness_score(
+        handoff_ready,
+        &warnings,
+        &snapshot,
+        next_action_summary.as_deref(),
+    );
     if !handoff_ready {
         if let Some(existing_handoff) = latest_ready_handoff.as_ref() {
             if let Some(existing_context_version) = task
@@ -661,7 +733,8 @@ pub(crate) fn broker_prepare_handoff(
                             handoff_ready: true,
                             handoff_reason: "Latest handoff artifact is available for resume."
                                 .to_string(),
-                            warnings,
+                            warnings: warnings.clone(),
+                            readiness: readiness.clone(),
                             latest_checkpoint_id: snapshot.latest_checkpoint_id,
                             handoff: Some(existing_handoff.clone()),
                             latest_handoff_artifact_id: Some(existing_handoff.artifact_id.clone()),
@@ -681,7 +754,8 @@ pub(crate) fn broker_prepare_handoff(
             task_id: request.task_id,
             handoff_ready,
             handoff_reason,
-            warnings,
+            warnings: warnings.clone(),
+            readiness: readiness.clone(),
             latest_checkpoint_id: snapshot.latest_checkpoint_id,
             handoff: latest_handoff.clone(),
             latest_handoff_artifact_id: latest_handoff
@@ -759,6 +833,7 @@ pub(crate) fn broker_prepare_handoff(
         handoff_ready: true,
         handoff_reason,
         warnings,
+        readiness,
         latest_checkpoint_id: snapshot.latest_checkpoint_id.clone(),
         handoff: Some(handoff.clone()),
         latest_handoff_artifact_id: Some(artifact_id),

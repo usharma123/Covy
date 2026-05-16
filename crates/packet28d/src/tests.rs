@@ -1973,6 +1973,81 @@ fn prepare_handoff_warns_when_tool_evidence_contradicts_active_hypothesis() {
     assert!(response.warnings[0].contains("handoff_contradiction"));
     assert!(response.warnings[0].contains("hypothesis:auth-cache"));
     assert!(response.warnings[0].contains("tool #42"));
+    assert_eq!(response.readiness.status, "caution");
+    assert!(response.readiness.score < 85);
+    assert!(response
+        .readiness
+        .reasons
+        .iter()
+        .any(|reason| reason == "contradictions=1"));
+}
+
+#[test]
+fn prepare_handoff_readiness_score_rises_after_verification_evidence() {
+    let state = daemon_test_state();
+    for (task_id, with_verification) in [
+        ("task-readiness-unverified", false),
+        ("task-readiness-verified", true),
+    ] {
+        state.lock().unwrap().agent_snapshots.insert(
+            task_id.to_string(),
+            suite_packet_core::AgentSnapshotPayload {
+                task_id: task_id.to_string(),
+                latest_checkpoint_id: Some("checkpoint-1".to_string()),
+                changed_paths_since_checkpoint: vec!["src/lib.rs".to_string()],
+                latest_intention: Some(suite_packet_core::AgentIntention {
+                    text: "Hand off after library edit".to_string(),
+                    occurred_at_unix: 1,
+                    ..suite_packet_core::AgentIntention::default()
+                }),
+                recent_tool_invocations: if with_verification {
+                    vec![suite_packet_core::ToolInvocationSummary {
+                        invocation_id: "test-1".to_string(),
+                        sequence: 7,
+                        tool_name: "cargo test".to_string(),
+                        operation_kind: suite_packet_core::ToolOperationKind::Test,
+                        result_summary: Some("tests passed".to_string()),
+                        ..suite_packet_core::ToolInvocationSummary::default()
+                    }]
+                } else {
+                    Vec::new()
+                },
+                ..suite_packet_core::AgentSnapshotPayload::default()
+            },
+        );
+    }
+
+    let unverified = broker_prepare_handoff(
+        state.clone(),
+        BrokerPrepareHandoffRequest {
+            task_id: "task-readiness-unverified".to_string(),
+            response_mode: Some(BrokerResponseMode::Slim),
+            ..BrokerPrepareHandoffRequest::default()
+        },
+    )
+    .unwrap();
+    let verified = broker_prepare_handoff(
+        state,
+        BrokerPrepareHandoffRequest {
+            task_id: "task-readiness-verified".to_string(),
+            response_mode: Some(BrokerResponseMode::Slim),
+            ..BrokerPrepareHandoffRequest::default()
+        },
+    )
+    .unwrap();
+
+    assert!(verified.readiness.score > unverified.readiness.score);
+    assert!(unverified
+        .readiness
+        .reasons
+        .iter()
+        .any(|reason| reason == "missing_recent_verification"));
+    assert!(!verified
+        .readiness
+        .reasons
+        .iter()
+        .any(|reason| reason == "missing_recent_verification"));
+    assert!(serde_json::to_string(&verified.readiness).unwrap().len() < 512);
 }
 
 #[test]

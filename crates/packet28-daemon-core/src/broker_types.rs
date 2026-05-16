@@ -381,11 +381,20 @@ pub struct BrokerPrepareHandoffRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
+pub struct BrokerHandoffReadiness {
+    pub score: u64,
+    pub status: String,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct BrokerPrepareHandoffResponse {
     pub task_id: String,
     pub handoff_ready: bool,
     pub handoff_reason: String,
     pub warnings: Vec<String>,
+    pub readiness: BrokerHandoffReadiness,
     pub latest_checkpoint_id: Option<String>,
     pub handoff: Option<BrokerHandoffDescriptor>,
     pub latest_handoff_artifact_id: Option<String>,
