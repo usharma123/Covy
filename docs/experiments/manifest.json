@@ -70,6 +70,51 @@
       ]
     },
     {
+      "id": "fixture-suite-smoke-3x-20260511",
+      "workflow": "Packet28 repeatable fixture-suite smoke across Rust, Node, and docs repositories",
+      "commands": [
+        "docs/experiments/run_packet28_fixture_suite.sh"
+      ],
+      "artifacts": [
+        "docs/experiments/fixture-suite/SMOKE_20260511.md",
+        "docs/experiments/fixture-suite/smoke-3x/summary.md",
+        "docs/experiments/fixture-suite/smoke-3x/results.jsonl"
+      ],
+      "metrics": [
+        {
+          "name": "packet28_fixture_runs",
+          "value": 24,
+          "min": 24
+        },
+        {
+          "name": "raw_artifact_recovery_available",
+          "value": 24,
+          "min": 24
+        },
+        {
+          "name": "packet28_savings_percent",
+          "value": 79.89,
+          "min": 75
+        },
+        {
+          "name": "indexed_search_hit_count",
+          "value": 2,
+          "min": 2
+        }
+      ],
+      "fallback_reasons": [
+        "regex search index is not ready",
+        "candidate set remained too broad for indexed verification (3/4 files)"
+      ],
+      "allow_fallbacks": true,
+      "runtime_versions": [
+        {
+          "name": "packet28",
+          "version": "0.2.52"
+        }
+      ]
+    },
+    {
       "id": "fff-search-backend-20260511",
       "workflow": "Optional fff MCP search backend comparison and adapter smoke",
       "commands": [
