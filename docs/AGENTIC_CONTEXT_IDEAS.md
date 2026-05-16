@@ -208,12 +208,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text output compact aliases | Reduces default text width while preserving parseable labels. | Density default output now uses compact aliases such as `cmds`, `fc`, `wf`, `json`, and `width` while JSON keeps full field names. | Evidence: `width` drops below 210, parser self-test passes, and required alias docs still pass. |
 | Context anomaly drilldown density alias docs repair | Helps maintainers map compact default labels back to their meaning. | The runbook now says JSON keeps full field names while default text uses one-line aliases. | Evidence: runbook remains within line/prose/table budgets and phrase matches current default and JSON outputs. |
 | Context anomaly drilldown density alias docs coverage | Prevents alias docs from drifting after compact text changes. | The density checker now requires the runbook phrase `JSON keeps full field names`. | Evidence: default output stays one line and removing the phrase fails missing output docs. |
+| Context anomaly drilldown density output phrase count refresh | Keeps `phrases` count meaningful after alias-doc phrase coverage grows. | The default `phrases` count now reflects both guarded output-doc phrases. | Evidence: default output remains under width cap; `phrases=2` equals required output phrase count and parser self-test passes. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output phrase count refresh | Keeps `phrases` count meaningful after alias-doc phrase coverage grows. | Verify default `phrases` count increments for the added alias-doc phrase and parser self-test still passes. | Compact metric: default output remains under width cap; correctness metric: `phrases` equals required output phrase count. |
+| Context anomaly drilldown density alias glossary docs | Helps maintainers interpret compact labels without reading checker source. | Add a compact alias glossary for the least obvious labels, such as `fc`, `wf`, and `json`. | Compact metric: runbook remains within line/prose/table budgets; correctness metric: glossary matches current parser labels. |
 
 ## Research Rules
 
