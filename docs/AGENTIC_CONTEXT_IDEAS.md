@@ -132,12 +132,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit JSON checksum summary | Lets maintainers confirm the structured audit artifact matches the run without downloading it. | The context-anomalies workflow summary now prints a SHA-256 checksum for `context-anomaly-hidden-sample-audit.json`. | Evidence: the new summary line is under 100 characters; checksum helper reproduces the uploaded JSON digest. |
 | Context anomaly drilldown audit JSON checksum docs | Helps maintainers reproduce the structured audit artifact checksum locally. | The runbook artifact note now says the same checksum helper applies to the text and JSON audit artifact paths. | Evidence: runbook remains under 45 lines and the command matches the workflow checksum helper invocation. |
 | Context anomaly drilldown audit artifact fallback | Keeps the workflow summary useful if audit artifact creation fails before checksum files exist. | Audit checksum summary fields now fall back to `missing-audit-text` or `missing-audit-json` when artifact files are absent. | Evidence: summary line count does not grow; missing artifact checksum commands report named placeholders instead of failing the summary step. |
+| Context anomaly drilldown audit artifact fallback docs | Helps maintainers interpret placeholder audit checksums in failed workflow summaries. | The runbook artifact note now explains `missing-audit-text/json` placeholders. | Evidence: runbook remains under 45 lines and placeholders match workflow fallback strings. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit artifact fallback docs | Helps maintainers interpret placeholder audit checksums in failed workflow summaries. | Add a short runbook note for `missing-audit-text` and `missing-audit-json`. | Compact metric: runbook remains under 45 lines; correctness metric: placeholders match workflow fallback strings. |
+| Context anomaly drilldown audit summary field budget | Prevents the growing context anomaly summary from becoming noisy in failed CI runs. | Add a local script check that counts context anomaly summary lines and max line length from the workflow template. | Compact metric: summary stays under an explicit line and width budget; correctness metric: required audit, fixture, and formatter fields are present. |
 
 ## Research Rules
 
