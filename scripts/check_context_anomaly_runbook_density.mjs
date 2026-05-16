@@ -94,7 +94,7 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_text_too_wide",
   "context_anomaly_runbook_density_json_too_long",
 ];
-const requiredOutputLabels = [
+const defaultOutputFieldOrder = [
   "lines",
   "row",
   "cmds",
@@ -113,7 +113,8 @@ const requiredOutputLabels = [
   "wdocs",
   "width",
 ];
-const defaultTextFields = [...requiredOutputLabels];
+const requiredOutputLabels = [...defaultOutputFieldOrder];
+const defaultTextFields = [...defaultOutputFieldOrder];
 const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
@@ -751,9 +752,11 @@ if (args.includes("--self-test")) {
   }
   const parsedDefaultOutput = parseDefaultOutput(defaultOutputLine);
   const parsedDefaultOutputFields = Object.keys(parsedDefaultOutput);
-  if (parsedDefaultOutputFields.join(",") !== defaultTextFields.join(",")) {
+  if (
+    parsedDefaultOutputFields.join(",") !== defaultOutputFieldOrder.join(",")
+  ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error(`expected_field_order=${defaultTextFields.join(",")}`);
+    console.error(`expected_field_order=${defaultOutputFieldOrder.join(",")}`);
     console.error(`actual_field_order=${parsedDefaultOutputFields.join(",")}`);
     process.exit(1);
   }

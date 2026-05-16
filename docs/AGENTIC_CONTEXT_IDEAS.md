@@ -296,12 +296,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density mutation stale-map docs | Helps maintainers add compact fields without guessing how stale mutation values are chosen. | The checker now comments that stale values must be parseable, field-specific, and guarded against no-op mutations. | Evidence: runbook output remains unchanged; stale mutation values remain auditable. |
 | Context anomaly drilldown density mutation table helper extraction | Makes the self-test mutation loop easier to reuse as compact output fields evolve. | The self-test now uses a local helper for the repeated missing/stale mutation checks. | Evidence: self-test output remains one line; mutation table coverage remains unchanged. |
 | Context anomaly drilldown density mutation table field-order audit | Keeps compact output parsing deterministic as fields are added or reordered. | The checker now aligns `defaultTextFields` with renderer order and self-tests parsed key order. | Evidence: self-test output remains one line; field-order drift fails self-test. |
+| Context anomaly drilldown density render-order helper | Prevents future drift between label declarations and renderer array ordering. | The checker now uses `defaultOutputFieldOrder` as the source for output labels and parser-order checks. | Evidence: default output remains unchanged; label-order source is singular. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density render-order helper | Prevents future drift between label declarations and renderer array ordering. | Introduce a single render-order constant used by both default text fields and renderer checks. | Compact metric: default output remains unchanged; correctness metric: label-order source is singular. |
+| Context anomaly drilldown density render-order docs guard | Helps maintainers keep the runbook alias list in the same order agents see in compact output. | Require the runbook `key=value` label list to match `defaultOutputFieldOrder`. | Compact metric: runbook stays within 44 lines; correctness metric: label-order docs drift fails self-test. |
 
 ## Research Rules
 
