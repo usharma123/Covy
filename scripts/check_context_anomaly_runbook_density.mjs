@@ -90,6 +90,7 @@ const requiredOutputLabels = [
   "env_docs",
   "output_labels",
 ];
+const requiredOutputDocPhrases = ["key=value"];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
@@ -128,6 +129,9 @@ function evaluate(runbook, lineBudget) {
   );
   const missingOutputLabels = requiredOutputLabels.filter(
     (label) => !runbook.includes(`\`${label}\``),
+  );
+  const missingOutputDocPhrases = requiredOutputDocPhrases.filter(
+    (phrase) => !runbook.includes(`\`${phrase}\``),
   );
   const missingEnvDocs = requiredEnvDocs.filter(
     (envName) => !runbook.includes(`\`${envName}\``),
@@ -170,11 +174,11 @@ function evaluate(runbook, lineBudget) {
       missing: missingFailureCodes,
     };
   }
-  if (missingOutputLabels.length > 0) {
+  if (missingOutputLabels.length > 0 || missingOutputDocPhrases.length > 0) {
     return {
       ok: false,
       code: "context_anomaly_runbook_density_missing_output_docs",
-      missing: missingOutputLabels,
+      missing: [...missingOutputLabels, ...missingOutputDocPhrases],
     };
   }
   if (missingEnvDocs.length > 0) {
@@ -494,6 +498,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`output_labels`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`key=value`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(

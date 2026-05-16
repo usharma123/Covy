@@ -195,12 +195,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default output parser | Prevents future text-output labels from becoming hard to consume. | Density self-test now parses the default one-line output and verifies expected count and budget fields. | Evidence: default output remains one line and parser extracts all expected counts and budgets. |
 | Context anomaly drilldown density default output parser failure | Proves malformed default density text fails the parser instead of being accepted silently. | Density self-test now rejects malformed prefixes and missing output-label fields. | Evidence: self-test output stays one line and malformed prefix or missing labels fails parser validation. |
 | Context anomaly drilldown density default output docs | Helps maintainers know the default text output is intentionally parseable. | The runbook now notes that density default output is one-line `key=value` text. | Evidence: runbook remains within line/prose/table budgets and note matches parser expectations. |
+| Context anomaly drilldown density default output docs coverage | Prevents parseable-output docs from drifting after text-output changes. | The density checker now requires the runbook `key=value` parseability note. | Evidence: default output stays one line and removing `key=value` fails missing output docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default output docs coverage | Prevents parseable-output docs from drifting after text-output changes. | Have the density checker require `key=value` in the runbook density output docs. | Compact metric: default output stays one line; correctness metric: removing `key=value` fails missing output docs. |
+| Context anomaly drilldown density output docs phrase count | Helps automation see how many non-label output doc phrases are guarded. | Report `output_doc_phrases` in default density output without growing JSON. | Compact metric: default output stays one line; correctness metric: count matches required output doc phrase list. |
 
 ## Research Rules
 
