@@ -54,7 +54,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Check context anomaly summary budget
-        run: node scripts/check_context_anomaly_summary_budget.mjs --self-test
+        run: |
+          node scripts/check_context_anomaly_summary_budget.mjs --help
+          node scripts/check_context_anomaly_summary_budget.mjs --self-test
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
