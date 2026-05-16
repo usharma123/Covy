@@ -147,6 +147,8 @@ struct ContextAnomalyTile {
     latest_status: String,
     latest_anomaly_count: usize,
     latest_high_count: usize,
+    latest_age_ms: u64,
+    oldest_recurring_hidden_age_ms: u64,
     latest_hidden_categories: Vec<String>,
     recurring_hidden_categories: Vec<String>,
 }
@@ -344,6 +346,14 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         println!(
             "context_anomaly_latest_high_count={}",
             report.context_anomalies.latest_high_count
+        );
+        println!(
+            "context_anomaly_latest_age_ms={}",
+            report.context_anomalies.latest_age_ms
+        );
+        println!(
+            "context_anomaly_oldest_recurring_hidden_age_ms={}",
+            report.context_anomalies.oldest_recurring_hidden_age_ms
         );
     }
     Ok(0)
@@ -564,11 +574,15 @@ fn context_anomaly_tile(root: &Path, history_path: Option<&Path>) -> Result<Cont
         });
     }
     let latest = records.last().expect("non-empty context anomaly history");
+    let (latest_age_ms, oldest_recurring_hidden_age_ms) =
+        context_anomaly_age_summary(&records, now_unix_ms());
     Ok(ContextAnomalyTile {
         run_count: records.len(),
         latest_status: if latest.ok { "ready" } else { "blocked" }.to_string(),
         latest_anomaly_count: latest.anomaly_count as usize,
         latest_high_count: latest.high_count as usize,
+        latest_age_ms,
+        oldest_recurring_hidden_age_ms,
         latest_hidden_categories: latest.hidden_categories.clone(),
         recurring_hidden_categories: recurring_context_hidden_categories(&records),
     })
@@ -789,6 +803,30 @@ fn recurring_context_hidden_categories(records: &[ContextAnomalyHistoryRecord]) 
         .filter(|(_, count)| *count > 1)
         .map(|(category, _)| category)
         .collect()
+}
+
+fn context_anomaly_age_summary(records: &[ContextAnomalyHistoryRecord], now_ms: i64) -> (u64, u64) {
+    let Some(latest) = records.last() else {
+        return (0, 0);
+    };
+    let latest_age_ms = now_ms.saturating_sub(latest.created_at_unix_ms).max(0) as u64;
+    let recurring_hidden = recurring_context_hidden_categories(records)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let oldest_recurring = records
+        .iter()
+        .filter(|record| {
+            record
+                .hidden_categories
+                .iter()
+                .any(|category| recurring_hidden.contains(category))
+        })
+        .map(|record| record.created_at_unix_ms)
+        .min();
+    let oldest_recurring_hidden_age_ms = oldest_recurring
+        .map(|created_at| now_ms.saturating_sub(created_at).max(0) as u64)
+        .unwrap_or_default();
+    (latest_age_ms, oldest_recurring_hidden_age_ms)
 }
 
 fn finalize_context_anomalies(anomalies: &mut Vec<ContextAnomaly>) -> Vec<String> {
@@ -1125,8 +1163,11 @@ fn render_dashboard_tui(report: &DashboardReport, panel: DashboardPanel) -> Stri
                 report.memory_lint.latest_status, report.memory_lint.latest_issue_count
             ));
             out.push_str(&format!(
-                "context_anomaly_latest_status={}\ncontext_anomaly_latest_high_count={}\n",
-                report.context_anomalies.latest_status, report.context_anomalies.latest_high_count
+                "context_anomaly_latest_status={}\ncontext_anomaly_latest_high_count={}\ncontext_anomaly_latest_age_ms={}\ncontext_anomaly_oldest_recurring_hidden_age_ms={}\n",
+                report.context_anomalies.latest_status,
+                report.context_anomalies.latest_high_count,
+                report.context_anomalies.latest_age_ms,
+                report.context_anomalies.oldest_recurring_hidden_age_ms
             ));
             out.push_str("handoff_latest_blockers:\n");
             push_tui_list(
@@ -1401,6 +1442,14 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
         report.context_anomalies.latest_high_count
     ));
     html.push_str(&format!(
+        "<tr><td>Latest age ms</td><td>{}</td></tr>",
+        report.context_anomalies.latest_age_ms
+    ));
+    html.push_str(&format!(
+        "<tr><td>Oldest recurring hidden age ms</td><td>{}</td></tr>",
+        report.context_anomalies.oldest_recurring_hidden_age_ms
+    ));
+    html.push_str(&format!(
         "<tr><td>Latest hidden</td><td><code>{}</code></td></tr>",
         escape_html(&report.context_anomalies.latest_hidden_categories.join(","))
     ));
@@ -1578,12 +1627,40 @@ mod tests {
         assert_eq!(tile.latest_status, "ready");
         assert_eq!(tile.latest_anomaly_count, 0);
         assert_eq!(tile.latest_high_count, 0);
+        assert!(tile.oldest_recurring_hidden_age_ms >= tile.latest_age_ms);
         assert!(tile.latest_hidden_categories.is_empty());
         assert_eq!(
             tile.recurring_hidden_categories,
             vec!["fallback_provenance"]
         );
         assert!(serde_json::to_string(&tile).unwrap().len() < 768);
+    }
+
+    #[test]
+    fn context_anomaly_age_summary_distinguishes_old_recurring_hidden() {
+        let records = vec![
+            ContextAnomalyHistoryRecord {
+                created_at_unix_ms: 1_000,
+                hidden_categories: vec!["fallback_provenance".to_string()],
+                ..ContextAnomalyHistoryRecord::default()
+            },
+            ContextAnomalyHistoryRecord {
+                created_at_unix_ms: 8_000,
+                hidden_categories: vec!["fallback_provenance".to_string()],
+                ..ContextAnomalyHistoryRecord::default()
+            },
+            ContextAnomalyHistoryRecord {
+                created_at_unix_ms: 9_000,
+                hidden_categories: Vec::new(),
+                ..ContextAnomalyHistoryRecord::default()
+            },
+        ];
+
+        let (latest_age_ms, oldest_recurring_hidden_age_ms) =
+            context_anomaly_age_summary(&records, 10_000);
+
+        assert_eq!(latest_age_ms, 1_000);
+        assert_eq!(oldest_recurring_hidden_age_ms, 9_000);
     }
 
     #[test]
@@ -1602,6 +1679,7 @@ mod tests {
         assert!(fixture.len() < 512);
         assert_eq!(tile.run_count, 3);
         assert_eq!(tile.latest_status, "ready");
+        assert!(tile.oldest_recurring_hidden_age_ms >= tile.latest_age_ms);
         assert!(tile.latest_hidden_categories.is_empty());
         assert_eq!(
             tile.recurring_hidden_categories,
