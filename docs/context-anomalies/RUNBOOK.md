@@ -19,7 +19,7 @@ Use this command table before treating a compact anomaly summary as complete:
 
 The audit script uses `verify context-anomalies --max-high 2` so local smoke can pass with known live quality debt and reports `audit_mode=tolerant`. The workflow threshold step and strict audit mode use `--max-high 0` and report `audit_mode=strict`.
 
-Manual workflow dispatch has a `strict_audit` input that also runs `node scripts/audit_context_anomaly_hidden_samples.mjs --strict`. Workflow runs upload `context-anomaly-hidden-sample-audit.txt` and `.json` in the `context-anomaly-hidden-sample-audit` artifact; reproduce the text checksum with `node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt`.
+Manual workflow dispatch has a `strict_audit` input that also runs `node scripts/audit_context_anomaly_hidden_samples.mjs --strict`. Workflow runs upload `context-anomaly-hidden-sample-audit.txt` and `.json` in the `context-anomaly-hidden-sample-audit` artifact; reproduce checksums with `node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt` or the `.json` path.
 
 The fixture should report `latest_status=ready` with recurring hidden `fallback_provenance`. That proves recurring hidden categories survive a final clean record. It should also report `recurring_hidden_samples` with `fallback_provenance=recent_fallbacks=1`.
 
