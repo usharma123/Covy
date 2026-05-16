@@ -332,12 +332,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-headroom positive-cap regression | Proves the fixed-point text renderer still succeeds with a narrow but sufficient cap. | Self-test now forces `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=196` and expects `thead=0 tw=196`. | Evidence: no output growth; exact-width cap succeeds with zero headroom. |
 | Context anomaly drilldown density text-headroom JSON exact-cap parity | Proves JSON `default_output_headroom` follows exact-width text-cap convergence too. | Self-test now runs JSON output at `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=196` and expects `default_output_headroom`:0. | Evidence: JSON output stays under cap; JSON and text headroom agree at zero. |
 | Context anomaly drilldown density text-headroom JSON low-cap failure | Proves JSON mode fails before emitting stale `default_output_headroom` when text output is too wide. | JSON mode now shares the fixed-point text-width guard before emitting payloads. | Evidence: no output growth; JSON mode fails at text cap 195. |
+| Context anomaly drilldown density text-headroom JSON low-cap error shape | Helps automation distinguish JSON-mode text-cap failures from success payloads. | Self-test now checks the JSON low-cap failure contains `ok:false` and the text-width failure code. | Evidence: error JSON stays compact; failure shape is machine-readable. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text-headroom JSON low-cap error shape | Helps automation distinguish JSON-mode text-cap failures from success payloads. | Add a self-test that JSON low-cap failure emits `ok:false` with the text-width failure code. | Compact metric: error JSON stays compact; correctness metric: failure shape is machine-readable. |
+| Context anomaly drilldown density text-headroom env helper reuse | Reduces boilerplate as env failure shape checks grow. | Reuse the new multi-text env failure helper for existing JSON env failure checks where useful. | Compact metric: self-test output stays one line; correctness metric: failure checks remain exact. |
 
 ## Research Rules
 

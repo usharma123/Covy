@@ -426,6 +426,30 @@ function assertEnvFailure(env, commandArgs, expectedCode) {
   process.exit(1);
 }
 
+function assertEnvFailureOutput(env, commandArgs, expectedTexts) {
+  try {
+    execFileSync(process.execPath, [scriptPath, ...commandArgs], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    const missing = expectedTexts.filter((text) => !output.includes(text));
+    if (missing.length === 0) {
+      return;
+    }
+    console.error("context_anomaly_runbook_density_self_test_env_failed");
+    console.error(`missing=${missing.join(",")}`);
+    console.error(`actual=${output.trim()}`);
+    process.exit(1);
+  }
+  console.error("context_anomaly_runbook_density_self_test_env_failed");
+  console.error(`expected=${expectedTexts.join(",")}`);
+  console.error("actual=ok");
+  process.exit(1);
+}
+
 function assertEnvOutput(env, commandArgs, expectedText) {
   const output = execFileSync(process.execPath, [scriptPath, ...commandArgs], {
     encoding: "utf8",
@@ -1485,6 +1509,11 @@ if (args.includes("--self-test")) {
     { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
     ["--json"],
     "context_anomaly_runbook_density_text_too_wide",
+  );
+  assertEnvFailureOutput(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+    ["--json"],
+    ['"ok":false', '"code":"context_anomaly_runbook_density_text_too_wide"'],
   );
   assertEnvOutput(
     { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
