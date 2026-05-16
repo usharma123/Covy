@@ -654,12 +654,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test sequence indentation audit | Checks whether the sequence-runner wrapper needs formatting churn. | Audited the minimal `runContextAnomalyDensitySelfTests()` wrapper and preserved the low-churn wrapper while queuing mechanical indentation cleanup separately. | Evidence: no runtime output growth; sequence wrapper readability decision is explicit. |
 | Context anomaly drilldown density self-test sequence indentation cleanup | Improves readability of the sequence-runner wrapper. | Mechanically indented the `runContextAnomalyDensitySelfTests()` body without changing helper order or output. | Evidence: no runtime output growth; indent-only cleanup preserves all self-test and density gates. |
 | Context anomaly drilldown density self-test sequence indentation order | Verifies the indented runner still ends before normal failure handling. | Verified the indented `runContextAnomalyDensitySelfTests()` body ends before invocation and the non-self-test failure path. | Evidence: no runtime output growth; indentation cleanup did not move execution boundaries. |
+| Context anomaly drilldown density self-test post-indent audit | Checks the fully indented self-test runner for remaining readability gaps. | Audited the indented runner and found only the overlong JSON field-doc order literals as a concrete cleanup target. | Evidence: no runtime output growth; next readability gap is explicitly queued. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test post-indent audit | Checks the fully indented self-test runner for remaining readability gaps. | Audit the indented `runContextAnomalyDensitySelfTests()` body for overlong lines or nested helper groups worth extracting. | Compact metric: no runtime output growth; correctness metric: post-cleanup readability gaps are either absent or explicitly queued. |
+| Context anomaly drilldown density self-test JSON field order literal cleanup | Shortens overlong JSON field-doc order literals. | Extract constants for the `density_label_line_width`, `default_output_headroom`, `default_output_iterations`, and `text_width_docs_checked` order strings. | Compact metric: no runtime output growth; correctness metric: JSON field-doc order checks still fail on swapped order. |
 
 ## Research Rules
 
