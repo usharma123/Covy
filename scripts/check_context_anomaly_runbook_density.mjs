@@ -1546,9 +1546,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`lbl`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`phr`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "phr",
+    "missing_phr_output_label",
   );
   assertSelfTest(
     evaluate(runbook.replaceAll("`adocs`", ""), maxLines),
