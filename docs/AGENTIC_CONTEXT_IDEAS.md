@@ -648,12 +648,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test terminal helper audit | Finds remaining unnamed self-test assertions after the help-width wrapper. | Audited the terminal `--self-test` block after `assertHelpLineWidthSelfTest()` and found no remaining direct assertion groups before success output. | Evidence: no runtime output growth; remaining terminal coverage has named ownership or is pure success emission. |
 | Context anomaly drilldown density self-test success output wrapper | Names the self-test success emission. | Extracted `finishSelfTestOk()` around the `context_anomaly_runbook_density_self_test_ok` log and exit. | Evidence: no runtime output growth; self-test success output remains unchanged. |
 | Context anomaly drilldown density self-test success output order | Keeps success emission after all self-test validation helpers. | Verified `finishSelfTestOk()` sits after `assertHelpLineWidthSelfTest()` and before the non-self-test failure handling path. | Evidence: no runtime output growth; success output only occurs after all self-test validation helpers. |
+| Context anomaly drilldown density self-test helper sequence audit | Audits the full named-helper sequence for remaining grouping gaps. | Scanned the `--self-test` block from `assertDefaultOutputMutationSelfTest()` through `finishSelfTestOk()` and found no remaining unnamed assertion phases. | Evidence: no runtime output growth; helper sequence ownership is complete across the audited block. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test helper sequence audit | Audits the full named-helper sequence for remaining grouping gaps. | Scan the `--self-test` block from the first mutation helper through `finishSelfTestOk()` and record any phase that still lacks named ownership. | Compact metric: no runtime output growth; correctness metric: helper sequence ownership is complete or next gaps are explicitly queued. |
+| Context anomaly drilldown density self-test sequence runner wrapper | Names the ordered execution of self-test helpers. | Extract `runContextAnomalyDensitySelfTests()` around the ordered helper invocation sequence after helper definitions. | Compact metric: no runtime output growth; correctness metric: helper execution order remains explicit and covered. |
 
 ## Research Rules
 
