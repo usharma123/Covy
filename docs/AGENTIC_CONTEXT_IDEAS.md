@@ -367,12 +367,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density failure docs alias stale-word detail | Makes stale alias failures easier to diagnose. | Self-test now asserts stale alias failures include `stale:no-success` in missing-doc details. | Evidence: no output growth; stale alias detail is reported. |
 | Context anomaly drilldown density stale alias detail helper | Avoids duplicating evaluate calls as stale-alias detail checks grow. | Stale-alias self-test now reuses one mutation result for both code and missing-detail assertions. | Evidence: no output growth; stale alias check remains single-source. |
 | Context anomaly drilldown density stale alias helper pattern | Makes future mutation-detail checks easier to keep single-source. | Self-test now has `assertSelfTestMissing` for expected code plus missing-detail checks. | Evidence: no output growth; mutation detail checks share one helper. |
+| Context anomaly drilldown density stale alias helper case index | Preserves self-test case indexing when using the missing-detail helper. | `assertSelfTestMissing` delegates through `assertSelfTest`, keeping the existing case-index path. | Evidence: no output growth; failure reports keep stable case indexes. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density stale alias helper case index | Preserves self-test case indexing when using the missing-detail helper. | Verify `assertSelfTestMissing` increments through `assertSelfTest` rather than adding separate counters. | Compact metric: no output growth; correctness metric: failure reports keep stable case indexes. |
+| Context anomaly drilldown density stale alias helper missing-detail case label | Makes missing-detail failures identify the same named mutation as code failures. | Include `case=` output in the helper's missing-detail failure branch. | Compact metric: no output growth; correctness metric: helper failures name the mutation. |
 
 ## Research Rules
 
