@@ -126,7 +126,7 @@ const requiredAliasDocPhrases = [
   "`wf`=workflow commands",
   "`json`=remaining JSON headroom",
 ];
-const requiredDensityDocPhrases = ["Density env:"];
+const requiredDensityDocPhrases = ["Env:"];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
@@ -154,6 +154,7 @@ function evaluate(runbook, lineBudget) {
       (line) =>
         !line.startsWith("|") &&
         (line.startsWith("Density ") ||
+          line.startsWith("Env:") ||
           line.includes("context_anomaly_runbook_density_")),
     );
   const maxActualDensityProseLineLength = Math.max(
@@ -567,8 +568,8 @@ if (args.includes("--self-test")) {
   }
   const widenedEnvProseResult = evaluate(
     runbook.replace(
-      "Density env:",
-      "Density env: widened",
+      "Env:",
+      "Env: widened",
     ),
     maxLines,
   );
@@ -775,7 +776,7 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
-    evaluate(runbook.replace("Density env:", ""), maxLines),
+    evaluate(runbook.replace("Env:", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
