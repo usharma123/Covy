@@ -1585,6 +1585,8 @@ if (args.includes("--self-test")) {
   const defaultOutputFieldPattern = (field) => new RegExp(` ${field}=\\S+`);
   const defaultOutputWithoutField = (line, field) =>
     line.replace(defaultOutputFieldPattern(field), "");
+  const defaultOutputWithStaleField = (line, field, staleValue) =>
+    line.replace(defaultOutputFieldPattern(field), ` ${field}=${staleValue}`);
   const defaultOutputMutationActualDetail = (actual) => actual ?? "ok";
   const defaultOutputMutationMismatchDetails = (expected, actual) => ({
     expected,
@@ -1615,9 +1617,10 @@ if (args.includes("--self-test")) {
         ),
       );
     }
-    const staleOutputLine = defaultOutputLine.replace(
-      fieldPattern,
-      ` ${field}=${staleValue}`,
+    const staleOutputLine = defaultOutputWithStaleField(
+      defaultOutputLine,
+      field,
+      staleValue,
     );
     if (
       staleOutputLine === defaultOutputLine ||
