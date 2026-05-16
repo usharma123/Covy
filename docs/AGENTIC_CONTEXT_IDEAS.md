@@ -596,12 +596,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test output order swap wrapper | Names the explicit output-order swap assertions. | Extracted `assertOutputOrderSwapMutationSelfTests()` around env/lbl, dlab/jhead, and thead/tw swap checks. | Evidence: no runtime output growth; output-order coverage still fails when documented output order is swapped. |
 | Context anomaly drilldown density self-test output order swap order | Keeps output-order swap checks before JSON output documentation checks. | Verified `assertOutputOrderSwapMutationSelfTests()` sits directly after phrase mutations and before JSON field-name doc coverage. | Evidence: no runtime output growth; order-swap coverage remains before JSON output-doc coverage. |
 | Context anomaly drilldown density self-test JSON field-name doc wrapper | Names the JSON full-field-name documentation assertion. | Extracted `assertJsonFieldNameDocMutationSelfTest()` around the `JSON keeps full field names` removal assertion. | Evidence: no runtime output growth; JSON field-name documentation coverage still fails when removed. |
+| Context anomaly drilldown density self-test JSON field-name doc order | Keeps JSON field-name doc coverage before specific JSON output field checks. | Verified `assertJsonFieldNameDocMutationSelfTest()` sits directly after output-order swaps and before `alias_docs_checked` JSON doc coverage. | Evidence: no runtime output growth; JSON field-name coverage remains before specific JSON field docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field-name doc order | Keeps JSON field-name doc coverage before specific JSON output field checks. | Verify `assertJsonFieldNameDocMutationSelfTest()` sits directly after output-order swaps and before `alias_docs_checked` JSON doc coverage. | Compact metric: no runtime output growth; correctness metric: JSON field-name coverage remains before specific JSON field docs. |
+| Context anomaly drilldown density self-test JSON field doc wrapper | Names the repeated specific JSON field documentation assertions. | Extract `assertJsonFieldDocMutationSelfTests()` around alias, row, phrase, anchor, parsed, parity, label, headroom, iteration, and text-width JSON field docs. | Compact metric: no runtime output growth; correctness metric: each required JSON field doc still fails when removed. |
 
 ## Research Rules
 
