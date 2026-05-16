@@ -152,12 +152,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density audit | Prevents the context anomaly runbook from exceeding its line budget as command rows grow. | `scripts/check_context_anomaly_runbook_density.mjs` now checks the runbook line budget and required command strings. | Evidence: default output reports `lines=44/44` and all required context anomaly commands are present. |
 | Context anomaly drilldown runbook density self-test | Proves the runbook density checker catches line-budget and missing-command regressions. | The runbook density checker now has `--self-test` with forced low line budget and missing-command fixtures. | Evidence: self-test output is one line and verifies both failure codes. |
 | Context anomaly drilldown runbook density workflow gate | Keeps runbook density regressions visible in CI. | The context-anomalies workflow now runs the runbook density checker self-test and path filters include the checker script. | Evidence: no summary growth; local self-test passes and workflow YAML includes the new script path. |
+| Context anomaly drilldown runbook density help workflow log | Keeps runbook density checker usage visible in CI logs without expanding summaries. | The context-anomalies workflow now runs the density checker `--help` mode before self-test. | Evidence: no GitHub summary growth; help output lists default, `--json`, `--self-test`, and `--help`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density help workflow log | Keeps runbook density checker usage visible in CI logs without expanding summaries. | Run the density checker `--help` before self-test in the workflow. | Compact metric: no GitHub summary growth; correctness metric: help output lists default, `--json`, `--self-test`, and `--help`. |
+| Context anomaly drilldown runbook density help docs | Helps agents discover density checker modes from the runbook. | Add the density checker help mode to the runbook command table or fold it into an existing row. | Compact metric: runbook remains under 45 lines; correctness metric: documented modes match help output. |
 
 ## Research Rules
 
