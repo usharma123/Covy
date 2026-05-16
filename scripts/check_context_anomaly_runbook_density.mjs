@@ -1752,9 +1752,10 @@ if (args.includes("--self-test")) {
     "tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
     "missing_width_env_pair",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`thead>=8`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`thead>=8`",
     "missing_default_text_headroom_doc",
   );
   assertSelfTest(
