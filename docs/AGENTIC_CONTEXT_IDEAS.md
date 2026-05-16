@@ -657,12 +657,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test post-indent audit | Checks the fully indented self-test runner for remaining readability gaps. | Audited the indented runner and found only the overlong JSON field-doc order literals as a concrete cleanup target. | Evidence: no runtime output growth; next readability gap is explicitly queued. |
 | Context anomaly drilldown density self-test JSON field order literal cleanup | Shortens overlong JSON field-doc order literals. | Extracted constants for the default-output JSON order strings and swapped-order variants. | Evidence: no runtime output growth; JSON field-doc order checks still fail on swapped order. |
 | Context anomaly drilldown density self-test JSON field order literal order | Keeps JSON field-order constants close to the swap assertions. | Verified the extracted JSON field-order constants sit in `assertJsonFieldDocMutationSelfTests()` immediately before the swapped-order assertions. | Evidence: no runtime output growth; constants remain local to their coverage. |
+| Context anomaly drilldown density self-test post-cleanup line audit | Confirms no overlong lines remain in the indented self-test runner. | Ran the post-cleanup line-length scan over the self-test runner and found no lines over 100 characters in the audited range. | Evidence: no runtime output growth; line-length audit is explicit after literal cleanup. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test post-cleanup line audit | Confirms no overlong lines remain in the indented self-test runner. | Run the post-cleanup line-length scan over the self-test runner and record whether more readability work remains. | Compact metric: no runtime output growth; correctness metric: line-length audit is explicit after literal cleanup. |
+| Context anomaly drilldown density self-test post-cleanup helper grouping audit | Checks whether the indented runner still has oversized helper groups after line cleanup. | Scan the self-test helper sequence for adjacent groups that still mix unrelated assertions and name the next refactor candidate. | Compact metric: no runtime output growth; correctness metric: remaining grouping risk is explicit before code churn. |
 
 ## Research Rules
 
