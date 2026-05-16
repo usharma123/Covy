@@ -526,12 +526,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation identity fields helper order | Keeps expected and actual identity field helpers beside the sample using them. | Verified expected and actual identity field helpers sit directly above `defaultOutputMutationIdentityFieldSample()`. | Evidence: no runtime output growth; expected/actual sources remain adjacent to their sample object. |
 | Context anomaly drilldown density self-test default output mutation joined identity fields helper | Names the joined expected/actual identity field strings used by the predicate. | Extracted `joinedDefaultOutputMutationIdentityFields(sample)` returning actual and expected joined field strings. | Evidence: no runtime output growth; identity predicate compares the same joined field lists. |
 | Context anomaly drilldown density self-test default output mutation joined identity fields property names | Makes joined field string properties distinct from array-valued sample fields. | Renamed joined helper properties to `actualJoinedMutationFields` and `expectedJoinedMutationFields`. | Evidence: no runtime output growth; predicate still compares actual joined fields to expected joined fields. |
+| Context anomaly drilldown density self-test default output mutation joined identity fields destructure helper | Names the joined-field comparison after destructuring. | Extracted `joinedDefaultOutputMutationIdentityFieldsMatch(joinedFields)` for comparing joined string payloads. | Evidence: no runtime output growth; sampled predicate still evaluates the same joined-field equality. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation joined identity fields destructure helper | Names the joined-field comparison after destructuring. | Extract `joinedDefaultOutputMutationIdentityFieldsMatch(joinedFields)` for comparing joined string payloads. | Compact metric: no runtime output growth; correctness metric: sampled predicate still evaluates the same joined-field equality. |
+| Context anomaly drilldown density self-test default output mutation joined identity fields comparison order | Keeps joined field construction beside the comparison helper. | Verify `joinedDefaultOutputMutationIdentityFields(sample)` sits directly above `joinedDefaultOutputMutationIdentityFieldsMatch(joinedFields)`. | Compact metric: no runtime output growth; correctness metric: joined payload construction remains adjacent to its comparator. |
 
 ## Research Rules
 
