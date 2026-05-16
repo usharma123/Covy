@@ -58,6 +58,7 @@ jobs:
       - name: Check context anomaly runbook density
         run: |
           node scripts/check_context_anomaly_runbook_density.mjs --help
+          node scripts/check_context_anomaly_runbook_density.mjs
           node scripts/check_context_anomaly_runbook_density.mjs --self-test
 
       - name: Check context anomaly summary budget
