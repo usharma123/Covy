@@ -726,6 +726,16 @@ if (args.includes("--self-test")) {
     console.error("malformed_default_output_prefix_accepted");
     process.exit(1);
   }
+  const missingLineValueError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ lines=\S+/, "")),
+    result,
+  );
+  if (missingLineValueError !== "missing_default_output_field=lines") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=lines`);
+    console.error(`actual=${missingLineValueError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingRowValueError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ row=\S+/, "")),
     result,
