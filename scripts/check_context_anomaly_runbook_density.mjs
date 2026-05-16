@@ -986,6 +986,11 @@ if (args.includes("--self-test")) {
   ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("exact_width_artifacts_did_not_converge");
+    console.error(`actual_exact_width_len=${exactWidthArtifacts.defaultOutputLine.length}`);
+    console.error(`actual_exact_width_headroom=${exactWidthArtifacts.defaultOutputHeadroom}`);
+    console.error(
+      `actual_exact_width_json_headroom=${exactWidthArtifacts.payload.default_output_headroom}`,
+    );
     process.exit(1);
   }
   const lowWidthArtifacts = buildSuccessArtifacts(
