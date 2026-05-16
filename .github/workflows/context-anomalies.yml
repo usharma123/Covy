@@ -74,4 +74,5 @@ jobs:
             echo "- fixture status: $(jq -r '.context_anomalies.latest_status // "none"' context-anomaly-fixture-dashboard.json)"
             echo "- fixture recurring hidden: $(jq -r '(.context_anomalies.recurring_hidden_categories // []) | join(",")' context-anomaly-fixture-dashboard.json)"
             echo "- fixture oldest recurring hidden age ms: $(jq -r '.context_anomalies.oldest_recurring_hidden_age_ms // 0' context-anomaly-fixture-dashboard.json)"
+            echo "- runbook: docs/context-anomalies/RUNBOOK.md"
           } >> "$GITHUB_STEP_SUMMARY"

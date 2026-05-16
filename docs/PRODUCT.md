@@ -64,6 +64,7 @@ Packet28 verify context-anomalies --root . --max-trend-age-ms 604800000 --json
 ```
 
 `verify context-anomalies` appends compact history under `.packet28`, the dashboard `context_anomalies` tile reports latest and recurring hidden-category trend fields, fixture replay avoids mutating live history, and `max_trend_age_ms` gates stale trend data.
+Runbook: `docs/context-anomalies/RUNBOOK.md`.
 
 Use local memory, feedback, transcripts, and graph:
 
