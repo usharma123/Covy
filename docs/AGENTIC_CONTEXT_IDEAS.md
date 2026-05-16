@@ -319,12 +319,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label width JSON docs guard | Helps JSON consumers find the full `density_label_line_width` field without source reading. | Self-test now has a dedicated missing-doc mutation for the JSON field phrase. | Evidence: JSON prose stays below current prose max; missing field docs fail self-test. |
 | Context anomaly drilldown density label width output order guard | Keeps the new `dlab` metric in the same order across docs, renderer, and parser checks. | Self-test now swaps `dlab`/`jhead` in the documented key list and expects output-doc failure. | Evidence: docs stay under row cap; order drift fails output-doc coverage. |
 | Context anomaly drilldown density label width headroom guard | Keeps `dlab` from consuming the remaining compact text margin unnoticed. | Self-test now requires at least 8 characters of default-output headroom after rendering `dlab`. | Evidence: default output keeps reserved slack; low text cap still fails. |
+| Context anomaly drilldown density label width headroom docs | Helps maintainers understand why the text output cap has reserved slack. | Runbook text-width docs now include guarded `thead>=8` wording beside the text cap. | Evidence: row/prose stay under caps; missing headroom wording fails docs coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label width headroom docs | Helps maintainers understand why the text output cap has reserved slack. | Document the default-output headroom expectation beside the text-width docs. | Compact metric: row/prose stay under caps; correctness metric: missing headroom wording fails docs coverage. |
+| Context anomaly drilldown density label width headroom output | Lets agents see text-output slack directly instead of subtracting `width` from the cap. | Add compact `thead` output for default-text headroom with parser coverage. | Compact metric: output stays within text cap; correctness metric: `thead` matches cap minus rendered width. |
 
 ## Research Rules
 

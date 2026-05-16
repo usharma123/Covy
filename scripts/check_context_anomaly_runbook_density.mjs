@@ -149,6 +149,7 @@ const requiredOutputDocPhrases = [
   "`density_label_line_width`",
   "`text_width_docs_checked`",
   "`max_json_bytes=576`",
+  "`thead>=8`",
   "`help<=120`",
 ];
 const requiredAliasDocPhrases = [
@@ -1243,14 +1244,16 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(
-      runbook.replace(
-        "`width` is capped by `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`",
-        "`width` has a text cap",
-      ),
+      runbook.replace("`width` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_width_env_pair",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`thead>=8`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "missing_default_text_headroom_doc",
   );
   assertSelfTest(
     evaluate(
