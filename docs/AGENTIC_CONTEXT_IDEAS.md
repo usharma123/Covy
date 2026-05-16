@@ -324,12 +324,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label width headroom JSON parity | Lets JSON consumers inspect default-text slack without parsing compact output. | JSON now reports `default_output_headroom`, built with the compact text line until payload and text metrics agree. | Evidence: JSON cap/headroom still passes; JSON value matches text cap minus width. |
 | Context anomaly drilldown density label width JSON cap recovery | Restores JSON byte headroom after adding `default_output_headroom`. | Density JSON cap now rebalances to `max_json_bytes=592` while preserving all guarded fields. | Evidence: JSON headroom returns above 24 bytes; all parity fields remain covered. |
 | Context anomaly drilldown density text-headroom JSON docs guard | Prevents the full `default_output_headroom` JSON field from becoming an undocumented implementation detail. | Self-test now has a dedicated missing-doc mutation for the `default_output_headroom` phrase. | Evidence: JSON prose stays under current prose max; missing field docs fail self-test. |
+| Context anomaly drilldown density text-headroom JSON order guard | Keeps `default_output_headroom` near related JSON width fields instead of drifting in docs. | Self-test now swaps `default_output_headroom` and `text_width_docs_checked` in the JSON docs line. | Evidence: JSON prose stays under current prose max; docs-order drift fails output-doc coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text-headroom JSON order guard | Keeps `default_output_headroom` near related JSON width fields instead of drifting in docs. | Add a dedicated self-test mutation that swaps `default_output_headroom` and `text_width_docs_checked` in the JSON docs line. | Compact metric: JSON prose stays under current prose max; correctness metric: docs-order drift fails output-doc coverage. |
+| Context anomaly drilldown density text-headroom JSON parity order guard | Keeps the emitted JSON field near related width fields, not only the docs phrase. | Add a self-test that verifies `default_output_headroom` order in the success payload parity field list. | Compact metric: JSON output stays under cap; correctness metric: payload order drift fails self-test. |
 
 ## Research Rules
 

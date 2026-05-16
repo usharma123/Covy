@@ -151,6 +151,7 @@ const requiredOutputDocPhrases = [
   "`density_label_line_width`",
   "`default_output_headroom`",
   "`text_width_docs_checked`",
+  "`density_label_line_width`,`default_output_headroom`,`text_width_docs_checked`",
   "`max_json_bytes=592`",
   "`thead>=8`",
   "`help<=120`",
@@ -1273,6 +1274,17 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`default_output_headroom`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_default_output_headroom_json_doc",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace(
+        "`density_label_line_width`,`default_output_headroom`,`text_width_docs_checked`",
+        "`density_label_line_width`,`text_width_docs_checked`,`default_output_headroom`",
+      ),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_output_docs",
+    "swapped_default_output_headroom_json_doc_order",
   );
   assertSelfTest(
     evaluate(runbook.replace("`text_width_docs_checked`", ""), maxLines),
