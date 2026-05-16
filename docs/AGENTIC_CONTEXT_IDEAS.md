@@ -100,12 +100,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown checksum docs | Helps agents repair fixture-checksum failures without reverse-engineering the hash command. | The context anomaly runbook now includes the exact checksum refresh command for the delimiter fixture. | Evidence: runbook remains under 45 lines; `shasum -a 256 ... | awk '{print $1}'` reproduces `hidden-samples-delimiters.sha256`. |
 | Context anomaly drilldown checksum workflow note | Makes checksum enforcement visible from CI summaries when fixture smoke runs. | The context-anomalies workflow summary now prints the enforced hidden-sample checksum file path after formatter smoke budget. | Evidence: summary grows by one line and the checksum line is emitted only after the smoke self-test succeeds. |
 | Context anomaly drilldown checksum status value | Lets CI readers confirm the actual checksum without opening the file. | The context-anomalies workflow summary now prints the checked-in fixture checksum value capped to its 64-character digest. | Evidence: formatter checksum summary line is under 100 characters and matches `hidden-samples-delimiters.sha256`. |
+| Context anomaly drilldown checksum JSON | Lets automation consume the enforced fixture checksum from the smoke script directly. | The smoke script `--json` output now includes the verified fixture `checksum`, and self-test checks that field. | Evidence: JSON output remains under 256 bytes and `checksum` matches the checked-in SHA-256 file. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown checksum JSON | Lets automation consume the enforced fixture checksum from the smoke script directly. | Add checksum fields to the smoke script `--json` output. | Compact metric: JSON remains under 256 bytes; correctness metric: checksum field matches the checked-in SHA-256 file. |
+| Context anomaly drilldown workflow checksum source | Removes duplicate checksum parsing between workflow shell and smoke JSON output. | Read the workflow formatter checksum line from smoke script `--json` instead of directly reading the checksum file. | Compact metric: no summary growth; correctness metric: workflow checksum summary equals JSON `checksum`. |
 
 ## Research Rules
 

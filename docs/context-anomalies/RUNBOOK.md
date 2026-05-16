@@ -7,7 +7,7 @@ Use this command table before treating a compact anomaly summary as complete:
 | Write live history | `Packet28 verify context-anomalies --root . --json` | Appends compact JSONL to `.packet28/context-anomaly-history.jsonl`. |
 | Replay fixture trend | `Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json` | Reports fixture `latest_status=ready`. |
 | Check sample formatter | `node scripts/check_context_anomaly_hidden_samples.mjs` | Prints one `context_anomaly_hidden_sample_fixture_ok=...` line. |
-| Read formatter budget | `node scripts/check_context_anomaly_hidden_samples.mjs --json` | Emits `actual_len`, `max_len`, and escaped `summary`. |
+| Read formatter budget | `node scripts/check_context_anomaly_hidden_samples.mjs --json` | Emits `actual_len`, `max_len`, `checksum`, and escaped `summary`. |
 | Self-test formatter | `node scripts/check_context_anomaly_hidden_samples.mjs --self-test` | Prints one `context_anomaly_hidden_sample_self_test_ok` line. |
 | List formatter modes | `node scripts/check_context_anomaly_hidden_samples.mjs --help` | Lists every accepted mode in under eight lines. |
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
@@ -30,6 +30,6 @@ The smoke script also checks `docs/context-anomalies/hidden-samples-delimiters.s
 
 Refresh that checksum with `shasum -a 256 docs/context-anomalies/hidden-samples-delimiters.json | awk '{print $1}' > docs/context-anomalies/hidden-samples-delimiters.sha256`.
 
-Workflow formatter budget lines use `actual/max`, matching the smoke script JSON fields `actual_len` and `max_len`.
+Workflow formatter budget lines use `actual/max`, matching the smoke script JSON fields `actual_len` and `max_len`; formatter checksum lines match the JSON `checksum`.
 
 Recurring hidden categories usually mean medium-severity sources are repeatedly being capped from the digest. Fix the underlying source or raise it into a visible dashboard tile before relying on the compact anomaly summary.

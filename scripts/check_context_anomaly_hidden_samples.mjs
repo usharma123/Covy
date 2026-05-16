@@ -95,17 +95,18 @@ const samples = JSON.parse(fixtureRaw);
 const actual = summarize(samples);
 const expected = readFileSync(expectedPath, "utf8").trim();
 
-function jsonPayload(summary, maxLength) {
+function jsonPayload(summary, maxLength, checksum) {
   return {
     ok: true,
     actual_len: summary.length,
     max_len: maxLength,
+    checksum,
     summary,
   };
 }
 
 if (selfTest) {
-  const payload = jsonPayload(actual, maxSummaryLength);
+  const payload = jsonPayload(actual, maxSummaryLength, actualChecksum);
   const lowBudget = actual.length - 1;
   if (actual !== expected) {
     console.error("context_anomaly_hidden_sample_self_test_mismatch");
@@ -114,6 +115,7 @@ if (selfTest) {
   if (
     payload.actual_len !== actual.length ||
     payload.max_len !== maxSummaryLength ||
+    payload.checksum !== actualChecksum ||
     payload.summary !== actual
   ) {
     console.error("context_anomaly_hidden_sample_self_test_json_drift");
@@ -149,7 +151,7 @@ if (actual.length > maxSummaryLength) {
 }
 
 if (jsonOutput) {
-  console.log(JSON.stringify(jsonPayload(actual, maxSummaryLength)));
+  console.log(JSON.stringify(jsonPayload(actual, maxSummaryLength, actualChecksum)));
 } else {
   console.log(`context_anomaly_hidden_sample_fixture_ok=${actual}`);
 }
