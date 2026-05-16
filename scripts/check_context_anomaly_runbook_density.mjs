@@ -14,7 +14,7 @@ const maxLines = Number.parseInt(
   10,
 );
 // 576 keeps full-field JSON parity output compact while preserving the
-// explicit headroom gate after adding density_label_line_width.
+// explicit headroom gate after adding default_output_headroom.
 const defaultMaxJsonBytes = 576;
 const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
@@ -129,6 +129,7 @@ const jsonPayloadParityFieldOrder = [
   "parsed_fields_checked",
   "json_parity_fields_checked",
   "density_label_line_width",
+  "default_output_headroom",
   "text_width_docs_checked",
   "row_soft_ok",
   "row_soft_max",
@@ -148,6 +149,7 @@ const requiredOutputDocPhrases = [
   "`parsed_fields_checked`",
   "`json_parity_fields_checked`",
   "`density_label_line_width`",
+  "`default_output_headroom`",
   "`text_width_docs_checked`",
   "`max_json_bytes=576`",
   "`thead>=8`",
@@ -446,7 +448,7 @@ function assertHelpIncludes(expected) {
   }
 }
 
-function successPayload(result, workflow, jsonBudget) {
+function successPayload(result, workflow, jsonBudget, defaultOutputHeadroom) {
   return {
     ok: true,
     line_count: result.line_count,
@@ -464,6 +466,9 @@ function successPayload(result, workflow, jsonBudget) {
     parsed_fields_checked: result.parsed_fields_checked,
     json_parity_fields_checked: result.json_parity_fields_checked,
     density_label_line_width: result.density_label_line_width,
+    ...(defaultOutputHeadroom === undefined
+      ? {}
+      : { default_output_headroom: defaultOutputHeadroom }),
     text_width_docs_checked: result.text_width_docs_checked,
     row_soft_ok: result.row_soft_ok,
     row_soft_max: result.row_soft_max,
@@ -472,7 +477,7 @@ function successPayload(result, workflow, jsonBudget) {
   };
 }
 
-function jsonPayloadParityExpectedFields(result) {
+function jsonPayloadParityExpectedFields(result, derived = {}) {
   const values = {
     output_doc_phrases_checked: result.output_doc_phrases_checked,
     alias_docs_checked: result.alias_docs_checked,
@@ -481,6 +486,7 @@ function jsonPayloadParityExpectedFields(result) {
     parsed_fields_checked: result.parsed_fields_checked,
     json_parity_fields_checked: result.json_parity_fields_checked,
     density_label_line_width: result.density_label_line_width,
+    default_output_headroom: derived.default_output_headroom,
     text_width_docs_checked: result.text_width_docs_checked,
     row_soft_ok: result.row_soft_ok,
     row_soft_max: result.row_soft_max,
@@ -490,8 +496,8 @@ function jsonPayloadParityExpectedFields(result) {
   );
 }
 
-function jsonPayloadParityIssue(payload, result) {
-  const expectedFields = jsonPayloadParityExpectedFields(result);
+function jsonPayloadParityIssue(payload, result, derived = {}) {
+  const expectedFields = jsonPayloadParityExpectedFields(result, derived);
   for (const [field, expected] of Object.entries(expectedFields)) {
     if (!Object.prototype.hasOwnProperty.call(payload, field)) {
       return `missing_json_payload_field=${field}`;
@@ -532,6 +538,50 @@ function defaultOutputIssue(payload, resultDetails, jsonHeadroom) {
     };
   }
   return null;
+}
+
+function buildSuccessArtifacts(resultDetails, workflow, jsonBudget) {
+  let payload = successPayload(resultDetails, workflow, jsonBudget, 0);
+  let jsonHeadroom = jsonHeadroomBytes(payload, jsonBudget);
+  let defaultOutputLine = renderDefaultOutputWithWidth(
+    payload,
+    resultDetails,
+    jsonHeadroom,
+  );
+  for (let i = 0; i < 5; i += 1) {
+    const defaultOutputHeadroom =
+      maxDefaultOutputLength - defaultOutputLine.length;
+    const nextPayload = successPayload(
+      resultDetails,
+      workflow,
+      jsonBudget,
+      defaultOutputHeadroom,
+    );
+    const nextJsonHeadroom = jsonHeadroomBytes(nextPayload, jsonBudget);
+    const nextDefaultOutputLine = renderDefaultOutputWithWidth(
+      nextPayload,
+      resultDetails,
+      nextJsonHeadroom,
+    );
+    if (
+      JSON.stringify(nextPayload) === JSON.stringify(payload) &&
+      nextJsonHeadroom === jsonHeadroom &&
+      nextDefaultOutputLine === defaultOutputLine
+    ) {
+      return {
+        payload,
+        jsonHeadroom,
+        defaultOutputLine,
+        defaultOutputHeadroom,
+      };
+    }
+    payload = nextPayload;
+    jsonHeadroom = nextJsonHeadroom;
+    defaultOutputLine = nextDefaultOutputLine;
+  }
+  const defaultOutputHeadroom =
+    maxDefaultOutputLength - defaultOutputLine.length;
+  return { payload, jsonHeadroom, defaultOutputLine, defaultOutputHeadroom };
 }
 
 function renderDefaultOutput(
@@ -818,15 +868,29 @@ if (args.includes("--self-test")) {
     );
     process.exit(1);
   }
-  const baselinePayload = successPayload(result, workflowResult, maxJsonBytes);
-  const jsonPayloadError = jsonPayloadParityIssue(baselinePayload, result);
+  const baselineArtifacts = buildSuccessArtifacts(
+    result,
+    workflowResult,
+    maxJsonBytes,
+  );
+  const {
+    payload: baselinePayload,
+    jsonHeadroom: baselineHeadroom,
+    defaultOutputLine,
+    defaultOutputHeadroom,
+  } = baselineArtifacts;
+  const jsonPayloadError = jsonPayloadParityIssue(baselinePayload, result, {
+    default_output_headroom: defaultOutputHeadroom,
+  });
   if (jsonPayloadError) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(jsonPayloadError);
     process.exit(1);
   }
   const jsonParityFieldOrder = Object.keys(
-    jsonPayloadParityExpectedFields(result),
+    jsonPayloadParityExpectedFields(result, {
+      default_output_headroom: defaultOutputHeadroom,
+    }),
   );
   // Keep parity expectations in success-payload order so JSON readers see the
   // same field sequence that the self-test validates.
@@ -855,10 +919,13 @@ if (args.includes("--self-test")) {
     parsed_fields_checked: 0,
     json_parity_fields_checked: 0,
     density_label_line_width: 0,
+    default_output_headroom: 0,
     text_width_docs_checked: 0,
   };
   const missingJsonParityMutationFields = Object.keys(
-    jsonPayloadParityExpectedFields(result),
+    jsonPayloadParityExpectedFields(result, {
+      default_output_headroom: defaultOutputHeadroom,
+    }),
   ).filter((field) => staleJsonPayloadValues[field] === undefined);
   if (missingJsonParityMutationFields.length > 0) {
     console.error("context_anomaly_runbook_density_self_test_failed");
@@ -873,6 +940,7 @@ if (args.includes("--self-test")) {
     const missingJsonPayloadError = jsonPayloadParityIssue(
       missingJsonPayload,
       result,
+      { default_output_headroom: defaultOutputHeadroom },
     );
     if (missingJsonPayloadError !== `missing_json_payload_field=${field}`) {
       console.error("context_anomaly_runbook_density_self_test_failed");
@@ -888,6 +956,7 @@ if (args.includes("--self-test")) {
     const staleJsonPayloadError = jsonPayloadParityIssue(
       { ...baselinePayload, [field]: staleValue },
       result,
+      { default_output_headroom: defaultOutputHeadroom },
     );
     if (staleJsonPayloadError !== `json_payload_mismatch=${field}`) {
       console.error("context_anomaly_runbook_density_self_test_failed");
@@ -899,7 +968,6 @@ if (args.includes("--self-test")) {
   for (const [field, staleValue] of Object.entries(staleJsonPayloadValues)) {
     assertJsonParityMutation(field, staleValue);
   }
-  const baselineHeadroom = jsonHeadroomBytes(baselinePayload, maxJsonBytes);
   if (baselineHeadroom < minJsonHeadroomBytes) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_headroom_at_least=${minJsonHeadroomBytes}`);
@@ -914,16 +982,11 @@ if (args.includes("--self-test")) {
     console.error("headroom_did_not_change_after_payload_growth");
     process.exit(1);
   }
-  const defaultOutputLine = renderDefaultOutputWithWidth(
-    baselinePayload,
-    result,
-    baselineHeadroom,
-  );
   const defaultParseDetails = {
     ...result,
     workflow_commands_checked: baselinePayload.workflow_commands_checked,
     json_headroom: baselineHeadroom,
-    default_output_headroom: maxDefaultOutputLength - defaultOutputLine.length,
+    default_output_headroom: defaultOutputHeadroom,
     default_output_width: defaultOutputLine.length,
   };
   // These fields are derived outside evaluate(), but parser parity still
@@ -993,7 +1056,6 @@ if (args.includes("--self-test")) {
     console.error(`actual_text_headroom=${parsedDefaultOutput.thead}`);
     process.exit(1);
   }
-  const defaultOutputHeadroom = maxDefaultOutputLength - defaultOutputLine.length;
   if (defaultOutputHeadroom < minDefaultOutputHeadroom) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(
@@ -1402,10 +1464,22 @@ if (!workflowResult.ok) {
   fail(code, details);
 }
 
-const payload = successPayload(result, workflowResult, maxJsonBytes);
-const jsonHeadroom = jsonHeadroomBytes(payload, maxJsonBytes);
+const {
+  payload,
+  jsonHeadroom,
+  defaultOutputLine,
+  defaultOutputHeadroom,
+} = buildSuccessArtifacts(result, workflowResult, maxJsonBytes);
 const defaultOutputWidthIssue = defaultOutputIssue(payload, result, jsonHeadroom);
 if (args.includes("--json")) {
+  const jsonPayloadError = jsonPayloadParityIssue(payload, result, {
+    default_output_headroom: defaultOutputHeadroom,
+  });
+  if (jsonPayloadError) {
+    fail("context_anomaly_runbook_density_json_parity_failed", {
+      issue: jsonPayloadError,
+    });
+  }
   const issue = jsonBudgetIssue(payload, maxJsonBytes);
   if (issue) {
     const { code, ok, ...details } = issue;
@@ -1417,5 +1491,5 @@ if (args.includes("--json")) {
     const { code, ok, ...details } = defaultOutputWidthIssue;
     fail(code, details);
   }
-  console.log(renderDefaultOutputWithWidth(payload, result, jsonHeadroom));
+  console.log(defaultOutputLine);
 }

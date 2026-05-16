@@ -321,12 +321,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label width headroom guard | Keeps `dlab` from consuming the remaining compact text margin unnoticed. | Self-test now requires at least 8 characters of default-output headroom after rendering `dlab`. | Evidence: default output keeps reserved slack; low text cap still fails. |
 | Context anomaly drilldown density label width headroom docs | Helps maintainers understand why the text output cap has reserved slack. | Runbook text-width docs now include guarded `thead>=8` wording beside the text cap. | Evidence: row/prose stay under caps; missing headroom wording fails docs coverage. |
 | Context anomaly drilldown density label width headroom output | Lets agents see text-output slack directly instead of subtracting `tw` from the cap. | Default output now reports `thead`, with compact label/parser aliases preserving text-output slack. | Evidence: `thead` matches cap minus rendered width; parser coverage stays field-specific. |
+| Context anomaly drilldown density label width headroom JSON parity | Lets JSON consumers inspect default-text slack without parsing compact output. | JSON now reports `default_output_headroom`, built with the compact text line until payload and text metrics agree. | Evidence: JSON cap/headroom still passes; JSON value matches text cap minus width. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label width headroom JSON parity | Lets JSON consumers inspect default-text slack without parsing compact output. | Add a full-field `default_output_headroom` JSON value and parity-check it against rendered text. | Compact metric: JSON cap/headroom still passes; correctness metric: JSON value matches text cap minus width. |
+| Context anomaly drilldown density label width JSON cap recovery | Restores JSON byte headroom after adding `default_output_headroom`. | Compact or rebalance density JSON docs/output budget without dropping guarded fields. | Compact metric: JSON headroom returns above 24 bytes; correctness metric: all parity fields remain covered. |
 
 ## Research Rules
 
