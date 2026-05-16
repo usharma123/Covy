@@ -88,6 +88,7 @@ const requiredOutputLabels = [
   "prose",
   "json_headroom",
   "env_docs",
+  "output_labels",
 ];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
@@ -194,6 +195,7 @@ function evaluate(runbook, lineBudget) {
     commands_checked: requiredCommands.length,
     failure_codes_checked: requiredFailureCodes.length,
     env_docs_checked: requiredEnvDocs.length,
+    output_labels_checked: requiredOutputLabels.length,
   };
 }
 
@@ -330,6 +332,12 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_env_docs=${requiredEnvDocs.length}`);
     console.error(`actual_env_docs=${result.env_docs_checked}`);
+    process.exit(1);
+  }
+  if (result.output_labels_checked !== requiredOutputLabels.length) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_output_labels=${requiredOutputLabels.length}`);
+    console.error(`actual_output_labels=${result.output_labels_checked}`);
     process.exit(1);
   }
   if (
@@ -490,6 +498,7 @@ if (args.includes("--json")) {
     `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines} max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed} commands=${payload.commands_checked}`,
     `failure_codes=${payload.failure_codes_checked}`,
     `env_docs=${result.env_docs_checked}`,
+    `output_labels=${result.output_labels_checked}`,
     `workflow_commands=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json_headroom=${jsonHeadroom}`,

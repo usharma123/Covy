@@ -190,12 +190,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density env docs coverage | Prevents density env knob docs from drifting as budgets are added. | The density checker now requires every `P28_CONTEXT_ANOMALY_RUNBOOK_*` env name in the runbook. | Evidence: default output stays one line and removing an env name fails `context_anomaly_runbook_density_missing_env_docs`. |
 | Context anomaly drilldown density env docs count output | Helps automation confirm how many env knobs the checker is guarding. | Default density output now reports `env_docs` while JSON remains unchanged. | Evidence: default output stays one line and the count matches the required env doc list. |
 | Context anomaly drilldown density env docs count self-test | Proves the default `env_docs` count is tied to the required env doc list. | Density self-test now asserts env doc count and verifies removing the `env_docs` output label fails output-doc coverage. | Evidence: self-test output stays one line and changing required env docs changes expected count. |
+| Context anomaly drilldown density output label count | Helps automation confirm how many default text labels the checker is guarding. | Default density output now reports `output_labels` while JSON remains unchanged. | Evidence: default output stays one line and count matches the required output label list. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output label count | Helps automation confirm how many default text labels the checker is guarding. | Report `output_labels` in default density output without growing JSON. | Compact metric: default output stays one line; correctness metric: count matches the required output label list. |
+| Context anomaly drilldown density output label count self-test | Proves the default `output_labels` count is tied to the required label list. | Add a self-test assertion for output label count and verify removing the label doc fails. | Compact metric: self-test output stays one line; correctness metric: changing required output labels changes expected count. |
 
 ## Research Rules
 
