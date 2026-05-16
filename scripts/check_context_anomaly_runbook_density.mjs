@@ -770,6 +770,8 @@ if (args.includes("--self-test")) {
     console.error("malformed_default_output_prefix_accepted");
     process.exit(1);
   }
+  // Each stale value must be parseable, field-specific, and impossible to
+  // equal the current rendered value; the loop below rejects no-op mutations.
   const staleDefaultOutputValues = {
     lines: "0/0",
     row: "0/0",
