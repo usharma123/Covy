@@ -723,6 +723,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${missingCommandCountError ?? "ok"}`);
     process.exit(1);
   }
+  const missingFailureCodeCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ fc=\d+/, "")),
+    result,
+  );
+  if (missingFailureCodeCountError !== "missing_default_output_field=fc") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=fc`);
+    console.error(`actual=${missingFailureCodeCountError ?? "ok"}`);
+    process.exit(1);
+  }
   const missingEnvError = defaultOutputParseIssue(
     parseDefaultOutput(defaultOutputLine.replace(/ env=\d+/, "")),
     result,
