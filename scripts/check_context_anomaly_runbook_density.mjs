@@ -2042,21 +2042,24 @@ if (args.includes("--self-test")) {
     };
     assertJsonFieldDocMutationSelfTests();
     const assertJsonByteHelpCapMutationSelfTests = () => {
-      assertSelfTestMissing(
-        evaluate(
-          runbook.replace(`\`max_json_bytes=${defaultMaxJsonBytes}\``, ""),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-        `\`max_json_bytes=${defaultMaxJsonBytes}\``,
-        "missing_max_json_bytes_doc",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        `\`help<=${maxHelpLineLength}\``,
-        "missing_help_cap_doc",
-      );
+      const jsonByteHelpCapDocs = [
+        {
+          caseName: "missing_max_json_bytes_doc",
+          docText: `\`max_json_bytes=${defaultMaxJsonBytes}\``,
+        },
+        {
+          caseName: "missing_help_cap_doc",
+          docText: `\`help<=${maxHelpLineLength}\``,
+        },
+      ];
+      for (const { caseName, docText } of jsonByteHelpCapDocs) {
+        assertSelfTestMissing(
+          evaluate(runbook.replace(docText, ""), maxLines),
+          "context_anomaly_runbook_density_missing_output_docs",
+          docText,
+          caseName,
+        );
+      }
     };
     assertJsonByteHelpCapMutationSelfTests();
     const assertEnvLineAnchorMutationSelfTest = () => {
