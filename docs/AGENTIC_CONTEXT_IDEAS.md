@@ -82,12 +82,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown sample truncation | Prevents noisy source strings from bloating recurring hidden-sample summaries. | Long hidden sample signals now have a regression test and the context anomaly runbook documents the 120-character budget. | Evidence: `context_hidden_samples_truncate_long_signals`; fallback provenance samples preserve `recent_fallbacks=1` and `latest_reason=` while staying under 120 characters. |
 | Context anomaly drilldown summary escaping | Keeps hidden sample summaries parseable when source signals contain delimiters. | Dashboard text summaries and CI hidden-sample summaries now percent-escape pair delimiters while preserving readable signal equals signs. | Evidence: `context_hidden_sample_summary_escapes_pair_delimiters`; delimiter-heavy fallback reasons remain one sample pair and CI summaries still cap output at 256 characters. |
 | Context anomaly drilldown summary golden fixture | Prevents Rust and workflow hidden-sample summary encoders from drifting apart. | A delimiter-heavy hidden-sample fixture now has a checked-in expected summary used by both a Rust unit test and workflow jq check. | Evidence: `context_hidden_sample_summary_matches_delimiter_fixture`; workflow summary step validates the same fixture before writing hidden sample lines. |
+| Context anomaly drilldown summary drift smoke | Gives maintainers a local command for checking hidden-sample summary fixtures without waiting for CI. | `scripts/check_context_anomaly_hidden_samples.mjs` now compares the delimiter fixture against the checked-in expected line and prints a one-line success summary. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs`; exits nonzero on drift and prints one `context_anomaly_hidden_sample_fixture_ok=...` line on success. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown summary drift smoke | Gives maintainers a local command for checking hidden-sample summary fixtures without waiting for CI. | Add a small local script or cargo test target that prints the delimiter fixture summary and compares it to the checked-in expected line. | Compact metric: smoke output is one line on success; correctness metric: exits nonzero when the checked-in expected summary drifts. |
+| Context anomaly drilldown runbook command table | Helps agents choose the right context anomaly command without scanning prose. | Add a compact command table for live verify, dashboard fixture replay, hidden-sample fixture smoke, and digest inspection. | Compact metric: runbook remains under 45 lines; correctness metric: every command in the table has a checked local validation path. |
 
 ## Research Rules
 
