@@ -139,12 +139,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit summary budget runbook command | Helps agents discover the local summary-budget check before editing the workflow summary. | The context anomaly runbook command table now lists `node scripts/check_context_anomaly_summary_budget.mjs --self-test`. | Evidence: runbook remains under 45 lines and the documented command matches the workflow gate. |
 | Context anomaly drilldown summary budget JSON docs | Helps automation consumers understand the summary-budget checker fields. | The context anomaly runbook command table now documents `node scripts/check_context_anomaly_summary_budget.mjs --json` and its fields. | Evidence: runbook remains under 45 lines and documented fields match checker JSON output. |
 | Context anomaly drilldown summary budget help workflow log | Keeps the summary-budget checker usage visible in CI logs without expanding summaries. | The context-anomalies workflow now runs the summary-budget checker `--help` mode before self-test. | Evidence: no GitHub summary growth; help output lists default, `--json`, `--self-test`, and `--help`. |
+| Context anomaly drilldown summary budget help docs | Helps agents discover all summary-budget checker modes from the runbook. | The runbook summary-budget row now notes that `--help` lists default, JSON, self-test, and help modes. | Evidence: runbook remains under 45 lines and documented modes match help output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown summary budget help docs | Helps agents discover all summary-budget checker modes from the runbook. | Add the summary-budget `--help` command to the command table or fold it into the existing summary-budget rows. | Compact metric: runbook remains under 45 lines; correctness metric: documented modes match help output. |
+| Context anomaly drilldown summary budget unknown-option docs | Helps agents recognize typoed checker flags quickly. | Document the checker's unknown-option error in the runbook or script help. | Compact metric: runbook remains under 45 lines or help stays under six lines; correctness metric: bad flag exits with `context_anomaly_summary_budget_unknown_option`. |
 
 ## Research Rules
 
