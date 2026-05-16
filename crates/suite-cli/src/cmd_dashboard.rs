@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
+use std::path::Path;
 
 use anyhow::Result;
 use clap::Args;
-use packet28_daemon_core::load_task_registry;
+use packet28_daemon_core::{load_task_registry, task_artifact_dir};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::memory_store::{
     feedback_stats, graph_stats, list_memories, local_store_stats, memory_health, memory_topics,
@@ -56,6 +58,7 @@ struct DashboardReport {
     pending_extractions: i64,
     integration_health: BTreeMap<String, String>,
     windsurf_doctor_status: String,
+    handoff_readiness: HandoffReadinessTile,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -74,6 +77,15 @@ struct DashboardRouteRoi {
     reduced_est_tokens: u64,
     saved_est_tokens: u64,
     savings_percent: f64,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct HandoffReadinessTile {
+    artifact_count: usize,
+    latest_status: String,
+    latest_blocking_categories: Vec<String>,
+    recurring_categories: Vec<String>,
+    regression_count: usize,
 }
 
 pub fn run(args: DashboardArgs) -> Result<i32> {
@@ -125,6 +137,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
     let graph = graph_stats()?;
     let feedback = feedback_stats()?;
     let transcripts = transcript_stats()?;
+    let handoff_readiness = handoff_readiness_tile(&root)?;
     let windsurf_rules = root.join(".windsurf").join("rules").join("packet28.md");
     let windsurf_status = if windsurf_rules.exists() {
         "rules_present"
@@ -160,6 +173,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         pending_extractions: store_stats.pending_extraction_count,
         integration_health,
         windsurf_doctor_status: windsurf_status.to_string(),
+        handoff_readiness,
     };
 
     let format = args.format.trim().to_ascii_lowercase();
@@ -207,8 +221,194 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         println!("hook_event_history={}", report.hook_event_history);
         println!("pending_extractions={}", report.pending_extractions);
         println!("windsurf_doctor_status={}", report.windsurf_doctor_status);
+        println!(
+            "handoff_latest_status={}",
+            report.handoff_readiness.latest_status
+        );
+        println!(
+            "handoff_regression_count={}",
+            report.handoff_readiness.regression_count
+        );
     }
     Ok(0)
+}
+
+fn handoff_readiness_tile(root: &Path) -> Result<HandoffReadinessTile> {
+    let mut records = Vec::<Vec<String>>::new();
+    for task_id in dashboard_task_ids(root)? {
+        let versions_dir = task_artifact_dir(root, &task_id).join("versions");
+        if !versions_dir.exists() {
+            continue;
+        }
+        let mut paths = fs::read_dir(&versions_dir)?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        for path in paths.into_iter().take(12) {
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+            let Ok(payload) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            let categories = dashboard_handoff_categories(root, &payload);
+            records.push(categories);
+        }
+    }
+    if records.is_empty() {
+        return Ok(HandoffReadinessTile {
+            latest_status: "none".to_string(),
+            ..HandoffReadinessTile::default()
+        });
+    }
+    let latest = records.last().cloned().unwrap_or_default();
+    let mut counts = BTreeMap::<String, usize>::new();
+    for categories in &records {
+        for category in categories {
+            *counts.entry(category.clone()).or_default() += 1;
+        }
+    }
+    let recurring_categories = counts
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(category, _)| category.clone())
+        .collect::<Vec<_>>();
+    let regression_count = latest
+        .iter()
+        .filter(|category| category_was_cleared_then_reintroduced(&records, category))
+        .count();
+    Ok(HandoffReadinessTile {
+        artifact_count: records.len(),
+        latest_status: if latest.is_empty() {
+            "ready"
+        } else {
+            "blocked"
+        }
+        .to_string(),
+        latest_blocking_categories: latest,
+        recurring_categories,
+        regression_count,
+    })
+}
+
+fn dashboard_task_ids(root: &Path) -> Result<Vec<String>> {
+    let mut ids = load_task_registry(root)
+        .map(|registry| registry.tasks.into_keys().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let probe = task_artifact_dir(root, "__packet28_probe__");
+    if let Some(tasks_dir) = probe.parent() {
+        if tasks_dir.exists() {
+            for entry in fs::read_dir(tasks_dir)? {
+                let entry = entry?;
+                if entry.path().is_dir() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        let candidate = name.to_string();
+                        if !ids.iter().any(|id| id == &candidate) {
+                            ids.push(candidate);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ids.sort();
+    Ok(ids)
+}
+
+fn dashboard_handoff_categories(root: &Path, payload: &Value) -> Vec<String> {
+    let mut categories = Vec::new();
+    let text = dashboard_handoff_text(payload);
+    if dashboard_missing_path_reference(root, &text) {
+        categories.push("paths".to_string());
+    }
+    if dashboard_missing_test_command(&text) {
+        categories.push("tests".to_string());
+    }
+    if dashboard_missing_env_reference(&text) {
+        categories.push("environment".to_string());
+    }
+    categories
+}
+
+fn dashboard_handoff_text(payload: &Value) -> String {
+    let mut blocks = Vec::new();
+    if let Some(brief) = payload.get("brief").and_then(Value::as_str) {
+        blocks.push(brief.to_string());
+    }
+    if let Some(next_action) = payload.get("next_action_summary").and_then(Value::as_str) {
+        blocks.push(next_action.to_string());
+    }
+    if let Some(sections) = payload.get("sections").and_then(Value::as_array) {
+        for section in sections {
+            if let Some(body) = section.get("body").and_then(Value::as_str) {
+                blocks.push(body.to_string());
+            }
+        }
+    }
+    blocks.join("\n")
+}
+
+fn dashboard_missing_path_reference(root: &Path, text: &str) -> bool {
+    text.split_whitespace().any(|token| {
+        let token = dashboard_clean_token(token);
+        !token.starts_with('/')
+            && token.contains('/')
+            && token
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name.contains('.'))
+            && !root.join(token).exists()
+    })
+}
+
+fn dashboard_missing_test_command(text: &str) -> bool {
+    let mentioned = text
+        .split_whitespace()
+        .map(dashboard_clean_token)
+        .any(|token| token.ends_with("_test") || token.starts_with("test_"));
+    mentioned && !text.lines().any(dashboard_line_contains_test_command)
+}
+
+fn dashboard_line_contains_test_command(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("cargo test")
+        || lower.contains("npm test")
+        || lower.contains("pnpm test")
+        || lower.contains("pytest")
+        || lower.contains("go test")
+}
+
+fn dashboard_missing_env_reference(text: &str) -> bool {
+    text.split('$').skip(1).any(|tail| {
+        let var = tail
+            .chars()
+            .take_while(|ch| *ch == '_' || ch.is_ascii_uppercase() || ch.is_ascii_digit())
+            .collect::<String>();
+        !var.is_empty() && std::env::var_os(var).is_none()
+    })
+}
+
+fn dashboard_clean_token(token: &str) -> &str {
+    token.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '`' | '\'' | '"' | ',' | '.' | ';' | ':' | ')' | '(' | '[' | ']'
+        )
+    })
+}
+
+fn category_was_cleared_then_reintroduced(records: &[Vec<String>], category: &str) -> bool {
+    let mut seen = false;
+    for categories in records.iter().take(records.len().saturating_sub(1)) {
+        if categories.iter().any(|candidate| candidate == category) {
+            seen = true;
+        } else if seen {
+            return true;
+        }
+    }
+    false
 }
 
 fn record_dashboard_route_roi(
@@ -309,6 +509,15 @@ fn render_dashboard_tui(report: &DashboardReport, panel: DashboardPanel) -> Stri
                 report.commands_reduced,
                 report.sessions
             ));
+            out.push_str(&format!(
+                "handoff_latest_status={}\nhandoff_regression_count={}\n",
+                report.handoff_readiness.latest_status, report.handoff_readiness.regression_count
+            ));
+            out.push_str("handoff_latest_blockers:\n");
+            push_tui_list(
+                &mut out,
+                &report.handoff_readiness.latest_blocking_categories,
+            );
             out.push_str("top_saved_routes:\n");
             for route in &report.top_saved_routes {
                 out.push_str(&format!(
@@ -448,6 +657,16 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
         "Pending extractions",
         &report.pending_extractions.to_string(),
     );
+    push_metric(
+        &mut html,
+        "Handoff status",
+        &report.handoff_readiness.latest_status,
+    );
+    push_metric(
+        &mut html,
+        "Handoff regressions",
+        &report.handoff_readiness.regression_count.to_string(),
+    );
     html.push_str("</section>");
 
     html.push_str("<h2>Memory Topics</h2><table><tr><th>Topic</th><th>Count</th></tr>");
@@ -478,6 +697,30 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
             escape_html(command)
         ));
     }
+    html.push_str("</table>");
+
+    html.push_str("<h2>Handoff Readiness</h2><table><tr><th>Signal</th><th>Value</th></tr>");
+    html.push_str(&format!(
+        "<tr><td>Latest status</td><td>{}</td></tr>",
+        escape_html(&report.handoff_readiness.latest_status)
+    ));
+    html.push_str(&format!(
+        "<tr><td>Latest blockers</td><td><code>{}</code></td></tr>",
+        escape_html(
+            &report
+                .handoff_readiness
+                .latest_blocking_categories
+                .join(",")
+        )
+    ));
+    html.push_str(&format!(
+        "<tr><td>Recurring categories</td><td><code>{}</code></td></tr>",
+        escape_html(&report.handoff_readiness.recurring_categories.join(","))
+    ));
+    html.push_str(&format!(
+        "<tr><td>Regressions</td><td>{}</td></tr>",
+        report.handoff_readiness.regression_count
+    ));
     html.push_str("</table>");
 
     html.push_str("<h2>Integration Health</h2><table><tr><th>Integration</th><th>Status</th></tr>");

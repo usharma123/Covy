@@ -5932,6 +5932,42 @@ fn test_dashboard_shows_local_product_metrics() {
         .args(["graph", "link", "Dashboard", "Packet28"])
         .assert()
         .success();
+    let task_id = "task-dashboard-handoff";
+    for (context_version, body) in [
+        (
+            "ctx-dashboard-1",
+            "cargo test -p suite-cli dashboard_handoff_test $PACKET28_DASHBOARD_MISSING_ENV_12345",
+        ),
+        (
+            "ctx-dashboard-2",
+            "cargo test -p suite-cli dashboard_handoff_test",
+        ),
+        (
+            "ctx-dashboard-3",
+            "cargo test -p suite-cli dashboard_handoff_test $PACKET28_DASHBOARD_MISSING_ENV_12345",
+        ),
+    ] {
+        let path =
+            packet28_daemon_core::task_version_json_path(root.path(), task_id, context_version);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "context_version": context_version,
+                "artifact_id": context_version,
+                "brief": "## Task Objective\nDashboard handoff readiness.",
+                "sections": [{
+                    "id": "verification",
+                    "title": "Verification",
+                    "body": body
+                }],
+                "changed_paths_since_checkpoint": ["src/lib.rs"],
+                "next_action_summary": "surface dashboard handoff readiness"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
 
     suite_cmd()
         .current_dir(root.path())
@@ -5958,6 +5994,12 @@ fn test_dashboard_shows_local_product_metrics() {
         .stdout(predicate::str::contains("\"message_count\":1"))
         .stdout(predicate::str::contains("\"graph_concepts\""))
         .stdout(predicate::str::contains("\"graph_stats\""))
+        .stdout(predicate::str::contains("\"handoff_readiness\""))
+        .stdout(predicate::str::contains("\"latest_status\":\"blocked\""))
+        .stdout(predicate::str::contains(
+            "\"latest_blocking_categories\":[\"environment\"]",
+        ))
+        .stdout(predicate::str::contains("\"regression_count\":1"))
         .stdout(predicate::str::contains("\"windsurf_doctor_status\""));
 
     suite_cmd()
@@ -5969,7 +6011,9 @@ fn test_dashboard_shows_local_product_metrics() {
         .stdout(predicate::str::contains("top_saved_routes=1"))
         .stdout(predicate::str::contains("memory_topics=1"))
         .stdout(predicate::str::contains("topics_needing_consolidation=0"))
-        .stdout(predicate::str::contains("transcript_messages=1"));
+        .stdout(predicate::str::contains("transcript_messages=1"))
+        .stdout(predicate::str::contains("handoff_latest_status=blocked"))
+        .stdout(predicate::str::contains("handoff_regression_count=1"));
 
     let html_path = root.path().join("packet28-dashboard.html");
     suite_cmd()
@@ -5993,6 +6037,7 @@ fn test_dashboard_shows_local_product_metrics() {
     assert!(html.contains("Top Saved Routes"));
     assert!(html.contains("run_reducer:git"));
     assert!(html.contains("Memory Topics"));
+    assert!(html.contains("Handoff Readiness"));
     assert!(html.contains("Integration Health"));
 
     suite_cmd()
@@ -6010,7 +6055,8 @@ fn test_dashboard_shows_local_product_metrics() {
         .stdout(predicate::str::contains("Packet28 Dashboard"))
         .stdout(predicate::str::contains("panel=Overview"))
         .stdout(predicate::str::contains("top_saved_routes:"))
-        .stdout(predicate::str::contains("commands_reduced=1"));
+        .stdout(predicate::str::contains("commands_reduced=1"))
+        .stdout(predicate::str::contains("handoff_regression_count=1"));
 
     suite_cmd()
         .current_dir(root.path())
