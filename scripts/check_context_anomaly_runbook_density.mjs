@@ -1902,30 +1902,33 @@ if (args.includes("--self-test")) {
     }
   };
   assertDefaultOutputPhraseMutationSelfTests();
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-    defaultOutputDocPhrase,
-    "swapped_env_lbl_output_order",
-  );
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace("`dlab`, `jhead`", "`jhead`, `dlab`"),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-    defaultOutputDocPhrase,
-    "swapped_dlab_jhead_output_order",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace("`thead`, `tw`", "`tw`, `thead`"), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    defaultOutputDocPhrase,
-    "swapped_thead_tw_output_order",
-  );
+  const assertOutputOrderSwapMutationSelfTests = () => {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_output_docs",
+      defaultOutputDocPhrase,
+      "swapped_env_lbl_output_order",
+    );
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replace("`dlab`, `jhead`", "`jhead`, `dlab`"),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_output_docs",
+      defaultOutputDocPhrase,
+      "swapped_dlab_jhead_output_order",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace("`thead`, `tw`", "`tw`, `thead`"), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      defaultOutputDocPhrase,
+      "swapped_thead_tw_output_order",
+    );
+  };
+  assertOutputOrderSwapMutationSelfTests();
   assertSelfTestMissing(
     evaluate(runbook.replace("JSON keeps full field names", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",

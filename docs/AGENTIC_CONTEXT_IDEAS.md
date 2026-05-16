@@ -593,12 +593,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test key/value output doc order | Keeps the key/value output doc mutation beside output-label mutations. | Verified `assertKeyValueOutputDocMutationSelfTest()` sits directly after `assertOutputLabelMutationSelfTests()` and before default output phrase mutations. | Evidence: no runtime output growth; key/value output doc coverage remains before default-output phrase coverage. |
 | Context anomaly drilldown density self-test default output phrase mutation wrapper | Names the default-output phrase mutation loop. | Extracted `assertDefaultOutputPhraseMutationSelfTests()` around the `defaultOutputFieldOrder` phrase drift assertions. | Evidence: no runtime output growth; default-output phrase coverage still fails for each drifted field label. |
 | Context anomaly drilldown density self-test default output phrase mutation order | Keeps default-output phrase mutations beside key/value and order assertions. | Verified `assertDefaultOutputPhraseMutationSelfTests()` sits after key/value output docs and before explicit output-order swaps. | Evidence: no runtime output growth; phrase drift coverage remains before order-swap coverage. |
+| Context anomaly drilldown density self-test output order swap wrapper | Names the explicit output-order swap assertions. | Extracted `assertOutputOrderSwapMutationSelfTests()` around env/lbl, dlab/jhead, and thead/tw swap checks. | Evidence: no runtime output growth; output-order coverage still fails when documented output order is swapped. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test output order swap wrapper | Names the explicit output-order swap assertions. | Extract `assertOutputOrderSwapMutationSelfTests()` around env/lbl, dlab/jhead, and thead/tw swap checks. | Compact metric: no runtime output growth; correctness metric: output-order coverage still fails when documented output order is swapped. |
+| Context anomaly drilldown density self-test output order swap order | Keeps output-order swap checks before JSON output documentation checks. | Verify `assertOutputOrderSwapMutationSelfTests()` sits directly after phrase mutations and before JSON field-name doc coverage. | Compact metric: no runtime output growth; correctness metric: order-swap coverage remains before JSON output-doc coverage. |
 
 ## Research Rules
 
