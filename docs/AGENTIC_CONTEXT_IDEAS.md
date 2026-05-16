@@ -238,12 +238,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density parser mismatch diagnostics | Makes default-output parser failures easier to debug when a count drifts. | Parser mismatches now return field-specific diagnostics such as `default_output_parse_mismatch=dphr`. | Evidence: success output is unchanged; self-test expects the field-specific stale-`dphr` diagnostic. |
 | Context anomaly drilldown density parser mismatch breadth | Proves field-specific parser diagnostics work beyond `dphr`. | Density self-test now mutates `soft=over` and requires `default_output_parse_mismatch=soft`. | Evidence: success output is unchanged; multiple mismatch fields produce field-specific diagnostics. |
 | Context anomaly drilldown density parser field coverage output | Helps automation see how many default-output fields are parser-enforced. | Default output now reports `parsed` from the expected parser field list. | Evidence: default output remains under text cap; `parsed` equals parser field count. |
+| Context anomaly drilldown density parser field coverage JSON parity | Lets JSON consumers inspect parser field coverage without parsing default text. | JSON success output now includes `parsed_fields_checked` with a documented 416-byte cap. | Evidence: JSON stays under budget; JSON count equals parser field count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density parser field coverage JSON parity | Lets JSON consumers inspect parser field coverage without parsing default text. | Add parser field count to JSON while preserving JSON headroom. | Compact metric: JSON stays under budget; correctness metric: JSON count equals parser field count. |
+| Context anomaly drilldown density parser JSON field docs | Helps maintainers discover `parsed_fields_checked` without inspecting the checker source. | Document `parsed_fields_checked` with the other compact JSON field docs and require it in self-test. | Compact metric: prose stays under width budget; correctness metric: removing the JSON field doc fails output-doc coverage. |
 
 ## Research Rules
 
