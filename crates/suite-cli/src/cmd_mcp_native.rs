@@ -270,6 +270,14 @@ pub(crate) struct Packet28HandoffRepairVerifyArgs {
     pub(crate) after_context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffLintTrendArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_ids: Vec<String>,
+    pub(crate) max_artifacts: Option<usize>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1995,6 +2003,80 @@ pub(crate) fn handle_packet28_handoff_repair_verify(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_lint_trends(
+    root: &Path,
+    args: Packet28HandoffLintTrendArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.handoff_lint_trends requires task_id"));
+    }
+    let max_artifacts = args.max_artifacts.unwrap_or(8).clamp(1, 24);
+    let artifact_ids = if args.artifact_ids.is_empty() {
+        discover_handoff_artifact_ids(root, task_id, max_artifacts)?
+    } else {
+        args.artifact_ids
+            .into_iter()
+            .filter(|id| !id.trim().is_empty())
+            .take(max_artifacts)
+            .collect()
+    };
+    let mut records = Vec::new();
+    let mut category_counts = std::collections::BTreeMap::<String, u64>::new();
+    let mut latest_categories = Vec::<String>::new();
+    for artifact_id in &artifact_ids {
+        let lint = handle_packet28_handoff_lint_all(
+            root,
+            Packet28HandoffLintAllArgs {
+                task_id: task_id.to_string(),
+                artifact_id: Some(artifact_id.clone()),
+                context_version: None,
+            },
+        )?;
+        let categories = lint_failing_categories(&lint);
+        latest_categories = categories.clone();
+        for category in &categories {
+            *category_counts.entry(category.clone()).or_default() += 1;
+        }
+        records.push(json!({
+            "artifact_id": artifact_id,
+            "failing_categories": categories,
+        }));
+    }
+    let recurring_categories: Vec<Value> = category_counts
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(category, count)| {
+            json!({
+                "category": category,
+                "count": count,
+            })
+        })
+        .collect();
+    let cleared_categories: Vec<String> = category_counts
+        .keys()
+        .filter(|category| !latest_categories.iter().any(|latest| latest == *category))
+        .cloned()
+        .collect();
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_count": records.len(),
+        "latest_artifact_id": artifact_ids.last().cloned().unwrap_or_default(),
+        "latest_blocking_categories": latest_categories,
+        "recurring_categories": recurring_categories,
+        "cleared_categories": cleared_categories,
+        "records": records,
+        "summary": format!(
+            "handoff_lint_trends artifacts={} recurring={} cleared={}",
+            artifact_ids.len(),
+            category_counts.values().filter(|count| **count > 1).count(),
+            category_counts.keys().filter(|category| {
+                !lint_latest_category_contains(&latest_categories, category)
+            }).count()
+        ),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -2369,6 +2451,40 @@ fn lint_failing_categories(lint: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn discover_handoff_artifact_ids(
+    root: &Path,
+    task_id: &str,
+    max_artifacts: usize,
+) -> Result<Vec<String>> {
+    let probe = task_version_json_path(root, task_id, "__packet28_probe__");
+    let Some(dir) = probe.parent() else {
+        return Ok(Vec::new());
+    };
+    let mut ids = Vec::new();
+    if !dir.exists() {
+        return Ok(ids);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
+            ids.push(stem.to_string());
+        }
+    }
+    ids.sort();
+    if ids.len() > max_artifacts {
+        ids = ids.split_off(ids.len() - max_artifacts);
+    }
+    Ok(ids)
+}
+
+fn lint_latest_category_contains(latest_categories: &[String], category: &str) -> bool {
+    latest_categories.iter().any(|latest| latest == category)
 }
 
 fn is_env_var_start(ch: char) -> bool {
