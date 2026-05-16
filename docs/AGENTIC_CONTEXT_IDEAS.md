@@ -301,12 +301,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density phrase-count refresh | Keeps the compact `phrases` count meaningful after adding the ordered label-list guard. | JSON now includes `output_doc_phrases_checked`, and the runbook documents the field under a 512-byte JSON cap. | Evidence: output remains one line; phrase count tracks required doc phrases in text and JSON. |
 | Context anomaly drilldown density JSON phrase-count self-test | Proves JSON phrase-count parity fails if `output_doc_phrases_checked` drifts. | Density self-test now mutates JSON payload `output_doc_phrases_checked` and requires a field-specific mismatch. | Evidence: JSON stays under 512 bytes; stale JSON phrase count fails self-test. |
 | Context anomaly drilldown density JSON parity helper expansion | Gives every JSON parity field the same stale-value coverage as phrase count. | Density self-test now table-drives stale JSON payload mutations for all parity fields. | Evidence: JSON stays under 512 bytes; stale JSON parity fields fail self-test. |
+| Context anomaly drilldown density JSON parity missing-field coverage | Proves JSON parity checks reject omitted parity fields, not just stale values. | Density self-test now deletes each JSON parity field and requires a field-specific missing-field error. | Evidence: JSON stays under 512 bytes; omitted JSON parity fields fail self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON parity missing-field coverage | Proves JSON parity checks reject omitted parity fields, not just stale values. | Extend JSON payload parity helper to report missing fields and self-test each omitted parity field. | Compact metric: JSON stays under 512 bytes; correctness metric: omitted JSON parity fields fail self-test. |
+| Context anomaly drilldown density JSON parity mutation helper | Keeps JSON parity missing/stale checks compact as more JSON fields gain parity coverage. | Extract the repeated JSON parity missing/stale mutation checks into a helper. | Compact metric: JSON stays under 512 bytes; correctness metric: JSON parity mutation coverage remains unchanged. |
 
 ## Research Rules
 

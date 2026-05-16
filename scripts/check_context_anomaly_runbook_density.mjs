@@ -442,6 +442,9 @@ function jsonPayloadParityExpectedFields(result) {
 function jsonPayloadParityIssue(payload, result) {
   const expectedFields = jsonPayloadParityExpectedFields(result);
   for (const [field, expected] of Object.entries(expectedFields)) {
+    if (!Object.prototype.hasOwnProperty.call(payload, field)) {
+      return `missing_json_payload_field=${field}`;
+    }
     if (payload[field] !== expected) {
       return `json_payload_mismatch=${field}`;
     }
@@ -733,6 +736,18 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   for (const [field, staleValue] of Object.entries(staleJsonPayloadValues)) {
+    const missingJsonPayload = { ...baselinePayload };
+    delete missingJsonPayload[field];
+    const missingJsonPayloadError = jsonPayloadParityIssue(
+      missingJsonPayload,
+      result,
+    );
+    if (missingJsonPayloadError !== `missing_json_payload_field=${field}`) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`expected=missing_json_payload_field=${field}`);
+      console.error(`actual=${missingJsonPayloadError ?? "ok"}`);
+      process.exit(1);
+    }
     if (staleValue === baselinePayload[field]) {
       console.error("context_anomaly_runbook_density_self_test_failed");
       console.error(`json_parity_mutation_noop=${field}`);
