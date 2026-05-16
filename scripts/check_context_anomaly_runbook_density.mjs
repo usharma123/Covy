@@ -141,6 +141,13 @@ function evaluate(runbook, lineBudget) {
   const missingOutputDocPhrases = requiredOutputDocPhrases.filter(
     (phrase) => !runbook.includes(`\`${phrase}\``),
   );
+  const hasTextWidthEnvDoc = runbook
+    .split("\n")
+    .some(
+      (line) =>
+        line.includes("`text_width`") &&
+        line.includes("`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`"),
+    );
   const missingEnvDocs = requiredEnvDocs.filter(
     (envName) => !runbook.includes(`\`${envName}\``),
   );
@@ -182,11 +189,21 @@ function evaluate(runbook, lineBudget) {
       missing: missingFailureCodes,
     };
   }
-  if (missingOutputLabels.length > 0 || missingOutputDocPhrases.length > 0) {
+  if (
+    missingOutputLabels.length > 0 ||
+    missingOutputDocPhrases.length > 0 ||
+    !hasTextWidthEnvDoc
+  ) {
     return {
       ok: false,
       code: "context_anomaly_runbook_density_missing_output_docs",
-      missing: [...missingOutputLabels, ...missingOutputDocPhrases],
+      missing: [
+        ...missingOutputLabels,
+        ...missingOutputDocPhrases,
+        ...(hasTextWidthEnvDoc
+          ? []
+          : ["text_width:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
+      ],
     };
   }
   if (missingEnvDocs.length > 0) {
@@ -570,6 +587,16 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`key=value`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace(
+        "`text_width` is capped by `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`",
+        "`text_width` has a text cap",
+      ),
+      maxLines,
+    ),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(

@@ -202,12 +202,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default output width metric | Helps automation see default text width headroom before the guard fails. | Default density output now reports final rendered `text_width`. | Evidence: default output remains under `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` and value matches rendered output length. |
 | Context anomaly drilldown density text width self-test | Proves reported `text_width` is the final rendered line length, including itself. | Density self-test now compares parsed `text_width` with rendered default output length. | Evidence: self-test output stays one line and width changes if labels grow. |
 | Context anomaly drilldown density text width docs | Helps maintainers interpret text width failures without reading checker code. | The runbook now documents `text_width` next to `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Evidence: runbook remains within line/prose/table budgets and label plus env match checker output. |
+| Context anomaly drilldown density text width docs coverage | Prevents the width metric docs from drifting away from the text-width guard. | The density checker now requires `text_width` and `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` in the same runbook line. | Evidence: default output stays one line and splitting the pair fails missing output docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text width docs coverage | Prevents the width metric docs from drifting away from the text-width guard. | Have the density checker require `text_width` and `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` in the same runbook line. | Compact metric: default output stays one line; correctness metric: splitting the pair fails missing output docs. |
+| Context anomaly drilldown density text width pair output | Helps automation see that the text-width doc pair is explicitly covered. | Report a small `text_width_docs=1` default-output count without growing JSON. | Compact metric: default output remains under text width cap; correctness metric: count follows the paired-doc requirement. |
 
 ## Research Rules
 
