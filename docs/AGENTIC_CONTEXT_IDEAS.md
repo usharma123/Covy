@@ -608,12 +608,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test alias glossary wrapper | Names the compact alias glossary assertions. | Extracted `assertAliasGlossaryMutationSelfTests()` around `fc`, `jhead`, `adocs`, and `dlab` glossary checks. | Evidence: no runtime output growth; alias glossary coverage still fails when compact aliases are removed. |
 | Context anomaly drilldown density self-test alias glossary order | Keeps alias glossary checks before width env-pair coverage. | Verified `assertAliasGlossaryMutationSelfTests()` sits after section-anchor checks and before the `tw` env-pair assertion. | Evidence: no runtime output growth; alias glossary coverage remains before width env-pair coverage. |
 | Context anomaly drilldown density self-test width env-pair wrapper | Names the text-width env-pair documentation assertion. | Extracted `assertWidthEnvPairMutationSelfTest()` around the `tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` assertion. | Evidence: no runtime output growth; width env-pair coverage still fails when removed. |
+| Context anomaly drilldown density self-test width env-pair order | Keeps width env-pair coverage before default text-headroom docs. | Verified `assertWidthEnvPairMutationSelfTest()` sits after alias glossary checks and before the `thead>=8` assertion. | Evidence: no runtime output growth; width env-pair coverage remains before default text-headroom coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test width env-pair order | Keeps width env-pair coverage before default text-headroom docs. | Verify `assertWidthEnvPairMutationSelfTest()` sits after alias glossary checks and before the `thead>=8` assertion. | Compact metric: no runtime output growth; correctness metric: width env-pair coverage remains before default text-headroom coverage. |
+| Context anomaly drilldown density self-test text headroom wrapper | Names the default text-headroom documentation assertion. | Extract `assertTextHeadroomMutationSelfTest()` around the `thead>=8` assertion. | Compact metric: no runtime output growth; correctness metric: default text-headroom coverage still fails when removed. |
 
 ## Research Rules
 
