@@ -12,14 +12,14 @@ Use this command table before treating a compact anomaly summary as complete:
 | List formatter modes | `node scripts/check_context_anomaly_hidden_samples.mjs --help` | Lists every accepted mode in under eight lines. |
 | Audit formatter flow | `node scripts/audit_context_anomaly_hidden_samples.mjs` | Runs the smoke modes, fixture dashboard, digest, and verifier checks. |
 | Audit release gate | `node scripts/audit_context_anomaly_hidden_samples.mjs --strict` | Uses release-like `--max-high 0` for the verifier check. |
-| List audit modes | `node scripts/audit_context_anomaly_hidden_samples.mjs --help` | Lists tolerant and strict modes in under six lines. |
+| List audit modes | `node scripts/audit_context_anomaly_hidden_samples.mjs --help` | Lists tolerant, strict, and checksum modes in under six lines. |
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 
 `Packet28 dashboard --root . --json` reads live history and reports latest status, high count, hidden categories, and recurring hidden categories.
 
 The audit script uses `verify context-anomalies --max-high 2` so local smoke can pass with known live quality debt and reports `audit_mode=tolerant`. The workflow threshold step and strict audit mode use `--max-high 0` and report `audit_mode=strict`.
 
-Manual workflow dispatch has a `strict_audit` input that also runs `node scripts/audit_context_anomaly_hidden_samples.mjs --strict`. Workflow runs upload `context-anomaly-hidden-sample-audit.txt` as the `context-anomaly-hidden-sample-audit` artifact; reproduce its checksum with `node -e "const fs=require('fs'),crypto=require('crypto'); process.stdout.write(crypto.createHash('sha256').update(fs.readFileSync('context-anomaly-hidden-sample-audit.txt')).digest('hex'))"`.
+Manual workflow dispatch has a `strict_audit` input that also runs `node scripts/audit_context_anomaly_hidden_samples.mjs --strict`. Workflow runs upload `context-anomaly-hidden-sample-audit.txt` as the `context-anomaly-hidden-sample-audit` artifact; reproduce its checksum with `node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt`.
 
 The fixture should report `latest_status=ready` with recurring hidden `fallback_provenance`. That proves recurring hidden categories survive a final clean record. It should also report `recurring_hidden_samples` with `fallback_provenance=recent_fallbacks=1`.
 

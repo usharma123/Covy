@@ -86,7 +86,7 @@ jobs:
           target/debug/Packet28 dashboard --root . --json > context-anomaly-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-dashboard.json
           target/debug/Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json > context-anomaly-fixture-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-fixture-dashboard.json
           audit_mode_line="$(grep '^audit_mode=' context-anomaly-hidden-sample-audit.txt || true)"
-          audit_output_checksum="$(node -e "const fs=require('fs'),crypto=require('crypto'); process.stdout.write(crypto.createHash('sha256').update(fs.readFileSync('context-anomaly-hidden-sample-audit.txt')).digest('hex'))")"
+          audit_output_checksum="$(node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt)"
           trend_repair_hint="$(jq -r '.trend_repair_hint // empty' context-anomalies.json)"
           hidden_sample_jq='def cat_escape: gsub("%"; "%25") | gsub("="; "%3D") | gsub(";"; "%3B") | gsub("\n"; "%0A"); def signal_escape: gsub("%"; "%25") | gsub(";"; "%3B") | gsub("\n"; "%0A"); map((.category | cat_escape) + "=" + (.signal | signal_escape)) | join(";")'
           hidden_sample_fixture_summary="$(jq -r "$hidden_sample_jq" docs/context-anomalies/hidden-samples-delimiters.json)"

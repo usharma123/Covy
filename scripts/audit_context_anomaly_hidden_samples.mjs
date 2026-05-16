@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -27,24 +28,47 @@ function expectFailure(command, args, expected, options = {}) {
 }
 
 const args = process.argv.slice(2);
-const unknownArgs = args.filter((arg) => !["--strict", "--help"].includes(arg));
-if (unknownArgs.length > 0) {
-  console.error("context_anomaly_hidden_sample_audit_unknown_option");
-  console.error(`option=${unknownArgs[0]}`);
-  process.exit(2);
+let strictMode = false;
+let checksumPath = null;
+let printHelp = false;
+for (let index = 0; index < args.length; index += 1) {
+  const arg = args[index];
+  if (arg === "--strict") {
+    strictMode = true;
+  } else if (arg === "--help") {
+    printHelp = true;
+  } else if (arg === "--checksum") {
+    const next = args[index + 1];
+    if (!next || next.startsWith("--")) {
+      console.error("context_anomaly_hidden_sample_audit_missing_checksum_path");
+      process.exit(2);
+    }
+    checksumPath = next;
+    index += 1;
+  } else {
+    console.error("context_anomaly_hidden_sample_audit_unknown_option");
+    console.error(`option=${arg}`);
+    process.exit(2);
+  }
 }
-if (args.includes("--help")) {
+if (printHelp) {
   console.log(
     [
-      "Usage: node scripts/audit_context_anomaly_hidden_samples.mjs [--strict|--help]",
+      "Usage: node scripts/audit_context_anomaly_hidden_samples.mjs [--strict|--checksum <path>|--help]",
       "default: tolerant audit with verifier --max-high 2",
       "--strict: release-like audit with verifier --max-high 0",
+      "--checksum <path>: print a SHA-256 digest for an audit artifact",
       "--help: print this help",
     ].join("\n"),
   );
   process.exit(0);
 }
-const strictMode = args.includes("--strict");
+if (checksumPath) {
+  process.stdout.write(
+    createHash("sha256").update(readFileSync(checksumPath)).digest("hex"),
+  );
+  process.exit(0);
+}
 const maxHigh = strictMode ? "0" : "2";
 
 const packetEnv = {
