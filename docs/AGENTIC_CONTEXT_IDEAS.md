@@ -598,12 +598,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON field-name doc wrapper | Names the JSON full-field-name documentation assertion. | Extracted `assertJsonFieldNameDocMutationSelfTest()` around the `JSON keeps full field names` removal assertion. | Evidence: no runtime output growth; JSON field-name documentation coverage still fails when removed. |
 | Context anomaly drilldown density self-test JSON field-name doc order | Keeps JSON field-name doc coverage before specific JSON output field checks. | Verified `assertJsonFieldNameDocMutationSelfTest()` sits directly after output-order swaps and before `alias_docs_checked` JSON doc coverage. | Evidence: no runtime output growth; JSON field-name coverage remains before specific JSON field docs. |
 | Context anomaly drilldown density self-test JSON field doc wrapper | Names the repeated specific JSON field documentation assertions. | Extracted `assertJsonFieldDocMutationSelfTests()` around alias, row, phrase, anchor, parsed, parity, label, headroom, iteration, and text-width JSON field docs. | Evidence: no runtime output growth; each required JSON field doc still fails when removed. |
+| Context anomaly drilldown density self-test JSON field doc order | Keeps specific JSON field docs before JSON byte/help cap docs. | Verified `assertJsonFieldDocMutationSelfTests()` sits directly after JSON field-name docs and before `max_json_bytes` documentation coverage. | Evidence: no runtime output growth; specific JSON field doc coverage remains before byte/help cap docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field doc order | Keeps specific JSON field docs before JSON byte/help cap docs. | Verify `assertJsonFieldDocMutationSelfTests()` sits directly after JSON field-name docs and before `max_json_bytes` documentation coverage. | Compact metric: no runtime output growth; correctness metric: specific JSON field doc coverage remains before byte/help cap docs. |
+| Context anomaly drilldown density self-test JSON byte/help cap wrapper | Names the JSON byte limit and help cap documentation assertions. | Extract `assertJsonByteHelpCapMutationSelfTests()` around `max_json_bytes` and `help<=...` documentation checks. | Compact metric: no runtime output growth; correctness metric: JSON byte/help cap docs still fail when removed. |
 
 ## Research Rules
 
