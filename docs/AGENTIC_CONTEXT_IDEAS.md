@@ -541,12 +541,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation sampled string predicate order | Keeps sampled joined-string predicate beside the assertion branch. | Verified `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)` sits directly above the identity failure helper. | Evidence: no runtime output growth; predicate remains adjacent to the mismatch branch. |
 | Context anomaly drilldown density self-test default output mutation joined string predicate local name | Makes the sampled predicate local describe joined string payloads. | Renamed `joinedIdentityFields` to `joinedIdentityFieldStrings` inside `sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)`. | Evidence: no runtime output growth; predicate still passes the joined string payload to the comparator. |
 | Context anomaly drilldown density self-test default output mutation joined string comparator parameter name | Makes comparator parameter naming match joined string payloads. | Renamed comparator parameter `joinedIdentityFields` to `joinedIdentityFieldStrings`. | Evidence: no runtime output growth; comparator still checks actual joined string against expected joined string. |
+| Context anomaly drilldown density self-test default output mutation joined string comparator property names | Makes comparator property access read as joined string comparison. | Renamed joined string object keys to `actualJoinedMutationFieldString` and `expectedJoinedMutationFieldString`. | Evidence: no runtime output growth; comparator still compares actual joined string to expected joined string. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation joined string comparator property names | Makes comparator property access read as joined string comparison. | Rename joined string object keys to `actualJoinedMutationFieldString` and `expectedJoinedMutationFieldString`. | Compact metric: no runtime output growth; correctness metric: comparator still compares actual joined string to expected joined string. |
+| Context anomaly drilldown density self-test default output mutation joined string property order | Keeps joined string property naming aligned between producer and comparator. | Verify producer and comparator both use `actualJoinedMutationFieldString` and `expectedJoinedMutationFieldString`. | Compact metric: no runtime output growth; correctness metric: joined string keys stay consistent across producer and comparator. |
 
 ## Research Rules
 
