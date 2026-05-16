@@ -74,7 +74,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: context-anomaly-hidden-sample-audit
-          path: context-anomaly-hidden-sample-audit.txt
+          path: |
+            context-anomaly-hidden-sample-audit.txt
+            context-anomaly-hidden-sample-audit.json
           if-no-files-found: ignore
 
       - name: Verify context anomaly thresholds
