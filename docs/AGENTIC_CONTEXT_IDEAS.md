@@ -465,12 +465,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output stale noop helper | Names the stale mutation no-op predicate. | Extracted `isDefaultOutputStaleMutationNoop(line, staleLine, field, staleValue)` for the stale mutation guard. | Evidence: no runtime output growth; stale no-op checks still guard unchanged lines and current-value collisions. |
 | Context anomaly drilldown density self-test default output missing noop helper | Names the missing mutation no-op predicate. | Extracted `isDefaultOutputMissingMutationNoop(line, missingLine)` for the missing mutation guard. | Evidence: no runtime output growth; missing no-op checks still guard unchanged lines. |
 | Context anomaly drilldown density self-test default output noop order helper | Keeps no-op predicates declared beside their diagnostic detail helpers. | Moved missing/stale no-op predicate declarations near the matching no-op detail helpers. | Evidence: no runtime output growth; no-op helpers remain easy to audit in pairs. |
+| Context anomaly drilldown density self-test default output missing assertion helper | Keeps missing-field mutation checks under one named assertion. | Extracted `assertDefaultOutputMissingMutation(field)` for the missing-line no-op and parser error checks. | Evidence: no runtime output growth; missing-field mutation coverage remains field-specific. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output missing assertion helper | Keeps missing-field mutation checks under one named assertion. | Extract an `assertDefaultOutputMissingMutation(field)` helper for the missing-line no-op and parser error checks. | Compact metric: no runtime output growth; correctness metric: missing-field mutation coverage remains field-specific. |
+| Context anomaly drilldown density self-test default output stale assertion helper | Keeps stale-field mutation checks under one named assertion. | Extract an `assertDefaultOutputStaleMutation(field, staleValue)` helper for the stale-line no-op and parser mismatch checks. | Compact metric: no runtime output growth; correctness metric: stale-field mutation coverage remains field-specific. |
 
 ## Research Rules
 

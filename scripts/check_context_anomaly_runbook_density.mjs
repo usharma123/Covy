@@ -1608,7 +1608,7 @@ if (args.includes("--self-test")) {
       missingStaleMutationFieldsDetails(missingStaleMutationFields),
     );
   }
-  const assertDefaultOutputMutation = (field, staleValue) => {
+  const assertDefaultOutputMissingMutation = (field) => {
     const missingOutputLine = defaultOutputWithoutField(defaultOutputLine, field);
     if (
       isDefaultOutputMissingMutationNoop(defaultOutputLine, missingOutputLine)
@@ -1629,6 +1629,9 @@ if (args.includes("--self-test")) {
         ),
       );
     }
+  };
+  const assertDefaultOutputMutation = (field, staleValue) => {
+    assertDefaultOutputMissingMutation(field);
     const staleOutputLine = defaultOutputWithStaleField(
       defaultOutputLine,
       field,
