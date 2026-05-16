@@ -28,7 +28,7 @@ if (args.includes("--help")) {
       "default: validate runbook line budget and required command entries",
       "--json: print ok, line_count, max_lines, and commands_checked",
       "--self-test: verify line-budget and missing-command failure modes",
-      "--help: print this help",
+      "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
     ].join("\n"),
   );
   process.exit(0);
