@@ -521,12 +521,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation identity field details order | Keeps identity field diagnostics beside the predicate and failure helper. | Verified `defaultOutputMutationIdentityFieldDetails(sample)` sits above `sampledDefaultOutputMutationIdentityFieldsMatch(sample)` and `failDefaultOutputMutationFieldIdentity(sample)`. | Evidence: no runtime output growth; identity diagnostics stay adjacent to their only failure caller. |
 | Context anomaly drilldown density self-test default output mutation identity field sample name | Makes the expected/actual identity field sample helper align with sampled identity field naming. | Renamed `defaultOutputMutationFieldIdentitySample()` to `defaultOutputMutationIdentityFieldSample()`. | Evidence: no runtime output growth; sample helper still returns expected and actual mutation fields. |
 | Context anomaly drilldown density self-test default output mutation identity field sample order | Keeps identity field sample construction beside its details consumer. | Verified `defaultOutputMutationIdentityFieldSample()` sits above `defaultOutputMutationIdentityFieldDetails(sample)`. | Evidence: no runtime output growth; sample construction remains adjacent to diagnostics using its shape. |
+| Context anomaly drilldown density self-test default output mutation expected identity fields helper name | Makes expected-field helper naming match the identity field sample. | Renamed `expectedDefaultOutputMutationFields()` to `expectedDefaultOutputMutationIdentityFields()`. | Evidence: no runtime output growth; identity sample still uses parser field list for expected fields. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation expected identity fields helper name | Makes expected-field helper naming match the identity field sample. | Rename `expectedDefaultOutputMutationFields()` to `expectedDefaultOutputMutationIdentityFields()`. | Compact metric: no runtime output growth; correctness metric: identity sample still uses parser field list for expected fields. |
+| Context anomaly drilldown density self-test default output mutation actual identity fields helper name | Makes actual-field helper naming match the identity field sample. | Rename `actualDefaultOutputMutationFields()` to `actualDefaultOutputMutationIdentityFields()`. | Compact metric: no runtime output growth; correctness metric: identity sample still uses mutation field helper for actual fields. |
 
 ## Research Rules
 
