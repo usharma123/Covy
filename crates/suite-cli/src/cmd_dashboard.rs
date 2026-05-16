@@ -590,6 +590,25 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
         });
     }
 
+    let changed_paths = savings
+        .iter()
+        .flat_map(|record| record.changed_paths.iter())
+        .filter(|path| !path.trim().is_empty())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(3)
+        .collect::<Vec<_>>();
+    if let Some(first_path) = changed_paths.first() {
+        anomalies.push(ContextAnomaly {
+            category: "stale_changed_paths".to_string(),
+            severity: "medium".to_string(),
+            signal: format!("changed_paths={}", changed_paths.join(",")),
+            next_check: format!("packet28.read_regions path={first_path} regions=[]"),
+            repair_hint: "reread changed paths before relying on earlier context".to_string(),
+        });
+    }
+
     let fallback_records = savings
         .iter()
         .filter(|record| record.fallback_reason.is_some())
@@ -1340,6 +1359,43 @@ mod tests {
         assert!(digest.anomalies[1]
             .repair_hint
             .contains("fallback provenance"));
+        assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn context_anomaly_digest_includes_changed_path_reread_signal() {
+        let root = tempfile::tempdir().unwrap();
+        record_reducer_drift_history(root.path(), &drift_payload(false, 1)).unwrap();
+        record_run_savings(
+            root.path(),
+            &RunSavingsRecord {
+                command: "Packet28 run -- cargo test".to_string(),
+                cwd: root.path().display().to_string(),
+                family: "rust".to_string(),
+                canonical_kind: "cargo_test".to_string(),
+                exit_code: 0,
+                raw_est_tokens: 900,
+                reduced_est_tokens: 200,
+                savings_percent: 77.0,
+                fallback_reason: None,
+                failure_fingerprint: None,
+                changed_paths: vec!["src/lib.rs".to_string()],
+                timestamp_unix_ms: 1,
+            },
+        )
+        .unwrap();
+
+        let digest = context_anomaly_digest(root.path()).unwrap();
+
+        assert_eq!(digest.anomaly_count, 2);
+        assert_eq!(digest.anomalies[0].category, "reducer_drift");
+        assert_eq!(digest.anomalies[0].severity, "high");
+        assert_eq!(digest.anomalies[1].category, "stale_changed_paths");
+        assert_eq!(digest.anomalies[1].severity, "medium");
+        assert!(digest.anomalies[1].next_check.contains("src/lib.rs"));
+        assert!(digest.anomalies[1]
+            .repair_hint
+            .contains("reread changed paths"));
         assert!(serde_json::to_string(&digest).unwrap().len() < 1024);
     }
 }
