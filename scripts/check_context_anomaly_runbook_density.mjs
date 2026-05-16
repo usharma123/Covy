@@ -1644,7 +1644,7 @@ if (args.includes("--self-test")) {
     "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
     "swapped_default_output_headroom_json_doc_order",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace(
         "`default_output_iterations`,`text_width_docs_checked`",
@@ -1653,6 +1653,7 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
     "swapped_default_output_iterations_json_doc_order",
   );
   assertSelfTest(
