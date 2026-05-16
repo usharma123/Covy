@@ -121,6 +121,9 @@ const defaultOutputFieldOrder = [
 ];
 const requiredOutputLabels = [...defaultOutputFieldOrder];
 const defaultTextFields = [...defaultOutputFieldOrder];
+const defaultOutputDocPhrase = `\`key=value\`: ${defaultOutputFieldOrder
+  .map((label) => `\`${label}\``)
+  .join(", ")};`;
 const jsonPayloadParityFieldOrder = [
   "output_doc_phrases_checked",
   "alias_docs_checked",
@@ -138,9 +141,7 @@ const jsonPayloadParityFieldOrder = [
 const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
-  `\`key=value\`: ${defaultOutputFieldOrder
-    .map((label) => `\`${label}\``)
-    .join(", ")};`,
+  defaultOutputDocPhrase,
   "`output_doc_phrases_checked`",
   "`alias_docs_checked`",
   "`row_soft_ok`",
@@ -1580,12 +1581,13 @@ if (args.includes("--self-test")) {
     ),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(
       runbook.replace("`dlab`, `jhead`", "`jhead`, `dlab`"),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
+    defaultOutputDocPhrase,
     "swapped_dlab_jhead_output_order",
   );
   assertSelfTest(
