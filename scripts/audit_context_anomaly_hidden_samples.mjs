@@ -27,11 +27,22 @@ function expectFailure(command, args, expected, options = {}) {
 }
 
 const args = process.argv.slice(2);
-const unknownArgs = args.filter((arg) => !["--strict"].includes(arg));
+const unknownArgs = args.filter((arg) => !["--strict", "--help"].includes(arg));
 if (unknownArgs.length > 0) {
   console.error("context_anomaly_hidden_sample_audit_unknown_option");
   console.error(`option=${unknownArgs[0]}`);
   process.exit(2);
+}
+if (args.includes("--help")) {
+  console.log(
+    [
+      "Usage: node scripts/audit_context_anomaly_hidden_samples.mjs [--strict|--help]",
+      "default: tolerant audit with verifier --max-high 2",
+      "--strict: release-like audit with verifier --max-high 0",
+      "--help: print this help",
+    ].join("\n"),
+  );
+  process.exit(0);
 }
 const strictMode = args.includes("--strict");
 const maxHigh = strictMode ? "0" : "2";

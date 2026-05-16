@@ -110,12 +110,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit threshold docs | Helps agents understand why the audit script allows two live high anomalies while the workflow threshold step remains stricter. | The context anomaly runbook now distinguishes the audit script's `--max-high 2` smoke tolerance from the workflow release gate's `--max-high 0`. | Evidence: runbook remains under 45 lines and names both thresholds next to the audit command context. |
 | Context anomaly drilldown audit strict-mode flag | Lets agents run the audit script with the same strict high-anomaly budget as release CI. | `scripts/audit_context_anomaly_hidden_samples.mjs --strict` now uses `--max-high 0` for the verifier check while default mode remains tolerant at `--max-high 2`. | Evidence: default audit still passes; strict mode exits nonzero with `context_anomaly_hidden_sample_audit_strict_failed`, `high=2`, and `max_high=0` in the current live state. |
 | Context anomaly drilldown audit option guard | Prevents typoed audit-script flags from silently using tolerant mode. | The audit script now rejects unknown command-line options before running smoke or verifier checks. | Evidence: default audit output is unchanged; `node scripts/audit_context_anomaly_hidden_samples.mjs --bad-flag` exits nonzero with `context_anomaly_hidden_sample_audit_unknown_option`. |
+| Context anomaly drilldown audit help | Gives agents a compact usage string for tolerant and strict audit modes. | The audit script now supports `--help`, and the runbook command table lists it. | Evidence: help output is four lines, exits zero, and lists default, `--strict`, and `--help` modes. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit help | Gives agents a compact usage string for tolerant and strict audit modes. | Add `--help` output to `scripts/audit_context_anomaly_hidden_samples.mjs` listing default and `--strict` modes. | Compact metric: help output under six lines; correctness metric: help lists every accepted flag and exits zero. |
+| Context anomaly drilldown audit help workflow log | Keeps the one-command audit usage visible in context-anomalies CI logs without expanding summaries. | Run `node scripts/audit_context_anomaly_hidden_samples.mjs --help` before the audit workflow step. | Compact metric: no summary growth; correctness metric: CI fails if audit help breaks. |
 
 ## Research Rules
 
