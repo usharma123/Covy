@@ -432,6 +432,14 @@ function assertSelfTestMissing(result, expectedCode, expectedMissing, caseName) 
   }
 }
 
+function failSelfTestInvariant(details) {
+  console.error("context_anomaly_runbook_density_self_test_failed");
+  for (const [key, value] of Object.entries(details)) {
+    console.error(`${key}=${value}`);
+  }
+  process.exit(1);
+}
+
 function assertEnvFailure(env, commandArgs, expectedCode) {
   try {
     execFileSync(process.execPath, [scriptPath, ...commandArgs], {
@@ -1506,14 +1514,11 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
   if (pairedEnvDocExclusionCount !== expectedPairedEnvDocExclusionCount) {
-    console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error(
-      `expected_paired_env_doc_exclusion_count=${expectedPairedEnvDocExclusionCount}`,
-    );
-    console.error(
-      `actual_paired_env_doc_exclusion_count=${pairedEnvDocExclusionCount}`,
-    );
-    process.exit(1);
+    failSelfTestInvariant({
+      expected_paired_env_doc_exclusion_count:
+        expectedPairedEnvDocExclusionCount,
+      actual_paired_env_doc_exclusion_count: pairedEnvDocExclusionCount,
+    });
   }
   if (
     requiredPlainEnvDocs.length !==
