@@ -13,6 +13,8 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
+// 544 keeps full-field JSON parity output compact while preserving the
+// explicit headroom gate after adding json_parity_fields_checked.
 const defaultMaxJsonBytes = 544;
 const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
