@@ -28,6 +28,8 @@ Check the shared summary fixture locally with `node scripts/check_context_anomal
 
 The smoke script also checks `docs/context-anomalies/hidden-samples-delimiters.sha256` before comparing the expected summary.
 
+Refresh that checksum with `shasum -a 256 docs/context-anomalies/hidden-samples-delimiters.json | awk '{print $1}' > docs/context-anomalies/hidden-samples-delimiters.sha256`.
+
 Workflow formatter budget lines use `actual/max`, matching the smoke script JSON fields `actual_len` and `max_len`.
 
 Recurring hidden categories usually mean medium-severity sources are repeatedly being capped from the digest. Fix the underlying source or raise it into a visible dashboard tile before relying on the compact anomaly summary.
