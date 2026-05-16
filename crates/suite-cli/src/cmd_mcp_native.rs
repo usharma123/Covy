@@ -174,6 +174,16 @@ pub(crate) struct Packet28VerifyHandoffArgs {
     pub(crate) context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28PromptPressureArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+    pub(crate) next_prompt: Option<String>,
+    pub(crate) budget_tokens: Option<u64>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -304,6 +314,10 @@ fn glob_request_summary(args: &Packet28GlobArgs) -> String {
 fn estimate_tokens_for_value(value: &Value) -> u64 {
     let bytes = serde_json::to_vec(value).unwrap_or_default().len() as f64;
     (bytes / 4.0).ceil() as u64
+}
+
+fn estimate_tokens_for_text(value: &str) -> u64 {
+    ((value.len() as f64) / 4.0).ceil() as u64
 }
 
 fn append_unique(items: &mut Vec<String>, value: impl Into<String>) {
@@ -1282,6 +1296,75 @@ pub(crate) fn handle_packet28_verify_handoff(
         } else {
             "handoff_replay_incomplete"
         },
+    }))
+}
+
+pub(crate) fn handle_packet28_prompt_pressure(
+    root: &Path,
+    args: Packet28PromptPressureArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.prompt_pressure requires task_id"));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.prompt_pressure requires artifact_id or context_version")
+    })?;
+    let path = task_version_json_path(root, task_id, &artifact_id);
+    let bytes = fs::read(&path).with_context(|| {
+        format!(
+            "failed to read stored handoff context artifact '{}'",
+            path.display()
+        )
+    })?;
+    let payload: Value = serde_json::from_slice(&bytes)?;
+    let budget_tokens = args.budget_tokens.unwrap_or(8_000).max(1);
+    let next_prompt = args.next_prompt.unwrap_or_default();
+    let context_tokens = estimate_tokens_for_value(&payload);
+    let next_prompt_tokens = estimate_tokens_for_text(&next_prompt);
+    let total_tokens = context_tokens.saturating_add(next_prompt_tokens);
+    let remaining_tokens = budget_tokens as i64 - total_tokens as i64;
+    let mut removable_sections = Vec::new();
+    if let Some(sections) = payload.get("sections").and_then(Value::as_array) {
+        for section in sections {
+            let id = section
+                .get("id")
+                .or_else(|| section.get("title"))
+                .and_then(Value::as_str)
+                .unwrap_or("section");
+            removable_sections.push((id.to_string(), estimate_tokens_for_value(section)));
+        }
+    }
+    removable_sections.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let largest_removable_sections: Vec<Value> = removable_sections
+        .into_iter()
+        .take(3)
+        .map(|(id, tokens)| {
+            json!({
+                "id": id,
+                "tokens": tokens,
+            })
+        })
+        .collect();
+    let pressure = if total_tokens > budget_tokens {
+        "over_budget"
+    } else if total_tokens.saturating_mul(100) >= budget_tokens.saturating_mul(85) {
+        "tight"
+    } else {
+        "ok"
+    };
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "budget_tokens": budget_tokens,
+        "context_tokens": context_tokens,
+        "next_prompt_tokens": next_prompt_tokens,
+        "total_tokens": total_tokens,
+        "remaining_tokens": remaining_tokens,
+        "pressure": pressure,
+        "over_budget": total_tokens > budget_tokens,
+        "largest_removable_sections": largest_removable_sections,
+        "summary": format!("prompt_pressure={pressure} total_tokens={total_tokens} remaining_tokens={remaining_tokens}"),
     }))
 }
 

@@ -43,10 +43,10 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
     handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
-    Packet28GlobArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs,
-    Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
-    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
-    Packet28WriteIntentionArgs,
+    Packet28GlobArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
+    Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
+    Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
+    Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs, Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -686,6 +686,20 @@ fn handle_method(
                             "task_id": {"type":"string"},
                             "artifact_id": {"type":"string"},
                             "context_version": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.prompt_pressure",
+                    "description": "Estimate whether a stored handoff context plus the next worker prompt will fit a target token budget and identify the largest removable sections.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "artifact_id": {"type":"string"},
+                            "context_version": {"type":"string"},
+                            "next_prompt": {"type":"string"},
+                            "budget_tokens": {"type":"integer","minimum":1}
                         }
                     }
                 },
@@ -1614,6 +1628,21 @@ fn handle_tool_call(
             )?;
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_verify_handoff(root, request)?
+        }
+        "packet28.prompt_pressure" => {
+            let mut request: Packet28PromptPressureArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request
+                    .artifact_id
+                    .as_deref()
+                    .or(request.context_version.as_deref()),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_prompt_pressure(root, request)?
         }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
@@ -2593,6 +2622,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 handoff replay ready={ready} score={score}.")
         }
+        "packet28.prompt_pressure" => {
+            let pressure = payload
+                .get("pressure")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let remaining = payload
+                .get("remaining_tokens")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!("Packet28 prompt pressure={pressure} remaining_tokens={remaining}.")
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
@@ -2988,6 +3028,7 @@ mod tests {
             "packet28_rewrite",
             "packet28_handoff",
             "packet28_verify_handoff",
+            "packet28_prompt_pressure",
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
@@ -3154,6 +3195,59 @@ mod tests {
                 .unwrap()
                 .len()
                 < 512
+        );
+    }
+
+    #[test]
+    fn prompt_pressure_identifies_largest_removable_section() {
+        let root = tempfile::tempdir().unwrap();
+        let task_id = "task-prompt-pressure";
+        let context_version = "ctx-pressure";
+        let path = task_version_json_path(root.path(), task_id, context_version);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "context_version": context_version,
+                "artifact_id": context_version,
+                "brief": "## Task Objective\nKeep only the decisive replay context.",
+                "sections": [
+                    {"id": "objective", "title": "Objective", "body": "finish the prompt pressure verifier"},
+                    {"id": "search_evidence", "title": "Search Evidence", "body": "line with redundant evidence ".repeat(90)},
+                    {"id": "next_action", "title": "Next Action", "body": "run focused verifier"}
+                ],
+                "next_action_summary": "run focused verifier"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.prompt_pressure",
+                "arguments": {
+                    "task_id": task_id,
+                    "context_version": context_version,
+                    "next_prompt": "Continue the handoff and implement the focused verifier.",
+                    "budget_tokens": 220
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["pressure"], "over_budget");
+        assert_eq!(response["structuredContent"]["over_budget"], true);
+        assert_eq!(
+            response["structuredContent"]["largest_removable_sections"][0]["id"],
+            "search_evidence"
+        );
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 768
         );
     }
 
