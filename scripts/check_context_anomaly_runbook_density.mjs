@@ -528,6 +528,9 @@ function defaultOutputParseIssue(parsed, resultDetails) {
   if (resultDetails.json_headroom !== undefined) {
     expectedValues.json = String(resultDetails.json_headroom);
   }
+  if (resultDetails.default_output_width !== undefined) {
+    expectedValues.width = String(resultDetails.default_output_width);
+  }
   for (const [field, expected] of Object.entries(expectedValues)) {
     if (parsed[field] !== expected) {
       return `default_output_parse_mismatch=${field}`;
@@ -686,11 +689,6 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const baselineHeadroom = jsonHeadroomBytes(baselinePayload, maxJsonBytes);
-  const defaultParseDetails = {
-    ...result,
-    workflow_commands_checked: baselinePayload.workflow_commands_checked,
-    json_headroom: baselineHeadroom,
-  };
   if (baselineHeadroom < minJsonHeadroomBytes) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_headroom_at_least=${minJsonHeadroomBytes}`);
@@ -710,6 +708,12 @@ if (args.includes("--self-test")) {
     result,
     baselineHeadroom,
   );
+  const defaultParseDetails = {
+    ...result,
+    workflow_commands_checked: baselinePayload.workflow_commands_checked,
+    json_headroom: baselineHeadroom,
+    default_output_width: defaultOutputLine.length,
+  };
   const parsedDefaultOutput = parseDefaultOutput(defaultOutputLine);
   const defaultOutputError = defaultOutputParseIssue(
     parsedDefaultOutput,
@@ -897,6 +901,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=json");
     console.error(`actual=${staleJsonHeadroomError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleTextWidthError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ width=\d+/, " width=0")),
+    defaultParseDetails,
+  );
+  if (staleTextWidthError !== "default_output_parse_mismatch=width") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=width");
+    console.error(`actual=${staleTextWidthError ?? "ok"}`);
     process.exit(1);
   }
   const staleCommandCountError = defaultOutputParseIssue(
