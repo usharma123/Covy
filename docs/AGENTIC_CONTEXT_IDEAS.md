@@ -69,12 +69,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly trend docs runbook | Helps maintainers understand when live trends differ from fixture trends. | `docs/context-anomalies/RUNBOOK.md` explains live `.packet28` history, fixture replay, and when to inspect recurring hidden categories. | Evidence: runbook is under 40 lines and includes live dashboard, fixture dashboard, verifier, and digest commands. |
 | Context anomaly trend age signal | Helps agents tell whether recurring hidden-category trends are current or stale. | The context-anomaly dashboard tile now includes `latest_age_ms` and `oldest_recurring_hidden_age_ms` across JSON, text, TUI, and HTML output. | Evidence: `context_anomaly_age_summary_distinguishes_old_recurring_hidden`; old recurring hidden history is distinguishable from recent latest history while the tile stays under 768 bytes. |
 | Context anomaly trend age summary | Lets CI readers see whether context anomaly trend history is stale without opening dashboard JSON. | The context-anomalies workflow summary now includes live latest age, live oldest recurring hidden age, and fixture oldest recurring hidden age. | Evidence: live summary remains eight lines and fixture summary extracts nonzero `oldest_recurring_hidden_age_ms` from `context-anomaly-fixture-dashboard.json`. |
+| Context anomaly trend freshness gate | Prevents stale trend history from looking like current signal in CI. | `Packet28 verify context-anomalies` and MCP `packet28.verify_context_anomalies` now accept optional `max_trend_age_ms` thresholding over live trend ages. | Evidence: `verify_context_anomalies_fails_stale_trend_age_threshold`; old history fails the threshold with compact trend-age fields under 1KB. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly trend freshness gate | Prevents stale trend history from looking like current signal in CI. | Add optional max-age thresholding to the context-anomaly verifier or workflow summary for stale trend history. | Compact metric: threshold output under 512 bytes; correctness metric: old fixture history warns or fails while fresh generated history passes. |
+| Context anomaly trend freshness workflow gate | Lets CI enforce that context anomaly trend history is fresh enough to trust. | Wire `--max-trend-age-ms` into `.github/workflows/context-anomalies.yml` with a generous threshold or workflow input. | Compact metric: workflow summary remains under 12 lines; correctness metric: stale synthetic history fails when threshold is set low. |
 
 ## Research Rules
 

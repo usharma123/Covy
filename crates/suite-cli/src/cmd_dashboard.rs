@@ -766,6 +766,11 @@ pub(crate) fn context_anomaly_digest(root: &Path) -> Result<ContextAnomalyDigest
     })
 }
 
+pub(crate) fn context_anomaly_trend_age_summary(root: &Path) -> Result<(u64, u64)> {
+    let records = load_context_anomaly_history(root, 32)?;
+    Ok(context_anomaly_age_summary(&records, now_unix_ms()))
+}
+
 fn load_context_anomaly_history(
     root: &Path,
     limit: usize,

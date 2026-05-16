@@ -1194,7 +1194,8 @@ fn handle_method(
                         "type": "object",
                         "properties": {
                             "max_anomalies": {"type":"integer","minimum":0},
-                            "max_high": {"type":"integer","minimum":0}
+                            "max_high": {"type":"integer","minimum":0},
+                            "max_trend_age_ms": {"type":"integer","minimum":0}
                         }
                     }
                 },
@@ -2265,6 +2266,7 @@ fn handle_tool_call(
                 root,
                 request.max_anomalies.unwrap_or(999),
                 request.max_high.unwrap_or(0),
+                request.max_trend_age_ms,
             )?
         }
         "packet28.memory_consolidate" => {
@@ -2619,6 +2621,7 @@ struct MemoryLintToolArgs {
 struct VerifyContextAnomaliesToolArgs {
     max_anomalies: Option<usize>,
     max_high: Option<usize>,
+    max_trend_age_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

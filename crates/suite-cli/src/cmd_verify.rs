@@ -108,6 +108,8 @@ pub struct ContextAnomalyVerifyArgs {
     #[arg(long, default_value_t = 0)]
     pub max_high: usize,
     #[arg(long)]
+    pub max_trend_age_ms: Option<u64>,
+    #[arg(long)]
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
@@ -616,7 +618,12 @@ fn run_memory_lint(args: MemoryLintVerifyArgs) -> Result<i32> {
 fn run_context_anomalies(args: ContextAnomalyVerifyArgs) -> Result<i32> {
     let cwd = crate::cmd_common::caller_cwd()?;
     let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
-    let payload = verify_context_anomalies_payload(&root, args.max_anomalies, args.max_high)?;
+    let payload = verify_context_anomalies_payload(
+        &root,
+        args.max_anomalies,
+        args.max_high,
+        args.max_trend_age_ms,
+    )?;
     crate::cmd_dashboard::record_context_anomaly_history(&root, &payload)?;
     let ok = payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
 
@@ -639,6 +646,23 @@ fn run_context_anomalies(args: ContextAnomalyVerifyArgs) -> Result<i32> {
         );
         println!("context_anomaly_max_anomalies={}", args.max_anomalies);
         println!("context_anomaly_max_high={}", args.max_high);
+        if let Some(max_trend_age_ms) = args.max_trend_age_ms {
+            println!("context_anomaly_max_trend_age_ms={max_trend_age_ms}");
+            println!(
+                "context_anomaly_trend_latest_age_ms={}",
+                payload
+                    .get("trend_latest_age_ms")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or_default()
+            );
+            println!(
+                "context_anomaly_trend_oldest_recurring_hidden_age_ms={}",
+                payload
+                    .get("trend_oldest_recurring_hidden_age_ms")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or_default()
+            );
+        }
         println!("context_anomaly_ok={ok}");
     }
 
@@ -685,6 +709,7 @@ pub(crate) fn verify_context_anomalies_payload(
     root: &Path,
     max_anomalies: usize,
     max_high: usize,
+    max_trend_age_ms: Option<u64>,
 ) -> Result<serde_json::Value> {
     let digest = crate::cmd_dashboard::context_anomaly_digest(root)?;
     let high_count = digest
@@ -692,15 +717,28 @@ pub(crate) fn verify_context_anomalies_payload(
         .iter()
         .filter(|anomaly| anomaly.severity == "high")
         .count();
-    let ok = digest.anomaly_count <= max_anomalies && high_count <= max_high;
-    Ok(json!({
+    let mut ok = digest.anomaly_count <= max_anomalies && high_count <= max_high;
+    let mut payload = json!({
         "ok": ok,
         "max_anomalies": max_anomalies,
         "max_high": max_high,
         "anomaly_count": digest.anomaly_count,
         "high_count": high_count,
         "anomalies": digest.anomalies,
-    }))
+    });
+    if let Some(max_trend_age_ms) = max_trend_age_ms {
+        let (latest_age_ms, oldest_recurring_hidden_age_ms) =
+            crate::cmd_dashboard::context_anomaly_trend_age_summary(root)?;
+        let trend_age_ok =
+            latest_age_ms <= max_trend_age_ms && oldest_recurring_hidden_age_ms <= max_trend_age_ms;
+        ok = ok && trend_age_ok;
+        payload["ok"] = json!(ok);
+        payload["max_trend_age_ms"] = json!(max_trend_age_ms);
+        payload["trend_latest_age_ms"] = json!(latest_age_ms);
+        payload["trend_oldest_recurring_hidden_age_ms"] = json!(oldest_recurring_hidden_age_ms);
+        payload["trend_age_ok"] = json!(trend_age_ok);
+    }
+    Ok(payload)
 }
 
 pub(crate) fn verify_memory_lint_payload(
@@ -1477,7 +1515,7 @@ mod tests {
         )
         .unwrap();
 
-        let payload = verify_context_anomalies_payload(root.path(), usize::MAX, 0).unwrap();
+        let payload = verify_context_anomalies_payload(root.path(), usize::MAX, 0, None).unwrap();
 
         assert_eq!(payload["ok"], false);
         assert_eq!(payload["anomaly_count"], 1);
@@ -1490,6 +1528,40 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("stale runtime"));
+        assert!(serde_json::to_string(&payload).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn verify_context_anomalies_fails_stale_trend_age_threshold() {
+        let root = tempfile::tempdir().unwrap();
+        let history_path = root
+            .path()
+            .join(".packet28")
+            .join("context-anomaly-history.jsonl");
+        std::fs::create_dir_all(history_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &history_path,
+            [
+                r#"{"created_at_unix_ms":1,"ok":true,"anomaly_count":3,"high_count":0,"hidden_categories":["fallback_provenance"]}"#,
+                r#"{"created_at_unix_ms":2,"ok":true,"anomaly_count":3,"high_count":0,"hidden_categories":["fallback_provenance"]}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let payload =
+            verify_context_anomalies_payload(root.path(), usize::MAX, usize::MAX, Some(1)).unwrap();
+
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["max_trend_age_ms"], 1);
+        assert_eq!(payload["trend_age_ok"], false);
+        assert!(payload["trend_latest_age_ms"].as_u64().unwrap() > 1);
+        assert!(
+            payload["trend_oldest_recurring_hidden_age_ms"]
+                .as_u64()
+                .unwrap()
+                > 1
+        );
         assert!(serde_json::to_string(&payload).unwrap().len() < 1024);
     }
 }
