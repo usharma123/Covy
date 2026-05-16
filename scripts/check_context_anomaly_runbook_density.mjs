@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = join(dirname(scriptPath), "..");
 const runbookPath = join(repoRoot, "docs/context-anomalies/RUNBOOK.md");
+const workflowPath = join(repoRoot, ".github/workflows/context-anomalies.yml");
 const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
@@ -22,7 +23,7 @@ const maxTableRowLength = Number.parseInt(
 );
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
-  "default: validate runbook line budget, row width, and required command entries",
+  "default: validate runbook line budget, row width, required command entries, and workflow density commands",
   "--json: print ok, budgets, max_table_row, commands_checked, and max_json_bytes",
   "--self-test: verify line, width, missing-command, and JSON byte failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
@@ -56,6 +57,11 @@ const requiredCommands = [
   "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
   "node scripts/check_context_anomaly_runbook_density.mjs --json",
   "Packet28 digest --root . --json",
+];
+const requiredWorkflowDensityCommands = [
+  "node scripts/check_context_anomaly_runbook_density.mjs --help",
+  "node scripts/check_context_anomaly_runbook_density.mjs",
+  "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
 ];
 
 function evaluate(runbook, lineBudget) {
@@ -102,6 +108,27 @@ function evaluate(runbook, lineBudget) {
     max_table_row: maxActualTableRowLength,
     max_table_row_allowed: maxTableRowLength,
     commands_checked: requiredCommands.length,
+  };
+}
+
+function evaluateWorkflow(workflow) {
+  const workflowLines = workflow
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const missingCommands = requiredWorkflowDensityCommands.filter(
+    (command) => !workflowLines.includes(command),
+  );
+  if (missingCommands.length > 0) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_workflow_missing_commands",
+      missing: missingCommands,
+    };
+  }
+  return {
+    ok: true,
+    workflow_commands_checked: requiredWorkflowDensityCommands.length,
   };
 }
 
@@ -184,11 +211,18 @@ function jsonBudgetIssue(payload, jsonBudget) {
 }
 
 const runbook = readFileSync(runbookPath, "utf8");
+const workflow = readFileSync(workflowPath, "utf8");
 const result = evaluate(runbook, maxLines);
+const workflowResult = evaluateWorkflow(workflow);
 if (args.includes("--self-test")) {
   if (!result.ok) {
     console.error("context_anomaly_runbook_density_self_test_baseline_failed");
     console.error(`code=${result.code}`);
+    process.exit(1);
+  }
+  if (!workflowResult.ok) {
+    console.error("context_anomaly_runbook_density_self_test_baseline_failed");
+    console.error(`code=${workflowResult.code}`);
     process.exit(1);
   }
   assertSelfTest(
@@ -218,6 +252,15 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_commands",
+  );
+  assertSelfTest(
+    evaluateWorkflow(
+      workflow.replace(
+        "          node scripts/check_context_anomaly_runbook_density.mjs\n",
+        "",
+      ),
+    ),
+    "context_anomaly_runbook_density_workflow_missing_commands",
   );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
@@ -253,6 +296,10 @@ if (args.includes("--self-test")) {
 
 if (!result.ok) {
   const { code, ok, ...details } = result;
+  fail(code, details);
+}
+if (!workflowResult.ok) {
+  const { code, ok, ...details } = workflowResult;
   fail(code, details);
 }
 

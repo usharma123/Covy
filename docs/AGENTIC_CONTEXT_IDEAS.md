@@ -171,12 +171,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density row width docs | Helps maintainers tune and interpret runbook row-width failures. | The runbook density rows now document `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX`, `max_table_row`, and `context_anomaly_runbook_density_row_too_wide`. | Evidence: runbook remains under 45 lines and names match checker configuration and output. |
 | Context anomaly drilldown runbook density JSON self-coverage | Makes the density checker protect its own JSON command row. | The density checker required-command list now includes `node scripts/check_context_anomaly_runbook_density.mjs --json`. | Evidence: checker output stays one line and self-test proves removing the JSON row fails the missing-command check. |
 | Context anomaly drilldown density row width workflow evidence | Keeps row-width budget evidence visible in workflow logs. | The context-anomalies workflow now runs the default density check between help and self-test so logs show `max_table_row`. | Evidence: no GitHub summary growth; local default output remains one line and reports current `max_table_row`. |
+| Context anomaly drilldown density workflow command coverage | Prevents CI log evidence from silently dropping the default density check. | The density checker self-test now asserts the workflow still runs help, default, and self-test density modes. | Evidence: self-test output stays one line and removing the workflow default density command fails `context_anomaly_runbook_density_workflow_missing_commands`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density workflow command coverage | Prevents CI log evidence from silently dropping the default density check. | Have the summary-budget or density checker self-test assert the workflow still runs help, default, and self-test density modes. | Compact metric: self-test output stays one line; correctness metric: removing the workflow default density command fails a named check. |
+| Context anomaly drilldown density workflow failure docs | Helps maintainers repair workflow command coverage failures without reading checker source. | Add `context_anomaly_runbook_density_workflow_missing_commands` to the runbook density failure docs. | Compact metric: runbook stays under line and row budgets; correctness metric: failure name matches checker output. |
 
 ## Research Rules
 
