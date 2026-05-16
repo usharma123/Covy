@@ -2025,21 +2025,24 @@ if (args.includes("--self-test")) {
     );
   };
   assertJsonFieldDocMutationSelfTests();
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace(`\`max_json_bytes=${defaultMaxJsonBytes}\``, ""),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-    `\`max_json_bytes=${defaultMaxJsonBytes}\``,
-    "missing_max_json_bytes_doc",
-  );
-  assertSelfTestMissing(
-    evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
-    "context_anomaly_runbook_density_missing_output_docs",
-    `\`help<=${maxHelpLineLength}\``,
-    "missing_help_cap_doc",
-  );
+  const assertJsonByteHelpCapMutationSelfTests = () => {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replace(`\`max_json_bytes=${defaultMaxJsonBytes}\``, ""),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_output_docs",
+      `\`max_json_bytes=${defaultMaxJsonBytes}\``,
+      "missing_max_json_bytes_doc",
+    );
+    assertSelfTestMissing(
+      evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
+      "context_anomaly_runbook_density_missing_output_docs",
+      `\`help<=${maxHelpLineLength}\``,
+      "missing_help_cap_doc",
+    );
+  };
+  assertJsonByteHelpCapMutationSelfTests();
   assertSelfTestMissing(
     evaluate(runbook.replaceAll("Env:", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
