@@ -528,6 +528,16 @@ function assertRequiredPlainEnvDocCount() {
   }
 }
 
+function assertPairedEnvDocExclusionsOmitted() {
+  for (const excludedEnvName of pairedEnvDocExclusions) {
+    if (requiredPlainEnvDocs.includes(excludedEnvName)) {
+      failSelfTestInvariant({
+        unexpected_plain_env_doc: excludedEnvName,
+      });
+    }
+  }
+}
+
 function assertEnvFailure(env, commandArgs, expectedCode) {
   try {
     execFileSync(process.execPath, [scriptPath, ...commandArgs], {
@@ -1604,13 +1614,7 @@ if (args.includes("--self-test")) {
   assertInvariantDetailFormats();
   assertPairedEnvDocExclusionCount();
   assertRequiredPlainEnvDocCount();
-  for (const excludedEnvName of pairedEnvDocExclusions) {
-    if (requiredPlainEnvDocs.includes(excludedEnvName)) {
-      failSelfTestInvariant({
-        unexpected_plain_env_doc: excludedEnvName,
-      });
-    }
-  }
+  assertPairedEnvDocExclusionsOmitted();
   assertSelfTest(
     evaluate(runbook, result.line_count - 1),
     "context_anomaly_runbook_density_too_many_lines",

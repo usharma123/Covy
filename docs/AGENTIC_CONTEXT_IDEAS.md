@@ -447,12 +447,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test invariant helper assertion helper | Makes formatter self-test read as one named assertion. | Extracted `assertInvariantDetailFormats()` to build expected/actual format objects, compare them, and report diagnostics. | Evidence: no runtime output growth; formatter assertion path is single-source. |
 | Context anomaly drilldown density self-test env exclusion assertion helper | Makes paired env exclusion checks read as named invariants. | Extracted `assertPairedEnvDocExclusionCount()` around the paired exclusion count check and diagnostics. | Evidence: no runtime output growth; paired exclusion invariant remains directly self-tested. |
 | Context anomaly drilldown density self-test plain env assertion helper | Makes plain env doc cardinality checks read as named invariants. | Extracted `assertRequiredPlainEnvDocCount()` around the plain env count check and diagnostics. | Evidence: no runtime output growth; plain env count invariant remains directly self-tested. |
+| Context anomaly drilldown density self-test env exclusion membership helper | Makes excluded env membership checks read as one named invariant. | Extracted `assertPairedEnvDocExclusionsOmitted()` around the loop that rejects paired env names in plain docs. | Evidence: no runtime output growth; paired env omissions remain directly self-tested. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test env exclusion membership helper | Makes excluded env membership checks read as one named invariant. | Extract an `assertPairedEnvDocExclusionsOmitted()` helper around the loop that rejects paired env names in plain docs. | Compact metric: no runtime output growth; correctness metric: paired env omissions remain directly self-tested. |
+| Context anomaly drilldown density self-test env invariant group helper | Keeps env doc structural invariants under one named assertion. | Extract an `assertEnvDocInvariants()` helper that calls the paired count, plain count, and omission assertions. | Compact metric: no runtime output growth; correctness metric: env doc structural checks stay grouped and directly self-tested. |
 
 ## Research Rules
 
