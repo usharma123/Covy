@@ -1509,6 +1509,16 @@ if (args.includes("--self-test")) {
     console.error(`actual_plain_env_docs=${requiredPlainEnvDocs.length}`);
     process.exit(1);
   }
+  for (const excludedEnvName of [
+    "P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
+    "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
+  ]) {
+    if (requiredPlainEnvDocs.includes(excludedEnvName)) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`unexpected_plain_env_doc=${excludedEnvName}`);
+      process.exit(1);
+    }
+  }
   assertSelfTest(
     evaluate(runbook, result.line_count - 1),
     "context_anomaly_runbook_density_too_many_lines",
