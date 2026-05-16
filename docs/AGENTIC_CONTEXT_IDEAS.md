@@ -168,12 +168,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density JSON env self-test | Proves the density JSON byte env knob is wired to the JSON failure gate. | The density checker self-test now shells back with `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX=10 --json`. | Evidence: self-test output remains one line and forced env reports `context_anomaly_runbook_density_json_too_long`. |
 | Context anomaly drilldown runbook density JSON failure docs | Helps maintainers understand the density JSON byte-cap failure. | The runbook density row now documents `context_anomaly_runbook_density_json_too_long`. | Evidence: runbook remains under 45 lines and the failure name matches checker output. |
 | Context anomaly drilldown density row width audit | Prevents the runbook table row itself from becoming unreadably wide. | The density checker now enforces `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX` with a 520-character default and reports `max_table_row`. | Evidence: checker output stays one line; forced low row width fails with `context_anomaly_runbook_density_row_too_wide`. |
+| Context anomaly drilldown density row width docs | Helps maintainers tune and interpret runbook row-width failures. | The runbook density rows now document `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX`, `max_table_row`, and `context_anomaly_runbook_density_row_too_wide`. | Evidence: runbook remains under 45 lines and names match checker configuration and output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density row width docs | Helps maintainers tune and interpret runbook row-width failures. | Document `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX` and `context_anomaly_runbook_density_row_too_wide`. | Compact metric: runbook remains under 45 lines; correctness metric: names match checker configuration and output. |
+| Context anomaly drilldown runbook density JSON self-coverage | Makes the density checker protect its own JSON command row. | Add `node scripts/check_context_anomaly_runbook_density.mjs --json` to the required command list. | Compact metric: checker output stays one line; correctness metric: removing the JSON row fails the missing-command check. |
 
 ## Research Rules
 
