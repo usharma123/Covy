@@ -160,12 +160,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density env self-test | Proves the runbook density env knob is wired to the line-budget failure. | The density self-test now shells back with `P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES=10`. | Evidence: self-test output remains one line and the forced env reports `context_anomaly_runbook_density_too_many_lines`. |
 | Context anomaly drilldown runbook density failure docs | Helps maintainers map density-check failures to fixes quickly. | The runbook density row now documents `context_anomaly_runbook_density_too_many_lines` and `context_anomaly_runbook_density_missing_commands`. | Evidence: runbook remains under 45 lines and failure names match checker output. |
 | Context anomaly drilldown runbook density env docs repair | Restores explicit runbook naming for the density line-budget env var after failure docs. | The runbook density row now includes `P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES` alongside density failure codes. | Evidence: runbook remains under 45 lines and the env var name matches script configuration. |
+| Context anomaly drilldown runbook density help docs repair | Restores explicit runbook mention of `--help` after density env/failure docs. | The runbook density row again notes that `--help` lists checker modes while preserving env and failure-code docs. | Evidence: runbook remains under 45 lines and documented help behavior matches checker output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density help docs repair | Restores explicit runbook mention of `--help` after density env/failure docs. | Fold `--help` mode discovery back into the density row without losing env and failure-code docs. | Compact metric: runbook remains under 45 lines; correctness metric: documented help behavior matches checker output. |
+| Context anomaly drilldown runbook density unknown-option docs | Helps agents recognize typoed density checker flags quickly. | Document the density checker's unknown-option error in help or runbook. | Compact metric: help stays compact or runbook remains under 45 lines; correctness metric: bad flag exits with `context_anomaly_runbook_density_unknown_option`. |
 
 ## Research Rules
 
