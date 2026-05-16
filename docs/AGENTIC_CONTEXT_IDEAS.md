@@ -396,12 +396,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper tail-order adoption | Reuses the missing-detail helper for the final compact output order pair. | The `thead`, `tw` output-order mutation now uses the single-sourced `defaultOutputDocPhrase` missing-detail assertion. | Evidence: no output growth; helper covers tail order-doc detail checks. |
 | Context anomaly drilldown density missing-detail helper label-order adoption | Reuses the missing-detail helper for the compact `env`, `lbl` output order docs. | The `env`, `lbl` output-order mutation now uses `assertSelfTestMissing` with `defaultOutputDocPhrase`. | Evidence: no output growth; helper covers label order-doc detail checks. |
 | Context anomaly drilldown density missing-detail helper key-value adoption | Reuses the missing-detail helper for the base compact `key=value` docs token. | The `key=value` mutation now uses `assertSelfTestMissing` for the base output docs token. | Evidence: no output growth; helper covers base output docs detail checks. |
+| Context anomaly drilldown density missing-detail helper soft-label adoption | Reuses the missing-detail helper for the compact `soft` output label mutation. | The `soft` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers output-label detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper soft-label adoption | Reuses the missing-detail helper for the compact `soft` output label mutation. | Convert the `soft` output-label mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers output-label detail checks. |
+| Context anomaly drilldown density missing-detail helper prose-label adoption | Reuses the missing-detail helper for the compact `prs` output label mutation. | Convert the `prs` output-label mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers prose label detail checks. |
 
 ## Research Rules
 
