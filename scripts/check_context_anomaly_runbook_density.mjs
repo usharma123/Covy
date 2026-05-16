@@ -13,7 +13,7 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
-const defaultMaxJsonBytes = 512;
+const defaultMaxJsonBytes = 544;
 const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
     String(defaultMaxJsonBytes),
@@ -122,6 +122,7 @@ const jsonPayloadParityFieldOrder = [
   "density_doc_phrases_checked",
   "density_doc_anchors_checked",
   "parsed_fields_checked",
+  "json_parity_fields_checked",
   "text_width_docs_checked",
   "row_soft_ok",
   "row_soft_max",
@@ -139,8 +140,9 @@ const requiredOutputDocPhrases = [
   "`density_doc_phrases_checked`",
   "`density_doc_anchors_checked`",
   "`parsed_fields_checked`",
+  "`json_parity_fields_checked`",
   "`text_width_docs_checked`",
-  "`max_json_bytes=512`",
+  "`max_json_bytes=544`",
   "`help<=120`",
 ];
 const requiredAliasDocPhrases = [
@@ -431,6 +433,7 @@ function successPayload(result, workflow, jsonBudget) {
     density_doc_phrases_checked: result.density_doc_phrases_checked,
     density_doc_anchors_checked: result.density_doc_anchors_checked,
     parsed_fields_checked: result.parsed_fields_checked,
+    json_parity_fields_checked: result.json_parity_fields_checked,
     text_width_docs_checked: result.text_width_docs_checked,
     row_soft_ok: result.row_soft_ok,
     row_soft_max: result.row_soft_max,
@@ -446,6 +449,7 @@ function jsonPayloadParityExpectedFields(result) {
     density_doc_phrases_checked: result.density_doc_phrases_checked,
     density_doc_anchors_checked: result.density_doc_anchors_checked,
     parsed_fields_checked: result.parsed_fields_checked,
+    json_parity_fields_checked: result.json_parity_fields_checked,
     text_width_docs_checked: result.text_width_docs_checked,
     row_soft_ok: result.row_soft_ok,
     row_soft_max: result.row_soft_max,
@@ -771,6 +775,7 @@ if (args.includes("--self-test")) {
     density_doc_phrases_checked: 0,
     density_doc_anchors_checked: 0,
     parsed_fields_checked: 0,
+    json_parity_fields_checked: 0,
     text_width_docs_checked: 0,
   };
   const missingJsonParityMutationFields = Object.keys(

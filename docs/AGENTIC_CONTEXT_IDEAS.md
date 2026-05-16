@@ -307,12 +307,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON parity field-order audit | Keeps JSON parity checks deterministic as the JSON payload gains fields. | Density self-test now verifies JSON parity fields appear in success-payload order. | Evidence: JSON stays under 512 bytes; JSON parity order drift fails self-test. |
 | Context anomaly drilldown density JSON parity order docs | Helps maintainers understand that JSON parity fields intentionally follow payload order. | The checker now comments that parity expectations should match the field sequence JSON readers see. | Evidence: JSON stays under 512 bytes; parity-order intent is discoverable. |
 | Context anomaly drilldown density JSON parity field-count output | Lets default text expose how many JSON parity fields are guarded without reading source. | Default output now reports `jpar`, with parser, stale/missing mutation, and runbook alias coverage. | Evidence: output remains under text cap; JSON parity field count matches expected map. |
+| Context anomaly drilldown density JSON parity count JSON output | Lets JSON consumers see the parity-field count without parsing compact text. | JSON now includes `json_parity_fields_checked`, and the runbook documents the field under a 544-byte JSON cap. | Evidence: JSON stays under 544 bytes; JSON parity count matches expected map. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON parity count JSON output | Lets JSON consumers see the parity-field count without parsing compact text. | Add `json_parity_fields_checked` to JSON output and runbook docs if it fits the 512-byte cap. | Compact metric: JSON stays under 512 bytes; correctness metric: JSON parity count matches expected map. |
+| Context anomaly drilldown density JSON cap docs refresh | Keeps density JSON budget docs honest after adding JSON parity count output. | Document why `max_json_bytes` increased to 544 while preserving headroom checks. | Compact metric: runbook stays within row/prose caps; correctness metric: JSON cap docs match output. |
 
 ## Research Rules
 
