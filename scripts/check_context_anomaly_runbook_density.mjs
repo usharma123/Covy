@@ -117,6 +117,7 @@ const requiredOutputDocPhrases = [
   "`alias_docs_checked`",
   "`row_soft_ok`",
   "`row_soft_max`",
+  "`density_doc_phrases_checked`",
   "`max_json_bytes=384`",
   "`help<=120`",
 ];
@@ -567,7 +568,7 @@ if (args.includes("--self-test")) {
   const widenedEnvProseResult = evaluate(
     runbook.replace(
       "Density env:",
-      "Density env: widened-env-prose-width-sentinel",
+      "Density env: widened",
     ),
     maxLines,
   );
@@ -756,6 +757,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`row_soft_ok`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`density_doc_phrases_checked`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(

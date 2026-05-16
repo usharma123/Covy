@@ -229,12 +229,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density env prose label docs guard | Prevents future prose compaction from breaking the self-test’s env-line anchor. | The density checker now requires the compact `Density env:` label and self-tests its removal. | Evidence: no runbook growth; removing the env-line label fails density output-doc coverage. |
 | Context anomaly drilldown density doc phrase count split | Helps automation distinguish generic output-doc phrases, alias docs, and density anchor docs. | Default density output now reports `dphr` for required density anchor docs. | Evidence: default output remains under text cap; `dphr` equals required density anchor count. |
 | Context anomaly drilldown density doc phrase JSON parity | Lets JSON consumers inspect density anchor coverage without parsing default text. | JSON success output now includes `density_doc_phrases_checked` with a documented 384-byte cap. | Evidence: JSON stays under budget; JSON count equals required density anchor count. |
+| Context anomaly drilldown density JSON field docs refresh | Helps maintainers see all non-obvious JSON-only density fields from the runbook. | The runbook now documents `density_doc_phrases_checked`, and the checker self-tests removal of that field doc. | Evidence: row remains under 480; removing the JSON field doc fails output-doc coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON field docs refresh | Helps maintainers see all non-obvious JSON-only density fields from the runbook. | Document `density_doc_phrases_checked` near the other JSON field docs without pushing the table row over the soft target. | Compact metric: row remains under 480; correctness metric: removing the JSON field doc fails output-doc coverage. |
+| Context anomaly drilldown density JSON field prose recovery | Restores prose-width margin after adding the density-doc JSON field to the env/help line. | Compact the JSON field docs while preserving `row_soft_ok`, `row_soft_max`, and `density_doc_phrases_checked`. | Compact metric: `prose` returns below 370; correctness metric: JSON field docs still pass. |
 
 ## Research Rules
 
