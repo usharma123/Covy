@@ -1614,9 +1614,12 @@ if (args.includes("--self-test")) {
       process.exit(1);
     }
   };
-  for (const field of defaultTextFields) {
-    assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
-  }
+  const assertDefaultOutputMutations = () => {
+    for (const field of defaultTextFields) {
+      assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
+    }
+  };
+  assertDefaultOutputMutations();
   assertInvariantDetailFormats();
   assertEnvDocInvariants();
   assertSelfTest(
