@@ -1627,9 +1627,10 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_default_output_headroom_json_doc",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`default_output_iterations`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`default_output_iterations`",
     "missing_default_output_iterations_json_doc",
   );
   assertSelfTestMissing(
