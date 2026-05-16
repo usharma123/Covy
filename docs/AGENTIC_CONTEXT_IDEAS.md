@@ -529,12 +529,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation joined identity fields destructure helper | Names the joined-field comparison after destructuring. | Extracted `joinedDefaultOutputMutationIdentityFieldsMatch(joinedFields)` for comparing joined string payloads. | Evidence: no runtime output growth; sampled predicate still evaluates the same joined-field equality. |
 | Context anomaly drilldown density self-test default output mutation joined identity fields comparison order | Keeps joined field construction beside the comparison helper. | Verified `joinedDefaultOutputMutationIdentityFields(sample)` sits directly above `joinedDefaultOutputMutationIdentityFieldsMatch(joinedFields)`. | Evidence: no runtime output growth; joined payload construction remains adjacent to its comparator. |
 | Context anomaly drilldown density self-test default output mutation joined identity fields local name | Makes the sampled predicate's local joined payload name match the helper output. | Renamed `joinedFields` to `joinedIdentityFields` inside `sampledDefaultOutputMutationIdentityFieldsMatch(sample)`. | Evidence: no runtime output growth; sampled predicate still passes the same joined payload to the comparator. |
+| Context anomaly drilldown density self-test default output mutation joined identity fields local sample helper | Names the sampled predicate's join step. | Extracted `sampleJoinedDefaultOutputMutationIdentityFields(sample)` wrapping `joinedDefaultOutputMutationIdentityFields(sample)`. | Evidence: no runtime output growth; sampled predicate still compares the same joined payload. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation joined identity fields local sample helper | Names the sampled predicate's join step. | Extract `sampleJoinedDefaultOutputMutationIdentityFields(sample)` wrapping `joinedDefaultOutputMutationIdentityFields(sample)`. | Compact metric: no runtime output growth; correctness metric: sampled predicate still compares the same joined payload. |
+| Context anomaly drilldown density self-test default output mutation joined identity fields sample helper order | Keeps sampled joined field helper beside the sampled predicate. | Verify `sampleJoinedDefaultOutputMutationIdentityFields(sample)` sits directly above `sampledDefaultOutputMutationIdentityFieldsMatch(sample)`. | Compact metric: no runtime output growth; correctness metric: sampled joined helper remains adjacent to its only caller. |
 
 ## Research Rules
 
