@@ -309,12 +309,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON parity field-count output | Lets default text expose how many JSON parity fields are guarded without reading source. | Default output now reports `jpar`, with parser, stale/missing mutation, and runbook alias coverage. | Evidence: output remains under text cap; JSON parity field count matches expected map. |
 | Context anomaly drilldown density JSON parity count JSON output | Lets JSON consumers see the parity-field count without parsing compact text. | JSON now includes `json_parity_fields_checked`, and the runbook documents the field under a 544-byte JSON cap. | Evidence: JSON stays under 544 bytes; JSON parity count matches expected map. |
 | Context anomaly drilldown density JSON cap docs refresh | Keeps density JSON budget docs honest after adding JSON parity count output. | The checker now documents why `max_json_bytes` is 544 while the runbook still requires the exact cap phrase. | Evidence: runbook stays within row/prose caps; JSON cap docs match output. |
+| Context anomaly drilldown density JSON headroom default output | Lets agents see actual JSON byte headroom directly instead of inferring from `json` alias docs. | Compact output now uses `jhead` for JSON headroom, with parser and runbook alias coverage. | Evidence: output remains under text cap; headroom field stays parser-checked. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON headroom default output | Lets agents see actual JSON byte headroom directly instead of inferring from `json` alias docs. | Rename or supplement compact `json` with a clearer `jhead` alias while preserving text budget. | Compact metric: output remains under text cap; correctness metric: headroom field stays parser-checked. |
+| Context anomaly drilldown density JSON headroom alias docs | Helps maintainers map `jhead` without reading checker source. | Add or verify dedicated `jhead` alias docs and stale/missing alias self-test coverage. | Compact metric: runbook stays under row/prose caps; correctness metric: missing `jhead` docs fail self-test. |
 
 ## Research Rules
 

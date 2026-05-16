@@ -111,7 +111,7 @@ const defaultOutputFieldOrder = [
   "parsed",
   "wf",
   "prose",
-  "json",
+  "jhead",
   "jpar",
   "wdocs",
   "width",
@@ -150,7 +150,7 @@ const requiredOutputDocPhrases = [
 const requiredAliasDocPhrases = [
   "`fc`=failure codes",
   "`wf`=workflow commands",
-  "`json`=remaining JSON headroom",
+  "`jhead`=JSON headroom",
   "`jpar`=JSON parity",
   "`adocs`=alias docs",
   "`wdocs`=width docs",
@@ -521,7 +521,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `parsed=${resultDetails.parsed_fields_checked}`,
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
-    `json=${jsonHeadroom}`,
+    `jhead=${jsonHeadroom}`,
     `jpar=${resultDetails.json_parity_fields_checked}`,
     `wdocs=${resultDetails.text_width_docs_checked}`,
     textWidth === undefined ? null : `width=${textWidth}`,
@@ -577,7 +577,7 @@ function defaultOutputExpectedValues(resultDetails) {
     expectedValues.wf = String(resultDetails.workflow_commands_checked);
   }
   if (resultDetails.json_headroom !== undefined) {
-    expectedValues.json = String(resultDetails.json_headroom);
+    expectedValues.jhead = String(resultDetails.json_headroom);
   }
   if (resultDetails.default_output_width !== undefined) {
     expectedValues.width = String(resultDetails.default_output_width);
@@ -917,7 +917,7 @@ if (args.includes("--self-test")) {
     fc: "0",
     wf: "0",
     prose: "0/0",
-    json: "0",
+    jhead: "0",
     env: "0",
     labels: "0",
     phrases: "0",
