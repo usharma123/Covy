@@ -463,12 +463,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output pattern locality | Removes stale local regex state after line mutation helpers own replacement. | Dropped the local `fieldPattern` binding from `assertDefaultOutputMutation()` after both line mutation helpers use `defaultOutputFieldPattern()`. | Evidence: no runtime output growth; mutation checks still target field-specific tokens. |
 | Context anomaly drilldown density self-test default output parsed value helper | Names the current parsed default-output value check. | Extracted `parsedDefaultOutputFieldValue(field)` for the stale no-op comparison. | Evidence: no runtime output growth; stale no-op checks still compare against the parsed current value. |
 | Context anomaly drilldown density self-test default output stale noop helper | Names the stale mutation no-op predicate. | Extracted `isDefaultOutputStaleMutationNoop(line, staleLine, field, staleValue)` for the stale mutation guard. | Evidence: no runtime output growth; stale no-op checks still guard unchanged lines and current-value collisions. |
+| Context anomaly drilldown density self-test default output missing noop helper | Names the missing mutation no-op predicate. | Extracted `isDefaultOutputMissingMutationNoop(line, missingLine)` for the missing mutation guard. | Evidence: no runtime output growth; missing no-op checks still guard unchanged lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output missing noop helper | Names the missing mutation no-op predicate. | Extract an `isDefaultOutputMissingMutationNoop(line, missingLine)` helper for the missing mutation guard. | Compact metric: no runtime output growth; correctness metric: missing no-op checks still guard unchanged lines. |
+| Context anomaly drilldown density self-test default output noop order helper | Keeps no-op predicates declared beside their diagnostic detail helpers. | Move missing/stale no-op predicate declarations near the matching no-op detail helpers. | Compact metric: no runtime output growth; correctness metric: no-op helpers remain easy to audit in pairs. |
 
 ## Research Rules
 

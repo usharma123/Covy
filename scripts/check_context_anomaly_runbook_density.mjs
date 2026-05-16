@@ -1593,6 +1593,8 @@ if (args.includes("--self-test")) {
     actual: defaultOutputMutationActualDetail(actual),
   });
   const parsedDefaultOutputFieldValue = (field) => parsedDefaultOutput[field];
+  const isDefaultOutputMissingMutationNoop = (originalLine, missingLine) =>
+    missingLine === originalLine;
   const isDefaultOutputStaleMutationNoop = (
     originalLine,
     staleLine,
@@ -1608,7 +1610,9 @@ if (args.includes("--self-test")) {
   }
   const assertDefaultOutputMutation = (field, staleValue) => {
     const missingOutputLine = defaultOutputWithoutField(defaultOutputLine, field);
-    if (missingOutputLine === defaultOutputLine) {
+    if (
+      isDefaultOutputMissingMutationNoop(defaultOutputLine, missingOutputLine)
+    ) {
       failDefaultOutputMutation(missingMutationNoopDetails(field));
     }
     const missingFieldError = defaultOutputParseIssue(
