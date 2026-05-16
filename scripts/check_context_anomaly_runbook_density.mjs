@@ -430,12 +430,12 @@ function jsonPayloadParityExpectedFields(result) {
   return {
     output_doc_phrases_checked: result.output_doc_phrases_checked,
     alias_docs_checked: result.alias_docs_checked,
-    row_soft_ok: result.row_soft_ok,
-    row_soft_max: result.row_soft_max,
     density_doc_phrases_checked: result.density_doc_phrases_checked,
     density_doc_anchors_checked: result.density_doc_anchors_checked,
     parsed_fields_checked: result.parsed_fields_checked,
     text_width_docs_checked: result.text_width_docs_checked,
+    row_soft_ok: result.row_soft_ok,
+    row_soft_max: result.row_soft_max,
   };
 }
 
@@ -713,6 +713,22 @@ if (args.includes("--self-test")) {
   if (jsonPayloadError) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(jsonPayloadError);
+    process.exit(1);
+  }
+  const jsonParityFieldOrder = Object.keys(
+    jsonPayloadParityExpectedFields(result),
+  );
+  const payloadParityFieldOrder = Object.keys(baselinePayload).filter((field) =>
+    jsonParityFieldOrder.includes(field),
+  );
+  if (payloadParityFieldOrder.join(",") !== jsonParityFieldOrder.join(",")) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_json_parity_order=${jsonParityFieldOrder.join(",")}`,
+    );
+    console.error(
+      `actual_json_parity_order=${payloadParityFieldOrder.join(",")}`,
+    );
     process.exit(1);
   }
   // Stale JSON values must differ from the rendered payload; the helper below

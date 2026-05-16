@@ -304,12 +304,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON parity missing-field coverage | Proves JSON parity checks reject omitted parity fields, not just stale values. | Density self-test now deletes each JSON parity field and requires a field-specific missing-field error. | Evidence: JSON stays under 512 bytes; omitted JSON parity fields fail self-test. |
 | Context anomaly drilldown density JSON parity mutation helper | Keeps JSON parity missing/stale checks compact as more JSON fields gain parity coverage. | The self-test now uses a local helper for JSON parity missing/stale mutation checks. | Evidence: JSON stays under 512 bytes; JSON parity mutation coverage remains unchanged. |
 | Context anomaly drilldown density JSON parity no-op guard docs | Helps maintainers choose stale JSON mutation values that cannot become current values. | The checker now comments that JSON stale values must differ from the rendered payload and fail fast on no-op mutations. | Evidence: JSON stays under 512 bytes; stale JSON mutation values remain auditable. |
+| Context anomaly drilldown density JSON parity field-order audit | Keeps JSON parity checks deterministic as the JSON payload gains fields. | Density self-test now verifies JSON parity fields appear in success-payload order. | Evidence: JSON stays under 512 bytes; JSON parity order drift fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON parity field-order audit | Keeps JSON parity checks deterministic as the JSON payload gains fields. | Assert JSON parity expected fields appear in the same order as the success payload keys. | Compact metric: JSON stays under 512 bytes; correctness metric: JSON parity order drift fails self-test. |
+| Context anomaly drilldown density JSON parity order docs | Helps maintainers understand that JSON parity fields intentionally follow payload order. | Add a compact checker comment explaining the JSON parity order audit. | Compact metric: JSON stays under 512 bytes; correctness metric: parity-order intent is discoverable. |
 
 ## Research Rules
 
