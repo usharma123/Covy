@@ -575,12 +575,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation count assertion order | Keeps the renamed count assertion beside the default-output mutation group. | Verified `assertDefaultOutputMutationFieldCountSample()` remains directly before the per-field mutation case loop. | Evidence: no runtime output growth; mutation group still runs count assertion before per-field case assertions. |
 | Context anomaly drilldown density self-test default output mutation cases wrapper | Names the per-field mutation assertion loop as a group-level step. | Extracted `assertDefaultOutputMutationCases()` around `defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase)`. | Evidence: no runtime output growth; mutation group still runs the same per-field mutation cases after identity and count checks. |
 | Context anomaly drilldown density self-test default output mutation cases wrapper order | Keeps the extracted mutation cases wrapper beside the public mutation assertion group. | Verified `assertDefaultOutputMutationCases()` sits directly above `assertDefaultOutputMutations()` and remains after identity/count checks. | Evidence: no runtime output growth; cases wrapper remains adjacent to its only caller. |
+| Context anomaly drilldown density self-test default output mutation top-level call wrapper | Names the final default-output mutation self-test call. | Extracted `assertDefaultOutputMutationSelfTest()` around `assertDefaultOutputMutations()`. | Evidence: no runtime output growth; self-test still invokes the full default-output mutation assertion group. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation top-level call wrapper | Names the final default-output mutation self-test call. | Extract `assertDefaultOutputMutationSelfTest()` around `assertDefaultOutputMutations()`. | Compact metric: no runtime output growth; correctness metric: self-test still invokes the full default-output mutation assertion group. |
+| Context anomaly drilldown density self-test default output mutation top-level call order | Keeps the top-level self-test wrapper beside the assertion group it invokes. | Verify `assertDefaultOutputMutationSelfTest()` sits directly below `assertDefaultOutputMutations()` and is the only default-output mutation callsite. | Compact metric: no runtime output growth; correctness metric: top-level self-test wrapper remains adjacent to the full assertion group. |
 
 ## Research Rules
 

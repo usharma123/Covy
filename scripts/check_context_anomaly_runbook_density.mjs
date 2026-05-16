@@ -1760,7 +1760,10 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutationFieldCountSample();
     assertDefaultOutputMutationCases();
   };
-  assertDefaultOutputMutations();
+  const assertDefaultOutputMutationSelfTest = () => {
+    assertDefaultOutputMutations();
+  };
+  assertDefaultOutputMutationSelfTest();
   assertInvariantDetailFormats();
   assertEnvDocInvariants();
   assertSelfTest(
