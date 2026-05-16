@@ -38,7 +38,7 @@
       "id": "real-repos-index-wait-20260511",
       "workflow": "Packet28 real repository parity and indexed search evidence across packet28, ripgrep, and fd",
       "commands": [
-        "docs/experiments/run_packet28_fixture_suite.sh"
+        "docs/experiments/run_packet28_real_repo_suite.sh"
       ],
       "artifacts": [
         "docs/experiments/real-repos/20260511TREAL_INDEX_WAIT_60S/summary.md",
