@@ -612,12 +612,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test text headroom wrapper | Names the default text-headroom documentation assertion. | Extracted `assertTextHeadroomMutationSelfTest()` around the `thead>=8` assertion. | Evidence: no runtime output growth; default text-headroom coverage still fails when removed. |
 | Context anomaly drilldown density self-test text headroom order | Keeps default text-headroom coverage before JSON error-shape docs. | Verified `assertTextHeadroomMutationSelfTest()` sits after width env-pair coverage and before the `ok:false` assertion. | Evidence: no runtime output growth; default text-headroom coverage remains before JSON error-shape coverage. |
 | Context anomaly drilldown density self-test JSON error-shape wrapper | Names the JSON `ok:false` error-shape documentation assertion. | Extracted `assertJsonErrorShapeMutationSelfTest()` around the `ok:false` assertion. | Evidence: no runtime output growth; JSON error-shape coverage still fails when removed. |
+| Context anomaly drilldown density self-test JSON error-shape order | Keeps JSON error-shape coverage before failure-success field docs. | Verified `assertJsonErrorShapeMutationSelfTest()` sits after text-headroom coverage and before the `no-succ` assertion. | Evidence: no runtime output growth; JSON error-shape coverage remains before failure-success field coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON error-shape order | Keeps JSON error-shape coverage before failure-success field docs. | Verify `assertJsonErrorShapeMutationSelfTest()` sits after text-headroom coverage and before the `no-succ` assertion. | Compact metric: no runtime output growth; correctness metric: JSON error-shape coverage remains before failure-success field coverage. |
+| Context anomaly drilldown density self-test failure-success wrapper | Names the JSON `no-succ` failure-success field documentation assertion. | Extract `assertFailureSuccessFieldMutationSelfTest()` around the `no-succ` assertion. | Compact metric: no runtime output growth; correctness metric: failure-success field coverage still fails when removed. |
 
 ## Research Rules
 
