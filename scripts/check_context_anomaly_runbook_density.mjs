@@ -588,6 +588,19 @@ if (args.includes("--self-test")) {
     console.error("env_prose_width_did_not_grow");
     process.exit(1);
   }
+  const widenedJsonProseResult = evaluate(
+    runbook.replace("JSON:", `JSON:${" widened".repeat(32)}`),
+    maxLines,
+  );
+  if (
+    !widenedJsonProseResult.ok ||
+    widenedJsonProseResult.max_density_prose_line <=
+      result.max_density_prose_line
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("json_prose_width_did_not_grow");
+    process.exit(1);
+  }
   if (result.text_width_docs_checked !== 1) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected_text_width_docs=1");

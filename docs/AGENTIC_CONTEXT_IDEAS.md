@@ -241,12 +241,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density parser field coverage JSON parity | Lets JSON consumers inspect parser field coverage without parsing default text. | JSON success output now includes `parsed_fields_checked` with a documented 416-byte cap. | Evidence: JSON stays under budget; JSON count equals parser field count. |
 | Context anomaly drilldown density parser JSON field docs | Helps maintainers discover `parsed_fields_checked` without inspecting the checker source. | The runbook now documents `parsed_fields_checked`, and the checker self-tests removal of that field doc. | Evidence: prose stays under width budget; removing the JSON field doc fails output-doc coverage. |
 | Context anomaly drilldown density parser JSON prose recovery | Restores prose headroom after adding `parsed_fields_checked` to compact JSON docs. | The runbook now splits env docs from JSON/help docs while keeping the 44-line budget. | Evidence: `prose` returns below 380; JSON field docs still pass. |
+| Context anomaly drilldown density JSON prose line coverage | Proves the split `JSON:` line participates in prose-width calculation. | Density self-test now widens the `JSON:` line and verifies `max_density_prose_line` grows. | Evidence: default output remains one line; JSON prose participates in width calculation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON prose line coverage | Proves the split `JSON:` line participates in prose-width calculation. | Self-test a widened `JSON:` line and verify `max_density_prose_line` grows. | Compact metric: default output remains one line; correctness metric: JSON prose participates in width calculation. |
+| Context anomaly drilldown density JSON prose label guard | Prevents future JSON prose compaction from dropping the `JSON:` line anchor. | Require a standalone `JSON:` prose anchor in the runbook, separate from the glossary phrase. | Compact metric: no runbook growth; correctness metric: removing the JSON prose anchor fails output-doc coverage. |
 
 ## Research Rules
 
