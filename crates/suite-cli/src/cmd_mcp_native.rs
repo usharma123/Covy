@@ -252,6 +252,14 @@ pub(crate) struct Packet28HandoffLintAllArgs {
     pub(crate) context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffFixPlanArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1884,6 +1892,37 @@ pub(crate) fn handle_packet28_handoff_lint_all(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_fix_plan(
+    root: &Path,
+    args: Packet28HandoffFixPlanArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.handoff_fix_plan requires task_id"));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.handoff_fix_plan requires artifact_id or context_version")
+    })?;
+    let lint = handle_packet28_handoff_lint_all(
+        root,
+        Packet28HandoffLintAllArgs {
+            task_id: task_id.to_string(),
+            artifact_id: Some(artifact_id.clone()),
+            context_version: None,
+        },
+    )?;
+    let actions = handoff_fix_actions_from_lint(&lint);
+    let action_count = actions.len();
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "status": if action_count == 0 { "ready" } else { "needs_fix" },
+        "action_count": action_count,
+        "actions": actions,
+        "summary": format!("handoff_fix_plan action_count={action_count}"),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -2173,6 +2212,78 @@ fn handoff_lint_check(category: &str, payload: Value) -> Value {
         "issue_count": issue_count,
         "references": references,
     })
+}
+
+fn handoff_fix_actions_from_lint(lint: &Value) -> Vec<Value> {
+    let mut actions = Vec::new();
+    let Some(checks) = lint.get("checks").and_then(Value::as_array) else {
+        return actions;
+    };
+    for check in checks {
+        if check.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let category = check
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let references = check
+            .get("references")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let first_reference = references
+            .iter()
+            .filter_map(Value::as_str)
+            .next()
+            .unwrap_or_default();
+        let action = match category {
+            "replay" => json!({
+                "kind": "repair_handoff_packet",
+                "reference": first_reference,
+                "next": "regenerate handoff with objective, next action, debt signal, and evidence handle",
+                "command": "Packet28 prepare_handoff",
+            }),
+            "dependencies" => json!({
+                "kind": "attach_missing_artifact",
+                "reference": first_reference,
+                "next": "attach referenced artifact handle or remove the stale reference",
+                "command": format!("packet28.fetch_tool_result handle={first_reference}"),
+            }),
+            "paths" => json!({
+                "kind": "read_or_correct_path",
+                "reference": first_reference,
+                "next": "read the referenced path or correct the handoff path before replay",
+                "command": format!("rg --files | rg '{}'", path_search_fragment(first_reference)),
+            }),
+            "tests" => json!({
+                "kind": "add_test_command",
+                "reference": first_reference,
+                "next": "add or run a concrete command for the mentioned test",
+                "command": format!("cargo test {first_reference}"),
+            }),
+            "stale_commands" => json!({
+                "kind": "rerun_stale_command",
+                "reference": first_reference,
+                "next": "rerun the command after the latest relevant edit",
+                "command": first_reference,
+            }),
+            "environment" => json!({
+                "kind": "setup_environment",
+                "reference": first_reference,
+                "next": "set the missing variable or remove the command dependency",
+                "command": format!("export {first_reference}=<value>"),
+            }),
+            _ => continue,
+        };
+        actions.push(action);
+    }
+    actions.truncate(6);
+    actions
+}
+
+fn path_search_fragment(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).replace('\'', "")
 }
 
 fn is_env_var_start(ch: char) -> bool {
