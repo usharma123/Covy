@@ -1972,27 +1972,27 @@ if (args.includes("--self-test")) {
         const jsonFieldOrderMutations = [
           {
             caseName: "swapped_default_output_headroom_json_doc_order",
-            expectedMissingDoc: jsonHeadroomOrderDoc,
+            expectedFullOrderDoc: jsonHeadroomOrderDoc,
             originalDoc: jsonHeadroomOrderDoc,
             swappedDoc: swappedJsonHeadroomOrderDoc,
           },
           {
             caseName: "swapped_default_output_iterations_json_doc_order",
-            expectedMissingDoc: jsonHeadroomOrderDoc,
+            expectedFullOrderDoc: jsonHeadroomOrderDoc,
             originalDoc: jsonIterationsTextWidthPairDoc,
             swappedDoc: swappedJsonIterationsTextWidthPairDoc,
           },
         ];
         for (const {
           caseName,
-          expectedMissingDoc,
+          expectedFullOrderDoc,
           originalDoc,
           swappedDoc,
         } of jsonFieldOrderMutations) {
           assertSelfTestMissing(
             evaluate(runbook.replace(originalDoc, swappedDoc), maxLines),
             "context_anomaly_runbook_density_missing_output_docs",
-            expectedMissingDoc,
+            expectedFullOrderDoc,
             caseName,
           );
         }
