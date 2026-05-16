@@ -700,12 +700,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test stale-alias helper audit | Checks whether stale `no-success` alias coverage is already minimal. | Re-scanned `assertStaleFailureAliasMutationSelfTest()` and kept its named result local because the stale-alias mutation and expected diagnostic are explicit. | Evidence: no runtime output growth; stale-alias regression coverage stays explicit. |
 | Context anomaly drilldown density self-test JSON error/help adjacency helper audit | Checks whether JSON error/help adjacency coverage is already minimal. | Re-scanned `assertJsonErrorHelpAdjacencyMutationSelfTest()` and found the compact adjacency strings explicit but worth naming before the next env-pair helper. | Evidence: no runtime output growth; adjacency mutation remains explicit. |
 | Context anomaly drilldown density self-test JSON error/help adjacency string names | Names the compact adjacency doc and mutated doc strings. | Extracted `jsonErrorHelpAdjacencyDoc` and `driftedJsonErrorHelpAdjacencyDoc` inside `assertJsonErrorHelpAdjacencyMutationSelfTest()`. | Evidence: no runtime output growth; original adjacency doc remains the expected-missing value. |
+| Context anomaly drilldown density self-test JSON error/help adjacency string order | Keeps named adjacency strings beside their mutation assertion. | Verified `jsonErrorHelpAdjacencyDoc` and `driftedJsonErrorHelpAdjacencyDoc` are defined immediately before the `runbook.replace(...)` assertion. | Evidence: no runtime output growth; original adjacency doc remains the expected-missing value. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON error/help adjacency string order | Keeps named adjacency strings beside their mutation assertion. | Verify `jsonErrorHelpAdjacencyDoc` and `driftedJsonErrorHelpAdjacencyDoc` are defined immediately before the `runbook.replace(...)` assertion. | Compact metric: no runtime output growth; correctness metric: original adjacency doc remains the expected-missing value. |
+| Context anomaly drilldown density self-test JSON headroom env-pair helper audit | Checks whether the JSON headroom env-pair helper needs string naming. | Re-scan `assertJsonHeadroomEnvPairMutationSelfTest()` and decide whether the original and replacement docs should be named like the adjacency helper. | Compact metric: no runtime output growth; correctness metric: env-pair expected-missing value stays explicit. |
 
 ## Research Rules
 
