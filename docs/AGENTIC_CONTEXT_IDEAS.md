@@ -604,12 +604,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test env-line anchor wrapper | Names the env-line anchor documentation assertion. | Extracted `assertEnvLineAnchorMutationSelfTest()` around the `Env:` removal assertion. | Evidence: no runtime output growth; env-line anchor coverage still fails when removed. |
 | Context anomaly drilldown density self-test env-line anchor order | Keeps env-line anchor coverage before section-anchor coverage. | Verified `assertEnvLineAnchorMutationSelfTest()` sits directly after JSON byte/help cap checks and before `JSON:` section-anchor coverage. | Evidence: no runtime output growth; env-line anchor coverage remains before section-anchor coverage. |
 | Context anomaly drilldown density self-test section-anchor wrapper | Names the JSON, JSON-field, and env section-anchor assertions. | Extracted `assertSectionAnchorMutationSelfTests()` around `JSON:` fields, `JSON:alias_docs_checked`, env variable, and continuation anchor checks. | Evidence: no runtime output growth; section-anchor coverage still fails when anchors are removed or merged. |
+| Context anomaly drilldown density self-test section-anchor order | Keeps section-anchor checks before alias glossary checks. | Verified `assertSectionAnchorMutationSelfTests()` sits after env-line anchor coverage and before `fc` alias glossary coverage. | Evidence: no runtime output growth; section-anchor coverage remains before alias glossary coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test section-anchor order | Keeps section-anchor checks before alias glossary checks. | Verify `assertSectionAnchorMutationSelfTests()` sits after env-line anchor coverage and before `fc` alias glossary coverage. | Compact metric: no runtime output growth; correctness metric: section-anchor coverage remains before alias glossary coverage. |
+| Context anomaly drilldown density self-test alias glossary wrapper | Names the compact alias glossary assertions. | Extract `assertAliasGlossaryMutationSelfTests()` around `fc`, `jhead`, `adocs`, and `dlab` glossary checks. | Compact metric: no runtime output growth; correctness metric: alias glossary coverage still fails when compact aliases are removed. |
 
 ## Research Rules
 
