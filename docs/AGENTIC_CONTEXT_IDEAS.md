@@ -643,12 +643,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test direct JSON budget order | Keeps direct JSON budget coverage before help output coverage. | Verified `assertJsonBudgetIssueMutationSelfTest()` sits after JSON headroom-min coverage and before the help includes loop. | Evidence: no runtime output growth; direct JSON budget coverage remains before help output coverage. |
 | Context anomaly drilldown density self-test help includes wrapper | Names required help-output token checks. | Extracted `assertHelpIncludesSelfTests()` around the required help token loop. | Evidence: no runtime output growth; help output still covers modes, unknown-option code, and soft-row env docs. |
 | Context anomaly drilldown density self-test help includes order | Keeps help-token coverage before help line-width checks. | Verified `assertHelpIncludesSelfTests()` sits after direct JSON budget coverage and before the `tooWideHelpLine` check. | Evidence: no runtime output growth; help token coverage remains before help width coverage. |
+| Context anomaly drilldown density self-test help width wrapper | Names max help-line width self-test coverage. | Extracted `assertHelpLineWidthSelfTest()` around the `tooWideHelpLine` check. | Evidence: no runtime output growth; help width failures still report line length diagnostics. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test help width wrapper | Names max help-line width self-test coverage. | Extract `assertHelpLineWidthSelfTest()` around the `tooWideHelpLine` check. | Compact metric: no runtime output growth; correctness metric: help width failures still report line length diagnostics. |
+| Context anomaly drilldown density self-test help width order | Keeps help width checks before self-test success output. | Verify `assertHelpLineWidthSelfTest()` sits after help-token coverage and before the `context_anomaly_runbook_density_self_test_ok` success log. | Compact metric: no runtime output growth; correctness metric: help width coverage remains before success output. |
 
 ## Research Rules
 
