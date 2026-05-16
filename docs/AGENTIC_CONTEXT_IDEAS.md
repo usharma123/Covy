@@ -354,12 +354,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point iteration JSON output | Helps agents see fixed-point convergence cost without reading self-test internals. | JSON now reports `default_output_iterations`, with parity and self-test coverage, while `max_json_bytes` rebalances to 640. | Evidence: default output stays under cap; JSON headroom stays above 24; reported count matches builder iterations. |
 | Context anomaly drilldown density fixed-point iteration JSON docs guard | Prevents `default_output_iterations` from becoming an undocumented JSON-only field. | Self-test now has a dedicated missing-doc mutation for the `default_output_iterations` phrase. | Evidence: JSON prose stays under cap; missing docs fail coverage. |
 | Context anomaly drilldown density fixed-point iteration JSON order guard | Keeps `default_output_iterations` between headroom and width docs in the JSON field list. | Self-test now swaps `default_output_iterations` and `text_width_docs_checked` in the JSON docs line. | Evidence: JSON prose stays under cap; docs-order drift fails coverage. |
+| Context anomaly drilldown density fixed-point iteration payload order guard | Keeps emitted JSON iteration count adjacent to related headroom/width metrics. | Self-test now asserts payload order includes `default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`. | Evidence: JSON output stays under cap; payload order drift fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fixed-point iteration payload order guard | Keeps emitted JSON iteration count adjacent to related headroom/width metrics. | Add a self-test assertion that payload order includes `default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`. | Compact metric: JSON output stays under cap; correctness metric: payload order drift fails self-test. |
+| Context anomaly drilldown density fixed-point iteration exact-cap JSON parity | Proves iteration count remains correct at the exact-width text cap too. | Add a JSON env self-test at text cap 196 that expects `default_output_iterations`:2. | Compact metric: JSON output stays under cap; correctness metric: exact-cap iteration count is stable. |
 
 ## Research Rules
 

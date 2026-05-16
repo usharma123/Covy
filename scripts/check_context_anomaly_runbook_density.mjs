@@ -1165,6 +1165,27 @@ if (args.includes("--self-test")) {
     );
     process.exit(1);
   }
+  const jsonIterationFieldSequence = [
+    "default_output_headroom",
+    "default_output_iterations",
+    "text_width_docs_checked",
+  ];
+  const actualJsonIterationFieldSequence = payloadParityFieldOrder.filter(
+    (field) => jsonIterationFieldSequence.includes(field),
+  );
+  if (
+    actualJsonIterationFieldSequence.join(",") !==
+    jsonIterationFieldSequence.join(",")
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_json_iteration_field_order=${jsonIterationFieldSequence.join(",")}`,
+    );
+    console.error(
+      `actual_json_iteration_field_order=${actualJsonIterationFieldSequence.join(",")}`,
+    );
+    process.exit(1);
+  }
   // Stale JSON values must differ from the rendered payload; the helper below
   // fails fast if any mutation becomes a no-op.
   const staleJsonPayloadValues = {
