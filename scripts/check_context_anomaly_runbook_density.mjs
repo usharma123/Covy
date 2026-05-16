@@ -1575,9 +1575,20 @@ if (args.includes("--self-test")) {
   const missingMutationNoopDetails = (field) => ({
     missing_mutation_noop: field,
   });
+  const isDefaultOutputMissingMutationNoop = (originalLine, missingLine) =>
+    missingLine === originalLine;
   const staleMutationNoopDetails = (field) => ({
     stale_mutation_noop: field,
   });
+  const parsedDefaultOutputFieldValue = (field) => parsedDefaultOutput[field];
+  const isDefaultOutputStaleMutationNoop = (
+    originalLine,
+    staleLine,
+    field,
+    staleValue,
+  ) =>
+    staleLine === originalLine ||
+    staleValue === parsedDefaultOutputFieldValue(field);
   const missingDefaultOutputFieldExpectation = (field) =>
     `missing_default_output_field=${field}`;
   const staleDefaultOutputFieldExpectation = (field) =>
@@ -1592,17 +1603,6 @@ if (args.includes("--self-test")) {
     expected,
     actual: defaultOutputMutationActualDetail(actual),
   });
-  const parsedDefaultOutputFieldValue = (field) => parsedDefaultOutput[field];
-  const isDefaultOutputMissingMutationNoop = (originalLine, missingLine) =>
-    missingLine === originalLine;
-  const isDefaultOutputStaleMutationNoop = (
-    originalLine,
-    staleLine,
-    field,
-    staleValue,
-  ) =>
-    staleLine === originalLine ||
-    staleValue === parsedDefaultOutputFieldValue(field);
   if (missingStaleMutationFields.length > 0) {
     failDefaultOutputMutation(
       missingStaleMutationFieldsDetails(missingStaleMutationFields),
