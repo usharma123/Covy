@@ -5891,6 +5891,14 @@ fn test_transcript_export_import_round_trip() {
 fn test_dashboard_shows_local_product_metrics() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
+    let trend_fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("docs")
+        .join("context-anomalies")
+        .join("history.jsonl");
     std::process::Command::new("git")
         .args(["init"])
         .current_dir(root.path())
@@ -6001,6 +6009,25 @@ fn test_dashboard_shows_local_product_metrics() {
         ))
         .stdout(predicate::str::contains("\"regression_count\":1"))
         .stdout(predicate::str::contains("\"windsurf_doctor_status\""));
+
+    suite_cmd()
+        .current_dir(root.path())
+        .env("HOME", home.path())
+        .args([
+            "dashboard",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--context-anomaly-history",
+            trend_fixture.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"context_anomalies\""))
+        .stdout(predicate::str::contains("\"latest_status\":\"ready\""))
+        .stdout(predicate::str::contains(
+            "\"recurring_hidden_categories\":[\"fallback_provenance\"]",
+        ));
 
     suite_cmd()
         .current_dir(root.path())

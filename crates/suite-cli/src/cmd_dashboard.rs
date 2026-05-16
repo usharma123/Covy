@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Args;
@@ -35,6 +35,9 @@ pub struct DashboardArgs {
     /// Keep the terminal dashboard open and accept navigation commands on stdin
     #[arg(long)]
     pub interactive: bool,
+    /// Read context anomaly history from this JSONL file instead of .packet28 history
+    #[arg(long, value_name = "PATH")]
+    pub context_anomaly_history: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +171,11 @@ struct ContextAnomalyHistoryRecord {
 
 pub fn run(args: DashboardArgs) -> Result<i32> {
     let root = crate::cmd_daemon::resolve_root_arg(&args.root);
+    let cwd = crate::cmd_common::caller_cwd()?;
+    let context_anomaly_history_path = args
+        .context_anomaly_history
+        .as_deref()
+        .map(|path| PathBuf::from(crate::cmd_common::resolve_path_from_cwd(path, &cwd)));
     let savings = load_run_savings(&root, 100)?;
     let mut token_savings = TokenSavings::default();
     let mut top_noisy_commands = Vec::new();
@@ -218,7 +226,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
     let handoff_readiness = handoff_readiness_tile(&root)?;
     let reducer_drift = reducer_drift_tile(&root)?;
     let memory_lint = memory_lint_tile(&root)?;
-    let context_anomalies = context_anomaly_tile(&root)?;
+    let context_anomalies = context_anomaly_tile(&root, context_anomaly_history_path.as_deref())?;
     let windsurf_rules = root.join(".windsurf").join("rules").join("packet28.md");
     let windsurf_status = if windsurf_rules.exists() {
         "rules_present"
@@ -544,8 +552,11 @@ fn memory_lint_tile(root: &Path) -> Result<MemoryLintTile> {
     })
 }
 
-fn context_anomaly_tile(root: &Path) -> Result<ContextAnomalyTile> {
-    let records = load_context_anomaly_history(root, 32)?;
+fn context_anomaly_tile(root: &Path, history_path: Option<&Path>) -> Result<ContextAnomalyTile> {
+    let records = match history_path {
+        Some(path) => load_context_anomaly_history_from_path(path, 32)?,
+        None => load_context_anomaly_history(root, 32)?,
+    };
     if records.is_empty() {
         return Ok(ContextAnomalyTile {
             latest_status: "none".to_string(),
@@ -746,6 +757,13 @@ fn load_context_anomaly_history(
     limit: usize,
 ) -> Result<Vec<ContextAnomalyHistoryRecord>> {
     let path = context_anomaly_history_path(root);
+    load_context_anomaly_history_from_path(&path, limit)
+}
+
+fn load_context_anomaly_history_from_path(
+    path: &Path,
+    limit: usize,
+) -> Result<Vec<ContextAnomalyHistoryRecord>> {
     let Ok(raw) = fs::read_to_string(path) else {
         return Ok(Vec::new());
     };
@@ -1554,7 +1572,7 @@ mod tests {
         )
         .unwrap();
 
-        let tile = context_anomaly_tile(root.path()).unwrap();
+        let tile = context_anomaly_tile(root.path(), None).unwrap();
 
         assert_eq!(tile.run_count, 3);
         assert_eq!(tile.latest_status, "ready");
@@ -1579,7 +1597,7 @@ mod tests {
         std::fs::create_dir_all(history_path.parent().unwrap()).unwrap();
         std::fs::write(&history_path, fixture).unwrap();
 
-        let tile = context_anomaly_tile(root.path()).unwrap();
+        let tile = context_anomaly_tile(root.path(), Some(&history_path)).unwrap();
 
         assert!(fixture.len() < 512);
         assert_eq!(tile.run_count, 3);
