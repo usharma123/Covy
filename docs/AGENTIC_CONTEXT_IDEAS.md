@@ -690,12 +690,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test section-anchor post-helper audit | Checks whether the section-anchor helper is decomposed enough after table and row-helper extraction. | Re-scanned `assertSectionAnchorMutationSelfTests()` and kept its table/helper/loop shape while moving the next target to repeated alias glossary assertions. | Evidence: no runtime output growth; next target is based on the current section-anchor helper shape. |
 | Context anomaly drilldown density self-test alias glossary table | Replaces repeated alias glossary assertions with a compact table. | Extracted the four assertions in `assertAliasGlossaryMutationSelfTests()` into alias glossary rows with doc text and case name. | Evidence: no runtime output growth; all alias glossary case names still fail on missing output docs. |
 | Context anomaly drilldown density self-test alias glossary table order | Keeps the alias glossary table beside the loop that executes it. | Verified `aliasGlossaryDocs` is defined inside `assertAliasGlossaryMutationSelfTests()` immediately before the doc-text/case-name loop. | Evidence: no runtime output growth; alias glossary rows remain adjacent to their assertion loop. |
+| Context anomaly drilldown density self-test alias glossary row helper | Names the per-row execution of alias glossary mutations. | Extracted the loop body in `assertAliasGlossaryMutationSelfTests()` into `assertAliasGlossaryMutation(aliasGlossaryDoc)`. | Evidence: no runtime output growth; every alias glossary row still removes the intended doc text and uses its case name. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test alias glossary row helper | Names the per-row execution of alias glossary mutations. | Extract the loop body in `assertAliasGlossaryMutationSelfTests()` into `assertAliasGlossaryMutation(aliasGlossaryDoc)`. | Compact metric: no runtime output growth; correctness metric: every alias glossary row still removes the intended doc text and uses its case name. |
+| Context anomaly drilldown density self-test alias glossary row helper order | Keeps the alias glossary row helper beside the table it executes. | Verify `assertAliasGlossaryMutation(aliasGlossaryDoc)` is defined after `aliasGlossaryDocs` and used by the following loop. | Compact metric: no runtime output growth; correctness metric: row helper remains local to alias glossary mutations. |
 
 ## Research Rules
 
