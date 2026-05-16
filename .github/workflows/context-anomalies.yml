@@ -67,6 +67,14 @@ jobs:
             node scripts/audit_context_anomaly_hidden_samples.mjs --strict
           fi
 
+      - name: Upload context anomaly audit output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-anomaly-hidden-sample-audit
+          path: context-anomaly-hidden-sample-audit.txt
+          if-no-files-found: ignore
+
       - name: Verify context anomaly thresholds
         run: |
           set -o pipefail

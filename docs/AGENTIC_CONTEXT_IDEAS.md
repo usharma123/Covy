@@ -117,12 +117,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit mode summary | Makes the audit script output explicitly say whether it used tolerant or strict verifier mode. | Audit script success and verifier-failure output now include `audit_mode=tolerant` or `audit_mode=strict` next to verifier status. | Evidence: default success output remains seven lines and reports `audit_mode=tolerant`; strict failure output stays under eight lines and reports `audit_mode=strict`. |
 | Context anomaly drilldown audit mode docs | Helps agents interpret the audit output mode without reading script logic. | The context anomaly runbook now ties `audit_mode=tolerant` to `--max-high 2` and `audit_mode=strict` to `--max-high 0`. | Evidence: runbook remains under 45 lines and documents both mode-to-threshold mappings. |
 | Context anomaly drilldown audit mode workflow summary | Makes the default audit mode visible in workflow logs and summaries. | The context-anomalies workflow now tees default audit output and appends its `audit_mode=...` line to the GitHub summary. | Evidence: summary grows by one line; local render extracts `audit_mode=tolerant verifier=ok high=2 max_high=2` from the audit output. |
+| Context anomaly drilldown audit output artifact | Lets maintainers inspect the exact audit output when workflow summaries are truncated. | The context-anomalies workflow now uploads `context-anomaly-hidden-sample-audit.txt` as the `context-anomaly-hidden-sample-audit` artifact. | Evidence: default audit artifact content is seven lines and contains the same audit mode line used in the summary. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit output artifact | Lets maintainers inspect the exact audit output when workflow summaries are truncated. | Upload or persist `context-anomaly-hidden-sample-audit.txt` from the context-anomalies workflow. | Compact metric: artifact is seven lines by default; correctness metric: artifact content matches the summary audit mode line. |
+| Context anomaly drilldown audit artifact runbook note | Helps maintainers find the uploaded audit output from failed workflow runs. | Document the `context-anomaly-hidden-sample-audit` artifact in the context anomaly runbook. | Compact metric: runbook remains under 45 lines; correctness metric: note names the artifact and source file. |
 
 ## Research Rules
 
