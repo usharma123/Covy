@@ -715,6 +715,8 @@ if (args.includes("--self-test")) {
     console.error(jsonPayloadError);
     process.exit(1);
   }
+  // Stale JSON values must differ from the rendered payload; the helper below
+  // fails fast if any mutation becomes a no-op.
   const staleJsonPayloadValues = {
     output_doc_phrases_checked: 0,
     alias_docs_checked: 0,
