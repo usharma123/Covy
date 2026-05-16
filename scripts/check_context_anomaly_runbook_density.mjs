@@ -511,6 +511,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     fc: String(resultDetails.failure_codes_checked),
     env: String(resultDetails.env_docs_checked),
     labels: String(resultDetails.output_labels_checked),
+    phrases: String(resultDetails.output_doc_phrases_checked),
     adocs: String(resultDetails.alias_docs_checked),
     dphr: String(resultDetails.density_doc_phrases_checked),
     anc: String(resultDetails.density_doc_anchors_checked),
@@ -849,6 +850,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=labels");
     console.error(`actual=${staleLabelCountError ?? "ok"}`);
+    process.exit(1);
+  }
+  const stalePhraseCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ phrases=\d+/, " phrases=0")),
+    result,
+  );
+  if (stalePhraseCountError !== "default_output_parse_mismatch=phrases") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=phrases");
+    console.error(`actual=${stalePhraseCountError ?? "ok"}`);
     process.exit(1);
   }
   const staleDensityDocCountError = defaultOutputParseIssue(

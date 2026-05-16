@@ -274,12 +274,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density failure-code missing-field self-test | Proves parser validation rejects omitted failure-code counts, not just stale values. | Density self-test now removes `fc` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted failure-code count fails parser validation. |
 | Context anomaly drilldown density workflow count parser coverage | Proves parser validation checks workflow-command count drift. | Default output parsing now verifies `wf`, and self-test mutates `wf=0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale workflow count fails parser validation. |
 | Context anomaly drilldown density workflow missing-field self-test | Proves parser validation rejects omitted workflow-command counts, not just stale values. | Density self-test now removes `wf` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted workflow count fails parser validation. |
+| Context anomaly drilldown density phrase count parser coverage | Proves parser validation checks output-doc phrase count drift. | Default output parsing now verifies `phrases`, and self-test mutates `phrases=0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale phrase count fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density phrase count parser coverage | Proves parser validation checks output-doc phrase count drift. | Add `phrases` to parsed mismatch checks and reject stale phrase counts. | Compact metric: self-test output remains one line; correctness metric: stale phrase count fails parser validation. |
+| Context anomaly drilldown density phrase missing-field self-test | Proves parser validation rejects omitted output-doc phrase counts, not just stale values. | Remove `phrases` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted phrase count fails parser validation. |
 
 ## Research Rules
 
