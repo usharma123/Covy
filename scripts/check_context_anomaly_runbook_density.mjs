@@ -144,6 +144,7 @@ const requiredDensityDocLinePrefixes = [
   "Env:",
   "JSON:",
   "Density failures cont.:",
+  "Density doc failures cont.:",
 ];
 const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
@@ -942,6 +943,16 @@ if (args.includes("--self-test")) {
   assertSelfTest(
     evaluate(
       runbook.replace("Density failures cont.:", "Density failures merged:"),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace(
+        "Density doc failures cont.:",
+        "Density doc failures merged:",
+      ),
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_output_docs",
