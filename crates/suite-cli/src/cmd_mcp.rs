@@ -1188,6 +1188,17 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.verify_context_anomalies",
+                    "description": "Verify context anomaly thresholds using the same compact digest as Packet28 verify context-anomalies.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "max_anomalies": {"type":"integer","minimum":0},
+                            "max_high": {"type":"integer","minimum":0}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.memory_consolidate",
                     "description": "Consolidate local Packet28 memories for a topic into one deterministic summary memory.",
                     "inputSchema": {
@@ -2248,6 +2259,14 @@ fn handle_tool_call(
         "packet28.context_anomalies" => {
             serde_json::to_value(crate::cmd_dashboard::context_anomaly_digest(root)?)?
         }
+        "packet28.verify_context_anomalies" => {
+            let request: VerifyContextAnomaliesToolArgs = serde_json::from_value(arguments)?;
+            crate::cmd_verify::verify_context_anomalies_payload(
+                root,
+                request.max_anomalies.unwrap_or(999),
+                request.max_high.unwrap_or(0),
+            )?
+        }
         "packet28.memory_consolidate" => {
             let request: MemoryConsolidateToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(consolidate_memories(
@@ -2594,6 +2613,12 @@ struct MemoryHealthToolArgs {
 #[derive(Debug, Deserialize)]
 struct MemoryLintToolArgs {
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerifyContextAnomaliesToolArgs {
+    max_anomalies: Option<usize>,
+    max_high: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3553,6 +3578,7 @@ mod tests {
             "packet28_memory_list",
             "packet28_memory_lint",
             "packet28_context_anomalies",
+            "packet28_verify_context_anomalies",
             "packet28_memory_embed",
             "packet28_memory_extract_patterns",
             "packet28_feedback_search",
@@ -3618,6 +3644,48 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("memory-lint"));
+    }
+
+    #[test]
+    fn verify_context_anomalies_tool_enforces_high_threshold() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        crate::cmd_dashboard::record_memory_lint_history(
+            root.path(),
+            &json!({
+                "ok": false,
+                "memory_count": 1,
+                "issue_count": 1,
+                "lint": {
+                    "issues": [{
+                        "kind": "runtime_specific_memory",
+                        "detail": "mentions windsurf"
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.verify_context_anomalies",
+                "arguments": {
+                    "max_high": 0
+                }
+            }),
+        )
+        .unwrap();
+
+        let content = &response["structuredContent"];
+        assert_eq!(content["ok"], false);
+        assert_eq!(content["high_count"], 1);
+        assert!(content["anomalies"][0]["next_check"]
+            .as_str()
+            .unwrap()
+            .contains("memory-lint"));
+        assert!(serde_json::to_string(content).unwrap().len() < 1024);
     }
 
     #[test]
