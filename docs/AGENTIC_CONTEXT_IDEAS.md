@@ -102,12 +102,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown checksum status value | Lets CI readers confirm the actual checksum without opening the file. | The context-anomalies workflow summary now prints the checked-in fixture checksum value capped to its 64-character digest. | Evidence: formatter checksum summary line is under 100 characters and matches `hidden-samples-delimiters.sha256`. |
 | Context anomaly drilldown checksum JSON | Lets automation consume the enforced fixture checksum from the smoke script directly. | The smoke script `--json` output now includes the verified fixture `checksum`, and self-test checks that field. | Evidence: JSON output remains under 256 bytes and `checksum` matches the checked-in SHA-256 file. |
 | Context anomaly drilldown workflow checksum source | Removes duplicate checksum parsing between workflow shell and smoke JSON output. | The context-anomalies workflow summary now reads the formatter checksum from smoke script `--json` output. | Evidence: no summary growth; workflow checksum summary equals JSON `checksum`. |
+| Context anomaly drilldown JSON checksum docs | Helps agents know the checksum source of truth when consuming smoke JSON. | The context anomaly runbook now notes that JSON `checksum` is verified before success output and equals `hidden-samples-delimiters.sha256`. | Evidence: runbook remains under 45 lines and the note matches smoke JSON output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown JSON checksum docs | Helps agents know the checksum source of truth when consuming smoke JSON. | Add a short runbook note that JSON `checksum` is the verified fixture SHA-256. | Compact metric: runbook remains under 45 lines; correctness metric: note matches smoke JSON output. |
+| Context anomaly drilldown smoke stability audit | Consolidates the many hidden-sample smoke checks into one local evidence bundle. | Run all smoke modes, workflow summary render snippets, and context anomaly verifier commands, then record the stable evidence in the ideas ledger. | Compact metric: audit note under one ledger row; correctness metric: every smoke mode and verifier command passes after the checksum changes. |
 
 ## Research Rules
 

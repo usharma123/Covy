@@ -32,4 +32,6 @@ Refresh that checksum with `shasum -a 256 docs/context-anomalies/hidden-samples-
 
 Workflow formatter budget lines use `actual/max`, matching the smoke script JSON fields `actual_len` and `max_len`; formatter checksum lines match the JSON `checksum`.
 
+The JSON `checksum` is verified before success output and equals `hidden-samples-delimiters.sha256`.
+
 Recurring hidden categories usually mean medium-severity sources are repeatedly being capped from the digest. Fix the underlying source or raise it into a visible dashboard tile before relying on the compact anomaly summary.
