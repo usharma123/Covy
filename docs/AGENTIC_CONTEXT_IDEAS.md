@@ -560,12 +560,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation sampled pair wrapper parameter order | Keeps the concise wrapper parameter next to the sampled identity caller. | Verified `assertSampledDefaultOutputMutationIdentityFieldPairSample(sample)` remains directly above `assertSampledDefaultOutputMutationFieldIdentity()`. | Evidence: no runtime output growth; concise wrapper remains adjacent to its only caller. |
 | Context anomaly drilldown density self-test default output mutation sampled identity local name | Makes the sampled identity wrapper local mirror the concise sample wrapper. | Renamed local `sampledIdentityFieldPair` to `sample` in `assertSampledDefaultOutputMutationFieldIdentity()`. | Evidence: no runtime output growth; sampled identity wrapper still passes the same sample to the pair wrapper. |
 | Context anomaly drilldown density self-test default output mutation sampled identity local order | Keeps the concise sampled local beside the pair wrapper call. | Verified `const sample = sampleDefaultOutputMutationIdentityFields()` is immediately passed to `assertSampledDefaultOutputMutationIdentityFieldPairSample(sample)`. | Evidence: no runtime output growth; sampled local remains adjacent to the pair wrapper call. |
+| Context anomaly drilldown density self-test default output mutation sampled identity helper name | Makes the sampled identity helper name describe that it validates one identity field sample. | Renamed `assertSampledDefaultOutputMutationFieldIdentity()` to `assertSampledDefaultOutputMutationIdentityFieldSample()`. | Evidence: no runtime output growth; public identity wrapper still delegates through the same sampled assertion path. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation sampled identity helper name | Makes the sampled identity helper name describe that it validates one identity field sample. | Rename `assertSampledDefaultOutputMutationFieldIdentity()` to `assertSampledDefaultOutputMutationIdentityFieldSample()`. | Compact metric: no runtime output growth; correctness metric: public identity wrapper still delegates through the same sampled assertion path. |
+| Context anomaly drilldown density self-test default output mutation sampled identity helper order | Keeps the renamed sampled identity helper beside the public identity wrapper. | Verify `assertSampledDefaultOutputMutationIdentityFieldSample()` sits directly above `assertDefaultOutputMutationFieldIdentity()`. | Compact metric: no runtime output growth; correctness metric: renamed sampled helper remains adjacent to its only caller. |
 
 ## Research Rules
 

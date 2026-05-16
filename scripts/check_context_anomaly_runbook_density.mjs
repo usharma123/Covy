@@ -1732,12 +1732,12 @@ if (args.includes("--self-test")) {
   ) => {
     assertSampledDefaultOutputMutationIdentityFieldPair(sample);
   };
-  const assertSampledDefaultOutputMutationFieldIdentity = () => {
+  const assertSampledDefaultOutputMutationIdentityFieldSample = () => {
     const sample = sampleDefaultOutputMutationIdentityFields();
     assertSampledDefaultOutputMutationIdentityFieldPairSample(sample);
   };
   const assertDefaultOutputMutationFieldIdentity = () => {
-    assertSampledDefaultOutputMutationFieldIdentity();
+    assertSampledDefaultOutputMutationIdentityFieldSample();
   };
   const failDefaultOutputMutationFieldCount = (sample) => {
     failDefaultOutputMutation(defaultOutputMutationFieldCountDetails(sample));
