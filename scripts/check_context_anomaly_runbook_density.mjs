@@ -336,6 +336,14 @@ function evaluate(runbook, lineBudget) {
   };
 }
 
+function densityLabelLineLength(runbook) {
+  return (
+    runbook
+      .split("\n")
+      .find((line) => line.startsWith("Density labels:"))?.length ?? 0
+  );
+}
+
 function evaluateWorkflow(workflow) {
   const workflowLines = workflow
     .split("\n")
@@ -722,6 +730,24 @@ if (args.includes("--self-test")) {
   ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("json_prose_width_did_not_grow");
+    process.exit(1);
+  }
+  const compactDensityLabelLineLength = densityLabelLineLength(runbook);
+  const spacedDensityLabelsRunbook = runbook.replace(
+    "Density labels:`Env:`=env,`JSON:`=fields,`h:`=help,`jpar`=JSON parity,`adocs`=alias docs,`wdocs`=width docs,`jhead` uses",
+    "Density labels: `Env:`=env, `JSON:`=fields, `h:`=help, `jpar`=JSON parity, `adocs`=alias docs, `wdocs`=width docs, `jhead` uses",
+  );
+  if (spacedDensityLabelsRunbook === runbook) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("density_label_spacing_mutation_noop");
+    process.exit(1);
+  }
+  const spacedDensityLabelLineLength = densityLabelLineLength(
+    spacedDensityLabelsRunbook,
+  );
+  if (spacedDensityLabelLineLength <= compactDensityLabelLineLength) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("density_label_spacing_width_did_not_grow");
     process.exit(1);
   }
   if (result.text_width_docs_checked !== 1) {

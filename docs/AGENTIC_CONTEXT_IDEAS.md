@@ -313,12 +313,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON headroom alias docs | Helps maintainers map `jhead` without reading checker source. | Density self-test now has a dedicated missing-alias check for `jhead` docs. | Evidence: runbook stays under row/prose caps; missing `jhead` docs fail self-test. |
 | Context anomaly drilldown density JSON headroom alias JSON docs | Helps JSON consumers connect `jhead` text output to the `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` guard. | Runbook density labels now link `jhead` to the JSON headroom env knob, and self-test requires the pair. | Evidence: runbook stays under row/prose caps; missing headroom link fails self-test. |
 | Context anomaly drilldown density label prose recovery | Restores density-label line headroom after linking `jhead` to its env knob. | The density-label prose line now removes non-semantic spaces around compact label pairs while preserving required docs. | Evidence: density-label line shrinks; required label docs still pass. |
+| Context anomaly drilldown density label prose spacing guard | Prevents future edits from re-expanding compact label prose. | Self-test now mutates compact label separators back to spaced form and requires density-label width growth. | Evidence: spacing mutation is non-noop; compact label line remains the shorter baseline. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label prose spacing guard | Prevents future edits from re-expanding compact label prose. | Add a self-test mutation that reintroduces spaced label separators and requires density-label width growth. | Compact metric: density-label line remains compact; correctness metric: spacing regression is observable. |
+| Context anomaly drilldown density label width metric | Gives maintainers a direct number for label-line pressure instead of inferring from global prose max. | Add a compact `dlab`/JSON field for the `Density labels:` line length, with parser parity. | Compact metric: text output stays under width cap; correctness metric: JSON/default fields match the measured label width. |
 
 ## Research Rules
 
