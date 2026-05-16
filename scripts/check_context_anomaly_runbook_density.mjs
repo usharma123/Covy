@@ -766,6 +766,11 @@ if (args.includes("--self-test")) {
     [],
     "soft=over",
   );
+  assertEnvOutput(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
+    ["--json"],
+    '"row_soft_ok":false',
+  );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX: "10" },
     [],
