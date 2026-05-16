@@ -1575,6 +1575,10 @@ if (args.includes("--self-test")) {
   const staleMutationNoopDetails = (field) => ({
     stale_mutation_noop: field,
   });
+  const defaultOutputMutationMismatchDetails = (expected, actual) => ({
+    expected,
+    actual: actual ?? "ok",
+  });
   if (missingStaleMutationFields.length > 0) {
     failDefaultOutputMutation({
       missing_stale_mutation_fields: missingStaleMutationFields,
@@ -1591,10 +1595,12 @@ if (args.includes("--self-test")) {
       defaultParseDetails,
     );
     if (missingFieldError !== `missing_default_output_field=${field}`) {
-      failDefaultOutputMutation({
-        expected: `missing_default_output_field=${field}`,
-        actual: missingFieldError ?? "ok",
-      });
+      failDefaultOutputMutation(
+        defaultOutputMutationMismatchDetails(
+          `missing_default_output_field=${field}`,
+          missingFieldError,
+        ),
+      );
     }
     const staleOutputLine = defaultOutputLine.replace(
       fieldPattern,
@@ -1611,10 +1617,12 @@ if (args.includes("--self-test")) {
       defaultParseDetails,
     );
     if (staleFieldError !== `default_output_parse_mismatch=${field}`) {
-      failDefaultOutputMutation({
-        expected: `default_output_parse_mismatch=${field}`,
-        actual: staleFieldError ?? "ok",
-      });
+      failDefaultOutputMutation(
+        defaultOutputMutationMismatchDetails(
+          `default_output_parse_mismatch=${field}`,
+          staleFieldError,
+        ),
+      );
     }
   };
   const assertDefaultOutputMutations = () => {
