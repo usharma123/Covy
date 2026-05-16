@@ -281,6 +281,10 @@ function jsonBudgetIssue(payload, jsonBudget) {
   };
 }
 
+function jsonHeadroomBytes(payload, jsonBudget) {
+  return jsonBudget - JSON.stringify(payload).length;
+}
+
 const runbook = readFileSync(runbookPath, "utf8");
 const workflow = readFileSync(workflowPath, "utf8");
 const result = evaluate(runbook, maxLines);
@@ -313,6 +317,22 @@ if (args.includes("--self-test")) {
     console.error(
       `actual_workflow_commands=${workflowResult.workflow_commands_checked}`,
     );
+    process.exit(1);
+  }
+  const baselinePayload = successPayload(result, workflowResult, maxJsonBytes);
+  const baselineHeadroom = jsonHeadroomBytes(baselinePayload, maxJsonBytes);
+  if (baselineHeadroom < minJsonHeadroomBytes) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_headroom_at_least=${minJsonHeadroomBytes}`);
+    console.error(`actual_headroom=${baselineHeadroom}`);
+    process.exit(1);
+  }
+  if (
+    jsonHeadroomBytes({ ...baselinePayload, extra: "x" }, maxJsonBytes) >=
+    baselineHeadroom
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("headroom_did_not_change_after_payload_growth");
     process.exit(1);
   }
   assertSelfTest(
@@ -420,7 +440,7 @@ if (!workflowResult.ok) {
 }
 
 const payload = successPayload(result, workflowResult, maxJsonBytes);
-const jsonHeadroomBytes = maxJsonBytes - JSON.stringify(payload).length;
+const jsonHeadroom = jsonHeadroomBytes(payload, maxJsonBytes);
 if (args.includes("--json")) {
   const issue = jsonBudgetIssue(payload, maxJsonBytes);
   if (issue) {
@@ -434,6 +454,6 @@ if (args.includes("--json")) {
     `failure_codes=${payload.failure_codes_checked}`,
     `workflow_commands=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
-    `json_headroom=${jsonHeadroomBytes}`,
+    `json_headroom=${jsonHeadroom}`,
   );
 }
