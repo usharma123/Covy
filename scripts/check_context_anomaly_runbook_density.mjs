@@ -29,6 +29,10 @@ const maxDensityProseLineLength = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX ?? "420",
   10,
 );
+const maxDefaultOutputLength = Number.parseInt(
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX ?? "220",
+  10,
+);
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
   "default: validate runbook line budget, row width, density prose width, docs, and workflow density commands",
@@ -80,6 +84,7 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_missing_output_docs",
   "context_anomaly_runbook_density_missing_env_docs",
   "context_anomaly_runbook_density_prose_too_wide",
+  "context_anomaly_runbook_density_text_too_wide",
   "context_anomaly_runbook_density_json_too_long",
 ];
 const requiredOutputLabels = [
@@ -96,6 +101,7 @@ const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
   "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX",
+  "P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
 ];
@@ -313,6 +319,19 @@ function jsonHeadroomBytes(payload, jsonBudget) {
   return jsonBudget - JSON.stringify(payload).length;
 }
 
+function defaultOutputIssue(payload, resultDetails, jsonHeadroom) {
+  const line = renderDefaultOutput(payload, resultDetails, jsonHeadroom);
+  if (line.length > maxDefaultOutputLength) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_text_too_wide",
+      default_output_len: line.length,
+      max_default_output_len: maxDefaultOutputLength,
+    };
+  }
+  return null;
+}
+
 function renderDefaultOutput(payload, resultDetails, jsonHeadroom) {
   return [
     `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines}`,
@@ -336,7 +355,7 @@ function parseDefaultOutput(line) {
   return Object.fromEntries(parts.slice(1).map((part) => part.split("=")));
 }
 
-function defaultOutputIssue(parsed, resultDetails) {
+function defaultOutputParseIssue(parsed, resultDetails) {
   const expectedTextFields = [
     "lines",
     "max_table_row",
@@ -438,7 +457,7 @@ if (args.includes("--self-test")) {
   const parsedDefaultOutput = parseDefaultOutput(
     renderDefaultOutput(baselinePayload, result, baselineHeadroom),
   );
-  const defaultOutputError = defaultOutputIssue(parsedDefaultOutput, result);
+  const defaultOutputError = defaultOutputParseIssue(parsedDefaultOutput, result);
   if (defaultOutputError) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(defaultOutputError);
@@ -449,7 +468,7 @@ if (args.includes("--self-test")) {
     console.error("malformed_default_output_prefix_accepted");
     process.exit(1);
   }
-  const missingLabelError = defaultOutputIssue(
+  const missingLabelError = defaultOutputParseIssue(
     parseDefaultOutput(
       renderDefaultOutput(baselinePayload, result, baselineHeadroom).replace(
         / output_labels=\d+/,
@@ -554,6 +573,11 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_prose_too_wide",
   );
   assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "10" },
+    [],
+    "context_anomaly_runbook_density_text_too_wide",
+  );
+  assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
     ["--json"],
     "context_anomaly_runbook_density_json_too_long",
@@ -593,6 +617,7 @@ if (!workflowResult.ok) {
 
 const payload = successPayload(result, workflowResult, maxJsonBytes);
 const jsonHeadroom = jsonHeadroomBytes(payload, maxJsonBytes);
+const defaultOutputWidthIssue = defaultOutputIssue(payload, result, jsonHeadroom);
 if (args.includes("--json")) {
   const issue = jsonBudgetIssue(payload, maxJsonBytes);
   if (issue) {
@@ -601,5 +626,9 @@ if (args.includes("--json")) {
   }
   console.log(JSON.stringify(payload));
 } else {
+  if (defaultOutputWidthIssue) {
+    const { code, ok, ...details } = defaultOutputWidthIssue;
+    fail(code, details);
+  }
   console.log(renderDefaultOutput(payload, result, jsonHeadroom));
 }
