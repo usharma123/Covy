@@ -98,12 +98,15 @@ const requiredOutputLabels = [
   "env",
   "labels",
   "phrases",
+  "alias_docs",
   "width",
   "width_docs",
 ];
 const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
+];
+const requiredAliasDocPhrases = [
   "`fc`=failure codes",
   "`wf`=workflow commands",
   "`json`=JSON headroom",
@@ -149,6 +152,9 @@ function evaluate(runbook, lineBudget) {
     (label) => !runbook.includes(`\`${label}\``),
   );
   const missingOutputDocPhrases = requiredOutputDocPhrases.filter(
+    (phrase) => !runbook.includes(phrase),
+  );
+  const missingAliasDocPhrases = requiredAliasDocPhrases.filter(
     (phrase) => !runbook.includes(phrase),
   );
   const hasTextWidthEnvDoc = runbook
@@ -202,6 +208,7 @@ function evaluate(runbook, lineBudget) {
   if (
     missingOutputLabels.length > 0 ||
     missingOutputDocPhrases.length > 0 ||
+    missingAliasDocPhrases.length > 0 ||
     !hasTextWidthEnvDoc
   ) {
     return {
@@ -210,6 +217,7 @@ function evaluate(runbook, lineBudget) {
       missing: [
         ...missingOutputLabels,
         ...missingOutputDocPhrases,
+        ...missingAliasDocPhrases,
         ...(hasTextWidthEnvDoc
           ? []
           : ["width:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX"]),
@@ -236,6 +244,7 @@ function evaluate(runbook, lineBudget) {
     env_docs_checked: requiredEnvDocs.length,
     output_labels_checked: requiredOutputLabels.length,
     output_doc_phrases_checked: requiredOutputDocPhrases.length,
+    alias_docs_checked: requiredAliasDocPhrases.length,
     text_width_docs_checked: hasTextWidthEnvDoc ? 1 : 0,
   };
 }
@@ -376,6 +385,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `env=${resultDetails.env_docs_checked}`,
     `labels=${resultDetails.output_labels_checked}`,
     `phrases=${resultDetails.output_doc_phrases_checked}`,
+    `alias_docs=${resultDetails.alias_docs_checked}`,
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json=${jsonHeadroom}`,
@@ -420,6 +430,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     "env",
     "labels",
     "phrases",
+    "alias_docs",
     "wf",
     "prose",
     "json",
@@ -481,6 +492,12 @@ if (args.includes("--self-test")) {
     console.error(
       `actual_output_doc_phrases=${result.output_doc_phrases_checked}`,
     );
+    process.exit(1);
+  }
+  if (result.alias_docs_checked !== requiredAliasDocPhrases.length) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_alias_docs=${requiredAliasDocPhrases.length}`);
+    console.error(`actual_alias_docs=${result.alias_docs_checked}`);
     process.exit(1);
   }
   if (result.text_width_docs_checked !== 1) {
@@ -621,6 +638,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`phrases`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`alias_docs`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(

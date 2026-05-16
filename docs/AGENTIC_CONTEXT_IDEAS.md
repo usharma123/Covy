@@ -210,12 +210,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density alias docs coverage | Prevents alias docs from drifting after compact text changes. | The density checker now requires the runbook phrase `JSON keeps full field names`. | Evidence: default output stays one line and removing the phrase fails missing output docs. |
 | Context anomaly drilldown density output phrase count refresh | Keeps `phrases` count meaningful after alias-doc phrase coverage grows. | The default `phrases` count now reflects guarded output-doc phrases. | Evidence: default output remains under width cap; `phrases` equals required output phrase count and parser self-test passes. |
 | Context anomaly drilldown density alias glossary docs | Helps maintainers interpret compact labels without reading checker source. | The runbook now maps `fc`, `wf`, and `json` aliases in the density row, and the density checker requires those map phrases. | Evidence: runbook remains within line/prose/table budgets; removing the `fc` alias map fails missing output docs. |
+| Context anomaly drilldown density alias glossary count split | Helps automation distinguish alias glossary coverage from general output-doc phrase coverage. | Default density output now reports `alias_docs` separately from `phrases`. | Evidence: default output remains within text width cap; `alias_docs` equals required alias map phrase count and self-test rejects a missing label. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density alias glossary count split | Helps automation distinguish alias glossary coverage from general output-doc phrase coverage. | Add an `alias_docs` count or equivalent compact metric for required alias map phrases. | Compact metric: default output remains within text width cap; correctness metric: `alias_docs` equals required alias map phrase count. |
+| Context anomaly drilldown density alias glossary JSON parity | Helps JSON consumers see alias glossary coverage without parsing default text. | Add `alias_docs_checked` to the compact JSON success payload while preserving JSON headroom. | Compact metric: JSON stays under byte/headroom budgets; correctness metric: JSON count equals required alias map phrase count. |
 
 ## Research Rules
 
