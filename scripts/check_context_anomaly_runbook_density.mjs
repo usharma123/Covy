@@ -1538,9 +1538,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replaceAll("`wf`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`env`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "env",
+    "missing_env_output_label",
   );
   assertSelfTestMissing(
     evaluate(runbook.replace("`lbl`", ""), maxLines),
