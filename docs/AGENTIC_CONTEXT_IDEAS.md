@@ -281,12 +281,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density line value parser coverage | Proves parser validation checks rendered runbook line-budget values, not just field presence. | Default output parsing now verifies `lines`, and self-test mutates `lines=0/0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale line value fails parser validation. |
 | Context anomaly drilldown density line missing-field self-test | Proves parser validation rejects omitted line-budget values, not just stale values. | Density self-test now removes `lines` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted line value fails parser validation. |
 | Context anomaly drilldown density prose value parser coverage | Proves parser validation checks rendered prose-width values, not just field presence. | Default output parsing now verifies `prose`, and self-test mutates `prose=0/0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale prose value fails parser validation. |
+| Context anomaly drilldown density prose missing-field self-test | Proves parser validation rejects omitted prose-width values, not just stale values. | Density self-test now removes `prose` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted prose value fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density prose missing-field self-test | Proves parser validation rejects omitted prose-width values, not just stale values. | Remove `prose` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted prose value fails parser validation. |
+| Context anomaly drilldown density JSON headroom parser coverage | Proves parser validation checks rendered JSON headroom, not just field presence. | Add `json` to parsed mismatch checks and reject stale headroom values. | Compact metric: self-test output remains one line; correctness metric: stale JSON headroom fails parser validation. |
 
 ## Research Rules
 
