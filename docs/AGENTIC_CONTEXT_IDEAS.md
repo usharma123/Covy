@@ -278,12 +278,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density phrase missing-field self-test | Proves parser validation rejects omitted output-doc phrase counts, not just stale values. | Density self-test now removes `phrases` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted phrase count fails parser validation. |
 | Context anomaly drilldown density row value parser coverage | Proves parser validation checks rendered row-width values, not just field presence. | Default output parsing now verifies `row`, and self-test mutates `row=0/0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale row value fails parser validation. |
 | Context anomaly drilldown density row missing-field self-test | Proves parser validation rejects omitted row-width values, not just stale values. | Density self-test now removes `row` from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted row value fails parser validation. |
+| Context anomaly drilldown density line value parser coverage | Proves parser validation checks rendered runbook line-budget values, not just field presence. | Default output parsing now verifies `lines`, and self-test mutates `lines=0/0` to require a field-specific mismatch. | Evidence: self-test output remains one line; stale line value fails parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density line value parser coverage | Proves parser validation checks rendered runbook line-budget values, not just field presence. | Add `lines` to parsed mismatch checks and reject stale line values. | Compact metric: self-test output remains one line; correctness metric: stale line value fails parser validation. |
+| Context anomaly drilldown density line missing-field self-test | Proves parser validation rejects omitted line-budget values, not just stale values. | Remove `lines` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted line value fails parser validation. |
 
 ## Research Rules
 

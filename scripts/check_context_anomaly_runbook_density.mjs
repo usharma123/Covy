@@ -507,6 +507,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     }
   }
   const expectedValues = {
+    lines: `${resultDetails.line_count}/${resultDetails.max_lines}`,
     row: `${resultDetails.max_table_row}/${resultDetails.max_table_row_allowed}`,
     cmds: String(resultDetails.commands_checked),
     fc: String(resultDetails.failure_codes_checked),
@@ -831,6 +832,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=row");
     console.error(`actual=${staleRowValueError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleLineValueError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ lines=\S+/, " lines=0/0")),
+    result,
+  );
+  if (staleLineValueError !== "default_output_parse_mismatch=lines") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=lines");
+    console.error(`actual=${staleLineValueError ?? "ok"}`);
     process.exit(1);
   }
   const staleCommandCountError = defaultOutputParseIssue(
