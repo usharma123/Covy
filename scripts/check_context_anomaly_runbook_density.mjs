@@ -1712,7 +1712,7 @@ if (args.includes("--self-test")) {
     joinedIdentityFields.expectedJoinedMutationFields;
   const sampleJoinedDefaultOutputMutationIdentityFieldStrings = (sample) =>
     joinedDefaultOutputMutationIdentityFieldStrings(sample);
-  const sampledDefaultOutputMutationIdentityFieldsMatch = (sample) => {
+  const sampledDefaultOutputMutationIdentityFieldStringsMatch = (sample) => {
     const joinedIdentityFields =
       sampleJoinedDefaultOutputMutationIdentityFieldStrings(sample);
     return joinedDefaultOutputMutationIdentityFieldStringsMatch(
@@ -1725,7 +1725,7 @@ if (args.includes("--self-test")) {
   const sampleDefaultOutputMutationIdentityFields = () =>
     defaultOutputMutationIdentityFieldSample();
   const assertSampledDefaultOutputMutationFieldIdentityFields = (sample) => {
-    if (!sampledDefaultOutputMutationIdentityFieldsMatch(sample)) {
+    if (!sampledDefaultOutputMutationIdentityFieldStringsMatch(sample)) {
       failDefaultOutputMutationFieldIdentity(sample);
     }
   };
