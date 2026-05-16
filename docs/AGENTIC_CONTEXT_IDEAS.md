@@ -683,12 +683,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON byte/help cap table order | Keeps the byte/help cap table beside the loop that executes it. | Verified `jsonByteHelpCapDocs` is defined inside `assertJsonByteHelpCapMutationSelfTests()` immediately before the `docText`/`caseName` loop. | Evidence: no runtime output growth; table rows remain adjacent to their assertion loop. |
 | Context anomaly drilldown density self-test JSON byte/help cap post-table audit | Checks whether the byte/help cap helper needs more decomposition after table extraction. | Re-scanned `assertJsonByteHelpCapMutationSelfTests()` after the table refactor and kept the table/loop local as the compact stopping point. | Evidence: no runtime output growth; next byte/help cap decision is based on current helper shape. |
 | Context anomaly drilldown density self-test env-line anchor helper audit | Checks whether the adjacent env-line anchor helper is already minimal. | Re-scanned `assertEnvLineAnchorMutationSelfTest()` and kept its single Env-line assertion separate while moving the next target to the larger section-anchor group. | Evidence: no runtime output growth; next target reflects the current adjacent helper shape. |
+| Context anomaly drilldown density self-test section-anchor table | Replaces repeated section-anchor mutation assertions with a table. | Extracted the five mutations in `assertSectionAnchorMutationSelfTests()` into `sectionAnchorMutations` rows with original and replacement strings. | Evidence: no runtime output growth; all section-anchor mutation cases still fail on missing output docs. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test section-anchor table | Replaces repeated section-anchor mutation assertions with a table. | Extract the five mutations in `assertSectionAnchorMutationSelfTests()` into `sectionAnchorMutations` rows with original and replacement strings. | Compact metric: no runtime output growth; correctness metric: all section-anchor mutation cases still fail on missing output docs. |
+| Context anomaly drilldown density self-test section-anchor table order | Keeps the section-anchor table beside the loop that executes it. | Verify `sectionAnchorMutations` is defined inside `assertSectionAnchorMutationSelfTests()` immediately before the `originalText`/`replacementText` loop. | Compact metric: no runtime output growth; correctness metric: section-anchor rows remain adjacent to their assertion loop. |
 
 ## Research Rules
 
