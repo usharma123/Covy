@@ -194,6 +194,16 @@ pub(crate) struct Packet28HandoffDiffArgs {
     pub(crate) right_context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffCompressionArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+    pub(crate) next_prompt: Option<String>,
+    pub(crate) budget_tokens: Option<u64>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1441,6 +1451,71 @@ pub(crate) fn handle_packet28_handoff_diff(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_compress(
+    root: &Path,
+    args: Packet28HandoffCompressionArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.handoff_compress requires task_id"));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.handoff_compress requires artifact_id or context_version")
+    })?;
+    let payload = read_handoff_payload(root, task_id, &artifact_id, "handoff compression")?;
+    let budget_tokens = args.budget_tokens.unwrap_or(8_000).max(1);
+    let next_prompt = args.next_prompt.unwrap_or_default();
+    let context_tokens = estimate_tokens_for_value(&payload);
+    let total_tokens = context_tokens.saturating_add(estimate_tokens_for_text(&next_prompt));
+    let mut needed_savings = total_tokens.saturating_sub(budget_tokens);
+    let mut candidates = Vec::new();
+    if let Some(sections) = payload.get("sections").and_then(Value::as_array) {
+        for section in sections {
+            let id = section_identifier(section);
+            let tokens = estimate_tokens_for_value(section);
+            let protected = is_replay_critical_section(section);
+            if protected {
+                continue;
+            }
+            candidates.push((id, tokens));
+        }
+    }
+    candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut selected_tokens = 0_u64;
+    let mut recommendations = Vec::new();
+    for (id, tokens) in candidates.into_iter().take(4) {
+        if needed_savings == 0 {
+            break;
+        }
+        selected_tokens = selected_tokens.saturating_add(tokens);
+        needed_savings = needed_savings.saturating_sub(tokens);
+        recommendations.push(json!({
+            "action": "drop_section",
+            "id": id,
+            "tokens": tokens,
+            "reason": "non_replay_critical_section",
+        }));
+    }
+    let projected_total_tokens = total_tokens.saturating_sub(selected_tokens);
+    let projected_over_budget = projected_total_tokens > budget_tokens;
+    let recommendation_count = recommendations.len();
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "budget_tokens": budget_tokens,
+        "total_tokens": total_tokens,
+        "needed_savings_tokens": total_tokens.saturating_sub(budget_tokens),
+        "projected_total_tokens": projected_total_tokens,
+        "projected_over_budget": projected_over_budget,
+        "recommendations": recommendations,
+        "summary": format!(
+            "handoff_compress recommendations={} projected_over_budget={}",
+            recommendation_count,
+            projected_over_budget
+        ),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -1455,6 +1530,32 @@ fn read_handoff_payload(
         )
     })?;
     Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn section_identifier(section: &Value) -> String {
+    section
+        .get("id")
+        .or_else(|| section.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("section")
+        .to_string()
+}
+
+fn is_replay_critical_section(section: &Value) -> bool {
+    let id = section_identifier(section).to_ascii_lowercase();
+    let title = section
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    id.contains("objective")
+        || id.contains("next_action")
+        || id.contains("context_debt")
+        || id.contains("evidence_freshness")
+        || title.contains("objective")
+        || title.contains("next action")
+        || title.contains("context debt")
+        || title.contains("evidence freshness")
 }
 
 fn push_handoff_delta(deltas: &mut Vec<Value>, field: &str, left: String, right: String) {

@@ -43,10 +43,11 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
     handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
-    Packet28GlobArgs, Packet28HandoffDiffArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
-    Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
-    Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
-    Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs, Packet28WriteIntentionArgs,
+    Packet28GlobArgs, Packet28HandoffCompressionArgs, Packet28HandoffDiffArgs,
+    Packet28PatchRiskArgs, Packet28PrepareHandoffArgs, Packet28PromptPressureArgs,
+    Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs, Packet28SearchArgs,
+    Packet28SearchFastArgs, Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs,
+    Packet28VerifyHandoffArgs, Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -714,6 +715,20 @@ fn handle_method(
                             "left_context_version": {"type":"string"},
                             "right_artifact_id": {"type":"string"},
                             "right_context_version": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.handoff_compress",
+                    "description": "Recommend non-critical handoff sections to remove so an over-budget replay packet can fit while preserving objective, next-action, debt, and evidence signals.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "artifact_id": {"type":"string"},
+                            "context_version": {"type":"string"},
+                            "next_prompt": {"type":"string"},
+                            "budget_tokens": {"type":"integer","minimum":1}
                         }
                     }
                 },
@@ -1674,6 +1689,21 @@ fn handle_tool_call(
             )?;
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_handoff_diff(root, request)?
+        }
+        "packet28.handoff_compress" => {
+            let mut request: Packet28HandoffCompressionArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request
+                    .artifact_id
+                    .as_deref()
+                    .or(request.context_version.as_deref()),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_handoff_compress(root, request)?
         }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
@@ -2675,6 +2705,18 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or("none");
             format!("Packet28 handoff diff delta_count={delta_count} top_delta={top_delta}.")
         }
+        "packet28.handoff_compress" => {
+            let recommendation_count = payload
+                .get("recommendations")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            let projected_over_budget = payload
+                .get("projected_over_budget")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            format!("Packet28 handoff compression recommendations={recommendation_count} projected_over_budget={projected_over_budget}.")
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
@@ -3072,6 +3114,7 @@ mod tests {
             "packet28_verify_handoff",
             "packet28_prompt_pressure",
             "packet28_handoff_diff",
+            "packet28_handoff_compress",
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
@@ -3338,6 +3381,66 @@ mod tests {
             response["structuredContent"]["deltas"][0]["field"],
             "next_action"
         );
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 1024
+        );
+    }
+
+    #[test]
+    fn handoff_compress_preserves_objective_and_next_action_sections() {
+        let root = tempfile::tempdir().unwrap();
+        let task_id = "task-handoff-compress";
+        let context_version = "ctx-compress";
+        let path = task_version_json_path(root.path(), task_id, context_version);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "context_version": context_version,
+                "artifact_id": context_version,
+                "brief": "## Task Objective\nCompress the handoff without losing replay anchors.",
+                "sections": [
+                    {"id": "objective", "title": "Objective", "body": "preserve this objective anchor ".repeat(40)},
+                    {"id": "next_action", "title": "Next Action", "body": "preserve this next action anchor ".repeat(40)},
+                    {"id": "search_evidence", "title": "Search Evidence", "body": "drop redundant search result ".repeat(120)}
+                ],
+                "evidence_artifact_ids": ["artifact-1"],
+                "next_action_summary": "continue with focused verification"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.handoff_compress",
+                "arguments": {
+                    "task_id": task_id,
+                    "context_version": context_version,
+                    "next_prompt": "Continue with focused verification.",
+                    "budget_tokens": 350
+                }
+            }),
+        )
+        .unwrap();
+
+        let recommendations = response["structuredContent"]["recommendations"]
+            .as_array()
+            .unwrap();
+        assert!(recommendations
+            .iter()
+            .any(|recommendation| recommendation["id"] == "search_evidence"));
+        assert!(!recommendations
+            .iter()
+            .any(|recommendation| recommendation["id"] == "objective"));
+        assert!(!recommendations
+            .iter()
+            .any(|recommendation| recommendation["id"] == "next_action"));
         assert!(
             serde_json::to_string(&response["structuredContent"])
                 .unwrap()
