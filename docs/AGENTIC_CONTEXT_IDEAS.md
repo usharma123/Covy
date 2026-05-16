@@ -482,12 +482,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation actual count helper | Names the actual mutation sweep size beside the expected count. | Extracted `actualDefaultOutputMutationFieldCount()` for the `defaultTextFields.length` side of the count invariant. | Evidence: no runtime output growth; mutation count diagnostics remain explicit. |
 | Context anomaly drilldown density self-test default output mutation count details helper | Keeps mutation count diagnostic keys behind one helper. | Extracted `defaultOutputMutationFieldCountDetails()` for expected/actual mutation field diagnostics. | Evidence: no runtime output growth; count diagnostics stay consistent. |
 | Context anomaly drilldown density self-test default output mutation count samples | Keeps count invariant expected and actual values single-read. | Stored expected/actual mutation counts in locals before comparison and diagnostics. | Evidence: no runtime output growth; count comparison and diagnostics use the same sampled values. |
+| Context anomaly drilldown density self-test default output mutation count sample helper | Names the expected/actual count sample object. | Extracted `defaultOutputMutationFieldCountSample()` returning expected and actual mutation field counts. | Evidence: no runtime output growth; count samples stay single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation count sample helper | Names the expected/actual count sample object. | Extract `defaultOutputMutationFieldCountSample()` returning expected and actual mutation field counts. | Compact metric: no runtime output growth; correctness metric: count samples stay single-source. |
+| Context anomaly drilldown density self-test default output mutation count mismatch helper | Names the count mismatch predicate. | Extract `defaultOutputMutationFieldCountsMismatch(sample)` for the actual-vs-expected comparison. | Compact metric: no runtime output growth; correctness metric: count mismatch logic stays single-source. |
 
 ## Research Rules
 
