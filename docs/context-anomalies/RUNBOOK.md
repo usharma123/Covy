@@ -20,7 +20,7 @@ Use this command table before treating a compact anomaly summary as complete:
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 Env:`P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`,`P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX`,`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`.
 JSON:`alias_docs_checked`,`row_soft_ok`,`row_soft_max`,`output_doc_phrases_checked`,`density_doc_phrases_checked`,`density_doc_anchors_checked`,`parsed_fields_checked`,`json_parity_fields_checked`,`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`.
-Density labels:`Env:`=env,`JSON:`=fields,`h:`=help,`jpar`=JSON parity,`adocs`=alias docs,`wdocs`=width docs,`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`;`ok:false`;h:`help<=120`.
+Density labels:`Env:`=env,`JSON:`=fields,`h:`=help,`jpar`=JSON parity,`adocs`=alias docs,`wdocs`=width docs,`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`;`ok:false`;`no-success`;h:`help<=120`.
 Density failures: `context_anomaly_runbook_density_too_many_lines`, `context_anomaly_runbook_density_row_too_wide`, `context_anomaly_runbook_density_missing_commands`, `context_anomaly_runbook_density_workflow_missing_commands`.
 Density failures cont.: `context_anomaly_runbook_density_missing_env_docs`, `context_anomaly_runbook_density_text_too_wide`.
 Density doc failures: `context_anomaly_runbook_density_missing_failure_docs`, `context_anomaly_runbook_density_missing_output_docs`.

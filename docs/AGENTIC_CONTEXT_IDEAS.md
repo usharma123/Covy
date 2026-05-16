@@ -359,12 +359,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point iteration low-cap JSON failure | Proves low-cap JSON failures do not emit a misleading `default_output_iterations` success metric. | Self-test now asserts JSON text-cap failures exclude `default_output_iterations`. | Evidence: error JSON stays compact; failure stays clearly separate from success metrics. |
 | Context anomaly drilldown density fixed-point env helper negative assertion reuse | Makes future failure-shape tests able to assert absent success-only fields. | JSON byte-cap failure self-test now also excludes `default_output_iterations`. | Evidence: self-test output stays one line; failure payloads omit success-only fields. |
 | Context anomaly drilldown density JSON headroom failure success-field exclusion | Keeps oversized-headroom JSON failures from looking like success payloads. | JSON-headroom failure self-test now excludes `default_output_iterations`. | Evidence: self-test output stays one line; headroom failure omits success-only fields. |
+| Context anomaly drilldown density JSON failure-field docs | Helps maintainers understand success-only fields are intentionally absent from failure payloads. | Runbook JSON error docs now include guarded `no-success` wording. | Evidence: prose stays under cap; docs mention success-field exclusion. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON failure-field docs | Helps maintainers understand success-only fields are intentionally absent from failure payloads. | Document compactly that `ok:false` JSON failures omit success metrics such as iteration count. | Compact metric: prose stays under cap; correctness metric: docs mention success-field exclusion. |
+| Context anomaly drilldown density JSON failure-field docs guard | Prevents the success-field exclusion note from drifting out of docs. | Add a dedicated missing-doc mutation for the `no-success` JSON error note. | Compact metric: prose stays under cap; correctness metric: missing exclusion docs fail coverage. |
 
 ## Research Rules
 
