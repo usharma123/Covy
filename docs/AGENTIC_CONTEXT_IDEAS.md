@@ -71,12 +71,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly trend age summary | Lets CI readers see whether context anomaly trend history is stale without opening dashboard JSON. | The context-anomalies workflow summary now includes live latest age, live oldest recurring hidden age, and fixture oldest recurring hidden age. | Evidence: live summary remains eight lines and fixture summary extracts nonzero `oldest_recurring_hidden_age_ms` from `context-anomaly-fixture-dashboard.json`. |
 | Context anomaly trend freshness gate | Prevents stale trend history from looking like current signal in CI. | `Packet28 verify context-anomalies` and MCP `packet28.verify_context_anomalies` now accept optional `max_trend_age_ms` thresholding over live trend ages. | Evidence: `verify_context_anomalies_fails_stale_trend_age_threshold`; old history fails the threshold with compact trend-age fields under 1KB. |
 | Context anomaly trend freshness workflow gate | Lets CI enforce that context anomaly trend history is fresh enough to trust. | `.github/workflows/context-anomalies.yml` now runs `verify context-anomalies` with `--max-trend-age-ms 604800000` while keeping fixture age evidence in the summary. | Evidence: local verifier with a generous threshold returns `trend_age_ok=true`; stale synthetic history still fails when the threshold is set low. |
+| Context anomaly trend release note | Makes the new trend/freshness controls discoverable outside the ideas ledger. | `docs/PRODUCT.md` now includes a context-quality trend note covering history writes, dashboard tile inspection, fixture replay, and freshness thresholding. | Evidence: product note is under 12 lines and includes the four user-facing commands for live verify, dashboard tile, fixture replay, and `max_trend_age_ms`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly trend release note | Makes the new trend/freshness controls discoverable outside the ideas ledger. | Add a short user-facing note to product docs or changelog covering history writes, dashboard tile, fixture replay, and freshness threshold. | Compact metric: note under 12 lines; correctness metric: includes all four commands/fields users need. |
+| Context anomaly stale-trend repair hint | Gives agents a direct next action when trend freshness gating fails. | Add a specific repair hint or issue field for stale trend history in verifier output and workflow summaries. | Compact metric: hint under 120 characters; correctness metric: stale threshold failure points to rerunning verifier or clearing obsolete history. |
 
 ## Research Rules
 

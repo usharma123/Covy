@@ -54,6 +54,17 @@ Packet28 session --root .
 Packet28 dashboard --root .
 ```
 
+Inspect context-quality trends:
+
+```bash
+Packet28 verify context-anomalies --root . --json
+Packet28 dashboard --root . --json
+Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json
+Packet28 verify context-anomalies --root . --max-trend-age-ms 604800000 --json
+```
+
+`verify context-anomalies` appends compact history under `.packet28`, the dashboard `context_anomalies` tile reports latest and recurring hidden-category trend fields, fixture replay avoids mutating live history, and `max_trend_age_ms` gates stale trend data.
+
 Use local memory, feedback, transcripts, and graph:
 
 ```bash
