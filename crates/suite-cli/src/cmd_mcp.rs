@@ -1585,6 +1585,7 @@ fn handle_tool_call(
                 root,
                 &manifest,
                 &request.require_workflows.unwrap_or_default(),
+                false,
             )?
         }
         "packet28.hypothesis_add" => {
