@@ -223,12 +223,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density row soft-target help docs | Helps maintainers discover the soft row target without reading script source. | Checker help now mentions `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX` while staying at five lines. | Evidence: self-test requires the env name in help; `--help` remains compact. |
 | Context anomaly drilldown density help width guard | Prevents compact help from becoming a single unreadable long line as env docs grow. | Density self-test now enforces a 120-character max help line and shortens the soft-env help wording. | Evidence: `--help` remains five lines; overly long help lines fail self-test. |
 | Context anomaly drilldown density help width docs | Helps maintainers understand why help wording is intentionally compressed. | The runbook now documents `help<=120`, and the density checker requires that help budget phrase. | Evidence: runbook row stays under soft target; removing the help budget doc fails output-doc coverage. |
+| Context anomaly drilldown density env prose width guard | Prevents non-failure density prose, such as env and help-budget docs, from becoming the next oversized line. | Density prose-width checking now includes all `Density ...` prose lines, not only failure-code lines. | Evidence: max env/help prose width is reported; forced low prose budget catches the env/help line. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density env prose width guard | Prevents non-failure density prose, such as env and help-budget docs, from becoming the next oversized line. | Extend prose-width checking to density env/help lines, not only failure-code prose. | Compact metric: max env/help prose width is reported; correctness metric: forced low prose budget catches the env/help line. |
+| Context anomaly drilldown density env prose width self-test | Proves the env/help prose line is the source of the reported prose-width maximum. | Self-test a runbook variant with a widened `Density envs:` line and verify `max_density_prose_line` grows. | Compact metric: default output remains one line; correctness metric: env/help prose participates in width calculation. |
 
 ## Research Rules
 

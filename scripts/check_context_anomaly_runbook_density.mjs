@@ -150,7 +150,8 @@ function evaluate(runbook, lineBudget) {
     .filter(
       (line) =>
         !line.startsWith("|") &&
-        line.includes("context_anomaly_runbook_density_"),
+        (line.startsWith("Density ") ||
+          line.includes("context_anomaly_runbook_density_")),
     );
   const maxActualDensityProseLineLength = Math.max(
     0,
