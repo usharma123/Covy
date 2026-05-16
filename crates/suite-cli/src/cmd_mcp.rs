@@ -44,11 +44,11 @@ use crate::cmd_mcp::native_tools::{
     handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
     Packet28GlobArgs, Packet28HandoffCompressionArgs, Packet28HandoffDependencyLintArgs,
-    Packet28HandoffDiffArgs, Packet28HandoffPathLintArgs, Packet28PatchRiskArgs,
-    Packet28PrepareHandoffArgs, Packet28PromptPressureArgs, Packet28ReadRegionsArgs,
-    Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
-    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
-    Packet28WriteIntentionArgs,
+    Packet28HandoffDiffArgs, Packet28HandoffPathLintArgs, Packet28HandoffTestLintArgs,
+    Packet28PatchRiskArgs, Packet28PrepareHandoffArgs, Packet28PromptPressureArgs,
+    Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs, Packet28SearchArgs,
+    Packet28SearchFastArgs, Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs,
+    Packet28VerifyHandoffArgs, Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -748,6 +748,18 @@ fn handle_method(
                 {
                     "name": "packet28.handoff_lint_paths",
                     "description": "Lint a stored Packet28 handoff artifact for repo-relative path references that are absent on disk and not listed as changed paths.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "artifact_id": {"type":"string"},
+                            "context_version": {"type":"string"}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.handoff_lint_tests",
+                    "description": "Lint a stored Packet28 handoff artifact for test-like names that are mentioned without a runnable test command.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -1759,6 +1771,21 @@ fn handle_tool_call(
             )?;
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_handoff_lint_paths(root, request)?
+        }
+        "packet28.handoff_lint_tests" => {
+            let mut request: Packet28HandoffTestLintArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request
+                    .artifact_id
+                    .as_deref()
+                    .or(request.context_version.as_deref()),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_handoff_lint_tests(root, request)?
         }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
@@ -2786,6 +2813,13 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 .unwrap_or_default();
             format!("Packet28 handoff path lint issue_count={issue_count}.")
         }
+        "packet28.handoff_lint_tests" => {
+            let issue_count = payload
+                .get("issue_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 handoff test lint issue_count={issue_count}.")
+        }
         "packet28.prepare_handoff" | "packet28.handoff" => {
             let ready = payload
                 .get("handoff_ready")
@@ -3186,6 +3220,7 @@ mod tests {
             "packet28_handoff_compress",
             "packet28_handoff_lint_dependencies",
             "packet28_handoff_lint_paths",
+            "packet28_handoff_lint_tests",
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
@@ -3617,6 +3652,57 @@ mod tests {
         assert_eq!(
             response["structuredContent"]["issues"][0]["reference"],
             "src/missing.rs"
+        );
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 1024
+        );
+    }
+
+    #[test]
+    fn handoff_test_lint_flags_named_test_without_command() {
+        let root = tempfile::tempdir().unwrap();
+        let task_id = "task-handoff-test-lint";
+        let context_version = "ctx-test-lint";
+        let path = task_version_json_path(root.path(), task_id, context_version);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "context_version": context_version,
+                "artifact_id": context_version,
+                "brief": "## Task Objective\nVerify missing_command_test and command_backed_test.",
+                "sections": [{
+                    "id": "verification",
+                    "title": "Verification",
+                    "body": "Run missing_command_test later.\nUse cargo test -p suite-cli command_backed_test now."
+                }],
+                "next_action_summary": "verify named tests"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.handoff_lint_tests",
+                "arguments": {
+                    "task_id": task_id,
+                    "context_version": context_version
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["ok"], false);
+        assert_eq!(response["structuredContent"]["issue_count"], 1);
+        assert_eq!(
+            response["structuredContent"]["issues"][0]["reference"],
+            "missing_command_test"
         );
         assert!(
             serde_json::to_string(&response["structuredContent"])

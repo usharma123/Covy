@@ -220,6 +220,14 @@ pub(crate) struct Packet28HandoffPathLintArgs {
     pub(crate) context_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28HandoffTestLintArgs {
+    pub(crate) task_id: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) context_version: Option<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1607,6 +1615,48 @@ pub(crate) fn handle_packet28_handoff_lint_paths(
     }))
 }
 
+pub(crate) fn handle_packet28_handoff_lint_tests(
+    root: &Path,
+    args: Packet28HandoffTestLintArgs,
+) -> Result<Value> {
+    let task_id = args.task_id.trim();
+    if task_id.is_empty() {
+        return Err(anyhow!("packet28.handoff_lint_tests requires task_id"));
+    }
+    let artifact_id = args.artifact_id.or(args.context_version).ok_or_else(|| {
+        anyhow!("packet28.handoff_lint_tests requires artifact_id or context_version")
+    })?;
+    let payload = read_handoff_payload(root, task_id, &artifact_id, "handoff test lint")?;
+    let text_blocks = handoff_text_blocks(&payload);
+    let mut mentioned_tests = Vec::new();
+    let mut command_backed_tests = Vec::new();
+    for text in &text_blocks {
+        collect_test_mentions(text, &mut mentioned_tests);
+        collect_command_backed_tests(text, &mut command_backed_tests);
+    }
+    let mut issues = Vec::new();
+    for test_name in mentioned_tests {
+        if !command_backed_tests
+            .iter()
+            .any(|command_test| command_test == &test_name)
+        {
+            issues.push(json!({
+                "kind": "missing_test_command",
+                "reference": test_name,
+                "reason": "test-like name is mentioned without a runnable test command in the same handoff",
+            }));
+        }
+    }
+    Ok(json!({
+        "task_id": task_id,
+        "artifact_id": artifact_id,
+        "ok": issues.is_empty(),
+        "issue_count": issues.len(),
+        "issues": issues,
+        "summary": format!("handoff_test_lint issue_count={}", issues.len()),
+    }))
+}
+
 fn read_handoff_payload(
     root: &Path,
     task_id: &str,
@@ -1650,6 +1700,24 @@ fn available_handoff_paths(payload: &Value) -> Vec<String> {
         }
     }
     paths
+}
+
+fn handoff_text_blocks(payload: &Value) -> Vec<String> {
+    let mut blocks = Vec::new();
+    if let Some(brief) = payload.get("brief").and_then(Value::as_str) {
+        blocks.push(brief.to_string());
+    }
+    if let Some(next_action) = payload.get("next_action_summary").and_then(Value::as_str) {
+        blocks.push(next_action.to_string());
+    }
+    if let Some(sections) = payload.get("sections").and_then(Value::as_array) {
+        for section in sections {
+            if let Some(body) = section.get("body").and_then(Value::as_str) {
+                blocks.push(body.to_string());
+            }
+        }
+    }
+    blocks
 }
 
 fn referenced_handoff_artifacts(payload: &Value) -> Vec<String> {
@@ -1712,14 +1780,59 @@ fn collect_artifact_references(text: &str, references: &mut Vec<String>) {
     }
 }
 
+fn collect_test_mentions(text: &str, tests: &mut Vec<String>) {
+    for token in text.split_whitespace() {
+        let token = clean_reference_token(token);
+        if is_test_name_reference(token) {
+            append_unique(tests, token.to_string());
+        }
+    }
+}
+
+fn collect_command_backed_tests(text: &str, tests: &mut Vec<String>) {
+    for line in text.lines() {
+        if contains_test_command(line) {
+            collect_test_mentions(line, tests);
+        }
+    }
+}
+
+fn contains_test_command(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    line.contains("cargo test")
+        || line.contains("cargo nextest")
+        || line.contains("npm test")
+        || line.contains("pnpm test")
+        || line.contains("yarn test")
+        || line.contains("bun test")
+        || line.contains("pytest")
+        || line.contains("go test")
+        || line.contains("mvn test")
+        || line.contains("gradle test")
+}
+
+fn is_test_name_reference(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    token.len() >= 6
+        && (lower.starts_with("test_")
+            || lower.ends_with("_test")
+            || lower.ends_with("_tests")
+            || lower.contains("::tests::")
+            || lower.contains("test::"))
+}
+
+fn clean_reference_token(token: &str) -> &str {
+    token.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '`' | '\'' | '"' | ',' | '.' | ';' | ':' | ')' | '(' | '[' | ']'
+        )
+    })
+}
+
 fn collect_path_references(text: &str, references: &mut Vec<String>) {
     for token in text.split_whitespace() {
-        let token = token.trim_matches(|ch: char| {
-            matches!(
-                ch,
-                '`' | '\'' | '"' | ',' | '.' | ';' | ':' | ')' | '(' | '[' | ']'
-            )
-        });
+        let token = clean_reference_token(token);
         if is_repo_relative_path_reference(token) {
             append_unique(references, token.to_string());
         }
