@@ -1506,6 +1506,17 @@ if (args.includes("--self-test")) {
     requiredCommands[0],
     "missing_first_required_command_detail",
   );
+  for (const [commandIndex, command] of requiredCommands.entries()) {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replaceAll(command, `drifted_required_command_${commandIndex}`),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_commands",
+      command,
+      `drifted_required_command_${commandIndex}`,
+    );
+  }
   assertSelfTest(
     evaluate(
       runbook.replace(
