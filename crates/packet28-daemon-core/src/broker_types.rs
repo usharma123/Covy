@@ -385,6 +385,7 @@ pub struct BrokerPrepareHandoffResponse {
     pub task_id: String,
     pub handoff_ready: bool,
     pub handoff_reason: String,
+    pub warnings: Vec<String>,
     pub latest_checkpoint_id: Option<String>,
     pub handoff: Option<BrokerHandoffDescriptor>,
     pub latest_handoff_artifact_id: Option<String>,

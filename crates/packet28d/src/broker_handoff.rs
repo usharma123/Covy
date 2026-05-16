@@ -36,6 +36,79 @@ fn normalize_timestamp_millis(value: u64) -> u64 {
     }
 }
 
+fn handoff_contradiction_warnings(
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> Vec<String> {
+    let contradiction_terms = [
+        "contradict",
+        "contradicted",
+        "contradiction",
+        "reject",
+        "rejected",
+        "refute",
+        "refuted",
+        "falsify",
+        "falsified",
+        "not true",
+    ];
+    let mut warnings = Vec::new();
+    for decision in snapshot
+        .active_decisions
+        .iter()
+        .filter(|decision| decision.id.starts_with("hypothesis:"))
+    {
+        let hypothesis_key = decision
+            .id
+            .strip_prefix("hypothesis:")
+            .unwrap_or(decision.id.as_str())
+            .to_ascii_lowercase();
+        let hypothesis_text = decision
+            .text
+            .strip_prefix("hypothesis active: ")
+            .unwrap_or(decision.text.as_str())
+            .to_ascii_lowercase();
+        for invocation in &snapshot.recent_tool_invocations {
+            let evidence = [
+                invocation.result_summary.as_deref().unwrap_or_default(),
+                invocation.compact_preview.as_deref().unwrap_or_default(),
+                invocation.request_summary.as_deref().unwrap_or_default(),
+                invocation.command.as_deref().unwrap_or_default(),
+            ]
+            .join(" ")
+            .to_ascii_lowercase();
+            if evidence.trim().is_empty()
+                || !contradiction_terms
+                    .iter()
+                    .any(|term| evidence.contains(term))
+            {
+                continue;
+            }
+            let mentions_hypothesis = evidence.contains(&hypothesis_key)
+                || decision.related_paths.iter().any(|path| {
+                    !path.trim().is_empty() && evidence.contains(&path.to_ascii_lowercase())
+                })
+                || decision.related_symbols.iter().any(|symbol| {
+                    !symbol.trim().is_empty() && evidence.contains(&symbol.to_ascii_lowercase())
+                })
+                || hypothesis_text
+                    .split_whitespace()
+                    .filter(|term| term.len() >= 5)
+                    .take(4)
+                    .any(|term| evidence.contains(term));
+            if mentions_hypothesis {
+                warnings.push(format!(
+                    "handoff_contradiction: active {} may be contradicted by tool #{} {}",
+                    decision.id, invocation.sequence, invocation.tool_name
+                ));
+                break;
+            }
+        }
+    }
+    warnings.sort();
+    warnings.dedup();
+    warnings
+}
+
 pub(crate) fn latest_handoff_descriptor(
     task: Option<&TaskRecord>,
 ) -> Option<BrokerHandoffDescriptor> {
@@ -553,6 +626,7 @@ pub(crate) fn broker_prepare_handoff(
     let latest_handoff = latest_handoff_descriptor(task.as_ref());
     let latest_ready_handoff = latest_ready_handoff_descriptor(task.as_ref());
     let (handoff_ready, handoff_reason) = compute_handoff_state(task.as_ref(), &snapshot);
+    let warnings = handoff_contradiction_warnings(&snapshot);
     let latest_intention = snapshot.latest_intention.clone();
     let next_action_summary = next_action_summary(None, &snapshot);
     if !handoff_ready {
@@ -587,6 +661,7 @@ pub(crate) fn broker_prepare_handoff(
                             handoff_ready: true,
                             handoff_reason: "Latest handoff artifact is available for resume."
                                 .to_string(),
+                            warnings,
                             latest_checkpoint_id: snapshot.latest_checkpoint_id,
                             handoff: Some(existing_handoff.clone()),
                             latest_handoff_artifact_id: Some(existing_handoff.artifact_id.clone()),
@@ -606,6 +681,7 @@ pub(crate) fn broker_prepare_handoff(
             task_id: request.task_id,
             handoff_ready,
             handoff_reason,
+            warnings,
             latest_checkpoint_id: snapshot.latest_checkpoint_id,
             handoff: latest_handoff.clone(),
             latest_handoff_artifact_id: latest_handoff
@@ -682,6 +758,7 @@ pub(crate) fn broker_prepare_handoff(
         task_id: request.task_id,
         handoff_ready: true,
         handoff_reason,
+        warnings,
         latest_checkpoint_id: snapshot.latest_checkpoint_id.clone(),
         handoff: Some(handoff.clone()),
         latest_handoff_artifact_id: Some(artifact_id),

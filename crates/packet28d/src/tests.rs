@@ -1929,6 +1929,53 @@ fn prepare_handoff_only_resumes_recorded_handoff_artifacts() {
 }
 
 #[test]
+fn prepare_handoff_warns_when_tool_evidence_contradicts_active_hypothesis() {
+    let state = daemon_test_state();
+    state.lock().unwrap().agent_snapshots.insert(
+        "task-contradiction".to_string(),
+        suite_packet_core::AgentSnapshotPayload {
+            task_id: "task-contradiction".to_string(),
+            latest_checkpoint_id: Some("checkpoint-1".to_string()),
+            active_decisions: vec![suite_packet_core::AgentDecision {
+                id: "hypothesis:auth-cache".to_string(),
+                text: "hypothesis active: Auth cache invalidation is suspect".to_string(),
+                related_paths: vec!["src/auth.rs".to_string()],
+                related_symbols: vec!["AuthCache".to_string()],
+                related_artifact_ids: Vec::new(),
+            }],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "tool-contradict".to_string(),
+                sequence: 42,
+                tool_name: "cargo test".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some(
+                    "refuted hypothesis auth-cache while testing src/auth.rs".to_string(),
+                ),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+
+    let response = broker_prepare_handoff(
+        state,
+        BrokerPrepareHandoffRequest {
+            task_id: "task-contradiction".to_string(),
+            query: None,
+            response_mode: Some(BrokerResponseMode::Slim),
+            include_debug_memory: false,
+        },
+    )
+    .unwrap();
+
+    assert!(response.handoff_ready);
+    assert_eq!(response.warnings.len(), 1);
+    assert!(response.warnings[0].contains("handoff_contradiction"));
+    assert!(response.warnings[0].contains("hypothesis:auth-cache"));
+    assert!(response.warnings[0].contains("tool #42"));
+}
+
+#[test]
 fn instruction_file_resolution_rewrites_larger_markdown() {
     let state = daemon_test_state();
     let workspace_root = state.lock().unwrap().root.display().to_string();
