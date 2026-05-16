@@ -336,12 +336,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-headroom env helper reuse | Reduces boilerplate as env failure shape checks grow. | JSON cap and JSON-headroom env failures now reuse the multi-text failure-shape helper. | Evidence: self-test output stays one line; failure checks remain exact. |
 | Context anomaly drilldown density JSON error shape docs | Helps maintainers know JSON failures are machine-readable, not plain stderr. | Runbook JSON docs now include guarded `ok:false` error-shape wording. | Evidence: runbook row/prose stay under caps; missing JSON error-shape docs fail coverage. |
 | Context anomaly drilldown density JSON error shape order guard | Keeps the JSON error-shape note adjacent to the help-width note for compact triage. | Self-test now requires the compact `ok:false`;`h:` adjacency phrase. | Evidence: JSON prose remains under cap; docs shape order drift fails coverage. |
+| Context anomaly drilldown density prose recovery after JSON error docs | Restores prose headroom after adding JSON error-shape docs. | The guarded error/help shape note now moves from the long JSON field list to the shorter density-label prose line. | Evidence: prose max drops below 300; all JSON docs guards still pass. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density prose recovery after JSON error docs | Restores prose headroom after adding JSON error-shape docs. | Compact the JSON docs prose line without removing guarded fields. | Compact metric: prose max drops below 300; correctness metric: all JSON docs guards still pass. |
+| Context anomaly drilldown density label-line prose recovery after error docs | Restores label-line margin after moving error/help shape docs there. | Compact the density-label prose line while preserving the guarded error/help phrase. | Compact metric: label-line width drops; correctness metric: JSON error/help docs still pass. |
 
 ## Research Rules
 
