@@ -307,6 +307,28 @@ function jsonHeadroomBytes(payload, jsonBudget) {
   return jsonBudget - JSON.stringify(payload).length;
 }
 
+function renderDefaultOutput(payload, resultDetails, jsonHeadroom) {
+  return [
+    `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines}`,
+    `max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed}`,
+    `commands=${payload.commands_checked}`,
+    `failure_codes=${payload.failure_codes_checked}`,
+    `env_docs=${resultDetails.env_docs_checked}`,
+    `output_labels=${resultDetails.output_labels_checked}`,
+    `workflow_commands=${payload.workflow_commands_checked}`,
+    `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
+    `json_headroom=${jsonHeadroom}`,
+  ].join(" ");
+}
+
+function parseDefaultOutput(line) {
+  const parts = line.trim().split(/\s+/);
+  if (parts[0] !== "context_anomaly_runbook_density_ok") {
+    return null;
+  }
+  return Object.fromEntries(parts.slice(1).map((part) => part.split("=")));
+}
+
 const runbook = readFileSync(runbookPath, "utf8");
 const workflow = readFileSync(workflowPath, "utf8");
 const result = evaluate(runbook, maxLines);
@@ -367,6 +389,35 @@ if (args.includes("--self-test")) {
   ) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("headroom_did_not_change_after_payload_growth");
+    process.exit(1);
+  }
+  const parsedDefaultOutput = parseDefaultOutput(
+    renderDefaultOutput(baselinePayload, result, baselineHeadroom),
+  );
+  const expectedTextFields = [
+    "lines",
+    "max_table_row",
+    "commands",
+    "failure_codes",
+    "env_docs",
+    "output_labels",
+    "workflow_commands",
+    "prose",
+    "json_headroom",
+  ];
+  for (const field of expectedTextFields) {
+    if (!parsedDefaultOutput?.[field]) {
+      console.error("context_anomaly_runbook_density_self_test_failed");
+      console.error(`missing_default_output_field=${field}`);
+      process.exit(1);
+    }
+  }
+  if (
+    parsedDefaultOutput.commands !== String(result.commands_checked) ||
+    parsedDefaultOutput.output_labels !== String(result.output_labels_checked)
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("default_output_parse_mismatch");
     process.exit(1);
   }
   assertSelfTest(
@@ -498,13 +549,5 @@ if (args.includes("--json")) {
   }
   console.log(JSON.stringify(payload));
 } else {
-  console.log(
-    `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines} max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed} commands=${payload.commands_checked}`,
-    `failure_codes=${payload.failure_codes_checked}`,
-    `env_docs=${result.env_docs_checked}`,
-    `output_labels=${result.output_labels_checked}`,
-    `workflow_commands=${payload.workflow_commands_checked}`,
-    `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
-    `json_headroom=${jsonHeadroom}`,
-  );
+  console.log(renderDefaultOutput(payload, result, jsonHeadroom));
 }
