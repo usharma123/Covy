@@ -390,12 +390,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper anchor-count field adoption | Reuses the missing-detail helper for density anchor-count JSON docs. | The `density_doc_anchors_checked` docs mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers anchor-count docs detail checks. |
 | Context anomaly drilldown density missing-detail helper density-phrases field adoption | Reuses the missing-detail helper for density phrase-count JSON docs. | The `density_doc_phrases_checked` docs mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers density phrase-count docs detail checks. |
 | Context anomaly drilldown density missing-detail helper row-soft field adoption | Reuses the missing-detail helper for row-soft JSON docs. | The `row_soft_ok` docs mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers row-soft docs detail checks. |
+| Context anomaly drilldown density missing-detail helper alias-docs field adoption | Reuses the missing-detail helper for alias-docs JSON docs. | The `alias_docs_checked` docs mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers alias-docs field detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper alias-docs field adoption | Reuses the missing-detail helper for alias-docs JSON docs. | Convert the `alias_docs_checked` docs mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers alias-docs field detail checks. |
+| Context anomaly drilldown density missing-detail helper JSON full-name adoption | Reuses the missing-detail helper for the JSON full-field-name prose guard. | Convert the `JSON keeps full field names` mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers prose phrase detail checks. |
 
 ## Research Rules
 
