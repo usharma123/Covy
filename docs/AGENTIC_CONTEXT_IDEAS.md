@@ -350,12 +350,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point JSON low-cap length detail | Helps debug JSON-mode text-cap failures with the same rendered-length detail. | JSON low-cap failure-shape self-test now checks `default_output_len=197` and `max_default_output_len=195`. | Evidence: error JSON stays compact; JSON failure details match rendered line. |
 | Context anomaly drilldown density fixed-point exact-cap length detail | Helps debug the zero-headroom success boundary with explicit rendered length evidence. | Exact-width artifact failure output now prints actual line length and headroom values. | Evidence: no output growth; exact-cap success detail matches rendered line. |
 | Context anomaly drilldown density fixed-point convergence loop budget | Prevents future fixed-point fields from needing more silent iterations than expected. | Success artifacts now expose internal convergence iteration count, and self-test caps normal/exact-width paths at 3. | Evidence: no output growth; convergence remains bounded. |
+| Context anomaly drilldown density fixed-point convergence fallback detail | Makes rare non-convergence easier to debug if future fields destabilize the loop. | Iteration-budget failure output now includes rendered line length and headroom for normal and exact-width paths. | Evidence: no output growth; fallback failures carry enough detail. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fixed-point convergence fallback detail | Makes rare non-convergence easier to debug if future fields destabilize the loop. | Add fallback diagnostics that print the final iteration count and rendered line length. | Compact metric: no output growth; correctness metric: fallback failures carry enough detail. |
+| Context anomaly drilldown density fixed-point iteration JSON output | Helps agents see fixed-point convergence cost without reading self-test internals. | Add compact `iter` default output or JSON-only iteration count if it fits budgets. | Compact metric: default output stays under cap or JSON headroom stays above 24; correctness metric: reported count matches builder iterations. |
 
 ## Research Rules
 

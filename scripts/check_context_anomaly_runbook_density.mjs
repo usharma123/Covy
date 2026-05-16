@@ -982,6 +982,8 @@ if (args.includes("--self-test")) {
   if (baselineArtifacts.iterations > 3) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`success_artifacts_iterations=${baselineArtifacts.iterations}`);
+    console.error(`success_artifacts_len=${defaultOutputLine.length}`);
+    console.error(`success_artifacts_headroom=${defaultOutputHeadroom}`);
     process.exit(1);
   }
   const exactWidthArtifacts = buildSuccessArtifacts(
@@ -1008,6 +1010,8 @@ if (args.includes("--self-test")) {
   if (exactWidthArtifacts.iterations > 3) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`exact_width_iterations=${exactWidthArtifacts.iterations}`);
+    console.error(`exact_width_len=${exactWidthArtifacts.defaultOutputLine.length}`);
+    console.error(`exact_width_headroom=${exactWidthArtifacts.defaultOutputHeadroom}`);
     process.exit(1);
   }
   const lowWidthArtifacts = buildSuccessArtifacts(
