@@ -639,12 +639,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON max shape order | Keeps JSON max failure shape before JSON headroom-min checks. | Verified `assertJsonMaxFailureShapeSelfTests()` sits after text headroom output coverage and before `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` failure coverage. | Evidence: no runtime output growth; JSON max failure shape remains before headroom-min coverage. |
 | Context anomaly drilldown density self-test JSON headroom-min wrapper | Names JSON headroom-min failure code, shape, and iteration exclusion checks. | Extracted `assertJsonHeadroomMinFailureShapeSelfTests()` around `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` failure, output, and exclusion assertions. | Evidence: no runtime output growth; JSON headroom-min failure shape remains covered. |
 | Context anomaly drilldown density self-test JSON headroom-min order | Keeps JSON headroom-min failure shape before direct budget unit coverage. | Verified `assertJsonHeadroomMinFailureShapeSelfTests()` sits after JSON max failure shape coverage and before the direct `jsonBudgetIssue()` assertion. | Evidence: no runtime output growth; JSON headroom-min failure shape remains before direct budget coverage. |
+| Context anomaly drilldown density self-test direct JSON budget wrapper | Names direct `jsonBudgetIssue()` unit coverage. | Extracted `assertJsonBudgetIssueMutationSelfTest()` around the direct `jsonBudgetIssue(successPayload(...), 10)` assertion. | Evidence: no runtime output growth; direct JSON budget coverage still returns the too-long code. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test direct JSON budget wrapper | Names direct `jsonBudgetIssue()` unit coverage. | Extract `assertJsonBudgetIssueMutationSelfTest()` around the direct `jsonBudgetIssue(successPayload(...), 10)` assertion. | Compact metric: no runtime output growth; correctness metric: direct JSON budget coverage still returns the too-long code. |
+| Context anomaly drilldown density self-test direct JSON budget order | Keeps direct JSON budget coverage before help output coverage. | Verify `assertJsonBudgetIssueMutationSelfTest()` sits after JSON headroom-min coverage and before the help includes loop. | Compact metric: no runtime output growth; correctness metric: direct JSON budget coverage remains before help output coverage. |
 
 ## Research Rules
 

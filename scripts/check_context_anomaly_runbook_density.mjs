@@ -2352,12 +2352,15 @@ if (args.includes("--self-test")) {
     );
   };
   assertJsonHeadroomMinFailureShapeSelfTests();
-  assertSelfTest(
-    jsonBudgetIssue(successPayload(result, workflowResult, 10), 10) ?? {
-      code: "ok",
-    },
-    "context_anomaly_runbook_density_json_too_long",
-  );
+  const assertJsonBudgetIssueMutationSelfTest = () => {
+    assertSelfTest(
+      jsonBudgetIssue(successPayload(result, workflowResult, 10), 10) ?? {
+        code: "ok",
+      },
+      "context_anomaly_runbook_density_json_too_long",
+    );
+  };
+  assertJsonBudgetIssueMutationSelfTest();
   for (const expected of [
     "default",
     "--json",
