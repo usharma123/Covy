@@ -1790,6 +1790,83 @@ fn broker_context_debt_clears_after_reads_questions_and_verification() {
 }
 
 #[test]
+fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    std::fs::create_dir_all(root.join(".packet28")).unwrap();
+    std::fs::write(
+        root.join(".packet28/run-savings.jsonl"),
+        serde_json::json!({
+            "command": "Packet28 run -- rg stale",
+            "cwd": root.display().to_string(),
+            "family": "search",
+            "canonical_kind": "rg",
+            "exit_code": 0,
+            "raw_est_tokens": 500,
+            "reduced_est_tokens": 100,
+            "savings_percent": 80.0,
+            "fallback_reason": "fff auto preferred backend failed: launch error",
+            "failure_fingerprint": null,
+            "changed_paths": [],
+            "timestamp_unix_ms": 10
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let stale_snapshot = suite_packet_core::AgentSnapshotPayload {
+        changed_paths_since_checkpoint: vec!["src/stale.rs".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "search-1".to_string(),
+            sequence: 1,
+            tool_name: "rg".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Search,
+            result_summary: Some("fallback search result".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let fresh_snapshot = suite_packet_core::AgentSnapshotPayload {
+        changed_paths_since_checkpoint: vec!["src/stale.rs".to_string()],
+        files_read: vec!["src/stale.rs".to_string()],
+        evidence_artifact_ids: vec!["artifact-test".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "test-1".to_string(),
+            sequence: 2,
+            tool_name: "cargo test".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Test,
+            result_summary: Some("tests passed".to_string()),
+            artifact_id: Some("artifact-test".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let request = BrokerGetContextRequest {
+        task_id: "task-confidence".to_string(),
+        action: Some(BrokerAction::Inspect),
+        include_sections: vec!["evidence_confidence".to_string()],
+        ..BrokerGetContextRequest::default()
+    };
+    let stale_sections =
+        build_broker_sections(&root, &state, &request, &stale_snapshot, None, None);
+    let fresh_sections =
+        build_broker_sections(&root, &state, &request, &fresh_snapshot, None, None);
+    let stale = stale_sections
+        .iter()
+        .find(|section| section.id == "evidence_confidence")
+        .expect("stale confidence section should render");
+    let fresh = fresh_sections
+        .iter()
+        .find(|section| section.id == "evidence_confidence")
+        .expect("fresh confidence section should render");
+
+    assert!(stale.body.contains("stale_paths=1"));
+    assert!(stale.body.contains("fallback_records=1"));
+    assert!(stale.body.contains("confidence: low"));
+    assert!(fresh.body.contains("confidence: high"));
+    assert!(fresh.body.contains("verification=fresh"));
+}
+
+#[test]
 fn render_task_memory_lines_surfaces_recent_state() {
     let snapshot = suite_packet_core::AgentSnapshotPayload {
         files_read: vec!["src/alpha.rs".to_string()],

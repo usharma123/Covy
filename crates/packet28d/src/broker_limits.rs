@@ -45,6 +45,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "current_focus",
             "discovered_scope",
             "evidence_freshness",
+            "evidence_confidence",
             "recent_tool_activity",
             "tool_failures",
             "search_evidence",
@@ -103,6 +104,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "evidence_cache",
             "checkpoint_deltas",
             "evidence_freshness",
+            "evidence_confidence",
             "active_decisions",
             "search_evidence",
             "code_evidence",
@@ -160,6 +162,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("current_focus".to_string(), 8);
             section_item_limits.insert("discovered_scope".to_string(), 8);
             section_item_limits.insert("evidence_freshness".to_string(), 4);
+            section_item_limits.insert("evidence_confidence".to_string(), 4);
             section_item_limits.insert("recent_tool_activity".to_string(), 6);
             section_item_limits.insert("tool_failures".to_string(), 4);
             section_item_limits.insert("search_evidence".to_string(), 8);
@@ -224,6 +227,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("evidence_cache".to_string(), 4);
             section_item_limits.insert("checkpoint_deltas".to_string(), 8);
             section_item_limits.insert("evidence_freshness".to_string(), 4);
+            section_item_limits.insert("evidence_confidence".to_string(), 4);
             section_item_limits.insert("search_evidence".to_string(), 8);
             section_item_limits.insert("code_evidence".to_string(), 6);
             section_item_limits.insert("relevant_context".to_string(), 5);

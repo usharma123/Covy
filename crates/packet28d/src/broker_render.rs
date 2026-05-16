@@ -761,6 +761,24 @@ pub(crate) fn build_broker_sections(
         });
     }
 
+    let confidence_lines = render_evidence_confidence_lines(root, snapshot);
+    if !confidence_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "evidence_confidence".to_string(),
+            title: "Evidence Confidence".to_string(),
+            body: truncate_lines(
+                confidence_lines,
+                section_item_limit(&effective_limits, "evidence_confidence"),
+            ),
+            priority: if matches!(action, BrokerAction::Inspect | BrokerAction::Edit) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
     let context_debt_lines = render_context_debt_lines(snapshot);
     if !context_debt_lines.is_empty() {
         sections.push(BrokerSection {
@@ -1114,6 +1132,104 @@ fn render_context_debt_lines(snapshot: &suite_packet_core::AgentSnapshotPayload)
         );
     }
     lines
+}
+
+fn render_evidence_confidence_lines(
+    root: &Path,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> Vec<String> {
+    let has_evidence_signal = !snapshot.recent_tool_invocations.is_empty()
+        || !snapshot.changed_paths_since_checkpoint.is_empty()
+        || !snapshot.evidence_artifact_ids.is_empty();
+    if !has_evidence_signal {
+        return Vec::new();
+    }
+
+    let stale_paths = snapshot
+        .changed_paths_since_checkpoint
+        .iter()
+        .filter(|path| !snapshot.files_read.iter().any(|read| read == *path))
+        .count() as u64;
+    let successful_verification = snapshot.recent_tool_invocations.iter().any(|invocation| {
+        matches!(
+            invocation.operation_kind,
+            suite_packet_core::ToolOperationKind::Build
+                | suite_packet_core::ToolOperationKind::Test
+                | suite_packet_core::ToolOperationKind::Diff
+        ) && !invocation
+            .result_summary
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains("fail")
+    });
+    let fallback_count = load_broker_run_savings(root, 32)
+        .iter()
+        .filter(|record| {
+            record
+                .fallback_reason
+                .as_deref()
+                .is_some_and(|reason| !reason.trim().is_empty())
+        })
+        .count() as u64;
+    let failure_count = snapshot.tool_failures.len() as u64
+        + snapshot
+            .recent_tool_invocations
+            .iter()
+            .filter(|invocation| {
+                invocation
+                    .result_summary
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+                    .contains("fail")
+            })
+            .count() as u64;
+    let artifact_gap = snapshot
+        .recent_tool_invocations
+        .iter()
+        .filter(|invocation| {
+            invocation.artifact_id.is_none()
+                && !invocation.raw_artifact_available
+                && matches!(
+                    invocation.operation_kind,
+                    suite_packet_core::ToolOperationKind::Search
+                        | suite_packet_core::ToolOperationKind::Read
+                        | suite_packet_core::ToolOperationKind::Build
+                        | suite_packet_core::ToolOperationKind::Test
+                        | suite_packet_core::ToolOperationKind::Diff
+                )
+        })
+        .count() as u64;
+    let score = 100_u64
+        .saturating_sub(stale_paths.saturating_mul(20).min(40))
+        .saturating_sub(fallback_count.saturating_mul(20).min(40))
+        .saturating_sub(failure_count.saturating_mul(25).min(50))
+        .saturating_sub(artifact_gap.saturating_mul(5).min(20))
+        .saturating_add(if successful_verification { 10 } else { 0 })
+        .min(100);
+    let label = if score >= 85 {
+        "high"
+    } else if score >= 60 {
+        "medium"
+    } else {
+        "low"
+    };
+    vec![
+        format!(
+            "- confidence: {label} score={score} stale_paths={stale_paths} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap}"
+        ),
+        format!(
+            "- confidence_reason: source=local_tool_state verification={} artifacts={} payoff={}",
+            if successful_verification { "fresh" } else { "missing" },
+            snapshot.evidence_artifact_ids.len(),
+            if score >= 85 {
+                "evidence usable"
+            } else {
+                "refresh stale/fallback evidence before relying"
+            }
+        ),
+    ]
 }
 
 fn active_hypothesis_contradiction_count(
