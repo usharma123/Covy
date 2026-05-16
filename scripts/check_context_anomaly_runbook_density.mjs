@@ -106,6 +106,7 @@ const requiredOutputLabels = [
   "labels",
   "phrases",
   "alias_docs",
+  "dphr",
   "soft",
   "width",
   "width_docs",
@@ -268,6 +269,7 @@ function evaluate(runbook, lineBudget) {
     output_labels_checked: requiredOutputLabels.length,
     output_doc_phrases_checked: requiredOutputDocPhrases.length,
     alias_docs_checked: requiredAliasDocPhrases.length,
+    density_doc_phrases_checked: requiredDensityDocPhrases.length,
     text_width_docs_checked: hasTextWidthEnvDoc ? 1 : 0,
   };
 }
@@ -426,6 +428,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `labels=${resultDetails.output_labels_checked}`,
     `phrases=${resultDetails.output_doc_phrases_checked}`,
     `alias_docs=${resultDetails.alias_docs_checked}`,
+    `dphr=${resultDetails.density_doc_phrases_checked}`,
     `soft=${resultDetails.row_soft_ok ? "ok" : "over"}`,
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
@@ -472,6 +475,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     "labels",
     "phrases",
     "alias_docs",
+    "dphr",
     "soft",
     "wf",
     "prose",
@@ -541,6 +545,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_alias_docs=${requiredAliasDocPhrases.length}`);
     console.error(`actual_alias_docs=${result.alias_docs_checked}`);
+    process.exit(1);
+  }
+  if (result.density_doc_phrases_checked !== requiredDensityDocPhrases.length) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_density_doc_phrases=${requiredDensityDocPhrases.length}`,
+    );
+    console.error(
+      `actual_density_doc_phrases=${result.density_doc_phrases_checked}`,
+    );
     process.exit(1);
   }
   if (!result.row_soft_ok) {
@@ -715,6 +729,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`alias_docs`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`dphr`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(

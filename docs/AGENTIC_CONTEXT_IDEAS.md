@@ -227,12 +227,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density env prose width self-test | Proves the env/help prose line is the source of the reported prose-width maximum. | Density self-test now widens the `Density env:` line and verifies `max_density_prose_line` grows. | Evidence: default output remains one line; env/help prose participates in width calculation. |
 | Context anomaly drilldown density env prose headroom recovery | Restores prose-width margin after env/help docs made the env line the widest density prose line. | The density env/help line now compacts separators and labels while preserving required env, JSON soft, and help docs. | Evidence: `prose` drops below 360; required env, JSON soft, and help docs still pass. |
 | Context anomaly drilldown density env prose label docs guard | Prevents future prose compaction from breaking the self-test’s env-line anchor. | The density checker now requires the compact `Density env:` label and self-tests its removal. | Evidence: no runbook growth; removing the env-line label fails density output-doc coverage. |
+| Context anomaly drilldown density doc phrase count split | Helps automation distinguish generic output-doc phrases, alias docs, and density anchor docs. | Default density output now reports `dphr` for required density anchor docs. | Evidence: default output remains under text cap; `dphr` equals required density anchor count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density doc phrase count split | Helps automation distinguish generic output-doc phrases, alias docs, and density anchor docs. | Add a compact count for required density doc anchors without widening JSON beyond budget. | Compact metric: default output remains under text cap; correctness metric: density doc count equals required density anchor count. |
+| Context anomaly drilldown density doc phrase JSON parity | Lets JSON consumers inspect density anchor coverage without parsing default text. | Add the density anchor doc count to JSON while preserving JSON headroom. | Compact metric: JSON stays under budget; correctness metric: JSON count equals required density anchor count. |
 
 ## Research Rules
 
