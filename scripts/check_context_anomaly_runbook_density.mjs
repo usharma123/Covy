@@ -1687,12 +1687,16 @@ if (args.includes("--self-test")) {
     expected_default_output_mutation_fields: expectedCount,
     actual_default_output_mutation_fields: actualCount,
   });
+  const defaultOutputMutationFieldCountsMismatch = (sample) =>
+    sample.actualCount !== sample.expectedCount;
   const assertDefaultOutputMutationFieldCount = () => {
-    const { expectedCount, actualCount } =
-      defaultOutputMutationFieldCountSample();
-    if (actualCount !== expectedCount) {
+    const countSample = defaultOutputMutationFieldCountSample();
+    if (defaultOutputMutationFieldCountsMismatch(countSample)) {
       failDefaultOutputMutation(
-        defaultOutputMutationFieldCountDetails(expectedCount, actualCount),
+        defaultOutputMutationFieldCountDetails(
+          countSample.expectedCount,
+          countSample.actualCount,
+        ),
       );
     }
   };

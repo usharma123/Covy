@@ -483,12 +483,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation count details helper | Keeps mutation count diagnostic keys behind one helper. | Extracted `defaultOutputMutationFieldCountDetails()` for expected/actual mutation field diagnostics. | Evidence: no runtime output growth; count diagnostics stay consistent. |
 | Context anomaly drilldown density self-test default output mutation count samples | Keeps count invariant expected and actual values single-read. | Stored expected/actual mutation counts in locals before comparison and diagnostics. | Evidence: no runtime output growth; count comparison and diagnostics use the same sampled values. |
 | Context anomaly drilldown density self-test default output mutation count sample helper | Names the expected/actual count sample object. | Extracted `defaultOutputMutationFieldCountSample()` returning expected and actual mutation field counts. | Evidence: no runtime output growth; count samples stay single-source. |
+| Context anomaly drilldown density self-test default output mutation count mismatch helper | Names the count mismatch predicate. | Extracted `defaultOutputMutationFieldCountsMismatch(sample)` for the actual-vs-expected comparison. | Evidence: no runtime output growth; count mismatch logic stays single-source. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation count mismatch helper | Names the count mismatch predicate. | Extract `defaultOutputMutationFieldCountsMismatch(sample)` for the actual-vs-expected comparison. | Compact metric: no runtime output growth; correctness metric: count mismatch logic stays single-source. |
+| Context anomaly drilldown density self-test default output mutation count details sample | Lets count diagnostics consume the same sample object as the predicate. | Change `defaultOutputMutationFieldCountDetails()` to accept the count sample object instead of separate expected/actual values. | Compact metric: no runtime output growth; correctness metric: count diagnostics consume the same sample as comparison. |
 
 ## Research Rules
 
