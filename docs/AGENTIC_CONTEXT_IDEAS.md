@@ -204,12 +204,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text width docs | Helps maintainers interpret text width failures without reading checker code. | The runbook now documents `text_width` next to `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`. | Evidence: runbook remains within line/prose/table budgets and label plus env match checker output. |
 | Context anomaly drilldown density text width docs coverage | Prevents the width metric docs from drifting away from the text-width guard. | The density checker now requires `text_width` and `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX` in the same runbook line. | Evidence: default output stays one line and splitting the pair fails missing output docs. |
 | Context anomaly drilldown density text width pair output | Helps automation see that the text-width doc pair is explicitly covered. | Default density output now reports `text_width_docs=1` while JSON remains unchanged. | Evidence: default output remains under text width cap and count follows the paired-doc requirement. |
+| Context anomaly drilldown density text width pair self-test | Proves `text_width_docs=1` is tied to the paired-doc requirement. | Density self-test now asserts text-width paired-doc count and rejects default output missing `text_width_docs`. | Evidence: self-test output stays one line and splitting the pair changes the count or fails docs coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text width pair self-test | Proves `text_width_docs=1` is tied to the paired-doc requirement. | Add a self-test assertion for text-width paired-doc count and parser coverage. | Compact metric: self-test output stays one line; correctness metric: splitting the pair changes the count or fails docs coverage. |
+| Context anomaly drilldown density text output compact aliases | Reduces default text width while preserving parseable labels. | Consider shortening low-value count labels or moving secondary counts behind `--json` if default text nears cap again. | Compact metric: `text_width` drops below 210; correctness metric: parser and required docs still pass. |
 
 ## Research Rules
 

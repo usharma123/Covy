@@ -541,6 +541,19 @@ if (args.includes("--self-test")) {
     console.error(`actual=${missingLabelError ?? "ok"}`);
     process.exit(1);
   }
+  const missingTextWidthDocsError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ text_width_docs=\d+/, "")),
+    result,
+  );
+  if (
+    missingTextWidthDocsError !==
+    "missing_default_output_field=text_width_docs"
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected=missing_default_output_field=text_width_docs`);
+    console.error(`actual=${missingTextWidthDocsError ?? "ok"}`);
+    process.exit(1);
+  }
   assertSelfTest(
     evaluate(runbook, result.line_count - 1),
     "context_anomaly_runbook_density_too_many_lines",
