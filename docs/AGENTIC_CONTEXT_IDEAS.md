@@ -107,12 +107,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit script | Turns the multi-command hidden-sample stability audit into one repeatable local command. | `scripts/audit_context_anomaly_hidden_samples.mjs` now runs smoke modes, workflow-equivalent formatter fields, fixture dashboard replay, digest, and verifier checks. | Evidence: success output is seven lines; script fails if any audited command or expected failure mode drifts. |
 | Context anomaly drilldown audit workflow path | Keeps the audit script covered by the context-anomalies workflow triggers. | The context-anomalies workflow path filters now include `scripts/audit_context_anomaly_hidden_samples.mjs` for pull requests and pushes. | Evidence: two path-filter entries were added, so audit script changes trigger the workflow. |
 | Context anomaly drilldown audit workflow execution | Makes CI run the same one-command local smoke audit instead of only the lower-level pieces. | The context-anomalies workflow now runs `node scripts/audit_context_anomaly_hidden_samples.mjs` after building Packet28. | Evidence: audit step adds no summary lines and fails the workflow if the local hidden-sample audit fails. |
+| Context anomaly drilldown audit threshold docs | Helps agents understand why the audit script allows two live high anomalies while the workflow threshold step remains stricter. | The context anomaly runbook now distinguishes the audit script's `--max-high 2` smoke tolerance from the workflow release gate's `--max-high 0`. | Evidence: runbook remains under 45 lines and names both thresholds next to the audit command context. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit threshold docs | Helps agents understand why the audit script allows two live high anomalies while the workflow threshold step remains stricter. | Document the audit script's `--max-high 2` live-verifier tolerance in the runbook. | Compact metric: runbook remains under 45 lines; correctness metric: note distinguishes local audit tolerance from release threshold. |
+| Context anomaly drilldown audit strict-mode flag | Lets agents run the audit script with the same strict high-anomaly budget as release CI. | Add a `--strict` flag to the audit script that uses `--max-high 0` for the verifier check. | Compact metric: strict failure output stays under eight lines; correctness metric: default audit remains tolerant while strict mode matches release threshold. |
 
 ## Research Rules
 
