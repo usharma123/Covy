@@ -133,12 +133,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit JSON checksum docs | Helps maintainers reproduce the structured audit artifact checksum locally. | The runbook artifact note now says the same checksum helper applies to the text and JSON audit artifact paths. | Evidence: runbook remains under 45 lines and the command matches the workflow checksum helper invocation. |
 | Context anomaly drilldown audit artifact fallback | Keeps the workflow summary useful if audit artifact creation fails before checksum files exist. | Audit checksum summary fields now fall back to `missing-audit-text` or `missing-audit-json` when artifact files are absent. | Evidence: summary line count does not grow; missing artifact checksum commands report named placeholders instead of failing the summary step. |
 | Context anomaly drilldown audit artifact fallback docs | Helps maintainers interpret placeholder audit checksums in failed workflow summaries. | The runbook artifact note now explains `missing-audit-text/json` placeholders. | Evidence: runbook remains under 45 lines and placeholders match workflow fallback strings. |
+| Context anomaly drilldown audit summary field budget | Prevents the growing context anomaly summary from becoming noisy in failed CI runs. | `scripts/check_context_anomaly_summary_budget.mjs` now checks workflow summary line count, template width, and required audit, fixture, trend, and formatter labels. | Evidence: default output reports `lines=22/24`; JSON output stays compact and includes all required labels. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit summary field budget | Prevents the growing context anomaly summary from becoming noisy in failed CI runs. | Add a local script check that counts context anomaly summary lines and max line length from the workflow template. | Compact metric: summary stays under an explicit line and width budget; correctness metric: required audit, fixture, and formatter fields are present. |
+| Context anomaly drilldown audit summary budget self-test | Proves the summary-budget checker catches both noisy summaries and missing fields. | Add a self-test mode that exercises low line budget, low width budget, and missing-label fixtures. | Compact metric: self-test output is one line; correctness metric: each expected failure mode is verified. |
 
 ## Research Rules
 
