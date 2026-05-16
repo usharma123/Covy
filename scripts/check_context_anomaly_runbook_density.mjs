@@ -1969,30 +1969,33 @@ if (args.includes("--self-test")) {
           "`default_output_iterations`,`text_width_docs_checked`";
         const swappedJsonIterationsTextWidthPairDoc =
           "`text_width_docs_checked`,`default_output_iterations`";
-        assertSelfTestMissing(
-          evaluate(
-            runbook.replace(
-              jsonHeadroomOrderDoc,
-              swappedJsonHeadroomOrderDoc,
-            ),
-            maxLines,
-          ),
-          "context_anomaly_runbook_density_missing_output_docs",
-          jsonHeadroomOrderDoc,
-          "swapped_default_output_headroom_json_doc_order",
-        );
-        assertSelfTestMissing(
-          evaluate(
-            runbook.replace(
-              jsonIterationsTextWidthPairDoc,
-              swappedJsonIterationsTextWidthPairDoc,
-            ),
-            maxLines,
-          ),
-          "context_anomaly_runbook_density_missing_output_docs",
-          jsonHeadroomOrderDoc,
-          "swapped_default_output_iterations_json_doc_order",
-        );
+        const jsonFieldOrderMutations = [
+          {
+            caseName: "swapped_default_output_headroom_json_doc_order",
+            expectedMissingDoc: jsonHeadroomOrderDoc,
+            originalDoc: jsonHeadroomOrderDoc,
+            swappedDoc: swappedJsonHeadroomOrderDoc,
+          },
+          {
+            caseName: "swapped_default_output_iterations_json_doc_order",
+            expectedMissingDoc: jsonHeadroomOrderDoc,
+            originalDoc: jsonIterationsTextWidthPairDoc,
+            swappedDoc: swappedJsonIterationsTextWidthPairDoc,
+          },
+        ];
+        for (const {
+          caseName,
+          expectedMissingDoc,
+          originalDoc,
+          swappedDoc,
+        } of jsonFieldOrderMutations) {
+          assertSelfTestMissing(
+            evaluate(runbook.replace(originalDoc, swappedDoc), maxLines),
+            "context_anomaly_runbook_density_missing_output_docs",
+            expectedMissingDoc,
+            caseName,
+          );
+        }
       };
       const leadingJsonFieldDocs = [
         ["`alias_docs_checked`", "missing_alias_docs_checked_json_doc"],
