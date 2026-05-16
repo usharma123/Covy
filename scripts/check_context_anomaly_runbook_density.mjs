@@ -1679,18 +1679,17 @@ if (args.includes("--self-test")) {
   const expectedDefaultOutputMutationFieldCount = () =>
     defaultOutputMutationFields().length;
   const actualDefaultOutputMutationFieldCount = () => defaultTextFields.length;
-  const defaultOutputMutationFieldCountDetails = () => ({
-    expected_default_output_mutation_fields:
-      expectedDefaultOutputMutationFieldCount(),
-    actual_default_output_mutation_fields:
-      actualDefaultOutputMutationFieldCount(),
+  const defaultOutputMutationFieldCountDetails = (expectedCount, actualCount) => ({
+    expected_default_output_mutation_fields: expectedCount,
+    actual_default_output_mutation_fields: actualCount,
   });
   const assertDefaultOutputMutationFieldCount = () => {
-    if (
-      actualDefaultOutputMutationFieldCount() !==
-      expectedDefaultOutputMutationFieldCount()
-    ) {
-      failDefaultOutputMutation(defaultOutputMutationFieldCountDetails());
+    const expectedCount = expectedDefaultOutputMutationFieldCount();
+    const actualCount = actualDefaultOutputMutationFieldCount();
+    if (actualCount !== expectedCount) {
+      failDefaultOutputMutation(
+        defaultOutputMutationFieldCountDetails(expectedCount, actualCount),
+      );
     }
   };
   const assertDefaultOutputMutations = () => {
