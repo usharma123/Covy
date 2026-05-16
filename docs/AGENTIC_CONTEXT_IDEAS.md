@@ -414,12 +414,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper workflow-command sweep | Extends exact-detail coverage across every required workflow command doc. | Self-test now mutates every `requiredWorkflowDensityCommands` entry and asserts that exact command appears in `missing`. | Evidence: no output growth; every workflow-command drift reports its exact missing command. |
 | Context anomaly drilldown density missing-detail helper command sweep dedupe | Avoids redundant command mutations after adding required and workflow command sweeps. | Removed single-command duplicate mutations now covered by table-driven sweeps. | Evidence: self-test stays green; no duplicate case coverage remains for command docs. |
 | Context anomaly drilldown density missing-detail helper failure sweep dedupe | Avoids redundant failure-code mutations after adding the table-driven failure sweep. | Removed the single workflow failure-code duplicate mutation now covered by `requiredFailureCodes`. | Evidence: self-test stays green; no duplicate case coverage remains for failure docs. |
+| Context anomaly drilldown density missing-detail helper env-doc detail adoption | Extends exact missing-detail coverage to required env var docs. | The JSON max env-doc mutation now asserts `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX` appears in `missing`. | Evidence: no output growth; env-doc mutations report exact missing vars. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper env-doc detail adoption | Extends exact missing-detail coverage to required env var docs. | Convert one env-doc mutation to assert its missing env var detail. | Compact metric: no output growth; correctness metric: env-doc mutations report exact missing vars. |
+| Context anomaly drilldown density missing-detail helper env-doc sweep | Extends exact-detail coverage across every required env var doc. | Add table-driven env-doc mutations for all `requiredEnvDocs`. | Compact metric: no output growth; correctness metric: every env-doc drift reports its exact missing var. |
 
 ## Research Rules
 
