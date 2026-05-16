@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const scriptPath = fileURLToPath(import.meta.url);
+const repoRoot = join(dirname(scriptPath), "..");
 const runbookPath = join(repoRoot, "docs/context-anomalies/RUNBOOK.md");
 const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
@@ -99,6 +101,29 @@ function assertSelfTest(result, expectedCode) {
   }
 }
 
+function assertEnvFailure(env, expectedCode) {
+  try {
+    execFileSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    if (output.includes(expectedCode)) {
+      return;
+    }
+    console.error("context_anomaly_runbook_density_self_test_env_failed");
+    console.error(`expected=${expectedCode}`);
+    console.error(`actual=${output.trim()}`);
+    process.exit(1);
+  }
+  console.error("context_anomaly_runbook_density_self_test_env_failed");
+  console.error(`expected=${expectedCode}`);
+  console.error("actual=ok");
+  process.exit(1);
+}
+
 const runbook = readFileSync(runbookPath, "utf8");
 const result = evaluate(runbook, maxLines);
 if (args.includes("--self-test")) {
@@ -124,6 +149,10 @@ if (args.includes("--self-test")) {
       maxLines,
     ),
     "context_anomaly_runbook_density_missing_commands",
+  );
+  assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
+    "context_anomaly_runbook_density_too_many_lines",
   );
   console.log("context_anomaly_runbook_density_self_test_ok");
   process.exit(0);

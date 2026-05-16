@@ -157,12 +157,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density self-coverage | Makes the density checker protect its own runbook command row. | The density checker required-command list now includes `node scripts/check_context_anomaly_runbook_density.mjs --self-test`. | Evidence: checker output stays one line and self-test proves removing the density row fails the missing-command check. |
 | Context anomaly drilldown runbook density JSON docs | Helps automation consumers understand the density checker payload. | The runbook density row now documents `--json` fields `line_count`, `max_lines`, and `commands_checked`. | Evidence: runbook remains under 45 lines and documented fields match checker JSON output. |
 | Context anomaly drilldown runbook density env docs | Helps maintainers tune the runbook density checker without reading script code. | The runbook density row now documents `P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES`. | Evidence: runbook remains under 45 lines and the env var name matches script configuration. |
+| Context anomaly drilldown runbook density env self-test | Proves the runbook density env knob is wired to the line-budget failure. | The density self-test now shells back with `P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES=10`. | Evidence: self-test output remains one line and the forced env reports `context_anomaly_runbook_density_too_many_lines`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density env self-test | Proves the runbook density env knob is wired to the line-budget failure. | Extend density self-test to shell back with `P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES=10`. | Compact metric: self-test output remains one line; correctness metric: forced env reports `context_anomaly_runbook_density_too_many_lines`. |
+| Context anomaly drilldown runbook density failure docs | Helps maintainers map density-check failures to fixes quickly. | Document `context_anomaly_runbook_density_too_many_lines` and `context_anomaly_runbook_density_missing_commands`. | Compact metric: runbook remains under 45 lines or help remains compact; correctness metric: failure names match checker output. |
 
 ## Research Rules
 
