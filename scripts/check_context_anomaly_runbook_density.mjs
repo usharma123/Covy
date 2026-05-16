@@ -117,6 +117,7 @@ const requiredOutputDocPhrases = [
   "`row_soft_ok`",
   "`row_soft_max`",
   "`max_json_bytes=352`",
+  "`help<=120`",
 ];
 const requiredAliasDocPhrases = [
   "`fc`=failure codes",
@@ -718,6 +719,10 @@ if (args.includes("--self-test")) {
       runbook.replace(`\`max_json_bytes=${defaultMaxJsonBytes}\``, ""),
       maxLines,
     ),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace(`\`help<=${maxHelpLineLength}\``, ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
