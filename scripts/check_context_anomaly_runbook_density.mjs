@@ -28,7 +28,7 @@ const maxDensityProseLineLength = Number.parseInt(
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
   "default: validate runbook line budget, row width, density prose width, docs, and workflow density commands",
-  "--json: print ok, budgets, max_table_row, commands_checked, failure_codes_checked, workflow_commands_checked, and max_json_bytes",
+  "--json: print ok, budgets, width metrics, command counts, and max_json_bytes",
   "--self-test: verify line, width, missing-command, and JSON byte failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
 ];
@@ -77,7 +77,7 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_prose_too_wide",
   "context_anomaly_runbook_density_json_too_long",
 ];
-const requiredOutputLabels = ["failure_codes", "workflow_commands"];
+const requiredOutputLabels = ["failure_codes", "workflow_commands", "prose"];
 
 function evaluate(runbook, lineBudget) {
   const lineCount = runbook.endsWith("\n")
@@ -161,6 +161,8 @@ function evaluate(runbook, lineBudget) {
     max_lines: lineBudget,
     max_table_row: maxActualTableRowLength,
     max_table_row_allowed: maxTableRowLength,
+    max_density_prose_line: maxActualDensityProseLineLength,
+    max_density_prose_line_allowed: maxDensityProseLineLength,
     commands_checked: requiredCommands.length,
     failure_codes_checked: requiredFailureCodes.length,
   };
@@ -247,6 +249,8 @@ function successPayload(result, workflow, jsonBudget) {
     max_lines: result.max_lines,
     max_table_row: result.max_table_row,
     max_table_row_allowed: result.max_table_row_allowed,
+    max_density_prose_line: result.max_density_prose_line,
+    max_density_prose_line_allowed: result.max_density_prose_line_allowed,
     commands_checked: result.commands_checked,
     failure_codes_checked: result.failure_codes_checked,
     workflow_commands_checked: workflow.workflow_commands_checked,
@@ -413,5 +417,6 @@ if (args.includes("--json")) {
     `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines} max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed} commands=${payload.commands_checked}`,
     `failure_codes=${payload.failure_codes_checked}`,
     `workflow_commands=${payload.workflow_commands_checked}`,
+    `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
   );
 }
