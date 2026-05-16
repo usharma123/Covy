@@ -63,6 +63,7 @@ struct DashboardReport {
     handoff_readiness: HandoffReadinessTile,
     reducer_drift: ReducerDriftTile,
     memory_lint: MemoryLintTile,
+    context_anomalies: ContextAnomalyTile,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -137,6 +138,16 @@ struct MemoryLintTile {
     recurring_issue_kinds: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Default)]
+struct ContextAnomalyTile {
+    run_count: usize,
+    latest_status: String,
+    latest_anomaly_count: usize,
+    latest_high_count: usize,
+    latest_hidden_categories: Vec<String>,
+    recurring_hidden_categories: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct MemoryLintHistoryRecord {
     created_at_unix_ms: i64,
@@ -207,6 +218,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
     let handoff_readiness = handoff_readiness_tile(&root)?;
     let reducer_drift = reducer_drift_tile(&root)?;
     let memory_lint = memory_lint_tile(&root)?;
+    let context_anomalies = context_anomaly_tile(&root)?;
     let windsurf_rules = root.join(".windsurf").join("rules").join("packet28.md");
     let windsurf_status = if windsurf_rules.exists() {
         "rules_present"
@@ -245,6 +257,7 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         handoff_readiness,
         reducer_drift,
         memory_lint,
+        context_anomalies,
     };
 
     let format = args.format.trim().to_ascii_lowercase();
@@ -315,6 +328,14 @@ pub fn run(args: DashboardArgs) -> Result<i32> {
         println!(
             "memory_lint_latest_issue_count={}",
             report.memory_lint.latest_issue_count
+        );
+        println!(
+            "context_anomaly_latest_status={}",
+            report.context_anomalies.latest_status
+        );
+        println!(
+            "context_anomaly_latest_high_count={}",
+            report.context_anomalies.latest_high_count
         );
     }
     Ok(0)
@@ -520,6 +541,25 @@ fn memory_lint_tile(root: &Path) -> Result<MemoryLintTile> {
         latest_issue_count: latest.issue_count as usize,
         latest_issue_kinds: latest.issue_kinds.clone(),
         recurring_issue_kinds,
+    })
+}
+
+fn context_anomaly_tile(root: &Path) -> Result<ContextAnomalyTile> {
+    let records = load_context_anomaly_history(root, 32)?;
+    if records.is_empty() {
+        return Ok(ContextAnomalyTile {
+            latest_status: "none".to_string(),
+            ..ContextAnomalyTile::default()
+        });
+    }
+    let latest = records.last().expect("non-empty context anomaly history");
+    Ok(ContextAnomalyTile {
+        run_count: records.len(),
+        latest_status: if latest.ok { "ready" } else { "blocked" }.to_string(),
+        latest_anomaly_count: latest.anomaly_count as usize,
+        latest_high_count: latest.high_count as usize,
+        latest_hidden_categories: latest.hidden_categories.clone(),
+        recurring_hidden_categories: recurring_context_hidden_categories(&records),
     })
 }
 
@@ -1066,6 +1106,10 @@ fn render_dashboard_tui(report: &DashboardReport, panel: DashboardPanel) -> Stri
                 "memory_lint_latest_status={}\nmemory_lint_latest_issue_count={}\n",
                 report.memory_lint.latest_status, report.memory_lint.latest_issue_count
             ));
+            out.push_str(&format!(
+                "context_anomaly_latest_status={}\ncontext_anomaly_latest_high_count={}\n",
+                report.context_anomalies.latest_status, report.context_anomalies.latest_high_count
+            ));
             out.push_str("handoff_latest_blockers:\n");
             push_tui_list(
                 &mut out,
@@ -1226,6 +1270,11 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
         &report.reducer_drift.latest_status,
     );
     push_metric(&mut html, "Memory lint", &report.memory_lint.latest_status);
+    push_metric(
+        &mut html,
+        "Context anomalies",
+        &report.context_anomalies.latest_status,
+    );
     html.push_str("</section>");
 
     html.push_str("<h2>Memory Topics</h2><table><tr><th>Topic</th><th>Count</th></tr>");
@@ -1320,6 +1369,34 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     ));
     html.push_str("</table>");
 
+    html.push_str("<h2>Context Anomalies</h2><table><tr><th>Signal</th><th>Value</th></tr>");
+    html.push_str(&format!(
+        "<tr><td>Latest status</td><td>{}</td></tr>",
+        escape_html(&report.context_anomalies.latest_status)
+    ));
+    html.push_str(&format!(
+        "<tr><td>Latest anomalies</td><td>{}</td></tr>",
+        report.context_anomalies.latest_anomaly_count
+    ));
+    html.push_str(&format!(
+        "<tr><td>Latest high</td><td>{}</td></tr>",
+        report.context_anomalies.latest_high_count
+    ));
+    html.push_str(&format!(
+        "<tr><td>Latest hidden</td><td><code>{}</code></td></tr>",
+        escape_html(&report.context_anomalies.latest_hidden_categories.join(","))
+    ));
+    html.push_str(&format!(
+        "<tr><td>Recurring hidden</td><td><code>{}</code></td></tr>",
+        escape_html(
+            &report
+                .context_anomalies
+                .recurring_hidden_categories
+                .join(",")
+        )
+    ));
+    html.push_str("</table>");
+
     html.push_str("<h2>Integration Health</h2><table><tr><th>Integration</th><th>Status</th></tr>");
     for (name, status) in &report.integration_health {
         html.push_str(&format!(
@@ -1410,6 +1487,20 @@ mod tests {
         }
     }
 
+    fn context_anomaly_payload(
+        ok: bool,
+        anomaly_count: u64,
+        high_count: u64,
+        hidden_categories: Vec<&str>,
+    ) -> Value {
+        serde_json::json!({
+            "ok": ok,
+            "anomaly_count": anomaly_count,
+            "high_count": high_count,
+            "hidden_categories": hidden_categories
+        })
+    }
+
     #[test]
     fn reducer_drift_tile_reports_recurring_and_cleared_latest_failure() {
         let root = tempfile::tempdir().unwrap();
@@ -1441,6 +1532,39 @@ mod tests {
         assert_eq!(tile.latest_issue_count, 0);
         assert!(tile.latest_issue_kinds.is_empty());
         assert_eq!(tile.recurring_issue_kinds, vec!["runtime_specific_memory"]);
+        assert!(serde_json::to_string(&tile).unwrap().len() < 768);
+    }
+
+    #[test]
+    fn context_anomaly_tile_reports_recurring_hidden_after_clean_latest() {
+        let root = tempfile::tempdir().unwrap();
+        record_context_anomaly_history(
+            root.path(),
+            &context_anomaly_payload(false, 3, 1, vec!["fallback_provenance"]),
+        )
+        .unwrap();
+        record_context_anomaly_history(
+            root.path(),
+            &context_anomaly_payload(false, 3, 1, vec!["fallback_provenance"]),
+        )
+        .unwrap();
+        record_context_anomaly_history(
+            root.path(),
+            &context_anomaly_payload(true, 0, 0, Vec::new()),
+        )
+        .unwrap();
+
+        let tile = context_anomaly_tile(root.path()).unwrap();
+
+        assert_eq!(tile.run_count, 3);
+        assert_eq!(tile.latest_status, "ready");
+        assert_eq!(tile.latest_anomaly_count, 0);
+        assert_eq!(tile.latest_high_count, 0);
+        assert!(tile.latest_hidden_categories.is_empty());
+        assert_eq!(
+            tile.recurring_hidden_categories,
+            vec!["fallback_provenance"]
+        );
         assert!(serde_json::to_string(&tile).unwrap().len() < 768);
     }
 
@@ -1629,12 +1753,7 @@ mod tests {
     #[test]
     fn context_anomaly_digest_reports_recurring_hidden_history() {
         let root = tempfile::tempdir().unwrap();
-        let payload = serde_json::json!({
-            "ok": true,
-            "anomaly_count": 3,
-            "high_count": 1,
-            "hidden_categories": ["fallback_provenance"]
-        });
+        let payload = context_anomaly_payload(true, 3, 1, vec!["fallback_provenance"]);
         record_context_anomaly_history(root.path(), &payload).unwrap();
         record_context_anomaly_history(root.path(), &payload).unwrap();
 
