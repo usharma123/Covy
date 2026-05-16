@@ -1676,12 +1676,12 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutation(mutationField, staleValue);
   };
   const defaultOutputMutationFields = () => defaultTextFields;
-  const expectedDefaultOutputMutationFieldCount = () =>
+  const expectedDefaultOutputMutationFieldListCount = () =>
     defaultOutputMutationFields().length;
   const actualStaleDefaultOutputValueCount = () =>
     Object.keys(staleDefaultOutputValues).length;
   const defaultOutputMutationFieldCountSample = () => ({
-    expectedMutationFields: expectedDefaultOutputMutationFieldCount(),
+    expectedMutationFields: expectedDefaultOutputMutationFieldListCount(),
     actualMutationFields: actualStaleDefaultOutputValueCount(),
   });
   const defaultOutputMutationFieldCountsMismatch = (sample) =>
