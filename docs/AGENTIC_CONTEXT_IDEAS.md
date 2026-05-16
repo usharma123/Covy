@@ -318,12 +318,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density label width docs guard | Helps maintainers preserve the meaning of the new `dlab` field without reading checker source. | Self-test now has a dedicated missing-alias mutation for `dlab` docs. | Evidence: docs stay inside row cap; missing `dlab` alias fails self-test. |
 | Context anomaly drilldown density label width JSON docs guard | Helps JSON consumers find the full `density_label_line_width` field without source reading. | Self-test now has a dedicated missing-doc mutation for the JSON field phrase. | Evidence: JSON prose stays below current prose max; missing field docs fail self-test. |
 | Context anomaly drilldown density label width output order guard | Keeps the new `dlab` metric in the same order across docs, renderer, and parser checks. | Self-test now swaps `dlab`/`jhead` in the documented key list and expects output-doc failure. | Evidence: docs stay under row cap; order drift fails output-doc coverage. |
+| Context anomaly drilldown density label width headroom guard | Keeps `dlab` from consuming the remaining compact text margin unnoticed. | Self-test now requires at least 8 characters of default-output headroom after rendering `dlab`. | Evidence: default output keeps reserved slack; low text cap still fails. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density label width headroom guard | Keeps `dlab` from consuming the remaining compact text margin unnoticed. | Add an explicit self-test assertion for minimum default-output headroom after rendering `dlab`. | Compact metric: default output keeps reserved slack; correctness metric: low text cap still fails. |
+| Context anomaly drilldown density label width headroom docs | Helps maintainers understand why the text output cap has reserved slack. | Document the default-output headroom expectation beside the text-width docs. | Compact metric: row/prose stay under caps; correctness metric: missing headroom wording fails docs coverage. |
 
 ## Research Rules
 

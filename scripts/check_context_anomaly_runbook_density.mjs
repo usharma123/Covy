@@ -41,6 +41,7 @@ const maxDefaultOutputLength = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX ?? "210",
   10,
 );
+const minDefaultOutputHeadroom = 8;
 const maxHelpLineLength = 120;
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
@@ -948,6 +949,15 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_text_width=${defaultOutputLine.length}`);
     console.error(`actual_text_width=${parsedDefaultOutput.width}`);
+    process.exit(1);
+  }
+  const defaultOutputHeadroom = maxDefaultOutputLength - defaultOutputLine.length;
+  if (defaultOutputHeadroom < minDefaultOutputHeadroom) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `expected_text_headroom_at_least=${minDefaultOutputHeadroom}`,
+    );
+    console.error(`actual_text_headroom=${defaultOutputHeadroom}`);
     process.exit(1);
   }
   if (parseDefaultOutput("bad_prefix lines=44/44") !== null) {
