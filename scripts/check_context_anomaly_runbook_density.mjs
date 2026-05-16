@@ -499,6 +499,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
   if (
     parsed.cmds !== String(resultDetails.commands_checked) ||
     parsed.labels !== String(resultDetails.output_labels_checked) ||
+    parsed.dphr !== String(resultDetails.density_doc_phrases_checked) ||
     parsed.soft !== (resultDetails.row_soft_ok ? "ok" : "over")
   ) {
     return "default_output_parse_mismatch";
