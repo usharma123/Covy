@@ -246,12 +246,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density env prose line guard | Prevents future env prose compaction from relying only on the `Env:` glossary phrase. | The density checker now requires a standalone `Env:` prose line, separate from the glossary phrase. | Evidence: no runbook growth; removing the env prose anchor fails output-doc coverage. |
 | Context anomaly drilldown density prose anchor count output | Helps automation see how many standalone density prose anchors are guarded. | Default output now reports `anc` for required `Env:`/`JSON:` line anchors. | Evidence: default output stays under text cap; `anc` equals required line-prefix count. |
 | Context anomaly drilldown density prose anchor parser coverage | Proves parser validation tracks the new `anc` count. | Default output parsing now verifies `anc`, and self-test mutates `anc=0` to require a field-specific mismatch. | Evidence: default output stays under text cap; stale `anc` fails parser validation. |
+| Context anomaly drilldown density prose anchor JSON parity | Lets JSON consumers inspect standalone prose-anchor coverage without parsing default text. | JSON success output now includes `density_doc_anchors_checked` with a documented 448-byte cap. | Evidence: JSON stays under budget; JSON count equals required line-prefix count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density prose anchor JSON parity | Lets JSON consumers inspect standalone prose-anchor coverage without parsing default text. | Add the prose anchor count to JSON while preserving byte/headroom budgets. | Compact metric: JSON stays under budget; correctness metric: JSON count equals required line-prefix count. |
+| Context anomaly drilldown density prose anchor JSON docs | Helps maintainers discover `density_doc_anchors_checked` without inspecting checker source. | Document `density_doc_anchors_checked` with the compact JSON fields and self-test removal. | Compact metric: prose remains under width budget; correctness metric: removing the field doc fails output-doc coverage. |
 
 ## Research Rules
 
