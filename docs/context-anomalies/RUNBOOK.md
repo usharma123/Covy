@@ -1,31 +1,19 @@
 # Context Anomaly Trends
 
-Context anomaly history is written by:
+Use this command table before treating a compact anomaly summary as complete:
 
-```sh
-Packet28 verify context-anomalies --root . --json
-```
+| Need | Command | Expected local check |
+|---|---|---|
+| Write live history | `Packet28 verify context-anomalies --root . --json` | Appends compact JSONL to `.packet28/context-anomaly-history.jsonl`. |
+| Replay fixture trend | `Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json` | Reports fixture `latest_status=ready`. |
+| Check sample formatter | `node scripts/check_context_anomaly_hidden_samples.mjs` | Prints one `context_anomaly_hidden_sample_fixture_ok=...` line. |
+| Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 
-The verifier appends compact JSONL records to `.packet28/context-anomaly-history.jsonl`. `Packet28 dashboard` reads that live history and reports latest status, latest high count, latest hidden categories, and recurring hidden categories:
-
-```sh
-Packet28 dashboard --root . --json
-```
-
-Use the checked-in fixture when you need deterministic trend output without mutating live `.packet28` state:
-
-```sh
-Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json
-```
+`Packet28 dashboard --root . --json` reads live history and reports latest status, high count, hidden categories, and recurring hidden categories.
 
 The fixture should report `latest_status=ready` with recurring hidden `fallback_provenance`. That proves recurring hidden categories survive a final clean record. It should also report `recurring_hidden_samples` with `fallback_provenance=recent_fallbacks=1`.
 
-When live recurring hidden categories differ from the fixture, inspect the omitted categories before treating the digest as complete:
-
-```sh
-Packet28 verify context-anomalies --root . --max-high 2 --json
-Packet28 digest --root . --json
-```
+When live recurring hidden categories differ from the fixture, inspect the omitted categories before treating the digest as complete.
 
 `verify context-anomalies` emits `hidden_samples` for capped categories in the current digest. The dashboard trend tile emits `recurring_hidden_samples` from stored history, which gives the latest compact source sample for each recurring hidden category.
 

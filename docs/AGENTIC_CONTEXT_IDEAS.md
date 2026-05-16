@@ -83,12 +83,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown summary escaping | Keeps hidden sample summaries parseable when source signals contain delimiters. | Dashboard text summaries and CI hidden-sample summaries now percent-escape pair delimiters while preserving readable signal equals signs. | Evidence: `context_hidden_sample_summary_escapes_pair_delimiters`; delimiter-heavy fallback reasons remain one sample pair and CI summaries still cap output at 256 characters. |
 | Context anomaly drilldown summary golden fixture | Prevents Rust and workflow hidden-sample summary encoders from drifting apart. | A delimiter-heavy hidden-sample fixture now has a checked-in expected summary used by both a Rust unit test and workflow jq check. | Evidence: `context_hidden_sample_summary_matches_delimiter_fixture`; workflow summary step validates the same fixture before writing hidden sample lines. |
 | Context anomaly drilldown summary drift smoke | Gives maintainers a local command for checking hidden-sample summary fixtures without waiting for CI. | `scripts/check_context_anomaly_hidden_samples.mjs` now compares the delimiter fixture against the checked-in expected line and prints a one-line success summary. | Evidence: `node scripts/check_context_anomaly_hidden_samples.mjs`; exits nonzero on drift and prints one `context_anomaly_hidden_sample_fixture_ok=...` line on success. |
+| Context anomaly drilldown runbook command table | Helps agents choose the right context anomaly command without scanning prose. | The context anomaly runbook now has a four-row command table for live verify, fixture replay, formatter smoke, and digest inspection. | Evidence: runbook remains under 45 lines; `verify context-anomalies`, fixture dashboard replay, smoke script, and digest commands all have local validation paths. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook command table | Helps agents choose the right context anomaly command without scanning prose. | Add a compact command table for live verify, dashboard fixture replay, hidden-sample fixture smoke, and digest inspection. | Compact metric: runbook remains under 45 lines; correctness metric: every command in the table has a checked local validation path. |
+| Context anomaly drilldown table CI excerpt | Makes the runbook command table visible from GitHub summaries when context anomaly checks run. | Add the formatter smoke command result and runbook command-table pointer to the context-anomalies workflow summary. | Compact metric: summary grows by at most two lines; correctness metric: workflow fails before summary write if the formatter smoke drifts. |
 
 ## Research Rules
 
