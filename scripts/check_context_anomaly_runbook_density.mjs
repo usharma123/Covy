@@ -1882,20 +1882,26 @@ if (args.includes("--self-test")) {
     );
   };
   assertKeyValueOutputDocMutationSelfTest();
-  for (const label of defaultOutputFieldOrder) {
-    assertSelfTestMissing(
-      evaluate(
-        runbook.replace(
-          defaultOutputDocPhrase,
-          defaultOutputDocPhrase.replace(`\`${label}\``, `\`${label}_drift\``),
+  const assertDefaultOutputPhraseMutationSelfTests = () => {
+    for (const label of defaultOutputFieldOrder) {
+      assertSelfTestMissing(
+        evaluate(
+          runbook.replace(
+            defaultOutputDocPhrase,
+            defaultOutputDocPhrase.replace(
+              `\`${label}\``,
+              `\`${label}_drift\``,
+            ),
+          ),
+          maxLines,
         ),
-        maxLines,
-      ),
-      "context_anomaly_runbook_density_missing_output_docs",
-      defaultOutputDocPhrase,
-      `drifted_${label}_default_output_doc_phrase`,
-    );
-  }
+        "context_anomaly_runbook_density_missing_output_docs",
+        defaultOutputDocPhrase,
+        `drifted_${label}_default_output_doc_phrase`,
+      );
+    }
+  };
+  assertDefaultOutputPhraseMutationSelfTests();
   assertSelfTestMissing(
     evaluate(
       runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
