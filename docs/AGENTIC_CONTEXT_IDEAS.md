@@ -569,12 +569,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test default output mutation count failure helper order | Keeps the count failure helper beside the count assertion that calls it. | Verified `failDefaultOutputMutationFieldCount(sample)` sits directly above `assertDefaultOutputMutationFieldCount()`. | Evidence: no runtime output growth; count mismatch branch still reports through the adjacent failure helper. |
 | Context anomaly drilldown density self-test default output mutation count failure details name | Names the count failure diagnostic payload before reporting it. | Extracted `defaultOutputMutationFieldCountFailureDetails(sample)` around `defaultOutputMutationFieldCountDetails(sample)`. | Evidence: no runtime output growth; count mismatch still reports the same expected and actual counts. |
 | Context anomaly drilldown density self-test default output mutation count failure details order | Keeps the count failure details wrapper beside the failure helper. | Verified `defaultOutputMutationFieldCountFailureDetails(sample)` sits directly above `failDefaultOutputMutationFieldCount(sample)`. | Evidence: no runtime output growth; count failure still reports through the adjacent details wrapper. |
+| Context anomaly drilldown density self-test default output mutation count failure payload local | Names the count failure payload at the reporting boundary. | Extracted local `details = defaultOutputMutationFieldCountFailureDetails(sample)` inside `failDefaultOutputMutationFieldCount(sample)`. | Evidence: no runtime output growth; count failure still passes the same details object to `failDefaultOutputMutation`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test default output mutation count failure payload local | Names the count failure payload at the reporting boundary. | Extract local `details = defaultOutputMutationFieldCountFailureDetails(sample)` inside `failDefaultOutputMutationFieldCount(sample)`. | Compact metric: no runtime output growth; correctness metric: count failure still passes the same details object to `failDefaultOutputMutation`. |
+| Context anomaly drilldown density self-test default output mutation count failure payload order | Keeps the named count failure payload beside its report call. | Verify `const details = defaultOutputMutationFieldCountFailureDetails(sample)` is immediately passed to `failDefaultOutputMutation(details)`. | Compact metric: no runtime output growth; correctness metric: failure helper still reports the same count details payload. |
 
 ## Research Rules
 
