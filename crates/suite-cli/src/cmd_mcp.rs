@@ -976,6 +976,16 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.reducer_drift",
+                    "description": "Replay reducer golden raw-output fixtures and flag missing decisive markers from compact summaries or previews.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "fixture": {"type":"string"}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.hypothesis_add",
                     "description": "Record an active task hypothesis so it flows into Packet28 broker context and handoff state.",
                     "inputSchema": {
@@ -2042,6 +2052,16 @@ fn handle_tool_call(
                 false,
             )?
         }
+        "packet28.reducer_drift" => {
+            let request: ReducerDriftToolArgs = serde_json::from_value(arguments)?;
+            let fixture = root.join(
+                request
+                    .fixture
+                    .as_deref()
+                    .unwrap_or("docs/reducer-drift/fixtures.json"),
+            );
+            crate::cmd_verify::verify_reducer_drift_payload(&fixture)?
+        }
         "packet28.hypothesis_add" => {
             let mut request: HypothesisAddToolArgs = serde_json::from_value(arguments)?;
             request.task_id = Some(resolve_session_task_id(
@@ -2792,6 +2812,11 @@ struct VerifyExperimentsToolArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct ReducerDriftToolArgs {
+    fixture: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HypothesisAddToolArgs {
     task_id: Option<String>,
     id: Option<String>,
@@ -3143,6 +3168,18 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 "Packet28 experiment manifest ok={ok} experiments={experiments} issues={issues}."
             )
         }
+        "packet28.reducer_drift" => {
+            let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
+            let cases = payload
+                .get("case_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let issues = payload
+                .get("issue_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 reducer drift ok={ok} cases={cases} issues={issues}.")
+        }
         "packet28.hypothesis_add" => {
             let id = payload
                 .get("id")
@@ -3467,6 +3504,7 @@ mod tests {
             "packet28_validate_tool_outcome",
             "packet28_patch_risk",
             "packet28_verify_experiments",
+            "packet28_reducer_drift",
             "packet28_hypothesis_add",
             "packet28_hypothesis_list",
             "packet28_hypothesis_resolve",
@@ -3578,6 +3616,53 @@ mod tests {
         assert_eq!(response["structuredContent"]["ok"], true);
         assert_eq!(response["structuredContent"]["experiment_count"], 1);
         assert_eq!(response["structuredContent"]["issue_count"], 0);
+    }
+
+    #[test]
+    fn reducer_drift_tool_flags_missing_marker() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("docs/reducer-drift")).unwrap();
+        std::fs::write(
+            root.path().join("docs/reducer-drift/fixtures.json"),
+            r#"{
+              "cases": [{
+                "id": "mcp-missing-marker",
+                "command_argv": ["cargo", "test", "removed_failure"],
+                "stdout": "running 1 test\ntest removed_failure ... FAILED\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n",
+                "stderr": "",
+                "exit_code": 101,
+                "required_markers": ["FAIL removed_failure"]
+              }]
+            }"#,
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.reducer_drift",
+                "arguments": {}
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["ok"], false);
+        assert_eq!(response["structuredContent"]["issue_count"], 1);
+        assert_eq!(
+            response["structuredContent"]["issues"][0]["kind"],
+            Value::String("missing_marker".to_string())
+        );
+        assert!(response["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("issues=1"));
+        assert!(
+            serde_json::to_string(&response["structuredContent"])
+                .unwrap()
+                .len()
+                < 1024
+        );
     }
 
     #[test]
