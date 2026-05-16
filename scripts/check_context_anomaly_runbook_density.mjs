@@ -2116,15 +2116,18 @@ if (args.includes("--self-test")) {
     );
   };
   assertAliasGlossaryMutationSelfTests();
-  assertSelfTestMissing(
-    evaluate(
-      runbook.replace("`tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
-      maxLines,
-    ),
-    "context_anomaly_runbook_density_missing_output_docs",
-    "tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
-    "missing_width_env_pair",
-  );
+  const assertWidthEnvPairMutationSelfTest = () => {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replace("`tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_output_docs",
+      "tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
+      "missing_width_env_pair",
+    );
+  };
+  assertWidthEnvPairMutationSelfTest();
   assertSelfTestMissing(
     evaluate(runbook.replace("`thead>=8`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
