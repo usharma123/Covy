@@ -244,12 +244,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON prose line coverage | Proves the split `JSON:` line participates in prose-width calculation. | Density self-test now widens the `JSON:` line and verifies `max_density_prose_line` grows. | Evidence: default output remains one line; JSON prose participates in width calculation. |
 | Context anomaly drilldown density JSON prose label guard | Prevents future JSON prose compaction from dropping the `JSON:` line anchor. | The density checker now requires a standalone `JSON:` prose line, separate from the glossary phrase. | Evidence: no runbook growth; removing the JSON prose anchor fails output-doc coverage. |
 | Context anomaly drilldown density env prose line guard | Prevents future env prose compaction from relying only on the `Env:` glossary phrase. | The density checker now requires a standalone `Env:` prose line, separate from the glossary phrase. | Evidence: no runbook growth; removing the env prose anchor fails output-doc coverage. |
+| Context anomaly drilldown density prose anchor count output | Helps automation see how many standalone density prose anchors are guarded. | Default output now reports `anc` for required `Env:`/`JSON:` line anchors. | Evidence: default output stays under text cap; `anc` equals required line-prefix count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density prose anchor count output | Helps automation see how many standalone density prose anchors are guarded. | Add a compact count for required `Env:`/`JSON:` line anchors. | Compact metric: default output stays under text cap; correctness metric: anchor count equals required line-prefix count. |
+| Context anomaly drilldown density prose anchor parser coverage | Proves parser validation tracks the new `anc` count. | Add `anc` to parsed mismatch checks and reject stale anchor counts. | Compact metric: default output stays under text cap; correctness metric: stale `anc` fails parser validation. |
 
 ## Research Rules
 
