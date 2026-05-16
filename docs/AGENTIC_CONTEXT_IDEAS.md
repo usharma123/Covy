@@ -656,12 +656,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test sequence indentation order | Verifies the indented runner still ends before normal failure handling. | Verified the indented `runContextAnomalyDensitySelfTests()` body ends before invocation and the non-self-test failure path. | Evidence: no runtime output growth; indentation cleanup did not move execution boundaries. |
 | Context anomaly drilldown density self-test post-indent audit | Checks the fully indented self-test runner for remaining readability gaps. | Audited the indented runner and found only the overlong JSON field-doc order literals as a concrete cleanup target. | Evidence: no runtime output growth; next readability gap is explicitly queued. |
 | Context anomaly drilldown density self-test JSON field order literal cleanup | Shortens overlong JSON field-doc order literals. | Extracted constants for the default-output JSON order strings and swapped-order variants. | Evidence: no runtime output growth; JSON field-doc order checks still fail on swapped order. |
+| Context anomaly drilldown density self-test JSON field order literal order | Keeps JSON field-order constants close to the swap assertions. | Verified the extracted JSON field-order constants sit in `assertJsonFieldDocMutationSelfTests()` immediately before the swapped-order assertions. | Evidence: no runtime output growth; constants remain local to their coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON field order literal order | Keeps JSON field-order constants close to the swap assertions. | Verify the extracted JSON field-order constants sit in `assertJsonFieldDocMutationSelfTests()` immediately before the swapped-order assertions. | Compact metric: no runtime output growth; correctness metric: constants remain local to their coverage. |
+| Context anomaly drilldown density self-test post-cleanup line audit | Confirms no overlong lines remain in the indented self-test runner. | Run the post-cleanup line-length scan over the self-test runner and record whether more readability work remains. | Compact metric: no runtime output growth; correctness metric: line-length audit is explicit after literal cleanup. |
 
 ## Research Rules
 
