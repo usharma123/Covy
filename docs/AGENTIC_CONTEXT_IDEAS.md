@@ -355,12 +355,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point iteration JSON docs guard | Prevents `default_output_iterations` from becoming an undocumented JSON-only field. | Self-test now has a dedicated missing-doc mutation for the `default_output_iterations` phrase. | Evidence: JSON prose stays under cap; missing docs fail coverage. |
 | Context anomaly drilldown density fixed-point iteration JSON order guard | Keeps `default_output_iterations` between headroom and width docs in the JSON field list. | Self-test now swaps `default_output_iterations` and `text_width_docs_checked` in the JSON docs line. | Evidence: JSON prose stays under cap; docs-order drift fails coverage. |
 | Context anomaly drilldown density fixed-point iteration payload order guard | Keeps emitted JSON iteration count adjacent to related headroom/width metrics. | Self-test now asserts payload order includes `default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`. | Evidence: JSON output stays under cap; payload order drift fails self-test. |
+| Context anomaly drilldown density fixed-point iteration exact-cap JSON parity | Proves iteration count remains correct at the exact-width text cap too. | JSON env self-test at text cap 196 now expects `default_output_iterations`:1. | Evidence: JSON output stays under cap; exact-cap iteration count is stable. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fixed-point iteration exact-cap JSON parity | Proves iteration count remains correct at the exact-width text cap too. | Add a JSON env self-test at text cap 196 that expects `default_output_iterations`:2. | Compact metric: JSON output stays under cap; correctness metric: exact-cap iteration count is stable. |
+| Context anomaly drilldown density fixed-point iteration low-cap JSON failure | Proves low-cap JSON failures do not emit a misleading `default_output_iterations` success metric. | Add a JSON env failure-shape check at text cap 195 that rejects success-only iteration output. | Compact metric: error JSON stays compact; correctness metric: failure stays clearly separate from success metrics. |
 
 ## Research Rules
 
