@@ -368,6 +368,22 @@ fn verify_experiment_manifest(
                 detail: "at least one non-empty command is required".to_string(),
             });
         }
+        for command in experiment
+            .commands
+            .iter()
+            .map(|command| command.trim())
+            .filter(|command| !command.is_empty())
+        {
+            if let Some(command_path) = local_script_command_path(command) {
+                if !root.join(&command_path).exists() {
+                    issues.push(ExperimentIssue {
+                        experiment_id: issue_id.to_string(),
+                        kind: "missing_command_path".to_string(),
+                        detail: command_path,
+                    });
+                }
+            }
+        }
         if experiment.artifacts.is_empty() {
             issues.push(ExperimentIssue {
                 experiment_id: issue_id.to_string(),
@@ -448,4 +464,20 @@ fn verify_experiment_manifest(
         }
     }
     issues
+}
+
+fn local_script_command_path(command: &str) -> Option<String> {
+    let first = command.split_whitespace().next()?.trim_matches(['"', '\'']);
+    if first.contains('<') || first.contains('$') {
+        return None;
+    }
+    let looks_like_experiment_script = first.starts_with("docs/experiments/")
+        || first.starts_with("./docs/experiments/")
+        || first.starts_with("scripts/")
+        || first.starts_with("./scripts/");
+    if looks_like_experiment_script {
+        Some(first.trim_start_matches("./").to_string())
+    } else {
+        None
+    }
 }

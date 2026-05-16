@@ -2357,6 +2357,12 @@ fn test_verify_experiments_checks_manifest_evidence() {
         {"name": "claude-code", "version": ""}
       ],
       "fallback_reasons": ["unsupported"]
+    },
+    {
+      "id": "missing-script-command",
+      "workflow": "Missing local script command",
+      "commands": ["docs/experiments/missing-script.sh --flag"],
+      "artifacts": ["docs/experiments/runtime-live/SMOKE.md"]
     }
   ]
 }"#,
@@ -2387,6 +2393,9 @@ fn test_verify_experiments_checks_manifest_evidence() {
         .stdout(predicate::str::contains("\"kind\":\"uncovered_workflow\""))
         .stdout(predicate::str::contains(
             "\"kind\":\"missing_command_evidence\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"kind\":\"missing_command_path\"",
         ))
         .stdout(predicate::str::contains("\"kind\":\"missing_artifact\""))
         .stdout(predicate::str::contains("\"kind\":\"metric_below_min\""))
