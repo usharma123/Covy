@@ -1394,7 +1394,9 @@ fn test_run_reduces_git_status() {
         .stdout(predicate::str::contains("run_reducer:git"))
         .stdout(predicate::str::contains("\"route_roi\""))
         .stdout(predicate::str::contains("\"saved_est_tokens\""))
-        .stdout(predicate::str::contains("\"avg_saved_tokens\""));
+        .stdout(predicate::str::contains("\"avg_saved_tokens\""))
+        .stdout(predicate::str::contains("\"downstream_followup_count\""))
+        .stdout(predicate::str::contains("\"avg_followups_per_invocation\""));
 
     suite_cmd()
         .current_dir(root.path())

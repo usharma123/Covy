@@ -357,6 +357,8 @@ struct GainRouteRoi {
     saved_est_tokens: u64,
     savings_pct: f64,
     avg_saved_tokens: f64,
+    downstream_followup_count: usize,
+    avg_followups_per_invocation: f64,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -986,11 +988,7 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
         summary.invocation_count += 1;
         summary.raw_est_tokens += record.raw_est_tokens;
         summary.reduced_est_tokens += record.reduced_est_tokens;
-        let route = if let Some(reason) = &record.fallback_reason {
-            format!("run_fallback:{reason}")
-        } else {
-            format!("run_reducer:{}", record.family)
-        };
+        let route = gain_route_for_run_savings(record);
         *summary.by_route.entry(route.clone()).or_insert(0) += 1;
         record_gain_route_roi(
             &mut summary.route_roi,
@@ -999,6 +997,7 @@ fn run_gain(args: AnalyticsArgs) -> Result<i32> {
             record.reduced_est_tokens,
         );
     }
+    record_gain_route_followups(&mut summary.route_roi, &run_savings);
     summary.saved_est_tokens = summary
         .raw_est_tokens
         .saturating_sub(summary.reduced_est_tokens);
@@ -1061,6 +1060,59 @@ fn record_gain_route_roi(
     } else {
         entry.saved_est_tokens as f64 / entry.invocation_count as f64
     };
+    entry.avg_followups_per_invocation = if entry.invocation_count == 0 {
+        0.0
+    } else {
+        entry.downstream_followup_count as f64 / entry.invocation_count as f64
+    };
+}
+
+fn record_gain_route_followups(
+    route_roi: &mut BTreeMap<String, GainRouteRoi>,
+    records: &[RunSavingsRecord],
+) {
+    let mut ordered = records.iter().collect::<Vec<_>>();
+    ordered.sort_by(|a, b| a.timestamp_unix_ms.cmp(&b.timestamp_unix_ms));
+    for (index, record) in ordered.iter().enumerate() {
+        let followups = count_downstream_followups(&ordered, index);
+        if followups == 0 {
+            continue;
+        }
+        let route = gain_route_for_run_savings(record);
+        let entry = route_roi.entry(route).or_default();
+        entry.downstream_followup_count = entry.downstream_followup_count.saturating_add(followups);
+        entry.avg_followups_per_invocation = if entry.invocation_count == 0 {
+            0.0
+        } else {
+            entry.downstream_followup_count as f64 / entry.invocation_count as f64
+        };
+    }
+}
+
+fn count_downstream_followups(records: &[&RunSavingsRecord], index: usize) -> usize {
+    const FOLLOWUP_WINDOW_MS: u128 = 10 * 60 * 1000;
+    let Some(record) = records.get(index) else {
+        return 0;
+    };
+    records
+        .iter()
+        .skip(index + 1)
+        .take_while(|candidate| {
+            candidate
+                .timestamp_unix_ms
+                .saturating_sub(record.timestamp_unix_ms)
+                <= FOLLOWUP_WINDOW_MS
+        })
+        .filter(|candidate| candidate.cwd == record.cwd)
+        .count()
+}
+
+fn gain_route_for_run_savings(record: &RunSavingsRecord) -> String {
+    if let Some(reason) = &record.fallback_reason {
+        format!("run_fallback:{reason}")
+    } else {
+        format!("run_reducer:{}", record.family)
+    }
 }
 
 fn gain_disabled_bypass_warning(sessions_dir: Option<&str>) -> Option<String> {
