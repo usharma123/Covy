@@ -525,6 +525,9 @@ function defaultOutputParseIssue(parsed, resultDetails) {
   if (resultDetails.workflow_commands_checked !== undefined) {
     expectedValues.wf = String(resultDetails.workflow_commands_checked);
   }
+  if (resultDetails.json_headroom !== undefined) {
+    expectedValues.json = String(resultDetails.json_headroom);
+  }
   for (const [field, expected] of Object.entries(expectedValues)) {
     if (parsed[field] !== expected) {
       return `default_output_parse_mismatch=${field}`;
@@ -666,10 +669,6 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const baselinePayload = successPayload(result, workflowResult, maxJsonBytes);
-  const defaultParseDetails = {
-    ...result,
-    workflow_commands_checked: baselinePayload.workflow_commands_checked,
-  };
   if (
     baselinePayload.alias_docs_checked !== result.alias_docs_checked ||
     baselinePayload.row_soft_ok !== result.row_soft_ok ||
@@ -687,6 +686,11 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const baselineHeadroom = jsonHeadroomBytes(baselinePayload, maxJsonBytes);
+  const defaultParseDetails = {
+    ...result,
+    workflow_commands_checked: baselinePayload.workflow_commands_checked,
+    json_headroom: baselineHeadroom,
+  };
   if (baselineHeadroom < minJsonHeadroomBytes) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_headroom_at_least=${minJsonHeadroomBytes}`);
@@ -873,6 +877,16 @@ if (args.includes("--self-test")) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error("expected=default_output_parse_mismatch=prose");
     console.error(`actual=${staleProseValueError ?? "ok"}`);
+    process.exit(1);
+  }
+  const staleJsonHeadroomError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ json=\d+/, " json=0")),
+    defaultParseDetails,
+  );
+  if (staleJsonHeadroomError !== "default_output_parse_mismatch=json") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch=json");
+    console.error(`actual=${staleJsonHeadroomError ?? "ok"}`);
     process.exit(1);
   }
   const staleCommandCountError = defaultOutputParseIssue(
