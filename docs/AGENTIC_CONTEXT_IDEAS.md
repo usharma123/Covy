@@ -169,12 +169,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown runbook density JSON failure docs | Helps maintainers understand the density JSON byte-cap failure. | The runbook density row now documents `context_anomaly_runbook_density_json_too_long`. | Evidence: runbook remains under 45 lines and the failure name matches checker output. |
 | Context anomaly drilldown density row width audit | Prevents the runbook table row itself from becoming unreadably wide. | The density checker now enforces `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX` with a 520-character default and reports `max_table_row`. | Evidence: checker output stays one line; forced low row width fails with `context_anomaly_runbook_density_row_too_wide`. |
 | Context anomaly drilldown density row width docs | Helps maintainers tune and interpret runbook row-width failures. | The runbook density rows now document `P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX`, `max_table_row`, and `context_anomaly_runbook_density_row_too_wide`. | Evidence: runbook remains under 45 lines and names match checker configuration and output. |
+| Context anomaly drilldown runbook density JSON self-coverage | Makes the density checker protect its own JSON command row. | The density checker required-command list now includes `node scripts/check_context_anomaly_runbook_density.mjs --json`. | Evidence: checker output stays one line and self-test proves removing the JSON row fails the missing-command check. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown runbook density JSON self-coverage | Makes the density checker protect its own JSON command row. | Add `node scripts/check_context_anomaly_runbook_density.mjs --json` to the required command list. | Compact metric: checker output stays one line; correctness metric: removing the JSON row fails the missing-command check. |
+| Context anomaly drilldown density row width workflow evidence | Keeps row-width budget evidence visible in workflow logs. | Have the workflow run default density check in addition to help and self-test, or make self-test print the current width. | Compact metric: no GitHub summary growth; correctness metric: CI logs show current `max_table_row`. |
 
 ## Research Rules
 

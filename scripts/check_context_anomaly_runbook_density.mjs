@@ -54,6 +54,7 @@ const requiredCommands = [
   "node scripts/check_context_anomaly_summary_budget.mjs --self-test",
   "node scripts/check_context_anomaly_summary_budget.mjs --json",
   "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
+  "node scripts/check_context_anomaly_runbook_density.mjs --json",
   "Packet28 digest --root . --json",
 ];
 
@@ -202,6 +203,16 @@ if (args.includes("--self-test")) {
     evaluate(
       runbook.replace(
         "node scripts/check_context_anomaly_runbook_density.mjs --self-test",
+        "",
+      ),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_commands",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace(
+        "node scripts/check_context_anomaly_runbook_density.mjs --json",
         "",
       ),
       maxLines,
