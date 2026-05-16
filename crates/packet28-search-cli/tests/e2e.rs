@@ -325,6 +325,36 @@ fn p28_auto_can_prefer_fff_when_configured() {
 }
 
 #[test]
+fn p28_auto_prefer_records_fff_backend_failure_before_native_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fixture(dir.path());
+
+    cli()
+        .args(["debug", "build", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    cli()
+        .current_dir(dir.path())
+        .env("P28_FFF_MCP_BIN", dir.path().join("missing-fff-mcp"))
+        .env("P28_FFF_AUTO", "prefer")
+        .args([
+            "Alpha",
+            "--transport",
+            "inproc",
+            "--fixed-strings",
+            "--stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"))
+        .stderr(predicate::str::contains("backend=indexed_regex"))
+        .stderr(predicate::str::contains(
+            "fallback_reason=fff auto preferred backend failed",
+        ));
+}
+
+#[test]
 fn p28_handles_anchored_line_start_regexes() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("src")).unwrap();

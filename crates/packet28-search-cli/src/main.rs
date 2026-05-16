@@ -340,7 +340,15 @@ fn execute_search(
     if matches!(engine, EngineMode::Fff) {
         return execute_fff_search(root, request).map(|result| (result, TransportMode::Inproc));
     }
-    match transport {
+    let preferred_fff_error = if matches!(engine, EngineMode::Auto) && fff_auto_prefer_requested() {
+        match execute_fff_search(root, request) {
+            Ok(result) => return Ok((result, TransportMode::Inproc)),
+            Err(error) => Some(format!("fff auto preferred backend failed: {error}")),
+        }
+    } else {
+        None
+    };
+    let (mut result, transport) = match transport {
         TransportMode::Inproc => execute_search_inproc(root, request, engine)
             .map(|result| (result, TransportMode::Inproc)),
         TransportMode::Daemon => {
@@ -350,7 +358,11 @@ fn execute_search(
                 .map(|result| (result, TransportMode::Daemon))
         }
         TransportMode::Auto => execute_search_auto(root, request, engine),
+    }?;
+    if let Some(error) = preferred_fff_error {
+        annotate_reason(&mut result, error);
     }
+    Ok((result, transport))
 }
 
 #[cfg(unix)]
@@ -414,29 +426,22 @@ fn execute_search_inproc(
             let runtime = load_runtime(root)?;
             indexed_search(root, &runtime, request)
         }
-        EngineMode::Auto => {
-            if should_prefer_fff_for_auto() {
-                if let Ok(fff_result) = execute_fff_search(root, request) {
-                    return Ok(fff_result);
-                }
-            }
-            match load_runtime(root) {
-                Ok(runtime) => match guarded_fallback_reason(root, &runtime, request)? {
-                    Some(reason) => {
-                        let mut result = packet28_reducer_core::search(root, request)?;
-                        annotate_fallback(&mut result, reason);
-                        Ok(select_fff_for_auto_fallback(root, request, engine, &result)
-                            .unwrap_or(result))
-                    }
-                    None => indexed_search(root, &runtime, request),
-                },
-                Err(err) => {
+        EngineMode::Auto => match load_runtime(root) {
+            Ok(runtime) => match guarded_fallback_reason(root, &runtime, request)? {
+                Some(reason) => {
                     let mut result = packet28_reducer_core::search(root, request)?;
-                    annotate_fallback(&mut result, format!("regex index load failed: {err}"));
-                    Ok(result)
+                    annotate_fallback(&mut result, reason);
+                    Ok(select_fff_for_auto_fallback(root, request, engine, &result)
+                        .unwrap_or(result))
                 }
+                None => indexed_search(root, &runtime, request),
+            },
+            Err(err) => {
+                let mut result = packet28_reducer_core::search(root, request)?;
+                annotate_fallback(&mut result, format!("regex index load failed: {err}"));
+                Ok(result)
             }
-        }
+        },
     }
 }
 
@@ -529,11 +534,11 @@ fn fff_auto_enabled() -> bool {
     )
 }
 
-fn should_prefer_fff_for_auto() -> bool {
+fn fff_auto_prefer_requested() -> bool {
     matches!(
         std::env::var("P28_FFF_AUTO").ok().as_deref(),
         Some("prefer" | "PREFER" | "first" | "FIRST" | "1" | "true" | "TRUE" | "on" | "ON")
-    ) && fff_backend_available()
+    )
 }
 
 fn fff_backend_available() -> bool {
