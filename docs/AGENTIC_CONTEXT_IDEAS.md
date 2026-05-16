@@ -351,12 +351,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point exact-cap length detail | Helps debug the zero-headroom success boundary with explicit rendered length evidence. | Exact-width artifact failure output now prints actual line length and headroom values. | Evidence: no output growth; exact-cap success detail matches rendered line. |
 | Context anomaly drilldown density fixed-point convergence loop budget | Prevents future fixed-point fields from needing more silent iterations than expected. | Success artifacts now expose internal convergence iteration count, and self-test caps normal/exact-width paths at 3. | Evidence: no output growth; convergence remains bounded. |
 | Context anomaly drilldown density fixed-point convergence fallback detail | Makes rare non-convergence easier to debug if future fields destabilize the loop. | Iteration-budget failure output now includes rendered line length and headroom for normal and exact-width paths. | Evidence: no output growth; fallback failures carry enough detail. |
+| Context anomaly drilldown density fixed-point iteration JSON output | Helps agents see fixed-point convergence cost without reading self-test internals. | JSON now reports `default_output_iterations`, with parity and self-test coverage, while `max_json_bytes` rebalances to 640. | Evidence: default output stays under cap; JSON headroom stays above 24; reported count matches builder iterations. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fixed-point iteration JSON output | Helps agents see fixed-point convergence cost without reading self-test internals. | Add compact `iter` default output or JSON-only iteration count if it fits budgets. | Compact metric: default output stays under cap or JSON headroom stays above 24; correctness metric: reported count matches builder iterations. |
+| Context anomaly drilldown density fixed-point iteration JSON docs guard | Prevents `default_output_iterations` from becoming an undocumented JSON-only field. | Add a dedicated self-test mutation for the `default_output_iterations` docs phrase. | Compact metric: JSON prose stays under cap; correctness metric: missing docs fail coverage. |
 
 ## Research Rules
 
