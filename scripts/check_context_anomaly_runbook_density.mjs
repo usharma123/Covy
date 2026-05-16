@@ -1111,6 +1111,12 @@ if (args.includes("--self-test")) {
     console.error(defaultOutputError);
     process.exit(1);
   }
+  if (parsedDefaultOutput.dlab !== String(actualDensityLabelLineLength)) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_dlab=${actualDensityLabelLineLength}`);
+    console.error(`actual_dlab=${parsedDefaultOutput.dlab}`);
+    process.exit(1);
+  }
   if (parsedDefaultOutput.tw !== String(defaultOutputLine.length)) {
     console.error("context_anomaly_runbook_density_self_test_failed");
     console.error(`expected_text_width=${defaultOutputLine.length}`);
