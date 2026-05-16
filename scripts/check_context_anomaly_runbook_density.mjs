@@ -16,11 +16,15 @@ const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ?? "256",
   10,
 );
+const maxTableRowLength = Number.parseInt(
+  process.env.P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX ?? "520",
+  10,
+);
 const helpLines = [
   "Usage: node scripts/check_context_anomaly_runbook_density.mjs [--json|--self-test|--help]",
-  "default: validate runbook line budget and required command entries",
-  "--json: print ok, budgets, commands_checked, and max_json_bytes under a byte cap",
-  "--self-test: verify line-budget, missing-command, and JSON byte failure modes",
+  "default: validate runbook line budget, row width, and required command entries",
+  "--json: print ok, budgets, max_table_row, commands_checked, and max_json_bytes",
+  "--self-test: verify line, width, missing-command, and JSON byte failure modes",
   "--help: print this help; bad flags fail with context_anomaly_runbook_density_unknown_option",
 ];
 const args = process.argv.slice(2);
@@ -57,6 +61,13 @@ function evaluate(runbook, lineBudget) {
   const lineCount = runbook.endsWith("\n")
     ? runbook.split("\n").length - 1
     : runbook.split("\n").length;
+  const tableRows = runbook
+    .split("\n")
+    .filter((line) => line.startsWith("|"));
+  const maxActualTableRowLength = Math.max(
+    0,
+    ...tableRows.map((line) => line.length),
+  );
   const missingCommands = requiredCommands.filter(
     (command) => !runbook.includes(command),
   );
@@ -66,6 +77,14 @@ function evaluate(runbook, lineBudget) {
       code: "context_anomaly_runbook_density_too_many_lines",
       line_count: lineCount,
       max_lines: lineBudget,
+    };
+  }
+  if (maxActualTableRowLength > maxTableRowLength) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_row_too_wide",
+      max_table_row: maxActualTableRowLength,
+      max_table_row_allowed: maxTableRowLength,
     };
   }
   if (missingCommands.length > 0) {
@@ -79,6 +98,8 @@ function evaluate(runbook, lineBudget) {
     ok: true,
     line_count: lineCount,
     max_lines: lineBudget,
+    max_table_row: maxActualTableRowLength,
+    max_table_row_allowed: maxTableRowLength,
     commands_checked: requiredCommands.length,
   };
 }
@@ -141,6 +162,8 @@ function successPayload(result, jsonBudget) {
     ok: true,
     line_count: result.line_count,
     max_lines: result.max_lines,
+    max_table_row: result.max_table_row,
+    max_table_row_allowed: result.max_table_row_allowed,
     commands_checked: result.commands_checked,
     max_json_bytes: jsonBudget,
   };
@@ -191,6 +214,11 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_too_many_lines",
   );
   assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
+    [],
+    "context_anomaly_runbook_density_row_too_wide",
+  );
+  assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
     ["--json"],
     "context_anomaly_runbook_density_json_too_long",
@@ -227,6 +255,6 @@ if (args.includes("--json")) {
   console.log(JSON.stringify(payload));
 } else {
   console.log(
-    `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines} commands=${payload.commands_checked}`,
+    `context_anomaly_runbook_density_ok lines=${payload.line_count}/${payload.max_lines} max_table_row=${payload.max_table_row}/${payload.max_table_row_allowed} commands=${payload.commands_checked}`,
   );
 }
