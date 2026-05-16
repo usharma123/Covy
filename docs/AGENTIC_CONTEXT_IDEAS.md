@@ -113,12 +113,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown audit help | Gives agents a compact usage string for tolerant and strict audit modes. | The audit script now supports `--help`, and the runbook command table lists it. | Evidence: help output is four lines, exits zero, and lists default, `--strict`, and `--help` modes. |
 | Context anomaly drilldown audit help workflow log | Keeps the one-command audit usage visible in context-anomalies CI logs without expanding summaries. | The context-anomalies workflow now prints audit script `--help` before running the default audit step. | Evidence: no summary growth; help output is four lines and CI fails if audit help breaks. |
 | Context anomaly drilldown strict audit workflow option | Lets maintainers opt into strict audit mode without editing scripts. | `workflow_dispatch` now has a `strict_audit` boolean that runs `scripts/audit_context_anomaly_hidden_samples.mjs --strict` after the default audit. | Evidence: default workflow behavior is unchanged; local strict command exits nonzero with current high anomalies, matching release threshold behavior. |
+| Context anomaly drilldown strict audit runbook note | Helps maintainers discover the manual strict audit workflow option. | The context anomaly runbook now documents the workflow `strict_audit` input and the strict audit command it runs. | Evidence: runbook remains under 45 lines and names both `strict_audit` and `node scripts/audit_context_anomaly_hidden_samples.mjs --strict`. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown strict audit runbook note | Helps maintainers discover the manual strict audit workflow option. | Document the context-anomalies workflow `strict_audit` dispatch input in the runbook. | Compact metric: runbook remains under 45 lines; correctness metric: note names the workflow input and strict command. |
+| Context anomaly drilldown audit mode summary | Makes the audit script output explicitly say whether it used tolerant or strict verifier mode. | Add `audit_mode=tolerant|strict` to audit script success and strict-failure output. | Compact metric: default success output remains under eight lines; correctness metric: mode line matches verifier max-high. |
 
 ## Research Rules
 

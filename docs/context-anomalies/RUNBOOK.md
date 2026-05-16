@@ -19,6 +19,8 @@ Use this command table before treating a compact anomaly summary as complete:
 
 The audit script uses `verify context-anomalies --max-high 2` so local smoke can pass with known live quality debt. The workflow threshold step still runs the stricter release gate with `--max-high 0`.
 
+Manual workflow dispatch has a `strict_audit` input that also runs `node scripts/audit_context_anomaly_hidden_samples.mjs --strict`.
+
 The fixture should report `latest_status=ready` with recurring hidden `fallback_provenance`. That proves recurring hidden categories survive a final clean record. It should also report `recurring_hidden_samples` with `fallback_provenance=recent_fallbacks=1`.
 
 When live recurring hidden categories differ from the fixture, inspect the omitted categories before treating the digest as complete.
