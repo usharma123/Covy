@@ -602,12 +602,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON byte/help cap wrapper | Names the JSON byte limit and help cap documentation assertions. | Extracted `assertJsonByteHelpCapMutationSelfTests()` around `max_json_bytes` and `help<=...` documentation checks. | Evidence: no runtime output growth; JSON byte/help cap docs still fail when removed. |
 | Context anomaly drilldown density self-test JSON byte/help cap order | Keeps JSON byte/help cap docs before env-line anchor checks. | Verified `assertJsonByteHelpCapMutationSelfTests()` sits directly after JSON field docs and before `Env:` anchor coverage. | Evidence: no runtime output growth; byte/help cap coverage remains before env-line anchor coverage. |
 | Context anomaly drilldown density self-test env-line anchor wrapper | Names the env-line anchor documentation assertion. | Extracted `assertEnvLineAnchorMutationSelfTest()` around the `Env:` removal assertion. | Evidence: no runtime output growth; env-line anchor coverage still fails when removed. |
+| Context anomaly drilldown density self-test env-line anchor order | Keeps env-line anchor coverage before section-anchor coverage. | Verified `assertEnvLineAnchorMutationSelfTest()` sits directly after JSON byte/help cap checks and before `JSON:` section-anchor coverage. | Evidence: no runtime output growth; env-line anchor coverage remains before section-anchor coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test env-line anchor order | Keeps env-line anchor coverage before section-anchor coverage. | Verify `assertEnvLineAnchorMutationSelfTest()` sits directly after JSON byte/help cap checks and before `JSON:` section-anchor coverage. | Compact metric: no runtime output growth; correctness metric: env-line anchor coverage remains before section-anchor coverage. |
+| Context anomaly drilldown density self-test section-anchor wrapper | Names the JSON, JSON-field, and env section-anchor assertions. | Extract `assertSectionAnchorMutationSelfTests()` around `JSON:` fields, `JSON:alias_docs_checked`, and env variable section anchor checks. | Compact metric: no runtime output growth; correctness metric: section-anchor coverage still fails when anchors are removed or merged. |
 
 ## Research Rules
 
