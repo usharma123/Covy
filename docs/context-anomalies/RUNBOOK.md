@@ -7,6 +7,7 @@ Use this command table before treating a compact anomaly summary as complete:
 | Write live history | `Packet28 verify context-anomalies --root . --json` | Appends compact JSONL to `.packet28/context-anomaly-history.jsonl`. |
 | Replay fixture trend | `Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json` | Reports fixture `latest_status=ready`. |
 | Check sample formatter | `node scripts/check_context_anomaly_hidden_samples.mjs` | Prints one `context_anomaly_hidden_sample_fixture_ok=...` line. |
+| Read formatter budget | `node scripts/check_context_anomaly_hidden_samples.mjs --json` | Emits `actual_len`, `max_len`, and escaped `summary`. |
 | Inspect digest | `Packet28 digest --root . --json` | Shows visible anomalies and capped `hidden_samples`. |
 
 `Packet28 dashboard --root . --json` reads live history and reports latest status, high count, hidden categories, and recurring hidden categories.
