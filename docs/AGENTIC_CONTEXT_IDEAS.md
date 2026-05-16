@@ -358,12 +358,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point iteration exact-cap JSON parity | Proves iteration count remains correct at the exact-width text cap too. | JSON env self-test at text cap 196 now expects `default_output_iterations`:1. | Evidence: JSON output stays under cap; exact-cap iteration count is stable. |
 | Context anomaly drilldown density fixed-point iteration low-cap JSON failure | Proves low-cap JSON failures do not emit a misleading `default_output_iterations` success metric. | Self-test now asserts JSON text-cap failures exclude `default_output_iterations`. | Evidence: error JSON stays compact; failure stays clearly separate from success metrics. |
 | Context anomaly drilldown density fixed-point env helper negative assertion reuse | Makes future failure-shape tests able to assert absent success-only fields. | JSON byte-cap failure self-test now also excludes `default_output_iterations`. | Evidence: self-test output stays one line; failure payloads omit success-only fields. |
+| Context anomaly drilldown density JSON headroom failure success-field exclusion | Keeps oversized-headroom JSON failures from looking like success payloads. | JSON-headroom failure self-test now excludes `default_output_iterations`. | Evidence: self-test output stays one line; headroom failure omits success-only fields. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON headroom failure success-field exclusion | Keeps oversized-headroom JSON failures from looking like success payloads. | Reuse the negative assertion helper for `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN=999`. | Compact metric: self-test output stays one line; correctness metric: headroom failure omits success-only fields. |
+| Context anomaly drilldown density JSON failure-field docs | Helps maintainers understand success-only fields are intentionally absent from failure payloads. | Document compactly that `ok:false` JSON failures omit success metrics such as iteration count. | Compact metric: prose stays under cap; correctness metric: docs mention success-field exclusion. |
 
 ## Research Rules
 
