@@ -74,14 +74,14 @@ use crate::memory_store::{
     delete_pending_extractions, distill_memories_to_graph, embed_memories,
     enqueue_pending_extraction, export_graph, extract_memory_patterns, feedback_stats,
     forget_memories_by_topic, forget_memory, graph_stats, inspect_graph, inspect_graph_concept,
-    learn_project_graph, link_concepts, list_feedback, list_graph_memoirs, list_memories_filtered,
-    list_pending_extractions, list_transcript_sessions, local_store_stats, memory_health,
-    memory_topics, process_pending_extractions, prune_memories, recall_memories_filtered,
-    record_feedback_with_metadata, refine_concept, search_concepts_filtered,
-    search_feedback_filtered, search_transcripts_filtered, show_graph_memoir,
-    show_transcript_session, store_memory_with_metadata, transcript_stats, update_memory,
-    FeedbackInput, MemoryListQuery, MemoryRecallQuery, MemoryStoreInput, MemoryUpdateInput,
-    PendingExtractionInput, TranscriptAppendInput,
+    learn_project_graph, link_concepts, lint_memories, list_feedback, list_graph_memoirs,
+    list_memories_filtered, list_pending_extractions, list_transcript_sessions, local_store_stats,
+    memory_health, memory_topics, process_pending_extractions, prune_memories,
+    recall_memories_filtered, record_feedback_with_metadata, refine_concept,
+    search_concepts_filtered, search_feedback_filtered, search_transcripts_filtered,
+    show_graph_memoir, show_transcript_session, store_memory_with_metadata, transcript_stats,
+    update_memory, FeedbackInput, MemoryListQuery, MemoryRecallQuery, MemoryStoreInput,
+    MemoryUpdateInput, PendingExtractionInput, TranscriptAppendInput,
 };
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
@@ -1170,6 +1170,16 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.memory_lint",
+                    "description": "Lint local Packet28 memories for runtime-specific advice, stale repo paths, and unsupported hook assumptions.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "limit": {"type":"integer","minimum":1}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.memory_consolidate",
                     "description": "Consolidate local Packet28 memories for a topic into one deterministic summary memory.",
                     "inputSchema": {
@@ -2223,6 +2233,10 @@ fn handle_tool_call(
                 request.consolidation_threshold.unwrap_or(10),
             )?)?
         }
+        "packet28.memory_lint" => {
+            let request: MemoryLintToolArgs = serde_json::from_value(arguments)?;
+            serde_json::to_value(lint_memories(root, request.limit.unwrap_or(200))?)?
+        }
         "packet28.memory_consolidate" => {
             let request: MemoryConsolidateToolArgs = serde_json::from_value(arguments)?;
             serde_json::to_value(consolidate_memories(
@@ -2564,6 +2578,11 @@ struct MemoryHealthToolArgs {
     topic: Option<String>,
     stale_after_days: Option<i64>,
     consolidation_threshold: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryLintToolArgs {
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3258,6 +3277,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 "Packet28 memory health: {total} memories, {needs} topic(s) need consolidation."
             )
         }
+        "packet28.memory_lint" => {
+            let issues = payload
+                .get("issue_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let memories = payload
+                .get("memory_count")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            format!("Packet28 memory lint memories={memories} issues={issues}.")
+        }
         "packet28.memory_consolidate" => {
             let count = payload
                 .get("source_count")
@@ -3510,6 +3540,7 @@ mod tests {
             "packet28_hypothesis_resolve",
             "packet28_doctor",
             "packet28_memory_list",
+            "packet28_memory_lint",
             "packet28_memory_embed",
             "packet28_memory_extract_patterns",
             "packet28_feedback_search",
