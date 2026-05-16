@@ -936,6 +936,22 @@ if (args.includes("--self-test")) {
     defaultOutputLine,
     defaultOutputHeadroom,
   } = baselineArtifacts;
+  const rebuiltBaselineArtifacts = buildSuccessArtifacts(
+    result,
+    workflowResult,
+    maxJsonBytes,
+  );
+  if (
+    JSON.stringify(rebuiltBaselineArtifacts.payload) !==
+      JSON.stringify(baselinePayload) ||
+    rebuiltBaselineArtifacts.jsonHeadroom !== baselineHeadroom ||
+    rebuiltBaselineArtifacts.defaultOutputLine !== defaultOutputLine ||
+    rebuiltBaselineArtifacts.defaultOutputHeadroom !== defaultOutputHeadroom
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("success_artifacts_did_not_converge");
+    process.exit(1);
+  }
   const jsonPayloadError = jsonPayloadParityIssue(baselinePayload, result, {
     default_output_headroom: defaultOutputHeadroom,
   });
