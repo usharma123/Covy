@@ -124,12 +124,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown artifact checksum helper | Avoids duplicating a long Node checksum one-liner between workflow and docs. | The audit script now supports `--checksum <path>`, and the workflow plus runbook use that helper for audit artifact hashing. | Evidence: helper output is one 64-character digest; workflow and runbook both call `node scripts/audit_context_anomaly_hidden_samples.mjs --checksum context-anomaly-hidden-sample-audit.txt`. |
 | Context anomaly drilldown checksum helper self-test | Prevents the audit checksum helper from drifting while workflow summaries still rely on it. | The default audit now checks `--checksum` against a temporary `abc` fixture with a known SHA-256 digest. | Evidence: default audit output remains seven lines and includes `checksum-helper`; helper digest is compared with an independent known value. |
 | Context anomaly drilldown checksum read failure | Gives CI a compact, parseable error when the audit artifact file is missing. | `--checksum` now catches file-read failures and emits a named two-line error instead of a Node stack trace. | Evidence: missing-file output stays at two lines; valid checksum output remains only the digest. |
+| Context anomaly drilldown audit JSON output | Lets automation consume audit mode, formatter budget, checksum, and digest counts without parsing text lines. | The audit script now supports `--json` success output and structured strict/verifier failure output while preserving default text output. | Evidence: JSON output stays under 512 bytes; JSON fields match the default audit lines for mode, budget, checksum, verifier counts, and digest count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown audit JSON output | Lets automation consume audit mode, formatter budget, checksum, and digest counts without parsing text lines. | Add `--json` output to the audit script while preserving default text output. | Compact metric: JSON output stays under 512 bytes; correctness metric: JSON fields match the default audit lines. |
+| Context anomaly drilldown audit JSON workflow summary | Removes text-line parsing from the workflow summary audit fields. | Have the context-anomalies workflow read audit mode and checksum inputs from audit JSON where possible. | Compact metric: summary line count does not grow; correctness metric: JSON-derived mode and checksum match existing summary output. |
 
 ## Research Rules
 

@@ -30,11 +30,14 @@ function expectFailure(command, args, expected, options = {}) {
 const args = process.argv.slice(2);
 let strictMode = false;
 let checksumPath = null;
+let jsonOutput = false;
 let printHelp = false;
 for (let index = 0; index < args.length; index += 1) {
   const arg = args[index];
   if (arg === "--strict") {
     strictMode = true;
+  } else if (arg === "--json") {
+    jsonOutput = true;
   } else if (arg === "--help") {
     printHelp = true;
   } else if (arg === "--checksum") {
@@ -54,8 +57,8 @@ for (let index = 0; index < args.length; index += 1) {
 if (printHelp) {
   console.log(
     [
-      "Usage: node scripts/audit_context_anomaly_hidden_samples.mjs [--strict|--checksum <path>|--help]",
-      "default: tolerant audit with verifier --max-high 2",
+      "Usage: node scripts/audit_context_anomaly_hidden_samples.mjs [--strict|--json|--checksum <path>|--help]",
+      "default: tolerant text audit with verifier --max-high 2; --json emits compact JSON",
       "--strict: release-like audit with verifier --max-high 0",
       "--checksum <path>: print a SHA-256 digest for an audit artifact",
       "--help: print this help",
@@ -76,6 +79,7 @@ if (checksumPath) {
   process.exit(0);
 }
 const maxHigh = strictMode ? "0" : "2";
+const auditMode = strictMode ? "strict" : "tolerant";
 
 const packetEnv = {
   ...process.env,
@@ -162,15 +166,24 @@ const verifier = JSON.parse(
   })(),
 );
 if (!verifier.ok) {
-  if (strictMode) {
-    console.error("context_anomaly_hidden_sample_audit_strict_failed");
-    console.error("audit_mode=strict");
-    console.error(`high=${verifier.high_count}`);
-    console.error(`max_high=${verifier.max_high}`);
+  const error = strictMode
+    ? "context_anomaly_hidden_sample_audit_strict_failed"
+    : "context_anomaly_hidden_sample_audit_verifier_failed";
+  if (jsonOutput) {
+    console.log(JSON.stringify({
+      ok: false,
+      error,
+      audit_mode: auditMode,
+      verifier: {
+        ok: false,
+        high: verifier.high_count,
+        max_high: verifier.max_high,
+      },
+    }));
     process.exit(1);
   }
-  console.error("context_anomaly_hidden_sample_audit_verifier_failed");
-  console.error("audit_mode=tolerant");
+  console.error(error);
+  console.error(`audit_mode=${auditMode}`);
   console.error(`high=${verifier.high_count}`);
   console.error(`max_high=${verifier.max_high}`);
   process.exit(1);
@@ -200,16 +213,46 @@ const digest = JSON.parse(
   }),
 );
 
+const smokeModes = [
+  "default",
+  "json",
+  "self-test",
+  "help",
+  "budget-fail",
+  "bad-flag",
+  "checksum-helper",
+];
+
+if (jsonOutput) {
+  console.log(JSON.stringify({
+    ok: true,
+    audit_mode: auditMode,
+    smoke_modes: smokeModes,
+    formatter_budget: {
+      actual: smokeJson.actual_len,
+      max: smokeJson.max_len,
+    },
+    formatter_checksum: smokeJson.checksum,
+    fixture_dashboard: contextTile.latest_status,
+    recurring_hidden: contextTile.recurring_hidden_categories,
+    verifier: {
+      ok: true,
+      high: verifier.high_count,
+      max_high: Number(maxHigh),
+    },
+    digest_anomalies: digest.anomaly_count,
+  }));
+  process.exit(0);
+}
+
 console.log("context_anomaly_hidden_sample_audit_ok");
-console.log(
-  "smoke_modes=default,json,self-test,help,budget-fail,bad-flag,checksum-helper",
-);
+console.log(`smoke_modes=${smokeModes.join(",")}`);
 console.log(`formatter_budget=${smokeJson.actual_len}/${smokeJson.max_len}`);
 console.log(`formatter_checksum=${smokeJson.checksum}`);
 console.log(
   `fixture_dashboard=${contextTile.latest_status} recurring_hidden=${contextTile.recurring_hidden_categories.join(",")}`,
 );
 console.log(
-  `audit_mode=${strictMode ? "strict" : "tolerant"} verifier=ok high=${verifier.high_count} max_high=${maxHigh}`,
+  `audit_mode=${auditMode} verifier=ok high=${verifier.high_count} max_high=${maxHigh}`,
 );
 console.log(`digest_anomalies=${digest.anomaly_count}`);
