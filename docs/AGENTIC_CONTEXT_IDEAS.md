@@ -347,12 +347,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point narrow-cap convergence | Proves the fixed-point builder also converges at the exact-width boundary. | The success-artifact builder now accepts a text budget, and self-test checks stable `thead=0 tw=196` artifacts. | Evidence: no output growth; exact-width artifacts are stable. |
 | Context anomaly drilldown density fixed-point low-cap artifact guard | Proves the parameterized artifact path reports a text-width issue below the exact-width boundary. | Self-test now runs `defaultOutputIssue` against a 195-character text budget artifact. | Evidence: no output growth; artifact path fails below exact width. |
 | Context anomaly drilldown density fixed-point low-cap length detail | Helps debug text-cap failures by proving the low-cap artifact reports the rendered length. | The 195-character artifact assertion now checks `default_output_len` and `max_default_output_len`. | Evidence: no output growth; failure detail matches rendered line. |
+| Context anomaly drilldown density fixed-point JSON low-cap length detail | Helps debug JSON-mode text-cap failures with the same rendered-length detail. | JSON low-cap failure-shape self-test now checks `default_output_len=197` and `max_default_output_len=195`. | Evidence: error JSON stays compact; JSON failure details match rendered line. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fixed-point JSON low-cap length detail | Helps debug JSON-mode text-cap failures with the same rendered-length detail. | Add a JSON env failure-shape check for `default_output_len` and `max_default_output_len` at text cap 195. | Compact metric: error JSON stays compact; correctness metric: JSON failure details match rendered line. |
+| Context anomaly drilldown density fixed-point exact-cap length detail | Helps debug the zero-headroom success boundary with explicit rendered length evidence. | Add a direct artifact assertion that the exact-width path reports `defaultOutputLine.length === 196`. | Compact metric: no output growth; correctness metric: exact-cap success detail matches rendered line. |
 
 ## Research Rules
 
