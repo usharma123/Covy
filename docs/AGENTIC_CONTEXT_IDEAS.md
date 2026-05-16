@@ -73,12 +73,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly trend freshness workflow gate | Lets CI enforce that context anomaly trend history is fresh enough to trust. | `.github/workflows/context-anomalies.yml` now runs `verify context-anomalies` with `--max-trend-age-ms 604800000` while keeping fixture age evidence in the summary. | Evidence: local verifier with a generous threshold returns `trend_age_ok=true`; stale synthetic history still fails when the threshold is set low. |
 | Context anomaly trend release note | Makes the new trend/freshness controls discoverable outside the ideas ledger. | `docs/PRODUCT.md` now includes a context-quality trend note covering history writes, dashboard tile inspection, fixture replay, and freshness thresholding. | Evidence: product note is under 12 lines and includes the four user-facing commands for live verify, dashboard tile, fixture replay, and `max_trend_age_ms`. |
 | Context anomaly stale-trend repair hint | Gives agents a direct next action when trend freshness gating fails. | Stale trend threshold failures now include `trend_repair_hint` in JSON and text verifier output. | Evidence: `verify_context_anomalies_fails_stale_trend_age_threshold`; repair hint stays under 120 characters and points to rerunning the verifier or clearing stale history. |
+| Context anomaly stale-trend workflow hint | Makes stale trend freshness failures actionable from GitHub step summaries. | The context-anomalies workflow now appends `trend_repair_hint` only when the verifier emits it. | Evidence: normal summary remains 12 lines without a hint; stale threshold failures surface the same hint as JSON output. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly stale-trend workflow hint | Makes stale trend freshness failures actionable from GitHub step summaries. | Include `trend_repair_hint` in the context-anomalies workflow summary when the verifier emits it. | Compact metric: summary remains under 12 lines when no hint exists; correctness metric: stale threshold failure surfaces the same hint as JSON output. |
+| Context anomaly trend docs cross-link | Helps agents find the runbook from product docs and CI summaries. | Cross-link the context anomaly runbook from product docs and the workflow summary. | Compact metric: one link line in each surface; correctness metric: link points to `docs/context-anomalies/RUNBOOK.md`. |
 
 ## Research Rules
 
