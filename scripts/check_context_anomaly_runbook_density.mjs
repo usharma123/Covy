@@ -1713,10 +1713,10 @@ if (args.includes("--self-test")) {
   const sampleJoinedDefaultOutputMutationIdentityFieldStrings = (sample) =>
     joinedDefaultOutputMutationIdentityFieldStrings(sample);
   const sampledDefaultOutputMutationIdentityFieldStringsMatch = (sample) => {
-    const joinedIdentityFields =
+    const joinedIdentityFieldStrings =
       sampleJoinedDefaultOutputMutationIdentityFieldStrings(sample);
     return joinedDefaultOutputMutationIdentityFieldStringsMatch(
-      joinedIdentityFields,
+      joinedIdentityFieldStrings,
     );
   };
   const failDefaultOutputMutationFieldIdentity = (sample) => {
