@@ -376,12 +376,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper JSON order adoption | Reuses the missing-detail helper for JSON docs order mutations with specific missing phrases. | The default-output headroom docs-order mutation now uses `assertSelfTestMissing` for the exact ordered JSON phrase. | Evidence: no output growth; helper covers docs-order detail checks. |
 | Context anomaly drilldown density missing-detail helper iteration order adoption | Reuses the missing-detail helper for the sibling iteration/width JSON docs order mutation. | The default-output iteration docs-order mutation now uses `assertSelfTestMissing` for the exact ordered JSON phrase. | Evidence: no output growth; helper covers adjacent docs-order detail checks. |
 | Context anomaly drilldown density missing-detail helper field-doc adoption | Reuses the missing-detail helper for a single JSON field-doc removal mutation. | The `default_output_iterations` JSON field-doc mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers field-doc detail checks. |
+| Context anomaly drilldown density missing-detail helper width-field adoption | Reuses the missing-detail helper for another single JSON field-doc removal mutation. | The `text_width_docs_checked` JSON field-doc mutation now uses `assertSelfTestMissing` for its field token. | Evidence: no output growth; helper covers width field-doc detail checks. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper width-field adoption | Reuses the missing-detail helper for another single JSON field-doc removal mutation. | Convert the `text_width_docs_checked` JSON field-doc mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers width field-doc detail checks. |
+| Context anomaly drilldown density missing-detail helper headroom-field adoption | Reuses the missing-detail helper for the remaining headroom JSON field-doc removal mutation. | Convert the `default_output_headroom` JSON field-doc mutation to `assertSelfTestMissing`. | Compact metric: no output growth; correctness metric: helper covers headroom field-doc detail checks. |
 
 ## Research Rules
 
