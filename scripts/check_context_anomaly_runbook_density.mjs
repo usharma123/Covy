@@ -1622,9 +1622,10 @@ if (args.includes("--self-test")) {
     "context_anomaly_runbook_density_missing_output_docs",
     "missing_density_label_line_width_json_doc",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`default_output_headroom`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`default_output_headroom`",
     "missing_default_output_headroom_json_doc",
   );
   assertSelfTestMissing(
