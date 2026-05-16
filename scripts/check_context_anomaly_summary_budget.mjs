@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const scriptPath = fileURLToPath(import.meta.url);
+const repoRoot = join(dirname(scriptPath), "..");
 const workflowPath = join(repoRoot, ".github/workflows/context-anomalies.yml");
 const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINES ?? "24",
@@ -156,6 +158,29 @@ function assertSelfTest(result, expectedCode) {
   }
 }
 
+function assertEnvFailure(env, commandArgs, expectedCode) {
+  try {
+    execFileSync(process.execPath, [scriptPath, ...commandArgs], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+    if (output.includes(expectedCode)) {
+      return;
+    }
+    console.error("context_anomaly_summary_budget_self_test_env_failed");
+    console.error(`expected=${expectedCode}`);
+    console.error(`actual=${output.trim()}`);
+    process.exit(1);
+  }
+  console.error("context_anomaly_summary_budget_self_test_env_failed");
+  console.error(`expected=${expectedCode}`);
+  console.error("actual=ok");
+  process.exit(1);
+}
+
 function successPayload(result, jsonBudget) {
   return {
     ok: true,
@@ -209,6 +234,21 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     jsonBudgetIssue(successPayload(result, 10), 10) ?? { code: "ok" },
+    "context_anomaly_summary_budget_json_too_long",
+  );
+  assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINES: "10" },
+    [],
+    "context_anomaly_summary_budget_too_many_lines",
+  );
+  assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINE: "40" },
+    [],
+    "context_anomaly_summary_budget_line_too_long",
+  );
+  assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_SUMMARY_JSON_MAX: "10" },
+    ["--json"],
     "context_anomaly_summary_budget_json_too_long",
   );
   console.log("context_anomaly_summary_budget_self_test_ok");

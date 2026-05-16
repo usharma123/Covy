@@ -145,12 +145,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown summary budget JSON byte self-test | Proves the summary-budget JSON byte cap fails when the payload grows beyond budget. | The summary-budget self-test now verifies a forced low JSON byte cap reports `context_anomaly_summary_budget_json_too_long`. | Evidence: self-test output remains one line and covers the byte-cap failure code. |
 | Context anomaly drilldown summary budget byte docs | Helps maintainers tune the summary-budget checker without reading script code. | The runbook summary-budget row now names `P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINES`, `P28_CONTEXT_ANOMALY_SUMMARY_MAX_LINE`, and `P28_CONTEXT_ANOMALY_SUMMARY_JSON_MAX`. | Evidence: runbook remains under 45 lines and env var names match script configuration. |
 | Context anomaly drilldown summary budget help row repair | Restores explicit runbook discoverability for the help modes after env var docs. | The runbook read-summary-budget row now notes that `--help` lists checker modes. | Evidence: runbook remains under 45 lines and documented help modes match checker help output. |
+| Context anomaly drilldown summary budget env self-test | Proves line, width, and JSON env knobs are actually wired to failure gates. | The summary-budget self-test now shells back into the checker with forced low `P28_CONTEXT_ANOMALY_SUMMARY_*` env values. | Evidence: self-test output remains one line and each env-controlled threshold reports its documented failure code. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown summary budget env self-test | Proves line, width, and JSON env knobs are actually wired to failure gates. | Extend self-test to assert forced low line, width, and JSON env-equivalent budgets fail with the documented codes. | Compact metric: self-test output remains one line; correctness metric: each env-controlled threshold has failure coverage. |
+| Context anomaly drilldown summary budget env failure docs | Helps maintainers understand which failure code maps to each summary-budget env knob. | Document the low line, width, and JSON cap failure codes in the runbook or help text. | Compact metric: runbook remains under 45 lines or help remains five lines; correctness metric: failure codes match checker output. |
 
 ## Research Rules
 
