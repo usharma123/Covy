@@ -1764,9 +1764,10 @@ if (args.includes("--self-test")) {
     "`ok:false`",
     "missing_json_error_shape_doc",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`no-succ`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`no-succ`",
     "missing_json_failure_success_field_doc",
   );
   const staleFailureAliasResult = evaluate(
