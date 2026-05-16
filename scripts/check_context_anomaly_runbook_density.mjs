@@ -1517,12 +1517,17 @@ if (args.includes("--self-test")) {
   for (const field of defaultTextFields) {
     assertDefaultOutputMutation(field, staleDefaultOutputValues[field]);
   }
+  const expectedInvariantArrayDetail = "array,detail";
+  const expectedInvariantScalarDetail = "scalar";
   if (
-    invariantDetailValue(["array", "detail"]) !== "array,detail" ||
-    invariantDetailValue("scalar") !== "scalar"
+    invariantDetailValue(["array", "detail"]) !== expectedInvariantArrayDetail ||
+    invariantDetailValue("scalar") !== expectedInvariantScalarDetail
   ) {
     failSelfTestInvariant({
-      expected_invariant_detail_format: "array,detail;scalar",
+      expected_invariant_detail_format: [
+        expectedInvariantArrayDetail,
+        expectedInvariantScalarDetail,
+      ],
       actual_invariant_detail_format: [
         invariantDetailValue(["array", "detail"]),
         invariantDetailValue("scalar"),
