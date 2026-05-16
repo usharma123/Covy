@@ -650,6 +650,7 @@ if (args.includes("--self-test")) {
   }
   const baselinePayload = successPayload(result, workflowResult, maxJsonBytes);
   if (
+    baselinePayload.alias_docs_checked !== result.alias_docs_checked ||
     baselinePayload.row_soft_ok !== result.row_soft_ok ||
     baselinePayload.row_soft_max !== result.row_soft_max ||
     baselinePayload.density_doc_phrases_checked !==

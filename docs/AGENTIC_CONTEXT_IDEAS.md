@@ -252,12 +252,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text width headroom recovery | Restores default-output width margin after adding `anc` and `parsed`. | Default text now uses `adocs` and `wdocs` compact aliases while JSON keeps full field names. | Evidence: `width` drops below 185; parser and docs still cover every label. |
 | Context anomaly drilldown density text alias glossary refresh | Helps maintainers map the new `adocs` and `wdocs` aliases without reading checker source. | The density label glossary now documents `adocs` and `wdocs`, and the checker self-tests alias-doc removal. | Evidence: row remains under soft target; required alias docs cover the new labels. |
 | Context anomaly drilldown density alias count refresh | Keeps the `adocs` count meaningful after adding `adocs` and `wdocs` glossary docs. | Default output parsing now verifies `adocs`, and self-test mutates `adocs=0` to require a field-specific mismatch. | Evidence: default output remains under text cap; `adocs` equals required alias doc count. |
+| Context anomaly drilldown density alias JSON count self-test | Proves JSON alias count tracks the expanded alias glossary list. | Density self-test now verifies JSON payload `alias_docs_checked` equals the evaluated alias doc count. | Evidence: JSON stays under budget; JSON alias count equals required alias doc count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density alias JSON count self-test | Proves JSON alias count tracks the expanded alias glossary list. | Assert JSON `alias_docs_checked` equals the required alias doc count in self-test. | Compact metric: JSON stays under budget; correctness metric: JSON alias count equals required alias doc count. |
+| Context anomaly drilldown density width-doc parser coverage | Proves parser validation checks the compact `wdocs` count, not only field presence. | Add `wdocs` to parsed mismatch checks and reject stale width-doc counts. | Compact metric: default output stays under text cap; correctness metric: stale `wdocs` fails parser validation. |
 
 ## Research Rules
 
