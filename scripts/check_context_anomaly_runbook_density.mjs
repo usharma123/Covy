@@ -78,6 +78,7 @@ const requiredFailureCodes = [
   "context_anomaly_runbook_density_workflow_missing_commands",
   "context_anomaly_runbook_density_missing_failure_docs",
   "context_anomaly_runbook_density_missing_output_docs",
+  "context_anomaly_runbook_density_missing_env_docs",
   "context_anomaly_runbook_density_prose_too_wide",
   "context_anomaly_runbook_density_json_too_long",
 ];
@@ -86,6 +87,13 @@ const requiredOutputLabels = [
   "workflow_commands",
   "prose",
   "json_headroom",
+];
+const requiredEnvDocs = [
+  "P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES",
+  "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX",
+  "P28_CONTEXT_ANOMALY_RUNBOOK_PROSE_MAX",
+  "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX",
+  "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
 ];
 
 function evaluate(runbook, lineBudget) {
@@ -118,6 +126,9 @@ function evaluate(runbook, lineBudget) {
   );
   const missingOutputLabels = requiredOutputLabels.filter(
     (label) => !runbook.includes(`\`${label}\``),
+  );
+  const missingEnvDocs = requiredEnvDocs.filter(
+    (envName) => !runbook.includes(`\`${envName}\``),
   );
   if (lineCount > lineBudget) {
     return {
@@ -162,6 +173,13 @@ function evaluate(runbook, lineBudget) {
       ok: false,
       code: "context_anomaly_runbook_density_missing_output_docs",
       missing: missingOutputLabels,
+    };
+  }
+  if (missingEnvDocs.length > 0) {
+    return {
+      ok: false,
+      code: "context_anomaly_runbook_density_missing_env_docs",
+      missing: missingEnvDocs,
     };
   }
   return {
@@ -376,6 +394,13 @@ if (args.includes("--self-test")) {
   assertSelfTest(
     evaluate(runbook.replace("`workflow_commands`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(
+      runbook.replace("`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`", ""),
+      maxLines,
+    ),
+    "context_anomaly_runbook_density_missing_env_docs",
   );
   assertSelfTest(
     evaluateWorkflow(
