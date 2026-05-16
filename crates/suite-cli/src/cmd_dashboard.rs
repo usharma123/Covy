@@ -1997,6 +1997,53 @@ mod tests {
     }
 
     #[test]
+    fn context_anomaly_tile_uses_latest_hidden_category_sample() {
+        let root = tempfile::tempdir().unwrap();
+        let older_payload = serde_json::json!({
+            "ok": true,
+            "anomaly_count": 3,
+            "high_count": 1,
+            "hidden_categories": ["fallback_provenance"],
+            "hidden_samples": [{
+                "category": "fallback_provenance",
+                "signal": "recent_fallbacks=1 latest_reason=older unsupported family"
+            }]
+        });
+        let newer_payload = serde_json::json!({
+            "ok": true,
+            "anomaly_count": 3,
+            "high_count": 1,
+            "hidden_categories": ["fallback_provenance"],
+            "hidden_samples": [{
+                "category": "fallback_provenance",
+                "signal": "recent_fallbacks=1 latest_reason=newer fallback sample"
+            }]
+        });
+        record_context_anomaly_history(root.path(), &older_payload).unwrap();
+        record_context_anomaly_history(root.path(), &newer_payload).unwrap();
+
+        let tile = context_anomaly_tile(root.path(), None).unwrap();
+
+        assert_eq!(tile.recurring_hidden_samples.len(), 1);
+        assert_eq!(
+            tile.recurring_hidden_samples[0].category,
+            "fallback_provenance"
+        );
+        assert!(tile.recurring_hidden_samples[0]
+            .signal
+            .contains("newer fallback sample"));
+        assert!(!tile.recurring_hidden_samples[0]
+            .signal
+            .contains("older unsupported family"));
+        assert!(
+            serde_json::to_string(&tile.recurring_hidden_samples)
+                .unwrap()
+                .len()
+                < 512
+        );
+    }
+
+    #[test]
     fn context_anomaly_digest_reports_recurring_hidden_history() {
         let root = tempfile::tempdir().unwrap();
         let payload = context_anomaly_payload(true, 3, 1, vec!["fallback_provenance"]);
