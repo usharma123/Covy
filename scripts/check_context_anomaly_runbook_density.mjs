@@ -1570,9 +1570,11 @@ if (args.includes("--self-test")) {
     evaluate(runbook.replace("`soft`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
-  assertSelfTest(
+  assertSelfTestMissing(
     evaluate(runbook.replace("`key=value`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
+    "`key=value`",
+    "missing_key_value_output_doc",
   );
   assertSelfTestMissing(
     evaluate(
