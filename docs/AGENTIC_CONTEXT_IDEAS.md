@@ -359,15 +359,16 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fixed-point iteration low-cap JSON failure | Proves low-cap JSON failures do not emit a misleading `default_output_iterations` success metric. | Self-test now asserts JSON text-cap failures exclude `default_output_iterations`. | Evidence: error JSON stays compact; failure stays clearly separate from success metrics. |
 | Context anomaly drilldown density fixed-point env helper negative assertion reuse | Makes future failure-shape tests able to assert absent success-only fields. | JSON byte-cap failure self-test now also excludes `default_output_iterations`. | Evidence: self-test output stays one line; failure payloads omit success-only fields. |
 | Context anomaly drilldown density JSON headroom failure success-field exclusion | Keeps oversized-headroom JSON failures from looking like success payloads. | JSON-headroom failure self-test now excludes `default_output_iterations`. | Evidence: self-test output stays one line; headroom failure omits success-only fields. |
-| Context anomaly drilldown density JSON failure-field docs | Helps maintainers understand success-only fields are intentionally absent from failure payloads. | Runbook JSON error docs now include guarded `no-success` wording. | Evidence: prose stays under cap; docs mention success-field exclusion. |
-| Context anomaly drilldown density JSON failure-field docs guard | Prevents the success-field exclusion note from drifting out of docs. | Self-test now has a dedicated missing-doc mutation for the `no-success` JSON error note. | Evidence: prose stays under cap; missing exclusion docs fail coverage. |
+| Context anomaly drilldown density JSON failure-field docs | Helps maintainers understand success-only fields are intentionally absent from failure payloads. | Runbook JSON error docs now use the guarded compact `no-succ` wording. | Evidence: prose stays under cap; docs mention success-field exclusion. |
+| Context anomaly drilldown density JSON failure-field docs guard | Prevents the success-field exclusion note from drifting out of docs. | Self-test now has a dedicated missing-doc mutation for the compact `no-succ` JSON error note. | Evidence: prose stays under cap; missing exclusion docs fail coverage. |
 | Context anomaly drilldown density label prose recovery after failure docs | Restores label-line margin after adding the success-field exclusion note. | The guarded exclusion token now compacts to `no-succ` while preserving error-shape coverage. | Evidence: `dlab` drops below 205; error docs guards still pass. |
+| Context anomaly drilldown density failure docs alias refresh | Keeps the idea ledger wording aligned with the compact `no-succ` runbook token. | Completed failure-field docs rows now name `no-succ`. | Evidence: no runtime output growth; ledger and runbook wording agree. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density failure docs alias refresh | Keeps the idea ledger wording aligned with the compact `no-succ` runbook token. | Refresh completed-row wording for failure-field docs to name `no-succ`. | Compact metric: no runtime output growth; correctness metric: ledger and runbook wording agree. |
+| Context anomaly drilldown density failure docs alias stale-word guard | Prevents the runbook from drifting back to the longer `no-success` token. | Add a self-test assertion that the compact runbook docs do not contain `no-success`. | Compact metric: no output growth; correctness metric: stale long token fails self-test. |
 
 ## Research Rules
 
