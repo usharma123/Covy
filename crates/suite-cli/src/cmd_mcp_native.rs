@@ -151,6 +151,14 @@ pub(crate) struct Packet28RecommendNextToolArgs {
     pub(crate) max_recommendations: Option<usize>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct Packet28ValidateToolOutcomeArgs {
+    pub(crate) task_id: String,
+    pub(crate) command: Option<String>,
+    pub(crate) focus_paths: Vec<String>,
+}
+
 impl Default for Packet28ActionCriticArgs {
     fn default() -> Self {
         Self {
@@ -1334,6 +1342,91 @@ pub(crate) fn handle_packet28_recommend_next_tool(
                 "score": recommendation.score,
             })
         }).collect::<Vec<_>>(),
+    }))
+}
+
+pub(crate) fn handle_packet28_validate_tool_outcome(
+    root: &Path,
+    args: Packet28ValidateToolOutcomeArgs,
+) -> Result<Value> {
+    let records = crate::savings_analytics::load_run_savings(root, 200)?;
+    let command_filter = args
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let record = records
+        .iter()
+        .find(|record| command_filter.map_or(true, |needle| record.command.contains(needle)));
+    let Some(record) = record else {
+        return Ok(json!({
+            "task_id": args.task_id,
+            "status": "missing_artifact",
+            "valid_success": false,
+            "summary": "missing_artifact: no recorded Packet28 run-savings outcome matched the request",
+            "next_action": "rerun the command through Packet28 or fetch the stored tool artifact before relying on it",
+        }));
+    };
+    let changed_focus = args
+        .focus_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .find(|focus| {
+            record
+                .changed_paths
+                .iter()
+                .any(|changed| changed == focus || changed.starts_with(*focus))
+        });
+    let (status, valid_success, next_action) = if record.exit_code != 0 {
+        (
+            "failure",
+            false,
+            "inspect the failure summary or rerun after applying the likely fix",
+        )
+    } else if record
+        .fallback_reason
+        .as_deref()
+        .is_some_and(|reason| !reason.trim().is_empty())
+    {
+        (
+            "fallback",
+            false,
+            "treat the compact result as degraded and inspect fallback provenance before proceeding",
+        )
+    } else if changed_focus.is_some() {
+        (
+            "stale_artifact",
+            false,
+            "refresh focused path evidence before relying on this prior outcome",
+        )
+    } else {
+        (
+            "success",
+            true,
+            "safe to rely on this recorded successful outcome",
+        )
+    };
+    let saved_tokens = record
+        .raw_est_tokens
+        .saturating_sub(record.reduced_est_tokens);
+    let evidence = if let Some(reason) = record.fallback_reason.as_deref() {
+        format!("fallback_reason={reason}")
+    } else {
+        format!(
+            "exit_code={} saved_tokens={} savings_percent={:.1}",
+            record.exit_code, saved_tokens, record.savings_percent
+        )
+    };
+    Ok(json!({
+        "task_id": args.task_id,
+        "status": status,
+        "valid_success": valid_success,
+        "summary": format!("{status}: {}", record.command),
+        "next_action": next_action,
+        "command": record.command,
+        "evidence": evidence,
+        "changed_paths": record.changed_paths,
     }))
 }
 

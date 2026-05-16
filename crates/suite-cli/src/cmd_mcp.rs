@@ -45,7 +45,7 @@ use crate::cmd_mcp::native_tools::{
     Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
     Packet28GlobArgs, Packet28PrepareHandoffArgs, Packet28ReadRegionsArgs,
     Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
-    Packet28ValidatePlanArgs, Packet28WriteIntentionArgs,
+    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28WriteIntentionArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
@@ -756,6 +756,18 @@ fn handle_method(
                             "focus_paths": {"type":"array","items":{"type":"string"}},
                             "focus_symbols": {"type":"array","items":{"type":"string"}},
                             "max_recommendations": {"type":"integer","minimum":1,"maximum":4}
+                        }
+                    }
+                },
+                {
+                    "name": "packet28.validate_tool_outcome",
+                    "description": "Classify the latest matching Packet28 tool outcome as success, fallback, missing artifact, stale artifact, or failure.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"},
+                            "command": {"type":"string"},
+                            "focus_paths": {"type":"array","items":{"type":"string"}}
                         }
                     }
                 },
@@ -1599,6 +1611,18 @@ fn handle_tool_call(
             )?;
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_recommend_next_tool(root, request)?
+        }
+        "packet28.validate_tool_outcome" => {
+            let mut request: Packet28ValidateToolOutcomeArgs = serde_json::from_value(arguments)?;
+            request.task_id = resolve_session_task_id(
+                session,
+                root,
+                &request.task_id,
+                request.command.as_deref(),
+                name,
+            )?;
+            track_task(session, root, &request.task_id)?;
+            native_tools::handle_packet28_validate_tool_outcome(root, request)?
         }
         "packet28.verify_experiments" => {
             let request: VerifyExperimentsToolArgs = serde_json::from_value(arguments)?;
@@ -2561,6 +2585,17 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
                 "Packet28 recommended {recommendation_count} next tool(s), estimated {token_estimate} tokens."
             )
         }
+        "packet28.validate_tool_outcome" => {
+            let status = payload
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let valid = payload
+                .get("valid_success")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            format!("Packet28 tool outcome status={status} valid_success={valid}.")
+        }
         "packet28.verify_experiments" => {
             let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
             let experiments = payload
@@ -2882,6 +2917,7 @@ mod tests {
             "packet28_validate_plan",
             "packet28_action_critic",
             "packet28_recommend_next_tool",
+            "packet28_validate_tool_outcome",
             "packet28_verify_experiments",
             "packet28_hypothesis_add",
             "packet28_hypothesis_list",
@@ -3081,5 +3117,51 @@ mod tests {
                 .unwrap()
                 .contains("packet28.read_regions")
         );
+    }
+
+    #[test]
+    fn validate_tool_outcome_does_not_treat_fallback_as_success() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".packet28")).unwrap();
+        std::fs::write(
+            root.path().join(".packet28/run-savings.jsonl"),
+            json!({
+                "command": "Packet28 run -- rg auth",
+                "cwd": root.path().display().to_string(),
+                "family": "search",
+                "canonical_kind": "rg",
+                "exit_code": 0,
+                "raw_est_tokens": 900,
+                "reduced_est_tokens": 200,
+                "savings_percent": 77.8,
+                "fallback_reason": "fff auto preferred backend failed: launch error",
+                "failure_fingerprint": null,
+                "changed_paths": [],
+                "timestamp_unix_ms": 20
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+
+        let response = handle_tool_call(
+            root.path(),
+            &session,
+            json!({
+                "name": "packet28.validate_tool_outcome",
+                "arguments": {
+                    "task_id": "task-outcome",
+                    "command": "rg auth"
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["structuredContent"]["status"], "fallback");
+        assert_eq!(response["structuredContent"]["valid_success"], false);
+        assert!(response["structuredContent"]["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("fallback_reason="));
     }
 }
