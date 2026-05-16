@@ -25,6 +25,8 @@ pub enum VerifyCommands {
     ReducerDrift(ReducerDriftVerifyArgs),
     /// Verify cross-agent memory lint fixtures catch stale runtime-specific advice
     MemoryLint(MemoryLintVerifyArgs),
+    /// Verify context anomaly digest stays below configured thresholds
+    ContextAnomalies(ContextAnomalyVerifyArgs),
 }
 
 #[derive(Args)]
@@ -91,6 +93,20 @@ pub struct MemoryLintVerifyArgs {
     pub root: String,
     #[arg(long, default_value = "docs/memory-lint/fixtures.json")]
     pub fixture: String,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct ContextAnomalyVerifyArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long, default_value_t = 999)]
+    pub max_anomalies: usize,
+    #[arg(long, default_value_t = 0)]
+    pub max_high: usize,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -295,6 +311,7 @@ pub fn run(args: VerifyArgs) -> Result<i32> {
         VerifyCommands::Handoffs(args) => run_handoffs(args),
         VerifyCommands::ReducerDrift(args) => run_reducer_drift(args),
         VerifyCommands::MemoryLint(args) => run_memory_lint(args),
+        VerifyCommands::ContextAnomalies(args) => run_context_anomalies(args),
     }
 }
 
@@ -596,6 +613,41 @@ fn run_memory_lint(args: MemoryLintVerifyArgs) -> Result<i32> {
     }
 }
 
+fn run_context_anomalies(args: ContextAnomalyVerifyArgs) -> Result<i32> {
+    let cwd = crate::cmd_common::caller_cwd()?;
+    let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
+    let payload = verify_context_anomalies_payload(&root, args.max_anomalies, args.max_high)?;
+    let ok = payload.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
+
+    if args.json {
+        crate::cmd_common::emit_json(&payload, args.pretty)?;
+    } else {
+        println!(
+            "context_anomaly_count={}",
+            payload
+                .get("anomaly_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default()
+        );
+        println!(
+            "context_anomaly_high_count={}",
+            payload
+                .get("high_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default()
+        );
+        println!("context_anomaly_max_anomalies={}", args.max_anomalies);
+        println!("context_anomaly_max_high={}", args.max_high);
+        println!("context_anomaly_ok={ok}");
+    }
+
+    if ok {
+        Ok(0)
+    } else {
+        Ok(1)
+    }
+}
+
 pub(crate) fn verify_experiments_payload(
     root: &Path,
     manifest_path: &Path,
@@ -626,6 +678,28 @@ pub(crate) fn verify_experiments_payload(
         payload["scores"] = json!(score_experiment_manifest(root, &manifest, &issues));
     }
     Ok(payload)
+}
+
+pub(crate) fn verify_context_anomalies_payload(
+    root: &Path,
+    max_anomalies: usize,
+    max_high: usize,
+) -> Result<serde_json::Value> {
+    let digest = crate::cmd_dashboard::context_anomaly_digest(root)?;
+    let high_count = digest
+        .anomalies
+        .iter()
+        .filter(|anomaly| anomaly.severity == "high")
+        .count();
+    let ok = digest.anomaly_count <= max_anomalies && high_count <= max_high;
+    Ok(json!({
+        "ok": ok,
+        "max_anomalies": max_anomalies,
+        "max_high": max_high,
+        "anomaly_count": digest.anomaly_count,
+        "high_count": high_count,
+        "anomalies": digest.anomalies,
+    }))
 }
 
 pub(crate) fn verify_memory_lint_payload(
@@ -1381,5 +1455,36 @@ mod tests {
         assert_eq!(payload["issue_count"], 3);
         assert!(payload["expectation_issues"].as_array().unwrap().is_empty());
         assert!(serde_json::to_string(&payload["lint"]).unwrap().len() < 768);
+    }
+
+    #[test]
+    fn verify_context_anomalies_fails_high_anomaly_threshold() {
+        let root = tempfile::tempdir().unwrap();
+        crate::cmd_dashboard::record_memory_lint_history(
+            root.path(),
+            &json!({
+                "ok": false,
+                "memory_count": 1,
+                "issue_count": 1,
+                "lint": {
+                    "issues": [{
+                        "kind": "runtime_specific_memory",
+                        "detail": "mentions windsurf"
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+
+        let payload = verify_context_anomalies_payload(root.path(), usize::MAX, 0).unwrap();
+
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["anomaly_count"], 1);
+        assert_eq!(payload["high_count"], 1);
+        assert!(payload["anomalies"][0]["next_check"]
+            .as_str()
+            .unwrap()
+            .contains("memory-lint"));
+        assert!(serde_json::to_string(&payload).unwrap().len() < 1024);
     }
 }

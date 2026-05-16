@@ -1,0 +1,49 @@
+name: Context Anomalies
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/context-anomalies.yml"
+      - "docs/AGENTIC_CONTEXT_IDEAS.md"
+      - "crates/suite-cli/src/cmd_dashboard.rs"
+      - "crates/suite-cli/src/cmd_digest.rs"
+      - "crates/suite-cli/src/cmd_mcp.rs"
+      - "crates/suite-cli/src/cmd_verify.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/context-anomalies.yml"
+      - "docs/AGENTIC_CONTEXT_IDEAS.md"
+      - "crates/suite-cli/src/cmd_dashboard.rs"
+      - "crates/suite-cli/src/cmd_digest.rs"
+      - "crates/suite-cli/src/cmd_mcp.rs"
+      - "crates/suite-cli/src/cmd_verify.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Packet28 CLI
+        run: cargo build -p suite-cli
+
+      - name: Verify context anomaly thresholds
+        run: target/debug/Packet28 verify context-anomalies --root . --max-high 0 --json
