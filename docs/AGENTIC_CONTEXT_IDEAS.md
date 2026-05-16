@@ -237,12 +237,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density glossary missing-field self-test | Proves the parser rejects omitted density-doc counts, not just stale values. | Density self-test now removes the `dphr` field from rendered default output and requires a missing-field error. | Evidence: self-test output remains one line; omitted glossary counts fail parser validation. |
 | Context anomaly drilldown density parser mismatch diagnostics | Makes default-output parser failures easier to debug when a count drifts. | Parser mismatches now return field-specific diagnostics such as `default_output_parse_mismatch=dphr`. | Evidence: success output is unchanged; self-test expects the field-specific stale-`dphr` diagnostic. |
 | Context anomaly drilldown density parser mismatch breadth | Proves field-specific parser diagnostics work beyond `dphr`. | Density self-test now mutates `soft=over` and requires `default_output_parse_mismatch=soft`. | Evidence: success output is unchanged; multiple mismatch fields produce field-specific diagnostics. |
+| Context anomaly drilldown density parser field coverage output | Helps automation see how many default-output fields are parser-enforced. | Default output now reports `parsed` from the expected parser field list. | Evidence: default output remains under text cap; `parsed` equals parser field count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density parser field coverage output | Helps automation see how many default-output fields are parser-enforced. | Add a compact `parsed` count to default output tied to expected parser fields. | Compact metric: default output remains under text cap; correctness metric: `parsed` equals parser field count. |
+| Context anomaly drilldown density parser field coverage JSON parity | Lets JSON consumers inspect parser field coverage without parsing default text. | Add parser field count to JSON while preserving JSON headroom. | Compact metric: JSON stays under budget; correctness metric: JSON count equals parser field count. |
 
 ## Research Rules
 

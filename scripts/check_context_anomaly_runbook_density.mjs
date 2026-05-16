@@ -108,9 +108,11 @@ const requiredOutputLabels = [
   "alias_docs",
   "dphr",
   "soft",
+  "parsed",
   "width",
   "width_docs",
 ];
+const defaultTextFields = [...requiredOutputLabels];
 const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
@@ -277,6 +279,7 @@ function evaluate(runbook, lineBudget) {
     output_doc_phrases_checked: requiredOutputDocPhrases.length,
     alias_docs_checked: requiredAliasDocPhrases.length,
     density_doc_phrases_checked: requiredDensityDocPhrases.length,
+    parsed_fields_checked: defaultTextFields.length,
     text_width_docs_checked: hasTextWidthEnvDoc ? 1 : 0,
   };
 }
@@ -438,6 +441,7 @@ function renderDefaultOutput(payload, resultDetails, jsonHeadroom, textWidth) {
     `alias_docs=${resultDetails.alias_docs_checked}`,
     `dphr=${resultDetails.density_doc_phrases_checked}`,
     `soft=${resultDetails.row_soft_ok ? "ok" : "over"}`,
+    `parsed=${resultDetails.parsed_fields_checked}`,
     `wf=${payload.workflow_commands_checked}`,
     `prose=${payload.max_density_prose_line}/${payload.max_density_prose_line_allowed}`,
     `json=${jsonHeadroom}`,
@@ -474,24 +478,7 @@ function parseDefaultOutput(line) {
 }
 
 function defaultOutputParseIssue(parsed, resultDetails) {
-  const expectedTextFields = [
-    "lines",
-    "row",
-    "cmds",
-    "fc",
-    "env",
-    "labels",
-    "phrases",
-    "alias_docs",
-    "dphr",
-    "soft",
-    "wf",
-    "prose",
-    "json",
-    "width_docs",
-    "width",
-  ];
-  for (const field of expectedTextFields) {
+  for (const field of defaultTextFields) {
     if (!parsed?.[field]) {
       return `missing_default_output_field=${field}`;
     }
@@ -501,6 +488,7 @@ function defaultOutputParseIssue(parsed, resultDetails) {
     labels: String(resultDetails.output_labels_checked),
     dphr: String(resultDetails.density_doc_phrases_checked),
     soft: resultDetails.row_soft_ok ? "ok" : "over",
+    parsed: String(resultDetails.parsed_fields_checked),
   };
   for (const [field, expected] of Object.entries(expectedValues)) {
     if (parsed[field] !== expected) {
@@ -567,6 +555,12 @@ if (args.includes("--self-test")) {
     console.error(
       `actual_density_doc_phrases=${result.density_doc_phrases_checked}`,
     );
+    process.exit(1);
+  }
+  if (result.parsed_fields_checked !== defaultTextFields.length) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(`expected_parsed_fields=${defaultTextFields.length}`);
+    console.error(`actual_parsed_fields=${result.parsed_fields_checked}`);
     process.exit(1);
   }
   if (!result.row_soft_ok) {
@@ -779,6 +773,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`dphr`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`parsed`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
