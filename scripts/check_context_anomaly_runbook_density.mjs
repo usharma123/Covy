@@ -719,6 +719,22 @@ if (args.includes("--self-test")) {
     json_headroom: baselineHeadroom,
     default_output_width: defaultOutputLine.length,
   };
+  const requiredDefaultParseDetailFields = [
+    "workflow_commands_checked",
+    "json_headroom",
+    "default_output_width",
+  ];
+  const missingDefaultParseDetailFields =
+    requiredDefaultParseDetailFields.filter(
+      (field) => defaultParseDetails[field] === undefined,
+    );
+  if (missingDefaultParseDetailFields.length > 0) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error(
+      `missing_default_parse_details=${missingDefaultParseDetailFields.join(",")}`,
+    );
+    process.exit(1);
+  }
   const expectedParserFields = Object.keys(
     defaultOutputExpectedValues(defaultParseDetails),
   ).sort();

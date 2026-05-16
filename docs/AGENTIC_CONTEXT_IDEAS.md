@@ -291,12 +291,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density parser mutation table | Reduces repeated self-test boilerplate so future compact fields get stale and missing mutations consistently. | Density self-test now runs a table-driven missing/stale mutation sweep for every default output label. | Evidence: self-test output remains one line; every field-specific mutation failure remains covered. |
 | Context anomaly drilldown density parser mutation cleanup | Removes duplicated parser mutation assertions now that a table-driven sweep covers every compact field. | Deleted the legacy one-off default-output mutation checks covered by the table. | Evidence: self-test output remains one line; table-driven mutations still cover every default output label. |
 | Context anomaly drilldown density stale-value safety audit | Prevents the mutation table from using a stale value that accidentally equals the current rendered value. | Density self-test now rejects missing/stale mutation no-ops before parser checks. | Evidence: self-test output remains one line; stale mutation values cannot become no-ops. |
+| Context anomaly drilldown density mutation table parse-details audit | Prevents table-driven mutations from using incomplete parse details for optional fields like `wf`, `json`, and `width`. | Density self-test now asserts the parse details object includes every optional parser field before mutation checks. | Evidence: self-test output remains one line; missing optional parse detail fails self-test. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density mutation table parse-details audit | Prevents table-driven mutations from using incomplete parse details for optional fields like `wf`, `json`, and `width`. | Assert the parse details object includes every optional parser field before running the mutation table. | Compact metric: self-test output remains one line; correctness metric: missing optional parse detail fails self-test. |
+| Context anomaly drilldown density mutation table optional-field docs | Helps maintainers understand why `wf`, `json`, and `width` require enriched parse details. | Document the optional parse-detail fields in the ideas ledger or checker comments without increasing runbook width. | Compact metric: runbook output remains unchanged; correctness metric: future maintainers can identify optional parse-detail fields. |
 
 ## Research Rules
 
