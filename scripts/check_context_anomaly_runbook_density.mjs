@@ -13,7 +13,7 @@ const maxLines = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES ?? "44",
   10,
 );
-const defaultMaxJsonBytes = 320;
+const defaultMaxJsonBytes = 352;
 const maxJsonBytes = Number.parseInt(
   process.env.P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX ??
     String(defaultMaxJsonBytes),
@@ -113,7 +113,9 @@ const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
   "`alias_docs_checked`",
-  "`max_json_bytes=320`",
+  "`row_soft_ok`",
+  "`row_soft_max`",
+  "`max_json_bytes=352`",
 ];
 const requiredAliasDocPhrases = [
   "`fc`=failure codes",
@@ -367,6 +369,8 @@ function successPayload(result, workflow, jsonBudget) {
     commands_checked: result.commands_checked,
     failure_codes_checked: result.failure_codes_checked,
     alias_docs_checked: result.alias_docs_checked,
+    row_soft_ok: result.row_soft_ok,
+    row_soft_max: result.row_soft_max,
     workflow_commands_checked: workflow.workflow_commands_checked,
     max_json_bytes: jsonBudget,
   };
@@ -556,6 +560,14 @@ if (args.includes("--self-test")) {
     process.exit(1);
   }
   const baselinePayload = successPayload(result, workflowResult, maxJsonBytes);
+  if (
+    baselinePayload.row_soft_ok !== result.row_soft_ok ||
+    baselinePayload.row_soft_max !== result.row_soft_max
+  ) {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("row_soft_json_mismatch");
+    process.exit(1);
+  }
   const baselineHeadroom = jsonHeadroomBytes(baselinePayload, maxJsonBytes);
   if (baselineHeadroom < minJsonHeadroomBytes) {
     console.error("context_anomaly_runbook_density_self_test_failed");
@@ -694,6 +706,10 @@ if (args.includes("--self-test")) {
   );
   assertSelfTest(
     evaluate(runbook.replace("`alias_docs_checked`", ""), maxLines),
+    "context_anomaly_runbook_density_missing_output_docs",
+  );
+  assertSelfTest(
+    evaluate(runbook.replace("`row_soft_ok`", ""), maxLines),
     "context_anomaly_runbook_density_missing_output_docs",
   );
   assertSelfTest(
