@@ -662,6 +662,12 @@ fn run_context_anomalies(args: ContextAnomalyVerifyArgs) -> Result<i32> {
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or_default()
             );
+            if let Some(hint) = payload
+                .get("trend_repair_hint")
+                .and_then(serde_json::Value::as_str)
+            {
+                println!("context_anomaly_trend_repair_hint={hint}");
+            }
         }
         println!("context_anomaly_ok={ok}");
     }
@@ -737,6 +743,10 @@ pub(crate) fn verify_context_anomalies_payload(
         payload["trend_latest_age_ms"] = json!(latest_age_ms);
         payload["trend_oldest_recurring_hidden_age_ms"] = json!(oldest_recurring_hidden_age_ms);
         payload["trend_age_ok"] = json!(trend_age_ok);
+        if !trend_age_ok {
+            payload["trend_repair_hint"] =
+                json!("rerun verifier or clear stale context anomaly history");
+        }
     }
     Ok(payload)
 }
@@ -1555,6 +1565,11 @@ mod tests {
         assert_eq!(payload["ok"], false);
         assert_eq!(payload["max_trend_age_ms"], 1);
         assert_eq!(payload["trend_age_ok"], false);
+        assert_eq!(
+            payload["trend_repair_hint"],
+            "rerun verifier or clear stale context anomaly history"
+        );
+        assert!(payload["trend_repair_hint"].as_str().unwrap().len() < 120);
         assert!(payload["trend_latest_age_ms"].as_u64().unwrap() > 1);
         assert!(
             payload["trend_oldest_recurring_hidden_age_ms"]
