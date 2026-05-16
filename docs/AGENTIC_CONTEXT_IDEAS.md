@@ -405,12 +405,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density missing-detail helper env-label adoption | Reuses the missing-detail helper for the compact `env` output label mutation. | The `env` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers env label detail checks. |
 | Context anomaly drilldown density missing-detail helper adocs-label adoption | Reuses the missing-detail helper for the compact `adocs` output label mutation. | The `adocs` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers alias-doc label detail checks. |
 | Context anomaly drilldown density missing-detail helper workflow-label adoption | Reuses the missing-detail helper for the compact `wf` output label mutation. | The `wf` output-label mutation now uses `assertSelfTestMissing` for its label token. | Evidence: no output growth; helper covers workflow label detail checks. |
+| Context anomaly drilldown density missing-detail helper output label sweep | Finishes exact-detail coverage for the compact output label mutation cluster. | Self-test now mutates every label inside `defaultOutputDocPhrase` and asserts the exact phrase is reported missing. | Evidence: no output growth; every output-label position has a named missing-detail assertion. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density missing-detail helper output label sweep | Finishes exact-detail coverage for the compact output label mutation cluster. | Inspect remaining output-label mutations and convert any still using bare `assertSelfTest`. | Compact metric: no output growth; correctness metric: every output-label mutation has a named missing-detail assertion. |
+| Context anomaly drilldown density missing-detail helper failure-doc detail adoption | Extends exact missing-detail coverage from output docs to failure-code docs. | Convert one failure-code docs mutation to assert its missing failure code detail. | Compact metric: no output growth; correctness metric: failure-doc mutations report exact missing codes. |
 
 ## Research Rules
 

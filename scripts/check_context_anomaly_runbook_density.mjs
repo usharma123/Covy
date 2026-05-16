@@ -1594,6 +1594,20 @@ if (args.includes("--self-test")) {
     "`key=value`",
     "missing_key_value_output_doc",
   );
+  for (const label of defaultOutputFieldOrder) {
+    assertSelfTestMissing(
+      evaluate(
+        runbook.replace(
+          defaultOutputDocPhrase,
+          defaultOutputDocPhrase.replace(`\`${label}\``, `\`${label}_drift\``),
+        ),
+        maxLines,
+      ),
+      "context_anomaly_runbook_density_missing_output_docs",
+      defaultOutputDocPhrase,
+      `drifted_${label}_default_output_doc_phrase`,
+    );
+  }
   assertSelfTestMissing(
     evaluate(
       runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
