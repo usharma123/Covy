@@ -141,6 +141,54 @@
           "version": "0.2.59"
         }
       ]
+    },
+    {
+      "id": "claude-code-main-navigation-20260511",
+      "workflow": "Packet28 code-navigation experiment on ClaudeCode main source snapshot",
+      "commands": [
+        "scripts/run_packet28_claude_code_experiment.sh",
+        "rg -n 'hook|mcp|tool_use' -g '*.ts' -g '*.tsx' .",
+        "target/debug/Packet28 run --root <isolated-claude-code-main> --json -- rg -n 'hook|mcp|tool_use' -g '*.ts' -g '*.tsx' .",
+        "target/debug/p28 --compact --stats 'hook|mcp|tool_use' .",
+        "target/debug/p28 --engine indexed --transport inproc --compact --stats tool_use"
+      ],
+      "artifacts": [
+        "docs/experiments/packet28-claude-code-main/README.md",
+        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/summary.md",
+        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/metrics.tsv",
+        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/daemon-index-status.json",
+        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/packet28_run_rg.out",
+        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/p28_compact.out",
+        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/p28_indexed_control.out"
+      ],
+      "metrics": [
+        {
+          "name": "p28_compact_savings_percent",
+          "value": 98.51,
+          "min": 98
+        },
+        {
+          "name": "p28_indexed_control_savings_percent",
+          "value": 71.49,
+          "min": 70
+        },
+        {
+          "name": "daemon_index_ready",
+          "value": 1,
+          "min": 1
+        },
+        {
+          "name": "p28_fallback_count",
+          "value": 0,
+          "max": 0
+        }
+      ],
+      "runtime_versions": [
+        {
+          "name": "packet28",
+          "version": "0.2.52"
+        }
+      ]
     }
   ]
 }
