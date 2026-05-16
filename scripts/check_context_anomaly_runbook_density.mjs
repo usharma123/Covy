@@ -1481,6 +1481,11 @@ if (args.includes("--self-test")) {
     [],
     "context_anomaly_runbook_density_text_too_wide",
   );
+  assertEnvFailure(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
+    ["--json"],
+    "context_anomaly_runbook_density_text_too_wide",
+  );
   assertEnvOutput(
     { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
     [],
@@ -1546,6 +1551,10 @@ const {
   defaultOutputHeadroom,
 } = buildSuccessArtifacts(result, workflowResult, maxJsonBytes);
 const defaultOutputWidthIssue = defaultOutputIssue(payload, result, jsonHeadroom);
+if (defaultOutputWidthIssue) {
+  const { code, ok, ...details } = defaultOutputWidthIssue;
+  fail(code, details);
+}
 if (args.includes("--json")) {
   const jsonPayloadError = jsonPayloadParityIssue(payload, result, {
     default_output_headroom: defaultOutputHeadroom,
@@ -1562,9 +1571,5 @@ if (args.includes("--json")) {
   }
   console.log(JSON.stringify(payload));
 } else {
-  if (defaultOutputWidthIssue) {
-    const { code, ok, ...details } = defaultOutputWidthIssue;
-    fail(code, details);
-  }
   console.log(defaultOutputLine);
 }

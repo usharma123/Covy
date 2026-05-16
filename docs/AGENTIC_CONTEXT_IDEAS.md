@@ -331,12 +331,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-headroom low-cap regression | Proves the fixed-point text renderer still fails cleanly when `thead` cannot fit. | Self-test now forces `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=195`, just below the exact-width success boundary. | Evidence: no output growth; low cap fails after `thead` convergence. |
 | Context anomaly drilldown density text-headroom positive-cap regression | Proves the fixed-point text renderer still succeeds with a narrow but sufficient cap. | Self-test now forces `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=196` and expects `thead=0 tw=196`. | Evidence: no output growth; exact-width cap succeeds with zero headroom. |
 | Context anomaly drilldown density text-headroom JSON exact-cap parity | Proves JSON `default_output_headroom` follows exact-width text-cap convergence too. | Self-test now runs JSON output at `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=196` and expects `default_output_headroom`:0. | Evidence: JSON output stays under cap; JSON and text headroom agree at zero. |
+| Context anomaly drilldown density text-headroom JSON low-cap failure | Proves JSON mode fails before emitting stale `default_output_headroom` when text output is too wide. | JSON mode now shares the fixed-point text-width guard before emitting payloads. | Evidence: no output growth; JSON mode fails at text cap 195. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text-headroom JSON low-cap failure | Proves JSON mode fails before emitting stale `default_output_headroom` when text output is too wide. | Add an env JSON self-test at `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX=195` expecting the text-width failure. | Compact metric: no output growth; correctness metric: JSON mode shares the text-width guard. |
+| Context anomaly drilldown density text-headroom JSON low-cap error shape | Helps automation distinguish JSON-mode text-cap failures from success payloads. | Add a self-test that JSON low-cap failure emits `ok:false` with the text-width failure code. | Compact metric: error JSON stays compact; correctness metric: failure shape is machine-readable. |
 
 ## Research Rules
 
