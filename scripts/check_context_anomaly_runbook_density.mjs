@@ -1506,9 +1506,9 @@ if (args.includes("--self-test")) {
   }
   if (pairedEnvDocExclusionCount !== 2) {
     console.error("context_anomaly_runbook_density_self_test_failed");
-    console.error("expected_paired_env_doc_exclusions=2");
+    console.error("expected_paired_env_doc_exclusion_count=2");
     console.error(
-      `actual_paired_env_doc_exclusions=${pairedEnvDocExclusionCount}`,
+      `actual_paired_env_doc_exclusion_count=${pairedEnvDocExclusionCount}`,
     );
     process.exit(1);
   }
