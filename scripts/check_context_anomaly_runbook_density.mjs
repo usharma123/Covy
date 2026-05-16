@@ -1481,6 +1481,11 @@ if (args.includes("--self-test")) {
     [],
     "context_anomaly_runbook_density_text_too_wide",
   );
+  assertEnvOutput(
+    { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
+    [],
+    "thead=0 tw=196",
+  );
   assertEnvFailure(
     { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10" },
     ["--json"],
