@@ -761,6 +761,30 @@ pub(crate) fn build_broker_sections(
         });
     }
 
+    let context_debt_lines = render_context_debt_lines(snapshot);
+    if !context_debt_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "context_debt".to_string(),
+            title: "Context Debt".to_string(),
+            body: truncate_lines(
+                context_debt_lines,
+                section_item_limit(&effective_limits, "context_debt"),
+            ),
+            priority: if matches!(
+                action,
+                BrokerAction::Plan
+                    | BrokerAction::Inspect
+                    | BrokerAction::ChooseTool
+                    | BrokerAction::Edit
+            ) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
     if should_run_reducer_search(&allowed_sections) {
         let search_execution = build_reducer_search_execution(SearchExecutionArgs {
             state: Some(state),
@@ -1031,6 +1055,116 @@ fn render_evidence_freshness_lines(
             ),
     );
     lines
+}
+
+fn render_context_debt_lines(snapshot: &suite_packet_core::AgentSnapshotPayload) -> Vec<String> {
+    let stale_paths = snapshot
+        .changed_paths_since_checkpoint
+        .iter()
+        .filter(|path| !snapshot.files_read.iter().any(|read| read == *path))
+        .collect::<Vec<_>>();
+    let unverified_edits = if (!snapshot.files_edited.is_empty()
+        || !snapshot.changed_paths_since_checkpoint.is_empty()
+        || !snapshot.changed_symbols_since_checkpoint.is_empty())
+        && !has_recent_verification_evidence(snapshot)
+    {
+        snapshot
+            .files_edited
+            .len()
+            .max(snapshot.changed_paths_since_checkpoint.len())
+            .max(snapshot.changed_symbols_since_checkpoint.len())
+    } else {
+        0
+    };
+    let contradiction_count = active_hypothesis_contradiction_count(snapshot);
+    let open_questions = snapshot.open_questions.len();
+    if stale_paths.is_empty()
+        && unverified_edits == 0
+        && contradiction_count == 0
+        && open_questions == 0
+    {
+        return Vec::new();
+    }
+
+    let mut lines = vec![format!(
+        "- debt_summary: stale_paths={} open_questions={} unverified_edits={} contradictions={}",
+        stale_paths.len(),
+        open_questions,
+        unverified_edits,
+        contradiction_count
+    )];
+    if let Some(path) = stale_paths.first() {
+        lines.push(format!(
+            "- payoff stale_path: read/search {path} before relying on cached evidence"
+        ));
+    }
+    if open_questions > 0 {
+        lines.push(
+            "- payoff open_questions: resolve or explicitly defer before handoff/finalization"
+                .to_string(),
+        );
+    }
+    if unverified_edits > 0 {
+        lines.push("- payoff unverified_edits: run focused test/build/diff evidence".to_string());
+    }
+    if contradiction_count > 0 {
+        lines.push(
+            "- payoff contradictions: resolve or supersede contradicted hypothesis decisions"
+                .to_string(),
+        );
+    }
+    lines
+}
+
+fn active_hypothesis_contradiction_count(
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> usize {
+    let contradiction_terms = [
+        "contradict",
+        "contradicted",
+        "contradiction",
+        "reject",
+        "rejected",
+        "refute",
+        "refuted",
+        "falsify",
+        "falsified",
+        "not true",
+    ];
+    snapshot
+        .active_decisions
+        .iter()
+        .filter(|decision| decision.id.starts_with("hypothesis:"))
+        .filter(|decision| {
+            let hypothesis_key = decision
+                .id
+                .strip_prefix("hypothesis:")
+                .unwrap_or(decision.id.as_str())
+                .to_ascii_lowercase();
+            snapshot.recent_tool_invocations.iter().any(|invocation| {
+                let evidence = [
+                    invocation.result_summary.as_deref().unwrap_or_default(),
+                    invocation.compact_preview.as_deref().unwrap_or_default(),
+                    invocation.request_summary.as_deref().unwrap_or_default(),
+                    invocation.command.as_deref().unwrap_or_default(),
+                ]
+                .join(" ")
+                .to_ascii_lowercase();
+                !evidence.trim().is_empty()
+                    && contradiction_terms
+                        .iter()
+                        .any(|term| evidence.contains(term))
+                    && (evidence.contains(&hypothesis_key)
+                        || decision.related_paths.iter().any(|path| {
+                            !path.trim().is_empty() && evidence.contains(&path.to_ascii_lowercase())
+                        })
+                        || decision.related_symbols.iter().any(|symbol| {
+                            !symbol.trim().is_empty()
+                                && evidence.contains(&symbol.to_ascii_lowercase())
+                        }))
+            })
+        })
+        .count()
 }
 
 #[derive(Debug, Clone)]

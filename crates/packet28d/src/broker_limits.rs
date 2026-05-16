@@ -24,6 +24,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "task_memory",
             "agent_intention",
             "checkpoint_context",
+            "context_debt",
             "active_decisions",
             "open_questions",
             "current_focus",
@@ -40,6 +41,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "task_memory",
             "agent_intention",
             "checkpoint_context",
+            "context_debt",
             "current_focus",
             "discovered_scope",
             "evidence_freshness",
@@ -59,6 +61,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "task_memory",
             "agent_intention",
             "checkpoint_context",
+            "context_debt",
             "recent_tool_activity",
             "tool_failures",
             "discovered_scope",
@@ -75,6 +78,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "task_memory",
             "agent_intention",
             "checkpoint_context",
+            "context_debt",
             "recent_tool_activity",
             "tool_failures",
             "code_evidence",
@@ -91,6 +95,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "task_memory",
             "agent_intention",
             "checkpoint_context",
+            "context_debt",
             "current_focus",
             "discovered_scope",
             "recent_tool_activity",
@@ -110,6 +115,7 @@ fn section_ids_for_action(action: BrokerAction) -> &'static [&'static str] {
             "task_memory",
             "agent_intention",
             "checkpoint_context",
+            "context_debt",
             "progress",
             "recent_tool_activity",
             "tool_failures",
@@ -129,6 +135,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("task_memory".to_string(), 8);
             section_item_limits.insert("agent_intention".to_string(), 6);
             section_item_limits.insert("checkpoint_context".to_string(), 6);
+            section_item_limits.insert("context_debt".to_string(), 6);
             section_item_limits.insert("active_decisions".to_string(), 8);
             section_item_limits.insert("open_questions".to_string(), 8);
             section_item_limits.insert("current_focus".to_string(), 8);
@@ -149,6 +156,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("task_memory".to_string(), 8);
             section_item_limits.insert("agent_intention".to_string(), 6);
             section_item_limits.insert("checkpoint_context".to_string(), 6);
+            section_item_limits.insert("context_debt".to_string(), 6);
             section_item_limits.insert("current_focus".to_string(), 8);
             section_item_limits.insert("discovered_scope".to_string(), 8);
             section_item_limits.insert("evidence_freshness".to_string(), 4);
@@ -169,6 +177,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("task_memory".to_string(), 6);
             section_item_limits.insert("agent_intention".to_string(), 5);
             section_item_limits.insert("checkpoint_context".to_string(), 4);
+            section_item_limits.insert("context_debt".to_string(), 4);
             section_item_limits.insert("recent_tool_activity".to_string(), 4);
             section_item_limits.insert("tool_failures".to_string(), 4);
             section_item_limits.insert("discovered_scope".to_string(), 6);
@@ -188,6 +197,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("task_memory".to_string(), 6);
             section_item_limits.insert("agent_intention".to_string(), 5);
             section_item_limits.insert("checkpoint_context".to_string(), 5);
+            section_item_limits.insert("context_debt".to_string(), 4);
             section_item_limits.insert("recent_tool_activity".to_string(), 4);
             section_item_limits.insert("tool_failures".to_string(), 4);
             section_item_limits.insert("code_evidence".to_string(), 6);
@@ -206,6 +216,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("task_memory".to_string(), 8);
             section_item_limits.insert("agent_intention".to_string(), 6);
             section_item_limits.insert("checkpoint_context".to_string(), 6);
+            section_item_limits.insert("context_debt".to_string(), 6);
             section_item_limits.insert("current_focus".to_string(), 8);
             section_item_limits.insert("discovered_scope".to_string(), 8);
             section_item_limits.insert("recent_tool_activity".to_string(), 6);
@@ -227,6 +238,7 @@ fn default_limits_for_action(action: BrokerAction) -> BrokerEffectiveLimits {
             section_item_limits.insert("task_memory".to_string(), 6);
             section_item_limits.insert("agent_intention".to_string(), 5);
             section_item_limits.insert("checkpoint_context".to_string(), 5);
+            section_item_limits.insert("context_debt".to_string(), 4);
             section_item_limits.insert("progress".to_string(), 3);
             section_item_limits.insert("recent_tool_activity".to_string(), 6);
             section_item_limits.insert("tool_failures".to_string(), 4);

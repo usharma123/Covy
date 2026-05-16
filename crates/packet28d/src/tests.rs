@@ -1724,6 +1724,72 @@ fn broker_edit_context_surfaces_evidence_freshness_for_changed_paths() {
 }
 
 #[test]
+fn broker_context_debt_clears_after_reads_questions_and_verification() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let debt_snapshot = suite_packet_core::AgentSnapshotPayload {
+        changed_paths_since_checkpoint: vec!["src/stale.rs".to_string()],
+        files_edited: vec!["src/stale.rs".to_string()],
+        open_questions: vec![suite_packet_core::AgentQuestion {
+            id: "q-auth".to_string(),
+            text: "Which auth path owns this?".to_string(),
+        }],
+        active_decisions: vec![suite_packet_core::AgentDecision {
+            id: "hypothesis:auth-cache".to_string(),
+            text: "hypothesis active: Auth cache owns stale reads".to_string(),
+            related_paths: vec!["src/stale.rs".to_string()],
+            related_symbols: Vec::new(),
+            related_artifact_ids: Vec::new(),
+        }],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "tool-refute".to_string(),
+            sequence: 8,
+            tool_name: "cargo test".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Generic,
+            result_summary: Some("refuted auth-cache after reading src/stale.rs".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let request = BrokerGetContextRequest {
+        task_id: "task-context-debt".to_string(),
+        action: Some(BrokerAction::Edit),
+        include_sections: vec!["context_debt".to_string()],
+        ..BrokerGetContextRequest::default()
+    };
+    let debt_sections = build_broker_sections(&root, &state, &request, &debt_snapshot, None, None);
+    let debt = debt_sections
+        .iter()
+        .find(|section| section.id == "context_debt")
+        .expect("debt section should render when debts exist");
+    assert!(debt.body.contains(
+        "debt_summary: stale_paths=1 open_questions=1 unverified_edits=1 contradictions=1"
+    ));
+    assert!(debt.body.contains("payoff stale_path"));
+    assert!(serde_json::to_string(&debt.body).unwrap().len() < 1024);
+
+    let clear_snapshot = suite_packet_core::AgentSnapshotPayload {
+        changed_paths_since_checkpoint: vec!["src/stale.rs".to_string()],
+        files_read: vec!["src/stale.rs".to_string()],
+        files_edited: vec!["src/stale.rs".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "tool-test".to_string(),
+            sequence: 9,
+            tool_name: "cargo test".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Test,
+            result_summary: Some("tests passed".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let clear_sections =
+        build_broker_sections(&root, &state, &request, &clear_snapshot, None, None);
+    assert!(clear_sections
+        .iter()
+        .all(|section| section.id != "context_debt"));
+}
+
+#[test]
 fn render_task_memory_lines_surfaces_recent_state() {
     let snapshot = suite_packet_core::AgentSnapshotPayload {
         files_read: vec!["src/alpha.rs".to_string()],
