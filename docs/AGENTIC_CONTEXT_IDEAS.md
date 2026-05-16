@@ -260,12 +260,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density failure prose recovery | Restores prose headroom now that the density failure line is the widest governed prose line. | The runbook now splits density failure-code docs across base and continuation lines while preserving every required code. | Evidence: `prose` drops below 310; required failure-code docs still pass. |
 | Context anomaly drilldown density failure continuation guard | Prevents future failure-code compaction from dropping the continuation line. | The density checker now requires the `Density failures cont.:` line and self-tests relabeling it away. | Evidence: no runbook growth; missing continuation line fails output-doc coverage. |
 | Context anomaly drilldown density doc-failure continuation guard | Prevents future doc-failure compaction from dropping the doc-failure continuation line. | The density checker now requires the `Density doc failures cont.:` line and self-tests relabeling it away. | Evidence: no runbook growth; missing doc-failure continuation line fails output-doc coverage. |
+| Context anomaly drilldown density prose anchor count refresh | Keeps `anc` meaningful after adding failure continuation anchors. | Default and JSON output now report four required prose line anchors, and self-test ties the count to `requiredDensityDocLinePrefixes.length`. | Evidence: default output remains under text cap; `anc` and JSON anchor count equal the required line-prefix count. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density prose anchor count refresh | Keeps `anc` meaningful after adding failure continuation anchors. | Verify default and JSON anchor counts reflect all required prose line anchors. | Compact metric: default output remains under text cap; correctness metric: `anc` equals required line-prefix count. |
+| Context anomaly drilldown density prose anchor missing-field self-test | Proves the parser rejects omitted prose-anchor counts, not just stale values. | Remove `anc` from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted anchor count fails parser validation. |
 
 ## Research Rules
 
