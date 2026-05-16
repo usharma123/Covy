@@ -186,12 +186,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON headroom guard | Prevents density JSON from sitting one byte below the cap after field additions. | Density JSON budget validation now requires spare headroom via `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`. | Evidence: success JSON has at least 16 spare bytes by default; forced oversized headroom still fails `context_anomaly_runbook_density_json_too_long`. |
 | Context anomaly drilldown density JSON headroom output | Helps automation see remaining JSON budget without recomputing payload length. | Default density output now reports `json_headroom` while JSON remains unchanged. | Evidence: JSON still passes the headroom guard and reported headroom matches byte length calculation. |
 | Context anomaly drilldown density JSON headroom self-test | Proves the text `json_headroom` label is calculated from the actual JSON payload. | Density self-test now checks headroom against the serialized payload and confirms payload growth reduces headroom. | Evidence: self-test output stays one line and payload mutation changes expected headroom. |
+| Context anomaly drilldown density runbook field row compression | Preserves table-width headroom after adding output labels and env knobs. | The read-density table row now keeps labels in-table and moves env details to a compact prose line. | Evidence: max table row drops below 460 and density required-doc checks still pass. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density runbook field row compression | Preserves table-width headroom after adding output labels and env knobs. | Shorten the read-density table row without dropping required command, label, or env docs. | Compact metric: max table row drops below 460; correctness metric: density required-doc checks still pass. |
+| Context anomaly drilldown density env docs coverage | Prevents density env knob docs from drifting as budgets are added. | Have the density checker require each `P28_CONTEXT_ANOMALY_RUNBOOK_*` env name in the runbook. | Compact metric: default output stays one line; correctness metric: removing an env name fails a named missing-doc check. |
 
 ## Research Rules
 
