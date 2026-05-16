@@ -233,12 +233,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON field prose recovery | Restores prose-width margin after adding the density-doc JSON field to the env/help line. | The env/help line now uses compact `Env:`, `JSON:`, and `h:` labels while preserving required field names. | Evidence: `prose` returns below 370; JSON field docs still pass. |
 | Context anomaly drilldown density env label glossary | Helps maintainers understand compact `Env:`, `JSON:`, and `h:` prose labels without expanding the table row. | The runbook now uses a short density-label glossary line, and the checker requires each glossary phrase. | Evidence: `prose` remains below 370; required env/help/JSON docs still pass. |
 | Context anomaly drilldown density glossary count refresh | Keeps the `dphr` density-doc count meaningful after adding the compact label glossary. | Default output parsing now verifies `dphr` equals the required density-doc phrase count. | Evidence: default output remains under text cap; parser rejects stale `dphr` values. |
+| Context anomaly drilldown density glossary stale-count self-test | Proves the default parser rejects stale density-doc counts after glossary growth. | Density self-test now mutates rendered default output to `dphr=0` and requires a parse mismatch. | Evidence: self-test output remains one line; stale glossary counts fail parser validation. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density glossary stale-count self-test | Proves the default parser rejects stale density-doc counts after glossary growth. | Mutate rendered default output to `dphr=0` in self-test and require a parse mismatch. | Compact metric: self-test output remains one line; correctness metric: stale glossary counts fail parser validation. |
+| Context anomaly drilldown density glossary missing-field self-test | Proves the parser rejects omitted density-doc counts, not just stale values. | Remove the `dphr` field from rendered default output in self-test and require a missing-field error. | Compact metric: self-test output remains one line; correctness metric: omitted glossary counts fail parser validation. |
 
 ## Research Rules
 

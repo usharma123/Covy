@@ -684,6 +684,16 @@ if (args.includes("--self-test")) {
     console.error(`actual=${missingTextWidthDocsError ?? "ok"}`);
     process.exit(1);
   }
+  const staleDensityDocCountError = defaultOutputParseIssue(
+    parseDefaultOutput(defaultOutputLine.replace(/ dphr=\d+/, " dphr=0")),
+    result,
+  );
+  if (staleDensityDocCountError !== "default_output_parse_mismatch") {
+    console.error("context_anomaly_runbook_density_self_test_failed");
+    console.error("expected=default_output_parse_mismatch");
+    console.error(`actual=${staleDensityDocCountError ?? "ok"}`);
+    process.exit(1);
+  }
   assertSelfTest(
     evaluate(runbook, result.line_count - 1),
     "context_anomaly_runbook_density_too_many_lines",
