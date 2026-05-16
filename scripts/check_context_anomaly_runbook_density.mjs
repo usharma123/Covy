@@ -1745,7 +1745,7 @@ if (args.includes("--self-test")) {
     const details = defaultOutputMutationFieldCountFailureDetails(sample);
     failDefaultOutputMutation(details);
   };
-  const assertDefaultOutputMutationFieldCount = () => {
+  const assertDefaultOutputMutationFieldCountSample = () => {
     const sample = defaultOutputMutationFieldCountSample();
     if (defaultOutputMutationFieldCountsMismatch(sample)) {
       failDefaultOutputMutationFieldCount(sample);
@@ -1754,7 +1754,7 @@ if (args.includes("--self-test")) {
   const assertDefaultOutputMutations = () => {
     assertStaleDefaultOutputValuesCovered();
     assertDefaultOutputMutationIdentityFieldSample();
-    assertDefaultOutputMutationFieldCount();
+    assertDefaultOutputMutationFieldCountSample();
     defaultOutputMutationFields().forEach(assertDefaultOutputMutationCase);
   };
   assertDefaultOutputMutations();
