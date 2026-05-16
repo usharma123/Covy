@@ -56,6 +56,7 @@ jobs:
         if: always()
         run: |
           target/debug/Packet28 dashboard --root . --json > context-anomaly-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-dashboard.json
+          target/debug/Packet28 dashboard --root . --context-anomaly-history docs/context-anomalies/history.jsonl --json > context-anomaly-fixture-dashboard.json || echo '{"context_anomalies":{}}' > context-anomaly-fixture-dashboard.json
           {
             echo "### Context anomalies"
             echo "- anomalies: $(jq -r '.anomaly_count // 0' context-anomalies.json)"
@@ -63,4 +64,7 @@ jobs:
             echo "- hidden: $(jq -r '(.hidden_categories // []) | join(",")' context-anomalies.json)"
             echo "- trend status: $(jq -r '.context_anomalies.latest_status // "none"' context-anomaly-dashboard.json)"
             echo "- recurring hidden: $(jq -r '(.context_anomalies.recurring_hidden_categories // []) | join(",")' context-anomaly-dashboard.json)"
+            echo "### Context anomaly fixture trend"
+            echo "- fixture status: $(jq -r '.context_anomalies.latest_status // "none"' context-anomaly-fixture-dashboard.json)"
+            echo "- fixture recurring hidden: $(jq -r '(.context_anomalies.recurring_hidden_categories // []) | join(",")' context-anomaly-fixture-dashboard.json)"
           } >> "$GITHUB_STEP_SUMMARY"
