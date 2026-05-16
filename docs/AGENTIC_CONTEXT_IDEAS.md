@@ -618,12 +618,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test stale alias wrapper | Names the stale `no-success` alias detection assertion. | Extracted `assertStaleFailureAliasMutationSelfTest()` around `staleFailureAliasResult` and its missing-alias assertion. | Evidence: no runtime output growth; stale alias coverage still fails when alias spelling regresses. |
 | Context anomaly drilldown density self-test stale alias order | Keeps stale alias coverage before JSON error/help adjacency docs. | Verified `assertStaleFailureAliasMutationSelfTest()` sits after failure-success coverage and before the error/help adjacency assertion. | Evidence: no runtime output growth; stale alias coverage remains before error/help adjacency coverage. |
 | Context anomaly drilldown density self-test error/help adjacency wrapper | Names the JSON error/help adjacency documentation assertion. | Extracted `assertJsonErrorHelpAdjacencyMutationSelfTest()` around the `ok:false`;`no-succ`;h:`help<=120` adjacency assertion. | Evidence: no runtime output growth; error/help adjacency coverage still fails when the compact key changes. |
+| Context anomaly drilldown density self-test error/help adjacency order | Keeps error/help adjacency coverage before JSON headroom env-pair docs. | Verified `assertJsonErrorHelpAdjacencyMutationSelfTest()` sits after stale alias coverage and before the `jhead` env-pair assertion. | Evidence: no runtime output growth; error/help adjacency coverage remains before JSON headroom env-pair coverage. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test error/help adjacency order | Keeps error/help adjacency coverage before JSON headroom env-pair docs. | Verify `assertJsonErrorHelpAdjacencyMutationSelfTest()` sits after stale alias coverage and before the `jhead` env-pair assertion. | Compact metric: no runtime output growth; correctness metric: error/help adjacency coverage remains before JSON headroom env-pair coverage. |
+| Context anomaly drilldown density self-test JSON headroom env-pair wrapper | Names the `jhead` env-pair documentation assertion. | Extract `assertJsonHeadroomEnvPairMutationSelfTest()` around the `jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` assertion. | Compact metric: no runtime output growth; correctness metric: JSON headroom env-pair coverage still fails when diluted. |
 
 ## Research Rules
 
