@@ -792,12 +792,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default-output wrapper local move | Aligns the default-output mutation wrapper with other runner-local self-test wrappers. | Moved `assertDefaultOutputMutationSelfTest()` inside `runContextAnomalyDensitySelfTests()` beside its invocation. | Evidence: no runtime output growth; default-output mutation coverage remains unchanged. |
 | Context anomaly drilldown density default-output wrapper local order | Keeps the default-output mutation wrapper local and after the formatter invariant. | Verified `assertDefaultOutputMutationSelfTest()` is defined inside `runContextAnomalyDensitySelfTests()` after `assertInvariantDetailFormatSelfTest()` and before env-doc checks. | Evidence: no runtime output growth; default-output mutation coverage remains unchanged. |
 | Context anomaly drilldown density runner opening sequence audit | Checks whether the first runner-local self-test groups are ordered by diagnostic dependency. | Re-scanned the opening sequence of `runContextAnomalyDensitySelfTests()` and kept detail formatting, default-output mutation, and env-doc checks in dependency order before broader fixture checks. | Evidence: no runtime output growth; self-test dependency order remains covered. |
+| Context anomaly drilldown density line-count boundary wrapper audit | Checks whether the first fixture boundary wrapper still names the phase well. | Re-scanned `assertLineCountBoundarySelfTest()` after the opening invariant checks and kept it because its name and placement clearly mark the transition into fixture boundary assertions. | Evidence: no runtime output growth; line-count boundary coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density line-count boundary wrapper audit | Checks whether the first fixture boundary wrapper still names the phase well. | Re-scan `assertLineCountBoundarySelfTest()` after the opening invariant checks and decide whether its name and placement still make the fixture transition clear. | Compact metric: no runtime output growth; correctness metric: line-count boundary coverage remains unchanged. |
+| Context anomaly drilldown density required command mutation wrapper audit | Checks whether the required-command mutation group remains clearly named after the boundary check. | Re-scan `assertRequiredCommandMutationSelfTests()` and its loop labels to decide whether the mutation group needs helper extraction or a clearer name. | Compact metric: no runtime output growth; correctness metric: required command mutation coverage remains unchanged. |
 
 ## Research Rules
 
