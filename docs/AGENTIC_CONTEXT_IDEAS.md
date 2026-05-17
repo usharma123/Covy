@@ -828,12 +828,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density alias glossary mutation order audit | Keeps alias glossary checks after section-anchor mutations and before width/env pair checks. | Verified `assertAliasGlossaryMutationSelfTests()` runs after `assertSectionAnchorMutationSelfTests()` and before `assertWidthEnvPairMutationSelfTest()`. | Evidence: no runtime output growth; alias glossary mutation coverage remains unchanged. |
 | Context anomaly drilldown density width/env pair mutation audit | Checks whether the width/env pair mutation should stay isolated after alias glossary checks. | Re-scanned `assertWidthEnvPairMutationSelfTest()` and kept it isolated because it verifies the compact `tw` label stays paired to `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`, distinct from the `thead>=8` headroom doc. | Evidence: no runtime output growth; width/env pair coverage remains unchanged. |
 | Context anomaly drilldown density width/env pair mutation order audit | Keeps width/env pair coverage after alias glossary checks and before text-headroom docs. | Verified `assertWidthEnvPairMutationSelfTest()` runs after `assertAliasGlossaryMutationSelfTests()` and before `assertTextHeadroomMutationSelfTest()`. | Evidence: no runtime output growth; width/env pair coverage remains unchanged. |
+| Context anomaly drilldown density text-headroom mutation audit | Checks whether default text-headroom coverage should stay isolated after width/env pair coverage. | Re-scanned `assertTextHeadroomMutationSelfTest()` and found its simple missing-doc shape matches the adjacent `ok:false` and `no-succ` checks, while stale alias and adjacency checks should stay separate. | Evidence: no runtime output growth; text-headroom coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text-headroom mutation audit | Checks whether default text-headroom coverage should stay isolated after width/env pair coverage. | Re-scan `assertTextHeadroomMutationSelfTest()` and decide whether the `thead>=8` assertion should remain separate from JSON error-shape docs. | Compact metric: no runtime output growth; correctness metric: text-headroom coverage remains unchanged. |
+| Context anomaly drilldown density scalar output-doc mutation grouping | Reduces drift across simple scalar output-doc mutation checks. | Group the `thead>=8`, `ok:false`, and `no-succ` missing-doc checks in one local table while keeping stale alias and adjacency checks separate. | Compact metric: no runtime output growth; correctness metric: scalar output-doc mutation coverage remains unchanged. |
 
 ## Research Rules
 
