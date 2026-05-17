@@ -394,7 +394,7 @@ function evaluateWorkflow(workflow) {
   };
 }
 
-function formatFailDetailValue(value) {
+function formatDetailValue(value) {
   return Array.isArray(value) ? value.join(",") : value;
 }
 
@@ -404,7 +404,7 @@ function fail(code, details) {
   } else {
     console.error(code);
     for (const [key, value] of Object.entries(details)) {
-      console.error(`${key}=${formatFailDetailValue(value)}`);
+      console.error(`${key}=${formatDetailValue(value)}`);
     }
   }
   process.exit(1);
@@ -441,10 +441,6 @@ function assertSelfTestMissing(result, expectedCode, expectedMissing, caseName) 
   }
 }
 
-function invariantDetailValue(value) {
-  return Array.isArray(value) ? value.join(",") : value;
-}
-
 const invariantArrayDetailSample = ["array", "detail"];
 const invariantScalarDetailSample = "scalar";
 const expectedInvariantArrayDetail = invariantArrayDetailSample.join(",");
@@ -459,8 +455,8 @@ function expectedInvariantDetailFormats() {
 
 function invariantDetailFormatSamples() {
   return {
-    actualInvariantArrayDetail: invariantDetailValue(invariantArrayDetailSample),
-    actualInvariantScalarDetail: invariantDetailValue(
+    actualInvariantArrayDetail: formatDetailValue(invariantArrayDetailSample),
+    actualInvariantScalarDetail: formatDetailValue(
       invariantScalarDetailSample,
     ),
   };
@@ -491,7 +487,7 @@ function invariantDetailFormatMismatchDetails(expectedFormats, actualFormats) {
 function failSelfTestInvariant(details) {
   console.error("context_anomaly_runbook_density_self_test_failed");
   for (const [key, value] of Object.entries(details)) {
-    console.error(`${key}=${invariantDetailValue(value)}`);
+    console.error(`${key}=${formatDetailValue(value)}`);
   }
   process.exit(1);
 }
