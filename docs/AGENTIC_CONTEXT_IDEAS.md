@@ -823,12 +823,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density section-anchor mutation group audit | Checks whether section-anchor mutations remain well represented as a local table. | Re-scanned `assertSectionAnchorMutationSelfTests()` and kept its local table because the cases mix density-label phrases, section prefixes, env-doc prefixes, and continuation headings. | Evidence: no runtime output growth; section-anchor mutation coverage remains unchanged. |
 | Context anomaly drilldown density section-anchor mutation group order | Keeps section-anchor mutations after Env: line-anchor coverage and before alias glossary checks. | Verified `assertSectionAnchorMutationSelfTests()` runs after `assertEnvLineAnchorMutationSelfTest()` and before `assertAliasGlossaryMutationSelfTests()`. | Evidence: no runtime output growth; section-anchor mutation coverage remains unchanged. |
 | Context anomaly drilldown density alias glossary mutation group audit | Checks whether alias glossary docs remain well represented as a local table. | Re-scanned `assertAliasGlossaryMutationSelfTests()` and found the mutation cases should derive from `requiredAliasDocPhrases` to avoid drifting from the alias glossary contract. | Evidence: no runtime output growth; alias glossary mutation coverage remains unchanged. |
+| Context anomaly drilldown density alias glossary mutation derivation | Prevents alias glossary mutation coverage from drifting away from required alias docs. | Derived alias glossary mutation cases from `requiredAliasDocPhrases`, generating case names from each alias token. | Evidence: no runtime output growth; alias glossary mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density alias glossary mutation derivation | Prevents alias glossary mutation coverage from drifting away from required alias docs. | Derive alias glossary mutation cases from `requiredAliasDocPhrases`, generating case names from each alias token. | Compact metric: no runtime output growth; correctness metric: alias glossary mutation coverage remains unchanged. |
+| Context anomaly drilldown density alias glossary mutation derivation guard audit | Checks whether alias glossary derivation needs a malformed-doc guard. | Re-scan the alias-token extraction from `requiredAliasDocPhrases` and decide whether malformed glossary docs should fail through `failSelfTestInvariant()`. | Compact metric: no runtime output growth; correctness metric: alias glossary mutation coverage remains unchanged. |
 
 ## Research Rules
 
