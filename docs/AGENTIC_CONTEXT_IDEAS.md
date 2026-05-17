@@ -853,12 +853,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output-label mutation order audit | Keeps output-label mutation coverage before key/value output-doc coverage. | Verified `assertOutputLabelMutationSelfTests()` runs after failure-code mutations and before `assertKeyValueOutputDocMutationSelfTest()`. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 | Context anomaly drilldown density key/value output-doc mutation audit | Checks whether the key/value output-doc assertion should stay isolated after output-label mutations. | Re-scanned `assertKeyValueOutputDocMutationSelfTest()` and kept it separate because it removes the `key=value` parseability prose anchor, distinct from the full default-output phrase mutation loop. | Evidence: no runtime output growth; key/value output-doc coverage remains unchanged. |
 | Context anomaly drilldown density key/value output-doc mutation order audit | Keeps key/value output-doc coverage between output-label and default-output phrase checks. | Verified `assertKeyValueOutputDocMutationSelfTest()` runs after `assertOutputLabelMutationSelfTests()` and before `assertDefaultOutputPhraseMutationSelfTests()`. | Evidence: no runtime output growth; key/value output-doc coverage remains unchanged. |
+| Context anomaly drilldown density default-output phrase mutation audit | Checks whether default-output phrase mutation coverage still needs one case per output field. | Re-scanned `assertDefaultOutputPhraseMutationSelfTests()` and kept direct `defaultOutputFieldOrder` iteration because `defaultOutputDocPhrase` is built from that order, while drifted label and case strings can be named once inside the loop. | Evidence: no runtime output growth; default-output phrase coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default-output phrase mutation audit | Checks whether default-output phrase mutation coverage still needs one case per output field. | Re-scan `assertDefaultOutputPhraseMutationSelfTests()` and decide whether its direct `defaultOutputFieldOrder` loop needs drift-token sharing or guard coverage. | Compact metric: no runtime output growth; correctness metric: default-output phrase coverage remains unchanged. |
+| Context anomaly drilldown density default-output phrase drift token sharing | Reduces drift between default-output phrase mutation text and expected missing-detail text. | Extract `driftedDefaultOutputLabel` and `driftedDefaultOutputCase` tokens inside `assertDefaultOutputPhraseMutationSelfTests()` and reuse them in mutation and detail checks. | Compact metric: no runtime output growth; correctness metric: default-output phrase coverage remains unchanged. |
 
 ## Research Rules
 
