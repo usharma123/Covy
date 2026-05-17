@@ -525,12 +525,19 @@ function failSelfTestInvariant(details) {
   process.exit(1);
 }
 
-function pairedEnvDocSpecByLabel(label) {
+function pairedEnvDocSpecByLabel(label, failInvariant = failSelfTestInvariant) {
   const pairedEnvDocSpec = pairedEnvDocSpecs.find(
     (candidate) => candidate.label === label,
   );
   if (!pairedEnvDocSpec) {
-    failSelfTestInvariant({ missing_paired_env_doc_spec: label });
+    failInvariant({ missing_paired_env_doc_spec: label });
+    return {
+      label,
+      envName: "",
+      docText: "",
+      replacementText: "",
+      caseName: "missing_paired_env_doc_spec",
+    };
   }
   return pairedEnvDocSpec;
 }
@@ -1821,6 +1828,20 @@ if (args.includes("--self-test")) {
       assertEnvDocInvariants();
     };
     assertEnvDocInvariantSelfTest();
+    const assertPairedEnvDocSpecLookupInvariantSelfTest = () => {
+      let missingPairedEnvDocSpec = null;
+      pairedEnvDocSpecByLabel("missing-pair", (details) => {
+        missingPairedEnvDocSpec = details.missing_paired_env_doc_spec;
+      });
+      if (missingPairedEnvDocSpec !== "missing-pair") {
+        failSelfTestInvariant({
+          expected_missing_paired_env_doc_spec: "missing-pair",
+          actual_missing_paired_env_doc_spec:
+            missingPairedEnvDocSpec ?? "missing",
+        });
+      }
+    };
+    assertPairedEnvDocSpecLookupInvariantSelfTest();
     const assertAliasGlossaryDerivationInvariantSelfTest = () => {
       let invalidAliasGlossaryDoc = null;
       deriveAliasGlossaryDocs(["fc=failure codes"], (details) => {
