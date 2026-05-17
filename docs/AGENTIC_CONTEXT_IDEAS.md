@@ -704,12 +704,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON headroom env-pair helper audit | Checks whether the JSON headroom env-pair helper needs string naming. | Re-scanned `assertJsonHeadroomEnvPairMutationSelfTest()` and found its original and replacement strings should be named like the adjacency helper. | Evidence: no runtime output growth; env-pair expected-missing value stays explicit. |
 | Context anomaly drilldown density self-test JSON headroom env-pair string names | Names the JSON headroom env-pair original and drifted docs. | Extracted `jsonHeadroomEnvPairDoc` and `driftedJsonHeadroomEnvPairDoc` inside `assertJsonHeadroomEnvPairMutationSelfTest()`. | Evidence: no runtime output growth; env-pair expected-missing value remains explicit. |
 | Context anomaly drilldown density self-test JSON headroom env-pair string order | Keeps JSON headroom env-pair strings beside their mutation assertion. | Verified `jsonHeadroomEnvPairDoc` and `driftedJsonHeadroomEnvPairDoc` are defined immediately before `runbook.replace(...)`. | Evidence: no runtime output growth; env-pair expected-missing value remains explicit. |
+| Context anomaly drilldown density self-test plain env-doc loop audit | Checks whether the plain env-doc mutation loop already has enough structure. | Re-scanned `assertPlainEnvDocMutationSelfTests()` and kept the index-specific loop while queuing clearer drifted env-doc token naming. | Evidence: no runtime output growth; required plain env docs stay covered by index-specific drift cases. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test plain env-doc loop audit | Checks whether the plain env-doc mutation loop already has enough structure. | Re-scan `assertPlainEnvDocMutationSelfTests()` and decide whether the loop needs a per-row helper or clearer drifted doc naming. | Compact metric: no runtime output growth; correctness metric: required plain env docs stay covered by index-specific drift cases. |
+| Context anomaly drilldown density self-test plain env-doc drift token name | Names the generated drifted env-doc replacement token. | Extract `driftedEnvDoc` inside the `requiredPlainEnvDocs` loop before calling `runbook.replaceAll(...)`. | Compact metric: no runtime output growth; correctness metric: index-specific drift cases still use the same env doc and case name. |
 
 ## Research Rules
 
