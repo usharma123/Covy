@@ -797,12 +797,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density required failure-code mutation wrapper audit | Checks whether the failure-code mutation group remains clearly named after required-command checks. | Re-scanned `assertRequiredFailureCodeMutationSelfTests()` and kept it because the `requiredFailureCodes` loop, failure-docs assertion, and case labels preserve the original failure code being tested. | Evidence: no runtime output growth; required failure-code mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-label mutation wrapper audit | Checks whether output-label mutation cases are still readable as a group. | Re-scanned `assertOutputLabelMutationSelfTests()` and found the repeated label assertions should move to a small case table while preserving the two `replaceAll` cases. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-label mutation case table | Makes output-label mutation coverage scannable as data instead of repeated assertion blocks. | Extracted output-label mutation cases into a local table and looped through `assertSelfTestMissing()` calls. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation table order | Keeps all required output labels represented in the mutation table. | Verified the output-label mutation table includes `wf`, `env`, `lbl`, `phr`, `adocs`, `dphr`, `anc`, `prs`, and `soft`, with `replaceAll` preserved only for `wf` and `adocs`. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output-label mutation table order | Keeps all required output labels represented in the mutation table. | Verify the output-label mutation table includes `wf`, `env`, `lbl`, `phr`, `adocs`, `dphr`, `anc`, `prs`, and `soft`, with `replaceAll` preserved for `wf` and `adocs`. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation table placement audit | Checks whether output-label mutation cases should stay local to the wrapper. | Re-scan `outputLabelMutationCases` and decide whether the table should remain inside `assertOutputLabelMutationSelfTests()` or move beside other top-level output constants. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
 
 ## Research Rules
 
