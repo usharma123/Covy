@@ -778,12 +778,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fail issue helper contract order | Keeps `failIssue()` immediately beside `fail()`. | Verified `failIssue()` remains directly after `fail()` and all controlled issue-object callers use it. | Evidence: no runtime output growth; failure output remains covered. |
 | Context anomaly drilldown density fail default detail formatting audit | Checks whether default failure detail formatting should name the array join behavior. | Re-scanned `fail()` default-output detail formatting and found array value formatting should move into a helper. | Evidence: no runtime output growth; default failure details remain covered. |
 | Context anomaly drilldown density fail default detail formatting helper | Names default failure detail value formatting. | Extracted a `formatFailDetailValue()` helper for array join vs scalar output and used it in `fail()` default-output details. | Evidence: no runtime output growth; default failure details remain covered. |
+| Context anomaly drilldown density fail default detail formatting helper order | Keeps default failure detail formatting beside `fail()`. | Verified `formatFailDetailValue()` is defined directly before `fail()` and the default-output detail loop uses it. | Evidence: no runtime output growth; default failure details remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fail default detail formatting helper order | Keeps default failure detail formatting beside `fail()`. | Verify `formatFailDetailValue()` is defined beside `fail()` and the default-output detail loop uses it. | Compact metric: no runtime output growth; correctness metric: default failure details remain covered. |
+| Context anomaly drilldown density invariant detail formatting convergence audit | Checks whether runtime and invariant detail formatting helpers should converge. | Re-scan `formatFailDetailValue()` and `invariantDetailValue()` to decide whether duplication should stay separate or share one helper. | Compact metric: no runtime output growth; correctness metric: default and invariant detail formatting remain covered. |
 
 ## Research Rules
 
