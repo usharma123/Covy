@@ -729,12 +729,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON max failure shape constants | Names shared JSON max failure env, args, expected output tokens, and exclusion token. | Extracted constants inside `assertJsonMaxFailureShapeSelfTests()` for the shared JSON-max env/args, expected output tokens, and excluded iterations token. | Evidence: no runtime output growth; JSON max failure and iteration exclusion stay covered. |
 | Context anomaly drilldown density self-test JSON max failure shape constants order | Keeps JSON max failure constants beside all assertions using them. | Verified JSON max env, args, expected output, and exclusion constants are defined before failure, output, and exclusion assertions. | Evidence: no runtime output growth; JSON max failure and iteration exclusion stay covered. |
 | Context anomaly drilldown density self-test JSON headroom-min failure shape audit | Checks whether JSON headroom-min failure shape coverage should use named constants. | Re-scanned `assertJsonHeadroomMinFailureShapeSelfTests()` and found shared env/args, expected output tokens, and exclusion token should be named like JSON max coverage. | Evidence: no runtime output growth; JSON headroom-min failure and iteration exclusion stay covered. |
+| Context anomaly drilldown density self-test JSON headroom-min failure shape constants | Names shared JSON headroom-min failure env, args, expected output tokens, and exclusion token. | Extracted constants inside `assertJsonHeadroomMinFailureShapeSelfTests()` for the shared JSON-headroom-min env/args, expected output tokens, and excluded iterations token. | Evidence: no runtime output growth; JSON headroom-min failure and iteration exclusion stay covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON headroom-min failure shape constants | Names shared JSON headroom-min failure env, args, expected output tokens, and exclusion token. | Extract constants inside `assertJsonHeadroomMinFailureShapeSelfTests()` for the shared JSON-headroom-min env/args, expected output tokens, and excluded iterations token. | Compact metric: no runtime output growth; correctness metric: JSON headroom-min failure and iteration exclusion stay covered. |
+| Context anomaly drilldown density self-test JSON headroom-min failure shape constants order | Keeps JSON headroom-min failure constants beside all assertions using them. | Verify JSON headroom-min env, args, expected output, and exclusion constants are defined before failure, output, and exclusion assertions. | Compact metric: no runtime output growth; correctness metric: JSON headroom-min failure and iteration exclusion stay covered. |
 
 ## Research Rules
 
