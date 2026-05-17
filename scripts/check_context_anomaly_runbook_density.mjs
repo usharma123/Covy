@@ -210,10 +210,25 @@ const requiredEnvDocs = [
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX",
   "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
 ];
-const pairedEnvDocExclusions = [
-  "P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
-  "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
+const pairedEnvDocSpecs = [
+  {
+    label: "tw",
+    envName: "P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
+    docText: "`tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`",
+    replacementText: "",
+    caseName: "missing_width_env_pair",
+  },
+  {
+    label: "jhead",
+    envName: "P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
+    docText: "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`",
+    replacementText: "`jhead` has headroom",
+    caseName: "missing_jhead_env_pair",
+  },
 ];
+const pairedEnvDocExclusions = pairedEnvDocSpecs.map(
+  ({ envName }) => envName,
+);
 const expectedPairedEnvDocExclusionCount = 2;
 const pairedEnvDocExclusionCount = pairedEnvDocExclusions.length;
 const requiredPlainEnvDocs = requiredEnvDocs.filter(
@@ -508,6 +523,16 @@ function failSelfTestInvariant(details) {
     console.error(`${key}=${formatDetailValue(value)}`);
   }
   process.exit(1);
+}
+
+function pairedEnvDocSpecByLabel(label) {
+  const pairedEnvDocSpec = pairedEnvDocSpecs.find(
+    (candidate) => candidate.label === label,
+  );
+  if (!pairedEnvDocSpec) {
+    failSelfTestInvariant({ missing_paired_env_doc_spec: label });
+  }
+  return pairedEnvDocSpec;
 }
 
 function assertInvariantDetailFormats() {
@@ -2141,14 +2166,18 @@ if (args.includes("--self-test")) {
     };
     assertAliasGlossaryMutationSelfTests();
     const assertWidthEnvPairMutationSelfTest = () => {
+      const widthEnvPairDoc = pairedEnvDocSpecByLabel("tw");
       assertSelfTestMissing(
         evaluate(
-          runbook.replace("`tw` cap:`P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`", ""),
+          runbook.replace(
+            widthEnvPairDoc.docText,
+            widthEnvPairDoc.replacementText,
+          ),
           maxLines,
         ),
         "context_anomaly_runbook_density_missing_output_docs",
-        "tw:P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX",
-        "missing_width_env_pair",
+        `${widthEnvPairDoc.label}:${widthEnvPairDoc.envName}`,
+        widthEnvPairDoc.caseName,
       );
     };
     assertWidthEnvPairMutationSelfTest();
@@ -2209,20 +2238,18 @@ if (args.includes("--self-test")) {
     };
     assertJsonErrorHelpAdjacencyMutationSelfTest();
     const assertJsonHeadroomEnvPairMutationSelfTest = () => {
-      const jsonHeadroomEnvPairDoc =
-        "`jhead` uses `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`";
-      const driftedJsonHeadroomEnvPairDoc = "`jhead` has headroom";
+      const jsonHeadroomEnvPairDoc = pairedEnvDocSpecByLabel("jhead");
       assertSelfTestMissing(
         evaluate(
           runbook.replace(
-            jsonHeadroomEnvPairDoc,
-            driftedJsonHeadroomEnvPairDoc,
+            jsonHeadroomEnvPairDoc.docText,
+            jsonHeadroomEnvPairDoc.replacementText,
           ),
           maxLines,
         ),
         "context_anomaly_runbook_density_missing_output_docs",
-        "jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN",
-        "missing_jhead_env_pair",
+        `${jsonHeadroomEnvPairDoc.label}:${jsonHeadroomEnvPairDoc.envName}`,
+        jsonHeadroomEnvPairDoc.caseName,
       );
     };
     assertJsonHeadroomEnvPairMutationSelfTest();
