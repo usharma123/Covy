@@ -855,12 +855,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density key/value output-doc mutation order audit | Keeps key/value output-doc coverage between output-label and default-output phrase checks. | Verified `assertKeyValueOutputDocMutationSelfTest()` runs after `assertOutputLabelMutationSelfTests()` and before `assertDefaultOutputPhraseMutationSelfTests()`. | Evidence: no runtime output growth; key/value output-doc coverage remains unchanged. |
 | Context anomaly drilldown density default-output phrase mutation audit | Checks whether default-output phrase mutation coverage still needs one case per output field. | Re-scanned `assertDefaultOutputPhraseMutationSelfTests()` and kept direct `defaultOutputFieldOrder` iteration because `defaultOutputDocPhrase` is built from that order, while drifted label and case strings can be named once inside the loop. | Evidence: no runtime output growth; default-output phrase coverage remains unchanged. |
 | Context anomaly drilldown density default-output phrase drift token sharing | Reduces drift between default-output phrase mutation text and expected missing-detail text. | Extracted `driftedDefaultOutputLabel` and `driftedDefaultOutputCase` tokens inside `assertDefaultOutputPhraseMutationSelfTests()` and reused them in mutation and detail checks. | Evidence: no runtime output growth; default-output phrase coverage remains unchanged. |
+| Context anomaly drilldown density default-output phrase mutation order audit | Keeps default-output phrase coverage before explicit output-order swaps. | Verified `assertDefaultOutputPhraseMutationSelfTests()` runs after key/value output-doc coverage and before `assertOutputOrderSwapMutationSelfTests()`. | Evidence: no runtime output growth; default-output phrase coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default-output phrase mutation order audit | Keeps default-output phrase coverage before explicit output-order swaps. | Verify `assertDefaultOutputPhraseMutationSelfTests()` still runs after key/value output-doc coverage and before `assertOutputOrderSwapMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: default-output phrase coverage remains unchanged. |
+| Context anomaly drilldown density output-order swap mutation audit | Checks whether explicit output-order swaps remain correctly derived from label pairs. | Re-scan `assertOutputOrderSwapMutationSelfTests()` and decide whether the selected pair anchors should gain additional validation against `defaultOutputFieldOrder`. | Compact metric: no runtime output growth; correctness metric: output-order swap coverage remains unchanged. |
 
 ## Research Rules
 
