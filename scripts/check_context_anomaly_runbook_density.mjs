@@ -1895,30 +1895,23 @@ if (args.includes("--self-test")) {
     };
     assertDefaultOutputPhraseMutationSelfTests();
     const assertOutputOrderSwapMutationSelfTests = () => {
-      assertSelfTestMissing(
-        evaluate(
-          runbook.replace("`env`, `lbl`", "`lbl`, `env`"),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-        defaultOutputDocPhrase,
-        "swapped_env_lbl_output_order",
-      );
-      assertSelfTestMissing(
-        evaluate(
-          runbook.replace("`dlab`, `jhead`", "`jhead`, `dlab`"),
-          maxLines,
-        ),
-        "context_anomaly_runbook_density_missing_output_docs",
-        defaultOutputDocPhrase,
-        "swapped_dlab_jhead_output_order",
-      );
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`thead`, `tw`", "`tw`, `thead`"), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        defaultOutputDocPhrase,
-        "swapped_thead_tw_output_order",
-      );
+      const outputOrderSwapCases = [
+        ["`env`, `lbl`", "`lbl`, `env`", "swapped_env_lbl_output_order"],
+        [
+          "`dlab`, `jhead`",
+          "`jhead`, `dlab`",
+          "swapped_dlab_jhead_output_order",
+        ],
+        ["`thead`, `tw`", "`tw`, `thead`", "swapped_thead_tw_output_order"],
+      ];
+      for (const [orderedPair, swappedPair, caseName] of outputOrderSwapCases) {
+        assertSelfTestMissing(
+          evaluate(runbook.replace(orderedPair, swappedPair), maxLines),
+          "context_anomaly_runbook_density_missing_output_docs",
+          defaultOutputDocPhrase,
+          caseName,
+        );
+      }
     };
     assertOutputOrderSwapMutationSelfTests();
     const assertJsonFieldNameDocMutationSelfTest = () => {
