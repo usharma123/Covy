@@ -2444,14 +2444,16 @@ if (args.includes("--self-test")) {
     };
     assertJsonBudgetIssueMutationSelfTest();
     const assertHelpIncludesSelfTests = () => {
-      for (const expected of [
+      const expectedHelpIncludes = [
         "default",
         "--json",
         "--self-test",
         "--help",
         "context_anomaly_runbook_density_unknown_option",
         "P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX",
-      ]) {
+      ];
+
+      for (const expected of expectedHelpIncludes) {
         assertHelpIncludes(expected);
       }
     };
