@@ -768,12 +768,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON parity failure details value | Names JSON parity failure details before `fail()`. | Extracted a `jsonParityFailureDetails` object inside the `jsonPayloadError` branch before passing it to `fail()`. | Evidence: no runtime output growth; JSON parity failure details remain covered. |
 | Context anomaly drilldown density JSON parity failure details order | Keeps JSON parity failure details beside `fail()`. | Verified `jsonParityFailureDetails` is defined inside the `jsonPayloadError` branch immediately before the `fail()` call that consumes it. | Evidence: no runtime output growth; JSON parity failure details remain covered. |
 | Context anomaly drilldown density JSON branch ordering audit | Checks whether JSON branch checks are ordered from parity to budget to output. | Re-scanned the JSON branch and verified parity failure, JSON budget failure, and JSON success output happen in a stable, readable order. | Evidence: no runtime output growth; JSON branch checks remain covered. |
+| Context anomaly drilldown density success branch split audit | Checks whether JSON and default success branches should be extracted. | Re-scanned the final `--json`/default output branch and found extraction would hide the intentionally linear output order, so the branch should stay inline. | Evidence: no runtime output growth; JSON and default success output remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density success branch split audit | Checks whether JSON and default success branches should be extracted. | Re-scan the final `--json`/default output branch and decide whether branch extraction would improve readability without hiding output order. | Compact metric: no runtime output growth; correctness metric: JSON and default success output remain covered. |
+| Context anomaly drilldown density success branch split order | Keeps final success output order visible inline. | Verify shared failure checks, JSON-specific checks, JSON output, and default output remain in direct source order. | Compact metric: no runtime output growth; correctness metric: JSON and default success output remain covered. |
 
 ## Research Rules
 
