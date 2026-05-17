@@ -722,12 +722,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test text JSON failure shape audit | Checks whether text JSON failure shape coverage needs table-driven structure. | Re-scanned `assertTextJsonFailureShapeSelfTests()` and found shared env/args plus expected output and exclusion tokens should be named. | Evidence: no runtime output growth; text JSON failure shape and iteration exclusion stay covered. |
 | Context anomaly drilldown density self-test text JSON failure shape constants | Names shared text JSON failure env, args, output tokens, and exclusion token. | Extracted constants inside `assertTextJsonFailureShapeSelfTests()` for the shared text-max env/args, expected output tokens, and excluded iterations token. | Evidence: no runtime output growth; text JSON failure shape and iteration exclusion stay covered. |
 | Context anomaly drilldown density self-test text JSON failure shape constants order | Keeps text JSON failure constants beside both assertions using them. | Verified text JSON env, args, expected output, and exclusion constants are defined before the output and exclusion assertions. | Evidence: no runtime output growth; text JSON failure shape and iteration exclusion stay covered. |
+| Context anomaly drilldown density self-test text-headroom output helper audit | Checks whether text-headroom text/JSON output checks should be table-driven. | Re-scanned `assertTextHeadroomOutputSelfTests()` and found the shared env plus text and JSON expected outputs should move into rows. | Evidence: no runtime output growth; text-headroom output checks remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test text-headroom output helper audit | Checks whether text-headroom text/JSON output checks should be table-driven. | Re-scan `assertTextHeadroomOutputSelfTests()` and decide whether shared env plus text and JSON expected outputs should move into rows. | Compact metric: no runtime output growth; correctness metric: text-headroom output checks remain covered. |
+| Context anomaly drilldown density self-test text-headroom output table | Replaces repeated text-headroom output assertions with a table. | Extract shared text-headroom env and three `assertEnvOutput` rows with args and expected text. | Compact metric: no runtime output growth; correctness metric: text-headroom text and JSON output checks remain covered. |
 
 ## Research Rules
 
