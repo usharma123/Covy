@@ -2326,20 +2326,26 @@ if (args.includes("--self-test")) {
     };
     assertProseTextEnvFailureSelfTests();
     const assertTextJsonFailureShapeSelfTests = () => {
+      const textJsonFailureEnv = {
+        P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195",
+      };
+      const textJsonFailureArgs = ["--json"];
+      const expectedTextJsonFailureOutput = [
+        '"ok":false',
+        '"code":"context_anomaly_runbook_density_text_too_wide"',
+        '"default_output_len":197',
+        '"max_default_output_len":195',
+      ];
+      const excludedTextJsonFailureOutput = '"default_output_iterations"';
       assertEnvFailureOutput(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-        ["--json"],
-        [
-          '"ok":false',
-          '"code":"context_anomaly_runbook_density_text_too_wide"',
-          '"default_output_len":197',
-          '"max_default_output_len":195',
-        ],
+        textJsonFailureEnv,
+        textJsonFailureArgs,
+        expectedTextJsonFailureOutput,
       );
       assertEnvFailureExcludes(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "195" },
-        ["--json"],
-        '"default_output_iterations"',
+        textJsonFailureEnv,
+        textJsonFailureArgs,
+        excludedTextJsonFailureOutput,
       );
     };
     assertTextJsonFailureShapeSelfTests();
