@@ -878,12 +878,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density scalar output-doc mutation audit | Checks whether scalar output-doc mutations remain correctly grouped after width/env pair coverage. | Re-scanned `assertScalarOutputDocMutationSelfTests()` and kept its local table because `thead`, `ok:false`, and `no-succ` are independent scalar docs while stale-alias and help-adjacency mutations assert distinct diagnostics. | Evidence: no runtime output growth; scalar output-doc coverage remains unchanged. |
 | Context anomaly drilldown density scalar output-doc mutation order audit | Keeps scalar output-doc checks after width/env pair coverage and before stale alias checks. | Verified `assertScalarOutputDocMutationSelfTests()` runs after `assertWidthEnvPairMutationSelfTest()` and before `assertStaleFailureAliasMutationSelfTest()`. | Evidence: no runtime output growth; scalar output-doc coverage remains unchanged. |
 | Context anomaly drilldown density stale failure alias drift token sharing | Reduces drift between compact failure-success docs, stale alias detection, and adjacency mutation coverage. | Extracted shared constants for `no-succ`, stale `no-success`, its diagnostic detail, and the JSON error/help adjacency phrase. | Evidence: no runtime output growth; stale failure-alias and adjacency coverage remain unchanged. |
+| Context anomaly drilldown density stale failure alias mutation order audit | Keeps stale alias coverage after scalar output-doc checks and before JSON error/help adjacency checks. | Verified `assertStaleFailureAliasMutationSelfTest()` runs after `assertScalarOutputDocMutationSelfTests()` and before `assertJsonErrorHelpAdjacencyMutationSelfTest()`. | Evidence: no runtime output growth; stale failure-alias coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density stale failure alias mutation order audit | Keeps stale alias coverage after scalar output-doc checks and before JSON error/help adjacency checks. | Verify `assertStaleFailureAliasMutationSelfTest()` still runs after `assertScalarOutputDocMutationSelfTests()` and before `assertJsonErrorHelpAdjacencyMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: stale failure-alias coverage remains unchanged. |
+| Context anomaly drilldown density JSON error/help adjacency mutation audit | Checks whether JSON error/help adjacency coverage remains isolated after stale alias coverage. | Re-scan `assertJsonErrorHelpAdjacencyMutationSelfTest()` after the shared-token refactor and decide whether its drifted `h:` key mutation needs additional guard coverage. | Compact metric: no runtime output growth; correctness metric: JSON error/help adjacency coverage remains unchanged. |
 
 ## Research Rules
 
