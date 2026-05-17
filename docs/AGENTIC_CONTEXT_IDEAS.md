@@ -863,12 +863,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output-order swap mutation order audit | Keeps output-order swap mutations before JSON field-name docs. | Verified `assertOutputOrderSwapMutationSelfTests()` runs after default-output phrase mutations and before `assertJsonFieldNameDocMutationSelfTest()`. | Evidence: no runtime output growth; output-order swap mutation coverage remains unchanged. |
 | Context anomaly drilldown density JSON field-name doc mutation audit | Checks whether the JSON full-field-name prose assertion remains properly isolated after output-order swaps. | Re-scanned `assertJsonFieldNameDocMutationSelfTest()` and kept it separate because it guards the prose contract that JSON keeps full field names, distinct from specific JSON payload field docs. | Evidence: no runtime output growth; JSON field-name doc coverage remains unchanged. |
 | Context anomaly drilldown density JSON field-name doc mutation order audit | Keeps JSON full-field-name prose coverage before individual JSON field docs. | Verified `assertJsonFieldNameDocMutationSelfTest()` runs after output-order swaps and before `assertJsonFieldDocMutationSelfTests()`. | Evidence: no runtime output growth; JSON field-name doc coverage remains unchanged. |
+| Context anomaly drilldown density JSON field-doc group audit | Checks whether JSON field-doc presence and order mutations remain well grouped. | Re-scanned `assertJsonFieldDocMutationSelfTests()` and kept its current leading presence, order-swap, trailing presence structure because the nested helpers are local to the JSON field-doc group. | Evidence: no runtime output growth; JSON field-doc mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON field-doc group audit | Checks whether JSON field-doc presence and order mutations remain well grouped. | Re-scan `assertJsonFieldDocMutationSelfTests()` and decide whether its presence/order/presence structure still needs decomposition after nearby guard additions. | Compact metric: no runtime output growth; correctness metric: JSON field-doc mutation coverage remains unchanged. |
+| Context anomaly drilldown density JSON field-doc group order audit | Keeps leading JSON field docs, order mutations, and trailing docs in source order. | Verify `assertJsonFieldDocMutationSelfTests()` still runs leading field-doc presence checks, then order mutations, then trailing field-doc presence checks. | Compact metric: no runtime output growth; correctness metric: JSON field-doc mutation coverage remains unchanged. |
 
 ## Research Rules
 
