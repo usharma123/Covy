@@ -885,12 +885,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON headroom env-pair mutation order audit | Keeps JSON headroom env-pair coverage after error/help adjacency checks and before plain env-doc mutations. | Verified `assertJsonHeadroomEnvPairMutationSelfTest()` runs after `assertJsonErrorHelpAdjacencyMutationSelfTest()` and before `assertPlainEnvDocMutationSelfTests()`. | Evidence: no runtime output growth; JSON headroom env-pair coverage remains unchanged. |
 | Context anomaly drilldown density plain env-doc mutation audit | Checks whether plain env-doc mutations remain correctly separated from paired env docs. | Re-scanned `assertPlainEnvDocMutationSelfTests()` and kept the direct `requiredPlainEnvDocs` loop because it already uses index-specific drift tokens and asserts the canonical env name in missing details. | Evidence: no runtime output growth; plain env-doc mutation coverage remains unchanged. |
 | Context anomaly drilldown density plain env-doc mutation order audit | Keeps plain env-doc mutations after JSON headroom env-pair coverage and before workflow command mutations. | Verified `assertPlainEnvDocMutationSelfTests()` runs after `assertJsonHeadroomEnvPairMutationSelfTest()` and before `assertWorkflowCommandMutationSelfTests()`. | Evidence: no runtime output growth; plain env-doc mutation coverage remains unchanged. |
+| Context anomaly drilldown density workflow command mutation audit | Checks whether workflow command mutations remain correctly table-driven after plain env docs. | Re-scanned `assertWorkflowCommandMutationSelfTests()` and kept the direct loop because it iterates `requiredWorkflowDensityCommands` and reuses `driftedWorkflowCommand` for both replacement and case detail. | Evidence: no runtime output growth; workflow command mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density workflow command mutation audit | Checks whether workflow command mutations remain correctly table-driven after plain env docs. | Re-scan `assertWorkflowCommandMutationSelfTests()` and decide whether its drifted command token and case detail need additional sharing. | Compact metric: no runtime output growth; correctness metric: workflow command mutation coverage remains unchanged. |
+| Context anomaly drilldown density workflow command mutation order audit | Keeps workflow command mutations after plain env-doc coverage and before env-limit failure checks. | Verify `assertWorkflowCommandMutationSelfTests()` still runs after `assertPlainEnvDocMutationSelfTests()` and before `assertEnvLimitFailureSelfTests()`. | Compact metric: no runtime output growth; correctness metric: workflow command mutation coverage remains unchanged. |
 
 ## Research Rules
 
