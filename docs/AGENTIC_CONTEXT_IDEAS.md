@@ -744,12 +744,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test success output constant | Names the final self-test success output. | Extracted a `selfTestSuccessOutput` constant inside `finishSelfTestOk()` and logged that named value. | Evidence: no runtime output growth; self-test success output remains covered. |
 | Context anomaly drilldown density self-test success output constant order | Keeps the final self-test success output beside the log call. | Verified `selfTestSuccessOutput` is defined immediately before the `console.log()` that emits it. | Evidence: no runtime output growth; self-test success output remains covered. |
 | Context anomaly drilldown density default error output audit | Checks whether default error output handling should name diagnostic labels. | Re-scanned the non-JSON `!result.ok` branch and nearby failure paths, and found repeated `{ code, ok, ...details }` fail handoffs should move into a helper. | Evidence: no runtime output growth; default and JSON error output remain covered. |
+| Context anomaly drilldown density default error output helper | Reuses one helper for issue objects passed to `fail()`. | Added a `failIssue()` helper for `{ code, ok, ...details }` issue objects and used it for result, workflow, default-output, and JSON budget failures. | Evidence: no runtime output growth; default and JSON error output remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default error output helper | Reuses one helper for issue objects passed to `fail()`. | Add a `failIssue()` helper for `{ code, ok, ...details }` issue objects and use it for result, workflow, default-output, and JSON budget failures. | Compact metric: no runtime output growth; correctness metric: default and JSON error output remain covered. |
+| Context anomaly drilldown density default error output helper order | Keeps the issue-failure helper beside `fail()`. | Verify `failIssue()` is defined immediately after `fail()` and all issue-object failure branches use it. | Compact metric: no runtime output growth; correctness metric: default and JSON error output remain covered. |
 
 ## Research Rules
 
