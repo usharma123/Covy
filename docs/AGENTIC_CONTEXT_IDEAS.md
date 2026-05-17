@@ -732,12 +732,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON headroom-min failure shape constants | Names shared JSON headroom-min failure env, args, expected output tokens, and exclusion token. | Extracted constants inside `assertJsonHeadroomMinFailureShapeSelfTests()` for the shared JSON-headroom-min env/args, expected output tokens, and excluded iterations token. | Evidence: no runtime output growth; JSON headroom-min failure and iteration exclusion stay covered. |
 | Context anomaly drilldown density self-test JSON headroom-min failure shape constants order | Keeps JSON headroom-min failure constants beside all assertions using them. | Verified JSON headroom-min env, args, expected output, and exclusion constants are defined before failure, output, and exclusion assertions. | Evidence: no runtime output growth; JSON headroom-min failure and iteration exclusion stay covered. |
 | Context anomaly drilldown density self-test JSON budget issue mutation audit | Checks whether direct JSON budget issue mutation coverage should name its inputs and expected code. | Re-scanned `assertJsonBudgetIssueMutationSelfTest()` and found the payload limit, fallback ok code, and expected JSON-too-long code should be named. | Evidence: no runtime output growth; JSON budget issue mutation remains covered. |
+| Context anomaly drilldown density self-test JSON budget issue mutation constants | Names direct JSON budget issue mutation inputs and expected code. | Extracted constants inside `assertJsonBudgetIssueMutationSelfTest()` for the payload budget, fallback ok result, and expected JSON-too-long code. | Evidence: no runtime output growth; JSON budget issue mutation remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON budget issue mutation constants | Names direct JSON budget issue mutation inputs and expected code. | Extract constants inside `assertJsonBudgetIssueMutationSelfTest()` for the payload budget, fallback ok result, and expected JSON-too-long code. | Compact metric: no runtime output growth; correctness metric: JSON budget issue mutation remains covered. |
+| Context anomaly drilldown density self-test JSON budget issue mutation constants order | Keeps direct JSON budget issue constants beside the mutation assertion. | Verify the budget limit, fallback result, and expected code constants are defined before the `jsonBudgetIssue()` assertion using them. | Compact metric: no runtime output growth; correctness metric: JSON budget issue mutation remains covered. |
 
 ## Research Rules
 
