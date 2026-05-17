@@ -870,12 +870,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density env-line anchor mutation audit | Checks whether the Env: line-anchor mutation should stay isolated before section anchors. | Re-scanned `assertEnvLineAnchorMutationSelfTest()` and kept it separate because it removes every `Env:` line anchor and checks the compact `Env:line` detail, distinct from specific section-anchor mutations. | Evidence: no runtime output growth; env-line anchor coverage remains unchanged. |
 | Context anomaly drilldown density env-line anchor mutation order audit | Keeps Env: line-anchor coverage before specific section-anchor mutations. | Verified `assertEnvLineAnchorMutationSelfTest()` runs after JSON byte/help cap docs and before `assertSectionAnchorMutationSelfTests()`. | Evidence: no runtime output growth; env-line anchor coverage remains unchanged. |
 | Context anomaly drilldown density section-anchor mutation group audit | Checks whether section-anchor mutations remain well represented as a local table. | Re-scanned `assertSectionAnchorMutationSelfTests()` and kept its local table because the cases mix density-label phrases, section prefixes, env-doc prefixes, and continuation headings. | Evidence: no runtime output growth; section-anchor mutation coverage remains unchanged. |
+| Context anomaly drilldown density section-anchor mutation group order audit | Keeps section-anchor mutations after Env: line-anchor coverage and before alias glossary checks. | Verified `assertSectionAnchorMutationSelfTests()` runs after `assertEnvLineAnchorMutationSelfTest()` and before `assertAliasGlossaryMutationSelfTests()`. | Evidence: no runtime output growth; section-anchor mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density section-anchor mutation group order audit | Keeps section-anchor mutations after Env: line-anchor coverage and before alias glossary checks. | Verify `assertSectionAnchorMutationSelfTests()` still runs after `assertEnvLineAnchorMutationSelfTest()` and before `assertAliasGlossaryMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: section-anchor mutation coverage remains unchanged. |
+| Context anomaly drilldown density alias glossary mutation group audit | Checks whether alias glossary docs remain correctly derived after section-anchor checks. | Re-scan `assertAliasGlossaryMutationSelfTests()` and decide whether the derived alias glossary mutation loop needs any additional guard coverage. | Compact metric: no runtime output growth; correctness metric: alias glossary mutation coverage remains unchanged. |
 
 ## Research Rules
 
