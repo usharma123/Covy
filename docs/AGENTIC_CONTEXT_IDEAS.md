@@ -752,12 +752,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON success output audit | Checks whether JSON success output should name its serialized payload. | Re-scanned the JSON success branch and found `JSON.stringify(payload)` should move into a named value before logging. | Evidence: no runtime output growth; JSON success output remains covered. |
 | Context anomaly drilldown density JSON success output value | Names the serialized JSON success payload before logging. | Extracted a `jsonOutputLine` value in the JSON success branch and logged that named value. | Evidence: no runtime output growth; JSON success output remains covered. |
 | Context anomaly drilldown density JSON success output value order | Keeps the serialized JSON success payload beside the log call. | Verified `jsonOutputLine` is defined immediately before the `console.log()` that emits it. | Evidence: no runtime output growth; JSON success output remains covered. |
+| Context anomaly drilldown density default success output audit | Checks whether default success output should name the emitted line. | Re-scanned the non-JSON success branch and found `defaultOutputLine` is already a named artifact from `buildSuccessArtifacts()`, so no alias is needed. | Evidence: no runtime output growth; default success output remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default success output audit | Checks whether default success output should name the emitted line. | Re-scan the non-JSON success branch and decide whether `defaultOutputLine` should be aliased before logging for symmetry with JSON output. | Compact metric: no runtime output growth; correctness metric: default success output remains covered. |
+| Context anomaly drilldown density default success output order | Keeps the named default output artifact beside its log call. | Verify `defaultOutputLine` is destructured from `buildSuccessArtifacts()` and logged unchanged in the non-JSON success branch. | Compact metric: no runtime output growth; correctness metric: default success output remains covered. |
 
 ## Research Rules
 
