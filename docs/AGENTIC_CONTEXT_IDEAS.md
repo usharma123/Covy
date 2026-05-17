@@ -848,12 +848,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density required command mutation order audit | Keeps command mutation coverage before failure-code mutation coverage. | Verified `assertRequiredCommandMutationSelfTests()` runs after line-count mutation coverage and before `assertRequiredFailureCodeMutationSelfTests()`. | Evidence: no runtime output growth; required-command mutation coverage remains unchanged. |
 | Context anomaly drilldown density failure-code mutation audit | Checks whether failure-code mutation coverage remains correctly table-driven. | Re-scanned `assertRequiredFailureCodeMutationSelfTests()` and found it is table-driven, but its mutation and case/detail drift strings are still built inline. | Evidence: no runtime output growth; failure-code mutation coverage remains unchanged. |
 | Context anomaly drilldown density failure-code drift token sharing | Reduces drift between failure-code mutation text and expected missing-detail text. | Extracted `driftedFailureCode` and `driftedFailureCodeCase` tokens inside `assertRequiredFailureCodeMutationSelfTests()` and reused them in mutation and detail checks. | Evidence: no runtime output growth; failure-code mutation coverage remains unchanged. |
+| Context anomaly drilldown density failure-code mutation order audit | Keeps failure-code mutation coverage before output-label mutation coverage. | Verified `assertRequiredFailureCodeMutationSelfTests()` runs after required-command mutations and before `assertOutputLabelMutationSelfTests()`. | Evidence: no runtime output growth; failure-code mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density failure-code mutation order audit | Keeps failure-code mutation coverage before output-label mutation coverage. | Verify `assertRequiredFailureCodeMutationSelfTests()` still runs after required-command mutations and before `assertOutputLabelMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: failure-code mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation audit | Checks whether output-label mutation coverage remains correctly derived and guarded. | Re-scan `assertOutputLabelMutationSelfTests()` after the command/failure-code cleanup and decide whether its local sets need further derivation or guard coverage. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
 
 ## Research Rules
 
