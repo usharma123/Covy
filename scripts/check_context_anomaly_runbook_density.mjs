@@ -1823,18 +1823,25 @@ if (args.includes("--self-test")) {
     };
     assertRequiredFailureCodeMutationSelfTests();
     const assertOutputLabelMutationSelfTests = () => {
-      const outputLabelMutationCases = [
-        { label: "wf", replaceAll: true },
-        { label: "env" },
-        { label: "lbl" },
-        { label: "phr" },
-        { label: "adocs", replaceAll: true },
-        { label: "dphr" },
-        { label: "anc" },
-        { label: "prs" },
-        { label: "soft" },
-      ];
-      for (const { label, replaceAll = false } of outputLabelMutationCases) {
+      const replaceAllOutputLabels = new Set(["wf", "adocs"]);
+      const separatelyDocumentedOutputLabels = new Set([
+        "wf",
+        "env",
+        "lbl",
+        "phr",
+        "adocs",
+        "dphr",
+        "anc",
+        "prs",
+        "soft",
+      ]);
+      const outputLabelMutationCases = requiredOutputLabels
+        .filter((label) => separatelyDocumentedOutputLabels.has(label))
+        .map((label) => ({
+          label,
+          replaceAll: replaceAllOutputLabels.has(label),
+        }));
+      for (const { label, replaceAll } of outputLabelMutationCases) {
         const marker = `\`${label}\``;
         const mutatedRunbook = replaceAll
           ? runbook.replaceAll(marker, "")
