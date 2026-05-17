@@ -2228,11 +2228,12 @@ if (args.includes("--self-test")) {
     assertJsonHeadroomEnvPairMutationSelfTest();
     const assertPlainEnvDocMutationSelfTests = () => {
       for (const [envIndex, envName] of requiredPlainEnvDocs.entries()) {
+        const driftedEnvDoc = `\`DRIFTED_ENV_DOC_${envIndex}\``;
         assertSelfTestMissing(
           evaluate(
             runbook.replaceAll(
               `\`${envName}\``,
-              `\`DRIFTED_ENV_DOC_${envIndex}\``,
+              driftedEnvDoc,
             ),
             maxLines,
           ),
