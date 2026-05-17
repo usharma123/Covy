@@ -2429,11 +2429,17 @@ if (args.includes("--self-test")) {
     };
     assertJsonHeadroomMinFailureShapeSelfTests();
     const assertJsonBudgetIssueMutationSelfTest = () => {
+      const jsonBudgetIssueLimit = 10;
+      const fallbackJsonBudgetIssueResult = { code: "ok" };
+      const expectedJsonBudgetIssueCode =
+        "context_anomaly_runbook_density_json_too_long";
+
       assertSelfTest(
-        jsonBudgetIssue(successPayload(result, workflowResult, 10), 10) ?? {
-          code: "ok",
-        },
-        "context_anomaly_runbook_density_json_too_long",
+        jsonBudgetIssue(
+          successPayload(result, workflowResult, jsonBudgetIssueLimit),
+          jsonBudgetIssueLimit,
+        ) ?? fallbackJsonBudgetIssueResult,
+        expectedJsonBudgetIssueCode,
       );
     };
     assertJsonBudgetIssueMutationSelfTest();
