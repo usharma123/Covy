@@ -861,12 +861,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output-order swap adjacency guard audit | Checks whether non-adjacent swap pair failures are directly covered. | Added a focused self-test for `assertOutputOrderSwapPairAdjacency()` so non-adjacent label pairs fail through `failSelfTestInvariant()` detail formatting. | Evidence: no runtime output growth; output-order swap guard coverage remains unchanged. |
 | Context anomaly drilldown density output-order swap guard order audit | Keeps output-order swap guard coverage near other structural self-test invariants. | Verified `assertOutputOrderSwapPairAdjacencyInvariantSelfTest()` runs after paired env-doc spec guard coverage and before alias glossary derivation invariants. | Evidence: no runtime output growth; output-order swap guard coverage remains unchanged. |
 | Context anomaly drilldown density output-order swap mutation order audit | Keeps output-order swap mutations before JSON field-name docs. | Verified `assertOutputOrderSwapMutationSelfTests()` runs after default-output phrase mutations and before `assertJsonFieldNameDocMutationSelfTest()`. | Evidence: no runtime output growth; output-order swap mutation coverage remains unchanged. |
+| Context anomaly drilldown density JSON field-name doc mutation audit | Checks whether the JSON full-field-name prose assertion remains properly isolated after output-order swaps. | Re-scanned `assertJsonFieldNameDocMutationSelfTest()` and kept it separate because it guards the prose contract that JSON keeps full field names, distinct from specific JSON payload field docs. | Evidence: no runtime output growth; JSON field-name doc coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON field-name doc mutation audit | Checks whether the JSON full-field-name prose assertion remains properly isolated after output-order swaps. | Re-scan `assertJsonFieldNameDocMutationSelfTest()` and decide whether its single prose assertion should stay separate from individual JSON field docs. | Compact metric: no runtime output growth; correctness metric: JSON field-name doc coverage remains unchanged. |
+| Context anomaly drilldown density JSON field-name doc mutation order audit | Keeps JSON full-field-name prose coverage before individual JSON field docs. | Verify `assertJsonFieldNameDocMutationSelfTest()` still runs after output-order swaps and before `assertJsonFieldDocMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: JSON field-name doc coverage remains unchanged. |
 
 ## Research Rules
 
