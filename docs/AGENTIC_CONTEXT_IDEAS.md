@@ -868,12 +868,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON byte/help cap docs audit | Checks whether JSON byte/help cap doc mutations remain well grouped after JSON field docs. | Re-scanned `assertJsonByteHelpCapMutationSelfTests()` and kept the two related cap docs in one local table with explicit case names. | Evidence: no runtime output growth; JSON byte/help cap doc coverage remains unchanged. |
 | Context anomaly drilldown density JSON byte/help cap docs order audit | Keeps JSON byte/help cap docs after JSON field-doc checks and before env anchors. | Verified `assertJsonByteHelpCapMutationSelfTests()` runs after `assertJsonFieldDocMutationSelfTests()` and before `assertEnvLineAnchorMutationSelfTest()`. | Evidence: no runtime output growth; JSON byte/help cap doc coverage remains unchanged. |
 | Context anomaly drilldown density env-line anchor mutation audit | Checks whether the Env: line-anchor mutation should stay isolated before section anchors. | Re-scanned `assertEnvLineAnchorMutationSelfTest()` and kept it separate because it removes every `Env:` line anchor and checks the compact `Env:line` detail, distinct from specific section-anchor mutations. | Evidence: no runtime output growth; env-line anchor coverage remains unchanged. |
+| Context anomaly drilldown density env-line anchor mutation order audit | Keeps Env: line-anchor coverage before specific section-anchor mutations. | Verified `assertEnvLineAnchorMutationSelfTest()` runs after JSON byte/help cap docs and before `assertSectionAnchorMutationSelfTests()`. | Evidence: no runtime output growth; env-line anchor coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density env-line anchor mutation order audit | Keeps Env: line-anchor coverage before specific section-anchor mutations. | Verify `assertEnvLineAnchorMutationSelfTest()` still runs after JSON byte/help cap docs and before `assertSectionAnchorMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: env-line anchor coverage remains unchanged. |
+| Context anomaly drilldown density section-anchor mutation group audit | Checks whether section-anchor mutations remain well represented as a local table. | Re-scan `assertSectionAnchorMutationSelfTests()` after the Env line-anchor audit and decide whether its local section-anchor table needs derivation or guard coverage. | Compact metric: no runtime output growth; correctness metric: section-anchor mutation coverage remains unchanged. |
 
 ## Research Rules
 
