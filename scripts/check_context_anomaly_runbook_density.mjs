@@ -1979,16 +1979,29 @@ if (args.includes("--self-test")) {
     };
     assertDefaultOutputPhraseMutationSelfTests();
     const assertOutputOrderSwapMutationSelfTests = () => {
+      const outputOrderSwapLabelPairs = [
+        ["env", "lbl"],
+        ["dlab", "jhead"],
+        ["thead", "tw"],
+      ];
+      const assertOutputOrderSwapPairAdjacency = ([leftLabel, rightLabel]) => {
+        const leftIndex = defaultOutputFieldOrder.indexOf(leftLabel);
+        const rightIndex = defaultOutputFieldOrder.indexOf(rightLabel);
+        if (leftIndex === -1 || rightIndex !== leftIndex + 1) {
+          failSelfTestInvariant({
+            non_adjacent_output_order_swap_pair: `${leftLabel},${rightLabel}`,
+          });
+        }
+      };
       const buildOutputOrderSwapCase = ([leftLabel, rightLabel]) => [
         `\`${leftLabel}\`, \`${rightLabel}\``,
         `\`${rightLabel}\`, \`${leftLabel}\``,
         `swapped_${leftLabel}_${rightLabel}_output_order`,
       ];
-      const outputOrderSwapCases = [
-        ["env", "lbl"],
-        ["dlab", "jhead"],
-        ["thead", "tw"],
-      ].map(buildOutputOrderSwapCase);
+      outputOrderSwapLabelPairs.forEach(assertOutputOrderSwapPairAdjacency);
+      const outputOrderSwapCases = outputOrderSwapLabelPairs.map(
+        buildOutputOrderSwapCase,
+      );
       for (const [orderedPair, swappedPair, caseName] of outputOrderSwapCases) {
         assertSelfTestMissing(
           evaluate(runbook.replace(orderedPair, swappedPair), maxLines),
