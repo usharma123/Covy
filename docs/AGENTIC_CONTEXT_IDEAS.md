@@ -739,12 +739,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test help includes token list order | Keeps expected help tokens beside their assertion loop. | Verified `expectedHelpIncludes` is defined immediately before the loop that calls `assertHelpIncludes`. | Evidence: no runtime output growth; help output required tokens remain covered. |
 | Context anomaly drilldown density self-test help line-width failure audit | Checks whether help line-width failure diagnostics should name the failure code. | Re-scanned `assertHelpLineWidthSelfTest()` and found the failure code plus max/actual diagnostic labels should move into named constants. | Evidence: no runtime output growth; help line-width failure remains covered. |
 | Context anomaly drilldown density self-test help line-width failure constants | Names help line-width failure code and diagnostic labels. | Extracted constants inside `assertHelpLineWidthSelfTest()` for the failure code, max help line length label, and actual help line length label. | Evidence: no runtime output growth; help line-width failure remains covered. |
+| Context anomaly drilldown density self-test help line-width failure constants order | Keeps help line-width diagnostic constants beside the failure branch. | Verified the failure code and diagnostic label constants are defined before the `tooWideHelpLine` branch that prints them. | Evidence: no runtime output growth; help line-width failure remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test help line-width failure constants order | Keeps help line-width diagnostic constants beside the failure branch. | Verify the failure code and diagnostic label constants are defined before the `tooWideHelpLine` branch that prints them. | Compact metric: no runtime output growth; correctness metric: help line-width failure remains covered. |
+| Context anomaly drilldown density self-test success output audit | Checks whether the self-test success message should be named. | Re-scan `finishSelfTestOk()` and decide whether the final self-test success output should move into a named constant. | Compact metric: no runtime output growth; correctness metric: self-test success output remains covered. |
 
 ## Research Rules
 
