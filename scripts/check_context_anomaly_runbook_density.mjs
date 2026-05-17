@@ -2263,16 +2263,19 @@ if (args.includes("--self-test")) {
     };
     assertWorkflowCommandMutationSelfTests();
     const assertEnvLimitFailureSelfTests = () => {
-      assertEnvFailure(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
-        [],
-        "context_anomaly_runbook_density_too_many_lines",
-      );
-      assertEnvFailure(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
-        [],
-        "context_anomaly_runbook_density_row_too_wide",
-      );
+      const envLimitFailures = [
+        {
+          env: { P28_CONTEXT_ANOMALY_RUNBOOK_MAX_LINES: "10" },
+          expectedCode: "context_anomaly_runbook_density_too_many_lines",
+        },
+        {
+          env: { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_MAX: "10" },
+          expectedCode: "context_anomaly_runbook_density_row_too_wide",
+        },
+      ];
+      for (const { env, expectedCode } of envLimitFailures) {
+        assertEnvFailure(env, [], expectedCode);
+      }
     };
     assertEnvLimitFailureSelfTests();
     const assertSoftRowOutputSelfTests = () => {
