@@ -790,12 +790,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density invariant assertion wrapper audit | Checks whether the local invariant self-test wrapper still improves readability. | Re-scanned `assertInvariantDetailFormatSelfTest()` beside the other local self-test wrappers and kept it because it preserves the named-group rhythm inside `runContextAnomalyDensitySelfTests()`. | Evidence: no runtime output growth; self-test ordering remains readable and covered. |
 | Context anomaly drilldown density default-output wrapper placement audit | Checks whether the default-output mutation self-test wrapper should live inside the runner. | Re-scanned `assertDefaultOutputMutationSelfTest()` and found its only callsite is inside `runContextAnomalyDensitySelfTests()`, so moving it local to the runner improves scan order. | Evidence: no runtime output growth; default-output mutation coverage remains unchanged. |
 | Context anomaly drilldown density default-output wrapper local move | Aligns the default-output mutation wrapper with other runner-local self-test wrappers. | Moved `assertDefaultOutputMutationSelfTest()` inside `runContextAnomalyDensitySelfTests()` beside its invocation. | Evidence: no runtime output growth; default-output mutation coverage remains unchanged. |
+| Context anomaly drilldown density default-output wrapper local order | Keeps the default-output mutation wrapper local and after the formatter invariant. | Verified `assertDefaultOutputMutationSelfTest()` is defined inside `runContextAnomalyDensitySelfTests()` after `assertInvariantDetailFormatSelfTest()` and before env-doc checks. | Evidence: no runtime output growth; default-output mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default-output wrapper local order | Keeps the default-output mutation wrapper local and after the formatter invariant. | Verify `assertDefaultOutputMutationSelfTest()` is defined inside `runContextAnomalyDensitySelfTests()` after `assertInvariantDetailFormatSelfTest()` and before env-doc checks. | Compact metric: no runtime output growth; correctness metric: default-output mutation coverage remains unchanged. |
+| Context anomaly drilldown density runner opening sequence audit | Checks whether the first runner-local self-test groups are ordered by diagnostic dependency. | Re-scan the opening sequence of `runContextAnomalyDensitySelfTests()` across detail formatting, default-output mutation, and env-doc checks. | Compact metric: no runtime output growth; correctness metric: self-test dependency order remains covered. |
 
 ## Research Rules
 
