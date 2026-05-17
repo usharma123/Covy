@@ -839,12 +839,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON headroom env-pair mutation order audit | Keeps JSON headroom env-pair coverage after error/help adjacency checks and before plain env-doc mutations. | Verified `assertJsonHeadroomEnvPairMutationSelfTest()` runs after `assertJsonErrorHelpAdjacencyMutationSelfTest()` and before `assertPlainEnvDocMutationSelfTests()`. | Evidence: no runtime output growth; JSON headroom env-pair coverage remains unchanged. |
 | Context anomaly drilldown density plain env-doc mutation audit | Checks whether plain env-doc mutations remain correctly separated from paired env docs. | Re-scanned `assertPlainEnvDocMutationSelfTests()` and found the sweep is guarded by `assertEnvDocInvariants()`, while the paired env exclusions can still be tied more directly to the `tw` and `jhead` pair assertions. | Evidence: no runtime output growth; plain env-doc mutation coverage remains unchanged. |
 | Context anomaly drilldown density paired env-doc exclusion derivation | Reduces drift between paired env-doc exclusions and pair-specific mutation checks. | Derived `pairedEnvDocExclusions` from shared `tw`/`jhead` pair specs used by their mutation assertions. | Evidence: no runtime output growth; paired and plain env-doc mutation coverage remains unchanged. |
+| Context anomaly drilldown density paired env-doc spec guard audit | Checks whether paired env-doc spec lookup failures are directly covered. | Added a focused self-test for `pairedEnvDocSpecByLabel()` so missing pair labels fail through `failSelfTestInvariant()` detail formatting. | Evidence: no runtime output growth; paired env-doc spec coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density paired env-doc spec guard audit | Checks whether paired env-doc spec lookup failures are directly covered. | Re-scan `pairedEnvDocSpecByLabel()` and decide whether the missing-spec invariant should get a focused self-test. | Compact metric: no runtime output growth; correctness metric: paired env-doc spec coverage remains unchanged. |
+| Context anomaly drilldown density paired env-doc spec guard order audit | Keeps paired env-doc spec guard coverage near other structural self-test invariants. | Verify `assertPairedEnvDocSpecLookupInvariantSelfTest()` still runs after env-doc invariants and before alias glossary derivation invariants. | Compact metric: no runtime output growth; correctness metric: paired env-doc spec coverage remains unchanged. |
 
 ## Research Rules
 
