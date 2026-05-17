@@ -831,12 +831,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text-headroom mutation audit | Checks whether default text-headroom coverage should stay isolated after width/env pair coverage. | Re-scanned `assertTextHeadroomMutationSelfTest()` and found its simple missing-doc shape matches the adjacent `ok:false` and `no-succ` checks, while stale alias and adjacency checks should stay separate. | Evidence: no runtime output growth; text-headroom coverage remains unchanged. |
 | Context anomaly drilldown density scalar output-doc mutation grouping | Reduces drift across simple scalar output-doc mutation checks. | Grouped the `thead>=8`, `ok:false`, and `no-succ` missing-doc checks in one local table while keeping stale alias and adjacency checks separate. | Evidence: no runtime output growth; scalar output-doc mutation coverage remains unchanged. |
 | Context anomaly drilldown density scalar output-doc mutation order audit | Keeps scalar output-doc checks after width/env pair coverage and before stale alias checks. | Verified `assertScalarOutputDocMutationSelfTests()` runs after `assertWidthEnvPairMutationSelfTest()` and before `assertStaleFailureAliasMutationSelfTest()`. | Evidence: no runtime output growth; scalar output-doc mutation coverage remains unchanged. |
+| Context anomaly drilldown density stale failure alias mutation audit | Checks whether stale failure-alias coverage should stay isolated from scalar missing-doc checks. | Re-scanned `assertStaleFailureAliasMutationSelfTest()` and kept it separate because it mutates `no-succ` into the stale long spelling and asserts the `stale:no-success` diagnostic. | Evidence: no runtime output growth; stale failure-alias coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density stale failure alias mutation audit | Checks whether stale failure-alias coverage should stay isolated from scalar missing-doc checks. | Re-scan `assertStaleFailureAliasMutationSelfTest()` and decide whether its stale replacement check should remain separate from the scalar output-doc table. | Compact metric: no runtime output growth; correctness metric: stale failure-alias coverage remains unchanged. |
+| Context anomaly drilldown density stale failure alias mutation order audit | Keeps stale alias coverage after scalar output-doc checks and before JSON error/help adjacency checks. | Verify `assertStaleFailureAliasMutationSelfTest()` still runs after `assertScalarOutputDocMutationSelfTests()` and before `assertJsonErrorHelpAdjacencyMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: stale failure-alias coverage remains unchanged. |
 
 ## Research Rules
 
