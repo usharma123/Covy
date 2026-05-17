@@ -406,6 +406,11 @@ function fail(code, details) {
   process.exit(1);
 }
 
+function failIssue(issue) {
+  const { code, ok, ...details } = issue;
+  fail(code, details);
+}
+
 let selfTestCaseIndex = 0;
 function assertSelfTest(result, expectedCode, caseName = "") {
   selfTestCaseIndex += 1;
@@ -2487,12 +2492,10 @@ if (args.includes("--self-test")) {
 }
 
 if (!result.ok) {
-  const { code, ok, ...details } = result;
-  fail(code, details);
+  failIssue(result);
 }
 if (!workflowResult.ok) {
-  const { code, ok, ...details } = workflowResult;
-  fail(code, details);
+  failIssue(workflowResult);
 }
 
 const {
@@ -2503,8 +2506,7 @@ const {
 } = buildSuccessArtifacts(result, workflowResult, maxJsonBytes);
 const defaultOutputWidthIssue = defaultOutputIssue(payload, result, jsonHeadroom);
 if (defaultOutputWidthIssue) {
-  const { code, ok, ...details } = defaultOutputWidthIssue;
-  fail(code, details);
+  failIssue(defaultOutputWidthIssue);
 }
 if (args.includes("--json")) {
   const jsonPayloadError = jsonPayloadParityIssue(payload, result, {
@@ -2518,8 +2520,7 @@ if (args.includes("--json")) {
   }
   const issue = jsonBudgetIssue(payload, maxJsonBytes);
   if (issue) {
-    const { code, ok, ...details } = issue;
-    fail(code, details);
+    failIssue(issue);
   }
   console.log(JSON.stringify(payload));
 } else {
