@@ -1841,6 +1841,16 @@ if (args.includes("--self-test")) {
           label,
           replaceAll: replaceAllOutputLabels.has(label),
         }));
+      if (
+        outputLabelMutationCases.length !== separatelyDocumentedOutputLabels.size
+      ) {
+        failSelfTestInvariant({
+          expected_output_label_mutation_cases:
+            separatelyDocumentedOutputLabels.size,
+          actual_output_label_mutation_cases:
+            outputLabelMutationCases.length,
+        });
+      }
       for (const { label, replaceAll } of outputLabelMutationCases) {
         const marker = `\`${label}\``;
         const mutatedRunbook = replaceAll
