@@ -816,12 +816,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON field-name doc mutation order | Keeps the JSON full-field-name prose check before individual JSON field docs. | Verified `assertJsonFieldNameDocMutationSelfTest()` runs after output-order swaps and before `assertJsonFieldDocMutationSelfTests()`. | Evidence: no runtime output growth; JSON field-name doc coverage remains unchanged. |
 | Context anomaly drilldown density JSON field-doc group audit | Checks whether JSON field-doc presence and order mutations are still well grouped. | Re-scanned `assertJsonFieldDocMutationSelfTests()` internals and kept the nested presence/order helpers local because they are only used by the JSON field-doc group. | Evidence: no runtime output growth; JSON field-doc mutation coverage remains unchanged. |
 | Context anomaly drilldown density JSON field-doc group order | Keeps leading JSON field docs, order mutations, and trailing docs in source order. | Verified `assertJsonFieldDocMutationSelfTests()` runs leading field-doc presence checks, then order mutations, then trailing field-doc presence checks. | Evidence: no runtime output growth; JSON field-doc mutation coverage remains unchanged. |
+| Context anomaly drilldown density JSON byte-help cap docs audit | Checks whether JSON byte/help cap doc mutations remain well grouped after JSON field docs. | Re-scanned `assertJsonByteHelpCapMutationSelfTests()` and kept the two related cap docs in one local table after JSON field-doc checks. | Evidence: no runtime output growth; JSON byte/help cap doc coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON byte-help cap docs audit | Checks whether JSON byte/help cap doc mutations remain well grouped after JSON field docs. | Re-scan `assertJsonByteHelpCapMutationSelfTests()` and decide whether the two cap docs should stay in one local table. | Compact metric: no runtime output growth; correctness metric: JSON byte/help cap doc coverage remains unchanged. |
+| Context anomaly drilldown density JSON byte-help cap docs order | Keeps JSON byte/help cap docs after JSON field-doc checks and before env anchors. | Verify `assertJsonByteHelpCapMutationSelfTests()` runs after `assertJsonFieldDocMutationSelfTests()` and before `assertEnvLineAnchorMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: JSON byte/help cap doc coverage remains unchanged. |
 
 ## Research Rules
 
