@@ -801,12 +801,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output-label mutation table placement audit | Checks whether output-label mutation cases should stay local to the wrapper. | Re-scanned `outputLabelMutationCases` and found the table should stay local because it is self-test-only, but its labels should derive from `requiredOutputLabels` to avoid drift. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-label mutation case derivation | Prevents the self-test mutation table from drifting away from required output labels. | Derived `outputLabelMutationCases` from `requiredOutputLabels`, filtered it to separately documented labels, and kept a small `replaceAll` special-case set. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-label mutation derivation guard audit | Checks whether derived output-label mutation cases need a self-test guard against empty filtering. | Re-scanned `separatelyDocumentedOutputLabels` and `replaceAllOutputLabels` and found the derived case count should be guarded so filter drift cannot silently skip a label. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation derivation guard | Prevents filtered output-label mutation cases from silently dropping coverage. | Added a self-test invariant that verifies `outputLabelMutationCases.length` matches `separatelyDocumentedOutputLabels.size` before running output-label mutations. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output-label mutation derivation guard | Prevents filtered output-label mutation cases from silently dropping coverage. | Add a self-test invariant that verifies `outputLabelMutationCases.length` matches `separatelyDocumentedOutputLabels.size` before running output-label mutations. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation derivation guard order | Keeps derived output-label mutation coverage guarded before any mutation case runs. | Verify the derived case-count invariant runs after `outputLabelMutationCases` is built and before the output-label mutation loop. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
 
 ## Research Rules
 
