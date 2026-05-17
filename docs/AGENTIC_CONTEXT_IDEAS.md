@@ -734,12 +734,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test JSON budget issue mutation audit | Checks whether direct JSON budget issue mutation coverage should name its inputs and expected code. | Re-scanned `assertJsonBudgetIssueMutationSelfTest()` and found the payload limit, fallback ok code, and expected JSON-too-long code should be named. | Evidence: no runtime output growth; JSON budget issue mutation remains covered. |
 | Context anomaly drilldown density self-test JSON budget issue mutation constants | Names direct JSON budget issue mutation inputs and expected code. | Extracted constants inside `assertJsonBudgetIssueMutationSelfTest()` for the payload budget, fallback ok result, and expected JSON-too-long code. | Evidence: no runtime output growth; JSON budget issue mutation remains covered. |
 | Context anomaly drilldown density self-test JSON budget issue mutation constants order | Keeps direct JSON budget issue constants beside the mutation assertion. | Verified the budget limit, fallback result, and expected code constants are defined before the `jsonBudgetIssue()` assertion using them. | Evidence: no runtime output growth; JSON budget issue mutation remains covered. |
+| Context anomaly drilldown density self-test help includes token list audit | Checks whether help includes coverage should name expected tokens. | Re-scanned `assertHelpIncludesSelfTests()` and found expected help tokens should move into a named list before the assertion loop. | Evidence: no runtime output growth; help output required tokens remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test help includes token list audit | Checks whether help includes coverage should name expected tokens. | Re-scan `assertHelpIncludesSelfTests()` and decide whether expected help tokens should move into a named list before the assertion loop. | Compact metric: no runtime output growth; correctness metric: help output required tokens remain covered. |
+| Context anomaly drilldown density self-test help includes token list | Names expected help output tokens before asserting them. | Extract an `expectedHelpIncludes` list inside `assertHelpIncludesSelfTests()` and iterate over that named list. | Compact metric: no runtime output growth; correctness metric: help output required tokens remain covered. |
 
 ## Research Rules
 
