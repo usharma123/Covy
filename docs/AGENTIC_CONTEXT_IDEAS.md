@@ -709,12 +709,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test plain env-doc drift token order | Keeps the generated drift token immediately beside the replacement call. | Verified `driftedEnvDoc` is defined inside the env-doc loop before `runbook.replaceAll(...)` and is the replacement argument. | Evidence: no runtime output growth; index-specific drift cases remain local to their mutation. |
 | Context anomaly drilldown density self-test workflow command loop audit | Checks whether the workflow command mutation loop needs clearer drift-token naming. | Re-scanned `assertWorkflowCommandMutationSelfTests()` and found the drifted workflow command string should be named before `workflow.replace(...)`. | Evidence: no runtime output growth; workflow command drift cases stay index-specific and explicit. |
 | Context anomaly drilldown density self-test workflow command drift token name | Names the generated drifted workflow command replacement. | Extracted `driftedWorkflowCommand` inside the workflow command loop and used it for replacement text and case naming. | Evidence: no runtime output growth; workflow command drift cases remain index-specific and explicit. |
+| Context anomaly drilldown density self-test workflow command drift token order | Keeps the generated workflow drift token beside its replacement call. | Verified `driftedWorkflowCommand` is defined inside the workflow command loop before `workflow.replace(...)` and is reused as the case name. | Evidence: no runtime output growth; workflow command drift cases remain index-specific and explicit. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test workflow command drift token order | Keeps the generated workflow drift token beside its replacement call. | Verify `driftedWorkflowCommand` is defined inside the workflow command loop before `workflow.replace(...)` and is reused as the case name. | Compact metric: no runtime output growth; correctness metric: workflow command drift cases remain index-specific and explicit. |
+| Context anomaly drilldown density self-test env-limit helper audit | Checks whether env limit failures are already grouped enough. | Re-scan `assertEnvLimitFailureSelfTests()` and decide whether max-line and row-width env failures should stay in one helper or use a table. | Compact metric: no runtime output growth; correctness metric: both hard env limit failure codes remain covered. |
 
 ## Research Rules
 
