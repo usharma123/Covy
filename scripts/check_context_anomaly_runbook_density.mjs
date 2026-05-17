@@ -2092,24 +2092,16 @@ if (args.includes("--self-test")) {
     };
     assertSectionAnchorMutationSelfTests();
     const assertAliasGlossaryMutationSelfTests = () => {
-      const aliasGlossaryDocs = [
-        {
-          caseName: "missing_fc_alias_glossary",
-          docText: "`fc`=failure codes",
-        },
-        {
-          caseName: "missing_jhead_alias_glossary",
-          docText: "`jhead`=JSON headroom",
-        },
-        {
-          caseName: "missing_adocs_alias_glossary",
-          docText: "`adocs`=alias docs",
-        },
-        {
-          caseName: "missing_dlab_alias_glossary",
-          docText: "`dlab`=density label width",
-        },
-      ];
+      const aliasGlossaryDocs = requiredAliasDocPhrases.map((docText) => {
+        const aliasMatch = docText.match(/^`([^`]+)`=/);
+        if (!aliasMatch) {
+          failSelfTestInvariant({ invalid_alias_glossary_doc: docText });
+        }
+        return {
+          caseName: `missing_${aliasMatch[1]}_alias_glossary`,
+          docText,
+        };
+      });
       const assertAliasGlossaryMutation = (aliasGlossaryDoc) => {
         const { caseName, docText } = aliasGlossaryDoc;
         assertSelfTest(
