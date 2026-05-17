@@ -872,12 +872,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density section-anchor mutation group audit | Checks whether section-anchor mutations remain well represented as a local table. | Re-scanned `assertSectionAnchorMutationSelfTests()` and kept its local table because the cases mix density-label phrases, section prefixes, env-doc prefixes, and continuation headings. | Evidence: no runtime output growth; section-anchor mutation coverage remains unchanged. |
 | Context anomaly drilldown density section-anchor mutation group order audit | Keeps section-anchor mutations after Env: line-anchor coverage and before alias glossary checks. | Verified `assertSectionAnchorMutationSelfTests()` runs after `assertEnvLineAnchorMutationSelfTest()` and before `assertAliasGlossaryMutationSelfTests()`. | Evidence: no runtime output growth; section-anchor mutation coverage remains unchanged. |
 | Context anomaly drilldown density alias glossary mutation group audit | Checks whether alias glossary docs remain correctly derived after section-anchor checks. | Re-scanned `assertAliasGlossaryMutationSelfTests()` and kept the derived loop because it already builds mutation cases from `requiredAliasDocPhrases` and malformed docs are covered by a separate invariant self-test. | Evidence: no runtime output growth; alias glossary mutation coverage remains unchanged. |
+| Context anomaly drilldown density alias glossary mutation order audit | Keeps alias glossary checks after section-anchor mutations and before width/env pair checks. | Verified `assertAliasGlossaryMutationSelfTests()` runs after `assertSectionAnchorMutationSelfTests()` and before `assertWidthEnvPairMutationSelfTest()`. | Evidence: no runtime output growth; alias glossary mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density alias glossary mutation order audit | Keeps alias glossary checks after section-anchor mutations and before width/env pair checks. | Verify `assertAliasGlossaryMutationSelfTests()` still runs after `assertSectionAnchorMutationSelfTests()` and before `assertWidthEnvPairMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: alias glossary mutation coverage remains unchanged. |
+| Context anomaly drilldown density width/env pair mutation audit | Checks whether width/env pair coverage should stay isolated after alias glossary checks. | Re-scan `assertWidthEnvPairMutationSelfTest()` and decide whether its `tw` paired-env lookup still needs to stay separate from scalar output-doc checks. | Compact metric: no runtime output growth; correctness metric: width/env pair coverage remains unchanged. |
 
 ## Research Rules
 
