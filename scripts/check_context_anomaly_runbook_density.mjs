@@ -2246,16 +2246,18 @@ if (args.includes("--self-test")) {
     assertPlainEnvDocMutationSelfTests();
     const assertWorkflowCommandMutationSelfTests = () => {
       for (const [commandIndex, command] of requiredWorkflowDensityCommands.entries()) {
+        const driftedWorkflowCommand =
+          `drifted_workflow_command_${commandIndex}`;
         assertSelfTestMissing(
           evaluateWorkflow(
             workflow.replace(
               `          ${command}\n`,
-              `          drifted_workflow_command_${commandIndex}\n`,
+              `          ${driftedWorkflowCommand}\n`,
             ),
           ),
           "context_anomaly_runbook_density_workflow_missing_commands",
           command,
-          `drifted_workflow_command_${commandIndex}`,
+          driftedWorkflowCommand,
         );
       }
     };
