@@ -774,12 +774,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density top-level failure branch order | Keeps result and workflow failure checks in producer order. | Verified `result` failure is checked before `workflowResult` failure and both pass directly through `failIssue()`. | Evidence: no runtime output growth; top-level failure output remains covered. |
 | Context anomaly drilldown density success artifact build order audit | Checks whether success artifacts are built only after top-level failures. | Re-scanned the top-level failure checks and `buildSuccessArtifacts()` call and verified success artifacts are built only after both failure exits. | Evidence: no runtime output growth; failure-before-success ordering remains covered. |
 | Context anomaly drilldown density success artifact build order | Keeps success artifact building after all top-level failure exits. | Verified `buildSuccessArtifacts()` remains after `result` and `workflowResult` failure checks and before artifact consumer checks. | Evidence: no runtime output growth; failure-before-success ordering remains covered. |
+| Context anomaly drilldown density fail issue helper contract audit | Checks whether `failIssue()` should validate issue shape before destructuring. | Re-scanned `failIssue()` callers and found issue objects are controlled by script-local producers with `code`, so no missing-code guard is needed. | Evidence: no runtime output growth; failure output remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fail issue helper contract audit | Checks whether `failIssue()` should validate issue shape before destructuring. | Re-scan `failIssue()` callers and decide whether issue objects are sufficiently controlled or need an explicit missing-code guard. | Compact metric: no runtime output growth; correctness metric: failure output remains covered. |
+| Context anomaly drilldown density fail issue helper contract order | Keeps `failIssue()` immediately beside `fail()`. | Verify `failIssue()` remains directly after `fail()` and all controlled issue-object callers use it. | Compact metric: no runtime output growth; correctness metric: failure output remains covered. |
 
 ## Research Rules
 
