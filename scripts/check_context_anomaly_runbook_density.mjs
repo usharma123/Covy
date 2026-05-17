@@ -1957,20 +1957,23 @@ if (args.includes("--self-test")) {
     assertKeyValueOutputDocMutationSelfTest();
     const assertDefaultOutputPhraseMutationSelfTests = () => {
       for (const label of defaultOutputFieldOrder) {
+        const driftedDefaultOutputLabel = `\`${label}_drift\``;
+        const driftedDefaultOutputCase =
+          `drifted_${label}_default_output_doc_phrase`;
         assertSelfTestMissing(
           evaluate(
             runbook.replace(
               defaultOutputDocPhrase,
               defaultOutputDocPhrase.replace(
                 `\`${label}\``,
-                `\`${label}_drift\``,
+                driftedDefaultOutputLabel,
               ),
             ),
             maxLines,
           ),
           "context_anomaly_runbook_density_missing_output_docs",
           defaultOutputDocPhrase,
-          `drifted_${label}_default_output_doc_phrase`,
+          driftedDefaultOutputCase,
         );
       }
     };
