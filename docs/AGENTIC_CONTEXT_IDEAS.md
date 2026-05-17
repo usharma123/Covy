@@ -737,12 +737,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test help includes token list audit | Checks whether help includes coverage should name expected tokens. | Re-scanned `assertHelpIncludesSelfTests()` and found expected help tokens should move into a named list before the assertion loop. | Evidence: no runtime output growth; help output required tokens remain covered. |
 | Context anomaly drilldown density self-test help includes token list | Names expected help output tokens before asserting them. | Extracted an `expectedHelpIncludes` list inside `assertHelpIncludesSelfTests()` and iterated over that named list. | Evidence: no runtime output growth; help output required tokens remain covered. |
 | Context anomaly drilldown density self-test help includes token list order | Keeps expected help tokens beside their assertion loop. | Verified `expectedHelpIncludes` is defined immediately before the loop that calls `assertHelpIncludes`. | Evidence: no runtime output growth; help output required tokens remain covered. |
+| Context anomaly drilldown density self-test help line-width failure audit | Checks whether help line-width failure diagnostics should name the failure code. | Re-scanned `assertHelpLineWidthSelfTest()` and found the failure code plus max/actual diagnostic labels should move into named constants. | Evidence: no runtime output growth; help line-width failure remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test help line-width failure audit | Checks whether help line-width failure diagnostics should name the failure code. | Re-scan `assertHelpLineWidthSelfTest()` and decide whether the failure code and diagnostic labels should move into named constants. | Compact metric: no runtime output growth; correctness metric: help line-width failure remains covered. |
+| Context anomaly drilldown density self-test help line-width failure constants | Names help line-width failure code and diagnostic labels. | Extract constants inside `assertHelpLineWidthSelfTest()` for the failure code, max help line length label, and actual help line length label. | Compact metric: no runtime output growth; correctness metric: help line-width failure remains covered. |
 
 ## Research Rules
 
