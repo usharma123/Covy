@@ -2509,13 +2509,16 @@ if (defaultOutputWidthIssue) {
   failIssue(defaultOutputWidthIssue);
 }
 if (args.includes("--json")) {
+  const jsonParityFailureCode =
+    "context_anomaly_runbook_density_json_parity_failed";
+  const jsonParityIssueDetailKey = "issue";
   const jsonPayloadError = jsonPayloadParityIssue(payload, result, {
     default_output_headroom: defaultOutputHeadroom,
     default_output_iterations: payload.default_output_iterations,
   });
   if (jsonPayloadError) {
-    fail("context_anomaly_runbook_density_json_parity_failed", {
-      issue: jsonPayloadError,
+    fail(jsonParityFailureCode, {
+      [jsonParityIssueDetailKey]: jsonPayloadError,
     });
   }
   const issue = jsonBudgetIssue(payload, maxJsonBytes);
