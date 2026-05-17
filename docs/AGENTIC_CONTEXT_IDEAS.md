@@ -766,12 +766,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON parity derived fields order | Keeps derived parity fields beside the parity check. | Verified `jsonParityDerivedFields` is defined immediately before the `jsonPayloadParityIssue()` call that consumes it. | Evidence: no runtime output growth; JSON parity derived fields remain covered. |
 | Context anomaly drilldown density JSON parity failure details audit | Checks whether JSON parity failure details should be named before `fail()`. | Re-scanned the `jsonPayloadError` failure branch and found the computed details object should move into a named value before calling `fail()`. | Evidence: no runtime output growth; JSON parity failure details remain covered. |
 | Context anomaly drilldown density JSON parity failure details value | Names JSON parity failure details before `fail()`. | Extracted a `jsonParityFailureDetails` object inside the `jsonPayloadError` branch before passing it to `fail()`. | Evidence: no runtime output growth; JSON parity failure details remain covered. |
+| Context anomaly drilldown density JSON parity failure details order | Keeps JSON parity failure details beside `fail()`. | Verified `jsonParityFailureDetails` is defined inside the `jsonPayloadError` branch immediately before the `fail()` call that consumes it. | Evidence: no runtime output growth; JSON parity failure details remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON parity failure details order | Keeps JSON parity failure details beside `fail()`. | Verify `jsonParityFailureDetails` is defined inside the `jsonPayloadError` branch immediately before the `fail()` call that consumes it. | Compact metric: no runtime output growth; correctness metric: JSON parity failure details remain covered. |
+| Context anomaly drilldown density JSON branch ordering audit | Checks whether JSON branch checks are ordered from parity to budget to output. | Re-scan the JSON branch and verify parity failure, JSON budget failure, and JSON success output happen in a stable, readable order. | Compact metric: no runtime output growth; correctness metric: JSON branch checks remain covered. |
 
 ## Research Rules
 
