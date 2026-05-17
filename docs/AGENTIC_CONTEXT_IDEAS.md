@@ -795,12 +795,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density line-count boundary wrapper audit | Checks whether the first fixture boundary wrapper still names the phase well. | Re-scanned `assertLineCountBoundarySelfTest()` after the opening invariant checks and kept it because its name and placement clearly mark the transition into fixture boundary assertions. | Evidence: no runtime output growth; line-count boundary coverage remains unchanged. |
 | Context anomaly drilldown density required command mutation wrapper audit | Checks whether the required-command mutation group remains clearly named after the boundary check. | Re-scanned `assertRequiredCommandMutationSelfTests()` and kept it because the group name, `requiredCommands` loop, and `drifted_required_command_${commandIndex}` labels clearly describe the mutation phase. | Evidence: no runtime output growth; required command mutation coverage remains unchanged. |
 | Context anomaly drilldown density required failure-code mutation wrapper audit | Checks whether the failure-code mutation group remains clearly named after required-command checks. | Re-scanned `assertRequiredFailureCodeMutationSelfTests()` and kept it because the `requiredFailureCodes` loop, failure-docs assertion, and case labels preserve the original failure code being tested. | Evidence: no runtime output growth; required failure-code mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation wrapper audit | Checks whether output-label mutation cases are still readable as a group. | Re-scanned `assertOutputLabelMutationSelfTests()` and found the repeated label assertions should move to a small case table while preserving the two `replaceAll` cases. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output-label mutation wrapper audit | Checks whether output-label mutation cases are still readable as a group. | Re-scan `assertOutputLabelMutationSelfTests()` and decide whether repeated output-label assertions should stay inline or use a table helper. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation case table | Makes output-label mutation coverage scannable as data instead of repeated assertion blocks. | Extract output-label mutation cases into a local table and loop through `assertSelfTestMissing()` calls. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
 
 ## Research Rules
 
