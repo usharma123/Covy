@@ -171,6 +171,24 @@ const requiredAliasDocPhrases = [
   "`wdocs`=width docs",
   "`dlab`=density label width",
 ];
+
+function deriveAliasGlossaryDocs(
+  aliasDocPhrases,
+  failInvariant = failSelfTestInvariant,
+) {
+  return aliasDocPhrases.map((docText) => {
+    const aliasMatch = docText.match(/^`([^`]+)`=/);
+    if (!aliasMatch) {
+      failInvariant({ invalid_alias_glossary_doc: docText });
+      return { caseName: "invalid_alias_glossary", docText };
+    }
+    return {
+      caseName: `missing_${aliasMatch[1]}_alias_glossary`,
+      docText,
+    };
+  });
+}
+
 const requiredDensityDocPhrases = [
   "Env:",
   "`Env:`=env",
@@ -1778,6 +1796,20 @@ if (args.includes("--self-test")) {
       assertEnvDocInvariants();
     };
     assertEnvDocInvariantSelfTest();
+    const assertAliasGlossaryDerivationInvariantSelfTest = () => {
+      let invalidAliasGlossaryDoc = null;
+      deriveAliasGlossaryDocs(["fc=failure codes"], (details) => {
+        invalidAliasGlossaryDoc = details.invalid_alias_glossary_doc;
+      });
+      if (invalidAliasGlossaryDoc !== "fc=failure codes") {
+        failSelfTestInvariant({
+          expected_invalid_alias_glossary_doc: "fc=failure codes",
+          actual_invalid_alias_glossary_doc:
+            invalidAliasGlossaryDoc ?? "missing",
+        });
+      }
+    };
+    assertAliasGlossaryDerivationInvariantSelfTest();
     const assertLineCountBoundarySelfTest = () => {
       assertSelfTest(
         evaluate(runbook, result.line_count - 1),
@@ -2092,16 +2124,9 @@ if (args.includes("--self-test")) {
     };
     assertSectionAnchorMutationSelfTests();
     const assertAliasGlossaryMutationSelfTests = () => {
-      const aliasGlossaryDocs = requiredAliasDocPhrases.map((docText) => {
-        const aliasMatch = docText.match(/^`([^`]+)`=/);
-        if (!aliasMatch) {
-          failSelfTestInvariant({ invalid_alias_glossary_doc: docText });
-        }
-        return {
-          caseName: `missing_${aliasMatch[1]}_alias_glossary`,
-          docText,
-        };
-      });
+      const aliasGlossaryDocs = deriveAliasGlossaryDocs(
+        requiredAliasDocPhrases,
+      );
       const assertAliasGlossaryMutation = (aliasGlossaryDoc) => {
         const { caseName, docText } = aliasGlossaryDoc;
         assertSelfTest(
