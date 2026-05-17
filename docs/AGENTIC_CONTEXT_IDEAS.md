@@ -888,12 +888,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density workflow command mutation audit | Checks whether workflow command mutations remain correctly table-driven after plain env docs. | Re-scanned `assertWorkflowCommandMutationSelfTests()` and kept the direct loop because it iterates `requiredWorkflowDensityCommands` and reuses `driftedWorkflowCommand` for both replacement and case detail. | Evidence: no runtime output growth; workflow command mutation coverage remains unchanged. |
 | Context anomaly drilldown density workflow command mutation order audit | Keeps workflow command mutations after plain env-doc coverage and before env-limit failure checks. | Verified `assertWorkflowCommandMutationSelfTests()` runs after `assertPlainEnvDocMutationSelfTests()` and before `assertEnvLimitFailureSelfTests()`. | Evidence: no runtime output growth; workflow command mutation coverage remains unchanged. |
 | Context anomaly drilldown density env-limit failure audit | Checks whether env-limit failure self-tests remain correctly grouped after mutation coverage. | Re-scanned `assertEnvLimitFailureSelfTests()` and kept its compact two-row table because each row already pairs a forced env value with the expected hard-limit failure code. | Evidence: no runtime output growth; env-limit failure coverage remains unchanged. |
+| Context anomaly drilldown density env-limit failure order audit | Keeps hard env-limit failure checks after workflow command mutations and before soft-row output checks. | Verified `assertEnvLimitFailureSelfTests()` runs after `assertWorkflowCommandMutationSelfTests()` and before `assertSoftRowOutputSelfTests()`. | Evidence: no runtime output growth; env-limit failure coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density env-limit failure order audit | Keeps hard env-limit failure checks after workflow command mutations and before soft-row output checks. | Verify `assertEnvLimitFailureSelfTests()` still runs after `assertWorkflowCommandMutationSelfTests()` and before `assertSoftRowOutputSelfTests()`. | Compact metric: no runtime output growth; correctness metric: env-limit failure coverage remains unchanged. |
+| Context anomaly drilldown density soft-row output audit | Checks whether soft-row output checks remain correctly grouped after hard env-limit failures. | Re-scan `assertSoftRowOutputSelfTests()` and decide whether default and JSON soft-row assertions need any shared expected-text derivation. | Compact metric: no runtime output growth; correctness metric: soft-row output coverage remains unchanged. |
 
 ## Research Rules
 
