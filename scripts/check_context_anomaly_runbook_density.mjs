@@ -394,13 +394,17 @@ function evaluateWorkflow(workflow) {
   };
 }
 
+function formatFailDetailValue(value) {
+  return Array.isArray(value) ? value.join(",") : value;
+}
+
 function fail(code, details) {
   if (args.includes("--json")) {
     console.log(JSON.stringify({ ok: false, code, ...details }));
   } else {
     console.error(code);
     for (const [key, value] of Object.entries(details)) {
-      console.error(`${key}=${Array.isArray(value) ? value.join(",") : value}`);
+      console.error(`${key}=${formatFailDetailValue(value)}`);
     }
   }
   process.exit(1);
