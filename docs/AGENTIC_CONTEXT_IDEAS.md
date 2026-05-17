@@ -841,12 +841,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density paired env-doc exclusion derivation | Reduces drift between paired env-doc exclusions and pair-specific mutation checks. | Derived `pairedEnvDocExclusions` from shared `tw`/`jhead` pair specs used by their mutation assertions. | Evidence: no runtime output growth; paired and plain env-doc mutation coverage remains unchanged. |
 | Context anomaly drilldown density paired env-doc spec guard audit | Checks whether paired env-doc spec lookup failures are directly covered. | Added a focused self-test for `pairedEnvDocSpecByLabel()` so missing pair labels fail through `failSelfTestInvariant()` detail formatting. | Evidence: no runtime output growth; paired env-doc spec coverage remains unchanged. |
 | Context anomaly drilldown density paired env-doc spec guard order audit | Keeps paired env-doc spec guard coverage near other structural self-test invariants. | Verified `assertPairedEnvDocSpecLookupInvariantSelfTest()` runs after env-doc invariants and before alias glossary derivation invariants. | Evidence: no runtime output growth; paired env-doc spec coverage remains unchanged. |
+| Context anomaly drilldown density alias glossary derivation guard order audit | Keeps alias glossary derivation guard coverage before line-budget mutation checks. | Verified `assertAliasGlossaryDerivationInvariantSelfTest()` runs after paired env-doc spec guard coverage and before `assertLineCountBoundarySelfTest()`. | Evidence: no runtime output growth; alias glossary derivation guard coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density alias glossary derivation guard order audit | Keeps alias glossary derivation guard coverage before line-budget mutation checks. | Verify `assertAliasGlossaryDerivationInvariantSelfTest()` still runs after paired env-doc spec guard coverage and before `assertLineCountBoundarySelfTest()`. | Compact metric: no runtime output growth; correctness metric: alias glossary derivation guard coverage remains unchanged. |
+| Context anomaly drilldown density line-count mutation order audit | Keeps line-budget mutation coverage after structural invariant guards and before command mutations. | Verify `assertLineCountBoundarySelfTest()` still runs after alias glossary derivation guard coverage and before `assertRequiredCommandMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: line-count mutation coverage remains unchanged. |
 
 ## Research Rules
 
