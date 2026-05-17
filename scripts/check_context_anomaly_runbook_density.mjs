@@ -124,6 +124,27 @@ const defaultTextFields = [...defaultOutputFieldOrder];
 const defaultOutputDocPhrase = `\`key=value\`: ${defaultOutputFieldOrder
   .map((label) => `\`${label}\``)
   .join(", ")};`;
+
+function outputOrderSwapPairIsAdjacent(
+  [leftLabel, rightLabel],
+  outputFieldOrder = defaultOutputFieldOrder,
+) {
+  const leftIndex = outputFieldOrder.indexOf(leftLabel);
+  const rightIndex = outputFieldOrder.indexOf(rightLabel);
+  return leftIndex !== -1 && rightIndex === leftIndex + 1;
+}
+
+function assertOutputOrderSwapPairAdjacency(
+  outputOrderSwapPair,
+  failInvariant = failSelfTestInvariant,
+) {
+  if (!outputOrderSwapPairIsAdjacent(outputOrderSwapPair)) {
+    failInvariant({
+      non_adjacent_output_order_swap_pair: outputOrderSwapPair.join(","),
+    });
+  }
+}
+
 const jsonPayloadParityFieldOrder = [
   "output_doc_phrases_checked",
   "alias_docs_checked",
@@ -1842,6 +1863,21 @@ if (args.includes("--self-test")) {
       }
     };
     assertPairedEnvDocSpecLookupInvariantSelfTest();
+    const assertOutputOrderSwapPairAdjacencyInvariantSelfTest = () => {
+      let nonAdjacentOutputOrderSwapPair = null;
+      assertOutputOrderSwapPairAdjacency(["lines", "cmds"], (details) => {
+        nonAdjacentOutputOrderSwapPair =
+          details.non_adjacent_output_order_swap_pair;
+      });
+      if (nonAdjacentOutputOrderSwapPair !== "lines,cmds") {
+        failSelfTestInvariant({
+          expected_non_adjacent_output_order_swap_pair: "lines,cmds",
+          actual_non_adjacent_output_order_swap_pair:
+            nonAdjacentOutputOrderSwapPair ?? "missing",
+        });
+      }
+    };
+    assertOutputOrderSwapPairAdjacencyInvariantSelfTest();
     const assertAliasGlossaryDerivationInvariantSelfTest = () => {
       let invalidAliasGlossaryDoc = null;
       deriveAliasGlossaryDocs(["fc=failure codes"], (details) => {
@@ -1984,15 +2020,6 @@ if (args.includes("--self-test")) {
         ["dlab", "jhead"],
         ["thead", "tw"],
       ];
-      const assertOutputOrderSwapPairAdjacency = ([leftLabel, rightLabel]) => {
-        const leftIndex = defaultOutputFieldOrder.indexOf(leftLabel);
-        const rightIndex = defaultOutputFieldOrder.indexOf(rightLabel);
-        if (leftIndex === -1 || rightIndex !== leftIndex + 1) {
-          failSelfTestInvariant({
-            non_adjacent_output_order_swap_pair: `${leftLabel},${rightLabel}`,
-          });
-        }
-      };
       const buildOutputOrderSwapCase = ([leftLabel, rightLabel]) => [
         `\`${leftLabel}\`, \`${rightLabel}\``,
         `\`${rightLabel}\`, \`${leftLabel}\``,
