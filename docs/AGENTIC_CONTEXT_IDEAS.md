@@ -799,12 +799,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output-label mutation case table | Makes output-label mutation coverage scannable as data instead of repeated assertion blocks. | Extracted output-label mutation cases into a local table and looped through `assertSelfTestMissing()` calls. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-label mutation table order | Keeps all required output labels represented in the mutation table. | Verified the output-label mutation table includes `wf`, `env`, `lbl`, `phr`, `adocs`, `dphr`, `anc`, `prs`, and `soft`, with `replaceAll` preserved only for `wf` and `adocs`. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-label mutation table placement audit | Checks whether output-label mutation cases should stay local to the wrapper. | Re-scanned `outputLabelMutationCases` and found the table should stay local because it is self-test-only, but its labels should derive from `requiredOutputLabels` to avoid drift. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation case derivation | Prevents the self-test mutation table from drifting away from required output labels. | Derived `outputLabelMutationCases` from `requiredOutputLabels`, filtered it to separately documented labels, and kept a small `replaceAll` special-case set. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output-label mutation case derivation | Prevents the self-test mutation table from drifting away from required output labels. | Derive `outputLabelMutationCases` from `requiredOutputLabels` and keep a small special-case set for `replaceAll` labels. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-label mutation derivation guard audit | Checks whether derived output-label mutation cases need a self-test guard against empty filtering. | Re-scan `separatelyDocumentedOutputLabels` and `replaceAllOutputLabels` to decide whether an explicit invariant should verify the derived mutation case count. | Compact metric: no runtime output growth; correctness metric: output-label mutation coverage remains unchanged. |
 
 ## Research Rules
 
