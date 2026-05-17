@@ -826,12 +826,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density alias glossary mutation derivation | Prevents alias glossary mutation coverage from drifting away from required alias docs. | Derived alias glossary mutation cases from `requiredAliasDocPhrases`, generating case names from each alias token. | Evidence: no runtime output growth; alias glossary mutation coverage remains unchanged. |
 | Context anomaly drilldown density alias glossary mutation derivation guard audit | Checks whether alias glossary derivation needs a malformed-doc guard. | Re-scanned the alias-token extraction from `requiredAliasDocPhrases` and added a focused malformed-doc self-test for the `failSelfTestInvariant()` guard. | Evidence: no runtime output growth; alias glossary mutation coverage remains unchanged. |
 | Context anomaly drilldown density alias glossary mutation order audit | Keeps alias glossary checks after section-anchor mutations and before width/env pair checks. | Verified `assertAliasGlossaryMutationSelfTests()` runs after `assertSectionAnchorMutationSelfTests()` and before `assertWidthEnvPairMutationSelfTest()`. | Evidence: no runtime output growth; alias glossary mutation coverage remains unchanged. |
+| Context anomaly drilldown density width/env pair mutation audit | Checks whether the width/env pair mutation should stay isolated after alias glossary checks. | Re-scanned `assertWidthEnvPairMutationSelfTest()` and kept it isolated because it verifies the compact `tw` label stays paired to `P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX`, distinct from the `thead>=8` headroom doc. | Evidence: no runtime output growth; width/env pair coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density width/env pair mutation audit | Checks whether the width/env pair mutation should stay isolated after alias glossary checks. | Re-scan `assertWidthEnvPairMutationSelfTest()` and decide whether it should remain a single targeted assertion or merge into width-doc mutations. | Compact metric: no runtime output growth; correctness metric: width/env pair coverage remains unchanged. |
+| Context anomaly drilldown density width/env pair mutation order audit | Keeps width/env pair coverage after alias glossary checks and before text-headroom docs. | Verify `assertWidthEnvPairMutationSelfTest()` still runs after `assertAliasGlossaryMutationSelfTests()` and before `assertTextHeadroomMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: width/env pair coverage remains unchanged. |
 
 ## Research Rules
 
