@@ -720,12 +720,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test prose/text env failure table | Replaces repeated prose/text env failure assertions with a table. | Extracted the four `assertEnvFailure` checks in `assertProseTextEnvFailureSelfTests()` into `proseTextEnvFailures` rows with env, args, and expected code. | Evidence: no runtime output growth; prose and text-width env failures remain covered. |
 | Context anomaly drilldown density self-test prose/text env failure table order | Keeps prose/text env failure rows beside their assertion loop. | Verified `proseTextEnvFailures` is defined inside `assertProseTextEnvFailureSelfTests()` immediately before the loop that calls `assertEnvFailure`. | Evidence: no runtime output growth; prose and text-width env failure rows remain adjacent to their assertion loop. |
 | Context anomaly drilldown density self-test text JSON failure shape audit | Checks whether text JSON failure shape coverage needs table-driven structure. | Re-scanned `assertTextJsonFailureShapeSelfTests()` and found shared env/args plus expected output and exclusion tokens should be named. | Evidence: no runtime output growth; text JSON failure shape and iteration exclusion stay covered. |
+| Context anomaly drilldown density self-test text JSON failure shape constants | Names shared text JSON failure env, args, output tokens, and exclusion token. | Extracted constants inside `assertTextJsonFailureShapeSelfTests()` for the shared text-max env/args, expected output tokens, and excluded iterations token. | Evidence: no runtime output growth; text JSON failure shape and iteration exclusion stay covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test text JSON failure shape constants | Names shared text JSON failure env, args, output tokens, and exclusion token. | Extract constants inside `assertTextJsonFailureShapeSelfTests()` for the shared text-max env/args, expected output tokens, and excluded iterations token. | Compact metric: no runtime output growth; correctness metric: text JSON failure shape and iteration exclusion stay covered. |
+| Context anomaly drilldown density self-test text JSON failure shape constants order | Keeps text JSON failure constants beside both assertions using them. | Verify text JSON env, args, expected output, and exclusion constants are defined before the output and exclusion assertions. | Compact metric: no runtime output growth; correctness metric: text JSON failure shape and iteration exclusion stay covered. |
 
 ## Research Rules
 
