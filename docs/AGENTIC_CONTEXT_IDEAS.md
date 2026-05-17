@@ -759,12 +759,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default output width issue audit | Checks whether default output width issue handling should name its local issue variable. | Re-scanned the `defaultOutputIssue()` branch and found `defaultOutputWidthIssue` already names the failure condition and the `failIssue()` handoff is clear. | Evidence: no runtime output growth; default output width failure remains covered. |
 | Context anomaly drilldown density default output width issue order | Keeps the default output width issue beside its failure handoff. | Verified `defaultOutputWidthIssue` is computed immediately before the branch that passes it to `failIssue()`. | Evidence: no runtime output growth; default output width failure remains covered. |
 | Context anomaly drilldown density JSON budget issue variable audit | Checks whether JSON budget issue handling should name its local issue variable more specifically. | Re-scanned the `jsonBudgetIssue()` branch and found the local `issue` variable should be renamed to match the JSON budget failure condition. | Evidence: no runtime output growth; JSON budget failure remains covered. |
+| Context anomaly drilldown density JSON budget issue variable | Names the JSON budget issue local variable by failure condition. | Renamed the local `issue` result from `jsonBudgetIssue()` to `jsonBudgetWidthIssue` before passing it to `failIssue()`. | Evidence: no runtime output growth; JSON budget failure remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON budget issue variable | Names the JSON budget issue local variable by failure condition. | Rename the local `issue` result from `jsonBudgetIssue()` to a JSON-budget-specific name before passing it to `failIssue()`. | Compact metric: no runtime output growth; correctness metric: JSON budget failure remains covered. |
+| Context anomaly drilldown density JSON budget issue variable order | Keeps the JSON budget issue variable beside its failure handoff. | Verify `jsonBudgetWidthIssue` is computed immediately before the branch that passes it to `failIssue()`. | Compact metric: no runtime output growth; correctness metric: JSON budget failure remains covered. |
 
 ## Research Rules
 
