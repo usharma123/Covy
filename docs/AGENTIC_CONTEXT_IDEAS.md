@@ -755,12 +755,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default success output audit | Checks whether default success output should name the emitted line. | Re-scanned the non-JSON success branch and found `defaultOutputLine` is already a named artifact from `buildSuccessArtifacts()`, so no alias is needed. | Evidence: no runtime output growth; default success output remains covered. |
 | Context anomaly drilldown density default success output order | Keeps the named default output artifact beside its log call. | Verified `defaultOutputLine` is destructured from `buildSuccessArtifacts()` and logged unchanged in the non-JSON success branch. | Evidence: no runtime output growth; default success output remains covered. |
 | Context anomaly drilldown density success artifacts destructure audit | Checks whether success artifact destructuring should be grouped or renamed. | Re-scanned the `buildSuccessArtifacts()` destructure and found payload, JSON headroom, default output line, and default headroom names already match producer names and direct consumers, so no grouping is needed. | Evidence: no runtime output growth; success artifact consumers remain covered. |
+| Context anomaly drilldown density success artifacts destructure order | Keeps success artifact names beside their consumer checks. | Verified `payload`, `jsonHeadroom`, `defaultOutputLine`, and `defaultOutputHeadroom` are destructured before the checks and output branches that consume them. | Evidence: no runtime output growth; success artifact consumers remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density success artifacts destructure order | Keeps success artifact names beside their consumer checks. | Verify `payload`, `jsonHeadroom`, `defaultOutputLine`, and `defaultOutputHeadroom` are destructured before the checks and output branches that consume them. | Compact metric: no runtime output growth; correctness metric: success artifact consumers remain covered. |
+| Context anomaly drilldown density default output width issue audit | Checks whether default output width issue handling should name its local issue variable. | Re-scan the `defaultOutputIssue()` branch and decide whether `defaultOutputWidthIssue` and its `failIssue()` handoff are already clear. | Compact metric: no runtime output growth; correctness metric: default output width failure remains covered. |
 
 ## Research Rules
 
