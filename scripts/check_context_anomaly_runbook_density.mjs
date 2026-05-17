@@ -2521,9 +2521,9 @@ if (args.includes("--json")) {
       [jsonParityIssueDetailKey]: jsonPayloadError,
     });
   }
-  const issue = jsonBudgetIssue(payload, maxJsonBytes);
-  if (issue) {
-    failIssue(issue);
+  const jsonBudgetWidthIssue = jsonBudgetIssue(payload, maxJsonBytes);
+  if (jsonBudgetWidthIssue) {
+    failIssue(jsonBudgetWidthIssue);
   }
   const jsonOutputLine = JSON.stringify(payload);
   console.log(jsonOutputLine);
