@@ -718,12 +718,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test soft-row output table order | Keeps the soft-row env and output table beside their assertion loop. | Verified `softRowOutputEnv` and `softRowOutputChecks` are defined immediately before the loop that calls `assertEnvOutput`. | Evidence: no runtime output growth; soft-row text and JSON output rows remain adjacent to their assertion loop. |
 | Context anomaly drilldown density self-test prose/text env failure helper audit | Checks whether prose/text env failures should be table-driven. | Re-scanned `assertProseTextEnvFailureSelfTests()` and found the four prose/text-width failure cases should move into env, args, and expected-code rows. | Evidence: no runtime output growth; prose and text-width env failures remain covered. |
 | Context anomaly drilldown density self-test prose/text env failure table | Replaces repeated prose/text env failure assertions with a table. | Extracted the four `assertEnvFailure` checks in `assertProseTextEnvFailureSelfTests()` into `proseTextEnvFailures` rows with env, args, and expected code. | Evidence: no runtime output growth; prose and text-width env failures remain covered. |
+| Context anomaly drilldown density self-test prose/text env failure table order | Keeps prose/text env failure rows beside their assertion loop. | Verified `proseTextEnvFailures` is defined inside `assertProseTextEnvFailureSelfTests()` immediately before the loop that calls `assertEnvFailure`. | Evidence: no runtime output growth; prose and text-width env failure rows remain adjacent to their assertion loop. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test prose/text env failure table order | Keeps prose/text env failure rows beside their assertion loop. | Verify `proseTextEnvFailures` is defined inside `assertProseTextEnvFailureSelfTests()` immediately before the loop that calls `assertEnvFailure`. | Compact metric: no runtime output growth; correctness metric: prose and text-width env failure rows remain adjacent to their assertion loop. |
+| Context anomaly drilldown density self-test text JSON failure shape audit | Checks whether text JSON failure shape coverage needs table-driven structure. | Re-scan `assertTextJsonFailureShapeSelfTests()` and decide whether the output tokens and exclusion checks should use named constants. | Compact metric: no runtime output growth; correctness metric: text JSON failure shape and iteration exclusion stay covered. |
 
 ## Research Rules
 
