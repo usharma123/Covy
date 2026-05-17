@@ -843,12 +843,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density paired env-doc spec guard order audit | Keeps paired env-doc spec guard coverage near other structural self-test invariants. | Verified `assertPairedEnvDocSpecLookupInvariantSelfTest()` runs after env-doc invariants and before alias glossary derivation invariants. | Evidence: no runtime output growth; paired env-doc spec coverage remains unchanged. |
 | Context anomaly drilldown density alias glossary derivation guard order audit | Keeps alias glossary derivation guard coverage before line-budget mutation checks. | Verified `assertAliasGlossaryDerivationInvariantSelfTest()` runs after paired env-doc spec guard coverage and before `assertLineCountBoundarySelfTest()`. | Evidence: no runtime output growth; alias glossary derivation guard coverage remains unchanged. |
 | Context anomaly drilldown density line-count mutation order audit | Keeps line-budget mutation coverage after structural invariant guards and before command mutations. | Verified `assertLineCountBoundarySelfTest()` runs after alias glossary derivation guard coverage and before `assertRequiredCommandMutationSelfTests()`. | Evidence: no runtime output growth; line-count mutation coverage remains unchanged. |
+| Context anomaly drilldown density required command mutation audit | Checks whether required-command mutation coverage remains correctly table-driven. | Re-scanned `assertRequiredCommandMutationSelfTests()` and found the loop is table-driven but repeats the drift-token template inside the mutation and expected-detail arguments. | Evidence: no runtime output growth; required-command mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density required command mutation audit | Checks whether required-command mutation coverage remains correctly table-driven. | Re-scan `assertRequiredCommandMutationSelfTests()` and decide whether command drift case naming needs a helper or invariant after recent grouping work. | Compact metric: no runtime output growth; correctness metric: required-command mutation coverage remains unchanged. |
+| Context anomaly drilldown density required command drift token sharing | Reduces drift between required-command mutation text and expected missing-detail text. | Extract one `driftedCommand` token inside `assertRequiredCommandMutationSelfTests()` and reuse it for `replaceAll()` and `assertSelfTestMissing()`. | Compact metric: no runtime output growth; correctness metric: required-command mutation coverage remains unchanged. |
 
 ## Research Rules
 
