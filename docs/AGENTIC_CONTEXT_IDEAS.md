@@ -895,12 +895,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density prose/text env failure order audit | Keeps prose/text env failures after soft-row outputs and before text JSON failure-shape checks. | Verified `assertProseTextEnvFailureSelfTests()` runs after `assertSoftRowOutputSelfTests()` and before `assertTextJsonFailureShapeSelfTests()`. | Evidence: no runtime output growth; prose/text env failure coverage remains unchanged. |
 | Context anomaly drilldown density text JSON failure-shape audit | Checks whether text-width JSON failure output coverage remains explicit after prose/text failures. | Re-scanned `assertTextJsonFailureShapeSelfTests()` and kept its local constants because shared env, args, expected output tokens, and the excluded success-only field are already named. | Evidence: no runtime output growth; text JSON failure-shape coverage remains unchanged. |
 | Context anomaly drilldown density text JSON failure-shape order audit | Keeps text JSON failure-shape checks after prose/text env failures and before text headroom output checks. | Verified `assertTextJsonFailureShapeSelfTests()` runs after `assertProseTextEnvFailureSelfTests()` and before `assertTextHeadroomOutputSelfTests()`. | Evidence: no runtime output growth; text JSON failure-shape coverage remains unchanged. |
+| Context anomaly drilldown density text headroom output audit | Checks whether text headroom output coverage remains correctly grouped after text JSON failure-shape checks. | Re-scanned `assertTextHeadroomOutputSelfTests()` and kept its shared exact-cap env plus table rows for default text headroom, JSON headroom, and JSON iteration count. | Evidence: no runtime output growth; text headroom output coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density text headroom output audit | Checks whether text headroom output coverage remains correctly grouped after text JSON failure-shape checks. | Re-scan `assertTextHeadroomOutputSelfTests()` and decide whether its default and JSON exact-cap assertions need additional shared derivation. | Compact metric: no runtime output growth; correctness metric: text headroom output coverage remains unchanged. |
+| Context anomaly drilldown density text headroom output order audit | Keeps text headroom output checks after text JSON failure-shape checks and before JSON max failure-shape checks. | Verify `assertTextHeadroomOutputSelfTests()` still runs after `assertTextJsonFailureShapeSelfTests()` and before `assertJsonMaxFailureShapeSelfTests()`. | Compact metric: no runtime output growth; correctness metric: text headroom output coverage remains unchanged. |
 
 ## Research Rules
 
