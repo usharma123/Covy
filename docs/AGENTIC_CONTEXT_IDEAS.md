@@ -845,12 +845,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density line-count mutation order audit | Keeps line-budget mutation coverage after structural invariant guards and before command mutations. | Verified `assertLineCountBoundarySelfTest()` runs after alias glossary derivation guard coverage and before `assertRequiredCommandMutationSelfTests()`. | Evidence: no runtime output growth; line-count mutation coverage remains unchanged. |
 | Context anomaly drilldown density required command mutation audit | Checks whether required-command mutation coverage remains correctly table-driven. | Re-scanned `assertRequiredCommandMutationSelfTests()` and found the loop is table-driven but repeats the drift-token template inside the mutation and expected-detail arguments. | Evidence: no runtime output growth; required-command mutation coverage remains unchanged. |
 | Context anomaly drilldown density required command drift token sharing | Reduces drift between required-command mutation text and expected missing-detail text. | Extracted one `driftedCommand` token inside `assertRequiredCommandMutationSelfTests()` and reused it for `replaceAll()` and `assertSelfTestMissing()`. | Evidence: no runtime output growth; required-command mutation coverage remains unchanged. |
+| Context anomaly drilldown density required command mutation order audit | Keeps command mutation coverage before failure-code mutation coverage. | Verified `assertRequiredCommandMutationSelfTests()` runs after line-count mutation coverage and before `assertRequiredFailureCodeMutationSelfTests()`. | Evidence: no runtime output growth; required-command mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density required command mutation order audit | Keeps command mutation coverage before failure-code mutation coverage. | Verify `assertRequiredCommandMutationSelfTests()` still runs after line-count mutation coverage and before `assertRequiredFailureCodeMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: required-command mutation coverage remains unchanged. |
+| Context anomaly drilldown density failure-code mutation audit | Checks whether failure-code mutation coverage remains correctly table-driven. | Re-scan `assertRequiredFailureCodeMutationSelfTests()` and decide whether failure-code drift token naming should be shared like command drift tokens. | Compact metric: no runtime output growth; correctness metric: failure-code mutation coverage remains unchanged. |
 
 ## Research Rules
 
