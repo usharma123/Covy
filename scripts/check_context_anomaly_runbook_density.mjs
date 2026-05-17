@@ -2152,33 +2152,31 @@ if (args.includes("--self-test")) {
       );
     };
     assertWidthEnvPairMutationSelfTest();
-    const assertTextHeadroomMutationSelfTest = () => {
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`thead>=8`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`thead>=8`",
-        "missing_default_text_headroom_doc",
-      );
+    const assertScalarOutputDocMutationSelfTests = () => {
+      const scalarOutputDocs = [
+        {
+          docText: "`thead>=8`",
+          caseName: "missing_default_text_headroom_doc",
+        },
+        {
+          docText: "`ok:false`",
+          caseName: "missing_json_error_shape_doc",
+        },
+        {
+          docText: "`no-succ`",
+          caseName: "missing_json_failure_success_field_doc",
+        },
+      ];
+      for (const { docText, caseName } of scalarOutputDocs) {
+        assertSelfTestMissing(
+          evaluate(runbook.replace(docText, ""), maxLines),
+          "context_anomaly_runbook_density_missing_output_docs",
+          docText,
+          caseName,
+        );
+      }
     };
-    assertTextHeadroomMutationSelfTest();
-    const assertJsonErrorShapeMutationSelfTest = () => {
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`ok:false`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`ok:false`",
-        "missing_json_error_shape_doc",
-      );
-    };
-    assertJsonErrorShapeMutationSelfTest();
-    const assertFailureSuccessFieldMutationSelfTest = () => {
-      assertSelfTestMissing(
-        evaluate(runbook.replace("`no-succ`", ""), maxLines),
-        "context_anomaly_runbook_density_missing_output_docs",
-        "`no-succ`",
-        "missing_json_failure_success_field_doc",
-      );
-    };
-    assertFailureSuccessFieldMutationSelfTest();
+    assertScalarOutputDocMutationSelfTests();
     const assertStaleFailureAliasMutationSelfTest = () => {
       const staleFailureAliasResult = evaluate(
         runbook.replace("`no-succ`", "`no-success`"),
