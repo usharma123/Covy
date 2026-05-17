@@ -1765,14 +1765,14 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutationFieldCountSample();
     assertDefaultOutputMutationCases();
   };
-  const assertDefaultOutputMutationSelfTest = () => {
-    assertDefaultOutputMutations();
-  };
   const runContextAnomalyDensitySelfTests = () => {
     const assertInvariantDetailFormatSelfTest = () => {
       assertInvariantDetailFormats();
     };
     assertInvariantDetailFormatSelfTest();
+    const assertDefaultOutputMutationSelfTest = () => {
+      assertDefaultOutputMutations();
+    };
     assertDefaultOutputMutationSelfTest();
     const assertEnvDocInvariantSelfTest = () => {
       assertEnvDocInvariants();
