@@ -783,12 +783,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density shared detail formatting helper | Prevents runtime and invariant detail formatting from drifting apart. | Replaced `formatFailDetailValue()` and `invariantDetailValue()` with one shared `formatDetailValue()` helper used by both failure paths. | Evidence: no runtime output growth; default and invariant detail formatting remain covered. |
 | Context anomaly drilldown density shared detail formatting helper order | Keeps shared detail formatting close to the primary failure path. | Verified `formatDetailValue()` remains before `fail()` and both runtime and invariant failure paths use it. | Evidence: no runtime output growth; default and invariant detail formatting remain covered. |
 | Context anomaly drilldown density shared detail naming history audit | Checks whether completed evidence should keep old helper names as historical record. | Re-scanned completed rows that mention old helper names and preserved them because they describe the code at each completed slice; current shared-helper rows document the rename. | Evidence: no runtime output growth; ideas log remains accurate for completed slices. |
+| Context anomaly drilldown density invariant sample naming audit | Checks whether invariant detail sample helpers should be renamed after detail formatting was shared. | Re-scanned `expectedInvariantDetailFormats()`, `invariantDetailFormatSamples()`, and mismatch helpers and kept invariant-specific names because they describe the self-test invariant block, not formatter ownership. | Evidence: no runtime output growth; default and invariant detail formatting remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density invariant sample naming audit | Checks whether invariant detail sample helpers should be renamed after detail formatting was shared. | Re-scan `expectedInvariantDetailFormats()`, `invariantDetailFormatSamples()`, and mismatch helpers to decide whether their invariant-specific names still fit the self-test contract. | Compact metric: no runtime output growth; correctness metric: default and invariant detail formatting remain covered. |
+| Context anomaly drilldown density invariant assertion order audit | Checks whether the detail-format invariant assertion runs before density fixture cases. | Verify `assertInvariantDetailFormats()` still runs at the start of `runSelfTests()` before fixture cases exercise broader density behavior. | Compact metric: no runtime output growth; correctness metric: invariant detail formatting remains covered before case assertions. |
 
 ## Research Rules
 
