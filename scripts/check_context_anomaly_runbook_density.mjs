@@ -2525,7 +2525,8 @@ if (args.includes("--json")) {
   if (issue) {
     failIssue(issue);
   }
-  console.log(JSON.stringify(payload));
+  const jsonOutputLine = JSON.stringify(payload);
+  console.log(jsonOutputLine);
 } else {
   console.log(defaultOutputLine);
 }
