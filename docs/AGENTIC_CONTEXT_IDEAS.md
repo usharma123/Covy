@@ -748,12 +748,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default error output helper order | Keeps the issue-failure helper beside `fail()`. | Verified `failIssue()` is defined immediately after `fail()` and all issue-object failure branches use it. | Evidence: no runtime output growth; default and JSON error output remain covered. |
 | Context anomaly drilldown density JSON parity failure audit | Checks whether JSON parity failure code and issue label should be named. | Re-scanned the `jsonPayloadParityIssue()` failure branch and found the parity failure code and issue detail key should move into named constants. | Evidence: no runtime output growth; JSON parity failure remains covered. |
 | Context anomaly drilldown density JSON parity failure constants | Names JSON parity failure code and issue detail key. | Extracted constants beside the JSON parity failure branch for the failure code and issue key used in the `fail()` details object. | Evidence: no runtime output growth; JSON parity failure remains covered. |
+| Context anomaly drilldown density JSON parity failure constants order | Keeps JSON parity failure constants beside the parity check. | Verified the parity failure code and issue key constants are defined before the `jsonPayloadParityIssue()` call and failure branch using them. | Evidence: no runtime output growth; JSON parity failure remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON parity failure constants order | Keeps JSON parity failure constants beside the parity check. | Verify the parity failure code and issue key constants are defined before the `jsonPayloadParityIssue()` call and failure branch using them. | Compact metric: no runtime output growth; correctness metric: JSON parity failure remains covered. |
+| Context anomaly drilldown density JSON success output audit | Checks whether JSON success output should name its serialized payload. | Re-scan the JSON success branch and decide whether `JSON.stringify(payload)` should move into a named value before logging. | Compact metric: no runtime output growth; correctness metric: JSON success output remains covered. |
 
 ## Research Rules
 
