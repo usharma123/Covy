@@ -1865,17 +1865,18 @@ if (args.includes("--self-test")) {
     assertLineCountBoundarySelfTest();
     const assertRequiredCommandMutationSelfTests = () => {
       for (const [commandIndex, command] of requiredCommands.entries()) {
+        const driftedCommand = `drifted_required_command_${commandIndex}`;
         assertSelfTestMissing(
           evaluate(
             runbook.replaceAll(
               command,
-              `drifted_required_command_${commandIndex}`,
+              driftedCommand,
             ),
             maxLines,
           ),
           "context_anomaly_runbook_density_missing_commands",
           command,
-          `drifted_required_command_${commandIndex}`,
+          driftedCommand,
         );
       }
     };
