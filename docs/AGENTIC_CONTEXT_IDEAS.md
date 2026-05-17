@@ -892,12 +892,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density soft-row output audit | Checks whether soft-row output checks remain correctly grouped after hard env-limit failures. | Re-scanned `assertSoftRowOutputSelfTests()` and kept its two-row table because it shares one forced soft-row env while checking intentionally different text and JSON output shapes. | Evidence: no runtime output growth; soft-row output coverage remains unchanged. |
 | Context anomaly drilldown density soft-row output order audit | Keeps soft-row output checks after hard env-limit failures and before prose/text env failures. | Verified `assertSoftRowOutputSelfTests()` runs after `assertEnvLimitFailureSelfTests()` and before `assertProseTextEnvFailureSelfTests()`. | Evidence: no runtime output growth; soft-row output coverage remains unchanged. |
 | Context anomaly drilldown density prose/text env failure audit | Checks whether prose and text-width env failures remain correctly table-driven after soft-row outputs. | Re-scanned `assertProseTextEnvFailureSelfTests()` and kept its four explicit rows because they cover prose width, text hard failure, and text fixed-point failure in both default and JSON modes. | Evidence: no runtime output growth; prose/text env failure coverage remains unchanged. |
+| Context anomaly drilldown density prose/text env failure order audit | Keeps prose/text env failures after soft-row outputs and before text JSON failure-shape checks. | Verified `assertProseTextEnvFailureSelfTests()` runs after `assertSoftRowOutputSelfTests()` and before `assertTextJsonFailureShapeSelfTests()`. | Evidence: no runtime output growth; prose/text env failure coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density prose/text env failure order audit | Keeps prose/text env failures after soft-row outputs and before text JSON failure-shape checks. | Verify `assertProseTextEnvFailureSelfTests()` still runs after `assertSoftRowOutputSelfTests()` and before `assertTextJsonFailureShapeSelfTests()`. | Compact metric: no runtime output growth; correctness metric: prose/text env failure coverage remains unchanged. |
+| Context anomaly drilldown density text JSON failure-shape audit | Checks whether text-width JSON failure output coverage remains explicit after prose/text failures. | Re-scan `assertTextJsonFailureShapeSelfTests()` and decide whether its env, args, expected-output, and exclusion tokens need any additional sharing. | Compact metric: no runtime output growth; correctness metric: text JSON failure-shape coverage remains unchanged. |
 
 ## Research Rules
 
