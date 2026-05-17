@@ -746,12 +746,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default error output audit | Checks whether default error output handling should name diagnostic labels. | Re-scanned the non-JSON `!result.ok` branch and nearby failure paths, and found repeated `{ code, ok, ...details }` fail handoffs should move into a helper. | Evidence: no runtime output growth; default and JSON error output remain covered. |
 | Context anomaly drilldown density default error output helper | Reuses one helper for issue objects passed to `fail()`. | Added a `failIssue()` helper for `{ code, ok, ...details }` issue objects and used it for result, workflow, default-output, and JSON budget failures. | Evidence: no runtime output growth; default and JSON error output remain covered. |
 | Context anomaly drilldown density default error output helper order | Keeps the issue-failure helper beside `fail()`. | Verified `failIssue()` is defined immediately after `fail()` and all issue-object failure branches use it. | Evidence: no runtime output growth; default and JSON error output remain covered. |
+| Context anomaly drilldown density JSON parity failure audit | Checks whether JSON parity failure code and issue label should be named. | Re-scanned the `jsonPayloadParityIssue()` failure branch and found the parity failure code and issue detail key should move into named constants. | Evidence: no runtime output growth; JSON parity failure remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON parity failure audit | Checks whether JSON parity failure code and issue label should be named. | Re-scan the `jsonPayloadParityIssue()` failure branch and decide whether the parity failure code and issue key should move into named constants. | Compact metric: no runtime output growth; correctness metric: JSON parity failure remains covered. |
+| Context anomaly drilldown density JSON parity failure constants | Names JSON parity failure code and issue detail key. | Extract constants beside the JSON parity failure branch for the failure code and issue key used in the `fail()` details object. | Compact metric: no runtime output growth; correctness metric: JSON parity failure remains covered. |
 
 ## Research Rules
 
