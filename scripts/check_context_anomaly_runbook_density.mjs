@@ -2459,13 +2459,17 @@ if (args.includes("--self-test")) {
     };
     assertHelpIncludesSelfTests();
     const assertHelpLineWidthSelfTest = () => {
+      const helpLineWidthFailureCode =
+        "context_anomaly_runbook_density_self_test_help_failed";
+      const maxHelpLineLengthLabel = "max_help_line_len";
+      const actualHelpLineLengthLabel = "actual_help_line_len";
       const tooWideHelpLine = helpLines.find(
         (line) => line.length > maxHelpLineLength,
       );
       if (tooWideHelpLine) {
-        console.error("context_anomaly_runbook_density_self_test_help_failed");
-        console.error(`max_help_line_len=${maxHelpLineLength}`);
-        console.error(`actual_help_line_len=${tooWideHelpLine.length}`);
+        console.error(helpLineWidthFailureCode);
+        console.error(`${maxHelpLineLengthLabel}=${maxHelpLineLength}`);
+        console.error(`${actualHelpLineLengthLabel}=${tooWideHelpLine.length}`);
         process.exit(1);
       }
     };
