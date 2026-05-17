@@ -809,12 +809,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output-order swap mutation audit | Checks whether output-order swap mutation cases cover enough phrase-order anchors. | Re-scanned `assertOutputOrderSwapMutationSelfTests()` and found its three repeated early, middle, and tail swap checks should move to a small case table. | Evidence: no runtime output growth; output-order swap mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-order swap mutation case table | Makes output-order swap coverage scannable as data. | Extracted the `env/lbl`, `dlab/jhead`, and `thead/tw` swap mutations into a local case table and looped through `assertSelfTestMissing()`. | Evidence: no runtime output growth; output-order swap mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-order swap mutation table order | Keeps the swap table covering early, middle, and tail output-order anchors. | Verified `outputOrderSwapCases` includes `env/lbl`, `dlab/jhead`, and `thead/tw` with the expected case labels. | Evidence: no runtime output growth; output-order swap mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-order swap anchor derivation audit | Checks whether swap anchors should be derived from default output order or stay hand-picked. | Re-scanned `outputOrderSwapCases` against `defaultOutputFieldOrder` and found the chosen adjacent anchors should derive ordered/swapped strings and case names from label pairs. | Evidence: no runtime output growth; output-order swap mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output-order swap anchor derivation audit | Checks whether swap anchors should be derived from default output order or stay hand-picked. | Re-scan `outputOrderSwapCases` against `defaultOutputFieldOrder` and decide whether deriving early, middle, and tail adjacent pairs would reduce drift. | Compact metric: no runtime output growth; correctness metric: output-order swap mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-order swap case derivation | Reduces drift in output-order swap mutations by deriving strings from label pairs. | Add a local helper that turns `["env", "lbl"]`, `["dlab", "jhead"]`, and `["thead", "tw"]` into ordered/swapped strings and case labels. | Compact metric: no runtime output growth; correctness metric: output-order swap mutation coverage remains unchanged. |
 
 ## Research Rules
 
