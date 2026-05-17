@@ -787,12 +787,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density invariant assertion order audit | Checks whether the detail-format invariant assertion runs before density fixture cases. | Re-scanned `runContextAnomalyDensitySelfTests()` and found the detail-format invariant runs early but after default-output mutation checks, so it should move to the first self-test assertion. | Evidence: no runtime output growth; invariant detail formatting remains covered before case assertions. |
 | Context anomaly drilldown density invariant assertion first check | Fails formatting invariant regressions before any broader self-test diagnostics. | Moved the invariant detail-format self-test to the first assertion in `runContextAnomalyDensitySelfTests()`. | Evidence: no runtime output growth; invariant detail formatting remains covered before case assertions. |
 | Context anomaly drilldown density invariant assertion first check order | Keeps the formatting invariant as the first self-test assertion. | Verified `assertInvariantDetailFormatSelfTest()` is invoked before default-output mutation, env-doc, and fixture self-test checks. | Evidence: no runtime output growth; invariant detail formatting remains covered before case assertions. |
+| Context anomaly drilldown density invariant assertion wrapper audit | Checks whether the local invariant self-test wrapper still improves readability. | Re-scanned `assertInvariantDetailFormatSelfTest()` beside the other local self-test wrappers and kept it because it preserves the named-group rhythm inside `runContextAnomalyDensitySelfTests()`. | Evidence: no runtime output growth; self-test ordering remains readable and covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density invariant assertion wrapper audit | Checks whether the local invariant self-test wrapper still improves readability. | Re-scan `assertInvariantDetailFormatSelfTest()` beside the other local self-test wrappers and decide whether to keep it or inline `assertInvariantDetailFormats()`. | Compact metric: no runtime output growth; correctness metric: self-test ordering remains readable and covered. |
+| Context anomaly drilldown density default-output wrapper placement audit | Checks whether the default-output mutation self-test wrapper should live inside the runner. | Re-scan `assertDefaultOutputMutationSelfTest()` placement against local wrappers inside `runContextAnomalyDensitySelfTests()` and decide whether moving it improves scan order. | Compact metric: no runtime output growth; correctness metric: default-output mutation coverage remains unchanged. |
 
 ## Research Rules
 
