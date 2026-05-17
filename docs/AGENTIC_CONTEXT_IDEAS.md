@@ -876,12 +876,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density width/env pair mutation audit | Checks whether width/env pair coverage should stay isolated after alias glossary checks. | Re-scanned `assertWidthEnvPairMutationSelfTest()` and kept it separate because it validates the `tw` label-to-env relationship through paired-env specs, distinct from scalar output-doc phrase removals. | Evidence: no runtime output growth; width/env pair coverage remains unchanged. |
 | Context anomaly drilldown density width/env pair mutation order audit | Keeps width/env pair coverage after alias glossary checks and before scalar output-doc checks. | Verified `assertWidthEnvPairMutationSelfTest()` runs after `assertAliasGlossaryMutationSelfTests()` and before `assertScalarOutputDocMutationSelfTests()`. | Evidence: no runtime output growth; width/env pair coverage remains unchanged. |
 | Context anomaly drilldown density scalar output-doc mutation audit | Checks whether scalar output-doc mutations remain correctly grouped after width/env pair coverage. | Re-scanned `assertScalarOutputDocMutationSelfTests()` and kept its local table because `thead`, `ok:false`, and `no-succ` are independent scalar docs while stale-alias and help-adjacency mutations assert distinct diagnostics. | Evidence: no runtime output growth; scalar output-doc coverage remains unchanged. |
+| Context anomaly drilldown density scalar output-doc mutation order audit | Keeps scalar output-doc checks after width/env pair coverage and before stale alias checks. | Verified `assertScalarOutputDocMutationSelfTests()` runs after `assertWidthEnvPairMutationSelfTest()` and before `assertStaleFailureAliasMutationSelfTest()`. | Evidence: no runtime output growth; scalar output-doc coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density scalar output-doc mutation order audit | Keeps scalar output-doc checks after width/env pair coverage and before stale alias checks. | Verify `assertScalarOutputDocMutationSelfTests()` still runs after `assertWidthEnvPairMutationSelfTest()` and before `assertStaleFailureAliasMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: scalar output-doc coverage remains unchanged. |
+| Context anomaly drilldown density stale failure alias mutation audit | Checks whether stale failure-alias coverage should stay isolated from scalar missing-doc checks. | Re-scan `assertStaleFailureAliasMutationSelfTest()` and decide whether its `no-success` diagnostic should remain separate from scalar `no-succ` removal. | Compact metric: no runtime output growth; correctness metric: stale failure-alias coverage remains unchanged. |
 
 ## Research Rules
 
