@@ -880,12 +880,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density stale failure alias drift token sharing | Reduces drift between compact failure-success docs, stale alias detection, and adjacency mutation coverage. | Extracted shared constants for `no-succ`, stale `no-success`, its diagnostic detail, and the JSON error/help adjacency phrase. | Evidence: no runtime output growth; stale failure-alias and adjacency coverage remain unchanged. |
 | Context anomaly drilldown density stale failure alias mutation order audit | Keeps stale alias coverage after scalar output-doc checks and before JSON error/help adjacency checks. | Verified `assertStaleFailureAliasMutationSelfTest()` runs after `assertScalarOutputDocMutationSelfTests()` and before `assertJsonErrorHelpAdjacencyMutationSelfTest()`. | Evidence: no runtime output growth; stale failure-alias coverage remains unchanged. |
 | Context anomaly drilldown density JSON error/help adjacency mutation audit | Checks whether JSON error/help adjacency coverage remains isolated after stale alias coverage. | Re-scanned `assertJsonErrorHelpAdjacencyMutationSelfTest()` after the shared-token refactor and kept it isolated because it derives the drifted key from the shared phrase and asserts the full missing-doc detail. | Evidence: no runtime output growth; JSON error/help adjacency coverage remains unchanged. |
+| Context anomaly drilldown density JSON error/help adjacency mutation order audit | Keeps JSON error/help adjacency coverage after stale alias checks and before JSON headroom env-pair checks. | Verified `assertJsonErrorHelpAdjacencyMutationSelfTest()` runs after `assertStaleFailureAliasMutationSelfTest()` and before `assertJsonHeadroomEnvPairMutationSelfTest()`. | Evidence: no runtime output growth; JSON error/help adjacency coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON error/help adjacency mutation order audit | Keeps JSON error/help adjacency coverage after stale alias checks and before JSON headroom env-pair checks. | Verify `assertJsonErrorHelpAdjacencyMutationSelfTest()` still runs after `assertStaleFailureAliasMutationSelfTest()` and before `assertJsonHeadroomEnvPairMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: JSON error/help adjacency coverage remains unchanged. |
+| Context anomaly drilldown density JSON headroom env-pair mutation audit | Checks whether JSON headroom env-pair coverage should stay isolated after error/help adjacency coverage. | Re-scan `assertJsonHeadroomEnvPairMutationSelfTest()` and decide whether its `jhead` paired-env lookup still needs to stay separate from plain env-doc mutations. | Compact metric: no runtime output growth; correctness metric: JSON headroom env-pair coverage remains unchanged. |
 
 ## Research Rules
 
