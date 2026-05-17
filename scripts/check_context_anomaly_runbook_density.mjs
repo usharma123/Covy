@@ -159,6 +159,13 @@ const jsonPayloadParityFieldOrder = [
   "row_soft_ok",
   "row_soft_max",
 ];
+const jsonErrorShapeDoc = "`ok:false`";
+const failureSuccessFieldDoc = "`no-succ`";
+const staleFailureSuccessFieldDoc = "`no-success`";
+const staleFailureSuccessFieldDetail = "stale:no-success";
+const jsonHelpLimitDoc = "`help<=120`";
+const jsonErrorHelpAdjacencyDoc =
+  `${jsonErrorShapeDoc};${failureSuccessFieldDoc};h:${jsonHelpLimitDoc}`;
 const requiredOutputDocPhrases = [
   "`key=value`",
   "JSON keeps full field names",
@@ -176,12 +183,12 @@ const requiredOutputDocPhrases = [
   "`default_output_iterations`",
   "`text_width_docs_checked`",
   "`density_label_line_width`,`default_output_headroom`,`default_output_iterations`,`text_width_docs_checked`",
-  "`ok:false`",
-  "`no-succ`",
-  "`ok:false`;`no-succ`;h:`help<=120`",
+  jsonErrorShapeDoc,
+  failureSuccessFieldDoc,
+  jsonErrorHelpAdjacencyDoc,
   "`max_json_bytes=640`",
   "`thead>=8`",
-  "`help<=120`",
+  jsonHelpLimitDoc,
 ];
 const requiredAliasDocPhrases = [
   "`fc`=failure codes",
@@ -316,7 +323,7 @@ function evaluate(runbook, lineBudget) {
         line.includes("`jhead`") &&
         line.includes("`P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN`"),
     );
-  const hasStaleFailureAlias = runbook.includes("`no-success`");
+  const hasStaleFailureAlias = runbook.includes(staleFailureSuccessFieldDoc);
   const missingEnvDocs = requiredEnvDocs.filter(
     (envName) => !runbook.includes(`\`${envName}\``),
   );
@@ -383,7 +390,7 @@ function evaluate(runbook, lineBudget) {
         ...(hasJsonHeadroomEnvDoc
           ? []
           : ["jhead:P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN"]),
-        ...(hasStaleFailureAlias ? ["stale:no-success"] : []),
+        ...(hasStaleFailureAlias ? [staleFailureSuccessFieldDetail] : []),
       ],
     };
   }
@@ -2255,11 +2262,11 @@ if (args.includes("--self-test")) {
           caseName: "missing_default_text_headroom_doc",
         },
         {
-          docText: "`ok:false`",
+          docText: jsonErrorShapeDoc,
           caseName: "missing_json_error_shape_doc",
         },
         {
-          docText: "`no-succ`",
+          docText: failureSuccessFieldDoc,
           caseName: "missing_json_failure_success_field_doc",
         },
       ];
@@ -2275,21 +2282,22 @@ if (args.includes("--self-test")) {
     assertScalarOutputDocMutationSelfTests();
     const assertStaleFailureAliasMutationSelfTest = () => {
       const staleFailureAliasResult = evaluate(
-        runbook.replace("`no-succ`", "`no-success`"),
+        runbook.replace(failureSuccessFieldDoc, staleFailureSuccessFieldDoc),
         maxLines,
       );
       assertSelfTestMissing(
         staleFailureAliasResult,
         "context_anomaly_runbook_density_missing_output_docs",
-        "stale:no-success",
+        staleFailureSuccessFieldDetail,
         "stale_json_failure_success_field_alias",
       );
     };
     assertStaleFailureAliasMutationSelfTest();
     const assertJsonErrorHelpAdjacencyMutationSelfTest = () => {
-      const jsonErrorHelpAdjacencyDoc = "`ok:false`;`no-succ`;h:`help<=120`";
-      const driftedJsonErrorHelpAdjacencyDoc =
-        "`ok:false`;`no-succ`;x:`help<=120`";
+      const driftedJsonErrorHelpAdjacencyDoc = jsonErrorHelpAdjacencyDoc.replace(
+        ";h:",
+        ";x:",
+      );
       assertSelfTestMissing(
         evaluate(
           runbook.replace(
