@@ -770,12 +770,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON branch ordering audit | Checks whether JSON branch checks are ordered from parity to budget to output. | Re-scanned the JSON branch and verified parity failure, JSON budget failure, and JSON success output happen in a stable, readable order. | Evidence: no runtime output growth; JSON branch checks remain covered. |
 | Context anomaly drilldown density success branch split audit | Checks whether JSON and default success branches should be extracted. | Re-scanned the final `--json`/default output branch and found extraction would hide the intentionally linear output order, so the branch should stay inline. | Evidence: no runtime output growth; JSON and default success output remain covered. |
 | Context anomaly drilldown density success branch split order | Keeps final success output order visible inline. | Verified shared failure checks, JSON-specific checks, JSON output, and default output remain in direct source order. | Evidence: no runtime output growth; JSON and default success output remain covered. |
+| Context anomaly drilldown density top-level failure branch audit | Checks whether initial result/workflow failure branches should be grouped. | Re-scanned the top-level `result` and `workflowResult` failure checks and found their direct `failIssue()` calls should stay inline so producer failure order remains visible. | Evidence: no runtime output growth; top-level failure output remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density top-level failure branch audit | Checks whether initial result/workflow failure branches should be grouped. | Re-scan the top-level `result` and `workflowResult` failure checks and decide whether their direct `failIssue()` calls should stay inline. | Compact metric: no runtime output growth; correctness metric: top-level failure output remains covered. |
+| Context anomaly drilldown density top-level failure branch order | Keeps result and workflow failure checks in producer order. | Verify `result` failure is checked before `workflowResult` failure and both pass directly through `failIssue()`. | Compact metric: no runtime output growth; correctness metric: top-level failure output remains covered. |
 
 ## Research Rules
 
