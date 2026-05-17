@@ -837,12 +837,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON error/help adjacency mutation order audit | Keeps JSON error/help adjacency coverage after stale alias checks and before JSON headroom env-pair checks. | Verified `assertJsonErrorHelpAdjacencyMutationSelfTest()` runs after `assertStaleFailureAliasMutationSelfTest()` and before `assertJsonHeadroomEnvPairMutationSelfTest()`. | Evidence: no runtime output growth; JSON error/help adjacency coverage remains unchanged. |
 | Context anomaly drilldown density JSON headroom env-pair mutation audit | Checks whether JSON headroom env-pair coverage should stay isolated after error/help adjacency coverage. | Re-scanned `assertJsonHeadroomEnvPairMutationSelfTest()` and kept it separate because `P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN` is excluded from `requiredPlainEnvDocs` and this assertion verifies the `jhead` label-to-env relationship. | Evidence: no runtime output growth; JSON headroom env-pair coverage remains unchanged. |
 | Context anomaly drilldown density JSON headroom env-pair mutation order audit | Keeps JSON headroom env-pair coverage after error/help adjacency checks and before plain env-doc mutations. | Verified `assertJsonHeadroomEnvPairMutationSelfTest()` runs after `assertJsonErrorHelpAdjacencyMutationSelfTest()` and before `assertPlainEnvDocMutationSelfTests()`. | Evidence: no runtime output growth; JSON headroom env-pair coverage remains unchanged. |
+| Context anomaly drilldown density plain env-doc mutation audit | Checks whether plain env-doc mutations remain correctly separated from paired env docs. | Re-scanned `assertPlainEnvDocMutationSelfTests()` and found the sweep is guarded by `assertEnvDocInvariants()`, while the paired env exclusions can still be tied more directly to the `tw` and `jhead` pair assertions. | Evidence: no runtime output growth; plain env-doc mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density plain env-doc mutation audit | Checks whether plain env-doc mutations remain correctly separated from paired env docs. | Re-scan `assertPlainEnvDocMutationSelfTests()` and decide whether the `requiredPlainEnvDocs` sweep needs additional guards after the paired `tw` and `jhead` exclusions. | Compact metric: no runtime output growth; correctness metric: plain env-doc mutation coverage remains unchanged. |
+| Context anomaly drilldown density paired env-doc exclusion derivation | Reduces drift between paired env-doc exclusions and pair-specific mutation checks. | Derive `pairedEnvDocExclusions` from shared `tw`/`jhead` pair specs used by their mutation assertions. | Compact metric: no runtime output growth; correctness metric: paired and plain env-doc mutation coverage remains unchanged. |
 
 ## Research Rules
 
