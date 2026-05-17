@@ -866,12 +866,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON field-doc group audit | Checks whether JSON field-doc presence and order mutations remain well grouped. | Re-scanned `assertJsonFieldDocMutationSelfTests()` and kept its current leading presence, order-swap, trailing presence structure because the nested helpers are local to the JSON field-doc group. | Evidence: no runtime output growth; JSON field-doc mutation coverage remains unchanged. |
 | Context anomaly drilldown density JSON field-doc group order audit | Keeps leading JSON field docs, order mutations, and trailing docs in source order. | Verified `assertJsonFieldDocMutationSelfTests()` runs leading field-doc presence checks, then order mutations, then trailing field-doc presence checks. | Evidence: no runtime output growth; JSON field-doc mutation coverage remains unchanged. |
 | Context anomaly drilldown density JSON byte/help cap docs audit | Checks whether JSON byte/help cap doc mutations remain well grouped after JSON field docs. | Re-scanned `assertJsonByteHelpCapMutationSelfTests()` and kept the two related cap docs in one local table with explicit case names. | Evidence: no runtime output growth; JSON byte/help cap doc coverage remains unchanged. |
+| Context anomaly drilldown density JSON byte/help cap docs order audit | Keeps JSON byte/help cap docs after JSON field-doc checks and before env anchors. | Verified `assertJsonByteHelpCapMutationSelfTests()` runs after `assertJsonFieldDocMutationSelfTests()` and before `assertEnvLineAnchorMutationSelfTest()`. | Evidence: no runtime output growth; JSON byte/help cap doc coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON byte/help cap docs order audit | Keeps JSON byte/help cap docs after JSON field-doc checks and before env anchors. | Verify `assertJsonByteHelpCapMutationSelfTests()` still runs after `assertJsonFieldDocMutationSelfTests()` and before `assertEnvLineAnchorMutationSelfTest()`. | Compact metric: no runtime output growth; correctness metric: JSON byte/help cap doc coverage remains unchanged. |
+| Context anomaly drilldown density env-line anchor mutation audit | Checks whether the Env: line-anchor mutation should stay isolated before section anchors. | Re-scan `assertEnvLineAnchorMutationSelfTest()` and decide whether the all-Env-line anchor assertion should remain separate from section-anchor mutations. | Compact metric: no runtime output growth; correctness metric: env-line anchor coverage remains unchanged. |
 
 ## Research Rules
 
