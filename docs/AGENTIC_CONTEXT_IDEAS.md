@@ -814,12 +814,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density output-order swap derivation helper order | Keeps swap derivation local to the output-order mutation group. | Verified `buildOutputOrderSwapCase()` is defined inside `assertOutputOrderSwapMutationSelfTests()` before `outputOrderSwapCases` is mapped. | Evidence: no runtime output growth; output-order swap mutation coverage remains unchanged. |
 | Context anomaly drilldown density JSON field-name doc mutation audit | Checks whether the JSON field-name doc mutation remains isolated after output-order checks. | Re-scanned `assertJsonFieldNameDocMutationSelfTest()` and kept it separate because it checks the prose sentence that JSON keeps full field names, distinct from individual JSON field docs. | Evidence: no runtime output growth; JSON field-name doc coverage remains unchanged. |
 | Context anomaly drilldown density JSON field-name doc mutation order | Keeps the JSON full-field-name prose check before individual JSON field docs. | Verified `assertJsonFieldNameDocMutationSelfTest()` runs after output-order swaps and before `assertJsonFieldDocMutationSelfTests()`. | Evidence: no runtime output growth; JSON field-name doc coverage remains unchanged. |
+| Context anomaly drilldown density JSON field-doc group audit | Checks whether JSON field-doc presence and order mutations are still well grouped. | Re-scanned `assertJsonFieldDocMutationSelfTests()` internals and kept the nested presence/order helpers local because they are only used by the JSON field-doc group. | Evidence: no runtime output growth; JSON field-doc mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON field-doc group audit | Checks whether JSON field-doc presence and order mutations are still well grouped. | Re-scan `assertJsonFieldDocMutationSelfTests()` internals and decide whether nested presence/order helpers should stay nested or move beside the runner. | Compact metric: no runtime output growth; correctness metric: JSON field-doc mutation coverage remains unchanged. |
+| Context anomaly drilldown density JSON field-doc group order | Keeps leading JSON field docs, order mutations, and trailing docs in source order. | Verify `assertJsonFieldDocMutationSelfTests()` runs leading field-doc presence checks, then order mutations, then trailing field-doc presence checks. | Compact metric: no runtime output growth; correctness metric: JSON field-doc mutation coverage remains unchanged. |
 
 ## Research Rules
 
