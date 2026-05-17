@@ -1769,11 +1769,11 @@ if (args.includes("--self-test")) {
     assertDefaultOutputMutations();
   };
   const runContextAnomalyDensitySelfTests = () => {
-    assertDefaultOutputMutationSelfTest();
     const assertInvariantDetailFormatSelfTest = () => {
       assertInvariantDetailFormats();
     };
     assertInvariantDetailFormatSelfTest();
+    assertDefaultOutputMutationSelfTest();
     const assertEnvDocInvariantSelfTest = () => {
       assertEnvDocInvariants();
     };
