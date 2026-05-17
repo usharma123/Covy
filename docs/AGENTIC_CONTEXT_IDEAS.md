@@ -725,12 +725,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test text-headroom output helper audit | Checks whether text-headroom text/JSON output checks should be table-driven. | Re-scanned `assertTextHeadroomOutputSelfTests()` and found the shared env plus text and JSON expected outputs should move into rows. | Evidence: no runtime output growth; text-headroom output checks remain covered. |
 | Context anomaly drilldown density self-test text-headroom output table | Replaces repeated text-headroom output assertions with a table. | Extracted shared text-headroom env and three `assertEnvOutput` rows with args and expected text. | Evidence: no runtime output growth; text-headroom text and JSON output checks remain covered. |
 | Context anomaly drilldown density self-test text-headroom output table order | Keeps text-headroom env and output rows beside their assertion loop. | Verified `textHeadroomOutputEnv` and `textHeadroomOutputChecks` are defined immediately before the loop that calls `assertEnvOutput`. | Evidence: no runtime output growth; text-headroom output rows remain adjacent to their assertion loop. |
+| Context anomaly drilldown density self-test JSON max failure shape audit | Checks whether JSON max failure shape coverage should use named constants. | Re-scanned `assertJsonMaxFailureShapeSelfTests()` and found shared env/args, expected output tokens, and exclusion token should be named. | Evidence: no runtime output growth; JSON max failure and iteration exclusion stay covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test JSON max failure shape audit | Checks whether JSON max failure shape coverage should use named constants. | Re-scan `assertJsonMaxFailureShapeSelfTests()` and decide whether shared env/args, expected output tokens, and exclusion token should be named. | Compact metric: no runtime output growth; correctness metric: JSON max failure and iteration exclusion stay covered. |
+| Context anomaly drilldown density self-test JSON max failure shape constants | Names shared JSON max failure env, args, expected output tokens, and exclusion token. | Extract constants inside `assertJsonMaxFailureShapeSelfTests()` for the shared JSON-max env/args, expected output tokens, and excluded iterations token. | Compact metric: no runtime output growth; correctness metric: JSON max failure and iteration exclusion stay covered. |
 
 ## Research Rules
 
