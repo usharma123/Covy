@@ -2522,9 +2522,10 @@ if (args.includes("--json")) {
     jsonParityDerivedFields,
   );
   if (jsonPayloadError) {
-    fail(jsonParityFailureCode, {
+    const jsonParityFailureDetails = {
       [jsonParityIssueDetailKey]: jsonPayloadError,
-    });
+    };
+    fail(jsonParityFailureCode, jsonParityFailureDetails);
   }
   const jsonBudgetWidthIssue = jsonBudgetIssue(payload, maxJsonBytes);
   if (jsonBudgetWidthIssue) {
