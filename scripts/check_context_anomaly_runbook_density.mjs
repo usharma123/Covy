@@ -2400,20 +2400,31 @@ if (args.includes("--self-test")) {
     };
     assertJsonMaxFailureShapeSelfTests();
     const assertJsonHeadroomMinFailureShapeSelfTests = () => {
+      const jsonHeadroomMinFailureEnv = {
+        P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999",
+      };
+      const jsonFailureArgs = ["--json"];
+      const expectedJsonHeadroomMinFailureOutput = [
+        '"ok":false',
+        '"code":"context_anomaly_runbook_density_json_too_long"',
+      ];
+      const excludedJsonHeadroomMinFailureOutput =
+        '"default_output_iterations"';
+
       assertEnvFailure(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-        ["--json"],
+        jsonHeadroomMinFailureEnv,
+        jsonFailureArgs,
         "context_anomaly_runbook_density_json_too_long",
       );
       assertEnvFailureOutput(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-        ["--json"],
-        ['"ok":false', '"code":"context_anomaly_runbook_density_json_too_long"'],
+        jsonHeadroomMinFailureEnv,
+        jsonFailureArgs,
+        expectedJsonHeadroomMinFailureOutput,
       );
       assertEnvFailureExcludes(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999" },
-        ["--json"],
-        '"default_output_iterations"',
+        jsonHeadroomMinFailureEnv,
+        jsonFailureArgs,
+        excludedJsonHeadroomMinFailureOutput,
       );
     };
     assertJsonHeadroomMinFailureShapeSelfTests();
