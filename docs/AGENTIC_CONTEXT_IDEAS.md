@@ -851,12 +851,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density failure-code mutation order audit | Keeps failure-code mutation coverage before output-label mutation coverage. | Verified `assertRequiredFailureCodeMutationSelfTests()` runs after required-command mutations and before `assertOutputLabelMutationSelfTests()`. | Evidence: no runtime output growth; failure-code mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-label mutation audit | Checks whether output-label mutation coverage remains correctly derived and guarded. | Re-scanned `assertOutputLabelMutationSelfTests()` and kept its current shape because cases derive from `requiredOutputLabels`, the `replaceAll` exceptions stay explicit, and filtered case count is guarded. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
 | Context anomaly drilldown density output-label mutation order audit | Keeps output-label mutation coverage before key/value output-doc coverage. | Verified `assertOutputLabelMutationSelfTests()` runs after failure-code mutations and before `assertKeyValueOutputDocMutationSelfTest()`. | Evidence: no runtime output growth; output-label mutation coverage remains unchanged. |
+| Context anomaly drilldown density key/value output-doc mutation audit | Checks whether the key/value output-doc assertion should stay isolated after output-label mutations. | Re-scanned `assertKeyValueOutputDocMutationSelfTest()` and kept it separate because it removes the `key=value` parseability prose anchor, distinct from the full default-output phrase mutation loop. | Evidence: no runtime output growth; key/value output-doc coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density key/value output-doc mutation audit | Checks whether the key/value output-doc assertion should stay isolated after output-label mutations. | Re-scan `assertKeyValueOutputDocMutationSelfTest()` and decide whether its single `key=value` assertion should stay separate from default-output phrase mutations. | Compact metric: no runtime output growth; correctness metric: key/value output-doc coverage remains unchanged. |
+| Context anomaly drilldown density key/value output-doc mutation order audit | Keeps key/value output-doc coverage between output-label and default-output phrase checks. | Verify `assertKeyValueOutputDocMutationSelfTest()` still runs after `assertOutputLabelMutationSelfTests()` and before `assertDefaultOutputPhraseMutationSelfTests()`. | Compact metric: no runtime output growth; correctness metric: key/value output-doc coverage remains unchanged. |
 
 ## Research Rules
 
