@@ -2279,16 +2279,22 @@ if (args.includes("--self-test")) {
     };
     assertEnvLimitFailureSelfTests();
     const assertSoftRowOutputSelfTests = () => {
-      assertEnvOutput(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
-        [],
-        "soft=over",
-      );
-      assertEnvOutput(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10" },
-        ["--json"],
-        '"row_soft_ok":false',
-      );
+      const softRowOutputEnv = {
+        P28_CONTEXT_ANOMALY_RUNBOOK_ROW_SOFT_MAX: "10",
+      };
+      const softRowOutputChecks = [
+        {
+          args: [],
+          expectedText: "soft=over",
+        },
+        {
+          args: ["--json"],
+          expectedText: '"row_soft_ok":false',
+        },
+      ];
+      for (const { args, expectedText } of softRowOutputChecks) {
+        assertEnvOutput(softRowOutputEnv, args, expectedText);
+      }
     };
     assertSoftRowOutputSelfTests();
     const assertProseTextEnvFailureSelfTests = () => {
