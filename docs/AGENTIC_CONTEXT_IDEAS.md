@@ -761,12 +761,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON budget issue variable audit | Checks whether JSON budget issue handling should name its local issue variable more specifically. | Re-scanned the `jsonBudgetIssue()` branch and found the local `issue` variable should be renamed to match the JSON budget failure condition. | Evidence: no runtime output growth; JSON budget failure remains covered. |
 | Context anomaly drilldown density JSON budget issue variable | Names the JSON budget issue local variable by failure condition. | Renamed the local `issue` result from `jsonBudgetIssue()` to `jsonBudgetWidthIssue` before passing it to `failIssue()`. | Evidence: no runtime output growth; JSON budget failure remains covered. |
 | Context anomaly drilldown density JSON budget issue variable order | Keeps the JSON budget issue variable beside its failure handoff. | Verified `jsonBudgetWidthIssue` is computed immediately before the branch that passes it to `failIssue()`. | Evidence: no runtime output growth; JSON budget failure remains covered. |
+| Context anomaly drilldown density JSON parity derived fields audit | Checks whether JSON parity derived fields should be named before comparison. | Re-scanned the `jsonPayloadParityIssue()` derived fields object and found default headroom and iteration fields should move into a named value before comparison. | Evidence: no runtime output growth; JSON parity derived fields remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON parity derived fields audit | Checks whether JSON parity derived fields should be named before comparison. | Re-scan the `jsonPayloadParityIssue()` derived fields object and decide whether default headroom and iteration fields should move into a named value. | Compact metric: no runtime output growth; correctness metric: JSON parity derived fields remain covered. |
+| Context anomaly drilldown density JSON parity derived fields value | Names JSON parity derived fields before comparison. | Extract a `jsonParityDerivedFields` object with `default_output_headroom` and `default_output_iterations` before calling `jsonPayloadParityIssue()`. | Compact metric: no runtime output growth; correctness metric: JSON parity derived fields remain covered. |
 
 ## Research Rules
 
