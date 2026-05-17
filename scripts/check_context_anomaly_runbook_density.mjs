@@ -2350,21 +2350,26 @@ if (args.includes("--self-test")) {
     };
     assertTextJsonFailureShapeSelfTests();
     const assertTextHeadroomOutputSelfTests = () => {
-      assertEnvOutput(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
-        [],
-        "thead=0 tw=196",
-      );
-      assertEnvOutput(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
-        ["--json"],
-        '"default_output_headroom":0',
-      );
-      assertEnvOutput(
-        { P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196" },
-        ["--json"],
-        '"default_output_iterations":1',
-      );
+      const textHeadroomOutputEnv = {
+        P28_CONTEXT_ANOMALY_RUNBOOK_TEXT_MAX: "196",
+      };
+      const textHeadroomOutputChecks = [
+        {
+          args: [],
+          expectedText: "thead=0 tw=196",
+        },
+        {
+          args: ["--json"],
+          expectedText: '"default_output_headroom":0',
+        },
+        {
+          args: ["--json"],
+          expectedText: '"default_output_iterations":1',
+        },
+      ];
+      for (const { args, expectedText } of textHeadroomOutputChecks) {
+        assertEnvOutput(textHeadroomOutputEnv, args, expectedText);
+      }
     };
     assertTextHeadroomOutputSelfTests();
     const assertJsonMaxFailureShapeSelfTests = () => {
