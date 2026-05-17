@@ -889,12 +889,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density workflow command mutation order audit | Keeps workflow command mutations after plain env-doc coverage and before env-limit failure checks. | Verified `assertWorkflowCommandMutationSelfTests()` runs after `assertPlainEnvDocMutationSelfTests()` and before `assertEnvLimitFailureSelfTests()`. | Evidence: no runtime output growth; workflow command mutation coverage remains unchanged. |
 | Context anomaly drilldown density env-limit failure audit | Checks whether env-limit failure self-tests remain correctly grouped after mutation coverage. | Re-scanned `assertEnvLimitFailureSelfTests()` and kept its compact two-row table because each row already pairs a forced env value with the expected hard-limit failure code. | Evidence: no runtime output growth; env-limit failure coverage remains unchanged. |
 | Context anomaly drilldown density env-limit failure order audit | Keeps hard env-limit failure checks after workflow command mutations and before soft-row output checks. | Verified `assertEnvLimitFailureSelfTests()` runs after `assertWorkflowCommandMutationSelfTests()` and before `assertSoftRowOutputSelfTests()`. | Evidence: no runtime output growth; env-limit failure coverage remains unchanged. |
+| Context anomaly drilldown density soft-row output audit | Checks whether soft-row output checks remain correctly grouped after hard env-limit failures. | Re-scanned `assertSoftRowOutputSelfTests()` and kept its two-row table because it shares one forced soft-row env while checking intentionally different text and JSON output shapes. | Evidence: no runtime output growth; soft-row output coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density soft-row output audit | Checks whether soft-row output checks remain correctly grouped after hard env-limit failures. | Re-scan `assertSoftRowOutputSelfTests()` and decide whether default and JSON soft-row assertions need any shared expected-text derivation. | Compact metric: no runtime output growth; correctness metric: soft-row output coverage remains unchanged. |
+| Context anomaly drilldown density soft-row output order audit | Keeps soft-row output checks after hard env-limit failures and before prose/text env failures. | Verify `assertSoftRowOutputSelfTests()` still runs after `assertEnvLimitFailureSelfTests()` and before `assertProseTextEnvFailureSelfTests()`. | Compact metric: no runtime output growth; correctness metric: soft-row output coverage remains unchanged. |
 
 ## Research Rules
 
