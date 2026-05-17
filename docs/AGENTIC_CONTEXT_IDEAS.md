@@ -806,12 +806,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density key-value output doc mutation audit | Checks whether the key=value output doc mutation remains properly isolated after output-label checks. | Re-scanned `assertKeyValueOutputDocMutationSelfTest()` and kept it separate because it removes the `key=value` prose anchor, distinct from output-label and full-phrase mutations. | Evidence: no runtime output growth; key=value output doc coverage remains unchanged. |
 | Context anomaly drilldown density key-value output doc mutation order | Keeps the key=value prose-anchor mutation between output-label and full-phrase checks. | Verified `assertKeyValueOutputDocMutationSelfTest()` runs after output-label mutations and before default-output phrase mutations. | Evidence: no runtime output growth; key=value output doc coverage remains unchanged. |
 | Context anomaly drilldown density default-output phrase mutation loop audit | Checks whether full default-output phrase mutations still need to iterate every output field. | Re-scanned `assertDefaultOutputPhraseMutationSelfTests()` and kept direct `defaultOutputFieldOrder` iteration because `defaultOutputDocPhrase` is built from the same order. | Evidence: no runtime output growth; default-output phrase mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-order swap mutation audit | Checks whether output-order swap mutation cases cover enough phrase-order anchors. | Re-scanned `assertOutputOrderSwapMutationSelfTests()` and found its three repeated early, middle, and tail swap checks should move to a small case table. | Evidence: no runtime output growth; output-order swap mutation coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output-order swap mutation audit | Checks whether output-order swap mutation cases cover enough phrase-order anchors. | Re-scan `assertOutputOrderSwapMutationSelfTests()` and decide whether the hand-picked swap cases should stay inline or move to a case table. | Compact metric: no runtime output growth; correctness metric: output-order swap mutation coverage remains unchanged. |
+| Context anomaly drilldown density output-order swap mutation case table | Makes output-order swap coverage scannable as data. | Extract the `env/lbl`, `dlab/jhead`, and `thead/tw` swap mutations into a local case table and loop through `assertSelfTestMissing()`. | Compact metric: no runtime output growth; correctness metric: output-order swap mutation coverage remains unchanged. |
 
 ## Research Rules
 
