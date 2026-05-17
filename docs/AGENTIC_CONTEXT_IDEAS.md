@@ -857,12 +857,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density default-output phrase drift token sharing | Reduces drift between default-output phrase mutation text and expected missing-detail text. | Extracted `driftedDefaultOutputLabel` and `driftedDefaultOutputCase` tokens inside `assertDefaultOutputPhraseMutationSelfTests()` and reused them in mutation and detail checks. | Evidence: no runtime output growth; default-output phrase coverage remains unchanged. |
 | Context anomaly drilldown density default-output phrase mutation order audit | Keeps default-output phrase coverage before explicit output-order swaps. | Verified `assertDefaultOutputPhraseMutationSelfTests()` runs after key/value output-doc coverage and before `assertOutputOrderSwapMutationSelfTests()`. | Evidence: no runtime output growth; default-output phrase coverage remains unchanged. |
 | Context anomaly drilldown density output-order swap mutation audit | Checks whether explicit output-order swaps remain correctly derived from label pairs. | Re-scanned `assertOutputOrderSwapMutationSelfTests()` and found ordered/swapped strings and case names derive from label pairs, but the selected pairs should be guarded as adjacent in `defaultOutputFieldOrder`. | Evidence: no runtime output growth; output-order swap coverage remains unchanged. |
+| Context anomaly drilldown density output-order swap adjacency guard | Prevents selected output-order swap anchors from drifting away from actual default output adjacency. | Added a self-test invariant that each output-order swap label pair appears adjacent in `defaultOutputFieldOrder` before building mutation cases. | Evidence: no runtime output growth; output-order swap coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density output-order swap adjacency guard | Prevents selected output-order swap anchors from drifting away from actual default output adjacency. | Add a self-test invariant that each output-order swap label pair appears adjacent in `defaultOutputFieldOrder` before building mutation cases. | Compact metric: no runtime output growth; correctness metric: output-order swap coverage remains unchanged. |
+| Context anomaly drilldown density output-order swap adjacency guard audit | Checks whether non-adjacent swap pair failures are directly covered. | Re-scan `assertOutputOrderSwapPairAdjacency()` and decide whether the non-adjacent-pair invariant should get a focused self-test. | Compact metric: no runtime output growth; correctness metric: output-order swap guard coverage remains unchanged. |
 
 ## Research Rules
 
