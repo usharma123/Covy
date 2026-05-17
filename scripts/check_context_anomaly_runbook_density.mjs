@@ -1886,17 +1886,19 @@ if (args.includes("--self-test")) {
         failureCodeIndex,
         failureCode,
       ] of requiredFailureCodes.entries()) {
+        const driftedFailureCode = `drifted_failure_code_${failureCodeIndex}`;
+        const driftedFailureCodeCase = `drifted_${failureCode}`;
         assertSelfTestMissing(
           evaluate(
             runbook.replace(
               failureCode,
-              `drifted_failure_code_${failureCodeIndex}`,
+              driftedFailureCode,
             ),
             maxLines,
           ),
           "context_anomaly_runbook_density_missing_failure_docs",
           failureCode,
-          `drifted_${failureCode}`,
+          driftedFailureCodeCase,
         );
       }
     };
