@@ -781,12 +781,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fail default detail formatting helper order | Keeps default failure detail formatting beside `fail()`. | Verified `formatFailDetailValue()` is defined directly before `fail()` and the default-output detail loop uses it. | Evidence: no runtime output growth; default failure details remain covered. |
 | Context anomaly drilldown density invariant detail formatting convergence audit | Checks whether runtime and invariant detail formatting helpers should converge. | Re-scanned `formatFailDetailValue()` and `invariantDetailValue()` and found both encode the same array-join vs scalar detail contract, so a shared helper can prevent drift. | Evidence: no runtime output growth; default and invariant detail formatting remain covered. |
 | Context anomaly drilldown density shared detail formatting helper | Prevents runtime and invariant detail formatting from drifting apart. | Replaced `formatFailDetailValue()` and `invariantDetailValue()` with one shared `formatDetailValue()` helper used by both failure paths. | Evidence: no runtime output growth; default and invariant detail formatting remain covered. |
+| Context anomaly drilldown density shared detail formatting helper order | Keeps shared detail formatting close to the primary failure path. | Verified `formatDetailValue()` remains before `fail()` and both runtime and invariant failure paths use it. | Evidence: no runtime output growth; default and invariant detail formatting remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density shared detail formatting helper order | Keeps shared detail formatting close to the primary failure path. | Verify `formatDetailValue()` remains before `fail()` and both runtime and invariant failure paths use it. | Compact metric: no runtime output growth; correctness metric: default and invariant detail formatting remain covered. |
+| Context anomaly drilldown density shared detail naming history audit | Checks whether completed evidence should keep old helper names as historical record. | Re-scan completed rows that mention `formatFailDetailValue()` or `invariantDetailValue()` and decide whether to preserve historical wording or normalize it after the shared-helper rename. | Compact metric: no runtime output growth; correctness metric: ideas log remains accurate for completed slices. |
 
 ## Research Rules
 
