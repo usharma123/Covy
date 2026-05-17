@@ -765,12 +765,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON parity derived fields value | Names JSON parity derived fields before comparison. | Extracted a `jsonParityDerivedFields` object with `default_output_headroom` and `default_output_iterations` before calling `jsonPayloadParityIssue()`. | Evidence: no runtime output growth; JSON parity derived fields remain covered. |
 | Context anomaly drilldown density JSON parity derived fields order | Keeps derived parity fields beside the parity check. | Verified `jsonParityDerivedFields` is defined immediately before the `jsonPayloadParityIssue()` call that consumes it. | Evidence: no runtime output growth; JSON parity derived fields remain covered. |
 | Context anomaly drilldown density JSON parity failure details audit | Checks whether JSON parity failure details should be named before `fail()`. | Re-scanned the `jsonPayloadError` failure branch and found the computed details object should move into a named value before calling `fail()`. | Evidence: no runtime output growth; JSON parity failure details remain covered. |
+| Context anomaly drilldown density JSON parity failure details value | Names JSON parity failure details before `fail()`. | Extracted a `jsonParityFailureDetails` object inside the `jsonPayloadError` branch before passing it to `fail()`. | Evidence: no runtime output growth; JSON parity failure details remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON parity failure details value | Names JSON parity failure details before `fail()`. | Extract a `jsonParityFailureDetails` object inside the `jsonPayloadError` branch before passing it to `fail()`. | Compact metric: no runtime output growth; correctness metric: JSON parity failure details remain covered. |
+| Context anomaly drilldown density JSON parity failure details order | Keeps JSON parity failure details beside `fail()`. | Verify `jsonParityFailureDetails` is defined inside the `jsonPayloadError` branch immediately before the `fail()` call that consumes it. | Compact metric: no runtime output growth; correctness metric: JSON parity failure details remain covered. |
 
 ## Research Rules
 
