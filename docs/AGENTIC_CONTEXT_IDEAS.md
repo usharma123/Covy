@@ -777,12 +777,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density fail issue helper contract audit | Checks whether `failIssue()` should validate issue shape before destructuring. | Re-scanned `failIssue()` callers and found issue objects are controlled by script-local producers with `code`, so no missing-code guard is needed. | Evidence: no runtime output growth; failure output remains covered. |
 | Context anomaly drilldown density fail issue helper contract order | Keeps `failIssue()` immediately beside `fail()`. | Verified `failIssue()` remains directly after `fail()` and all controlled issue-object callers use it. | Evidence: no runtime output growth; failure output remains covered. |
 | Context anomaly drilldown density fail default detail formatting audit | Checks whether default failure detail formatting should name the array join behavior. | Re-scanned `fail()` default-output detail formatting and found array value formatting should move into a helper. | Evidence: no runtime output growth; default failure details remain covered. |
+| Context anomaly drilldown density fail default detail formatting helper | Names default failure detail value formatting. | Extracted a `formatFailDetailValue()` helper for array join vs scalar output and used it in `fail()` default-output details. | Evidence: no runtime output growth; default failure details remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density fail default detail formatting helper | Names default failure detail value formatting. | Extract a `formatFailDetailValue()` helper for array join vs scalar output and use it in `fail()` default-output details. | Compact metric: no runtime output growth; correctness metric: default failure details remain covered. |
+| Context anomaly drilldown density fail default detail formatting helper order | Keeps default failure detail formatting beside `fail()`. | Verify `formatFailDetailValue()` is defined beside `fail()` and the default-output detail loop uses it. | Compact metric: no runtime output growth; correctness metric: default failure details remain covered. |
 
 ## Research Rules
 
