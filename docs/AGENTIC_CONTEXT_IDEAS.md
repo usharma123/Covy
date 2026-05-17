@@ -713,12 +713,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test env-limit helper audit | Checks whether env limit failures are already grouped enough. | Re-scanned `assertEnvLimitFailureSelfTests()` and found the two hard-limit env failures should move into a compact table. | Evidence: no runtime output growth; both hard env limit failure codes remain covered. |
 | Context anomaly drilldown density self-test env-limit table | Replaces repeated hard env-limit failure assertions with a table. | Extracted max-lines and row-max env failure cases in `assertEnvLimitFailureSelfTests()` into `envLimitFailures` rows with env and expected code. | Evidence: no runtime output growth; both hard env limit failure codes remain covered. |
 | Context anomaly drilldown density self-test env-limit table order | Keeps the hard env-limit table beside its assertion loop. | Verified `envLimitFailures` is defined inside `assertEnvLimitFailureSelfTests()` immediately before the loop that calls `assertEnvFailure`. | Evidence: no runtime output growth; both hard env limit failure rows remain adjacent to their assertion loop. |
+| Context anomaly drilldown density self-test soft-row output helper audit | Checks whether soft-row text and JSON output checks should be table-driven. | Re-scanned `assertSoftRowOutputSelfTests()` and found the two shared-env output-mode checks should move into a table. | Evidence: no runtime output growth; soft-row text and JSON output checks remain covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test soft-row output helper audit | Checks whether soft-row text and JSON output checks should be table-driven. | Re-scan `assertSoftRowOutputSelfTests()` and decide whether to extract shared env and expected output rows. | Compact metric: no runtime output growth; correctness metric: soft-row text and JSON output checks remain covered. |
+| Context anomaly drilldown density self-test soft-row output table | Replaces repeated soft-row output assertions with a table. | Extract the two `assertEnvOutput` checks in `assertSoftRowOutputSelfTests()` into `softRowOutputChecks` rows with args and expected text. | Compact metric: no runtime output growth; correctness metric: soft-row text and JSON output checks remain covered. |
 
 ## Research Rules
 
