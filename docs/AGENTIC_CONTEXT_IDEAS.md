@@ -757,12 +757,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density success artifacts destructure audit | Checks whether success artifact destructuring should be grouped or renamed. | Re-scanned the `buildSuccessArtifacts()` destructure and found payload, JSON headroom, default output line, and default headroom names already match producer names and direct consumers, so no grouping is needed. | Evidence: no runtime output growth; success artifact consumers remain covered. |
 | Context anomaly drilldown density success artifacts destructure order | Keeps success artifact names beside their consumer checks. | Verified `payload`, `jsonHeadroom`, `defaultOutputLine`, and `defaultOutputHeadroom` are destructured before the checks and output branches that consume them. | Evidence: no runtime output growth; success artifact consumers remain covered. |
 | Context anomaly drilldown density default output width issue audit | Checks whether default output width issue handling should name its local issue variable. | Re-scanned the `defaultOutputIssue()` branch and found `defaultOutputWidthIssue` already names the failure condition and the `failIssue()` handoff is clear. | Evidence: no runtime output growth; default output width failure remains covered. |
+| Context anomaly drilldown density default output width issue order | Keeps the default output width issue beside its failure handoff. | Verified `defaultOutputWidthIssue` is computed immediately before the branch that passes it to `failIssue()`. | Evidence: no runtime output growth; default output width failure remains covered. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density default output width issue order | Keeps the default output width issue beside its failure handoff. | Verify `defaultOutputWidthIssue` is computed immediately before the branch that passes it to `failIssue()`. | Compact metric: no runtime output growth; correctness metric: default output width failure remains covered. |
+| Context anomaly drilldown density JSON budget issue variable audit | Checks whether JSON budget issue handling should name its local issue variable more specifically. | Re-scan the `jsonBudgetIssue()` branch and decide whether the local `issue` variable should be renamed for clarity. | Compact metric: no runtime output growth; correctness metric: JSON budget failure remains covered. |
 
 ## Research Rules
 
