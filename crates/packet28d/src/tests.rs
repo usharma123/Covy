@@ -1906,6 +1906,32 @@ fn broker_context_debt_clears_symbol_only_after_verification() {
 }
 
 #[test]
+fn broker_symbol_verification_clears_debt_but_preserves_confidence_staleness() {
+    let state = daemon_test_state();
+    let verified_symbol_snapshot = suite_packet_core::AgentSnapshotPayload {
+        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+        evidence_artifact_ids: vec!["artifact-test".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "tool-test".to_string(),
+            sequence: 9,
+            tool_name: "cargo test auth_cache".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Test,
+            result_summary: Some("tests passed".to_string()),
+            artifact_id: Some("artifact-test".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let debt = broker_context_debt_body(&state, verified_symbol_snapshot.clone());
+    let confidence = broker_evidence_confidence_body(&state, verified_symbol_snapshot);
+
+    assert!(debt.is_none());
+    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("confidence: high"));
+    assert!(confidence.contains("backing=artifact"));
+}
+
+#[test]
 fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     let state = daemon_test_state();
     let root = daemon_test_root(&state);

@@ -927,12 +927,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker context debt helper shape audit | Keeps debt-present and debt-cleared assertions readable after helper extraction. | Re-scanned `broker_context_debt_body()` callsites and kept the optional body shape because present cases use `.expect(...)` while clearing cases assert `is_none()` directly. | Evidence: no product output change; debt clearing remains explicit. |
 | Broker context debt payoff width | Keeps stale-symbol payoff guidance compact. | Extended symbol-only debt payoff coverage to require at most three lines, each no wider than 140 characters, and serialized output under 512 bytes. | Evidence: `broker_context_debt_surfaces_symbol_payoff_without_stale_path`; compact metric: symbol debt output remains bounded. |
 | Broker context debt mixed payoff width | Keeps combined stale-path, stale-symbol, and question payoff guidance compact. | Extended mixed debt payoff coverage to require at most five lines, each no wider than 140 characters, and serialized output under 768 bytes while preserving payoff order. | Evidence: `broker_context_debt_orders_symbol_payoff_after_path_payoff`; compact metric: mixed debt output remains bounded. |
+| Broker context debt verified-symbol confidence interplay | Keeps debt resolution and evidence freshness semantics distinct. | Added combined coverage showing successful artifact-backed symbol verification clears `context_debt` while `evidence_confidence` still reports `stale_symbols=1`, high confidence, and artifact backing. | Evidence: `broker_symbol_verification_clears_debt_but_preserves_confidence_staleness`; compact metric: no product output growth. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker context debt verified-symbol confidence interplay audit | Checks whether clearing context debt after symbol verification aligns with medium/high evidence confidence. | Re-scan symbol-only verified debt and confidence tests together and decide whether docs should clarify that debt can clear while confidence may still show stale symbols. | Compact metric: no product output change; correctness metric: debt and confidence semantics remain distinct. |
+| Broker confidence stale-symbol naming audit | Checks whether `stale_symbols` is the right label after successful verification. | Re-scan the confidence wording and decide whether a clearer label such as `changed_symbols` would better convey freshness debt without implying failed verification. | Compact metric: confidence output remains two lines; correctness metric: symbol freshness remains visible. |
 
 ## Research Rules
 
