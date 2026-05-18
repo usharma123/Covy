@@ -933,12 +933,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence freshness-label compatibility | Helps downstream consumers survive the `changed_symbols` rename. | Added coverage that confidence output contains `changed_symbols` and never `stale_symbols`, while context debt still uses `payoff stale_symbol` for the refresh action. | Evidence: `broker_symbol_labels_distinguish_confidence_from_debt_payoff`; compact metric: no confidence output growth. |
 | Broker confidence stale-path label audit | Keeps path and symbol freshness labels semantically distinct. | Added mixed path/symbol coverage showing confidence keeps `stale_paths` for unread changed paths and `changed_symbols` for changed symbol counts. | Evidence: `broker_confidence_distinguishes_stale_paths_from_changed_symbols`; compact metric: confidence output remains two lines. |
 | Broker confidence mixed-freshness payoff wording | Helps agents decide whether to refresh paths, symbols, fallback, artifacts, or failures first. | Replaced the generic confidence payoff with compact blocker-specific wording and covered mixed path/symbol, fallback, successful, failed, symbol-only, and unbacked-symbol cases. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: confidence output remains two lines. |
+| Broker confidence payoff priority audit | Keeps confidence payoff advice stable across overlapping blockers. | Added direct coverage for usable evidence, failures, mixed path/symbol freshness, artifact-backed symbol evidence, changed symbols, fallback records, and artifact gaps. | Evidence: `broker_confidence_payoff_priority_orders_repair_actions`; compact metric: no output growth. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence payoff priority audit | Checks whether the new payoff ordering matches agent repair cost. | Re-scan failure, freshness, fallback, and artifact payoff priority and decide whether artifact gaps should outrank changed symbols after successful verification. | Compact metric: confidence output remains two lines; correctness metric: payoff names the cheapest high-value next action. |
+| Broker confidence artifact-gap score sensitivity | Checks whether missing artifacts should affect score more strongly. | Add coverage for multiple artifact gaps and decide whether repeated unbacked tool evidence should drop from high to medium confidence sooner. | Compact metric: confidence output remains two lines; correctness metric: artifact-heavy evidence does not look overconfident. |
 
 ## Research Rules
 

@@ -1256,7 +1256,7 @@ fn render_evidence_confidence_lines(
     ]
 }
 
-fn confidence_payoff(
+pub(crate) fn confidence_payoff(
     score: u64,
     stale_paths: u64,
     changed_symbols: u64,

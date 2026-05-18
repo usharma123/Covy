@@ -315,6 +315,7 @@ Current evidence:
 - Packet28 now tests the compatibility contract between confidence and debt labels: `changed_symbols` belongs to `evidence_confidence`, while `payoff stale_symbol` remains the context-debt action label. Evidence: `broker_symbol_labels_distinguish_confidence_from_debt_payoff`.
 - Packet28 evidence confidence now locks the mixed path/symbol label contract: unread changed paths render as `stale_paths`, while symbol freshness renders as `changed_symbols`. Evidence: `broker_confidence_distinguishes_stale_paths_from_changed_symbols`.
 - Packet28 evidence confidence now emits blocker-specific payoff wording instead of a generic stale/fallback refresh phrase, so medium/low confidence points at stale paths, changed symbols, fallback records, artifact gaps, or failures directly. Evidence: `cargo test -p packet28d broker_evidence_confidence`.
+- Packet28 now locks confidence payoff priority directly, so failures outrank freshness, mixed path/symbol freshness outranks fallback and artifact gaps, artifact-backed symbol evidence outranks generic changed-symbol refresh, and usable evidence stays explicit. Evidence: `broker_confidence_payoff_priority_orders_repair_actions`.
 
 ### 6. Release Readiness
 

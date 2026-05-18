@@ -1968,6 +1968,35 @@ fn broker_confidence_distinguishes_stale_paths_from_changed_symbols() {
 }
 
 #[test]
+fn broker_confidence_payoff_priority_orders_repair_actions() {
+    assert_eq!(confidence_payoff(100, 1, 1, 1, 1, 1), "evidence usable");
+    assert_eq!(
+        confidence_payoff(55, 1, 1, 1, 1, 1),
+        "rerun failing evidence"
+    );
+    assert_eq!(
+        confidence_payoff(60, 1, 1, 1, 0, 1),
+        "refresh stale_paths+changed_symbols"
+    );
+    assert_eq!(
+        confidence_payoff(75, 0, 1, 0, 0, 1),
+        "capture artifact-backed symbol evidence"
+    );
+    assert_eq!(
+        confidence_payoff(80, 0, 1, 0, 0, 0),
+        "refresh changed_symbols"
+    );
+    assert_eq!(
+        confidence_payoff(80, 0, 0, 1, 0, 0),
+        "replace fallback_records"
+    );
+    assert_eq!(
+        confidence_payoff(80, 0, 0, 0, 0, 1),
+        "capture artifact-backed evidence"
+    );
+}
+
+#[test]
 fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     let state = daemon_test_state();
     let root = daemon_test_root(&state);
