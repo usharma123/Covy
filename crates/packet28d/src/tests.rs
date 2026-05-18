@@ -66,6 +66,12 @@ fn broker_evidence_confidence_body(
     .body
 }
 
+fn broker_confidence_reason_line(body: &str) -> &str {
+    body.lines()
+        .find(|line| line.starts_with("- confidence_reason:"))
+        .expect("confidence reason line should render")
+}
+
 fn broker_context_debt_body(
     state: &Arc<Mutex<DaemonState>>,
     snapshot: suite_packet_core::AgentSnapshotPayload,
@@ -2011,6 +2017,63 @@ fn broker_confidence_risk_priority_matches_repair_actions() {
     assert_eq!(confidence_risk(80, 0, 1, 0, 0, 0), "changed_symbols");
     assert_eq!(confidence_risk(80, 0, 0, 1, 0, 0), "fallback_records");
     assert_eq!(confidence_risk(70, 0, 0, 1, 0, 1), "fallback_records");
+}
+
+#[test]
+fn broker_evidence_confidence_reason_lines_stay_stable() {
+    let state = daemon_test_state();
+    let backed_success = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            evidence_artifact_ids: vec!["artifact-test".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-backed".to_string(),
+                sequence: 1,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                artifact_id: Some("artifact-test".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+    let unbacked_symbol = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-unbacked-symbol".to_string(),
+                sequence: 2,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+    let mixed_freshness = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_paths_since_checkpoint: vec!["src/auth.rs".to_string()],
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+
+    assert_eq!(
+        broker_confidence_reason_line(&backed_success),
+        "- confidence_reason: source=local_tool_state verification=fresh artifacts=1 backing=artifact risk=none payoff=evidence usable"
+    );
+    assert_eq!(
+        broker_confidence_reason_line(&unbacked_symbol),
+        "- confidence_reason: source=local_tool_state verification=fresh artifacts=0 backing=missing risk=missing_backing payoff=capture artifact-backed symbol evidence"
+    );
+    assert_eq!(
+        broker_confidence_reason_line(&mixed_freshness),
+        "- confidence_reason: source=local_tool_state verification=missing artifacts=0 backing=missing risk=freshness_mixed payoff=refresh stale_paths+changed_symbols"
+    );
 }
 
 #[test]

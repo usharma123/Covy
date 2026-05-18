@@ -941,12 +941,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence risk priority audit | Keeps the new `risk=` reason code aligned with payoff priority. | Added direct coverage for `confidence_risk()` across usable evidence, failures, mixed freshness, stale paths, missing backing, changed symbols, and fallback records. | Evidence: `broker_confidence_risk_priority_matches_repair_actions`; compact metric: no output growth. |
 | Broker confidence helper duplication audit | Keeps payoff and risk priorities single-sourced. | Replaced duplicate priority ladders with an internal confidence risk class and extended direct tests to cover fallback-plus-artifact precedence for both payoff and risk labels. | Evidence: `broker_confidence_payoff_priority_orders_repair_actions`; `broker_confidence_risk_priority_matches_repair_actions`; compact metric: no output growth. |
 | Broker confidence risk-class naming audit | Keeps internal risk names aligned with rendered labels. | Renamed internal missing-backing variants to distinguish changed-symbol missing backing from generic artifact missing backing while keeping both rendered as `risk=missing_backing`. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: no output change. |
+| Broker confidence risk-class output audit | Keeps representative confidence reason lines stable after the risk-class refactor. | Added exact-line coverage for backed success, unbacked changed-symbol success, and mixed freshness reason lines, including `risk=` and `payoff=`. | Evidence: `broker_evidence_confidence_reason_lines_stay_stable`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence risk-class output audit | Ensures the risk-class refactor did not change rendered confidence output unexpectedly. | Add a snapshot-like compact assertion for representative confidence reason lines after the risk-class renaming. | Compact metric: confidence output remains two lines; correctness metric: rendered risk/payoff strings stay stable. |
+| Broker confidence reason-line width audit | Ensures exact reason-line coverage does not permit slow token growth. | Add or extend compactness checks to include the longest `risk=` and `payoff=` reason lines after exact-line assertions. | Compact metric: each confidence line stays under the established width cap. |
 
 ## Research Rules
 
