@@ -1992,6 +1992,10 @@ fn broker_confidence_payoff_priority_orders_repair_actions() {
         "replace fallback_records"
     );
     assert_eq!(
+        confidence_payoff(70, 0, 0, 1, 0, 1),
+        "replace fallback_records"
+    );
+    assert_eq!(
         confidence_payoff(80, 0, 0, 0, 0, 1),
         "capture artifact-backed evidence"
     );
@@ -2006,6 +2010,7 @@ fn broker_confidence_risk_priority_matches_repair_actions() {
     assert_eq!(confidence_risk(75, 0, 1, 0, 0, 1), "missing_backing");
     assert_eq!(confidence_risk(80, 0, 1, 0, 0, 0), "changed_symbols");
     assert_eq!(confidence_risk(80, 0, 0, 1, 0, 0), "fallback_records");
+    assert_eq!(confidence_risk(70, 0, 0, 1, 0, 1), "fallback_records");
 }
 
 #[test]

@@ -939,12 +939,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence missing-backing cap audit | Ensures the missing-backed cap does not flatten distinct weak-evidence cases. | Added coverage that symbol-only evidence stays medium at 80, unbacked success caps at 84, and failed unbacked symbol evidence remains low at 35. | Evidence: `broker_evidence_confidence_missing_backing_keeps_score_spread`; compact metric: confidence output remains two lines. |
 | Broker confidence score-spread documentation | Helps agents interpret the numeric score beside high/medium/low labels. | Added a compact `risk=` code to `confidence_reason` for none, failures, mixed freshness, stale paths, changed symbols, and missing backing without adding a section line. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: confidence output remains two lines. |
 | Broker confidence risk priority audit | Keeps the new `risk=` reason code aligned with payoff priority. | Added direct coverage for `confidence_risk()` across usable evidence, failures, mixed freshness, stale paths, missing backing, changed symbols, and fallback records. | Evidence: `broker_confidence_risk_priority_matches_repair_actions`; compact metric: no output growth. |
+| Broker confidence helper duplication audit | Keeps payoff and risk priorities single-sourced. | Replaced duplicate priority ladders with an internal confidence risk class and extended direct tests to cover fallback-plus-artifact precedence for both payoff and risk labels. | Evidence: `broker_confidence_payoff_priority_orders_repair_actions`; `broker_confidence_risk_priority_matches_repair_actions`; compact metric: no output growth. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence helper duplication audit | Checks whether payoff and risk helper priorities should share one source of truth. | Re-scan `confidence_payoff()` and `confidence_risk()` for duplicated priority ladders and decide whether a tiny classified-risk enum would reduce drift without adding abstraction weight. | Compact metric: no output growth; correctness metric: future priority changes stay single-sourced. |
+| Broker confidence risk-class naming audit | Checks whether internal risk class names stay aligned with rendered labels. | Re-scan `ConfidenceRiskClass` variant names against `risk=` and `payoff=` strings, especially missing symbol backing versus generic missing backing. | Compact metric: no output growth; correctness metric: internal names explain rendered output without leaking implementation detail. |
 
 ## Research Rules
 

@@ -1270,6 +1270,54 @@ fn render_evidence_confidence_lines(
     ]
 }
 
+#[derive(Clone, Copy)]
+enum ConfidenceRiskClass {
+    Usable,
+    Failures,
+    MixedFreshness,
+    StalePaths,
+    MissingSymbolBacking,
+    ChangedSymbols,
+    FallbackRecords,
+    MissingBacking,
+    WeakEvidence,
+}
+
+fn confidence_risk_class(
+    score: u64,
+    stale_paths: u64,
+    changed_symbols: u64,
+    fallback_count: u64,
+    failure_count: u64,
+    artifact_gap: u64,
+) -> ConfidenceRiskClass {
+    if score >= 85 {
+        return ConfidenceRiskClass::Usable;
+    }
+    if failure_count > 0 {
+        return ConfidenceRiskClass::Failures;
+    }
+    if stale_paths > 0 && changed_symbols > 0 {
+        return ConfidenceRiskClass::MixedFreshness;
+    }
+    if stale_paths > 0 {
+        return ConfidenceRiskClass::StalePaths;
+    }
+    if changed_symbols > 0 && artifact_gap > 0 {
+        return ConfidenceRiskClass::MissingSymbolBacking;
+    }
+    if changed_symbols > 0 {
+        return ConfidenceRiskClass::ChangedSymbols;
+    }
+    if fallback_count > 0 {
+        return ConfidenceRiskClass::FallbackRecords;
+    }
+    if artifact_gap > 0 {
+        return ConfidenceRiskClass::MissingBacking;
+    }
+    ConfidenceRiskClass::WeakEvidence
+}
+
 pub(crate) fn confidence_payoff(
     score: u64,
     stale_paths: u64,
@@ -1278,31 +1326,24 @@ pub(crate) fn confidence_payoff(
     failure_count: u64,
     artifact_gap: u64,
 ) -> &'static str {
-    if score >= 85 {
-        return "evidence usable";
+    match confidence_risk_class(
+        score,
+        stale_paths,
+        changed_symbols,
+        fallback_count,
+        failure_count,
+        artifact_gap,
+    ) {
+        ConfidenceRiskClass::Usable => "evidence usable",
+        ConfidenceRiskClass::Failures => "rerun failing evidence",
+        ConfidenceRiskClass::MixedFreshness => "refresh stale_paths+changed_symbols",
+        ConfidenceRiskClass::StalePaths => "refresh stale_paths",
+        ConfidenceRiskClass::MissingSymbolBacking => "capture artifact-backed symbol evidence",
+        ConfidenceRiskClass::ChangedSymbols => "refresh changed_symbols",
+        ConfidenceRiskClass::FallbackRecords => "replace fallback_records",
+        ConfidenceRiskClass::MissingBacking => "capture artifact-backed evidence",
+        ConfidenceRiskClass::WeakEvidence => "refresh weak evidence",
     }
-    if failure_count > 0 {
-        return "rerun failing evidence";
-    }
-    if stale_paths > 0 && changed_symbols > 0 {
-        return "refresh stale_paths+changed_symbols";
-    }
-    if stale_paths > 0 {
-        return "refresh stale_paths";
-    }
-    if changed_symbols > 0 && artifact_gap > 0 {
-        return "capture artifact-backed symbol evidence";
-    }
-    if changed_symbols > 0 {
-        return "refresh changed_symbols";
-    }
-    if fallback_count > 0 {
-        return "replace fallback_records";
-    }
-    if artifact_gap > 0 {
-        return "capture artifact-backed evidence";
-    }
-    "refresh weak evidence"
 }
 
 pub(crate) fn confidence_risk(
@@ -1313,28 +1354,24 @@ pub(crate) fn confidence_risk(
     failure_count: u64,
     artifact_gap: u64,
 ) -> &'static str {
-    if score >= 85 {
-        return "none";
+    match confidence_risk_class(
+        score,
+        stale_paths,
+        changed_symbols,
+        fallback_count,
+        failure_count,
+        artifact_gap,
+    ) {
+        ConfidenceRiskClass::Usable => "none",
+        ConfidenceRiskClass::Failures => "failures",
+        ConfidenceRiskClass::MixedFreshness => "freshness_mixed",
+        ConfidenceRiskClass::StalePaths => "stale_paths",
+        ConfidenceRiskClass::MissingSymbolBacking => "missing_backing",
+        ConfidenceRiskClass::ChangedSymbols => "changed_symbols",
+        ConfidenceRiskClass::FallbackRecords => "fallback_records",
+        ConfidenceRiskClass::MissingBacking => "missing_backing",
+        ConfidenceRiskClass::WeakEvidence => "weak_evidence",
     }
-    if failure_count > 0 {
-        return "failures";
-    }
-    if stale_paths > 0 && changed_symbols > 0 {
-        return "freshness_mixed";
-    }
-    if stale_paths > 0 {
-        return "stale_paths";
-    }
-    if artifact_gap > 0 {
-        return "missing_backing";
-    }
-    if changed_symbols > 0 {
-        return "changed_symbols";
-    }
-    if fallback_count > 0 {
-        return "fallback_records";
-    }
-    "weak_evidence"
 }
 
 fn active_hypothesis_contradiction_count(
