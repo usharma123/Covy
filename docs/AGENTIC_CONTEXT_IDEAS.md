@@ -901,12 +901,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON max failure-shape order audit | Keeps JSON max failure-shape checks after text headroom outputs and before JSON headroom-min failure-shape checks. | Verified `assertJsonMaxFailureShapeSelfTests()` runs after `assertTextHeadroomOutputSelfTests()` and before `assertJsonHeadroomMinFailureShapeSelfTests()`. | Evidence: no runtime output growth; JSON max failure-shape coverage remains unchanged. |
 | Context anomaly drilldown density JSON headroom-min failure-shape code sharing | Reduces drift inside JSON headroom-min failure-shape coverage. | Named the expected JSON-too-long code once inside `assertJsonHeadroomMinFailureShapeSelfTests()` and reused it for both the expected JSON output token and `assertEnvFailure()`. | Evidence: no runtime output growth; JSON headroom-min failure-shape coverage remains unchanged. |
 | Context anomaly drilldown density JSON headroom-min failure-shape order audit | Keeps JSON headroom-min failure-shape checks after JSON max failure-shape checks and before direct JSON budget checks. | Verified `assertJsonHeadroomMinFailureShapeSelfTests()` runs after `assertJsonMaxFailureShapeSelfTests()` and before `assertJsonBudgetIssueMutationSelfTest()`. | Evidence: no runtime output growth; JSON headroom-min failure-shape coverage remains unchanged. |
+| Context anomaly drilldown density direct JSON budget issue audit | Checks whether direct `jsonBudgetIssue()` unit coverage remains explicit after failure-shape checks. | Re-scanned `assertJsonBudgetIssueMutationSelfTest()` and kept its existing named limit, fallback ok result, and expected JSON-too-long code constants. | Evidence: no runtime output growth; direct JSON budget coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density direct JSON budget issue audit | Checks whether direct `jsonBudgetIssue()` unit coverage remains explicit after failure-shape checks. | Re-scan `assertJsonBudgetIssueMutationSelfTest()` and decide whether its limit, fallback, and expected-code constants need any additional sharing. | Compact metric: no runtime output growth; correctness metric: direct JSON budget coverage remains unchanged. |
+| Context anomaly drilldown density direct JSON budget issue order audit | Keeps direct JSON budget issue coverage after JSON headroom-min failures and before help output checks. | Verify `assertJsonBudgetIssueMutationSelfTest()` still runs after `assertJsonHeadroomMinFailureShapeSelfTests()` and before `assertHelpIncludesSelfTests()`. | Compact metric: no runtime output growth; correctness metric: direct JSON budget coverage remains unchanged. |
 
 ## Research Rules
 
