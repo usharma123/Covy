@@ -1926,7 +1926,7 @@ fn broker_symbol_verification_clears_debt_but_preserves_confidence_staleness() {
     let confidence = broker_evidence_confidence_body(&state, verified_symbol_snapshot);
 
     assert!(debt.is_none());
-    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("changed_symbols=1"));
     assert!(confidence.contains("confidence: high"));
     assert!(confidence.contains("backing=artifact"));
 }
@@ -2004,7 +2004,7 @@ fn broker_evidence_confidence_penalizes_symbol_only_staleness() {
     );
 
     assert!(confidence.contains("stale_paths=0"));
-    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("changed_symbols=1"));
     assert!(confidence.contains("confidence: medium"));
     assert!(confidence.contains("refresh stale/fallback evidence before relying"));
 }
@@ -2030,7 +2030,7 @@ fn broker_evidence_confidence_keeps_symbol_staleness_visible_after_verification(
         },
     );
 
-    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("changed_symbols=1"));
     assert!(confidence.contains("confidence: high"));
     assert!(confidence.contains("verification=fresh"));
 }
@@ -2054,7 +2054,7 @@ fn broker_evidence_confidence_scores_failed_symbol_verification_low() {
         },
     );
 
-    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("changed_symbols=1"));
     assert!(confidence.contains("failures=1"));
     assert!(confidence.contains("confidence: low"));
     assert!(confidence.contains("verification=missing"));
@@ -2079,7 +2079,7 @@ fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
         },
     );
 
-    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("changed_symbols=1"));
     assert!(confidence.contains("artifact_gaps=1"));
     assert!(confidence.contains("backing=missing"));
     assert!(confidence.contains("confidence: medium"));

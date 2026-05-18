@@ -1156,7 +1156,7 @@ fn render_evidence_confidence_lines(
         .iter()
         .filter(|path| !snapshot.files_read.iter().any(|read| read == *path))
         .count() as u64;
-    let stale_symbols = snapshot.changed_symbols_since_checkpoint.len() as u64;
+    let changed_symbols = snapshot.changed_symbols_since_checkpoint.len() as u64;
     let successful_verification = snapshot.recent_tool_invocations.iter().any(|invocation| {
         matches!(
             invocation.operation_kind,
@@ -1217,10 +1217,10 @@ fn render_evidence_confidence_lines(
     } else {
         "artifact"
     };
-    let unbacked_symbol_evidence = stale_symbols > 0 && artifact_gap > 0;
+    let unbacked_symbol_evidence = changed_symbols > 0 && artifact_gap > 0;
     let score = 100_u64
         .saturating_sub(stale_paths.saturating_mul(20).min(40))
-        .saturating_sub(stale_symbols.saturating_mul(20).min(40))
+        .saturating_sub(changed_symbols.saturating_mul(20).min(40))
         .saturating_sub(fallback_count.saturating_mul(20).min(40))
         .saturating_sub(failure_count.saturating_mul(25).min(50))
         .saturating_sub(artifact_gap.saturating_mul(5).min(20))
@@ -1236,7 +1236,7 @@ fn render_evidence_confidence_lines(
     };
     vec![
         format!(
-            "- confidence: {label} score={score} stale_paths={stale_paths} stale_symbols={stale_symbols} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap} backing={evidence_backing}"
+            "- confidence: {label} score={score} stale_paths={stale_paths} changed_symbols={changed_symbols} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap} backing={evidence_backing}"
         ),
         format!(
             "- confidence_reason: source=local_tool_state verification={} artifacts={} backing={} payoff={}",

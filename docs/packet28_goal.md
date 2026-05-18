@@ -311,6 +311,7 @@ Current evidence:
 - Packet28 context debt now emits a direct `stale_symbol` payoff for symbol-only stale evidence, giving agents a concrete inspect/search action even when no changed path is available. Evidence: `broker_context_debt_surfaces_symbol_payoff_without_stale_path`.
 - Packet28 evidence confidence now distinguishes artifact-backed symbol verification from unbacked tool claims, keeping changed-symbol verification at medium confidence when no artifact handle or raw artifact is available. Evidence: `broker_evidence_confidence_scores_unbacked_symbol_verification_medium`.
 - Packet28 evidence confidence now labels backing directly as `backing=artifact` or `backing=missing` in both the score and reason lines, making artifact-backed versus unbacked symbol evidence readable without interpreting artifact-gap counts. Evidence: `broker_evidence_confidence_orders_symbol_evidence_tiers`.
+- Packet28 evidence confidence now renders symbol freshness as `changed_symbols` instead of `stale_symbols`, preserving the freshness signal without implying that successful symbol verification failed. Evidence: `broker_symbol_verification_clears_debt_but_preserves_confidence_staleness`.
 
 ### 6. Release Readiness
 
