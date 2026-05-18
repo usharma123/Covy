@@ -914,12 +914,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker context debt symbol payoff order | Keeps stale-symbol payoff guidance near stale-path payoff guidance. | Added coverage that mixed path/symbol debt emits stale-path payoff, stale-symbol payoff, open-question payoff, and unverified-edit payoff in priority order. | Evidence: `broker_context_debt_orders_symbol_payoff_after_path_payoff`; compact metric: debt output remains item-limited. |
 | Broker context debt symbol clearing | Prevents stale symbol debt from persisting after fresh verification. | Added coverage that a symbol-only changed snapshot with a successful test invocation does not render `context_debt`. | Evidence: `broker_context_debt_clears_symbol_only_after_verification`; compact metric: no debt section when verified. |
 | Broker evidence confidence symbol verification | Keeps symbol staleness visible even when successful verification raises confidence. | Added coverage that symbol-only verified evidence reports high confidence, fresh verification, and `stale_symbols=1` in the compact confidence line. | Evidence: `broker_evidence_confidence_keeps_symbol_staleness_visible_after_verification`; compact metric: confidence output remains two lines. |
+| Broker evidence confidence symbol failure | Prevents failed symbol-related verification from looking reliable. | Added coverage that changed-symbol evidence with a failing test reports stale symbols, one failure, missing verification, and low confidence. | Evidence: `broker_evidence_confidence_scores_failed_symbol_verification_low`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker evidence confidence symbol failure audit | Checks whether symbol-only evidence confidence drops clearly when recent verification fails. | Add focused coverage for a changed-symbol snapshot with a failing test invocation and verify the confidence line shows stale symbols, failures, and low confidence. | Compact metric: confidence output remains two lines; correctness metric: failed symbol evidence is not treated as reliable. |
+| Broker evidence confidence artifact gap audit | Checks whether symbol evidence without an artifact-backed read/test remains clearly weaker than artifact-backed evidence. | Re-scan artifact-gap scoring for changed-symbol snapshots and decide whether missing artifacts should affect symbol-focused confidence more strongly. | Compact metric: confidence output remains two lines; correctness metric: symbol confidence distinguishes backed evidence from unbacked tool claims. |
 
 ## Research Rules
 

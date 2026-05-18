@@ -2057,6 +2057,45 @@ fn broker_evidence_confidence_keeps_symbol_staleness_visible_after_verification(
 }
 
 #[test]
+fn broker_evidence_confidence_scores_failed_symbol_verification_low() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let sections = build_broker_sections(
+        &root,
+        &state,
+        &BrokerGetContextRequest {
+            task_id: "task-confidence-symbol-failed".to_string(),
+            action: Some(BrokerAction::Inspect),
+            include_sections: vec!["evidence_confidence".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-1".to_string(),
+                sequence: 2,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests failed".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+        None,
+        None,
+    );
+    let confidence = sections
+        .iter()
+        .find(|section| section.id == "evidence_confidence")
+        .expect("failed symbol evidence should render confidence");
+
+    assert!(confidence.body.contains("stale_symbols=1"));
+    assert!(confidence.body.contains("failures=1"));
+    assert!(confidence.body.contains("confidence: low"));
+    assert!(confidence.body.contains("verification=missing"));
+}
+
+#[test]
 fn render_task_memory_lines_surfaces_recent_state() {
     let snapshot = suite_packet_core::AgentSnapshotPayload {
         files_read: vec!["src/alpha.rs".to_string()],
