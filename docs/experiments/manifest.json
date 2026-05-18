@@ -46,9 +46,7 @@
         "docs/experiments/run_packet28_real_repo_suite.sh"
       ],
       "artifacts": [
-        "docs/experiments/real-repos/20260511TREAL_INDEX_WAIT_60S/summary.md",
-        "docs/experiments/real-repos/20260511TREAL_INDEX_WAIT_60S/results.jsonl",
-        "docs/experiments/real-repos/20260511TREAL_INDEX_WAIT_60S/packet28.gain.json"
+        "docs/experiments/real-repos/SMOKE_20260511.md"
       ],
       "metrics": [
         {
@@ -91,8 +89,7 @@
       ],
       "artifacts": [
         "docs/experiments/fixture-suite/SMOKE_20260511.md",
-        "docs/experiments/fixture-suite/smoke-3x/summary.md",
-        "docs/experiments/fixture-suite/smoke-3x/results.jsonl"
+        "docs/experiments/manifest-evidence.md"
       ],
       "metrics": [
         {
@@ -240,12 +237,7 @@
       ],
       "artifacts": [
         "docs/experiments/packet28-claude-code-main/README.md",
-        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/summary.md",
-        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/metrics.tsv",
-        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/daemon-index-status.json",
-        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/packet28_run_rg.out",
-        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/p28_compact.out",
-        "docs/experiments/packet28-claude-code-main/fixfinal-20260511T165918Z/p28_indexed_control.out"
+        "docs/experiments/manifest-evidence.md"
       ],
       "metrics": [
         {

@@ -51,7 +51,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -86,7 +86,7 @@ jobs:
 
       - name: Upload context anomaly audit output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: context-anomaly-hidden-sample-audit
           path: |

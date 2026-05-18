@@ -31,7 +31,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -40,6 +40,9 @@ jobs:
 
       - name: Build Packet28 CLI
         run: cargo build -p suite-cli
+
+      - name: Check manifest artifacts are committed
+        run: node scripts/check_experiment_manifest_artifacts_tracked.mjs
 
       - name: Verify experiment manifest
         run: |
