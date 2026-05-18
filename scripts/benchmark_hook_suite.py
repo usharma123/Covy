@@ -377,9 +377,10 @@ def render_text(summary: dict) -> str:
     )
     for result in summary["results"]:
         if result["status"] != "ok":
+            detail = result.get("error") or f"status={result.get('status', 'unknown')}"
             lines.append(f"{result['case']}: ERROR")
             lines.append(f"  command: {result['command']}")
-            lines.append(f"  detail: {result['error']}")
+            lines.append(f"  detail: {detail}")
             lines.append(f"  artifact: {result['artifact_path']}")
             continue
         lines.append(
@@ -431,8 +432,10 @@ def render_markdown(summary: dict) -> str:
     )
     for result in summary["results"]:
         if result["status"] != "ok":
+            detail = (result.get("error") or f"status={result.get('status', 'unknown')}")[:120]
+            detail = str(detail).replace("|", "\\|")
             lines.append(
-                f"| `{result['case']}` | error | error | n/a | `{result['error'][:120]}` |"
+                f"| `{result['case']}` | {result.get('raw_est_tokens', 'error')} | {result.get('reduced_est_tokens', 'error')} | n/a | `{detail}` |"
             )
             continue
         preview = (result["reduced_preview"].strip() or "<empty>").replace("|", "\\|")

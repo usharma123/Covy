@@ -143,10 +143,12 @@
       "commands": [
         "cargo test -p packet28-search-cli p28_fff_engine_adapts_mcp_grep_results",
         "P28_FFF_MCP_BIN=/tmp/fff-eval/target/release/fff-mcp target/debug/p28 SearchResult --engine fff --stats --max-total-matches 5",
-        "docs/experiments/run_p28_search_backend_comparison.sh"
+        "docs/experiments/run_p28_search_backend_comparison.sh",
+        "P28_FFF_MCP_BIN=/private/tmp/packet28-fff-upstream-20260518/target/release/fff-mcp target/debug/Packet28 mcp serve --root /Users/utsavsharma/Documents/GitHub/Coverage"
       ],
       "artifacts": [
         "docs/experiments/search-backends/FFF_EVAL_20260511.md",
+        "docs/experiments/search-backends/FFF_PERSISTENT_MCP_20260518.md",
         "docs/experiments/search-backends/FFF_COMPARE_20260511/summary.md",
         "docs/experiments/search-backends/FFF_COMPARE_20260511/results.jsonl"
       ],
@@ -166,12 +168,20 @@
           "evidence": [
             "| fff_mcp | 27 |"
           ]
+        },
+        {
+          "name": "persistent_fff_warm_ms",
+          "value": 8.0,
+          "max": 10.0,
+          "evidence": [
+            "| `SearchResult` | 8.0 | fff_mcp | 19 |"
+          ]
         }
       ],
       "runtime_versions": [
         {
           "name": "fff",
-          "version": "39f67c0cf97c22a71408fc6de2f2888c5c4a700e"
+          "version": "39f67c0cf97c22a71408fc6de2f2888c5c4a700e; follow-up 6645a68ebc1f1a0dc98c1669a7e3f6d91625f79f"
         }
       ]
     },

@@ -13,7 +13,86 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  release-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release gate dependencies
+        run: cargo build -p suite-cli -p packet28d -p packet28-reducer-core -p packet28-search-cli
+
+      - name: Run p28 search CLI tests
+        run: cargo test -p packet28-search-cli --tests
+
+      - name: Run hook benchmark suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/benchmark_hook_suite.py \
+            --root "$GITHUB_WORKSPACE" \
+            --gh-repo "${{ github.repository }}" \
+            --artifact-dir "$GITHUB_WORKSPACE/.packet28/benchmarks/release-hook-suite"
+
+      - name: Run native MCP benchmark suite
+        run: |
+          python3 scripts/benchmark_native_mcp.py \
+            --root "$GITHUB_WORKSPACE" \
+            --artifact-dir "$GITHUB_WORKSPACE/.packet28/benchmarks/release-native-suite"
+
+      - name: Validate hook benchmark thresholds
+        run: |
+          python3 scripts/validate_hook_benchmarks.py \
+            "$GITHUB_WORKSPACE/.packet28/benchmarks/release-hook-suite/summary.json" \
+            --markdown-path "$GITHUB_WORKSPACE/.packet28/benchmarks/release-hook-suite/validation.md"
+
+      - name: Validate native MCP benchmark thresholds
+        run: |
+          python3 scripts/validate_native_benchmarks.py \
+            "$GITHUB_WORKSPACE/.packet28/benchmarks/release-native-suite/summary.json" \
+            --markdown-path "$GITHUB_WORKSPACE/.packet28/benchmarks/release-native-suite/validation.md"
+
+      - name: Check manifest artifacts are committed
+        run: node scripts/check_experiment_manifest_artifacts_tracked.mjs
+
+      - name: Verify experiment manifest
+        run: |
+          target/debug/Packet28 verify experiments --root . --json \
+            --require-workflow "Claude Code, Gemini, and OpenCode runtime integration smoke" \
+            --require-workflow "Packet28 real repository parity and indexed search evidence across packet28, ripgrep, and fd" \
+            --require-workflow "Packet28 repeatable fixture-suite smoke across Rust, Node, and docs repositories" \
+            --require-workflow "Optional fff MCP search backend comparison and adapter smoke" \
+            --require-workflow "Packet28 broker plan validation CLI with mapped test-gate score evidence" \
+            --require-workflow "Packet28 code-navigation experiment on ClaudeCode main source snapshot" \
+            --require-workflow "Packet28 release smoke for published npm package and install path"
+
+      - name: Publish release gate summary
+        if: always()
+        run: |
+          for file in \
+            .packet28/benchmarks/release-hook-suite/summary.md \
+            .packet28/benchmarks/release-hook-suite/validation.md \
+            .packet28/benchmarks/release-native-suite/summary.md \
+            .packet28/benchmarks/release-native-suite/validation.md; do
+            if [ -f "$file" ]; then
+              cat "$file" >> "$GITHUB_STEP_SUMMARY"
+              printf '\n' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Upload release gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-gate-benchmarks
+          path: .packet28/benchmarks
+
   build:
+    needs: release-gates
     strategy:
       matrix:
         include:
@@ -102,7 +181,10 @@ jobs:
           path: dist/@packet28/${{ matrix.platform }}
 
   publish:
-    needs: build
+    needs:
+      - release-gates
+      - build
+      - test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
