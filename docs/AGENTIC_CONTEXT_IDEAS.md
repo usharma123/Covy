@@ -906,12 +906,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density help includes output audit | Checks whether help-output token coverage remains explicit after direct JSON budget checks. | Re-scanned `assertHelpIncludesSelfTests()` and kept its named `expectedHelpIncludes` list because it already groups required modes, options, unknown-option code, and soft-row env documentation before the assertion loop. | Evidence: no runtime output growth; help output required-token coverage remains unchanged. |
 | Context anomaly drilldown density help includes output order audit | Keeps help-output token coverage after direct JSON budget checks and before help line-width diagnostics. | Verified `assertHelpIncludesSelfTests()` runs after `assertJsonBudgetIssueMutationSelfTest()` and before `assertHelpLineWidthSelfTest()`. | Evidence: no runtime output growth; help output required-token coverage remains unchanged. |
 | Context anomaly drilldown density help line-width diagnostics audit | Checks whether help line-width failure diagnostics remain explicit after help-output token coverage. | Re-scanned `assertHelpLineWidthSelfTest()` and kept its named failure code plus max/actual diagnostic labels because they already sit beside the failure output. | Evidence: no runtime output growth; help line-width diagnostics remain unchanged. |
+| Context anomaly drilldown density help line-width diagnostics order audit | Keeps help line-width diagnostics after help-output token coverage and before self-test success output. | Verified `assertHelpLineWidthSelfTest()` runs after `assertHelpIncludesSelfTests()` and before `finishSelfTestOk()`. | Evidence: no runtime output growth; help line-width diagnostics remain unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density help line-width diagnostics order audit | Keeps help line-width diagnostics after help-output token coverage and before self-test success output. | Verify `assertHelpLineWidthSelfTest()` still runs after `assertHelpIncludesSelfTests()` and before `finishSelfTestOk()`. | Compact metric: no runtime output growth; correctness metric: help line-width diagnostics remain unchanged. |
+| Context anomaly drilldown density self-test success output audit | Checks whether final self-test success output remains explicit after all validation helpers. | Re-scan `finishSelfTestOk()` and decide whether its success-output constant needs any additional grouping. | Compact metric: no runtime output growth; correctness metric: self-test success output remains unchanged. |
 
 ## Research Rules
 
