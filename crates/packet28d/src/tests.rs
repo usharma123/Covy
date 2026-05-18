@@ -1874,6 +1874,38 @@ fn broker_context_debt_orders_symbol_payoff_after_path_payoff() {
 }
 
 #[test]
+fn broker_context_debt_clears_symbol_only_after_verification() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let sections = build_broker_sections(
+        &root,
+        &state,
+        &BrokerGetContextRequest {
+            task_id: "task-symbol-debt-clear".to_string(),
+            action: Some(BrokerAction::Edit),
+            include_sections: vec!["context_debt".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "tool-test".to_string(),
+                sequence: 9,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+        None,
+        None,
+    );
+
+    assert!(sections.iter().all(|section| section.id != "context_debt"));
+}
+
+#[test]
 fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     let state = daemon_test_state();
     let root = daemon_test_root(&state);
