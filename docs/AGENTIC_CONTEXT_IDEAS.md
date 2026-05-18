@@ -907,12 +907,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density help includes output order audit | Keeps help-output token coverage after direct JSON budget checks and before help line-width diagnostics. | Verified `assertHelpIncludesSelfTests()` runs after `assertJsonBudgetIssueMutationSelfTest()` and before `assertHelpLineWidthSelfTest()`. | Evidence: no runtime output growth; help output required-token coverage remains unchanged. |
 | Context anomaly drilldown density help line-width diagnostics audit | Checks whether help line-width failure diagnostics remain explicit after help-output token coverage. | Re-scanned `assertHelpLineWidthSelfTest()` and kept its named failure code plus max/actual diagnostic labels because they already sit beside the failure output. | Evidence: no runtime output growth; help line-width diagnostics remain unchanged. |
 | Context anomaly drilldown density help line-width diagnostics order audit | Keeps help line-width diagnostics after help-output token coverage and before self-test success output. | Verified `assertHelpLineWidthSelfTest()` runs after `assertHelpIncludesSelfTests()` and before `finishSelfTestOk()`. | Evidence: no runtime output growth; help line-width diagnostics remain unchanged. |
+| Context anomaly drilldown density self-test success output audit | Checks whether final self-test success output remains explicit after all validation helpers. | Re-scanned `finishSelfTestOk()` and kept its named `selfTestSuccessOutput` constant beside the terminal log and exit. | Evidence: no runtime output growth; self-test success output remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density self-test success output audit | Checks whether final self-test success output remains explicit after all validation helpers. | Re-scan `finishSelfTestOk()` and decide whether its success-output constant needs any additional grouping. | Compact metric: no runtime output growth; correctness metric: self-test success output remains unchanged. |
+| Context anomaly drilldown density self-test success output order audit | Keeps final success output after all validation helpers and before normal density failure handling. | Verify `finishSelfTestOk()` still runs after `assertHelpLineWidthSelfTest()` and before the non-self-test failure path. | Compact metric: no runtime output growth; correctness metric: self-test success output remains unchanged. |
 
 ## Research Rules
 
