@@ -1800,7 +1800,7 @@ fn glob_match_inner(pattern: &[u8], name: &[u8]) -> bool {
 }
 
 fn render_grep_results(args: &GrepArgs) -> Result<String> {
-    let pattern = args.pattern.replace(r"\|", "|");
+    let pattern = normalize_grep_pattern(&args.pattern);
     let regex =
         Regex::new(&pattern).with_context(|| format!("invalid grep pattern '{pattern}'"))?;
     let mut result = search_result_for_grep(args)?;
@@ -1826,13 +1826,17 @@ fn reducer_search_result(args: &GrepArgs) -> Result<SearchResult> {
     packet28_reducer_core::search(
         &root,
         &SearchRequest {
-            query: args.pattern.clone(),
+            query: normalize_grep_pattern(&args.pattern),
             requested_paths,
             max_matches_per_file: Some(1000),
             max_total_matches: Some(1000),
             ..SearchRequest::default()
         },
     )
+}
+
+fn normalize_grep_pattern(pattern: &str) -> String {
+    pattern.replace(r"\|", "|")
 }
 
 fn p28_search_result(args: &GrepArgs) -> Result<SearchResult> {
@@ -2965,6 +2969,32 @@ pub fn load_config() -> Result<Config> {
         assert!(rendered.contains("a.rs:1:fn alpha() {}"));
         assert!(rendered.contains("[+1 more]"));
         assert!(!rendered.contains("ignored"));
+    }
+
+    #[test]
+    fn grep_basic_alternation_matches_like_observed_hook_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src").join("command.rs"),
+            "pub fn classify_command() {}\npub enum Mutation {}\n",
+        )
+        .unwrap();
+        let rendered = render_grep_results(&GrepArgs {
+            pattern: r"fn classify\|Mutation".to_string(),
+            path: dir.path().join("src").join("command.rs"),
+            max_len: 120,
+            max: 10,
+            context_only: false,
+            file_type: None,
+            engine: GrepEngine::Legacy,
+            json: false,
+            pretty: false,
+        })
+        .unwrap();
+        assert!(rendered.contains("2 matches in 1 files"));
+        assert!(rendered.contains("command.rs:1:pub fn classify_command() {}"));
+        assert!(rendered.contains("command.rs:2:pub enum Mutation {}"));
     }
 
     #[test]
