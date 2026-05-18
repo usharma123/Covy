@@ -930,12 +930,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker context debt verified-symbol confidence interplay | Keeps debt resolution and evidence freshness semantics distinct. | Added combined coverage showing successful artifact-backed symbol verification clears `context_debt` while `evidence_confidence` still reports `changed_symbols=1`, high confidence, and artifact backing. | Evidence: `broker_symbol_verification_clears_debt_but_preserves_confidence_staleness`; compact metric: no product output growth. |
 | Broker confidence changed-symbol naming | Avoids implying that successful symbol verification failed. | Renamed the confidence output field from `stale_symbols` to `changed_symbols` while keeping the confidence penalty and freshness signal intact. | Evidence: `broker_symbol_verification_clears_debt_but_preserves_confidence_staleness`; compact metric: confidence output remains two lines. |
 | Broker confidence changed-symbol naming history audit | Keeps completed ideas rows aligned with current confidence output. | Re-scanned `stale_symbols` and stale-symbol references, updated the failed-symbol confidence row to current `changed_symbols` wording, and kept context-debt `stale_symbol` payoff language unchanged. | Evidence: docs-only audit; compact metric: no product output change. |
+| Broker confidence freshness-label compatibility | Helps downstream consumers survive the `changed_symbols` rename. | Added coverage that confidence output contains `changed_symbols` and never `stale_symbols`, while context debt still uses `payoff stale_symbol` for the refresh action. | Evidence: `broker_symbol_labels_distinguish_confidence_from_debt_payoff`; compact metric: no confidence output growth. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence freshness-label compatibility | Helps downstream consumers survive the `changed_symbols` rename. | Add a narrow renderer or docs compatibility note that treats `changed_symbols` as the current confidence field and reserves `stale_symbol` for context-debt payoff labels. | Compact metric: no confidence output growth; correctness metric: consumers can distinguish freshness metrics from payoff actions. |
+| Broker confidence stale-path label audit | Checks whether `stale_paths` should stay paired with `changed_symbols`. | Re-scan path freshness wording and decide whether `stale_paths` is precise enough because path freshness has read-state backing while symbol freshness is count-only. | Compact metric: confidence output remains two lines; correctness metric: path and symbol labels stay semantically distinct. |
 
 ## Research Rules
 

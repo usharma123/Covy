@@ -1932,6 +1932,24 @@ fn broker_symbol_verification_clears_debt_but_preserves_confidence_staleness() {
 }
 
 #[test]
+fn broker_symbol_labels_distinguish_confidence_from_debt_payoff() {
+    let state = daemon_test_state();
+    let symbol_snapshot = suite_packet_core::AgentSnapshotPayload {
+        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+
+    let debt = broker_context_debt_body(&state, symbol_snapshot.clone())
+        .expect("expected context debt for unverified changed symbol");
+    let confidence = broker_evidence_confidence_body(&state, symbol_snapshot);
+
+    assert!(confidence.contains("changed_symbols=1"));
+    assert!(!confidence.contains("stale_symbols"));
+    assert!(debt.contains("payoff stale_symbol"));
+    assert!(!debt.contains("changed_symbols="));
+}
+
+#[test]
 fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     let state = daemon_test_state();
     let root = daemon_test_root(&state);
