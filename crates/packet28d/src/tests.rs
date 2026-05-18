@@ -1790,6 +1790,39 @@ fn broker_context_debt_clears_after_reads_questions_and_verification() {
 }
 
 #[test]
+fn broker_context_debt_surfaces_symbol_payoff_without_stale_path() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let sections = build_broker_sections(
+        &root,
+        &state,
+        &BrokerGetContextRequest {
+            task_id: "task-symbol-debt".to_string(),
+            action: Some(BrokerAction::Edit),
+            include_sections: vec!["context_debt".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+        None,
+        None,
+    );
+    let debt = sections
+        .iter()
+        .find(|section| section.id == "context_debt")
+        .expect("symbol-only stale evidence should render debt");
+
+    assert!(debt.body.contains(
+        "debt_summary: stale_paths=0 open_questions=0 unverified_edits=1 contradictions=0"
+    ));
+    assert!(debt.body.contains(
+        "payoff stale_symbol: inspect/search AuthCache before relying on cached evidence"
+    ));
+}
+
+#[test]
 fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     let state = daemon_test_state();
     let root = daemon_test_root(&state);

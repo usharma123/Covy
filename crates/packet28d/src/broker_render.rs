@@ -1116,6 +1116,11 @@ fn render_context_debt_lines(snapshot: &suite_packet_core::AgentSnapshotPayload)
             "- payoff stale_path: read/search {path} before relying on cached evidence"
         ));
     }
+    if let Some(symbol) = snapshot.changed_symbols_since_checkpoint.first() {
+        lines.push(format!(
+            "- payoff stale_symbol: inspect/search {symbol} before relying on cached evidence"
+        ));
+    }
     if open_questions > 0 {
         lines.push(
             "- payoff open_questions: resolve or explicitly defer before handoff/finalization"
