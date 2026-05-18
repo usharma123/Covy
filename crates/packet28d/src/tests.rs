@@ -2134,6 +2134,7 @@ fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
     assert!(confidence.body.contains("backing=missing"));
     assert!(confidence.body.contains("confidence: medium"));
     assert!(confidence.body.contains("verification=fresh"));
+    assert!(confidence.body.contains("artifacts=0 backing=missing"));
 }
 
 #[test]
@@ -2195,12 +2196,15 @@ fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
     assert!(backed_verified.contains("confidence: high"));
     assert!(backed_verified.contains("artifact_gaps=0"));
     assert!(backed_verified.contains("backing=artifact"));
+    assert!(backed_verified.contains("artifacts=1 backing=artifact"));
     assert!(unbacked_verified.contains("confidence: medium"));
     assert!(unbacked_verified.contains("artifact_gaps=1"));
     assert!(unbacked_verified.contains("backing=missing"));
+    assert!(unbacked_verified.contains("artifacts=0 backing=missing"));
     assert!(failed.contains("confidence: low"));
     assert!(failed.contains("failures=1"));
     assert!(failed.contains("backing=missing"));
+    assert!(failed.contains("artifacts=0 backing=missing"));
 }
 
 #[test]

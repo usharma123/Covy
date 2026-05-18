@@ -1239,9 +1239,10 @@ fn render_evidence_confidence_lines(
             "- confidence: {label} score={score} stale_paths={stale_paths} stale_symbols={stale_symbols} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap} backing={evidence_backing}"
         ),
         format!(
-            "- confidence_reason: source=local_tool_state verification={} artifacts={} payoff={}",
+            "- confidence_reason: source=local_tool_state verification={} artifacts={} backing={} payoff={}",
             if successful_verification { "fresh" } else { "missing" },
             snapshot.evidence_artifact_ids.len(),
+            evidence_backing,
             if score >= 85 {
                 "evidence usable"
             } else {

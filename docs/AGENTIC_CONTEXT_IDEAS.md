@@ -919,12 +919,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker evidence confidence artifact-backed order | Keeps artifact-backed, unbacked, and failed symbol confidence expectations distinct. | Added a combined tier-order test for backed verified symbol evidence, unbacked verified symbol evidence, and failed symbol evidence. | Evidence: `broker_evidence_confidence_orders_symbol_evidence_tiers`; compact metric: confidence output remains two lines. |
 | Broker evidence confidence artifact gap label | Makes backed versus unbacked evidence readable without decoding gap counts. | Added `backing=artifact|missing` to the compact confidence line and extended symbol tier coverage to assert the backing label. | Evidence: `broker_evidence_confidence_orders_symbol_evidence_tiers`; compact metric: confidence output remains two lines. |
 | Broker test root cross-process isolation | Keeps focused broker tests reliable when agents run filtered cargo tests in parallel. | Included the process id in `daemon_test_state()` temp roots so separate test processes no longer collide when started in the same millisecond. | Evidence: parallel focused confidence tests passed; compact metric: no product output change. |
+| Broker evidence confidence backing reason label | Makes the actionable confidence reason carry the same backed/unbacked signal as the score line. | Added `backing=artifact|missing` to `confidence_reason` and extended tier coverage to assert the reason-line backing label. | Evidence: `broker_evidence_confidence_orders_symbol_evidence_tiers`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker evidence confidence backing label reason audit | Checks whether `confidence_reason` should echo the new backing label for faster scanability. | Re-scan the reason line and decide whether `backing=artifact|missing` belongs only in the score line or also in the reason line. | Compact metric: confidence output remains two lines; correctness metric: backing labels stay aligned with symbol confidence tiers. |
+| Broker evidence confidence backing line-width audit | Checks whether the two confidence lines remain compact after adding backing labels. | Verify representative backed and unbacked confidence outputs stay within broker section width expectations and preserve the two-line section shape. | Compact metric: confidence output remains two lines; correctness metric: backing labels stay visible. |
 
 ## Research Rules
 
