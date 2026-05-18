@@ -1227,6 +1227,11 @@ fn render_evidence_confidence_lines(
         .saturating_sub(if unbacked_symbol_evidence { 10 } else { 0 })
         .saturating_add(if successful_verification { 10 } else { 0 })
         .min(100);
+    let score = if evidence_backing == "missing" {
+        score.min(84)
+    } else {
+        score
+    };
     let label = if score >= 85 {
         "high"
     } else if score >= 60 {
