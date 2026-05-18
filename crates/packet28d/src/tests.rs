@@ -2074,6 +2074,16 @@ fn broker_evidence_confidence_reason_lines_stay_stable() {
         broker_confidence_reason_line(&mixed_freshness),
         "- confidence_reason: source=local_tool_state verification=missing artifacts=0 backing=missing risk=freshness_mixed payoff=refresh stale_paths+changed_symbols"
     );
+    for reason_line in [
+        broker_confidence_reason_line(&backed_success),
+        broker_confidence_reason_line(&unbacked_symbol),
+        broker_confidence_reason_line(&mixed_freshness),
+    ] {
+        assert!(
+            reason_line.len() <= 180,
+            "reason line too wide: {reason_line}"
+        );
+    }
 }
 
 #[test]

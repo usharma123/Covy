@@ -324,6 +324,7 @@ Current evidence:
 - Packet28 now single-sources confidence payoff and risk priority through an internal risk classification, reducing drift between `risk=` and `payoff=` while preserving the compact rendered output. Evidence: `broker_confidence_payoff_priority_orders_repair_actions`; `broker_confidence_risk_priority_matches_repair_actions`.
 - Packet28 now distinguishes changed-symbol missing backing from generic artifact missing backing in internal risk-class names while keeping both rendered as the compact `risk=missing_backing` label. Evidence: `cargo test -p packet28d broker_evidence_confidence`.
 - Packet28 now locks representative confidence reason lines exactly, covering backed success, unbacked changed-symbol success, and mixed freshness with stable `risk=` and `payoff=` output. Evidence: `broker_evidence_confidence_reason_lines_stay_stable`.
+- Packet28 now width-bounds representative confidence reason lines that include `risk=` and `payoff=`, keeping the expanded reason signal compact. Evidence: `broker_evidence_confidence_reason_lines_stay_stable`.
 
 ### 6. Release Readiness
 

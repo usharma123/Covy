@@ -942,12 +942,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence helper duplication audit | Keeps payoff and risk priorities single-sourced. | Replaced duplicate priority ladders with an internal confidence risk class and extended direct tests to cover fallback-plus-artifact precedence for both payoff and risk labels. | Evidence: `broker_confidence_payoff_priority_orders_repair_actions`; `broker_confidence_risk_priority_matches_repair_actions`; compact metric: no output growth. |
 | Broker confidence risk-class naming audit | Keeps internal risk names aligned with rendered labels. | Renamed internal missing-backing variants to distinguish changed-symbol missing backing from generic artifact missing backing while keeping both rendered as `risk=missing_backing`. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: no output change. |
 | Broker confidence risk-class output audit | Keeps representative confidence reason lines stable after the risk-class refactor. | Added exact-line coverage for backed success, unbacked changed-symbol success, and mixed freshness reason lines, including `risk=` and `payoff=`. | Evidence: `broker_evidence_confidence_reason_lines_stay_stable`; compact metric: confidence output remains two lines. |
+| Broker confidence reason-line width audit | Ensures exact reason-line coverage does not permit slow token growth. | Extended representative reason-line coverage to require each `risk=` and `payoff=` line to stay under 180 characters. | Evidence: `broker_evidence_confidence_reason_lines_stay_stable`; compact metric: confidence reason lines remain width-bounded. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence reason-line width audit | Ensures exact reason-line coverage does not permit slow token growth. | Add or extend compactness checks to include the longest `risk=` and `payoff=` reason lines after exact-line assertions. | Compact metric: each confidence line stays under the established width cap. |
+| Broker confidence reason-line byte audit | Guards against hidden serialized-size growth beyond line width. | Add a compact serialized-size assertion for representative confidence sections now that reason lines include `risk=`. | Compact metric: representative confidence bodies stay under a small byte budget. |
 
 ## Research Rules
 
