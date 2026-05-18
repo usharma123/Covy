@@ -2084,6 +2084,9 @@ fn broker_evidence_confidence_reason_lines_stay_stable() {
             "reason line too wide: {reason_line}"
         );
     }
+    for body in [&backed_success, &unbacked_symbol, &mixed_freshness] {
+        assert!(body.len() <= 512, "confidence body too large: {body}");
+    }
 }
 
 #[test]

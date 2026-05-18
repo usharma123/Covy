@@ -325,6 +325,7 @@ Current evidence:
 - Packet28 now distinguishes changed-symbol missing backing from generic artifact missing backing in internal risk-class names while keeping both rendered as the compact `risk=missing_backing` label. Evidence: `cargo test -p packet28d broker_evidence_confidence`.
 - Packet28 now locks representative confidence reason lines exactly, covering backed success, unbacked changed-symbol success, and mixed freshness with stable `risk=` and `payoff=` output. Evidence: `broker_evidence_confidence_reason_lines_stay_stable`.
 - Packet28 now width-bounds representative confidence reason lines that include `risk=` and `payoff=`, keeping the expanded reason signal compact. Evidence: `broker_evidence_confidence_reason_lines_stay_stable`.
+- Packet28 now byte-bounds representative confidence bodies after adding `risk=`, keeping backed, unbacked-symbol, and mixed-freshness examples under 512 bytes. Evidence: `broker_evidence_confidence_reason_lines_stay_stable`.
 
 ### 6. Release Readiness
 
