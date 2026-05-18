@@ -320,6 +320,7 @@ Current evidence:
 - Packet28 evidence confidence now caps missing-backed evidence below high confidence, so even a successful verification without artifact/raw backing reports medium confidence and an artifact-backed payoff. Evidence: `broker_evidence_confidence_caps_missing_backing_below_high`.
 - Packet28 evidence confidence now verifies that the missing-backed cap preserves score spread: symbol-only evidence remains medium at 80, unbacked success caps at 84, and failed unbacked symbol evidence remains low at 35. Evidence: `broker_evidence_confidence_missing_backing_keeps_score_spread`.
 - Packet28 evidence confidence now includes a compact `risk=` reason code beside the payoff, making score drivers such as failures, mixed freshness, changed symbols, stale paths, and missing backing visible without adding another section line. Evidence: `cargo test -p packet28d broker_evidence_confidence`.
+- Packet28 now locks `risk=` priority directly, keeping usable evidence, failures, mixed freshness, stale paths, missing backing, changed symbols, and fallback record risk labels aligned with payoff priority. Evidence: `broker_confidence_risk_priority_matches_repair_actions`.
 
 ### 6. Release Readiness
 

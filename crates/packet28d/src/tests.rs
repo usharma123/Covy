@@ -1998,6 +1998,17 @@ fn broker_confidence_payoff_priority_orders_repair_actions() {
 }
 
 #[test]
+fn broker_confidence_risk_priority_matches_repair_actions() {
+    assert_eq!(confidence_risk(100, 1, 1, 1, 1, 1), "none");
+    assert_eq!(confidence_risk(55, 1, 1, 1, 1, 1), "failures");
+    assert_eq!(confidence_risk(60, 1, 1, 1, 0, 1), "freshness_mixed");
+    assert_eq!(confidence_risk(75, 1, 0, 1, 0, 1), "stale_paths");
+    assert_eq!(confidence_risk(75, 0, 1, 0, 0, 1), "missing_backing");
+    assert_eq!(confidence_risk(80, 0, 1, 0, 0, 0), "changed_symbols");
+    assert_eq!(confidence_risk(80, 0, 0, 1, 0, 0), "fallback_records");
+}
+
+#[test]
 fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     let state = daemon_test_state();
     let root = daemon_test_root(&state);
