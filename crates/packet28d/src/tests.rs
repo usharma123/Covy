@@ -1841,6 +1841,9 @@ fn broker_context_debt_surfaces_symbol_payoff_without_stale_path() {
     assert!(debt.contains(
         "payoff stale_symbol: inspect/search AuthCache before relying on cached evidence"
     ));
+    assert!(debt.lines().count() <= 3);
+    assert!(debt.lines().all(|line| line.len() <= 140));
+    assert!(serde_json::to_string(&debt).unwrap().len() < 512);
 }
 
 #[test]
