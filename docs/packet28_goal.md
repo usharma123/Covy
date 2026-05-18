@@ -327,6 +327,7 @@ Current evidence:
 - Packet28 now width-bounds representative confidence reason lines that include `risk=` and `payoff=`, keeping the expanded reason signal compact. Evidence: `broker_evidence_confidence_reason_lines_stay_stable`.
 - Packet28 now byte-bounds representative confidence bodies after adding `risk=`, keeping backed, unbacked-symbol, and mixed-freshness examples under 512 bytes. Evidence: `broker_evidence_confidence_reason_lines_stay_stable`.
 - Packet28 confidence tests now share the `broker_evidence_confidence_` prefix for rendered confidence and helper-priority coverage, so one focused cargo test filter exercises the cluster. Evidence: `cargo test -p packet28d broker_evidence_confidence`.
+- Packet28 confidence coverage now has an explicit focused-filter size: `cargo test -p packet28d broker_evidence_confidence` runs 14 confidence tests spanning helper priority, rendered scoring, reason-line stability, and compactness.
 
 ### 6. Release Readiness
 
