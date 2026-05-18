@@ -2508,9 +2508,11 @@ if (args.includes("--self-test")) {
         P28_CONTEXT_ANOMALY_RUNBOOK_JSON_HEADROOM_MIN: "999",
       };
       const jsonFailureArgs = ["--json"];
+      const expectedJsonHeadroomMinFailureCode =
+        "context_anomaly_runbook_density_json_too_long";
       const expectedJsonHeadroomMinFailureOutput = [
         '"ok":false',
-        '"code":"context_anomaly_runbook_density_json_too_long"',
+        `"code":"${expectedJsonHeadroomMinFailureCode}"`,
       ];
       const excludedJsonHeadroomMinFailureOutput =
         '"default_output_iterations"';
@@ -2518,7 +2520,7 @@ if (args.includes("--self-test")) {
       assertEnvFailure(
         jsonHeadroomMinFailureEnv,
         jsonFailureArgs,
-        "context_anomaly_runbook_density_json_too_long",
+        expectedJsonHeadroomMinFailureCode,
       );
       assertEnvFailureOutput(
         jsonHeadroomMinFailureEnv,
