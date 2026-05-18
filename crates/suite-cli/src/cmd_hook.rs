@@ -2090,7 +2090,12 @@ fn build_pretool_rewrite(
 
     // In hook context, promote NativeTool → ReducerRewrite when the reducer-core
     // also classifies the command (e.g. head/cat/sed → fs family).
-    if matches!(decision.kind, crate::route_registry::RouteKind::NativeTool) {
+    if matches!(decision.kind, crate::route_registry::RouteKind::NativeTool)
+        && !decision
+            .native_tool
+            .as_ref()
+            .is_some_and(|tool| matches!(tool.kind, crate::route_registry::NativeToolKind::Grep))
+    {
         if let Some(spec) = packet28_reducer_core::classify_command_argv(&command, &decision.argv) {
             decision = crate::route_registry::RouteDecision {
                 kind: crate::route_registry::RouteKind::ReducerRewrite,
@@ -2924,6 +2929,33 @@ mod tests {
         assert!(command.contains("hook reducer-runner"));
         assert!(command.contains("--family git"));
         assert!(command.contains("--kind git_status"));
+    }
+
+    #[test]
+    fn pretool_keeps_grep_on_native_compact_path_with_basic_alternation() {
+        let root = PathBuf::from("/tmp/demo");
+        let payload = json!({
+            "tool_name":"Bash",
+            "tool_input":{
+                "command": r"grep 'fn classify\|Mutation' crates/packet28-reducer-core/src/command.rs"
+            }
+        });
+        let rewrite = build_pretool_rewrite(
+            &HookRuntimeConfig::default(),
+            &root,
+            &payload,
+            HookEventKind::PreToolUse,
+            "task-grep",
+            Some("session-1"),
+        )
+        .unwrap()
+        .unwrap();
+        let command = rewrite["command"].as_str().unwrap();
+
+        assert!(command.contains(" compact grep "));
+        assert!(!command.contains("hook reducer-runner"));
+        assert!(command.contains("fn classify\\|Mutation"));
+        assert!(command.contains("crates/packet28-reducer-core/src/command.rs"));
     }
 
     #[test]
