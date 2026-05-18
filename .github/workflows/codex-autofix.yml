@@ -1,0 +1,129 @@
+name: Codex Autofix
+
+on:
+  workflow_run:
+    workflows:
+      - Hook Benchmark Suite
+      - Context Anomalies
+      - Experiment Manifest
+      - Handoff Readiness
+      - Memory Lint
+      - Reducer Drift
+      - Release
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Failed GitHub Actions run id to inspect"
+        required: true
+      ref:
+        description: "Git ref to check out"
+        required: false
+        default: main
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: codex-autofix-${{ github.event.workflow_run.id || inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  autofix:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.name != 'Codex Autofix'
+      )
+    runs-on: ubuntu-latest
+    env:
+      RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+      RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, inputs.run_id) }}
+      CHECKOUT_REF: ${{ github.event.workflow_run.head_sha || inputs.ref }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CODEX_AUTOFIX_VERIFY: cargo test --workspace --all-targets
+    steps:
+      - name: Require OpenAI credentials
+        if: env.OPENAI_API_KEY == ''
+        run: |
+          echo "OPENAI_API_KEY is not configured; skipping Codex autofix."
+          exit 78
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install Codex CLI
+        run: |
+          if ! command -v codex >/dev/null 2>&1; then
+            npm install -g @openai/codex
+          fi
+          codex --version
+
+      - name: Capture failed run logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .packet28/ci-autofix
+          gh run view "$RUN_ID" --log > .packet28/ci-autofix/failure.log
+          test -s .packet28/ci-autofix/failure.log
+
+      - name: Run Codex autofix
+        env:
+          CI_FAILURE_LOG: ${{ github.workspace }}/.packet28/ci-autofix/failure.log
+          CI_RUN_URL: ${{ env.RUN_URL }}
+        run: scripts/ci/codex_autofix.sh
+
+      - name: Verify generated fix
+        run: |
+          if git diff --quiet -- . ':!.packet28'; then
+            echo "No autofix diff was produced."
+            exit 0
+          fi
+          cargo fmt --check
+          cargo test --workspace --all-targets
+
+      - name: Open autofix pull request
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- . ':!.packet28'; then
+            echo "No changes to publish."
+            exit 0
+          fi
+          branch="codex-autofix/run-${RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git restore --staged .packet28 || true
+          git commit -m "Codex autofix for CI run ${RUN_ID}"
+          git push --force-with-lease origin "$branch"
+          gh pr create \
+            --draft \
+            --title "Codex autofix for CI run ${RUN_ID}" \
+            --body "Automated Codex attempt to fix failing CI run ${RUN_URL}." \
+            --base main \
+            --head "$branch"
+
+      - name: Upload autofix artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: codex-autofix-${{ env.RUN_ID }}
+          path: .packet28/ci-autofix
