@@ -611,6 +611,7 @@ fn run_read(args: ReadArgs) -> Result<i32> {
 fn run_grep(args: GrepArgs) -> Result<i32> {
     let root = resolve_root(&args.root)?;
     let cwd = resolve_cwd(args.cwd.as_deref())?;
+    let query = normalize_grep_query(&args.query);
     let mut requested_paths = Vec::<String>::new();
     for raw_path in &args.paths {
         for path in expand_repo_paths(&root, &cwd, raw_path)? {
@@ -625,7 +626,7 @@ fn run_grep(args: GrepArgs) -> Result<i32> {
     let result = packet28_reducer_core::search(
         &root,
         &packet28_reducer_core::SearchRequest {
-            query: args.query.clone(),
+            query: query.clone(),
             requested_paths,
             fixed_string: args.fixed_string,
             case_sensitive: Some(!args.ignore_case),
@@ -651,7 +652,7 @@ fn run_grep(args: GrepArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.grep",
             compact_path: "native_tool",
-            request_summary: format!("grep {}", args.query),
+            request_summary: format!("grep {}", query),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_for_value(&payload)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -660,6 +661,10 @@ fn run_grep(args: GrepArgs) -> Result<i32> {
         },
     )?;
     Ok(0)
+}
+
+fn normalize_grep_query(query: &str) -> String {
+    query.replace(r"\|", "|")
 }
 
 fn run_json(args: JsonArgs) -> Result<i32> {
@@ -2540,5 +2545,18 @@ fn pct_saved(raw: u64, reduced: u64) -> f64 {
         0.0
     } else {
         ((raw.saturating_sub(reduced)) as f64 / raw as f64) * 100.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_grep_normalizes_basic_alternation() {
+        assert_eq!(
+            normalize_grep_query(r"fn classify\|Mutation\|fn classify_command"),
+            "fn classify|Mutation|fn classify_command"
+        );
     }
 }

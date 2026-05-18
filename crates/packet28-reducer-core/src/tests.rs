@@ -40,7 +40,8 @@ fn compact_preview_mentions_groups() {
     );
     assert!(preview.contains("Search found 3 matches in 1 files."));
     assert!(preview.contains("src/lib.rs"));
-    assert!(!preview.contains("alpha"));
+    assert!(preview.contains("src/lib.rs:4:alpha"));
+    assert!(preview.contains("src/lib.rs:8:beta"));
 }
 
 #[test]

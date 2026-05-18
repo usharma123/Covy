@@ -74,6 +74,11 @@ def main() -> int:
         raise SystemExit(
             f"hook rewrite failed ({rewrite.returncode}): {rewrite.stderr or rewrite.stdout}"
         )
+    if (
+        not rewrite.stdout.strip()
+        and "allowing runtime action after processing error" in rewrite.stderr
+    ):
+        raise SystemExit(f"hook processing failed: {rewrite.stderr.strip()}")
     rewrite_payload = json.loads(rewrite.stdout.strip() or "{}")
     rewritten = (
         rewrite_payload.get("hookSpecificOutput", {})

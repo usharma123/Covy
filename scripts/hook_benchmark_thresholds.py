@@ -6,6 +6,18 @@ DEFAULT_THRESHOLDS = {
         "git_status": {"min_reduction_pct": 90.0, "min_raw_tokens": 100},
         "fs_head": {"min_reduction_pct": 70.0, "min_raw_tokens": 40},
         "rust_test": {"min_reduction_pct": 90.0, "min_raw_tokens": 100},
+        "grep_basic_alternation_integrity": {
+            "min_reduction_pct": 0.0,
+            "min_raw_tokens": 1000,
+            "required_reduced_substrings": [
+                "crates/packet28-reducer-core/src/command.rs:16:",
+                "crates/packet28-reducer-core/src/command.rs:34:",
+            ],
+            "forbidden_reduced_substrings": [
+                "Search found 0 matches",
+                "0 matches for",
+            ],
+        },
         "gh_pr_list": {"min_reduction_pct": 80.0, "min_raw_tokens": 60},
         "gh_pr_view": {"min_reduction_pct": 80.0, "min_raw_tokens": 100},
         "gh_run_list": {"min_reduction_pct": 80.0, "min_raw_tokens": 80},

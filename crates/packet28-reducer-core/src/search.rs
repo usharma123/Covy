@@ -13,6 +13,8 @@ pub(crate) const DEFAULT_MAX_TOTAL_MATCHES: usize = 50;
 const MAX_TOTAL_MATCHES_LIMIT: usize = 200;
 const DEFAULT_DISPLAYED_MATCHES_PER_FILE: usize = 12;
 const DEFAULT_DISPLAYED_GROUPS_IN_PREVIEW: usize = 12;
+const DEFAULT_DISPLAYED_MATCH_LINES_IN_PREVIEW: usize = 12;
+const DEFAULT_MATCH_PREVIEW_TEXT_LIMIT: usize = 140;
 
 pub fn normalize_capture_path(root: &Path, text: &str) -> String {
     let trimmed = text.trim();
@@ -389,6 +391,24 @@ pub(crate) fn render_search_compact_preview(
     )];
     for group in groups.iter().take(DEFAULT_DISPLAYED_GROUPS_IN_PREVIEW) {
         lines.push(format!("- {} ({})", group.path, group.match_count));
+        for item in group
+            .matches
+            .iter()
+            .take(DEFAULT_DISPLAYED_MATCH_LINES_IN_PREVIEW)
+        {
+            lines.push(format!(
+                "  {}:{}:{}",
+                item.path,
+                item.line,
+                compact_match_preview_text(&item.text)
+            ));
+        }
+        if group.matches.len() > DEFAULT_DISPLAYED_MATCH_LINES_IN_PREVIEW {
+            lines.push(format!(
+                "  +{} more match(es)",
+                group.matches.len() - DEFAULT_DISPLAYED_MATCH_LINES_IN_PREVIEW
+            ));
+        }
     }
     if groups.len() > DEFAULT_DISPLAYED_GROUPS_IN_PREVIEW {
         lines.push(format!(
@@ -397,6 +417,18 @@ pub(crate) fn render_search_compact_preview(
         ));
     }
     lines.join("\n")
+}
+
+fn compact_match_preview_text(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= DEFAULT_MATCH_PREVIEW_TEXT_LIMIT {
+        return compact;
+    }
+    compact
+        .chars()
+        .take(DEFAULT_MATCH_PREVIEW_TEXT_LIMIT.saturating_sub(3))
+        .collect::<String>()
+        + "..."
 }
 
 fn parse_line_range_spec(value: &str) -> Option<(usize, usize)> {

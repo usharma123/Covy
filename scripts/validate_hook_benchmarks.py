@@ -52,8 +52,16 @@ def validate(summary: dict) -> tuple[list[str], list[str]]:
             if result.get("status") == "passthrough":
                 errors.append(f"{case}: command was not compacted by the hook")
             else:
-                errors.append(f"{case}: benchmark execution failed")
+                detail = result.get("error") or "benchmark execution failed"
+                errors.append(f"{case}: {detail}")
             continue
+        reduced_preview = result.get("reduced_preview", "")
+        for needle in config.get("required_reduced_substrings", []):
+            if needle not in reduced_preview:
+                errors.append(f"{case}: reduced output missing required substring {needle!r}")
+        for needle in config.get("forbidden_reduced_substrings", []):
+            if needle in reduced_preview:
+                errors.append(f"{case}: reduced output contained forbidden substring {needle!r}")
         raw_tokens = result.get("raw_est_tokens", 0)
         if raw_tokens < config["min_raw_tokens"]:
             notes.append(

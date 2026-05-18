@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 
+from benchmark_common import estimate_tokens, resolve_shell, run_capture
 from hook_benchmark_thresholds import DEFAULT_THRESHOLDS, eligible_for_mean
 
 
@@ -298,6 +299,95 @@ def run_fixture_case(root: Path, artifact_dir: Path, case: dict) -> dict:
     return error_payload
 
 
+def run_compact_grep_integrity_case(root: Path, artifact_dir: Path, shell: str | None) -> dict:
+    case_name = "grep_basic_alternation_integrity"
+    artifact_path = artifact_dir / f"{case_name}.json"
+    pattern = r"fn classify\|Mutation\|fn classify_command"
+    target_path = "crates/packet28-reducer-core/src/command.rs"
+    command_text = f"grep -n '{pattern}' {target_path}"
+    try:
+        shell_path = resolve_shell(shell)
+    except FileNotFoundError as exc:
+        payload = {
+            "case": case_name,
+            "status": "error",
+            "surface": "live",
+            "command": command_text,
+            "error": f"benchmark shell setup failed: {exc}",
+            "artifact_path": str(artifact_path),
+        }
+        artifact_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return payload
+
+    raw = run_capture([shell_path, "-lc", command_text], root)
+    compact_cmd = [
+        "cargo",
+        "run",
+        "-q",
+        "-p",
+        "suite-cli",
+        "--bin",
+        "Packet28",
+        "--",
+        "compact",
+        "grep",
+        "--root",
+        str(root),
+        pattern,
+        target_path,
+    ]
+    reduced = run_capture(compact_cmd, root)
+    raw_visible = raw.stdout + raw.stderr
+    reduced_visible = reduced.stdout + reduced.stderr
+    required = [
+        f"{target_path}:16:",
+        f"{target_path}:34:",
+    ]
+    forbidden = ["Search found 0 matches", "0 matches for"]
+    integrity_errors = []
+    if raw.returncode != 0:
+        integrity_errors.append(f"raw grep exited {raw.returncode}")
+    if reduced.returncode != 0:
+        integrity_errors.append(f"compact grep exited {reduced.returncode}")
+    for needle in required:
+        if needle not in reduced_visible:
+            integrity_errors.append(f"missing compact grep line marker: {needle}")
+    for needle in forbidden:
+        if needle in reduced_visible:
+            integrity_errors.append(f"forbidden compact grep output: {needle}")
+
+    raw_tokens = estimate_tokens(raw_visible)
+    reduced_tokens = estimate_tokens(reduced_visible)
+    payload = {
+        "case": case_name,
+        "status": "ok" if not integrity_errors else "error",
+        "surface": "live",
+        "command": command_text,
+        "rewritten_command": " ".join(compact_cmd),
+        "compact_path": "native_compact_grep",
+        "raw_output_recoverable": True,
+        "raw_exit_code": raw.returncode,
+        "reduced_exit_code": reduced.returncode,
+        "raw_bytes": len(raw_visible.encode("utf-8")),
+        "raw_est_tokens": raw_tokens,
+        "reduced_bytes": len(reduced_visible.encode("utf-8")),
+        "reduced_est_tokens": reduced_tokens,
+        "raw_preview": raw_visible[:400],
+        "reduced_preview": reduced_visible[:400],
+        "token_reduction_pct": round(100.0 * (raw_tokens - reduced_tokens) / raw_tokens, 1)
+        if raw_tokens
+        else 0.0,
+        "required_reduced_substrings": required,
+        "forbidden_reduced_substrings": forbidden,
+        "integrity_errors": integrity_errors,
+        "artifact_path": str(artifact_path),
+    }
+    if integrity_errors:
+        payload["error"] = "; ".join(integrity_errors)
+    artifact_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
 def build_summary(
     results: list[dict],
     root: Path,
@@ -493,6 +583,7 @@ def main() -> int:
         run_case(root, artifact_dir, name, argv, args.shell)
         for name, argv in default_cases(gh_repo, gh_pr_number, gh_run_id)
     ]
+    results.append(run_compact_grep_integrity_case(root, artifact_dir, args.shell))
     results.extend(run_fixture_case(root, artifact_dir, case) for case in fixture_cases(root))
     summary = build_summary(results, root, artifact_dir, gh_repo, gh_pr_number, gh_run_id)
     (artifact_dir / "summary.json").write_text(
