@@ -911,12 +911,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density self-test success output order audit | Keeps final success output after all validation helpers and before normal density failure handling. | Verified `finishSelfTestOk()` runs after `assertHelpLineWidthSelfTest()` and exits inside self-test mode before the non-self-test `result` and `workflowResult` failure path. | Evidence: no runtime output growth; self-test success output remains unchanged. |
 | Broker evidence confidence symbol-only staleness | Prevents agents from treating symbol-only changes as high-confidence cached context. | Included changed symbols as evidence signals, added a stale-symbol confidence penalty, and surfaced `stale_symbols` in the compact confidence line. | Evidence: `broker_evidence_confidence_penalizes_symbol_only_staleness`; compact metric: confidence line remains two lines. |
 | Broker context debt symbol payoff | Gives agents a concrete action when stale evidence is symbol-only. | Added a compact `payoff stale_symbol` line for the first changed symbol and covered the pathless symbol-debt case. | Evidence: `broker_context_debt_surfaces_symbol_payoff_without_stale_path`; compact metric: debt output remains item-limited. |
+| Broker context debt symbol payoff order | Keeps stale-symbol payoff guidance near stale-path payoff guidance. | Added coverage that mixed path/symbol debt emits stale-path payoff, stale-symbol payoff, open-question payoff, and unverified-edit payoff in priority order. | Evidence: `broker_context_debt_orders_symbol_payoff_after_path_payoff`; compact metric: debt output remains item-limited. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker context debt symbol payoff order audit | Keeps stale-symbol payoff guidance near stale-path payoff guidance. | Verify `render_context_debt_lines()` emits `payoff stale_symbol` after stale-path payoff and before open-question/unverified-edit/contradiction payoff lines. | Compact metric: debt section remains item-limited; correctness metric: symbol-only debt payoff remains covered. |
+| Broker context debt symbol clearing audit | Checks whether symbol-only debt clears after verification evidence just like path debt. | Add focused coverage that a symbol-only changed snapshot with fresh test/build evidence does not render `context_debt`. | Compact metric: no new broker context section when verified; correctness metric: symbol-only debt clearing is explicit. |
 
 ## Research Rules
 

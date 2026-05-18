@@ -1823,6 +1823,57 @@ fn broker_context_debt_surfaces_symbol_payoff_without_stale_path() {
 }
 
 #[test]
+fn broker_context_debt_orders_symbol_payoff_after_path_payoff() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let sections = build_broker_sections(
+        &root,
+        &state,
+        &BrokerGetContextRequest {
+            task_id: "task-symbol-debt-order".to_string(),
+            action: Some(BrokerAction::Edit),
+            include_sections: vec!["context_debt".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &suite_packet_core::AgentSnapshotPayload {
+            changed_paths_since_checkpoint: vec!["src/auth.rs".to_string()],
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            open_questions: vec![suite_packet_core::AgentQuestion {
+                id: "q-auth".to_string(),
+                text: "Which auth cache path owns this?".to_string(),
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+        None,
+        None,
+    );
+    let debt = sections
+        .iter()
+        .find(|section| section.id == "context_debt")
+        .expect("mixed stale evidence should render debt");
+    let stale_path_index = debt
+        .body
+        .find("payoff stale_path")
+        .expect("stale path payoff should render");
+    let stale_symbol_index = debt
+        .body
+        .find("payoff stale_symbol")
+        .expect("stale symbol payoff should render");
+    let open_questions_index = debt
+        .body
+        .find("payoff open_questions")
+        .expect("open question payoff should render");
+    let unverified_edits_index = debt
+        .body
+        .find("payoff unverified_edits")
+        .expect("unverified edit payoff should render");
+
+    assert!(stale_path_index < stale_symbol_index);
+    assert!(stale_symbol_index < open_questions_index);
+    assert!(open_questions_index < unverified_edits_index);
+}
+
+#[test]
 fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     let state = daemon_test_state();
     let root = daemon_test_root(&state);
