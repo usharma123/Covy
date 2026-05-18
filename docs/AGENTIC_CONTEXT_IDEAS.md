@@ -903,12 +903,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density JSON headroom-min failure-shape order audit | Keeps JSON headroom-min failure-shape checks after JSON max failure-shape checks and before direct JSON budget checks. | Verified `assertJsonHeadroomMinFailureShapeSelfTests()` runs after `assertJsonMaxFailureShapeSelfTests()` and before `assertJsonBudgetIssueMutationSelfTest()`. | Evidence: no runtime output growth; JSON headroom-min failure-shape coverage remains unchanged. |
 | Context anomaly drilldown density direct JSON budget issue audit | Checks whether direct `jsonBudgetIssue()` unit coverage remains explicit after failure-shape checks. | Re-scanned `assertJsonBudgetIssueMutationSelfTest()` and kept its existing named limit, fallback ok result, and expected JSON-too-long code constants. | Evidence: no runtime output growth; direct JSON budget coverage remains unchanged. |
 | Context anomaly drilldown density direct JSON budget issue order audit | Keeps direct JSON budget issue coverage after JSON headroom-min failures and before help output checks. | Verified `assertJsonBudgetIssueMutationSelfTest()` runs after `assertJsonHeadroomMinFailureShapeSelfTests()` and before `assertHelpIncludesSelfTests()`. | Evidence: no runtime output growth; direct JSON budget coverage remains unchanged. |
+| Context anomaly drilldown density help includes output audit | Checks whether help-output token coverage remains explicit after direct JSON budget checks. | Re-scanned `assertHelpIncludesSelfTests()` and kept its named `expectedHelpIncludes` list because it already groups required modes, options, unknown-option code, and soft-row env documentation before the assertion loop. | Evidence: no runtime output growth; help output required-token coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density help includes output audit | Checks whether help-output token coverage remains explicit after direct JSON budget checks. | Re-scan `assertHelpIncludesSelfTests()` and decide whether its required token list needs additional grouping or shared labels. | Compact metric: no runtime output growth; correctness metric: help output required-token coverage remains unchanged. |
+| Context anomaly drilldown density help includes output order audit | Keeps help-output token coverage after direct JSON budget checks and before help line-width diagnostics. | Verify `assertHelpIncludesSelfTests()` still runs after `assertJsonBudgetIssueMutationSelfTest()` and before `assertHelpLineWidthSelfTest()`. | Compact metric: no runtime output growth; correctness metric: help output required-token coverage remains unchanged. |
 
 ## Research Rules
 
