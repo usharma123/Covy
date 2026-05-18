@@ -42,6 +42,30 @@ fn daemon_test_root(state: &Arc<Mutex<DaemonState>>) -> PathBuf {
     state.lock().unwrap().root.clone()
 }
 
+fn broker_evidence_confidence_body(
+    state: &Arc<Mutex<DaemonState>>,
+    snapshot: suite_packet_core::AgentSnapshotPayload,
+) -> String {
+    let root = daemon_test_root(state);
+    build_broker_sections(
+        &root,
+        state,
+        &BrokerGetContextRequest {
+            task_id: "task-confidence".to_string(),
+            action: Some(BrokerAction::Inspect),
+            include_sections: vec!["evidence_confidence".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &snapshot,
+        None,
+        None,
+    )
+    .into_iter()
+    .find(|section| section.id == "evidence_confidence")
+    .expect("evidence confidence should render")
+    .body
+}
+
 fn write_test_coverage_state(root: &Path, path: &str, covered: bool) {
     let mut coverage = suite_packet_core::CoverageData::new();
     let mut file = suite_packet_core::FileCoverage::new();
@@ -1957,80 +1981,39 @@ fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
         }],
         ..suite_packet_core::AgentSnapshotPayload::default()
     };
-    let request = BrokerGetContextRequest {
-        task_id: "task-confidence".to_string(),
-        action: Some(BrokerAction::Inspect),
-        include_sections: vec!["evidence_confidence".to_string()],
-        ..BrokerGetContextRequest::default()
-    };
-    let stale_sections =
-        build_broker_sections(&root, &state, &request, &stale_snapshot, None, None);
-    let fresh_sections =
-        build_broker_sections(&root, &state, &request, &fresh_snapshot, None, None);
-    let stale = stale_sections
-        .iter()
-        .find(|section| section.id == "evidence_confidence")
-        .expect("stale confidence section should render");
-    let fresh = fresh_sections
-        .iter()
-        .find(|section| section.id == "evidence_confidence")
-        .expect("fresh confidence section should render");
+    let stale = broker_evidence_confidence_body(&state, stale_snapshot);
+    let fresh = broker_evidence_confidence_body(&state, fresh_snapshot);
 
-    assert!(stale.body.contains("stale_paths=1"));
-    assert!(stale.body.contains("fallback_records=1"));
-    assert!(stale.body.contains("confidence: low"));
-    assert!(fresh.body.contains("confidence: high"));
-    assert!(fresh.body.contains("verification=fresh"));
+    assert!(stale.contains("stale_paths=1"));
+    assert!(stale.contains("fallback_records=1"));
+    assert!(stale.contains("confidence: low"));
+    assert!(fresh.contains("confidence: high"));
+    assert!(fresh.contains("verification=fresh"));
 }
 
 #[test]
 fn broker_evidence_confidence_penalizes_symbol_only_staleness() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let symbol_snapshot = suite_packet_core::AgentSnapshotPayload {
-        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-        ..suite_packet_core::AgentSnapshotPayload::default()
-    };
-    let sections = build_broker_sections(
-        &root,
+    let confidence = broker_evidence_confidence_body(
         &state,
-        &BrokerGetContextRequest {
-            task_id: "task-confidence-symbol".to_string(),
-            action: Some(BrokerAction::Inspect),
-            include_sections: vec!["evidence_confidence".to_string()],
-            ..BrokerGetContextRequest::default()
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            ..suite_packet_core::AgentSnapshotPayload::default()
         },
-        &symbol_snapshot,
-        None,
-        None,
     );
-    let confidence = sections
-        .iter()
-        .find(|section| section.id == "evidence_confidence")
-        .expect("symbol-only staleness should render confidence");
 
-    assert!(confidence.body.contains("stale_paths=0"));
-    assert!(confidence.body.contains("stale_symbols=1"));
-    assert!(confidence.body.contains("confidence: medium"));
-    assert!(confidence
-        .body
-        .contains("refresh stale/fallback evidence before relying"));
+    assert!(confidence.contains("stale_paths=0"));
+    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("confidence: medium"));
+    assert!(confidence.contains("refresh stale/fallback evidence before relying"));
 }
 
 #[test]
 fn broker_evidence_confidence_keeps_symbol_staleness_visible_after_verification() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let sections = build_broker_sections(
-        &root,
+    let confidence = broker_evidence_confidence_body(
         &state,
-        &BrokerGetContextRequest {
-            task_id: "task-confidence-symbol-verified".to_string(),
-            action: Some(BrokerAction::Inspect),
-            include_sections: vec!["evidence_confidence".to_string()],
-            ..BrokerGetContextRequest::default()
-        },
-        &suite_packet_core::AgentSnapshotPayload {
+        suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             evidence_artifact_ids: vec!["artifact-test".to_string()],
             recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
@@ -2044,33 +2027,19 @@ fn broker_evidence_confidence_keeps_symbol_staleness_visible_after_verification(
             }],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
-        None,
-        None,
     );
-    let confidence = sections
-        .iter()
-        .find(|section| section.id == "evidence_confidence")
-        .expect("verified symbol-only evidence should render confidence");
 
-    assert!(confidence.body.contains("stale_symbols=1"));
-    assert!(confidence.body.contains("confidence: high"));
-    assert!(confidence.body.contains("verification=fresh"));
+    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("confidence: high"));
+    assert!(confidence.contains("verification=fresh"));
 }
 
 #[test]
 fn broker_evidence_confidence_scores_failed_symbol_verification_low() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let sections = build_broker_sections(
-        &root,
+    let confidence = broker_evidence_confidence_body(
         &state,
-        &BrokerGetContextRequest {
-            task_id: "task-confidence-symbol-failed".to_string(),
-            action: Some(BrokerAction::Inspect),
-            include_sections: vec!["evidence_confidence".to_string()],
-            ..BrokerGetContextRequest::default()
-        },
-        &suite_packet_core::AgentSnapshotPayload {
+        suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
                 invocation_id: "test-1".to_string(),
@@ -2082,34 +2051,20 @@ fn broker_evidence_confidence_scores_failed_symbol_verification_low() {
             }],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
-        None,
-        None,
     );
-    let confidence = sections
-        .iter()
-        .find(|section| section.id == "evidence_confidence")
-        .expect("failed symbol evidence should render confidence");
 
-    assert!(confidence.body.contains("stale_symbols=1"));
-    assert!(confidence.body.contains("failures=1"));
-    assert!(confidence.body.contains("confidence: low"));
-    assert!(confidence.body.contains("verification=missing"));
+    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("failures=1"));
+    assert!(confidence.contains("confidence: low"));
+    assert!(confidence.contains("verification=missing"));
 }
 
 #[test]
 fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let sections = build_broker_sections(
-        &root,
+    let confidence = broker_evidence_confidence_body(
         &state,
-        &BrokerGetContextRequest {
-            task_id: "task-confidence-symbol-unbacked".to_string(),
-            action: Some(BrokerAction::Inspect),
-            include_sections: vec!["evidence_confidence".to_string()],
-            ..BrokerGetContextRequest::default()
-        },
-        &suite_packet_core::AgentSnapshotPayload {
+        suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
                 invocation_id: "test-1".to_string(),
@@ -2121,77 +2076,66 @@ fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
             }],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
-        None,
-        None,
     );
-    let confidence = sections
-        .iter()
-        .find(|section| section.id == "evidence_confidence")
-        .expect("unbacked symbol verification should render confidence");
 
-    assert!(confidence.body.contains("stale_symbols=1"));
-    assert!(confidence.body.contains("artifact_gaps=1"));
-    assert!(confidence.body.contains("backing=missing"));
-    assert!(confidence.body.contains("confidence: medium"));
-    assert!(confidence.body.contains("verification=fresh"));
-    assert!(confidence.body.contains("artifacts=0 backing=missing"));
+    assert!(confidence.contains("stale_symbols=1"));
+    assert!(confidence.contains("artifact_gaps=1"));
+    assert!(confidence.contains("backing=missing"));
+    assert!(confidence.contains("confidence: medium"));
+    assert!(confidence.contains("verification=fresh"));
+    assert!(confidence.contains("artifacts=0 backing=missing"));
 }
 
 #[test]
 fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let request = BrokerGetContextRequest {
-        task_id: "task-confidence-symbol-tier".to_string(),
-        action: Some(BrokerAction::Inspect),
-        include_sections: vec!["evidence_confidence".to_string()],
-        ..BrokerGetContextRequest::default()
-    };
-    let confidence_body = |snapshot: suite_packet_core::AgentSnapshotPayload| {
-        build_broker_sections(&root, &state, &request, &snapshot, None, None)
-            .into_iter()
-            .find(|section| section.id == "evidence_confidence")
-            .expect("symbol evidence should render confidence")
-            .body
-    };
-    let backed_verified = confidence_body(suite_packet_core::AgentSnapshotPayload {
-        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-        evidence_artifact_ids: vec!["artifact-test".to_string()],
-        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-            invocation_id: "test-backed".to_string(),
-            sequence: 1,
-            tool_name: "cargo test auth_cache".to_string(),
-            operation_kind: suite_packet_core::ToolOperationKind::Test,
-            result_summary: Some("tests passed".to_string()),
-            artifact_id: Some("artifact-test".to_string()),
-            ..suite_packet_core::ToolInvocationSummary::default()
-        }],
-        ..suite_packet_core::AgentSnapshotPayload::default()
-    });
-    let unbacked_verified = confidence_body(suite_packet_core::AgentSnapshotPayload {
-        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-            invocation_id: "test-unbacked".to_string(),
-            sequence: 2,
-            tool_name: "cargo test auth_cache".to_string(),
-            operation_kind: suite_packet_core::ToolOperationKind::Test,
-            result_summary: Some("tests passed".to_string()),
-            ..suite_packet_core::ToolInvocationSummary::default()
-        }],
-        ..suite_packet_core::AgentSnapshotPayload::default()
-    });
-    let failed = confidence_body(suite_packet_core::AgentSnapshotPayload {
-        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-            invocation_id: "test-failed".to_string(),
-            sequence: 3,
-            tool_name: "cargo test auth_cache".to_string(),
-            operation_kind: suite_packet_core::ToolOperationKind::Test,
-            result_summary: Some("tests failed".to_string()),
-            ..suite_packet_core::ToolInvocationSummary::default()
-        }],
-        ..suite_packet_core::AgentSnapshotPayload::default()
-    });
+    let backed_verified = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            evidence_artifact_ids: vec!["artifact-test".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-backed".to_string(),
+                sequence: 1,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                artifact_id: Some("artifact-test".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+    let unbacked_verified = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-unbacked".to_string(),
+                sequence: 2,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+    let failed = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-failed".to_string(),
+                sequence: 3,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests failed".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
 
     assert!(backed_verified.contains("confidence: high"));
     assert!(backed_verified.contains("artifact_gaps=0"));
@@ -2210,46 +2154,38 @@ fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
 #[test]
 fn broker_evidence_confidence_backing_labels_stay_compact() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let request = BrokerGetContextRequest {
-        task_id: "task-confidence-backing-width".to_string(),
-        action: Some(BrokerAction::Inspect),
-        include_sections: vec!["evidence_confidence".to_string()],
-        ..BrokerGetContextRequest::default()
-    };
-    let confidence_body = |snapshot: suite_packet_core::AgentSnapshotPayload| {
-        build_broker_sections(&root, &state, &request, &snapshot, None, None)
-            .into_iter()
-            .find(|section| section.id == "evidence_confidence")
-            .expect("symbol evidence should render confidence")
-            .body
-    };
-    let backed_verified = confidence_body(suite_packet_core::AgentSnapshotPayload {
-        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-        evidence_artifact_ids: vec!["artifact-test".to_string()],
-        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-            invocation_id: "test-backed".to_string(),
-            sequence: 1,
-            tool_name: "cargo test auth_cache".to_string(),
-            operation_kind: suite_packet_core::ToolOperationKind::Test,
-            result_summary: Some("tests passed".to_string()),
-            artifact_id: Some("artifact-test".to_string()),
-            ..suite_packet_core::ToolInvocationSummary::default()
-        }],
-        ..suite_packet_core::AgentSnapshotPayload::default()
-    });
-    let unbacked_verified = confidence_body(suite_packet_core::AgentSnapshotPayload {
-        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-            invocation_id: "test-unbacked".to_string(),
-            sequence: 2,
-            tool_name: "cargo test auth_cache".to_string(),
-            operation_kind: suite_packet_core::ToolOperationKind::Test,
-            result_summary: Some("tests passed".to_string()),
-            ..suite_packet_core::ToolInvocationSummary::default()
-        }],
-        ..suite_packet_core::AgentSnapshotPayload::default()
-    });
+    let backed_verified = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            evidence_artifact_ids: vec!["artifact-test".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-backed".to_string(),
+                sequence: 1,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                artifact_id: Some("artifact-test".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+    let unbacked_verified = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-unbacked".to_string(),
+                sequence: 2,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
 
     for body in [backed_verified, unbacked_verified] {
         let lines = body.lines().collect::<Vec<_>>();

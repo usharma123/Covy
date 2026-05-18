@@ -921,12 +921,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker test root cross-process isolation | Keeps focused broker tests reliable when agents run filtered cargo tests in parallel. | Included the process id in `daemon_test_state()` temp roots so separate test processes no longer collide when started in the same millisecond. | Evidence: parallel focused confidence tests passed; compact metric: no product output change. |
 | Broker evidence confidence backing reason label | Makes the actionable confidence reason carry the same backed/unbacked signal as the score line. | Added `backing=artifact|missing` to `confidence_reason` and extended tier coverage to assert the reason-line backing label. | Evidence: `broker_evidence_confidence_orders_symbol_evidence_tiers`; compact metric: confidence output remains two lines. |
 | Broker evidence confidence backing line-width | Keeps backing labels visible without expanding the confidence section shape. | Added coverage that representative backed and unbacked confidence output stays at two lines, each at or below 180 characters, with `backing=` visible. | Evidence: `broker_evidence_confidence_backing_labels_stay_compact`; compact metric: confidence output remains two lines. |
+| Broker evidence confidence test helper extraction | Reduces duplicate confidence-section setup without hiding tier expectations. | Extracted `broker_evidence_confidence_body()` and reused it across confidence tests while leaving each test's snapshot and assertions explicit. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: no product output change. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker evidence confidence helper extraction audit | Checks whether repeated confidence test setup should move into a shared helper. | Re-scan the symbol confidence tests and decide whether repeated `BrokerGetContextRequest` plus section lookup setup should be extracted without obscuring test readability. | Compact metric: no product output change; correctness metric: confidence tier coverage stays explicit. |
+| Broker evidence confidence helper scope audit | Checks whether the new helper should stay limited to confidence tests or be generalized for other broker section tests. | Re-scan nearby broker section tests for repeated section-body lookup patterns and decide whether broader extraction is worth the indirection. | Compact metric: no product output change; correctness metric: broker section tests stay readable. |
 
 ## Research Rules
 
