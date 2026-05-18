@@ -309,6 +309,7 @@ Current evidence:
 - Packet28 reducer search ranking now uses evidence freshness for changed paths, preferring freshly read changed paths over stale changed paths when other reducer-search signals are comparable. Evidence: `search_ranking_prefers_fresh_changed_path_over_stale_changed_path`.
 - Packet28 evidence confidence now treats changed symbols as stale evidence signals, rendering confidence for symbol-only changes and lowering confidence until symbol evidence is refreshed. Evidence: `broker_evidence_confidence_penalizes_symbol_only_staleness`.
 - Packet28 context debt now emits a direct `stale_symbol` payoff for symbol-only stale evidence, giving agents a concrete inspect/search action even when no changed path is available. Evidence: `broker_context_debt_surfaces_symbol_payoff_without_stale_path`.
+- Packet28 evidence confidence now distinguishes artifact-backed symbol verification from unbacked tool claims, keeping changed-symbol verification at medium confidence when no artifact handle or raw artifact is available. Evidence: `broker_evidence_confidence_scores_unbacked_symbol_verification_medium`.
 
 ### 6. Release Readiness
 

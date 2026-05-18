@@ -915,12 +915,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker context debt symbol clearing | Prevents stale symbol debt from persisting after fresh verification. | Added coverage that a symbol-only changed snapshot with a successful test invocation does not render `context_debt`. | Evidence: `broker_context_debt_clears_symbol_only_after_verification`; compact metric: no debt section when verified. |
 | Broker evidence confidence symbol verification | Keeps symbol staleness visible even when successful verification raises confidence. | Added coverage that symbol-only verified evidence reports high confidence, fresh verification, and `stale_symbols=1` in the compact confidence line. | Evidence: `broker_evidence_confidence_keeps_symbol_staleness_visible_after_verification`; compact metric: confidence output remains two lines. |
 | Broker evidence confidence symbol failure | Prevents failed symbol-related verification from looking reliable. | Added coverage that changed-symbol evidence with a failing test reports stale symbols, one failure, missing verification, and low confidence. | Evidence: `broker_evidence_confidence_scores_failed_symbol_verification_low`; compact metric: confidence output remains two lines. |
+| Broker evidence confidence artifact-backed symbols | Distinguishes backed symbol verification from unbacked tool claims. | Added a symbol-specific unbacked-evidence penalty and coverage that changed-symbol verification without artifact/raw evidence stays medium confidence. | Evidence: `broker_evidence_confidence_scores_unbacked_symbol_verification_medium`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker evidence confidence artifact gap audit | Checks whether symbol evidence without an artifact-backed read/test remains clearly weaker than artifact-backed evidence. | Re-scan artifact-gap scoring for changed-symbol snapshots and decide whether missing artifacts should affect symbol-focused confidence more strongly. | Compact metric: confidence output remains two lines; correctness metric: symbol confidence distinguishes backed evidence from unbacked tool claims. |
+| Broker evidence confidence artifact-backed order audit | Keeps artifact-backed, unbacked, and failed symbol confidence expectations distinct. | Verify backed verified symbols remain high, unbacked verified symbols remain medium, and failed symbol verification remains low. | Compact metric: confidence output remains two lines; correctness metric: symbol confidence tiers remain explicit. |
 
 ## Research Rules
 
