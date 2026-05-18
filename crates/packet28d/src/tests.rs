@@ -2135,6 +2135,70 @@ fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
 }
 
 #[test]
+fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let request = BrokerGetContextRequest {
+        task_id: "task-confidence-symbol-tier".to_string(),
+        action: Some(BrokerAction::Inspect),
+        include_sections: vec!["evidence_confidence".to_string()],
+        ..BrokerGetContextRequest::default()
+    };
+    let confidence_body = |snapshot: suite_packet_core::AgentSnapshotPayload| {
+        build_broker_sections(&root, &state, &request, &snapshot, None, None)
+            .into_iter()
+            .find(|section| section.id == "evidence_confidence")
+            .expect("symbol evidence should render confidence")
+            .body
+    };
+    let backed_verified = confidence_body(suite_packet_core::AgentSnapshotPayload {
+        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+        evidence_artifact_ids: vec!["artifact-test".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "test-backed".to_string(),
+            sequence: 1,
+            tool_name: "cargo test auth_cache".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Test,
+            result_summary: Some("tests passed".to_string()),
+            artifact_id: Some("artifact-test".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    });
+    let unbacked_verified = confidence_body(suite_packet_core::AgentSnapshotPayload {
+        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "test-unbacked".to_string(),
+            sequence: 2,
+            tool_name: "cargo test auth_cache".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Test,
+            result_summary: Some("tests passed".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    });
+    let failed = confidence_body(suite_packet_core::AgentSnapshotPayload {
+        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "test-failed".to_string(),
+            sequence: 3,
+            tool_name: "cargo test auth_cache".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Test,
+            result_summary: Some("tests failed".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    });
+
+    assert!(backed_verified.contains("confidence: high"));
+    assert!(backed_verified.contains("artifact_gaps=0"));
+    assert!(unbacked_verified.contains("confidence: medium"));
+    assert!(unbacked_verified.contains("artifact_gaps=1"));
+    assert!(failed.contains("confidence: low"));
+    assert!(failed.contains("failures=1"));
+}
+
+#[test]
 fn render_task_memory_lines_surfaces_recent_state() {
     let snapshot = suite_packet_core::AgentSnapshotPayload {
         files_read: vec!["src/alpha.rs".to_string()],
