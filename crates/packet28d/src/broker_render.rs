@@ -1208,6 +1208,15 @@ fn render_evidence_confidence_lines(
                 )
         })
         .count() as u64;
+    let artifact_backed = !snapshot.evidence_artifact_ids.is_empty()
+        || snapshot.recent_tool_invocations.iter().any(|invocation| {
+            invocation.artifact_id.is_some() || invocation.raw_artifact_available
+        });
+    let evidence_backing = if artifact_gap > 0 || !artifact_backed {
+        "missing"
+    } else {
+        "artifact"
+    };
     let unbacked_symbol_evidence = stale_symbols > 0 && artifact_gap > 0;
     let score = 100_u64
         .saturating_sub(stale_paths.saturating_mul(20).min(40))
@@ -1227,7 +1236,7 @@ fn render_evidence_confidence_lines(
     };
     vec![
         format!(
-            "- confidence: {label} score={score} stale_paths={stale_paths} stale_symbols={stale_symbols} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap}"
+            "- confidence: {label} score={score} stale_paths={stale_paths} stale_symbols={stale_symbols} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap} backing={evidence_backing}"
         ),
         format!(
             "- confidence_reason: source=local_tool_state verification={} artifacts={} payoff={}",

@@ -10,8 +10,9 @@ static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
     let root = std::env::temp_dir().join(format!(
-        "packet28-broker-test-{}-{}",
+        "packet28-broker-test-{}-{}-{}",
         now_unix_millis(),
+        std::process::id(),
         TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&root).unwrap();
@@ -2130,6 +2131,7 @@ fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
 
     assert!(confidence.body.contains("stale_symbols=1"));
     assert!(confidence.body.contains("artifact_gaps=1"));
+    assert!(confidence.body.contains("backing=missing"));
     assert!(confidence.body.contains("confidence: medium"));
     assert!(confidence.body.contains("verification=fresh"));
 }
@@ -2192,10 +2194,13 @@ fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
 
     assert!(backed_verified.contains("confidence: high"));
     assert!(backed_verified.contains("artifact_gaps=0"));
+    assert!(backed_verified.contains("backing=artifact"));
     assert!(unbacked_verified.contains("confidence: medium"));
     assert!(unbacked_verified.contains("artifact_gaps=1"));
+    assert!(unbacked_verified.contains("backing=missing"));
     assert!(failed.contains("confidence: low"));
     assert!(failed.contains("failures=1"));
+    assert!(failed.contains("backing=missing"));
 }
 
 #[test]
