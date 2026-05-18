@@ -898,12 +898,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Context anomaly drilldown density text headroom output audit | Checks whether text headroom output coverage remains correctly grouped after text JSON failure-shape checks. | Re-scanned `assertTextHeadroomOutputSelfTests()` and kept its shared exact-cap env plus table rows for default text headroom, JSON headroom, and JSON iteration count. | Evidence: no runtime output growth; text headroom output coverage remains unchanged. |
 | Context anomaly drilldown density text headroom output order audit | Keeps text headroom output checks after text JSON failure-shape checks and before JSON max failure-shape checks. | Verified `assertTextHeadroomOutputSelfTests()` runs after `assertTextJsonFailureShapeSelfTests()` and before `assertJsonMaxFailureShapeSelfTests()`. | Evidence: no runtime output growth; text headroom output coverage remains unchanged. |
 | Context anomaly drilldown density JSON max failure-shape code sharing | Reduces drift inside JSON max failure-shape coverage. | Named the expected JSON-too-long code once inside `assertJsonMaxFailureShapeSelfTests()` and reused it for both the expected JSON output token and `assertEnvFailure()`. | Evidence: no runtime output growth; JSON max failure-shape coverage remains unchanged. |
+| Context anomaly drilldown density JSON max failure-shape order audit | Keeps JSON max failure-shape checks after text headroom outputs and before JSON headroom-min failure-shape checks. | Verified `assertJsonMaxFailureShapeSelfTests()` runs after `assertTextHeadroomOutputSelfTests()` and before `assertJsonHeadroomMinFailureShapeSelfTests()`. | Evidence: no runtime output growth; JSON max failure-shape coverage remains unchanged. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Context anomaly drilldown density JSON max failure-shape order audit | Keeps JSON max failure-shape checks after text headroom outputs and before JSON headroom-min failure-shape checks. | Verify `assertJsonMaxFailureShapeSelfTests()` still runs after `assertTextHeadroomOutputSelfTests()` and before `assertJsonHeadroomMinFailureShapeSelfTests()`. | Compact metric: no runtime output growth; correctness metric: JSON max failure-shape coverage remains unchanged. |
+| Context anomaly drilldown density JSON headroom-min failure-shape audit | Checks whether JSON headroom-min failure output coverage remains explicit after JSON max failure-shape checks. | Re-scan `assertJsonHeadroomMinFailureShapeSelfTests()` and decide whether its env, args, expected-output, and exclusion tokens need any additional sharing. | Compact metric: no runtime output growth; correctness metric: JSON headroom-min failure-shape coverage remains unchanged. |
 
 ## Research Rules
 
