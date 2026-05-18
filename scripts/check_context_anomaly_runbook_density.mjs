@@ -2479,15 +2479,17 @@ if (args.includes("--self-test")) {
         P28_CONTEXT_ANOMALY_RUNBOOK_JSON_MAX: "10",
       };
       const jsonFailureArgs = ["--json"];
+      const expectedJsonMaxFailureCode =
+        "context_anomaly_runbook_density_json_too_long";
       const expectedJsonMaxFailureOutput = [
         '"ok":false',
-        '"code":"context_anomaly_runbook_density_json_too_long"',
+        `"code":"${expectedJsonMaxFailureCode}"`,
       ];
       const excludedJsonMaxFailureOutput = '"default_output_iterations"';
       assertEnvFailure(
         jsonMaxFailureEnv,
         jsonFailureArgs,
-        "context_anomaly_runbook_density_json_too_long",
+        expectedJsonMaxFailureCode,
       );
       assertEnvFailureOutput(
         jsonMaxFailureEnv,
