@@ -951,12 +951,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence helper-name audit | Keeps confidence helper naming aligned with the unified test prefix. | Renamed the reason-line helper to `broker_evidence_confidence_reason_line()` so helper searches match the confidence cluster prefix. | Evidence: `broker_evidence_confidence_reason_lines_stay_stable`; compact metric: no product output change. |
 | Broker confidence prefix cleanup audit | Removes stale pre-unification prefix references from docs and tests. | Re-scanned docs and confidence tests after helper renaming, then rewrote historical audit rows so the obsolete prefix no longer creates grep noise. | Evidence: no stale prefix matches in docs or `crates/packet28d/src/tests.rs`; compact metric: no product output change. |
 | Broker confidence evidence-name consistency audit | Keeps documented confidence evidence names runnable or intentionally helper-scoped. | Compared confidence identifiers in docs against `crates/packet28d/src/tests.rs`; all resolve, with only `broker_evidence_confidence_body()` and `broker_evidence_confidence_reason_line()` being helper mentions rather than test gates. | Evidence: identifier scan across docs and tests; compact metric: no product output change. |
+| Broker confidence helper-mention audit | Keeps helper mentions distinct from runnable test evidence. | Re-scanned confidence rows that mention helper names and kept them in helper-extraction, helper-scope, helper-name, or explicit test-helper contexts rather than test-gate rows. | Evidence: helper mention scan across docs and tests; compact metric: no product output change. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence helper-mention audit | Checks whether helper names in docs should be marked as helpers. | Re-scan confidence rows that mention `broker_evidence_confidence_body()` or `broker_evidence_confidence_reason_line()` and decide whether to label them explicitly as helper evidence. | Compact metric: docs-only; correctness metric: readers can distinguish helper mentions from runnable tests. |
+| Broker confidence docs/gate split audit | Checks whether docs-only confidence audits are clearly separated from runnable gates. | Re-scan recent confidence rows and ensure docs-only audits say docs-only while test-backed rows cite runnable filters or test names. | Compact metric: docs-only; correctness metric: evidence strength is explicit. |
 
 ## Research Rules
 
