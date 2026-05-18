@@ -1223,7 +1223,7 @@ fn render_evidence_confidence_lines(
         .saturating_sub(changed_symbols.saturating_mul(20).min(40))
         .saturating_sub(fallback_count.saturating_mul(20).min(40))
         .saturating_sub(failure_count.saturating_mul(25).min(50))
-        .saturating_sub(artifact_gap.saturating_mul(5).min(20))
+        .saturating_sub(artifact_gap.saturating_mul(10).min(40))
         .saturating_sub(if unbacked_symbol_evidence { 10 } else { 0 })
         .saturating_add(if successful_verification { 10 } else { 0 })
         .min(100);

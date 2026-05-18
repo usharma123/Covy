@@ -934,12 +934,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence stale-path label audit | Keeps path and symbol freshness labels semantically distinct. | Added mixed path/symbol coverage showing confidence keeps `stale_paths` for unread changed paths and `changed_symbols` for changed symbol counts. | Evidence: `broker_confidence_distinguishes_stale_paths_from_changed_symbols`; compact metric: confidence output remains two lines. |
 | Broker confidence mixed-freshness payoff wording | Helps agents decide whether to refresh paths, symbols, fallback, artifacts, or failures first. | Replaced the generic confidence payoff with compact blocker-specific wording and covered mixed path/symbol, fallback, successful, failed, symbol-only, and unbacked-symbol cases. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: confidence output remains two lines. |
 | Broker confidence payoff priority audit | Keeps confidence payoff advice stable across overlapping blockers. | Added direct coverage for usable evidence, failures, mixed path/symbol freshness, artifact-backed symbol evidence, changed symbols, fallback records, and artifact gaps. | Evidence: `broker_confidence_payoff_priority_orders_repair_actions`; compact metric: no output growth. |
+| Broker confidence artifact-gap score sensitivity | Prevents repeated unbacked evidence from looking high confidence. | Increased the artifact-gap penalty and added coverage that two evidence-producing tool calls without artifacts render medium confidence with an artifact-backed payoff. | Evidence: `broker_evidence_confidence_scores_repeated_artifact_gaps_medium`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence artifact-gap score sensitivity | Checks whether missing artifacts should affect score more strongly. | Add coverage for multiple artifact gaps and decide whether repeated unbacked tool evidence should drop from high to medium confidence sooner. | Compact metric: confidence output remains two lines; correctness metric: artifact-heavy evidence does not look overconfident. |
+| Broker confidence single artifact-gap tolerance audit | Checks whether one missing artifact should still allow high confidence. | Add or adjust coverage for a single artifact gap with otherwise clean evidence and decide whether the backing label is enough or score should drop. | Compact metric: confidence output remains two lines; correctness metric: one unbacked call is not over- or under-penalized. |
 
 ## Research Rules
 

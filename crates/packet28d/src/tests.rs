@@ -2157,6 +2157,40 @@ fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
 }
 
 #[test]
+fn broker_evidence_confidence_scores_repeated_artifact_gaps_medium() {
+    let state = daemon_test_state();
+    let confidence = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            recent_tool_invocations: vec![
+                suite_packet_core::ToolInvocationSummary {
+                    invocation_id: "search-1".to_string(),
+                    sequence: 1,
+                    tool_name: "rg AuthCache".to_string(),
+                    operation_kind: suite_packet_core::ToolOperationKind::Search,
+                    result_summary: Some("matched AuthCache".to_string()),
+                    ..suite_packet_core::ToolInvocationSummary::default()
+                },
+                suite_packet_core::ToolInvocationSummary {
+                    invocation_id: "read-1".to_string(),
+                    sequence: 2,
+                    tool_name: "read src/auth.rs".to_string(),
+                    operation_kind: suite_packet_core::ToolOperationKind::Read,
+                    result_summary: Some("read auth cache code".to_string()),
+                    ..suite_packet_core::ToolInvocationSummary::default()
+                },
+            ],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+
+    assert!(confidence.contains("artifact_gaps=2"));
+    assert!(confidence.contains("backing=missing"));
+    assert!(confidence.contains("confidence: medium"));
+    assert!(confidence.contains("payoff=capture artifact-backed evidence"));
+}
+
+#[test]
 fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
     let state = daemon_test_state();
     let backed_verified = broker_evidence_confidence_body(
