@@ -419,7 +419,7 @@ def run_packet28_trace(root: Path, packet28_bin: Path) -> tuple[list[dict[str, A
                     "task_id": TASK_ID,
                     "path": str(FIX_PATH),
                     "line_start": 1,
-                    "line_end": 140,
+                    "line_end": 28,
                     "response_mode": "slim",
                 },
             )
@@ -480,18 +480,51 @@ def run_packet28_trace(root: Path, packet28_bin: Path) -> tuple[list[dict[str, A
 def summarize(normal_steps: list[dict[str, Any]], packet_steps: list[dict[str, Any]]) -> dict[str, Any]:
     normal_tokens = sum(step["tokens"] for step in normal_steps)
     packet_tokens = sum(step["tokens"] for step in packet_steps)
+    artifact_tokens = sum(step.get("artifact_fetch_tokens", 0) for step in packet_steps)
+    packet_tokens_with_artifacts = packet_tokens + artifact_tokens
     saved = normal_tokens - packet_tokens
+    saved_with_artifacts = normal_tokens - packet_tokens_with_artifacts
     pct = round(100.0 * saved / normal_tokens, 1) if normal_tokens else 0.0
+    pct_with_artifacts = (
+        round(100.0 * saved_with_artifacts / normal_tokens, 1) if normal_tokens else 0.0
+    )
+    hook_steps = [
+        step
+        for step in packet_steps
+        if step.get("tool") == "packet28.hook" and step.get("status") == "ok"
+    ]
+    hook_raw_tokens = sum(step.get("raw_tokens", 0) for step in hook_steps)
+    hook_reduced_tokens = sum(step.get("reduced_tokens", 0) for step in hook_steps)
+    hook_reduction_pct = (
+        round(100.0 * (hook_raw_tokens - hook_reduced_tokens) / hook_raw_tokens, 1)
+        if hook_raw_tokens
+        else None
+    )
+    artifact_steps = [step for step in packet_steps if step.get("artifact_fetch_tokens", 0) > 0]
+    artifact_full_tokens = sum(step.get("artifact_fetch_tokens", 0) for step in artifact_steps)
+    artifact_slim_tokens = sum(step.get("tokens", 0) for step in artifact_steps)
+    artifact_slim_reduction_pct = (
+        round(100.0 * (artifact_full_tokens - artifact_slim_tokens) / artifact_full_tokens, 1)
+        if artifact_full_tokens
+        else None
+    )
     return {
         "normal_context_tokens": normal_tokens,
         "packet28_context_tokens": packet_tokens,
+        "packet28_context_with_optional_artifacts_tokens": packet_tokens_with_artifacts,
         "saved_context_tokens": saved,
+        "saved_context_with_optional_artifacts_tokens": saved_with_artifacts,
         "savings_pct": pct,
+        "savings_with_optional_artifacts_pct": pct_with_artifacts,
         "normal_step_count": len(normal_steps),
         "packet28_step_count": len(packet_steps),
-        "packet28_optional_artifact_fetch_tokens": sum(
-            step.get("artifact_fetch_tokens", 0) for step in packet_steps
-        ),
+        "packet28_optional_artifact_fetch_tokens": artifact_tokens,
+        "hook_raw_tokens": hook_raw_tokens,
+        "hook_reduced_tokens": hook_reduced_tokens,
+        "hook_reduction_pct": hook_reduction_pct,
+        "artifact_full_tokens": artifact_full_tokens,
+        "artifact_slim_tokens": artifact_slim_tokens,
+        "artifact_slim_reduction_pct": artifact_slim_reduction_pct,
     }
 
 
@@ -510,10 +543,16 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Packet28 context: `{summary['packet28_context_tokens']}` estimated tokens",
         f"- Saved context: `{summary['saved_context_tokens']}` estimated tokens",
         f"- Savings: `{summary['savings_pct']}%`",
+        f"- Packet28 context if every optional artifact is fetched into context: `{summary['packet28_context_with_optional_artifacts_tokens']}` estimated tokens",
+        f"- Savings with optional artifact fetches included: `{summary['savings_with_optional_artifacts_pct']}%`",
+        f"- Hook-only route reduction: `{summary['hook_reduction_pct']}%`",
+        f"- Slim MCP payload reduction versus full artifact payloads: `{summary['artifact_slim_reduction_pct']}%`",
         f"- Normal steps: `{summary['normal_step_count']}`",
         f"- Packet28 steps, including extra safety/features: `{summary['packet28_step_count']}`",
         f"- Optional full-artifact fetch tokens verified but not counted in slim context: `{summary['packet28_optional_artifact_fetch_tokens']}`",
         f"- Feature checks passed: `{passed_feature_checks}/{total_feature_checks}`",
+        "",
+        "The 90% claim is valid only for slim context kept in the agent window. Artifact fetches are recovery/debug operations and are reported separately because fetching every artifact into context is a different usage mode.",
         "",
         "## Feature Checks",
         "",
@@ -566,6 +605,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--packet28-bin", default="target/debug/Packet28")
     parser.add_argument("--artifact-dir", required=True)
     parser.add_argument("--keep-work", action="store_true")
+    parser.add_argument("--min-slim-savings-pct", type=float, default=90.0)
+    parser.add_argument("--min-with-artifacts-savings-pct", type=float, default=50.0)
     return parser.parse_args()
 
 
@@ -609,7 +650,19 @@ def main() -> int:
         shutil.rmtree(work_dir, ignore_errors=True)
     if not all(feature_checks.values()):
         return 1
-    if summary["saved_context_tokens"] <= 0:
+    if summary["savings_pct"] < args.min_slim_savings_pct:
+        print(
+            f"slim savings {summary['savings_pct']}% below required {args.min_slim_savings_pct}%",
+            file=sys.stderr,
+        )
+        return 1
+    if summary["savings_with_optional_artifacts_pct"] < args.min_with_artifacts_savings_pct:
+        print(
+            "savings with optional artifacts "
+            f"{summary['savings_with_optional_artifacts_pct']}% below required "
+            f"{args.min_with_artifacts_savings_pct}%",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

@@ -9,6 +9,7 @@ on:
       - "scripts/validate_hook_benchmarks.py"
       - "scripts/benchmark_native_mcp.py"
       - "scripts/validate_native_benchmarks.py"
+      - "scripts/bench_agentic_coding_task.py"
       - "scripts/benchmark_common.py"
       - "scripts/hook_benchmark_thresholds.py"
       - "crates/packet28-reducer-core/**"
@@ -29,6 +30,7 @@ on:
       - "scripts/validate_hook_benchmarks.py"
       - "scripts/benchmark_native_mcp.py"
       - "scripts/validate_native_benchmarks.py"
+      - "scripts/bench_agentic_coding_task.py"
       - "scripts/benchmark_common.py"
       - "scripts/hook_benchmark_thresholds.py"
       - "crates/packet28-reducer-core/**"
@@ -80,6 +82,13 @@ jobs:
             --root "$GITHUB_WORKSPACE" \
             --artifact-dir "$GITHUB_WORKSPACE/.packet28/benchmarks/ci-native-suite"
 
+      - name: Run agentic tokenomics benchmark
+        run: |
+          python3 scripts/bench_agentic_coding_task.py \
+            --artifact-dir "$GITHUB_WORKSPACE/.packet28/benchmarks/ci-agentic-tokenomics" \
+            --min-slim-savings-pct 90 \
+            --min-with-artifacts-savings-pct 50
+
       - name: Validate hook benchmark thresholds
         run: |
           python3 scripts/validate_hook_benchmarks.py \
@@ -101,6 +110,8 @@ jobs:
           cat .packet28/benchmarks/ci-native-suite/summary.md >> "$GITHUB_STEP_SUMMARY"
           printf '\n' >> "$GITHUB_STEP_SUMMARY"
           cat .packet28/benchmarks/ci-native-suite/validation.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n' >> "$GITHUB_STEP_SUMMARY"
+          cat .packet28/benchmarks/ci-agentic-tokenomics/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hook benchmark artifacts
         uses: actions/upload-artifact@v6
