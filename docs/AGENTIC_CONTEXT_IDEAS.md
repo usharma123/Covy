@@ -940,12 +940,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence score-spread documentation | Helps agents interpret the numeric score beside high/medium/low labels. | Added a compact `risk=` code to `confidence_reason` for none, failures, mixed freshness, stale paths, changed symbols, and missing backing without adding a section line. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: confidence output remains two lines. |
 | Broker confidence risk priority audit | Keeps the new `risk=` reason code aligned with payoff priority. | Added direct coverage for `confidence_risk()` across usable evidence, failures, mixed freshness, stale paths, missing backing, changed symbols, and fallback records. | Evidence: `broker_confidence_risk_priority_matches_repair_actions`; compact metric: no output growth. |
 | Broker confidence helper duplication audit | Keeps payoff and risk priorities single-sourced. | Replaced duplicate priority ladders with an internal confidence risk class and extended direct tests to cover fallback-plus-artifact precedence for both payoff and risk labels. | Evidence: `broker_confidence_payoff_priority_orders_repair_actions`; `broker_confidence_risk_priority_matches_repair_actions`; compact metric: no output growth. |
+| Broker confidence risk-class naming audit | Keeps internal risk names aligned with rendered labels. | Renamed internal missing-backing variants to distinguish changed-symbol missing backing from generic artifact missing backing while keeping both rendered as `risk=missing_backing`. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: no output change. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence risk-class naming audit | Checks whether internal risk class names stay aligned with rendered labels. | Re-scan `ConfidenceRiskClass` variant names against `risk=` and `payoff=` strings, especially missing symbol backing versus generic missing backing. | Compact metric: no output growth; correctness metric: internal names explain rendered output without leaking implementation detail. |
+| Broker confidence risk-class output audit | Ensures the risk-class refactor did not change rendered confidence output unexpectedly. | Add a snapshot-like compact assertion for representative confidence reason lines after the risk-class renaming. | Compact metric: confidence output remains two lines; correctness metric: rendered risk/payoff strings stay stable. |
 
 ## Research Rules
 

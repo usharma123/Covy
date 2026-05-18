@@ -1276,10 +1276,10 @@ enum ConfidenceRiskClass {
     Failures,
     MixedFreshness,
     StalePaths,
-    MissingSymbolBacking,
+    ChangedSymbolMissingBacking,
     ChangedSymbols,
     FallbackRecords,
-    MissingBacking,
+    ArtifactMissingBacking,
     WeakEvidence,
 }
 
@@ -1304,7 +1304,7 @@ fn confidence_risk_class(
         return ConfidenceRiskClass::StalePaths;
     }
     if changed_symbols > 0 && artifact_gap > 0 {
-        return ConfidenceRiskClass::MissingSymbolBacking;
+        return ConfidenceRiskClass::ChangedSymbolMissingBacking;
     }
     if changed_symbols > 0 {
         return ConfidenceRiskClass::ChangedSymbols;
@@ -1313,7 +1313,7 @@ fn confidence_risk_class(
         return ConfidenceRiskClass::FallbackRecords;
     }
     if artifact_gap > 0 {
-        return ConfidenceRiskClass::MissingBacking;
+        return ConfidenceRiskClass::ArtifactMissingBacking;
     }
     ConfidenceRiskClass::WeakEvidence
 }
@@ -1338,10 +1338,12 @@ pub(crate) fn confidence_payoff(
         ConfidenceRiskClass::Failures => "rerun failing evidence",
         ConfidenceRiskClass::MixedFreshness => "refresh stale_paths+changed_symbols",
         ConfidenceRiskClass::StalePaths => "refresh stale_paths",
-        ConfidenceRiskClass::MissingSymbolBacking => "capture artifact-backed symbol evidence",
+        ConfidenceRiskClass::ChangedSymbolMissingBacking => {
+            "capture artifact-backed symbol evidence"
+        }
         ConfidenceRiskClass::ChangedSymbols => "refresh changed_symbols",
         ConfidenceRiskClass::FallbackRecords => "replace fallback_records",
-        ConfidenceRiskClass::MissingBacking => "capture artifact-backed evidence",
+        ConfidenceRiskClass::ArtifactMissingBacking => "capture artifact-backed evidence",
         ConfidenceRiskClass::WeakEvidence => "refresh weak evidence",
     }
 }
@@ -1366,10 +1368,10 @@ pub(crate) fn confidence_risk(
         ConfidenceRiskClass::Failures => "failures",
         ConfidenceRiskClass::MixedFreshness => "freshness_mixed",
         ConfidenceRiskClass::StalePaths => "stale_paths",
-        ConfidenceRiskClass::MissingSymbolBacking => "missing_backing",
+        ConfidenceRiskClass::ChangedSymbolMissingBacking => "missing_backing",
         ConfidenceRiskClass::ChangedSymbols => "changed_symbols",
         ConfidenceRiskClass::FallbackRecords => "fallback_records",
-        ConfidenceRiskClass::MissingBacking => "missing_backing",
+        ConfidenceRiskClass::ArtifactMissingBacking => "missing_backing",
         ConfidenceRiskClass::WeakEvidence => "weak_evidence",
     }
 }
