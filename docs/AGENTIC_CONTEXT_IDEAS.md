@@ -937,12 +937,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence artifact-gap score sensitivity | Prevents repeated unbacked evidence from looking high confidence. | Increased the artifact-gap penalty and added coverage that two evidence-producing tool calls without artifacts render medium confidence with an artifact-backed payoff. | Evidence: `broker_evidence_confidence_scores_repeated_artifact_gaps_medium`; compact metric: confidence output remains two lines. |
 | Broker confidence single artifact-gap tolerance audit | Prevents one unbacked successful verification from being promoted to high confidence. | Capped missing-backed confidence below high and added coverage that a successful verification without artifact/raw backing reports medium confidence with an artifact-backed payoff. | Evidence: `broker_evidence_confidence_caps_missing_backing_below_high`; compact metric: confidence output remains two lines. |
 | Broker confidence missing-backing cap audit | Ensures the missing-backed cap does not flatten distinct weak-evidence cases. | Added coverage that symbol-only evidence stays medium at 80, unbacked success caps at 84, and failed unbacked symbol evidence remains low at 35. | Evidence: `broker_evidence_confidence_missing_backing_keeps_score_spread`; compact metric: confidence output remains two lines. |
+| Broker confidence score-spread documentation | Helps agents interpret the numeric score beside high/medium/low labels. | Added a compact `risk=` code to `confidence_reason` for none, failures, mixed freshness, stale paths, changed symbols, and missing backing without adding a section line. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence score-spread documentation | Helps agents interpret the numeric score beside high/medium/low labels. | Add a compact docs or rendered reason-code note for why missing-backed evidence can be medium at different scores without expanding section line count. | Compact metric: confidence output remains two lines or docs-only; correctness metric: score meaning is clear to downstream consumers. |
+| Broker confidence risk priority audit | Keeps the new `risk=` reason code aligned with payoff priority. | Add direct coverage for `confidence_risk()` so risk labels and payoff labels cannot diverge across overlapping blockers. | Compact metric: no output growth; correctness metric: risk and payoff name the same dominant blocker class. |
 
 ## Research Rules
 
