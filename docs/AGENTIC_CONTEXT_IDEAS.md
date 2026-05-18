@@ -926,12 +926,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker context debt test helper extraction | Reduces duplicate context-debt section setup without hiding debt scenarios. | Extracted `broker_context_debt_body()` returning an optional body and reused it across debt rendering and debt-clearing tests. | Evidence: `cargo test -p packet28d broker_context_debt`; compact metric: no product output change. |
 | Broker context debt helper shape audit | Keeps debt-present and debt-cleared assertions readable after helper extraction. | Re-scanned `broker_context_debt_body()` callsites and kept the optional body shape because present cases use `.expect(...)` while clearing cases assert `is_none()` directly. | Evidence: no product output change; debt clearing remains explicit. |
 | Broker context debt payoff width | Keeps stale-symbol payoff guidance compact. | Extended symbol-only debt payoff coverage to require at most three lines, each no wider than 140 characters, and serialized output under 512 bytes. | Evidence: `broker_context_debt_surfaces_symbol_payoff_without_stale_path`; compact metric: symbol debt output remains bounded. |
+| Broker context debt mixed payoff width | Keeps combined stale-path, stale-symbol, and question payoff guidance compact. | Extended mixed debt payoff coverage to require at most five lines, each no wider than 140 characters, and serialized output under 768 bytes while preserving payoff order. | Evidence: `broker_context_debt_orders_symbol_payoff_after_path_payoff`; compact metric: mixed debt output remains bounded. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker context debt mixed payoff width audit | Checks whether mixed stale-path plus stale-symbol debt remains compact. | Add or verify coverage that mixed path/symbol/open-question debt stays bounded while preserving payoff ordering. | Compact metric: mixed debt output remains below existing budget; correctness metric: payoff order remains visible. |
+| Broker context debt verified-symbol confidence interplay audit | Checks whether clearing context debt after symbol verification aligns with medium/high evidence confidence. | Re-scan symbol-only verified debt and confidence tests together and decide whether docs should clarify that debt can clear while confidence may still show stale symbols. | Compact metric: no product output change; correctness metric: debt and confidence semantics remain distinct. |
 
 ## Research Rules
 

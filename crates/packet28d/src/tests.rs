@@ -1878,6 +1878,9 @@ fn broker_context_debt_orders_symbol_payoff_after_path_payoff() {
     assert!(stale_path_index < stale_symbol_index);
     assert!(stale_symbol_index < open_questions_index);
     assert!(open_questions_index < unverified_edits_index);
+    assert!(debt.lines().count() <= 5);
+    assert!(debt.lines().all(|line| line.len() <= 140));
+    assert!(serde_json::to_string(&debt).unwrap().len() < 768);
 }
 
 #[test]
