@@ -920,12 +920,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker evidence confidence artifact gap label | Makes backed versus unbacked evidence readable without decoding gap counts. | Added `backing=artifact|missing` to the compact confidence line and extended symbol tier coverage to assert the backing label. | Evidence: `broker_evidence_confidence_orders_symbol_evidence_tiers`; compact metric: confidence output remains two lines. |
 | Broker test root cross-process isolation | Keeps focused broker tests reliable when agents run filtered cargo tests in parallel. | Included the process id in `daemon_test_state()` temp roots so separate test processes no longer collide when started in the same millisecond. | Evidence: parallel focused confidence tests passed; compact metric: no product output change. |
 | Broker evidence confidence backing reason label | Makes the actionable confidence reason carry the same backed/unbacked signal as the score line. | Added `backing=artifact|missing` to `confidence_reason` and extended tier coverage to assert the reason-line backing label. | Evidence: `broker_evidence_confidence_orders_symbol_evidence_tiers`; compact metric: confidence output remains two lines. |
+| Broker evidence confidence backing line-width | Keeps backing labels visible without expanding the confidence section shape. | Added coverage that representative backed and unbacked confidence output stays at two lines, each at or below 180 characters, with `backing=` visible. | Evidence: `broker_evidence_confidence_backing_labels_stay_compact`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker evidence confidence backing line-width audit | Checks whether the two confidence lines remain compact after adding backing labels. | Verify representative backed and unbacked confidence outputs stay within broker section width expectations and preserve the two-line section shape. | Compact metric: confidence output remains two lines; correctness metric: backing labels stay visible. |
+| Broker evidence confidence helper extraction audit | Checks whether repeated confidence test setup should move into a shared helper. | Re-scan the symbol confidence tests and decide whether repeated `BrokerGetContextRequest` plus section lookup setup should be extracted without obscuring test readability. | Compact metric: no product output change; correctness metric: confidence tier coverage stays explicit. |
 
 ## Research Rules
 

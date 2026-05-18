@@ -2208,6 +2208,58 @@ fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
 }
 
 #[test]
+fn broker_evidence_confidence_backing_labels_stay_compact() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let request = BrokerGetContextRequest {
+        task_id: "task-confidence-backing-width".to_string(),
+        action: Some(BrokerAction::Inspect),
+        include_sections: vec!["evidence_confidence".to_string()],
+        ..BrokerGetContextRequest::default()
+    };
+    let confidence_body = |snapshot: suite_packet_core::AgentSnapshotPayload| {
+        build_broker_sections(&root, &state, &request, &snapshot, None, None)
+            .into_iter()
+            .find(|section| section.id == "evidence_confidence")
+            .expect("symbol evidence should render confidence")
+            .body
+    };
+    let backed_verified = confidence_body(suite_packet_core::AgentSnapshotPayload {
+        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+        evidence_artifact_ids: vec!["artifact-test".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "test-backed".to_string(),
+            sequence: 1,
+            tool_name: "cargo test auth_cache".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Test,
+            result_summary: Some("tests passed".to_string()),
+            artifact_id: Some("artifact-test".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    });
+    let unbacked_verified = confidence_body(suite_packet_core::AgentSnapshotPayload {
+        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+            invocation_id: "test-unbacked".to_string(),
+            sequence: 2,
+            tool_name: "cargo test auth_cache".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Test,
+            result_summary: Some("tests passed".to_string()),
+            ..suite_packet_core::ToolInvocationSummary::default()
+        }],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    });
+
+    for body in [backed_verified, unbacked_verified] {
+        let lines = body.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|line| line.len() <= 180));
+        assert!(body.contains("backing="));
+    }
+}
+
+#[test]
 fn render_task_memory_lines_surfaces_recent_state() {
     let snapshot = suite_packet_core::AgentSnapshotPayload {
         files_read: vec!["src/alpha.rs".to_string()],
