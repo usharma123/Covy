@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use packet28_daemon_core::{
     hook_runtime_config_path, load_task_events, load_task_registry, task_artifact_dir,
     task_brief_markdown_path, task_state_json_path, task_version_json_path, BrokerAction,
@@ -104,10 +104,23 @@ pub enum McpCommands {
     SmokeTest(McpSmokeTestArgs),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum McpToolset {
+    /// Small default catalog for search/read/fetch/handoff loops.
+    #[default]
+    Core,
+    /// Full compatibility catalog with memory, graph, feedback, diagnostics, and legacy aliases.
+    All,
+}
+
 #[derive(Args, Clone)]
 pub struct McpServeArgs {
     #[arg(long, default_value = ".")]
     pub root: String,
+
+    /// Tool catalog exposed by tools/list. Tools remain callable by name in core mode.
+    #[arg(long, value_enum, default_value_t = McpToolset::Core)]
+    pub toolset: McpToolset,
 }
 
 #[derive(Args, Clone)]
@@ -133,6 +146,7 @@ pub struct McpSmokeTestArgs {
 struct McpSessionState {
     initialized: bool,
     shutdown: bool,
+    toolset: McpToolset,
     tracked_tasks: BTreeMap<String, u64>,
     current_task_id: Option<String>,
     framing: Option<McpMessageFraming>,
@@ -353,7 +367,7 @@ pub fn run(args: McpArgs) -> Result<i32> {
 fn run_serve(args: McpServeArgs) -> Result<i32> {
     let root = crate::broker_client::resolve_root(&args.root);
     crate::broker_client::ensure_daemon(&root)?;
-    serve_stdio(root)?;
+    serve_stdio(root, args.toolset)?;
     Ok(0)
 }
 
@@ -540,11 +554,14 @@ impl Drop for ConfiguredMcpHarness {
     }
 }
 
-fn serve_stdio(root: PathBuf) -> Result<()> {
+fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let writer = Arc::new(Mutex::new(io::stdout()));
-    let session = Arc::new(Mutex::new(McpSessionState::default()));
+    let session = Arc::new(Mutex::new(McpSessionState {
+        toolset,
+        ..McpSessionState::default()
+    }));
     start_notification_thread(root.clone(), writer.clone(), session.clone());
 
     loop {
@@ -710,6 +727,42 @@ fn rewrite_tool_names_for_cursor(payload: &mut Value) {
             tool["name"] = Value::String(safe_name);
         }
     }
+}
+
+fn filter_tools_for_toolset(payload: &mut Value, toolset: McpToolset) {
+    if matches!(toolset, McpToolset::All) {
+        return;
+    }
+    let Some(tools) = payload.get_mut("tools").and_then(Value::as_array_mut) else {
+        return;
+    };
+    tools.retain(|tool| {
+        tool.get("name")
+            .and_then(Value::as_str)
+            .is_some_and(is_core_mcp_tool)
+    });
+}
+
+fn is_core_mcp_tool(name: &str) -> bool {
+    matches!(
+        canonical_tool_name(name).as_str(),
+        "packet28.search"
+            | "packet28.search_fast"
+            | "packet28.read_regions"
+            | "packet28.glob"
+            | "packet28.fetch_tool_result"
+            | "packet28.fetch_raw_output"
+            | "packet28.fetch_context"
+            | "packet28.prepare_handoff"
+            | "packet28.handoff"
+            | "packet28.write_intention"
+            | "packet28.task_status"
+            | "packet28.capabilities"
+            | "packet28.action_critic"
+            | "packet28.recommend_next_tool"
+            | "packet28.validate_tool_outcome"
+            | "packet28.patch_risk"
+    )
 }
 
 fn handle_method(
@@ -1864,6 +1917,11 @@ fn handle_method(
                 }
             ]
             });
+            let toolset = session
+                .lock()
+                .map(|guard| guard.toolset)
+                .unwrap_or_default();
+            filter_tools_for_toolset(&mut payload, toolset);
             rewrite_tool_names_for_cursor(&mut payload);
             Ok(payload)
         }
@@ -3802,9 +3860,44 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_product_compatibility_aliases() {
+    fn tools_list_defaults_to_core_catalog_to_reduce_first_load() {
         let root = tempfile::tempdir().unwrap();
         let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let core_payload = handle_method(root.path(), &session, "tools/list", Value::Null).unwrap();
+        let core_tools = core_payload["tools"].as_array().unwrap();
+        let core_names = core_tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(core_names.contains(&"packet28_search"));
+        assert!(core_names.contains(&"packet28_read_regions"));
+        assert!(core_names.contains(&"packet28_fetch_tool_result"));
+        assert!(core_names.contains(&"packet28_write_intention"));
+        assert!(!core_names.contains(&"packet28_memory_store"));
+        assert!(core_tools.len() <= 16);
+
+        let all_session = Arc::new(Mutex::new(McpSessionState {
+            toolset: McpToolset::All,
+            ..McpSessionState::default()
+        }));
+        let all_payload =
+            handle_method(root.path(), &all_session, "tools/list", Value::Null).unwrap();
+        let core_bytes = serde_json::to_vec(&core_payload).unwrap().len();
+        let all_bytes = serde_json::to_vec(&all_payload).unwrap().len();
+        assert!(
+            core_bytes * 4 < all_bytes,
+            "core={core_bytes} all={all_bytes}"
+        );
+    }
+
+    #[test]
+    fn tools_list_exposes_product_compatibility_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState {
+            toolset: McpToolset::All,
+            ..McpSessionState::default()
+        }));
         let payload = handle_method(root.path(), &session, "tools/list", Value::Null).unwrap();
         let tool_names = payload["tools"]
             .as_array()

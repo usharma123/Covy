@@ -1704,7 +1704,7 @@ fn write_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result<McpConfi
     let command = resolve_packet28_mcp_command();
     let packet28_entry = json!({
         "command": command,
-        "args": ["--root", root_arg]
+        "args": ["--root", root_arg, "--toolset", "core"]
     });
 
     // Read existing config or start fresh
@@ -2119,7 +2119,7 @@ fn codex_mcp_entry_matches(path: &Path, root: &Path) -> Result<bool> {
             args.iter()
                 .filter_map(toml::Value::as_str)
                 .collect::<Vec<_>>()
-                == vec!["--root", expected_root.as_str()]
+                == vec!["--root", expected_root.as_str(), "--toolset", "core"]
         })
         .unwrap_or(false);
     Ok(command_matches && args_matches)
@@ -2135,6 +2135,8 @@ fn run_codex_mcp_add(root: &Path) -> Result<bool> {
             &resolve_packet28_mcp_command(),
             "--root",
             &root.display().to_string(),
+            "--toolset",
+            "core",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -2154,6 +2156,8 @@ fn write_codex_mcp_config(path: &Path, root: &Path) -> Result<McpConfigStatus> {
     let desired_args = vec![
         toml::Value::String("--root".to_string()),
         toml::Value::String(desired_root.clone()),
+        toml::Value::String("--toolset".to_string()),
+        toml::Value::String("core".to_string()),
     ];
     let already_configured = servers
         .get("packet28")
@@ -2181,7 +2185,7 @@ fn write_windsurf_mcp_config(path: &Path, root: &Path, auto_yes: bool) -> Result
     let root_arg = root.display().to_string();
     let packet28_entry = json!({
         "command": resolve_packet28_mcp_command(),
-        "args": ["--root", root_arg]
+        "args": ["--root", root_arg, "--toolset", "core"]
     });
     let mut config: BTreeMap<String, Value> = if path.exists() {
         let content = fs::read_to_string(path)

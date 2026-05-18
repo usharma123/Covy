@@ -67,8 +67,16 @@ try {
   // ignore
 }
 
-// Prepend "mcp serve" to the user's args
-const child = spawn(binaryPath, ["mcp", "serve", ...process.argv.slice(2)], {
+function serveArgs(argv) {
+  if (argv.includes("--toolset")) {
+    return argv;
+  }
+  return [...argv, "--toolset", process.env.PACKET28_MCP_TOOLSET || "core"];
+}
+
+// Prepend "mcp serve" to the user's args. Default to the slim core toolset
+// so first-use MCP schema loading stays small; pass --toolset all for the full catalog.
+const child = spawn(binaryPath, ["mcp", "serve", ...serveArgs(process.argv.slice(2))], {
   stdio: "inherit",
   env: { ...process.env, PACKET28_MANAGED_BY_NPM: "1" },
 });
