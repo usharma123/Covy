@@ -1950,6 +1950,23 @@ fn broker_symbol_labels_distinguish_confidence_from_debt_payoff() {
 }
 
 #[test]
+fn broker_confidence_distinguishes_stale_paths_from_changed_symbols() {
+    let state = daemon_test_state();
+    let confidence = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_paths_since_checkpoint: vec!["src/auth.rs".to_string()],
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+
+    assert!(confidence.contains("stale_paths=1"));
+    assert!(confidence.contains("changed_symbols=1"));
+    assert!(confidence.contains("confidence: medium"));
+}
+
+#[test]
 fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     let state = daemon_test_state();
     let root = daemon_test_root(&state);

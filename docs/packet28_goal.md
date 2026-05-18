@@ -313,6 +313,7 @@ Current evidence:
 - Packet28 evidence confidence now labels backing directly as `backing=artifact` or `backing=missing` in both the score and reason lines, making artifact-backed versus unbacked symbol evidence readable without interpreting artifact-gap counts. Evidence: `broker_evidence_confidence_orders_symbol_evidence_tiers`.
 - Packet28 evidence confidence now renders symbol freshness as `changed_symbols` instead of `stale_symbols`, preserving the freshness signal without implying that successful symbol verification failed. Evidence: `broker_symbol_verification_clears_debt_but_preserves_confidence_staleness`.
 - Packet28 now tests the compatibility contract between confidence and debt labels: `changed_symbols` belongs to `evidence_confidence`, while `payoff stale_symbol` remains the context-debt action label. Evidence: `broker_symbol_labels_distinguish_confidence_from_debt_payoff`.
+- Packet28 evidence confidence now locks the mixed path/symbol label contract: unread changed paths render as `stale_paths`, while symbol freshness renders as `changed_symbols`. Evidence: `broker_confidence_distinguishes_stale_paths_from_changed_symbols`.
 
 ### 6. Release Readiness
 

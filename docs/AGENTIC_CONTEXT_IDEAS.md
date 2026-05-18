@@ -931,12 +931,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence changed-symbol naming | Avoids implying that successful symbol verification failed. | Renamed the confidence output field from `stale_symbols` to `changed_symbols` while keeping the confidence penalty and freshness signal intact. | Evidence: `broker_symbol_verification_clears_debt_but_preserves_confidence_staleness`; compact metric: confidence output remains two lines. |
 | Broker confidence changed-symbol naming history audit | Keeps completed ideas rows aligned with current confidence output. | Re-scanned `stale_symbols` and stale-symbol references, updated the failed-symbol confidence row to current `changed_symbols` wording, and kept context-debt `stale_symbol` payoff language unchanged. | Evidence: docs-only audit; compact metric: no product output change. |
 | Broker confidence freshness-label compatibility | Helps downstream consumers survive the `changed_symbols` rename. | Added coverage that confidence output contains `changed_symbols` and never `stale_symbols`, while context debt still uses `payoff stale_symbol` for the refresh action. | Evidence: `broker_symbol_labels_distinguish_confidence_from_debt_payoff`; compact metric: no confidence output growth. |
+| Broker confidence stale-path label audit | Keeps path and symbol freshness labels semantically distinct. | Added mixed path/symbol coverage showing confidence keeps `stale_paths` for unread changed paths and `changed_symbols` for changed symbol counts. | Evidence: `broker_confidence_distinguishes_stale_paths_from_changed_symbols`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence stale-path label audit | Checks whether `stale_paths` should stay paired with `changed_symbols`. | Re-scan path freshness wording and decide whether `stale_paths` is precise enough because path freshness has read-state backing while symbol freshness is count-only. | Compact metric: confidence output remains two lines; correctness metric: path and symbol labels stay semantically distinct. |
+| Broker confidence mixed-freshness payoff wording | Helps agents decide whether to refresh paths, symbols, or both first. | Re-scan mixed stale-path and changed-symbol confidence reason text and decide whether the payoff should name the dominant freshness blocker. | Compact metric: confidence output remains two lines; correctness metric: medium confidence guidance points to the right refresh target. |
 
 ## Research Rules
 
