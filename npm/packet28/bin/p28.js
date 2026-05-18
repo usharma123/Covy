@@ -34,6 +34,18 @@ function getPlatformKey() {
   return null;
 }
 
+function ensureExecutable(candidate) {
+  if (!existsSync(candidate)) return false;
+  try {
+    const mode = statSync(candidate).mode;
+    if (mode & 0o111) return true;
+    chmodSync(candidate, mode | 0o755);
+    return Boolean(statSync(candidate).mode & 0o111);
+  } catch {
+    return false;
+  }
+}
+
 function findBinary(name) {
   const platformKey = getPlatformKey();
   if (!platformKey) {
@@ -49,9 +61,16 @@ function findBinary(name) {
     const pkgJsonPath = require.resolve(`${platformPackage}/package.json`);
     const vendorDir = path.join(path.dirname(pkgJsonPath), "bin");
     const binaryPath = path.join(vendorDir, name);
-    if (existsSync(binaryPath)) return binaryPath;
+    if (ensureExecutable(binaryPath)) return binaryPath;
   } catch {
     // optional dep not installed — fall through
+  }
+
+  try {
+    const which = execSync(`which ${name}`, { encoding: "utf-8" }).trim();
+    if (which && ensureExecutable(which)) return which;
+  } catch {
+    // not on PATH
   }
 
   const localBinary = path.join(
@@ -61,30 +80,14 @@ function findBinary(name) {
     platformKey,
     name,
   );
-  if (existsSync(localBinary)) return localBinary;
-
-  try {
-    const which = execSync(`which ${name}`, { encoding: "utf-8" }).trim();
-    if (which && existsSync(which)) return which;
-  } catch {
-    // not on PATH
-  }
+  if (ensureExecutable(localBinary)) return localBinary;
 
   throw new Error(
-    `Could not find ${name} binary. Reinstall: npm install -g packet28@latest`,
+    `Could not find executable ${name} binary. Reinstall: npm install -g packet28@latest`,
   );
 }
 
 const binaryPath = findBinary("p28");
-
-try {
-  const mode = statSync(binaryPath).mode;
-  if (!(mode & 0o111)) {
-    chmodSync(binaryPath, mode | 0o755);
-  }
-} catch {
-  // ignore — will fail at spawn if truly broken
-}
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
