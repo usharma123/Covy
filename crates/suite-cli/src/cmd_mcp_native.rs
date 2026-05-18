@@ -3532,38 +3532,15 @@ pub(crate) fn handle_packet28_read_regions(
         read_result.path,
         read_result.regions.len()
     );
-    let full_payload = json!({
-        "task_id": task_id,
-        "invocation_id": invocation_id,
-        "sequence": sequence,
-        "path": read_result.path,
-        "regions": read_result.regions,
-        "symbols": read_result.symbols,
-        "lines": read_result.lines,
-        "compact_preview": read_result.compact_preview,
-        "response_mode": "full",
-    });
+    let full_payload =
+        build_read_regions_full_payload(task_id, &invocation_id, sequence, &read_result);
     let artifact_id = Some(store_result_artifact(
         root,
         task_id,
         full_payload["invocation_id"].as_str().unwrap_or_default(),
         &full_payload,
     )?);
-    let payload = match args.response_mode {
-        Packet28SearchResponseMode::Full => {
-            let mut payload = full_payload.clone();
-            payload["artifact_id"] = json!(artifact_id.clone());
-            payload
-        }
-        Packet28SearchResponseMode::Slim => json!({
-            "path": read_result.path,
-            "regions": read_result.regions,
-            "symbols": read_result.symbols,
-            "compact_preview": read_result.compact_preview,
-            "artifact_id": artifact_id.clone(),
-            "response_mode": "slim",
-        }),
-    };
+    let payload = build_read_regions_response_payload(&full_payload, &args, artifact_id.clone());
     let raw_est_tokens = Some(estimate_tokens_for_value(&full_payload));
     let reduced_est_tokens = Some(estimate_tokens_for_value(&payload));
     write_native_tool_result(
@@ -3591,6 +3568,67 @@ pub(crate) fn handle_packet28_read_regions(
         },
     )?;
     Ok(payload)
+}
+
+fn build_read_regions_full_payload(
+    task_id: &str,
+    invocation_id: &str,
+    sequence: u64,
+    read_result: &packet28_reducer_core::ReadRegionsResult,
+) -> Value {
+    json!({
+        "task_id": task_id,
+        "invocation_id": invocation_id,
+        "sequence": sequence,
+        "path": read_result.path,
+        "regions": read_result.regions,
+        "symbols": read_result.symbols,
+        "content": render_read_region_content(&read_result.lines),
+        "line_count": read_result.lines.len(),
+        "compact_preview": read_result.compact_preview,
+        "response_mode": "full",
+    })
+}
+
+fn build_read_regions_response_payload(
+    full_payload: &Value,
+    args: &Packet28ReadRegionsArgs,
+    artifact_id: Option<String>,
+) -> Value {
+    match args.response_mode {
+        Packet28SearchResponseMode::Full => {
+            let mut payload = full_payload.clone();
+            payload["artifact_id"] = json!(artifact_id);
+            payload
+        }
+        Packet28SearchResponseMode::Slim => {
+            let mut payload = json!({
+                "path": full_payload["path"].clone(),
+                "regions": full_payload["regions"].clone(),
+                "symbols": full_payload["symbols"].clone(),
+                "line_count": full_payload["line_count"].clone(),
+                "compact_preview": full_payload["compact_preview"].clone(),
+                "artifact_id": artifact_id,
+                "response_mode": "slim",
+            });
+            if read_regions_request_is_explicit(args) {
+                payload["content"] = full_payload["content"].clone();
+            }
+            payload
+        }
+    }
+}
+
+fn read_regions_request_is_explicit(args: &Packet28ReadRegionsArgs) -> bool {
+    !args.regions.is_empty() || args.line_start.is_some() || args.line_end.is_some()
+}
+
+fn render_read_region_content(lines: &[packet28_reducer_core::ReadLine]) -> String {
+    lines
+        .iter()
+        .map(|item| format!("{}: {}", item.line, item.text))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn collect_glob_matches(
@@ -3995,5 +4033,52 @@ mod tests {
         assert!(payload.get("invocation_id").is_none());
         assert!(payload.get("sequence").is_none());
         assert_eq!(payload["match_count"], 1);
+    }
+
+    #[test]
+    fn read_regions_slim_includes_explicit_content_and_full_uses_text_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("sample.rs"),
+            "fn alpha() {}\nfn beta() {}\nfn gamma() {}\n",
+        )
+        .unwrap();
+        let args = Packet28ReadRegionsArgs {
+            task_id: "task-read".to_string(),
+            path: "sample.rs".to_string(),
+            regions: vec!["sample.rs:1-3".to_string()],
+            response_mode: Packet28SearchResponseMode::Slim,
+            ..Packet28ReadRegionsArgs::default()
+        };
+        let read_result = packet28_reducer_core::read_regions(
+            dir.path(),
+            &packet28_reducer_core::ReadRegionsRequest {
+                path: args.path.clone(),
+                regions: args.regions.clone(),
+                ..packet28_reducer_core::ReadRegionsRequest::default()
+            },
+        )
+        .unwrap();
+        let full_payload = build_read_regions_full_payload("task-read", "tool-1", 1, &read_result);
+        let payload = build_read_regions_response_payload(
+            &full_payload,
+            &args,
+            Some("artifact-1".to_string()),
+        );
+
+        assert_eq!(payload["response_mode"], "slim");
+        assert_eq!(payload["line_count"], 3);
+        assert_eq!(
+            payload["content"],
+            "1: fn alpha() {}\n2: fn beta() {}\n3: fn gamma() {}"
+        );
+        assert!(payload.get("lines").is_none());
+
+        assert_eq!(full_payload["response_mode"], "full");
+        assert_eq!(
+            full_payload["content"],
+            "1: fn alpha() {}\n2: fn beta() {}\n3: fn gamma() {}"
+        );
+        assert!(full_payload.get("lines").is_none());
     }
 }
