@@ -1,0 +1,233 @@
+{
+  "measured_at_unix": 1779135409,
+  "task_id": "agentic-coding-tokenomics-20260518",
+  "packet28_bin": "/Users/utsavsharma/Documents/GitHub/Coverage/target/debug/Packet28",
+  "normal_root": "/Users/utsavsharma/Documents/GitHub/Coverage/docs/experiments/agentic-tokenomics/20260518/work/normal",
+  "packet28_root": "/Users/utsavsharma/Documents/GitHub/Coverage/docs/experiments/agentic-tokenomics/20260518/work/packet28",
+  "summary": {
+    "normal_context_tokens": 8040,
+    "packet28_context_tokens": 487,
+    "saved_context_tokens": 7553,
+    "savings_pct": 93.9,
+    "normal_step_count": 5,
+    "packet28_step_count": 7,
+    "packet28_optional_artifact_fetch_tokens": 2772
+  },
+  "normal_steps": [
+    {
+      "command": "find src tests docs -type f",
+      "exit_code": 0,
+      "elapsed_ms": 3.305,
+      "bytes": 88,
+      "tokens": 22,
+      "preview": "src/auth/user_id.rs\nsrc/auth/mod.rs\nsrc/lib.rs\ntests/integration.rs\ndocs/login_alias.md\n"
+    },
+    {
+      "command": "rg -n normalize_user_id|resolve_login_alias|login alias|UserId src tests docs",
+      "exit_code": 0,
+      "elapsed_ms": 8.385,
+      "bytes": 5418,
+      "tokens": 1355,
+      "preview": "docs/login_alias.md:3:The login alias flow stores every UserId in lowercase and without surrounding whitespace.\ndocs/login_alias.md:4:Search terms for this fixture include normalize_user_id, resolve_login_alias, UserId, and login alias.\ntests/integration.rs:1:use agentic_tokenomics_fixture::auth::resolve_login_alias;\ntests/integration.rs:5:    assert_eq!(resolve_login_alias(\" Carol \"), \"user:carol"
+    },
+    {
+      "command": "sed -n 1,140p src/auth/user_id.rs",
+      "exit_code": 0,
+      "elapsed_ms": 2.563,
+      "bytes": 4074,
+      "tokens": 1019,
+      "preview": "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct UserId(String);\n\nimpl UserId {\n    pub fn new(raw: &str) -> Self {\n        Self(normalize_user_id(raw))\n    }\n\n    pub fn as_str(&self) -> &str {\n        &self.0\n    }\n}\n\npub fn normalize_user_id(input: &str) -> String {\n    input.to_ascii_lowercase()\n}\n\npub fn resolve_login_alias(input: &str) -> String {\n    format!(\"user:{}\", normalize_user_id(in"
+    },
+    {
+      "command": "cargo test --lib",
+      "exit_code": 101,
+      "elapsed_ms": 1774.092,
+      "bytes": 11645,
+      "tokens": 2912,
+      "preview": "\nrunning 2 tests\ntest tests::normalize_user_id_trims_alias_input ... FAILED\ntest tests::resolve_login_alias_uses_normalized_id ... FAILED\n\nfailures:\n\n---- tests::normalize_user_id_trims_alias_input stdout ----\n\nthread 'tests::normalize_user_id_trims_alias_input' (1564872) panicked at src/lib.rs:9:9:\nassertion `left == right` failed\n  left: \" alice.example \"\n right: \"alice.example\"\nnote: run with `"
+    },
+    {
+      "command": "cargo test --lib",
+      "exit_code": 0,
+      "elapsed_ms": 357.297,
+      "bytes": 10926,
+      "tokens": 2732,
+      "preview": "\nrunning 2 tests\ntest tests::normalize_user_id_trims_alias_input ... ok\ntest tests::resolve_login_alias_uses_normalized_id ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n   Compiling agentic-tokenomics-fixture v0.1.0 (/Users/utsavsharma/Documents/GitHub/Coverage/docs/experiments/agentic-tokenomics/20260518/work/normal)\nwarning: function `logi"
+    }
+  ],
+  "packet28_steps": [
+    {
+      "name": "glob source files",
+      "tool": "packet28.glob",
+      "status": "ok",
+      "elapsed_ms": 75.682,
+      "tokens": 37,
+      "bytes": 148,
+      "artifact_id": "tool-invocation-1-result.json",
+      "artifact_fetch_succeeded": true,
+      "artifact_fetch_tokens": 117,
+      "payload": {
+        "artifact_id": "tool-invocation-1-result.json",
+        "compact_preview": "Glob matched 3 path(s) for 'src/**/*.rs'.",
+        "match_count": 3,
+        "response_mode": "slim"
+      }
+    },
+    {
+      "name": "search symbol",
+      "tool": "packet28.search",
+      "status": "ok",
+      "elapsed_ms": 64.824,
+      "tokens": 154,
+      "bytes": 614,
+      "artifact_id": "tool-invocation-2-result.json",
+      "artifact_fetch_succeeded": true,
+      "artifact_fetch_tokens": 684,
+      "payload": {
+        "artifact_id": "tool-invocation-2-result.json",
+        "compact_preview": "Search found 9 matches in 4 files.",
+        "engine": {
+          "engine": "legacy_rg",
+          "fallback_reason": "regex search index is not ready"
+        },
+        "hybrid": {
+          "primary_backend": "legacy_rg"
+        },
+        "match_count": 9,
+        "paths": [
+          "docs/login_alias.md",
+          "src/auth/mod.rs",
+          "src/auth/user_id.rs",
+          "src/lib.rs"
+        ],
+        "regions": [
+          "docs/login_alias.md:4-4",
+          "src/auth/mod.rs:3-3",
+          "src/auth/user_id.rs:14-14",
+          "src/auth/user_id.rs:19-19",
+          "src/auth/user_id.rs:22-22",
+          "src/auth/user_id.rs:6-6",
+          "src/lib.rs:5-5",
+          "src/lib.rs:8-8"
+        ],
+        "response_mode": "slim",
+        "search_strategy": "hybrid",
+        "symbols": [
+          "normalize_user_id"
+        ]
+      }
+    },
+    {
+      "name": "read target file",
+      "tool": "packet28.read_regions",
+      "status": "ok",
+      "elapsed_ms": 52.637,
+      "tokens": 154,
+      "bytes": 614,
+      "artifact_id": "tool-invocation-3-result.json",
+      "artifact_fetch_succeeded": true,
+      "artifact_fetch_tokens": 1971,
+      "payload": {
+        "artifact_id": "tool-invocation-3-result.json",
+        "compact_preview": "Read 140 line(s) from src/auth/user_id.rs.\n1: #[derive(Debug, Clone, PartialEq, Eq)]\n2: pub struct UserId(String);\n3: \n4: impl UserId {\n5: pub fn new(raw: &str) -> Self {\n6: Self(normalize_user_id(raw))\n7: }\n8: \n+132 more line(s)",
+        "path": "src/auth/user_id.rs",
+        "regions": [
+          "src/auth/user_id.rs:1-140"
+        ],
+        "response_mode": "slim",
+        "symbols": [
+          "UserId(String",
+          "as_str",
+          "login_alias_fixture_hint_1",
+          "login_alias_fixture_hint_10",
+          "login_alias_fixture_hint_11",
+          "login_alias_fixture_hint_12",
+          "login_alias_fixture_hint_13",
+          "login_alias_fixture_hint_14"
+        ]
+      }
+    },
+    {
+      "name": "patch risk",
+      "tool": "packet28.patch_risk",
+      "status": "ok",
+      "elapsed_ms": 0.403,
+      "tokens": 50,
+      "bytes": 198,
+      "artifact_id": null,
+      "artifact_fetch_succeeded": null,
+      "artifact_fetch_tokens": 0,
+      "payload": {
+        "paths": [
+          "src/auth/user_id.rs"
+        ],
+        "reasons": [
+          "missing_testmap"
+        ],
+        "required_checks": [
+          "run or refresh testmap before broad edits"
+        ],
+        "risk": "low",
+        "score": 25,
+        "task_id": "agentic-coding-tokenomics-20260518"
+      }
+    },
+    {
+      "name": "cargo test --lib",
+      "tool": "packet28.hook",
+      "status": "ok",
+      "command": "cargo test --lib",
+      "rewritten_command": "/Users/utsavsharma/Documents/GitHub/Coverage/target/debug/Packet28 hook reducer-runner --root /Users/utsavsharma/Documents/GitHub/Coverage/docs/experiments/agentic-tokenomics/20260518/work/packet28 --task-id agentic-coding-tokenomics-20260518 --family rust --kind rust_test --fingerprint 'rust:rust_test:cargo\u001ftest\u001f--lib' --session-id agentic-coding-tokenomics-20260518-session --cwd /Users/utsavsharma/Documents/GitHub/Coverage/docs/experiments/agentic-tokenomics/20260518/work/packet28 -- cargo test --lib",
+      "tokens": 11,
+      "raw_tokens": 2912,
+      "reduced_tokens": 11,
+      "reduction_pct": 99.6,
+      "raw_output_recoverable": true,
+      "exit_code": 101,
+      "preview": "cargo test reported 0 passed and 2 failed\n"
+    },
+    {
+      "name": "cargo test --lib",
+      "tool": "packet28.hook",
+      "status": "ok",
+      "command": "cargo test --lib",
+      "rewritten_command": "/Users/utsavsharma/Documents/GitHub/Coverage/target/debug/Packet28 hook reducer-runner --root /Users/utsavsharma/Documents/GitHub/Coverage/docs/experiments/agentic-tokenomics/20260518/work/packet28 --task-id agentic-coding-tokenomics-20260518 --family rust --kind rust_test --fingerprint 'rust:rust_test:cargo\u001ftest\u001f--lib' --session-id agentic-coding-tokenomics-20260518-session --cwd /Users/utsavsharma/Documents/GitHub/Coverage/docs/experiments/agentic-tokenomics/20260518/work/packet28 -- cargo test --lib",
+      "tokens": 7,
+      "raw_tokens": 2732,
+      "reduced_tokens": 7,
+      "reduction_pct": 99.7,
+      "raw_output_recoverable": true,
+      "exit_code": 0,
+      "preview": "cargo test passed (2 tests)\n"
+    },
+    {
+      "name": "validate tool outcome",
+      "tool": "packet28.validate_tool_outcome",
+      "status": "ok",
+      "elapsed_ms": 1.532,
+      "tokens": 74,
+      "bytes": 295,
+      "artifact_id": null,
+      "artifact_fetch_succeeded": null,
+      "artifact_fetch_tokens": 0,
+      "payload": {
+        "next_action": "rerun the command through Packet28 or fetch the stored tool artifact before relying on it",
+        "status": "missing_artifact",
+        "summary": "missing_artifact: no recorded Packet28 run-savings outcome matched the request",
+        "task_id": "agentic-coding-tokenomics-20260518",
+        "valid_success": false
+      }
+    }
+  ],
+  "packet28_feature_checks": {
+    "glob_artifact_fetch": true,
+    "search_artifact_fetch": true,
+    "read_regions_artifact_fetch": true,
+    "patch_risk_returned_required_checks": true,
+    "hook_reduced_pre_fix_test": true,
+    "workspace_fingerprint_busted_stale_test_cache": true,
+    "hook_reduced_post_fix_test": true,
+    "post_fix_tests_passed": true,
+    "validate_tool_outcome_returned_status": true
+  }
+}

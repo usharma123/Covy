@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
 use packet28_daemon_core::{
-    load_task_events, task_artifact_dir, task_brief_markdown_path, task_state_json_path,
-    task_version_json_path, BrokerAction, BrokerPlanStep, BrokerPrepareHandoffRequest,
-    BrokerResponseMode, BrokerTaskStatusRequest, BrokerTaskStatusResponse,
-    BrokerValidatePlanRequest, BrokerWriteOp, BrokerWriteStateBatchRequest,
-    BrokerWriteStateBatchResponse, BrokerWriteStateRequest, BrokerWriteStateResponse,
-    DaemonRequest, DaemonResponse, TaskRecord,
+    hook_runtime_config_path, load_task_events, load_task_registry, task_artifact_dir,
+    task_brief_markdown_path, task_state_json_path, task_version_json_path, BrokerAction,
+    BrokerPlanStep, BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
+    BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
+    BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
+    BrokerWriteStateResponse, DaemonRequest, DaemonResponse, TaskRecord,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -1126,6 +1126,16 @@ fn handle_method(
                     }
                 },
                 {
+                    "name": "packet28.agent_status",
+                    "description": "Return local Packet28 agent integration health, active task state, hook config presence, and reducer cache safety.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": {"type":"string"}
+                        }
+                    }
+                },
+                {
                     "name": "packet28.patch_risk",
                     "description": "Score pre-edit patch risk from path scope, cached testmap mappings, and recent failure/fallback records.",
                     "inputSchema": {
@@ -2227,6 +2237,7 @@ fn handle_tool_call(
             track_task(session, root, &request.task_id)?;
             native_tools::handle_packet28_validate_tool_outcome(root, request)?
         }
+        "packet28.agent_status" => handle_packet28_agent_status(root, arguments)?,
         "packet28.patch_risk" => {
             let mut request: Packet28PatchRiskArgs = serde_json::from_value(arguments)?;
             request.task_id = resolve_session_task_id(
@@ -3144,6 +3155,60 @@ fn handle_packet28_doctor(root: &Path, request: DoctorToolArgs) -> Result<Value>
     serde_json::from_slice(&output.stdout).context("Packet28 doctor did not return JSON")
 }
 
+fn handle_packet28_agent_status(root: &Path, arguments: Value) -> Result<Value> {
+    #[derive(Deserialize, Default)]
+    struct AgentStatusArgs {
+        task_id: Option<String>,
+    }
+
+    let request = serde_json::from_value::<AgentStatusArgs>(arguments).unwrap_or_default();
+    let active = crate::task_runtime::load_active_task(root);
+    let task_id = request
+        .task_id
+        .or_else(|| active.as_ref().map(|record| record.task_id.clone()));
+    let registry = load_task_registry(root).ok();
+    let task = task_id.as_ref().and_then(|id| {
+        registry
+            .as_ref()
+            .and_then(|registry| registry.tasks.get(id))
+    });
+    let cache_entries = task
+        .map(|task| task.hook_reducer_cache.len())
+        .unwrap_or_default();
+    let workspace_guarded_entries = task
+        .map(|task| {
+            task.hook_reducer_cache
+                .values()
+                .filter(|entry| entry.workspace_fingerprint.is_some())
+                .count()
+        })
+        .unwrap_or_default();
+
+    Ok(json!({
+        "status": "ok",
+        "root": root.display().to_string(),
+        "active_task_id": active.as_ref().map(|record| record.task_id.clone()),
+        "task_id": task_id,
+        "hook_config_present": hook_runtime_config_path(root).exists(),
+        "reducer_cache_safety": {
+            "workspace_fingerprint_enabled": true,
+            "policy": "safe_by_default",
+            "cache_entries": cache_entries,
+            "workspace_guarded_entries": workspace_guarded_entries
+        },
+        "mcp": {
+            "manual_json_rpc_required": false,
+            "recommended_path": "Packet28 setup --runtime all --yes"
+        },
+        "task": task.map(|task| json!({
+            "latest_context_version": task.latest_context_version,
+            "latest_hook_command_kind": task.latest_hook_command_kind,
+            "hook_window_est_tokens": task.hook_window_est_tokens,
+            "hook_threshold_exceeded": task.hook_threshold_exceeded
+        }))
+    }))
+}
+
 fn capabilities_payload() -> Value {
     // Keep this payload minimal — it is injected into every MCP init and
     // counts against the agent's context budget.  Only include fields the
@@ -3682,6 +3747,14 @@ fn summarize_tool_payload(name: &str, payload: &Value) -> String {
             format!("Packet28 distilled graph concepts: {created} created, {refined} refined.")
         }
         "packet28.task_status" => "Packet28 task status.".to_string(),
+        "packet28.agent_status" => {
+            let policy = payload
+                .get("reducer_cache_safety")
+                .and_then(|value| value.get("policy"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!("Packet28 agent status cache_policy={policy}.")
+        }
         "packet28.capabilities" => "Packet28 broker capabilities.".to_string(),
         _ => "Packet28 response.".to_string(),
     }
@@ -3762,6 +3835,7 @@ mod tests {
             "packet28_action_critic",
             "packet28_recommend_next_tool",
             "packet28_validate_tool_outcome",
+            "packet28_agent_status",
             "packet28_patch_risk",
             "packet28_verify_experiments",
             "packet28_reducer_drift",
@@ -3799,6 +3873,30 @@ mod tests {
                 "{required} missing from tools/list"
             );
         }
+    }
+
+    #[test]
+    fn agent_status_reports_safe_cache_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let payload = handle_method(
+            root.path(),
+            &session,
+            "tools/call",
+            json!({
+                "name": "packet28.agent_status",
+                "arguments": {}
+            }),
+        )
+        .unwrap();
+        let content = payload["structuredContent"].clone();
+
+        assert_eq!(content["status"], "ok");
+        assert_eq!(
+            content["reducer_cache_safety"]["workspace_fingerprint_enabled"],
+            true
+        );
+        assert_eq!(content["mcp"]["manual_json_rpc_required"], false);
     }
 
     #[test]

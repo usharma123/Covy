@@ -335,6 +335,7 @@ pub struct HookReducerCacheEntry {
     pub reducer_family: String,
     pub canonical_command_kind: String,
     pub cache_fingerprint: String,
+    pub workspace_fingerprint: Option<String>,
     pub summary: String,
     #[serde(default)]
     pub compact_preview: Option<String>,

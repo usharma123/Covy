@@ -465,6 +465,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
                 "    Selected runtime hooks will capture tool activity directly into Packet28."
             );
         }
+        println!("    Reducer-runner cache safety is enabled with workspace fingerprints.");
         println!("    Start a new session and Packet28 intent/handoff tools will be available.");
     } else if agent_files_ready {
         println!("    Agent instruction files have been written.");
@@ -479,6 +480,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
     println!("    packet28 --version");
     println!("    packet28 daemon status --root {root_display}");
     println!("    packet28 doctor --root {root_display}");
+    println!("    packet28-mcp --root {root_display}  # then call packet28.agent_status");
     println!();
 
     Ok(exit_code)

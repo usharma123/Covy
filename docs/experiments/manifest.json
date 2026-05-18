@@ -1,6 +1,49 @@
 {
   "experiments": [
     {
+      "id": "agentic-tokenomics-20260518",
+      "workflow": "Packet28 versus normal tools on a generated agentic Rust bug-fix task",
+      "commands": [
+        "python3 scripts/bench_agentic_coding_task.py --artifact-dir docs/experiments/agentic-tokenomics/20260518"
+      ],
+      "artifacts": [
+        "docs/experiments/agentic-tokenomics/20260518/summary.md",
+        "docs/experiments/agentic-tokenomics/20260518/results.json"
+      ],
+      "metrics": [
+        {
+          "name": "saved_context_tokens",
+          "value": 7553,
+          "min": 1,
+          "evidence": [
+            "Saved context: `7553` estimated tokens"
+          ]
+        },
+        {
+          "name": "packet28_savings_percent",
+          "value": 93.9,
+          "min": 80,
+          "evidence": [
+            "Savings: `93.9%`"
+          ]
+        },
+        {
+          "name": "packet28_feature_checks_passed",
+          "value": 9,
+          "min": 9,
+          "evidence": [
+            "Feature checks passed: `9/9`"
+          ]
+        }
+      ],
+      "runtime_versions": [
+        {
+          "name": "packet28",
+          "version": "0.2.61"
+        }
+      ]
+    },
+    {
       "id": "runtime-live-20260512",
       "workflow": "Claude Code, Gemini, and OpenCode runtime integration smoke",
       "commands": [

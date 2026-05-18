@@ -882,9 +882,15 @@ fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
         return Err(anyhow!("reducer-runner classification mismatch"));
     }
 
-    if let Some((cached_packet, exit_code)) =
-        cached_reducer_packet(&root, &task_id, &spec, &command_text)
-    {
+    let workspace_fingerprint = workspace_cache_fingerprint(&root, &cwd, &spec);
+
+    if let Some((cached_packet, exit_code)) = cached_reducer_packet(
+        &root,
+        &task_id,
+        &spec,
+        &command_text,
+        Some(&workspace_fingerprint),
+    ) {
         let command_id = format!("runner-cache-{}", now_unix_millis());
         let _ = crate::broker_client::hook_ingest(
             &root,
@@ -1015,6 +1021,9 @@ fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
         "command": command_text,
         "argv": args.argv,
         "cwd": cwd.display().to_string(),
+        "cache_hit": false,
+        "cache_validity": "workspace_fingerprint",
+        "workspace_fingerprint": workspace_fingerprint,
         "stdout_spool_path": stdout_path.display().to_string(),
         "stderr_spool_path": stderr_path.display().to_string(),
         "stdout_preview": compact_text(&stdout, 400),
@@ -1138,16 +1147,151 @@ fn run_reduce_fixture(args: ReduceFixtureArgs) -> Result<i32> {
     Ok(0)
 }
 
+fn workspace_cache_fingerprint(root: &Path, cwd: &Path, spec: &CommandReducerSpec) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"packet28-workspace-cache-v1");
+    hash_path_component(&mut hasher, "root", root);
+    hash_path_component(&mut hasher, "cwd", cwd);
+    hasher.update(spec.family.as_bytes());
+    hasher.update(spec.canonical_kind.as_bytes());
+
+    let mut paths = workspace_fingerprint_paths(root, cwd, spec);
+    paths.sort();
+    paths.dedup();
+
+    for args in [
+        &["rev-parse", "--show-toplevel"][..],
+        &["rev-parse", "HEAD"][..],
+    ] {
+        match git_output_for_fingerprint(root, args) {
+            Some(output) => {
+                hasher.update(b"git-ok");
+                hasher.update(output.as_bytes());
+            }
+            None => {
+                hasher.update(b"git-unavailable");
+            }
+        }
+    }
+    if paths.is_empty() {
+        match git_output_for_fingerprint(
+            root,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        ) {
+            Some(output) => {
+                hasher.update(b"git-status-ok");
+                hasher.update(output.as_bytes());
+            }
+            None => {
+                hasher.update(b"git-status-unavailable");
+            }
+        }
+    }
+    for path in paths {
+        hash_file_for_fingerprint(&mut hasher, root, &path);
+    }
+
+    hasher.finalize().to_hex().to_string()
+}
+
+fn workspace_fingerprint_paths(root: &Path, cwd: &Path, spec: &CommandReducerSpec) -> Vec<PathBuf> {
+    if spec.family == "rust" {
+        let base = if cwd.exists() { cwd } else { root };
+        let mut paths = Vec::new();
+        collect_rust_workspace_paths(base, &mut paths);
+        paths
+    } else if !spec.paths.is_empty() {
+        spec.paths
+            .iter()
+            .map(|path| {
+                let candidate = PathBuf::from(path);
+                if candidate.is_absolute() {
+                    candidate
+                } else {
+                    cwd.join(candidate)
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn collect_rust_workspace_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        if path.is_dir() {
+            if matches!(name, ".git" | ".packet28" | "target" | "node_modules") {
+                continue;
+            }
+            collect_rust_workspace_paths(&path, paths);
+        } else if path.is_file()
+            && (path.extension().and_then(|value| value.to_str()) == Some("rs")
+                || matches!(name, "Cargo.toml" | "Cargo.lock"))
+        {
+            paths.push(path);
+        }
+    }
+}
+
+fn hash_file_for_fingerprint(hasher: &mut blake3::Hasher, root: &Path, path: &Path) {
+    let display_path = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string();
+    hasher.update(display_path.as_bytes());
+    match fs::metadata(path) {
+        Ok(metadata) => {
+            hasher.update(b"exists");
+            hasher.update(&metadata.len().to_le_bytes());
+            if let Ok(bytes) = fs::read(path) {
+                hasher.update(&bytes);
+            }
+        }
+        Err(_) => {
+            hasher.update(b"missing");
+        }
+    }
+}
+
+fn hash_path_component(hasher: &mut blake3::Hasher, label: &str, path: &Path) {
+    hasher.update(label.as_bytes());
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    hasher.update(path.to_string_lossy().as_bytes());
+}
+
+fn git_output_for_fingerprint(root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn cached_reducer_packet(
     root: &Path,
     task_id: &str,
     spec: &CommandReducerSpec,
     command_text: &str,
+    workspace_fingerprint: Option<&str>,
 ) -> Option<(HookReducerPacket, i32)> {
     let registry = load_task_registry(root).ok()?;
     let task = registry.tasks.get(task_id)?;
     let entry = task.hook_reducer_cache.get(&spec.cache_fingerprint)?;
-    if !cache_entry_matches(task, entry, spec) {
+    if !cache_entry_matches(task, entry, spec, workspace_fingerprint) {
         return None;
     }
     let est_bytes = entry.summary.len() as u64;
@@ -1195,8 +1339,14 @@ fn cache_entry_matches(
     task: &TaskRecord,
     entry: &HookReducerCacheEntry,
     spec: &CommandReducerSpec,
+    workspace_fingerprint: Option<&str>,
 ) -> bool {
     if entry.reducer_family != spec.family || entry.canonical_command_kind != spec.canonical_kind {
+        return false;
+    }
+    if workspace_fingerprint.is_some()
+        && entry.workspace_fingerprint.as_deref() != workspace_fingerprint
+    {
         return false;
     }
     if entry.git_epoch != task.hook_git_epoch
@@ -2832,6 +2982,29 @@ mod tests {
         let gemini_command = gemini["command"].as_str().unwrap();
         assert!(gemini_command.contains("--kind git_status"));
         assert!(gemini_command.ends_with(" -- git status --short"));
+    }
+
+    #[test]
+    fn rust_workspace_fingerprint_changes_for_out_of_band_source_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"demo\"\n").unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn value() -> i32 { 1 }\n",
+        )
+        .unwrap();
+        let spec = classify_command("cargo test --lib").unwrap();
+
+        let before = workspace_cache_fingerprint(dir.path(), dir.path(), &spec);
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn value() -> i32 { 2 }\n",
+        )
+        .unwrap();
+        let after = workspace_cache_fingerprint(dir.path(), dir.path(), &spec);
+
+        assert_ne!(before, after);
     }
 
     #[test]

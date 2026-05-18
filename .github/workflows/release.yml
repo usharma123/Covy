@@ -29,6 +29,13 @@ jobs:
       - name: Run p28 search CLI tests
         run: cargo test -p packet28-search-cli --tests
 
+      - name: Run reducer cache safety tests
+        run: |
+          cargo test -p suite-cli rust_workspace_fingerprint_changes_for_out_of_band_source_edit
+          cargo test -p suite-cli agent_status_reports_safe_cache_policy
+          cargo test -p suite-cli test_packet28_hook_reducer_runner_reuses_cached_summary_without_rerunning_command --test e2e_smoke
+          cargo test -p suite-cli test_packet28_hook_reducer_runner_busts_cache_after_out_of_band_file_edit --test e2e_smoke
+
       - name: Run hook benchmark suite
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,7 +75,13 @@ jobs:
             --require-workflow "Optional fff MCP search backend comparison and adapter smoke" \
             --require-workflow "Packet28 broker plan validation CLI with mapped test-gate score evidence" \
             --require-workflow "Packet28 code-navigation experiment on ClaudeCode main source snapshot" \
+            --require-workflow "Packet28 versus normal tools on a generated agentic Rust bug-fix task" \
             --require-workflow "Packet28 release smoke for published npm package and install path"
+
+      - name: Verify release notes
+        run: |
+          set -euo pipefail
+          test -s "docs/releases/${GITHUB_REF_NAME}.md"
 
       - name: Publish release gate summary
         if: always()
@@ -275,7 +288,7 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" \
             --title "Packet28 ${GITHUB_REF_NAME}" \
-            --generate-notes
+            --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
 
   test:
     runs-on: ubuntu-latest

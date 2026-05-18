@@ -11531,6 +11531,83 @@ fn test_packet28_hook_reducer_runner_reuses_cached_summary_without_rerunning_com
 
 #[test]
 #[cfg(unix)]
+fn test_packet28_hook_reducer_runner_busts_cache_after_out_of_band_file_edit() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    fs::write(dir.path().join("sample.txt"), "Alpha\nBeta\n").unwrap();
+
+    let bin_dir = dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let counter_path = dir.path().join("cat-count.txt");
+    fs::write(&counter_path, "0\n").unwrap();
+    let script_path = bin_dir.join("cat");
+    fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\ncount=$(/bin/cat \"{count}\" 2>/dev/null || echo 0)\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > \"{count}\"\nexec /bin/cat \"$@\"\n",
+            count = counter_path.display()
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).unwrap();
+
+    let spec = packet28_reducer_core::classify_command("cat sample.txt").unwrap();
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let runner_args = [
+        "hook",
+        "reducer-runner",
+        "--root",
+        dir.path().to_str().unwrap(),
+        "--task-id",
+        "task-runner-stale-cache",
+        "--family",
+        &spec.family,
+        "--kind",
+        &spec.canonical_kind,
+        "--fingerprint",
+        &spec.cache_fingerprint,
+        "--cwd",
+        dir.path().to_str().unwrap(),
+        "--",
+        "cat",
+        "sample.txt",
+    ];
+
+    let mut first = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    first
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .args(runner_args);
+    let first = first.output().unwrap();
+    assert!(first.status.success());
+
+    fs::write(dir.path().join("sample.txt"), "Alpha\nBeta\nGamma\n").unwrap();
+
+    let mut second = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    second
+        .current_dir(dir.path())
+        .env("PATH", &path_env)
+        .args(runner_args);
+    let second = second.output().unwrap();
+    assert!(second.status.success());
+    assert_ne!(first.stdout, second.stdout);
+    assert_eq!(fs::read_to_string(&counter_path).unwrap().trim(), "2");
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
 fn test_packet28_hooks_degrade_gracefully_on_bad_json_and_no_rewrite() {
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();

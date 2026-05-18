@@ -331,6 +331,12 @@ fn cache_hit_for_packet(
     if entry.reducer_family != packet_family(packet).unwrap_or_default() {
         return false;
     }
+    let packet_workspace_fingerprint = packet_workspace_fingerprint(packet);
+    if packet_workspace_fingerprint.is_some()
+        && entry.workspace_fingerprint.as_deref() != packet_workspace_fingerprint
+    {
+        return false;
+    }
     if entry.git_epoch != task.hook_git_epoch
         || entry.fs_epoch != task.hook_fs_epoch
         || entry.rust_epoch != task.hook_rust_epoch
@@ -367,6 +373,7 @@ fn update_cache_for_packet(
             reducer_family: family.to_string(),
             canonical_command_kind: kind.to_string(),
             cache_fingerprint: fingerprint.clone(),
+            workspace_fingerprint: packet_workspace_fingerprint(packet).map(ToOwned::to_owned),
             summary: packet.summary.clone(),
             compact_preview: packet.compact_preview.clone(),
             paths: packet.paths.clone(),
@@ -383,6 +390,15 @@ fn update_cache_for_packet(
             rust_epoch: task.hook_rust_epoch,
         },
     );
+}
+
+fn packet_workspace_fingerprint(packet: &packet28_daemon_core::HookReducerPacket) -> Option<&str> {
+    packet
+        .artifact
+        .as_ref()
+        .and_then(|artifact| artifact.get("workspace_fingerprint"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn apply_lifecycle_event(

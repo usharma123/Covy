@@ -378,6 +378,7 @@ It updates runtime config where supported (`.mcp.json`, `.cursor/mcp.json`, `~/.
 Packet28's MCP surface includes:
 
 - Tools for slim reducer search, region reads, state writes, handoff assembly, and stored artifact fetches
+- Agent health checks such as `packet28.agent_status`, which reports setup health, active task state, hook config presence, and safe reducer-cache policy
 - Compatibility tools for command reduction, rewrite planning, handoff, and doctor checks: `packet28.reduce`, `packet28.rewrite`, `packet28.handoff`, and `packet28.doctor`
 - Local memory, feedback, and graph tools: `packet28.memory_store`, `packet28.memory_recall`, `packet28.memory_list`, `packet28.feedback_record`, `packet28.feedback_search`, `packet28.feedback_stats`, and `packet28.graph_inspect`
 - Prompt entry points such as `packet28.start_task`, `packet28.continue_task`, and `packet28.summarize_current_context`
@@ -604,9 +605,11 @@ Example reducer-plus-handoff loop:
 
 1. Install runtime hooks with `Packet28 setup --runtime all --yes`.
 2. Let hooks persist reducer packets into the daemon automatically during the turn.
-3. Call `packet28.write_intention` only for semantic objective changes.
-4. Call `packet28.prepare_handoff` only for explicit bootstrap or inspection.
-5. Relaunch a fresh worker from the handoff packet through `packet28-agent` or `Packet28 daemon task launch-agent`.
+3. Use normal shell/search/read tools; reducer-runner cache validity includes workspace fingerprints, so out-of-band edits do not replay stale command results.
+4. Call `packet28.write_intention` only for semantic objective changes.
+5. Call `packet28.agent_status` or `packet28.validate_tool_outcome` when an agent needs health or result confidence; no manual MCP JSON-RPC wrapper is required after setup.
+6. Call `packet28.prepare_handoff` only for explicit bootstrap or inspection.
+7. Relaunch a fresh worker from the handoff packet through `packet28-agent` or `Packet28 daemon task launch-agent`.
 
 Run the local hook benchmark suite:
 
