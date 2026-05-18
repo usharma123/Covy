@@ -944,12 +944,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence risk-class output audit | Keeps representative confidence reason lines stable after the risk-class refactor. | Added exact-line coverage for backed success, unbacked changed-symbol success, and mixed freshness reason lines, including `risk=` and `payoff=`. | Evidence: `broker_evidence_confidence_reason_lines_stay_stable`; compact metric: confidence output remains two lines. |
 | Broker confidence reason-line width audit | Ensures exact reason-line coverage does not permit slow token growth. | Extended representative reason-line coverage to require each `risk=` and `payoff=` line to stay under 180 characters. | Evidence: `broker_evidence_confidence_reason_lines_stay_stable`; compact metric: confidence reason lines remain width-bounded. |
 | Broker confidence reason-line byte audit | Guards against hidden serialized-size growth beyond line width. | Extended representative confidence reason coverage to require backed, unbacked-symbol, and mixed-freshness confidence bodies to stay under 512 bytes. | Evidence: `broker_evidence_confidence_reason_lines_stay_stable`; compact metric: representative confidence bodies remain byte-bounded. |
+| Broker confidence reason-line helper audit | Keeps output-stability helpers narrow. | Re-scanned `broker_confidence_reason_line()` callsites and kept it confidence-specific because only exact confidence reason output tests need the helper. | Evidence: docs-only audit plus `rg broker_confidence_reason_line`; compact metric: no product output change. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence reason-line helper audit | Checks whether the reason-line helper belongs beside confidence-specific helpers. | Re-scan `broker_confidence_reason_line()` callsites and decide whether it should stay local to output stability tests or be generalized. | Compact metric: no product output change; correctness metric: tests stay readable without over-abstracting. |
+| Broker confidence test cluster audit | Checks whether the growing confidence test cluster should be grouped or split. | Re-scan confidence tests for ordering, helper locality, and filter ergonomics after the risk/payoff additions. | Compact metric: no product output change; correctness metric: confidence behavior remains easy to inspect. |
 
 ## Research Rules
 
