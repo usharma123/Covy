@@ -66,7 +66,7 @@ fn broker_evidence_confidence_body(
     .body
 }
 
-fn broker_confidence_reason_line(body: &str) -> &str {
+fn broker_evidence_confidence_reason_line(body: &str) -> &str {
     body.lines()
         .find(|line| line.starts_with("- confidence_reason:"))
         .expect("confidence reason line should render")
@@ -2063,21 +2063,21 @@ fn broker_evidence_confidence_reason_lines_stay_stable() {
     );
 
     assert_eq!(
-        broker_confidence_reason_line(&backed_success),
+        broker_evidence_confidence_reason_line(&backed_success),
         "- confidence_reason: source=local_tool_state verification=fresh artifacts=1 backing=artifact risk=none payoff=evidence usable"
     );
     assert_eq!(
-        broker_confidence_reason_line(&unbacked_symbol),
+        broker_evidence_confidence_reason_line(&unbacked_symbol),
         "- confidence_reason: source=local_tool_state verification=fresh artifacts=0 backing=missing risk=missing_backing payoff=capture artifact-backed symbol evidence"
     );
     assert_eq!(
-        broker_confidence_reason_line(&mixed_freshness),
+        broker_evidence_confidence_reason_line(&mixed_freshness),
         "- confidence_reason: source=local_tool_state verification=missing artifacts=0 backing=missing risk=freshness_mixed payoff=refresh stale_paths+changed_symbols"
     );
     for reason_line in [
-        broker_confidence_reason_line(&backed_success),
-        broker_confidence_reason_line(&unbacked_symbol),
-        broker_confidence_reason_line(&mixed_freshness),
+        broker_evidence_confidence_reason_line(&backed_success),
+        broker_evidence_confidence_reason_line(&unbacked_symbol),
+        broker_evidence_confidence_reason_line(&mixed_freshness),
     ] {
         assert!(
             reason_line.len() <= 180,
