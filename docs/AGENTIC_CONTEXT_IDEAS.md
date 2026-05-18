@@ -932,12 +932,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence changed-symbol naming history audit | Keeps completed ideas rows aligned with current confidence output. | Re-scanned `stale_symbols` and stale-symbol references, updated the failed-symbol confidence row to current `changed_symbols` wording, and kept context-debt `stale_symbol` payoff language unchanged. | Evidence: docs-only audit; compact metric: no product output change. |
 | Broker confidence freshness-label compatibility | Helps downstream consumers survive the `changed_symbols` rename. | Added coverage that confidence output contains `changed_symbols` and never `stale_symbols`, while context debt still uses `payoff stale_symbol` for the refresh action. | Evidence: `broker_symbol_labels_distinguish_confidence_from_debt_payoff`; compact metric: no confidence output growth. |
 | Broker confidence stale-path label audit | Keeps path and symbol freshness labels semantically distinct. | Added mixed path/symbol coverage showing confidence keeps `stale_paths` for unread changed paths and `changed_symbols` for changed symbol counts. | Evidence: `broker_confidence_distinguishes_stale_paths_from_changed_symbols`; compact metric: confidence output remains two lines. |
+| Broker confidence mixed-freshness payoff wording | Helps agents decide whether to refresh paths, symbols, fallback, artifacts, or failures first. | Replaced the generic confidence payoff with compact blocker-specific wording and covered mixed path/symbol, fallback, successful, failed, symbol-only, and unbacked-symbol cases. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: confidence output remains two lines. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence mixed-freshness payoff wording | Helps agents decide whether to refresh paths, symbols, or both first. | Re-scan mixed stale-path and changed-symbol confidence reason text and decide whether the payoff should name the dominant freshness blocker. | Compact metric: confidence output remains two lines; correctness metric: medium confidence guidance points to the right refresh target. |
+| Broker confidence payoff priority audit | Checks whether the new payoff ordering matches agent repair cost. | Re-scan failure, freshness, fallback, and artifact payoff priority and decide whether artifact gaps should outrank changed symbols after successful verification. | Compact metric: confidence output remains two lines; correctness metric: payoff names the cheapest high-value next action. |
 
 ## Research Rules
 

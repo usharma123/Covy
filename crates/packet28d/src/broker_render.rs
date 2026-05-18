@@ -1234,6 +1234,14 @@ fn render_evidence_confidence_lines(
     } else {
         "low"
     };
+    let payoff = confidence_payoff(
+        score,
+        stale_paths,
+        changed_symbols,
+        fallback_count,
+        failure_count,
+        artifact_gap,
+    );
     vec![
         format!(
             "- confidence: {label} score={score} stale_paths={stale_paths} changed_symbols={changed_symbols} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap} backing={evidence_backing}"
@@ -1243,13 +1251,44 @@ fn render_evidence_confidence_lines(
             if successful_verification { "fresh" } else { "missing" },
             snapshot.evidence_artifact_ids.len(),
             evidence_backing,
-            if score >= 85 {
-                "evidence usable"
-            } else {
-                "refresh stale/fallback evidence before relying"
-            }
+            payoff
         ),
     ]
+}
+
+fn confidence_payoff(
+    score: u64,
+    stale_paths: u64,
+    changed_symbols: u64,
+    fallback_count: u64,
+    failure_count: u64,
+    artifact_gap: u64,
+) -> &'static str {
+    if score >= 85 {
+        return "evidence usable";
+    }
+    if failure_count > 0 {
+        return "rerun failing evidence";
+    }
+    if stale_paths > 0 && changed_symbols > 0 {
+        return "refresh stale_paths+changed_symbols";
+    }
+    if stale_paths > 0 {
+        return "refresh stale_paths";
+    }
+    if changed_symbols > 0 && artifact_gap > 0 {
+        return "capture artifact-backed symbol evidence";
+    }
+    if changed_symbols > 0 {
+        return "refresh changed_symbols";
+    }
+    if fallback_count > 0 {
+        return "replace fallback_records";
+    }
+    if artifact_gap > 0 {
+        return "capture artifact-backed evidence";
+    }
+    "refresh weak evidence"
 }
 
 fn active_hypothesis_contradiction_count(

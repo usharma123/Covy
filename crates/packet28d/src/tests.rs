@@ -1964,6 +1964,7 @@ fn broker_confidence_distinguishes_stale_paths_from_changed_symbols() {
     assert!(confidence.contains("stale_paths=1"));
     assert!(confidence.contains("changed_symbols=1"));
     assert!(confidence.contains("confidence: medium"));
+    assert!(confidence.contains("payoff=refresh stale_paths+changed_symbols"));
 }
 
 #[test]
@@ -2023,8 +2024,10 @@ fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
     assert!(stale.contains("stale_paths=1"));
     assert!(stale.contains("fallback_records=1"));
     assert!(stale.contains("confidence: low"));
+    assert!(stale.contains("payoff=refresh stale_paths"));
     assert!(fresh.contains("confidence: high"));
     assert!(fresh.contains("verification=fresh"));
+    assert!(fresh.contains("payoff=evidence usable"));
 }
 
 #[test]
@@ -2041,7 +2044,7 @@ fn broker_evidence_confidence_penalizes_symbol_only_staleness() {
     assert!(confidence.contains("stale_paths=0"));
     assert!(confidence.contains("changed_symbols=1"));
     assert!(confidence.contains("confidence: medium"));
-    assert!(confidence.contains("refresh stale/fallback evidence before relying"));
+    assert!(confidence.contains("payoff=refresh changed_symbols"));
 }
 
 #[test]
@@ -2093,6 +2096,7 @@ fn broker_evidence_confidence_scores_failed_symbol_verification_low() {
     assert!(confidence.contains("failures=1"));
     assert!(confidence.contains("confidence: low"));
     assert!(confidence.contains("verification=missing"));
+    assert!(confidence.contains("payoff=rerun failing evidence"));
 }
 
 #[test]
@@ -2120,6 +2124,7 @@ fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
     assert!(confidence.contains("confidence: medium"));
     assert!(confidence.contains("verification=fresh"));
     assert!(confidence.contains("artifacts=0 backing=missing"));
+    assert!(confidence.contains("payoff=capture artifact-backed symbol evidence"));
 }
 
 #[test]
