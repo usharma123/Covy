@@ -1867,6 +1867,40 @@ fn broker_evidence_confidence_scores_stale_or_fallback_below_fresh_success() {
 }
 
 #[test]
+fn broker_evidence_confidence_penalizes_symbol_only_staleness() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let symbol_snapshot = suite_packet_core::AgentSnapshotPayload {
+        changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let sections = build_broker_sections(
+        &root,
+        &state,
+        &BrokerGetContextRequest {
+            task_id: "task-confidence-symbol".to_string(),
+            action: Some(BrokerAction::Inspect),
+            include_sections: vec!["evidence_confidence".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &symbol_snapshot,
+        None,
+        None,
+    );
+    let confidence = sections
+        .iter()
+        .find(|section| section.id == "evidence_confidence")
+        .expect("symbol-only staleness should render confidence");
+
+    assert!(confidence.body.contains("stale_paths=0"));
+    assert!(confidence.body.contains("stale_symbols=1"));
+    assert!(confidence.body.contains("confidence: medium"));
+    assert!(confidence
+        .body
+        .contains("refresh stale/fallback evidence before relying"));
+}
+
+#[test]
 fn render_task_memory_lines_surfaces_recent_state() {
     let snapshot = suite_packet_core::AgentSnapshotPayload {
         files_read: vec!["src/alpha.rs".to_string()],

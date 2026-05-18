@@ -307,6 +307,7 @@ Current evidence:
 - Packet28 broker edit/inspect context now includes `evidence_freshness` when paths or symbols changed since checkpoint, scoring fresh changed-path reads before marking which paths and symbols should be refreshed before relying on cached evidence. Evidence: `broker_edit_context_surfaces_evidence_freshness_for_changed_paths`.
 - Packet28 relevant-context rendering now marks cached snippets that mention changed-since-checkpoint paths as `stale_after_change` unless that path has a fresh read, and downranks stale snippets after fresher context in the rendered broker section. Evidence: `relevant_context_marks_and_downranks_stale_changed_path_context`.
 - Packet28 reducer search ranking now uses evidence freshness for changed paths, preferring freshly read changed paths over stale changed paths when other reducer-search signals are comparable. Evidence: `search_ranking_prefers_fresh_changed_path_over_stale_changed_path`.
+- Packet28 evidence confidence now treats changed symbols as stale evidence signals, rendering confidence for symbol-only changes and lowering confidence until symbol evidence is refreshed. Evidence: `broker_evidence_confidence_penalizes_symbol_only_staleness`.
 
 ### 6. Release Readiness
 

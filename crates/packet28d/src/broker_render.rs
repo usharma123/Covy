@@ -1140,6 +1140,7 @@ fn render_evidence_confidence_lines(
 ) -> Vec<String> {
     let has_evidence_signal = !snapshot.recent_tool_invocations.is_empty()
         || !snapshot.changed_paths_since_checkpoint.is_empty()
+        || !snapshot.changed_symbols_since_checkpoint.is_empty()
         || !snapshot.evidence_artifact_ids.is_empty();
     if !has_evidence_signal {
         return Vec::new();
@@ -1150,6 +1151,7 @@ fn render_evidence_confidence_lines(
         .iter()
         .filter(|path| !snapshot.files_read.iter().any(|read| read == *path))
         .count() as u64;
+    let stale_symbols = snapshot.changed_symbols_since_checkpoint.len() as u64;
     let successful_verification = snapshot.recent_tool_invocations.iter().any(|invocation| {
         matches!(
             invocation.operation_kind,
@@ -1203,6 +1205,7 @@ fn render_evidence_confidence_lines(
         .count() as u64;
     let score = 100_u64
         .saturating_sub(stale_paths.saturating_mul(20).min(40))
+        .saturating_sub(stale_symbols.saturating_mul(20).min(40))
         .saturating_sub(fallback_count.saturating_mul(20).min(40))
         .saturating_sub(failure_count.saturating_mul(25).min(50))
         .saturating_sub(artifact_gap.saturating_mul(5).min(20))
@@ -1217,7 +1220,7 @@ fn render_evidence_confidence_lines(
     };
     vec![
         format!(
-            "- confidence: {label} score={score} stale_paths={stale_paths} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap}"
+            "- confidence: {label} score={score} stale_paths={stale_paths} stale_symbols={stale_symbols} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap}"
         ),
         format!(
             "- confidence_reason: source=local_tool_state verification={} artifacts={} payoff={}",
