@@ -2216,6 +2216,54 @@ fn broker_evidence_confidence_caps_missing_backing_below_high() {
 }
 
 #[test]
+fn broker_evidence_confidence_missing_backing_keeps_score_spread() {
+    let state = daemon_test_state();
+    let symbol_only = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+    let unbacked_success = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-1".to_string(),
+                sequence: 1,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests passed".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+    let failed_symbol = broker_evidence_confidence_body(
+        &state,
+        suite_packet_core::AgentSnapshotPayload {
+            changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
+            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
+                invocation_id: "test-2".to_string(),
+                sequence: 2,
+                tool_name: "cargo test auth_cache".to_string(),
+                operation_kind: suite_packet_core::ToolOperationKind::Test,
+                result_summary: Some("tests failed".to_string()),
+                ..suite_packet_core::ToolInvocationSummary::default()
+            }],
+            ..suite_packet_core::AgentSnapshotPayload::default()
+        },
+    );
+
+    assert!(symbol_only.contains("score=80"));
+    assert!(symbol_only.contains("confidence: medium"));
+    assert!(unbacked_success.contains("score=84"));
+    assert!(unbacked_success.contains("confidence: medium"));
+    assert!(failed_symbol.contains("score=35"));
+    assert!(failed_symbol.contains("confidence: low"));
+}
+
+#[test]
 fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
     let state = daemon_test_state();
     let backed_verified = broker_evidence_confidence_body(

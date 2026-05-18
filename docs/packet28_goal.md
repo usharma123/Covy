@@ -318,6 +318,7 @@ Current evidence:
 - Packet28 now locks confidence payoff priority directly, so failures outrank freshness, mixed path/symbol freshness outranks fallback and artifact gaps, artifact-backed symbol evidence outranks generic changed-symbol refresh, and usable evidence stays explicit. Evidence: `broker_confidence_payoff_priority_orders_repair_actions`.
 - Packet28 evidence confidence now penalizes repeated artifact gaps more strongly, dropping two unbacked evidence-producing tool calls to medium confidence with an artifact-backed payoff. Evidence: `broker_evidence_confidence_scores_repeated_artifact_gaps_medium`.
 - Packet28 evidence confidence now caps missing-backed evidence below high confidence, so even a successful verification without artifact/raw backing reports medium confidence and an artifact-backed payoff. Evidence: `broker_evidence_confidence_caps_missing_backing_below_high`.
+- Packet28 evidence confidence now verifies that the missing-backed cap preserves score spread: symbol-only evidence remains medium at 80, unbacked success caps at 84, and failed unbacked symbol evidence remains low at 35. Evidence: `broker_evidence_confidence_missing_backing_keeps_score_spread`.
 
 ### 6. Release Readiness
 
