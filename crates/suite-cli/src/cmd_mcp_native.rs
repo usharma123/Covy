@@ -874,16 +874,55 @@ fn execute_search_primary(
     session: &Arc<Mutex<McpSessionState>>,
     request: &packet28_reducer_core::SearchRequest,
 ) -> Result<packet28_reducer_core::SearchResult> {
-    match packet28_search_via_session(root, session, request.clone()) {
-        Ok(result) => Ok(result),
+    let fff_prefer_error = if mcp_fff_auto_prefer_requested() {
+        match execute_fff_search_with_session(root, session, request) {
+            Ok(mut result) => {
+                append_unique(
+                    &mut result.diagnostics,
+                    "auto preferred persistent fff MCP backend",
+                );
+                return Ok(result);
+            }
+            Err(error) => Some(error.to_string()),
+        }
+    } else {
+        None
+    };
+
+    let mut result = match packet28_search_via_session(root, session, request.clone()) {
+        Ok(result) => result,
         Err(daemon_error) => {
             let mut fallback = packet28_reducer_core::search(root, request)?;
             if let Some(engine) = fallback.engine.as_mut() {
                 engine.fallback_reason = Some(daemon_error.to_string());
             }
-            Ok(fallback)
+            fallback
+        }
+    };
+
+    if let Some(error) = fff_prefer_error {
+        append_unique(
+            &mut result.diagnostics,
+            format!("fff auto preferred backend failed: {error}"),
+        );
+        if let Some(engine) = result.engine.as_mut() {
+            engine.fallback_reason = match engine.fallback_reason.take() {
+                Some(existing) => Some(format!(
+                    "fff auto preferred backend failed: {error}; {existing}"
+                )),
+                None => Some(format!("fff auto preferred backend failed: {error}")),
+            };
         }
     }
+
+    Ok(result)
+}
+
+fn mcp_fff_auto_prefer_requested() -> bool {
+    matches!(
+        std::env::var("P28_FFF_AUTO").ok().as_deref(),
+        Some("prefer" | "PREFER" | "first" | "FIRST" | "1" | "true" | "TRUE" | "on" | "ON")
+    )
 }
 
 fn execute_fff_search_with_session(

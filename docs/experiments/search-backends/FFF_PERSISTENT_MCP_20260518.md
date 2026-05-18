@@ -16,6 +16,8 @@ Upstream exposes a real Rust crate, `fff-search`, plus the `fff-mcp` binary. Dir
 
 Packet28 now accepts `search_strategy: "fff"` on `packet28.search` and `packet28.search_fast`. The MCP session caches one `fff-mcp` process per root, preserving FFF's warm index and typed output path while retaining Packet28's slim/full payload reduction and artifact storage.
 
+Packet28 MCP `hybrid` search also honors `P28_FFF_AUTO=prefer`. With `P28_FFF_MCP_BIN` set, the default MCP search path attempts persistent FFF first and falls back to the existing daemon/index/native path if FFF is missing or fails.
+
 ## Smoke Command
 
 The smoke used `target/debug/Packet28 mcp serve --root /Users/utsavsharma/Documents/GitHub/Coverage` with `P28_FFF_MCP_BIN` pointed at the built upstream binary, then called `packet28.search_fast` four times in the same MCP session.
@@ -29,6 +31,13 @@ The smoke used `target/debug/Packet28 mcp serve --root /Users/utsavsharma/Docume
 | `SearchResult` | 1.0 | fff_mcp | 19 |
 | `Packet28SearchStrategy` | 0.8 | fff_mcp | 10 |
 
+Default hybrid search with `P28_FFF_AUTO=prefer`:
+
+| query | Packet28 hybrid ms | search_strategy | primary backend | matches |
+|---|---:|---|---|---:|
+| `SearchResult` | 181.8 | hybrid | fff_mcp | 20 |
+| `SearchResult` | 6.3 | hybrid | fff_mcp | 20 |
+
 Native `rg -n --max-count 20` comparison in the same repo:
 
 | query | rg ms | status |
@@ -40,4 +49,4 @@ Native `rg -n --max-count 20` comparison in the same repo:
 
 ## Outcome
 
-FFF is worthwhile for Packet28 when it is used as a warm, long-lived backend. The previous per-query `p28 --engine fff` adapter proved correctness but paid process startup every call. The persistent MCP strategy shows the intended FFF shape: after initial scan, repeated indexed searches are faster than repeated `rg` spawns while Packet28 still returns reduced MCP payloads.
+FFF is worthwhile for Packet28 when it is used as a warm, long-lived backend. The previous per-query `p28 --engine fff` adapter proved correctness but paid process startup every call. The persistent MCP strategy shows the intended FFF shape: after initial scan, repeated indexed searches are faster than repeated `rg` spawns while Packet28 still returns reduced MCP payloads. `P28_FFF_AUTO=prefer` now makes the default MCP hybrid path choose this warm FFF backend first.
