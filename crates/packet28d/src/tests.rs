@@ -1956,7 +1956,7 @@ fn broker_symbol_labels_distinguish_confidence_from_debt_payoff() {
 }
 
 #[test]
-fn broker_confidence_distinguishes_stale_paths_from_changed_symbols() {
+fn broker_evidence_confidence_distinguishes_stale_paths_from_changed_symbols() {
     let state = daemon_test_state();
     let confidence = broker_evidence_confidence_body(
         &state,
@@ -1975,7 +1975,7 @@ fn broker_confidence_distinguishes_stale_paths_from_changed_symbols() {
 }
 
 #[test]
-fn broker_confidence_payoff_priority_orders_repair_actions() {
+fn broker_evidence_confidence_payoff_priority_orders_repair_actions() {
     assert_eq!(confidence_payoff(100, 1, 1, 1, 1, 1), "evidence usable");
     assert_eq!(
         confidence_payoff(55, 1, 1, 1, 1, 1),
@@ -2008,7 +2008,7 @@ fn broker_confidence_payoff_priority_orders_repair_actions() {
 }
 
 #[test]
-fn broker_confidence_risk_priority_matches_repair_actions() {
+fn broker_evidence_confidence_risk_priority_matches_repair_actions() {
     assert_eq!(confidence_risk(100, 1, 1, 1, 1, 1), "none");
     assert_eq!(confidence_risk(55, 1, 1, 1, 1, 1), "failures");
     assert_eq!(confidence_risk(60, 1, 1, 1, 0, 1), "freshness_mixed");
