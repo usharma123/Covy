@@ -947,12 +947,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker confidence reason-line helper audit | Keeps output-stability helpers narrow. | Re-scanned `broker_confidence_reason_line()` callsites and kept it confidence-specific because only exact confidence reason output tests need the helper. | Evidence: docs-only audit plus `rg broker_confidence_reason_line`; compact metric: no product output change. |
 | Broker confidence test cluster audit | Improves confidence test filter ergonomics. | Renamed direct helper and mixed-label confidence tests to the `broker_evidence_confidence_` prefix so one cargo test filter covers rendered confidence and helper-priority coverage. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: no product output change. |
 | Broker confidence test cluster count audit | Makes the confidence filter's expected breadth explicit. | Recorded that `cargo test -p packet28d broker_evidence_confidence` now runs 14 focused confidence tests, covering helper priority, rendered scoring, reason-line stability, and compactness. | Evidence: passing 14-test filter run; compact metric: no product output change. |
+| Broker confidence stale docs-reference audit | Keeps evidence references aligned after confidence test renaming. | Re-scanned docs and tests for old `broker_confidence_` evidence names; only the intentional `broker_confidence_reason_line()` helper remains. | Evidence: `rg broker_confidence_ docs crates/packet28d/src/tests.rs`; compact metric: no product output change. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker confidence stale docs-reference audit | Checks whether historical references still use old confidence test names. | Re-scan docs for pre-unification `broker_confidence_` evidence names and replace only stale references. | Compact metric: docs-only; correctness metric: evidence names match current test names. |
+| Broker confidence helper-name audit | Checks whether `broker_confidence_reason_line()` should adopt the unified prefix too. | Decide whether the helper name should remain short and local or become `broker_evidence_confidence_reason_line()` for prefix consistency. | Compact metric: no product output change; correctness metric: helper names do not confuse test filtering. |
 
 ## Research Rules
 
