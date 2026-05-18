@@ -923,12 +923,13 @@ This note tracks high-leverage ideas that go beyond RTK/ICM parity and are speci
 | Broker evidence confidence backing line-width | Keeps backing labels visible without expanding the confidence section shape. | Added coverage that representative backed and unbacked confidence output stays at two lines, each at or below 180 characters, with `backing=` visible. | Evidence: `broker_evidence_confidence_backing_labels_stay_compact`; compact metric: confidence output remains two lines. |
 | Broker evidence confidence test helper extraction | Reduces duplicate confidence-section setup without hiding tier expectations. | Extracted `broker_evidence_confidence_body()` and reused it across confidence tests while leaving each test's snapshot and assertions explicit. | Evidence: `cargo test -p packet28d broker_evidence_confidence`; compact metric: no product output change. |
 | Broker evidence confidence helper scope audit | Keeps broker section tests direct unless a helper has a narrow owner. | Re-scanned nearby broker section tests and kept `broker_evidence_confidence_body()` confidence-specific because other section tests vary by action, request shape, and section-specific assertions. | Evidence: no product output change; broker section tests stay readable. |
+| Broker context debt test helper extraction | Reduces duplicate context-debt section setup without hiding debt scenarios. | Extracted `broker_context_debt_body()` returning an optional body and reused it across debt rendering and debt-clearing tests. | Evidence: `cargo test -p packet28d broker_context_debt`; compact metric: no product output change. |
 
 ## Next-Wave Backlog
 
 | Idea | Agent benefit | First implementation slice | Evidence gate |
 |---|---|---|---|
-| Broker context debt helper extraction audit | Checks whether context-debt tests now have enough repeated setup for a narrow helper. | Re-scan the context-debt tests and decide whether a `broker_context_debt_body()` helper would reduce duplication without hiding debt-clearing assertions. | Compact metric: no product output change; correctness metric: context-debt coverage stays explicit. |
+| Broker context debt helper shape audit | Checks whether the optional-body helper preserves clear negative assertions. | Re-scan `broker_context_debt_body()` callsites and verify debt-present and debt-cleared tests remain readable after returning `Option<String>`. | Compact metric: no product output change; correctness metric: debt clearing remains explicit. |
 
 ## Research Rules
 

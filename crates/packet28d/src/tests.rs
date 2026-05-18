@@ -66,6 +66,29 @@ fn broker_evidence_confidence_body(
     .body
 }
 
+fn broker_context_debt_body(
+    state: &Arc<Mutex<DaemonState>>,
+    snapshot: suite_packet_core::AgentSnapshotPayload,
+) -> Option<String> {
+    let root = daemon_test_root(state);
+    build_broker_sections(
+        &root,
+        state,
+        &BrokerGetContextRequest {
+            task_id: "task-context-debt".to_string(),
+            action: Some(BrokerAction::Edit),
+            include_sections: vec!["context_debt".to_string()],
+            ..BrokerGetContextRequest::default()
+        },
+        &snapshot,
+        None,
+        None,
+    )
+    .into_iter()
+    .find(|section| section.id == "context_debt")
+    .map(|section| section.body)
+}
+
 fn write_test_coverage_state(root: &Path, path: &str, covered: bool) {
     let mut coverage = suite_packet_core::CoverageData::new();
     let mut file = suite_packet_core::FileCoverage::new();
@@ -1751,7 +1774,6 @@ fn broker_edit_context_surfaces_evidence_freshness_for_changed_paths() {
 #[test]
 fn broker_context_debt_clears_after_reads_questions_and_verification() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
     let debt_snapshot = suite_packet_core::AgentSnapshotPayload {
         changed_paths_since_checkpoint: vec!["src/stale.rs".to_string()],
         files_edited: vec!["src/stale.rs".to_string()],
@@ -1776,22 +1798,13 @@ fn broker_context_debt_clears_after_reads_questions_and_verification() {
         }],
         ..suite_packet_core::AgentSnapshotPayload::default()
     };
-    let request = BrokerGetContextRequest {
-        task_id: "task-context-debt".to_string(),
-        action: Some(BrokerAction::Edit),
-        include_sections: vec!["context_debt".to_string()],
-        ..BrokerGetContextRequest::default()
-    };
-    let debt_sections = build_broker_sections(&root, &state, &request, &debt_snapshot, None, None);
-    let debt = debt_sections
-        .iter()
-        .find(|section| section.id == "context_debt")
+    let debt = broker_context_debt_body(&state, debt_snapshot)
         .expect("debt section should render when debts exist");
-    assert!(debt.body.contains(
+    assert!(debt.contains(
         "debt_summary: stale_paths=1 open_questions=1 unverified_edits=1 contradictions=1"
     ));
-    assert!(debt.body.contains("payoff stale_path"));
-    assert!(serde_json::to_string(&debt.body).unwrap().len() < 1024);
+    assert!(debt.contains("payoff stale_path"));
+    assert!(serde_json::to_string(&debt).unwrap().len() < 1024);
 
     let clear_snapshot = suite_packet_core::AgentSnapshotPayload {
         changed_paths_since_checkpoint: vec!["src/stale.rs".to_string()],
@@ -1807,42 +1820,25 @@ fn broker_context_debt_clears_after_reads_questions_and_verification() {
         }],
         ..suite_packet_core::AgentSnapshotPayload::default()
     };
-    let clear_sections =
-        build_broker_sections(&root, &state, &request, &clear_snapshot, None, None);
-    assert!(clear_sections
-        .iter()
-        .all(|section| section.id != "context_debt"));
+    assert!(broker_context_debt_body(&state, clear_snapshot).is_none());
 }
 
 #[test]
 fn broker_context_debt_surfaces_symbol_payoff_without_stale_path() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let sections = build_broker_sections(
-        &root,
+    let debt = broker_context_debt_body(
         &state,
-        &BrokerGetContextRequest {
-            task_id: "task-symbol-debt".to_string(),
-            action: Some(BrokerAction::Edit),
-            include_sections: vec!["context_debt".to_string()],
-            ..BrokerGetContextRequest::default()
-        },
-        &suite_packet_core::AgentSnapshotPayload {
+        suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
-        None,
-        None,
-    );
-    let debt = sections
-        .iter()
-        .find(|section| section.id == "context_debt")
-        .expect("symbol-only stale evidence should render debt");
+    )
+    .expect("symbol-only stale evidence should render debt");
 
-    assert!(debt.body.contains(
+    assert!(debt.contains(
         "debt_summary: stale_paths=0 open_questions=0 unverified_edits=1 contradictions=0"
     ));
-    assert!(debt.body.contains(
+    assert!(debt.contains(
         "payoff stale_symbol: inspect/search AuthCache before relying on cached evidence"
     ));
 }
@@ -1850,17 +1846,9 @@ fn broker_context_debt_surfaces_symbol_payoff_without_stale_path() {
 #[test]
 fn broker_context_debt_orders_symbol_payoff_after_path_payoff() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let sections = build_broker_sections(
-        &root,
+    let debt = broker_context_debt_body(
         &state,
-        &BrokerGetContextRequest {
-            task_id: "task-symbol-debt-order".to_string(),
-            action: Some(BrokerAction::Edit),
-            include_sections: vec!["context_debt".to_string()],
-            ..BrokerGetContextRequest::default()
-        },
-        &suite_packet_core::AgentSnapshotPayload {
+        suite_packet_core::AgentSnapshotPayload {
             changed_paths_since_checkpoint: vec!["src/auth.rs".to_string()],
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             open_questions: vec![suite_packet_core::AgentQuestion {
@@ -1869,27 +1857,18 @@ fn broker_context_debt_orders_symbol_payoff_after_path_payoff() {
             }],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
-        None,
-        None,
-    );
-    let debt = sections
-        .iter()
-        .find(|section| section.id == "context_debt")
-        .expect("mixed stale evidence should render debt");
+    )
+    .expect("mixed stale evidence should render debt");
     let stale_path_index = debt
-        .body
         .find("payoff stale_path")
         .expect("stale path payoff should render");
     let stale_symbol_index = debt
-        .body
         .find("payoff stale_symbol")
         .expect("stale symbol payoff should render");
     let open_questions_index = debt
-        .body
         .find("payoff open_questions")
         .expect("open question payoff should render");
     let unverified_edits_index = debt
-        .body
         .find("payoff unverified_edits")
         .expect("unverified edit payoff should render");
 
@@ -1901,17 +1880,9 @@ fn broker_context_debt_orders_symbol_payoff_after_path_payoff() {
 #[test]
 fn broker_context_debt_clears_symbol_only_after_verification() {
     let state = daemon_test_state();
-    let root = daemon_test_root(&state);
-    let sections = build_broker_sections(
-        &root,
+    let debt = broker_context_debt_body(
         &state,
-        &BrokerGetContextRequest {
-            task_id: "task-symbol-debt-clear".to_string(),
-            action: Some(BrokerAction::Edit),
-            include_sections: vec!["context_debt".to_string()],
-            ..BrokerGetContextRequest::default()
-        },
-        &suite_packet_core::AgentSnapshotPayload {
+        suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
                 invocation_id: "tool-test".to_string(),
@@ -1923,11 +1894,9 @@ fn broker_context_debt_clears_symbol_only_after_verification() {
             }],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
-        None,
-        None,
     );
 
-    assert!(sections.iter().all(|section| section.id != "context_debt"));
+    assert!(debt.is_none());
 }
 
 #[test]
