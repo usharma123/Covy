@@ -11306,7 +11306,11 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
     assert_eq!(search_full_payload["response_mode"], "full");
     assert_eq!(search_full_payload["query"], "Alpha");
     assert_eq!(search_full_payload["search_strategy"], "hybrid");
-    assert!(!search_full_payload["groups"].as_array().unwrap().is_empty());
+    assert_eq!(search_full_payload["content_format"], "path:line:text");
+    assert!(search_full_payload["groups"].is_null());
+    assert!(search_full_payload["content"]
+        .as_str()
+        .is_some_and(|content| content.contains("src/alpha.rs:")));
     assert!(search_full_payload["engine"].is_object());
     assert!(search_full_payload["hybrid"].is_object());
 
@@ -11353,7 +11357,10 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
     let read_full_payload = &read_full["result"]["structuredContent"];
     assert_eq!(read_full_payload["response_mode"], "full");
     assert_eq!(read_full_payload["path"], "src/alpha.rs");
-    assert_eq!(read_full_payload["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(read_full_payload["line_count"], 2);
+    assert!(read_full_payload["content"]
+        .as_str()
+        .is_some_and(|content| content.contains("2: use crate::beta::Beta;")));
 
     write_mcp_message(
         &mut stdin,
