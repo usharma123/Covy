@@ -388,6 +388,161 @@ def run_compact_grep_integrity_case(root: Path, artifact_dir: Path, shell: str |
     return payload
 
 
+def run_bash_posttool_grep_capture_case(root: Path, artifact_dir: Path, shell: str | None) -> dict:
+    case_name = "bash_posttool_grep_capture_integrity"
+    artifact_path = artifact_dir / f"{case_name}.json"
+    task_id = f"bench-posttool-grep-{int(time.time())}"
+    pattern = r"fn classify\|Mutation\|fn classify_command"
+    target_path = "crates/packet28-reducer-core/src/command.rs"
+    command_text = f"grep -n '{pattern}' {target_path}"
+    required_regions = [
+        f"{target_path}:16-16",
+        f"{target_path}:34-34",
+    ]
+    try:
+        shell_path = resolve_shell(shell)
+    except FileNotFoundError as exc:
+        payload = {
+            "case": case_name,
+            "status": "error",
+            "surface": "live",
+            "command": command_text,
+            "error": f"benchmark shell setup failed: {exc}",
+            "artifact_path": str(artifact_path),
+        }
+        artifact_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return payload
+
+    raw = run_capture([shell_path, "-lc", command_text], root)
+    raw_visible = raw.stdout + raw.stderr
+    hook_payload = json.dumps(
+        {
+            "hook_event_name": "PostToolUse",
+            "task_id": task_id,
+            "session_id": f"{task_id}-session",
+            "cwd": str(root),
+            "tool_name": "Bash",
+            "tool_input": {"command": command_text},
+            "tool_response": {
+                "stdout": raw.stdout,
+                "stderr": raw.stderr,
+                "exit_code": raw.returncode,
+            },
+        }
+    )
+    hook_cmd = [
+        "cargo",
+        "run",
+        "-q",
+        "-p",
+        "suite-cli",
+        "--bin",
+        "Packet28",
+        "--",
+        "hook",
+        "claude",
+        "--root",
+        str(root),
+    ]
+    hook = run_capture(hook_cmd, root, hook_payload)
+    status_cmd = [
+        "cargo",
+        "run",
+        "-q",
+        "-p",
+        "suite-cli",
+        "--bin",
+        "Packet28",
+        "--",
+        "daemon",
+        "task",
+        "status",
+        "--root",
+        str(root),
+        "--task-id",
+        task_id,
+        "--json",
+    ]
+    status = run_capture(status_cmd, root)
+    packet = None
+    status_payload = {}
+    if status.returncode == 0:
+        try:
+            status_payload = json.loads(status.stdout or "{}")
+        except json.JSONDecodeError:
+            status_payload = {}
+        for entry in status_payload.get("hook_reducer_cache", {}).values():
+            if entry.get("canonical_command_kind") == "grep":
+                packet = entry
+                break
+
+    integrity_errors = []
+    if raw.returncode != 0:
+        integrity_errors.append(f"raw grep exited {raw.returncode}")
+    if hook.returncode != 0:
+        integrity_errors.append(f"PostToolUse hook exited {hook.returncode}")
+    if (
+        not hook.stdout.strip()
+        and "allowing runtime action after processing error" in hook.stderr
+    ):
+        integrity_errors.append(f"PostToolUse hook processing failed: {hook.stderr.strip()}")
+    if status.returncode != 0:
+        integrity_errors.append(f"task status exited {status.returncode}: {status.stderr.strip()}")
+    if packet is None:
+        integrity_errors.append("task status did not contain a grep hook reducer cache entry")
+        packet = {}
+    if packet.get("reducer_family") != "shell_native":
+        integrity_errors.append(
+            f"expected reducer_family shell_native, got {packet.get('reducer_family')!r}"
+        )
+    if packet.get("canonical_command_kind") != "grep":
+        integrity_errors.append(
+            f"expected canonical_command_kind grep, got {packet.get('canonical_command_kind')!r}"
+        )
+    regions = packet.get("regions", [])
+    for region in required_regions:
+        if region not in regions:
+            integrity_errors.append(f"missing captured grep region: {region}")
+    reduced_preview = packet.get("compact_preview") or packet.get("summary") or ""
+    for needle in [f"{target_path}:16:", f"{target_path}:34:"]:
+        if needle not in reduced_preview:
+            integrity_errors.append(f"missing compact preview line marker: {needle}")
+    if "0 matches" in reduced_preview:
+        integrity_errors.append("captured grep preview reported 0 matches")
+
+    raw_tokens = estimate_tokens(raw_visible)
+    reduced_tokens = estimate_tokens(reduced_preview)
+    payload = {
+        "case": case_name,
+        "status": "ok" if not integrity_errors else "error",
+        "surface": "live",
+        "command": command_text,
+        "rewritten_command": None,
+        "compact_path": "bash_grep_post_capture",
+        "raw_output_recoverable": True,
+        "raw_exit_code": raw.returncode,
+        "reduced_exit_code": hook.returncode,
+        "raw_bytes": len(raw_visible.encode("utf-8")),
+        "raw_est_tokens": raw_tokens,
+        "reduced_bytes": len(reduced_preview.encode("utf-8")),
+        "reduced_est_tokens": reduced_tokens,
+        "raw_preview": raw_visible[:400],
+        "reduced_preview": reduced_preview[:400],
+        "token_reduction_pct": round(100.0 * (raw_tokens - reduced_tokens) / raw_tokens, 1)
+        if raw_tokens
+        else 0.0,
+        "task_id": task_id,
+        "required_regions": required_regions,
+        "captured_regions": regions,
+        "integrity_errors": integrity_errors,
+        "artifact_path": str(artifact_path),
+    }
+    if integrity_errors:
+        payload["error"] = "; ".join(integrity_errors)
+    artifact_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
 def build_summary(
     results: list[dict],
     root: Path,
@@ -584,6 +739,7 @@ def main() -> int:
         for name, argv in default_cases(gh_repo, gh_pr_number, gh_run_id)
     ]
     results.append(run_compact_grep_integrity_case(root, artifact_dir, args.shell))
+    results.append(run_bash_posttool_grep_capture_case(root, artifact_dir, args.shell))
     results.extend(run_fixture_case(root, artifact_dir, case) for case in fixture_cases(root))
     summary = build_summary(results, root, artifact_dir, gh_repo, gh_pr_number, gh_run_id)
     (artifact_dir / "summary.json").write_text(
