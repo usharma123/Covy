@@ -139,6 +139,9 @@ else
             crates/suite-cli/tests/gain_e2e.rs)
               add_filtered_package "$package" "gain"
               ;;
+            crates/suite-cli/tests/run_raw_artifact_e2e.rs)
+              add_filtered_package "$package" "run_raw_artifact"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
