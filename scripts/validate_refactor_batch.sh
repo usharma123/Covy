@@ -275,6 +275,9 @@ else
             crates/suite-cli/tests/map_proxy_e2e.rs)
               add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               ;;
+            crates/suite-cli/tests/mcp_proxy_e2e.rs)
+              add_filtered_test "$package" "mcp_proxy_e2e" "mcp_proxy_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
