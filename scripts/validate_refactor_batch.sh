@@ -44,6 +44,7 @@ package_name_for_dir() {
 }
 
 declare -a full_packages=()
+declare -a lib_packages=()
 declare -a filtered_specs=()
 
 has_item() {
@@ -60,6 +61,12 @@ add_full_package() {
   local package="$1"
   [[ -n "$package" ]] || return 0
   has_item "$package" "${full_packages[@]}" || full_packages+=("$package")
+}
+
+add_lib_package() {
+  local package="$1"
+  [[ -n "$package" ]] || return 0
+  has_item "$package" "${lib_packages[@]}" || lib_packages+=("$package")
 }
 
 add_filtered_package() {
@@ -105,6 +112,9 @@ else
             crates/suite-cli/src/cmd_mcp.rs|crates/suite-cli/src/cmd_mcp_native.rs)
               add_filtered_package "$package" "mcp"
               ;;
+            crates/packet28-search-core/src/lib.rs)
+              add_lib_package "$package"
+              ;;
             crates/packet28d/src/broker_*.rs|crates/packet28d/src/tests.rs)
               add_filtered_package "$package" "broker"
               ;;
@@ -127,11 +137,19 @@ cargo clippy --all-targets --all-features -- -D warnings
 for spec in "${filtered_specs[@]}"; do
   package="${spec%%:*}"
   filter="${spec#*:}"
-  if has_item "$package" "${full_packages[@]}"; then
+  if has_item "$package" "${full_packages[@]}" || has_item "$package" "${lib_packages[@]}"; then
     continue
   fi
   echo "+ cargo test -p $package --all-features $filter -- --test-threads=1"
   cargo test -p "$package" --all-features "$filter" -- --test-threads=1
+done
+
+for package in "${lib_packages[@]}"; do
+  if has_item "$package" "${full_packages[@]}"; then
+    continue
+  fi
+  echo "+ cargo test -p $package --all-features --lib"
+  cargo test -p "$package" --all-features --lib
 done
 
 for package in "${full_packages[@]}"; do
@@ -142,6 +160,6 @@ done
 if [[ "$full" == true ]]; then
   echo "+ cargo test --all-features"
   cargo test --all-features
-elif ((${#filtered_specs[@]} == 0 && ${#full_packages[@]} == 0)); then
+elif ((${#filtered_specs[@]} == 0 && ${#lib_packages[@]} == 0 && ${#full_packages[@]} == 0)); then
   echo "No Rust package changes detected; skipped cargo test."
 fi
