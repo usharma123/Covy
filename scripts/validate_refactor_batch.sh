@@ -169,6 +169,9 @@ else
             crates/suite-cli/tests/feedback_graph_e2e.rs)
               add_filtered_package "$package" "feedback_graph"
               ;;
+            crates/suite-cli/tests/transcript_e2e.rs)
+              add_filtered_package "$package" "transcript_round_trip"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
