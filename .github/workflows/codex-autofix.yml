@@ -3,6 +3,7 @@ name: Codex Autofix
 on:
   workflow_run:
     workflows:
+      - Build
       - Hook Benchmark Suite
       - Context Anomalies
       - Experiment Manifest
