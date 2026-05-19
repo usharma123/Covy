@@ -192,6 +192,9 @@ else
             crates/suite-cli/tests/discover_e2e.rs)
               add_filtered_package "$package" "discover_"
               ;;
+            crates/suite-cli/tests/session_e2e.rs)
+              add_filtered_package "$package" "session_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
