@@ -222,6 +222,18 @@ struct ExperimentIssue {
     detail: String,
 }
 
+fn experiment_issue(
+    experiment_id: impl Into<String>,
+    kind: impl Into<String>,
+    detail: impl Into<String>,
+) -> ExperimentIssue {
+    ExperimentIssue {
+        experiment_id: experiment_id.into(),
+        kind: kind.into(),
+        detail: detail.into(),
+    }
+}
+
 pub fn run(args: VerifyArgs) -> Result<i32> {
     match args.command {
         VerifyCommands::Filters(args) => run_filters(args),
@@ -1043,53 +1055,53 @@ fn verify_experiment_manifest(
     for workflow in required_workflows {
         let workflow = workflow.trim();
         if !workflow.is_empty() && !covered_workflows.contains(workflow) {
-            issues.push(ExperimentIssue {
-                experiment_id: "<manifest>".to_string(),
-                kind: "missing_required_workflow".to_string(),
-                detail: workflow.to_string(),
-            });
+            issues.push(experiment_issue(
+                "<manifest>",
+                "missing_required_workflow",
+                workflow,
+            ));
         }
     }
     if manifest.experiments.is_empty() {
-        issues.push(ExperimentIssue {
-            experiment_id: "<manifest>".to_string(),
-            kind: "missing_experiments".to_string(),
-            detail: "manifest must contain at least one experiment".to_string(),
-        });
+        issues.push(experiment_issue(
+            "<manifest>",
+            "missing_experiments",
+            "manifest must contain at least one experiment",
+        ));
     }
     for experiment in &manifest.experiments {
         let id = experiment.id.trim();
         let issue_id = if id.is_empty() { "<missing-id>" } else { id };
         if id.is_empty() {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "missing_id".to_string(),
-                detail: "experiment id is required".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "missing_id",
+                "experiment id is required",
+            ));
         } else if !seen_ids.insert(id.to_string()) {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "duplicate_id".to_string(),
-                detail: "experiment id appears more than once".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "duplicate_id",
+                "experiment id appears more than once",
+            ));
         }
         if experiment.workflow.trim().is_empty() {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "uncovered_workflow".to_string(),
-                detail: "workflow must name the agent workflow this experiment covers".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "uncovered_workflow",
+                "workflow must name the agent workflow this experiment covers",
+            ));
         }
         if experiment
             .commands
             .iter()
             .all(|command| command.trim().is_empty())
         {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "missing_command_evidence".to_string(),
-                detail: "at least one non-empty command is required".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "missing_command_evidence",
+                "at least one non-empty command is required",
+            ));
         }
         for command in experiment
             .commands
@@ -1099,37 +1111,33 @@ fn verify_experiment_manifest(
         {
             if let Some(command_path) = local_script_command_path(command) {
                 if !root.join(&command_path).exists() {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "missing_command_path".to_string(),
-                        detail: command_path,
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "missing_command_path",
+                        command_path,
+                    ));
                 }
             }
         }
         if experiment.artifacts.is_empty() {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "missing_artifact".to_string(),
-                detail: "at least one artifact path is required".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "missing_artifact",
+                "at least one artifact path is required",
+            ));
         }
         for artifact in &experiment.artifacts {
             let artifact = artifact.trim();
             if artifact.is_empty() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_artifact".to_string(),
-                    detail: "artifact path is empty".to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_artifact",
+                    "artifact path is empty",
+                ));
                 continue;
             }
             if !root.join(artifact).exists() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_artifact".to_string(),
-                    detail: artifact.to_string(),
-                });
+                issues.push(experiment_issue(issue_id, "missing_artifact", artifact));
             }
         }
         let artifact_evidence = experiment
@@ -1147,36 +1155,36 @@ fn verify_experiment_manifest(
         for metric in &experiment.metrics {
             let metric_name = metric.name.trim();
             if metric_name.is_empty() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_metric_name".to_string(),
-                    detail: "metric name is required".to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_metric_name",
+                    "metric name is required",
+                ));
             }
             let Some(value) = metric.value else {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_metric_value".to_string(),
-                    detail: metric_name.to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_metric_value",
+                    metric_name,
+                ));
                 continue;
             };
             if let Some(min) = metric.min {
                 if value < min {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "metric_below_min".to_string(),
-                        detail: format!("{metric_name} value={value} min={min}"),
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "metric_below_min",
+                        format!("{metric_name} value={value} min={min}"),
+                    ));
                 }
             }
             if let Some(max) = metric.max {
                 if value > max {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "metric_above_max".to_string(),
-                        detail: format!("{metric_name} value={value} max={max}"),
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "metric_above_max",
+                        format!("{metric_name} value={value} max={max}"),
+                    ));
                 }
             }
             let evidence = metric
@@ -1186,38 +1194,37 @@ fn verify_experiment_manifest(
                 .filter(|evidence| !evidence.is_empty())
                 .collect::<Vec<_>>();
             if evidence.is_empty() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_metric_evidence".to_string(),
-                    detail: metric_name.to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_metric_evidence",
+                    metric_name,
+                ));
             }
             for evidence in evidence {
                 if !artifact_evidence.contains(evidence) {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "missing_metric_artifact_evidence".to_string(),
-                        detail: format!("{metric_name}: {evidence}"),
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "missing_metric_artifact_evidence",
+                        format!("{metric_name}: {evidence}"),
+                    ));
                 }
             }
         }
         for runtime in &experiment.runtime_versions {
             if runtime.name.trim().is_empty() || runtime.version.trim().is_empty() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_runtime_version".to_string(),
-                    detail: "runtime version entries require non-empty name and version"
-                        .to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_runtime_version",
+                    "runtime version entries require non-empty name and version",
+                ));
             }
         }
         if !experiment.allow_fallbacks && !experiment.fallback_reasons.is_empty() {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "unexpected_fallback".to_string(),
-                detail: experiment.fallback_reasons.join("; "),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "unexpected_fallback",
+                experiment.fallback_reasons.join("; "),
+            ));
         }
         if experiment.allow_fallbacks {
             for reason in experiment
@@ -1227,11 +1234,11 @@ fn verify_experiment_manifest(
                 .filter(|reason| !reason.is_empty())
             {
                 if !artifact_evidence.contains(reason) {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "missing_fallback_artifact_evidence".to_string(),
-                        detail: reason.to_string(),
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "missing_fallback_artifact_evidence",
+                        reason,
+                    ));
                 }
             }
         }
