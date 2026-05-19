@@ -157,6 +157,9 @@ else
             crates/suite-cli/tests/wakeup_scope_e2e.rs)
               add_filtered_package "$package" "wakeup_scope"
               ;;
+            crates/suite-cli/tests/memory_recall_e2e.rs)
+              add_filtered_package "$package" "memory_recall"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
