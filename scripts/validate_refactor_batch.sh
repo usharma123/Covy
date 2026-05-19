@@ -242,6 +242,9 @@ else
             crates/suite-cli/tests/hook_rewrite_e2e.rs)
               add_filtered_test "$package" "hook_rewrite_e2e" "hook_rewrite_cli"
               ;;
+            crates/suite-cli/tests/hook_runner_e2e.rs)
+              add_filtered_test "$package" "hook_runner_e2e" "hook_runner_cli"
+              ;;
             crates/suite-cli/tests/cover_e2e.rs)
               add_filtered_test "$package" "cover_e2e" "cover_cli"
               ;;
