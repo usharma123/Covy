@@ -221,6 +221,9 @@ else
             crates/suite-cli/tests/daemon_lifecycle_e2e.rs)
               add_filtered_test "$package" "daemon_lifecycle_e2e" "daemon_lifecycle_cli"
               ;;
+            crates/suite-cli/tests/daemon_task_e2e.rs)
+              add_filtered_test "$package" "daemon_task_e2e" "daemon_task_cli"
+              ;;
             crates/suite-cli/tests/hypothesis_cli_e2e.rs)
               add_filtered_test "$package" "hypothesis_cli_e2e" "hypothesis_cli"
               ;;
