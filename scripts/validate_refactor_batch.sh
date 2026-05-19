@@ -124,6 +124,9 @@ else
             crates/suite-cli/tests/system_build_e2e.rs)
               add_filtered_package "$package" "system_build"
               ;;
+            crates/suite-cli/tests/system_filter_e2e.rs)
+              add_filtered_package "$package" "system_filter_backed"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
