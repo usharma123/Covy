@@ -1900,16 +1900,6 @@ fn lookup_posting_range(lookup: &[u8], hash: u64) -> Option<LookupPostingMeta> {
     None
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn build_all_hashes(bytes: &[u8]) -> Vec<u64> {
-    build_indexed_grams(bytes)
-        .into_iter()
-        .map(|gram| gram.hash)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 fn build_indexed_grams(bytes: &[u8]) -> Vec<IndexedGram> {
     let normalized = normalize_for_index(bytes);
     let mut by_hash = HashMap::<u64, PositionSummary>::new();
@@ -2608,6 +2598,15 @@ mod tests {
         assert_eq!(indexed.regions, reducer.regions, "query={}", request.query);
     }
 
+    fn build_all_hashes_for_test(bytes: &[u8]) -> Vec<u64> {
+        build_indexed_grams(bytes)
+            .into_iter()
+            .map(|gram| gram.hash)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     #[test]
     fn sparse_grams_fall_back_to_trigrams() {
         let hashes = build_covering_hashes(b"Packet28");
@@ -2616,7 +2615,7 @@ mod tests {
 
     #[test]
     fn build_all_hashes_cover_literal_coverings() {
-        let hashes = build_all_hashes(b"pub(crate) fn handle_packet28_search(")
+        let hashes = build_all_hashes_for_test(b"pub(crate) fn handle_packet28_search(")
             .into_iter()
             .collect::<BTreeSet<_>>();
         for hash in build_covering_hashes(b"handle_packet28_search") {
