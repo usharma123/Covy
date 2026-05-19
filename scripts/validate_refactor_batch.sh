@@ -185,6 +185,9 @@ else
             crates/suite-cli/tests/run_reducer_e2e.rs)
               add_filtered_test "$package" "run_reducer_e2e" "run_reducer"
               ;;
+            crates/suite-cli/tests/runtime_backend_e2e.rs)
+              add_filtered_test "$package" "runtime_backend_e2e" "runtime_backend_cli"
+              ;;
             crates/suite-cli/tests/memory_pending_e2e.rs)
               add_filtered_test "$package" "memory_pending_e2e" "memory_pending"
               ;;
