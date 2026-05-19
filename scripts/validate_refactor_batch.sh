@@ -91,6 +91,13 @@ add_filtered_test() {
   [[ -n "$package" && -n "$test_target" && -n "$filter" ]] || return 0
   local spec="$package:$test_target:$filter"
   has_item "$spec" "${filtered_test_specs[@]}" || filtered_test_specs+=("$spec")
+  add_lint_test "$package" "$test_target"
+}
+
+add_lint_test() {
+  local package="$1"
+  local test_target="$2"
+  [[ -n "$package" && -n "$test_target" ]] || return 0
   has_item "$package:$test_target" "${lint_test_specs[@]}" || lint_test_specs+=("$package:$test_target")
 }
 
@@ -135,6 +142,9 @@ else
               ;;
             crates/suite-cli/tests/verify_e2e.rs)
               add_filtered_test "$package" "verify_e2e" "verify"
+              ;;
+            crates/suite-cli/tests/e2e_smoke.rs)
+              add_lint_test "$package" "e2e_smoke"
               ;;
             crates/suite-cli/tests/rewrite_e2e.rs)
               add_filtered_test "$package" "rewrite_e2e" "top_level_rewrite"
@@ -237,6 +247,9 @@ else
               ;;
             crates/suite-cli/tests/stack_build_e2e.rs)
               add_filtered_test "$package" "stack_build_e2e" "stack_build_cli"
+              ;;
+            crates/suite-cli/tests/map_proxy_e2e.rs)
+              add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
