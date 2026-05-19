@@ -195,6 +195,9 @@ else
             crates/suite-cli/tests/session_e2e.rs)
               add_filtered_package "$package" "session_cli"
               ;;
+            crates/suite-cli/tests/learn_e2e.rs)
+              add_filtered_package "$package" "learn_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
