@@ -112,6 +112,9 @@ else
             crates/suite-cli/tests/rewrite_e2e.rs)
               add_filtered_package "$package" "top_level_rewrite"
               ;;
+            crates/suite-cli/tests/system_core_e2e.rs)
+              add_filtered_package "$package" "system_core"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
