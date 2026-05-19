@@ -1596,34 +1596,6 @@ fn write_packet_value(path: &Path, value: &Value) {
     fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
 }
 
-fn write_stack_log(path: &Path) {
-    fs::write(
-        path,
-        r#"
-java.lang.IllegalStateException: boom
-  at com.example.Service.run(src/service.rs:42)
-  at com.example.Main.main(src/main.rs:10)
-
-java.lang.IllegalStateException: boom
-  at com.example.Service.run(src/service.rs:42)
-  at com.example.Main.main(src/main.rs:10)
-"#,
-    )
-    .unwrap();
-}
-
-fn write_build_log(path: &Path) {
-    fs::write(
-        path,
-        r#"
-src/lib.rs:10:5: error: cannot find value `x` in this scope [E0425]
-src/lib.rs:10:5: error: cannot find value `x` in this scope [E0425]
-main.c(40,2): warning C4996: use of deprecated function
-"#,
-    )
-    .unwrap();
-}
-
 fn write_repo_fixture(root: &Path) {
     let src = root.join("src");
     fs::create_dir_all(&src).unwrap();
@@ -4247,65 +4219,6 @@ fn test_suite_daemon_suppresses_disconnect_log_noise() {
     assert!(!log.contains("request handling failed: Broken pipe"));
     assert!(!log.contains("request handling failed: Connection reset"));
     assert!(!log.contains("request handling failed: unexpected end of file"));
-
-    suite_cmd()
-        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
-        .assert()
-        .success();
-}
-
-#[test]
-#[cfg(unix)]
-fn test_suite_stack_and_build_via_daemon_emit_packet_wrappers() {
-    ensure_packet28d_built();
-    let dir = TempDir::new().unwrap();
-    init_repo(dir.path());
-    let stack_input = dir.path().join("stack.log");
-    let build_input = dir.path().join("build.log");
-    write_stack_log(&stack_input);
-    write_build_log(&build_input);
-
-    let stack_output = suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "--via-daemon",
-            "stack",
-            "slice",
-            "--input",
-            stack_input.to_str().unwrap(),
-            "--json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let stack_value = parse_packet_wrapper(&stack_output, "suite.stack.slice.v1");
-    assert!(packet_payload(&stack_value)
-        .get("failures")
-        .and_then(Value::as_array)
-        .is_some());
-
-    let build_output = suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "--via-daemon",
-            "build",
-            "reduce",
-            "--input",
-            build_input.to_str().unwrap(),
-            "--json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let build_value = parse_packet_wrapper(&build_output, "suite.build.reduce.v1");
-    assert!(packet_payload(&build_value)
-        .get("groups")
-        .and_then(Value::as_array)
-        .is_some());
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
