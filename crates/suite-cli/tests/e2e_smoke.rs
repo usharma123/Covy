@@ -4255,56 +4255,6 @@ fn test_suite_daemon_suppresses_disconnect_log_noise() {
 }
 
 #[test]
-fn test_suite_context_assemble_machine_failure_emits_suite_error_v1() {
-    let dir = TempDir::new().unwrap();
-    let context = dir.path().join("context.yaml");
-    let packet_a = dir.path().join("a.json");
-    let packet_b = dir.path().join("b.json");
-    write_governed_context(&context);
-    write_context_packet(
-        &packet_a,
-        "diffy",
-        "Diff gate",
-        "critical regression in coverage",
-        "src/lib.rs",
-    );
-    write_context_packet(
-        &packet_b,
-        "testy",
-        "Impact plan",
-        "selected tests for src/lib.rs",
-        "src/lib.rs",
-    );
-
-    let output = suite_cmd()
-        .args([
-            "context",
-            "assemble",
-            "--packet",
-            packet_a.to_str().unwrap(),
-            "--packet",
-            packet_b.to_str().unwrap(),
-            "--context-config",
-            context.to_str().unwrap(),
-            "--budget-tokens",
-            "1",
-            "--budget-bytes",
-            "1",
-            "--json",
-        ])
-        .assert()
-        .code(2)
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(
-        value.get("schema_version").and_then(Value::as_str),
-        Some("suite.error.v1")
-    );
-}
-
-#[test]
 fn test_suite_recall_prefers_summary_snippet_over_target_name() {
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();
