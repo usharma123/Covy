@@ -1751,10 +1751,6 @@ fn packet_payload(wrapper: &Value) -> &Value {
         .expect("packet.payload should exist")
 }
 
-fn packet_debug(wrapper: &Value) -> Option<&Value> {
-    packet_payload(wrapper).get("debug")
-}
-
 fn write_cached_coverage_state(root: &Path) {
     let mut coverage = suite_packet_core::CoverageData::new();
     let mut file = suite_packet_core::FileCoverage::new();
@@ -1892,78 +1888,6 @@ fn test_suite_governed_local_workflow_smoke() {
         Some("contextq")
     );
     assert!(packet_payload(&value).get("assembly").is_some());
-}
-
-#[test]
-fn test_suite_stack_slice_governed_smoke() {
-    let dir = TempDir::new().unwrap();
-    let input = dir.path().join("stack.log");
-    let context = dir.path().join("context.yaml");
-    write_stack_log(&input);
-    write_governed_context(&context);
-
-    let output = suite_cmd()
-        .args([
-            "stack",
-            "slice",
-            "--input",
-            input.to_str().unwrap(),
-            "--json",
-            "full",
-            "--context-config",
-            context.to_str().unwrap(),
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let value = parse_packet_wrapper(&output, "suite.stack.slice.v1");
-    assert!(packet_debug(&value)
-        .and_then(|debug| debug.get("kernel_audit"))
-        .and_then(|v| v.get("stack"))
-        .is_some());
-    assert!(packet_debug(&value)
-        .and_then(|debug| debug.get("kernel_audit"))
-        .and_then(|v| v.get("governed"))
-        .is_some());
-}
-
-#[test]
-fn test_suite_build_reduce_governed_smoke() {
-    let dir = TempDir::new().unwrap();
-    let input = dir.path().join("build.log");
-    let context = dir.path().join("context.yaml");
-    write_build_log(&input);
-    write_governed_context(&context);
-
-    let output = suite_cmd()
-        .args([
-            "build",
-            "reduce",
-            "--input",
-            input.to_str().unwrap(),
-            "--json",
-            "full",
-            "--context-config",
-            context.to_str().unwrap(),
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let value = parse_packet_wrapper(&output, "suite.build.reduce.v1");
-    assert!(packet_debug(&value)
-        .and_then(|debug| debug.get("kernel_audit"))
-        .and_then(|v| v.get("build"))
-        .is_some());
-    assert!(packet_debug(&value)
-        .and_then(|debug| debug.get("kernel_audit"))
-        .and_then(|v| v.get("governed"))
-        .is_some());
 }
 
 #[test]

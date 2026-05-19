@@ -3,7 +3,7 @@ set -eo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/validate_refactor_batch.sh [--full] [package[:filter] ...]
+Usage: scripts/validate_refactor_batch.sh [--full] [package[:filter] ...] [package:test-target:filter ...]
 
 Runs the fast validation gate for an incremental refactor batch:
   - cargo fmt --check
@@ -47,7 +47,9 @@ package_name_for_dir() {
 declare -a full_packages=()
 declare -a lib_packages=()
 declare -a filtered_specs=()
+declare -a filtered_test_specs=()
 declare -a lint_packages=()
+declare -a lint_test_specs=()
 
 has_item() {
   local needle="$1"
@@ -82,6 +84,16 @@ add_filtered_package() {
   add_lint_package "$package"
 }
 
+add_filtered_test() {
+  local package="$1"
+  local test_target="$2"
+  local filter="$3"
+  [[ -n "$package" && -n "$test_target" && -n "$filter" ]] || return 0
+  local spec="$package:$test_target:$filter"
+  has_item "$spec" "${filtered_test_specs[@]}" || filtered_test_specs+=("$spec")
+  has_item "$package:$test_target" "${lint_test_specs[@]}" || lint_test_specs+=("$package:$test_target")
+}
+
 add_lint_package() {
   local package="$1"
   [[ -n "$package" ]] || return 0
@@ -90,7 +102,11 @@ add_lint_package() {
 
 add_package_spec() {
   local spec="$1"
-  if [[ "$spec" == *:* ]]; then
+  if [[ "$spec" == *:*:* ]]; then
+    local package="${spec%%:*}"
+    local rest="${spec#*:}"
+    add_filtered_test "$package" "${rest%%:*}" "${rest#*:}"
+  elif [[ "$spec" == *:* ]]; then
     add_filtered_package "${spec%%:*}" "${spec#*:}"
   else
     add_full_package "$spec"
@@ -118,106 +134,109 @@ else
               add_filtered_package "$package" "verify"
               ;;
             crates/suite-cli/tests/verify_e2e.rs)
-              add_filtered_package "$package" "verify"
+              add_filtered_test "$package" "verify_e2e" "verify"
               ;;
             crates/suite-cli/tests/rewrite_e2e.rs)
-              add_filtered_package "$package" "top_level_rewrite"
+              add_filtered_test "$package" "rewrite_e2e" "top_level_rewrite"
               ;;
             crates/suite-cli/tests/system_core_e2e.rs)
-              add_filtered_package "$package" "system_core"
+              add_filtered_test "$package" "system_core_e2e" "system_core"
               ;;
             crates/suite-cli/tests/system_wrapper_e2e.rs)
-              add_filtered_package "$package" "system_wrapper"
+              add_filtered_test "$package" "system_wrapper_e2e" "system_wrapper"
               ;;
             crates/suite-cli/tests/system_infra_e2e.rs)
-              add_filtered_package "$package" "system_infra"
+              add_filtered_test "$package" "system_infra_e2e" "system_infra"
               ;;
             crates/suite-cli/tests/system_build_e2e.rs)
-              add_filtered_package "$package" "system_build"
+              add_filtered_test "$package" "system_build_e2e" "system_build"
               ;;
             crates/suite-cli/tests/system_filter_e2e.rs)
-              add_filtered_package "$package" "system_filter_backed"
+              add_filtered_test "$package" "system_filter_e2e" "system_filter_backed"
               ;;
             crates/suite-cli/tests/system_filter_more_e2e.rs)
-              add_filtered_package "$package" "system_more_filter_backed"
+              add_filtered_test "$package" "system_filter_more_e2e" "system_more_filter_backed"
               ;;
             crates/suite-cli/tests/system_filter_remaining_e2e.rs)
-              add_filtered_package "$package" "system_remaining_filter_backed"
+              add_filtered_test "$package" "system_filter_remaining_e2e" "system_remaining_filter_backed"
               ;;
             crates/suite-cli/tests/system_query_e2e.rs)
-              add_filtered_package "$package" "system_query"
+              add_filtered_test "$package" "system_query_e2e" "system_query"
               ;;
             crates/suite-cli/tests/gain_e2e.rs)
-              add_filtered_package "$package" "gain"
+              add_filtered_test "$package" "gain_e2e" "gain"
               ;;
             crates/suite-cli/tests/run_raw_artifact_e2e.rs)
-              add_filtered_package "$package" "run_raw_artifact"
+              add_filtered_test "$package" "run_raw_artifact_e2e" "run_raw_artifact"
               ;;
             crates/suite-cli/tests/run_filter_e2e.rs)
-              add_filtered_package "$package" "run_filter"
+              add_filtered_test "$package" "run_filter_e2e" "run_filter"
               ;;
             crates/suite-cli/tests/run_reducer_e2e.rs)
-              add_filtered_package "$package" "run_reducer"
+              add_filtered_test "$package" "run_reducer_e2e" "run_reducer"
               ;;
             crates/suite-cli/tests/memory_pending_e2e.rs)
-              add_filtered_package "$package" "memory_pending"
+              add_filtered_test "$package" "memory_pending_e2e" "memory_pending"
               ;;
             crates/suite-cli/tests/memory_migration_e2e.rs)
-              add_filtered_package "$package" "memory_migration"
+              add_filtered_test "$package" "memory_migration_e2e" "memory_migration"
               ;;
             crates/suite-cli/tests/wakeup_scope_e2e.rs)
-              add_filtered_package "$package" "wakeup_scope"
+              add_filtered_test "$package" "wakeup_scope_e2e" "wakeup_scope"
               ;;
             crates/suite-cli/tests/memory_recall_e2e.rs)
-              add_filtered_package "$package" "memory_recall"
+              add_filtered_test "$package" "memory_recall_e2e" "memory_recall"
               ;;
             crates/suite-cli/tests/memory_consolidate_e2e.rs)
-              add_filtered_package "$package" "memory_consolidate"
+              add_filtered_test "$package" "memory_consolidate_e2e" "memory_consolidate"
               ;;
             crates/suite-cli/tests/memory_cli_e2e.rs)
-              add_filtered_package "$package" "memory_cli"
+              add_filtered_test "$package" "memory_cli_e2e" "memory_cli"
               ;;
             crates/suite-cli/tests/feedback_graph_e2e.rs)
-              add_filtered_package "$package" "feedback_graph"
+              add_filtered_test "$package" "feedback_graph_e2e" "feedback_graph"
               ;;
             crates/suite-cli/tests/transcript_e2e.rs)
-              add_filtered_package "$package" "transcript_round_trip"
+              add_filtered_test "$package" "transcript_e2e" "transcript_round_trip"
               ;;
             crates/suite-cli/tests/dashboard_e2e.rs)
-              add_filtered_package "$package" "dashboard_local"
+              add_filtered_test "$package" "dashboard_e2e" "dashboard_local"
               ;;
             crates/suite-cli/tests/hypothesis_cli_e2e.rs)
-              add_filtered_package "$package" "hypothesis_cli"
+              add_filtered_test "$package" "hypothesis_cli_e2e" "hypothesis_cli"
               ;;
             crates/suite-cli/tests/discover_e2e.rs)
-              add_filtered_package "$package" "discover_"
+              add_filtered_test "$package" "discover_e2e" "discover_"
               ;;
             crates/suite-cli/tests/session_e2e.rs)
-              add_filtered_package "$package" "session_cli"
+              add_filtered_test "$package" "session_e2e" "session_cli"
               ;;
             crates/suite-cli/tests/learn_e2e.rs)
-              add_filtered_package "$package" "learn_cli"
+              add_filtered_test "$package" "learn_e2e" "learn_cli"
               ;;
             crates/suite-cli/tests/hook_telemetry_e2e.rs)
-              add_filtered_package "$package" "hook_telemetry"
+              add_filtered_test "$package" "hook_telemetry_e2e" "hook_telemetry"
               ;;
             crates/suite-cli/tests/cover_e2e.rs)
-              add_filtered_package "$package" "cover_cli"
+              add_filtered_test "$package" "cover_e2e" "cover_cli"
               ;;
             crates/suite-cli/tests/diff_analyze_e2e.rs)
-              add_filtered_package "$package" "diff_analyze_cli"
+              add_filtered_test "$package" "diff_analyze_e2e" "diff_analyze_cli"
               ;;
             crates/suite-cli/tests/test_impact_e2e.rs)
-              add_filtered_package "$package" "test_impact_cli"
+              add_filtered_test "$package" "test_impact_e2e" "test_impact_cli"
               ;;
             crates/suite-cli/tests/guard_e2e.rs)
-              add_filtered_package "$package" "guard_cli"
+              add_filtered_test "$package" "guard_e2e" "guard_cli"
               ;;
             crates/suite-cli/tests/context_assemble_e2e.rs)
-              add_filtered_package "$package" "context_assemble_cli"
+              add_filtered_test "$package" "context_assemble_e2e" "context_assemble_cli"
               ;;
             crates/suite-cli/tests/context_correlate_e2e.rs)
-              add_filtered_package "$package" "context_correlate_cli"
+              add_filtered_test "$package" "context_correlate_e2e" "context_correlate_cli"
+              ;;
+            crates/suite-cli/tests/stack_build_e2e.rs)
+              add_filtered_test "$package" "stack_build_e2e" "stack_build_cli"
               ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
@@ -238,7 +257,10 @@ else
         fi
         ;;
     esac
-  done < <(git diff --name-only HEAD -- Cargo.toml Cargo.lock crates)
+  done < <(
+    git diff --name-only HEAD -- Cargo.toml Cargo.lock crates
+    git ls-files --others --exclude-standard -- Cargo.toml Cargo.lock crates
+  )
 fi
 
 echo "+ cargo fmt --check"
@@ -252,9 +274,34 @@ elif ((${#lint_packages[@]})); then
     echo "+ cargo clippy -p $package --all-targets --all-features -- -D warnings"
     cargo clippy -p "$package" --all-targets --all-features -- -D warnings
   done
+  for spec in "${lint_test_specs[@]}"; do
+    package="${spec%%:*}"
+    test_target="${spec#*:}"
+    echo "+ cargo clippy -p $package --test $test_target --all-features -- -D warnings"
+    cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
+  done
+elif ((${#lint_test_specs[@]})); then
+  for spec in "${lint_test_specs[@]}"; do
+    package="${spec%%:*}"
+    test_target="${spec#*:}"
+    echo "+ cargo clippy -p $package --test $test_target --all-features -- -D warnings"
+    cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
+  done
 else
   echo "No Rust package changes detected; skipped cargo clippy."
 fi
+
+for spec in "${filtered_test_specs[@]}"; do
+  package="${spec%%:*}"
+  rest="${spec#*:}"
+  test_target="${rest%%:*}"
+  filter="${rest#*:}"
+  if has_item "$package" "${full_packages[@]}" || has_item "$package" "${lib_packages[@]}"; then
+    continue
+  fi
+  echo "+ cargo test -p $package --test $test_target --all-features $filter -- --test-threads=1"
+  cargo test -p "$package" --test "$test_target" --all-features "$filter" -- --test-threads=1
+done
 
 for spec in "${filtered_specs[@]}"; do
   package="${spec%%:*}"
@@ -282,6 +329,11 @@ done
 if [[ "$full" == true ]]; then
   echo "+ cargo test --all-features"
   cargo test --all-features
-elif ((${#filtered_specs[@]} == 0 && ${#lib_packages[@]} == 0 && ${#full_packages[@]} == 0)); then
+elif ((
+  ${#filtered_test_specs[@]} == 0 &&
+  ${#filtered_specs[@]} == 0 &&
+  ${#lib_packages[@]} == 0 &&
+  ${#full_packages[@]} == 0
+)); then
   echo "No Rust package changes detected; skipped cargo test."
 fi
