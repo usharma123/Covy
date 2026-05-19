@@ -106,6 +106,9 @@ else
             crates/suite-cli/src/cmd_verify.rs)
               add_filtered_package "$package" "verify"
               ;;
+            crates/suite-cli/tests/verify_e2e.rs)
+              add_filtered_package "$package" "verify"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
