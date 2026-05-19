@@ -153,7 +153,18 @@ def json_preview(payload: dict) -> str:
     return compact[:400]
 
 
-def benchmark_case(stdin, stdout, request_id: int, task_id: str, case_name: str, tool_name: str, arguments: dict) -> dict:
+def benchmark_case(
+    stdin,
+    stdout,
+    request_id: int,
+    task_id: str,
+    case_name: str,
+    tool_name: str,
+    arguments: dict,
+    *,
+    token_reduction_eligible: bool = True,
+    token_reduction_note: str | None = None,
+) -> dict:
     try:
         slim_args = dict(arguments)
         slim_args["task_id"] = task_id
@@ -201,9 +212,13 @@ def benchmark_case(stdin, stdout, request_id: int, task_id: str, case_name: str,
             "status": "ok",
             "tool_name": tool_name,
             "compact_path": "native_slim_artifact",
+            "token_reduction_eligible": token_reduction_eligible,
+            "token_reduction_note": token_reduction_note,
             "raw_output_recoverable": True,
             "artifact_fetch_succeeded": True,
             "artifact_id": artifact_id,
+            "fetched_groups_present": "groups" in full_payload,
+            "fetched_content_format": full_payload.get("content_format"),
             "raw_bytes": len(raw_text.encode("utf-8")),
             "raw_est_tokens": raw_tokens,
             "reduced_bytes": len(reduced_text.encode("utf-8")),
@@ -224,9 +239,21 @@ def benchmark_case(stdin, stdout, request_id: int, task_id: str, case_name: str,
 
 def build_summary(results: list[dict], root: Path, artifact_dir: Path) -> dict:
     ok_results = [result for result in results if result["status"] == "ok"]
+    eligible_results = [
+        result for result in ok_results if result.get("token_reduction_eligible", True)
+    ]
     mean = (
         round(sum(result["token_reduction_pct"] for result in ok_results) / len(ok_results), 1)
         if ok_results
+        else None
+    )
+    eligible_mean = (
+        round(
+            sum(result["token_reduction_pct"] for result in eligible_results)
+            / len(eligible_results),
+            1,
+        )
+        if eligible_results
         else None
     )
     return {
@@ -237,6 +264,8 @@ def build_summary(results: list[dict], root: Path, artifact_dir: Path) -> dict:
         "success_count": len(ok_results),
         "error_count": len(results) - len(ok_results),
         "mean_token_reduction_pct": mean,
+        "eligible_case_count": len(eligible_results),
+        "eligible_mean_token_reduction_pct": eligible_mean,
         "artifact_fetch_success_count": sum(
             1 for result in ok_results if result.get("artifact_fetch_succeeded")
         ),
@@ -255,7 +284,11 @@ def render_markdown(summary: dict) -> str:
     ]
     if summary.get("mean_token_reduction_pct") is not None:
         lines.append(
-            f"- Mean token reduction across native slim/full comparisons: `{summary['mean_token_reduction_pct']}%`"
+            f"- Mean token reduction across all native slim/full comparisons: `{summary['mean_token_reduction_pct']}%`"
+        )
+    if summary.get("eligible_mean_token_reduction_pct") is not None:
+        lines.append(
+            f"- Mean token reduction across eligible compacting cases: `{summary['eligible_mean_token_reduction_pct']}%`"
         )
     lines.append(
         f"- Artifact fetch success count: `{summary['artifact_fetch_success_count']}/{summary['case_count']}`"
@@ -274,8 +307,12 @@ def render_markdown(summary: dict) -> str:
             )
             continue
         preview = result["reduced_preview"].replace("|", "\\|")
+        reduction = f"{result['token_reduction_pct']}%"
+        if not result.get("token_reduction_eligible", True):
+            note = result.get("token_reduction_note") or "not reduction-gated"
+            reduction = f"{reduction} ({note})"
         lines.append(
-            f"| `{result['case']}` | `{result['tool_name']}` | {result['raw_est_tokens']} | {result['reduced_est_tokens']} | {result['token_reduction_pct']}% | `{preview}` |"
+            f"| `{result['case']}` | `{result['tool_name']}` | {result['raw_est_tokens']} | {result['reduced_est_tokens']} | {reduction} | `{preview}` |"
         )
     return "\n".join(lines) + os.linesep
 
@@ -349,6 +386,8 @@ def main() -> int:
                 "native_read_regions",
                 "packet28.read_regions",
                 {"path": "src/alpha.rs", "line_start": 1, "line_end": 60},
+                token_reduction_eligible=False,
+                token_reduction_note="explicit read ranges return requested content inline",
             ),
             benchmark_case(
                 child.stdin,

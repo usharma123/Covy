@@ -1472,7 +1472,55 @@ pub(crate) fn handle_packet28_fetch_tool_result(
     if payload.get("response_mode").is_none() {
         payload["response_mode"] = json!("full");
     }
+    compact_fetched_tool_result_payload(&mut payload);
     Ok(payload)
+}
+
+fn compact_fetched_tool_result_payload(payload: &mut Value) {
+    if payload.get("groups").and_then(Value::as_array).is_some() {
+        compact_fetched_search_payload(payload);
+    }
+}
+
+fn compact_fetched_search_payload(payload: &mut Value) {
+    let content = render_search_artifact_content(payload);
+    if !content.is_empty() {
+        payload["content"] = json!(content);
+        payload["line_count"] = json!(payload["content"].as_str().unwrap_or("").lines().count());
+        payload["content_format"] = json!("path:line:text");
+    }
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("groups");
+    }
+}
+
+fn render_search_artifact_content(payload: &Value) -> String {
+    let mut lines = Vec::new();
+    let Some(groups) = payload.get("groups").and_then(Value::as_array) else {
+        return String::new();
+    };
+    for group in groups {
+        let Some(matches) = group.get("matches").and_then(Value::as_array) else {
+            continue;
+        };
+        let group_path = group
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        for item in matches {
+            let path = item
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(group_path);
+            let Some(line) = item.get("line").and_then(Value::as_u64) else {
+                continue;
+            };
+            let text = item.get("text").and_then(Value::as_str).unwrap_or_default();
+            lines.push(format!("{path}:{line}:{text}"));
+        }
+    }
+    lines.join("\n")
 }
 
 pub(crate) fn handle_packet28_fetch_raw_output(
@@ -4033,6 +4081,32 @@ mod tests {
         assert!(payload.get("invocation_id").is_none());
         assert!(payload.get("sequence").is_none());
         assert_eq!(payload["match_count"], 1);
+    }
+
+    #[test]
+    fn fetched_search_artifact_uses_text_content_instead_of_match_objects() {
+        let result = sample_result("indexed_regex", "src/alpha.rs", 4, "struct Alpha;");
+        let execution = Packet28SearchExecution {
+            strategy: Packet28SearchStrategy::Hybrid,
+            primary_backend: "indexed_regex".to_string(),
+            secondary_backend: Some("legacy_rg".to_string()),
+            shadowed: true,
+            added_displayed_matches: 0,
+            added_paths: 0,
+            notes: Vec::new(),
+        };
+        let mut payload = build_search_full_payload(&result, &execution);
+        payload["artifact_id"] = json!("artifact-search");
+
+        compact_fetched_tool_result_payload(&mut payload);
+
+        assert_eq!(payload["response_mode"], "full");
+        assert_eq!(payload["artifact_id"], "artifact-search");
+        assert_eq!(payload["content"], "src/alpha.rs:4:struct Alpha;");
+        assert_eq!(payload["content_format"], "path:line:text");
+        assert_eq!(payload["line_count"], 1);
+        assert_eq!(payload["regions"][0], "src/alpha.rs:4-4");
+        assert!(payload.get("groups").is_none());
     }
 
     #[test]

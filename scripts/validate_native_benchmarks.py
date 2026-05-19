@@ -7,11 +7,16 @@ from pathlib import Path
 
 
 DEFAULT_THRESHOLDS = {
-    "mean_token_reduction_pct": 75.0,
+    "eligible_mean_token_reduction_pct": 80.0,
     "cases": {
         "native_search": {"min_reduction_pct": 80.0},
-        "native_read_regions": {"min_reduction_pct": 60.0},
         "native_glob": {"min_reduction_pct": 80.0},
+    },
+    "fetch_payloads": {
+        "native_search": {
+            "fetched_groups_present": False,
+            "fetched_content_format": "path:line:text",
+        },
     },
 }
 
@@ -24,15 +29,15 @@ def validate(summary: dict) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     notes: list[str] = []
 
-    mean = summary.get("mean_token_reduction_pct")
+    mean = summary.get("eligible_mean_token_reduction_pct")
     if mean is None:
-        errors.append("summary is missing mean_token_reduction_pct")
-    elif mean < DEFAULT_THRESHOLDS["mean_token_reduction_pct"]:
+        errors.append("summary is missing eligible_mean_token_reduction_pct")
+    elif mean < DEFAULT_THRESHOLDS["eligible_mean_token_reduction_pct"]:
         errors.append(
-            f"mean token reduction {mean}% is below required {DEFAULT_THRESHOLDS['mean_token_reduction_pct']}%"
+            f"eligible mean token reduction {mean}% is below required {DEFAULT_THRESHOLDS['eligible_mean_token_reduction_pct']}%"
         )
     else:
-        notes.append(f"mean token reduction {mean}% passed")
+        notes.append(f"eligible mean token reduction {mean}% passed")
 
     if summary.get("artifact_fetch_success_count") != summary.get("case_count"):
         errors.append(
@@ -54,6 +59,11 @@ def validate(summary: dict) -> tuple[list[str], list[str]]:
         if result.get("status") != "ok":
             errors.append(f"{case}: benchmark execution failed")
             continue
+        if not result.get("token_reduction_eligible", True):
+            notes.append(
+                f"{case}: skipped reduction gate ({result.get('token_reduction_note', 'not eligible')})"
+            )
+            continue
         reduction = result.get("token_reduction_pct")
         if reduction is None:
             errors.append(f"{case}: missing token_reduction_pct")
@@ -64,6 +74,25 @@ def validate(summary: dict) -> tuple[list[str], list[str]]:
             )
         else:
             notes.append(f"{case}: reduction {reduction}% passed")
+
+    for case, expected in DEFAULT_THRESHOLDS["fetch_payloads"].items():
+        result = by_case.get(case)
+        if result is None or result.get("status") != "ok":
+            continue
+        for key, value in expected.items():
+            actual = result.get(key)
+            if actual != value:
+                errors.append(f"{case}: expected {key}={value!r}, got {actual!r}")
+            else:
+                notes.append(f"{case}: {key}={value!r} passed")
+
+    for result in summary.get("results", []):
+        if result.get("status") != "ok":
+            continue
+        if not result.get("token_reduction_eligible", True):
+            notes.append(
+                f"{result.get('case')}: reduction claim excluded by design; artifact fetch still verified"
+            )
 
     return errors, notes
 
