@@ -186,6 +186,9 @@ else
             crates/suite-cli/tests/dashboard_e2e.rs)
               add_filtered_package "$package" "dashboard_local"
               ;;
+            crates/suite-cli/tests/hypothesis_cli_e2e.rs)
+              add_filtered_package "$package" "hypothesis_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
