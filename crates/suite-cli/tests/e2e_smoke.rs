@@ -1894,58 +1894,6 @@ fn write_state_event(path: &Path, content: &str) {
 }
 
 #[test]
-fn test_suite_cover_check_smoke() {
-    let output = suite_cmd()
-        .args([
-            "cover",
-            "check",
-            "--coverage",
-            &fixture("lcov/basic.info"),
-            "--no-issues-state",
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let value = parse_packet_wrapper(&output, "suite.cover.check.v1");
-    assert!(packet_payload(&value).get("passed").is_some());
-}
-
-#[test]
-fn test_suite_cover_check_rich_json_smoke() {
-    let output = suite_cmd()
-        .args([
-            "cover",
-            "check",
-            "--coverage",
-            &fixture("lcov/basic.info"),
-            "--no-issues-state",
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-            "--json",
-            "--packet-detail",
-            "rich",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let value = parse_packet_wrapper(&output, "suite.cover.check.v1");
-    assert!(packet_payload(&value).get("violations").is_some());
-}
-
-#[test]
 fn test_suite_diff_analyze_smoke() {
     suite_cmd()
         .args([
@@ -2384,26 +2332,6 @@ fn test_suite_guard_check_detects_wrapped_packet_redaction() {
         .and_then(|finding| finding.get("rule"))
         .and_then(Value::as_str)
         .is_some_and(|rule| rule == "redaction"));
-}
-
-#[test]
-fn test_suite_cover_check_terminal_default() {
-    suite_cmd()
-        .args([
-            "cover",
-            "check",
-            "--coverage",
-            &fixture("lcov/basic.info"),
-            "--no-issues-state",
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Quality Gate: PASSED"))
-        .stdout(predicate::str::contains("\"schema_version\"").not());
 }
 
 #[test]
@@ -3708,31 +3636,6 @@ fn test_suite_proxy_run_profiles_and_handle_fetch_share_hash() {
         .and_then(Value::as_str)
         .unwrap();
     assert_eq!(compact_hash, fetched_hash);
-}
-
-#[test]
-fn test_suite_cover_check_report_json_compat_maps_to_packet_wrapper() {
-    let output = suite_cmd()
-        .args([
-            "cover",
-            "check",
-            "--coverage",
-            &fixture("lcov/basic.info"),
-            "--no-issues-state",
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-            "--report",
-            "json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let value = parse_packet_wrapper(&output, "suite.cover.check.v1");
-    assert!(packet_payload(&value).get("passed").is_some());
 }
 
 #[test]

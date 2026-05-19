@@ -201,6 +201,9 @@ else
             crates/suite-cli/tests/hook_telemetry_e2e.rs)
               add_filtered_package "$package" "hook_telemetry"
               ;;
+            crates/suite-cli/tests/cover_e2e.rs)
+              add_filtered_package "$package" "cover_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
