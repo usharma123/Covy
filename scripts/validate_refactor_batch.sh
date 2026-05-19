@@ -215,6 +215,9 @@ else
             crates/suite-cli/tests/dashboard_e2e.rs)
               add_filtered_test "$package" "dashboard_e2e" "dashboard_local"
               ;;
+            crates/suite-cli/tests/doctor_e2e.rs)
+              add_filtered_test "$package" "doctor_e2e" "doctor_cli"
+              ;;
             crates/suite-cli/tests/agent_cli_e2e.rs)
               add_filtered_test "$package" "agent_cli_e2e" "agent_cli"
               ;;

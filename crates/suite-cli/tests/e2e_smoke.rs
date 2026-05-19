@@ -1901,76 +1901,6 @@ fn test_packet28_agent_wait_for_handoff_times_out_when_checkpoint_missing() {
 
 #[test]
 #[cfg(unix)]
-fn test_packet28_doctor_reports_healthy_stack() {
-    ensure_packet28d_built();
-    let dir = TempDir::new().unwrap();
-    init_repo(dir.path());
-    write_repo_fixture(dir.path());
-    git(dir.path(), &["add", "src/alpha.rs", "src/beta.rs"]);
-    git(
-        dir.path(),
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "init",
-        ],
-    );
-    write_cached_coverage_state(dir.path());
-    write_cached_testmap_state(dir.path());
-    fs::write(
-        dir.path().join(".mcp.json"),
-        json!({
-            "mcpServers": {
-                "packet28": {
-                    "command": "packet28-mcp",
-                    "args": ["--root", dir.path().to_str().unwrap()]
-                }
-            }
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    for _ in 0..2 {
-        let output = suite_cmd()
-            .current_dir(dir.path())
-            .args(["doctor", "--root", dir.path().to_str().unwrap(), "--json"])
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let payload: Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(payload["daemon"]["ok"], true);
-        assert_eq!(payload["index"]["ok"], true);
-        assert!(payload["mcp_config"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["packet28_configured"] == true));
-        assert_eq!(payload["handshake"]["ok"], true);
-        assert_eq!(payload["reducer_round_trip"]["ok"], true);
-        assert!(payload.get("push_notifications").is_some());
-        assert_eq!(payload["handoff_round_trip"]["ok"], true);
-        assert!(payload["checks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|check| check["name"] == "experiment_manifest"));
-    }
-
-    suite_cmd()
-        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
-        .assert()
-        .success();
-}
-
-#[test]
-#[cfg(unix)]
 fn test_packet28_mcp_prepare_handoff_requires_checkpoint_and_persists_artifact() {
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();
@@ -2554,39 +2484,6 @@ fn test_packet28_mcp_native_tools_return_slim_results_and_fetch_full_artifacts()
 
     child.kill().unwrap();
     child.wait().unwrap();
-
-    suite_cmd()
-        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
-        .assert()
-        .success();
-}
-
-#[test]
-#[cfg(unix)]
-fn test_packet28_doctor_reports_healthy_runtime() {
-    ensure_packet28d_built();
-    let dir = TempDir::new().unwrap();
-    init_repo(dir.path());
-    write_repo_fixture(dir.path());
-
-    let output = suite_cmd()
-        .args(["doctor", "--root", dir.path().to_str().unwrap(), "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let report: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(report["ok"], true);
-    assert_eq!(report["daemon"]["ok"], true);
-    assert_eq!(report["handshake"]["ok"], true);
-    assert_eq!(report["reducer_round_trip"]["ok"], true);
-    assert_eq!(report["handoff_round_trip"]["ok"], true);
-    assert!(report["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|check| check["name"] == "experiment_manifest"));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
