@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Output, Stdio};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,18 +20,23 @@ fn cli() -> Command {
 }
 
 fn daemon_bin() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace = manifest_dir
-        .parent()
-        .and_then(|path| path.parent())
-        .expect("workspace root");
-    let status = ProcessCommand::new("cargo")
-        .args(["build", "-p", "packet28d"])
-        .current_dir(workspace)
-        .status()
-        .expect("build packet28d");
-    assert!(status.success(), "packet28d build failed");
-    workspace.join("target/debug/packet28d")
+    static DAEMON_BIN: OnceLock<PathBuf> = OnceLock::new();
+    DAEMON_BIN
+        .get_or_init(|| {
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let workspace = manifest_dir
+                .parent()
+                .and_then(|path| path.parent())
+                .expect("workspace root");
+            let status = ProcessCommand::new("cargo")
+                .args(["build", "-p", "packet28d"])
+                .current_dir(workspace)
+                .status()
+                .expect("build packet28d");
+            assert!(status.success(), "packet28d build failed");
+            workspace.join("target/debug/packet28d")
+        })
+        .clone()
 }
 
 fn cli_with_daemon_env() -> Command {
