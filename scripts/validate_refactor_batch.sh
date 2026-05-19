@@ -183,6 +183,9 @@ else
             crates/suite-cli/tests/transcript_e2e.rs)
               add_filtered_package "$package" "transcript_round_trip"
               ;;
+            crates/suite-cli/tests/dashboard_e2e.rs)
+              add_filtered_package "$package" "dashboard_local"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
