@@ -7,10 +7,11 @@ Usage: scripts/validate_refactor_batch.sh [--full] [package[:filter] ...]
 
 Runs the fast validation gate for an incremental refactor batch:
   - cargo fmt --check
-  - cargo clippy --all-targets --all-features -- -D warnings
+  - package-scoped cargo clippy for changed Rust packages
   - targeted cargo test commands for changed Rust packages
 
-Pass --full to run cargo test --all-features after the targeted tests.
+Pass --full to run workspace clippy and cargo test --all-features after the
+targeted package tests.
 Pass package names or package:filter pairs to override auto-detection.
 USAGE
 }
@@ -46,6 +47,7 @@ package_name_for_dir() {
 declare -a full_packages=()
 declare -a lib_packages=()
 declare -a filtered_specs=()
+declare -a lint_packages=()
 
 has_item() {
   local needle="$1"
@@ -61,12 +63,14 @@ add_full_package() {
   local package="$1"
   [[ -n "$package" ]] || return 0
   has_item "$package" "${full_packages[@]}" || full_packages+=("$package")
+  add_lint_package "$package"
 }
 
 add_lib_package() {
   local package="$1"
   [[ -n "$package" ]] || return 0
   has_item "$package" "${lib_packages[@]}" || lib_packages+=("$package")
+  add_lint_package "$package"
 }
 
 add_filtered_package() {
@@ -75,6 +79,13 @@ add_filtered_package() {
   [[ -n "$package" && -n "$filter" ]] || return 0
   local spec="$package:$filter"
   has_item "$spec" "${filtered_specs[@]}" || filtered_specs+=("$spec")
+  add_lint_package "$package"
+}
+
+add_lint_package() {
+  local package="$1"
+  [[ -n "$package" ]] || return 0
+  has_item "$package" "${lint_packages[@]}" || lint_packages+=("$package")
 }
 
 add_package_spec() {
@@ -197,8 +208,17 @@ fi
 echo "+ cargo fmt --check"
 cargo fmt --check
 
-echo "+ cargo clippy --all-targets --all-features -- -D warnings"
-cargo clippy --all-targets --all-features -- -D warnings
+if [[ "$full" == true ]]; then
+  echo "+ cargo clippy --all-targets --all-features -- -D warnings"
+  cargo clippy --all-targets --all-features -- -D warnings
+elif ((${#lint_packages[@]})); then
+  for package in "${lint_packages[@]}"; do
+    echo "+ cargo clippy -p $package --all-targets --all-features -- -D warnings"
+    cargo clippy -p "$package" --all-targets --all-features -- -D warnings
+  done
+else
+  echo "No Rust package changes detected; skipped cargo clippy."
+fi
 
 for spec in "${filtered_specs[@]}"; do
   package="${spec%%:*}"

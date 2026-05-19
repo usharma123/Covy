@@ -58,9 +58,10 @@ Execution rules:
   - scripts/validate_refactor_batch.sh
 - The fast batch gate must run:
   - cargo fmt --check
-  - cargo clippy --all-targets --all-features -- -D warnings
+  - package-scoped cargo clippy for changed Rust packages
   - targeted cargo test commands for changed crates or behavior filters
-- Run the full workspace test gate at major checkpoints, before final push, and before claiming the goal complete:
+- Run the full workspace lint and test gate at major checkpoints, before final push, and before claiming the goal complete:
+  - cargo clippy --all-targets --all-features -- -D warnings
   - cargo test --all-features
 - If there are project-specific test or benchmark commands in the repo docs, run those too.
 - All tests must pass before committing.
