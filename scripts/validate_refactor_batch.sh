@@ -145,6 +145,9 @@ else
             crates/suite-cli/tests/run_filter_e2e.rs)
               add_filtered_package "$package" "run_filter"
               ;;
+            crates/suite-cli/tests/run_reducer_e2e.rs)
+              add_filtered_package "$package" "run_reducer"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
