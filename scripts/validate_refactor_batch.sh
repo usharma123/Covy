@@ -207,6 +207,9 @@ else
             crates/suite-cli/tests/diff_analyze_e2e.rs)
               add_filtered_package "$package" "diff_analyze_cli"
               ;;
+            crates/suite-cli/tests/test_impact_e2e.rs)
+              add_filtered_package "$package" "test_impact_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
