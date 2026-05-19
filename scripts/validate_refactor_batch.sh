@@ -148,6 +148,9 @@ else
             crates/suite-cli/tests/run_reducer_e2e.rs)
               add_filtered_package "$package" "run_reducer"
               ;;
+            crates/suite-cli/tests/memory_pending_e2e.rs)
+              add_filtered_package "$package" "memory_pending"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
