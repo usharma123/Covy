@@ -95,6 +95,25 @@ fn broker_context_debt_body(
     .map(|section| section.body)
 }
 
+fn tool_invocation(
+    invocation_id: &str,
+    sequence: u64,
+    tool_name: &str,
+    operation_kind: suite_packet_core::ToolOperationKind,
+    result_summary: Option<&str>,
+    artifact_id: Option<&str>,
+) -> suite_packet_core::ToolInvocationSummary {
+    suite_packet_core::ToolInvocationSummary {
+        invocation_id: invocation_id.to_string(),
+        sequence,
+        tool_name: tool_name.to_string(),
+        operation_kind,
+        result_summary: result_summary.map(ToOwned::to_owned),
+        artifact_id: artifact_id.map(ToOwned::to_owned),
+        ..suite_packet_core::ToolInvocationSummary::default()
+    }
+}
+
 fn write_test_coverage_state(root: &Path, path: &str, covered: bool) {
     let mut coverage = suite_packet_core::CoverageData::new();
     let mut file = suite_packet_core::FileCoverage::new();
@@ -1917,15 +1936,14 @@ fn broker_symbol_verification_clears_debt_but_preserves_confidence_staleness() {
     let verified_symbol_snapshot = suite_packet_core::AgentSnapshotPayload {
         changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
         evidence_artifact_ids: vec!["artifact-test".to_string()],
-        recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-            invocation_id: "tool-test".to_string(),
-            sequence: 9,
-            tool_name: "cargo test auth_cache".to_string(),
-            operation_kind: suite_packet_core::ToolOperationKind::Test,
-            result_summary: Some("tests passed".to_string()),
-            artifact_id: Some("artifact-test".to_string()),
-            ..suite_packet_core::ToolInvocationSummary::default()
-        }],
+        recent_tool_invocations: vec![tool_invocation(
+            "tool-test",
+            9,
+            "cargo test auth_cache",
+            suite_packet_core::ToolOperationKind::Test,
+            Some("tests passed"),
+            Some("artifact-test"),
+        )],
         ..suite_packet_core::AgentSnapshotPayload::default()
     };
     let debt = broker_context_debt_body(&state, verified_symbol_snapshot.clone());
@@ -2026,15 +2044,14 @@ fn broker_evidence_confidence_reason_lines_stay_stable() {
         &state,
         suite_packet_core::AgentSnapshotPayload {
             evidence_artifact_ids: vec!["artifact-test".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-backed".to_string(),
-                sequence: 1,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                artifact_id: Some("artifact-test".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-backed",
+                1,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                Some("artifact-test"),
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2042,14 +2059,14 @@ fn broker_evidence_confidence_reason_lines_stay_stable() {
         &state,
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-unbacked-symbol".to_string(),
-                sequence: 2,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-unbacked-symbol",
+                2,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                None,
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2180,15 +2197,14 @@ fn broker_evidence_confidence_keeps_symbol_staleness_visible_after_verification(
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             evidence_artifact_ids: vec!["artifact-test".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-1".to_string(),
-                sequence: 2,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                artifact_id: Some("artifact-test".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-1",
+                2,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                Some("artifact-test"),
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2205,14 +2221,14 @@ fn broker_evidence_confidence_scores_failed_symbol_verification_low() {
         &state,
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-1".to_string(),
-                sequence: 2,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests failed".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-1",
+                2,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests failed"),
+                None,
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2232,14 +2248,14 @@ fn broker_evidence_confidence_scores_unbacked_symbol_verification_medium() {
         &state,
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-1".to_string(),
-                sequence: 2,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-1",
+                2,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                None,
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2260,22 +2276,22 @@ fn broker_evidence_confidence_scores_repeated_artifact_gaps_medium() {
         &state,
         suite_packet_core::AgentSnapshotPayload {
             recent_tool_invocations: vec![
-                suite_packet_core::ToolInvocationSummary {
-                    invocation_id: "search-1".to_string(),
-                    sequence: 1,
-                    tool_name: "rg AuthCache".to_string(),
-                    operation_kind: suite_packet_core::ToolOperationKind::Search,
-                    result_summary: Some("matched AuthCache".to_string()),
-                    ..suite_packet_core::ToolInvocationSummary::default()
-                },
-                suite_packet_core::ToolInvocationSummary {
-                    invocation_id: "read-1".to_string(),
-                    sequence: 2,
-                    tool_name: "read src/auth.rs".to_string(),
-                    operation_kind: suite_packet_core::ToolOperationKind::Read,
-                    result_summary: Some("read auth cache code".to_string()),
-                    ..suite_packet_core::ToolInvocationSummary::default()
-                },
+                tool_invocation(
+                    "search-1",
+                    1,
+                    "rg AuthCache",
+                    suite_packet_core::ToolOperationKind::Search,
+                    Some("matched AuthCache"),
+                    None,
+                ),
+                tool_invocation(
+                    "read-1",
+                    2,
+                    "read src/auth.rs",
+                    suite_packet_core::ToolOperationKind::Read,
+                    Some("read auth cache code"),
+                    None,
+                ),
             ],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
@@ -2294,14 +2310,14 @@ fn broker_evidence_confidence_caps_missing_backing_below_high() {
     let confidence = broker_evidence_confidence_body(
         &state,
         suite_packet_core::AgentSnapshotPayload {
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-1".to_string(),
-                sequence: 1,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-1",
+                1,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                None,
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2327,14 +2343,14 @@ fn broker_evidence_confidence_missing_backing_keeps_score_spread() {
     let unbacked_success = broker_evidence_confidence_body(
         &state,
         suite_packet_core::AgentSnapshotPayload {
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-1".to_string(),
-                sequence: 1,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-1",
+                1,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                None,
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2370,15 +2386,14 @@ fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             evidence_artifact_ids: vec!["artifact-test".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-backed".to_string(),
-                sequence: 1,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                artifact_id: Some("artifact-test".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-backed",
+                1,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                Some("artifact-test"),
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2386,14 +2401,14 @@ fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
         &state,
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-unbacked".to_string(),
-                sequence: 2,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-unbacked",
+                2,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                None,
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2401,14 +2416,14 @@ fn broker_evidence_confidence_orders_symbol_evidence_tiers() {
         &state,
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-failed".to_string(),
-                sequence: 3,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests failed".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-failed",
+                3,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests failed"),
+                None,
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2435,15 +2450,14 @@ fn broker_evidence_confidence_backing_labels_stay_compact() {
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
             evidence_artifact_ids: vec!["artifact-test".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-backed".to_string(),
-                sequence: 1,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                artifact_id: Some("artifact-test".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-backed",
+                1,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                Some("artifact-test"),
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
@@ -2451,14 +2465,14 @@ fn broker_evidence_confidence_backing_labels_stay_compact() {
         &state,
         suite_packet_core::AgentSnapshotPayload {
             changed_symbols_since_checkpoint: vec!["AuthCache".to_string()],
-            recent_tool_invocations: vec![suite_packet_core::ToolInvocationSummary {
-                invocation_id: "test-unbacked".to_string(),
-                sequence: 2,
-                tool_name: "cargo test auth_cache".to_string(),
-                operation_kind: suite_packet_core::ToolOperationKind::Test,
-                result_summary: Some("tests passed".to_string()),
-                ..suite_packet_core::ToolInvocationSummary::default()
-            }],
+            recent_tool_invocations: vec![tool_invocation(
+                "test-unbacked",
+                2,
+                "cargo test auth_cache",
+                suite_packet_core::ToolOperationKind::Test,
+                Some("tests passed"),
+                None,
+            )],
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
