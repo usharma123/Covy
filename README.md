@@ -621,6 +621,8 @@ python3 scripts/benchmark_hook_suite.py --root . --derive-gh-repo
 The suite writes per-case JSON plus a `summary.json` under `.packet28/benchmarks/...`. CI also runs the suite and uploads the artifact bundle through the `Hook Benchmark Suite` workflow.
 CI validates the results against conservative regression thresholds with `scripts/validate_hook_benchmarks.py` and publishes both the benchmark table and validation report into the workflow summary.
 
+Token-reduction claims are benchmark-scoped. The 90%+ target applies to eligible broad hook reductions and slim agentic context, where raw command output is large enough for compaction to matter. The CI gate currently checks a weighted hook-suite reduction of at least 85%, an agentic slim-context reduction of at least 90%, and an agentic context-with-optional-artifacts reduction of at least 50%. Tiny exact greps can be larger after Packet28 adds summary and file:line context; those cases are still validated for correctness and actionable regions, but they are not counted as savings evidence.
+
 Generate agent instructions directly:
 
 ```bash
