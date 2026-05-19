@@ -210,6 +210,9 @@ else
             crates/suite-cli/tests/test_impact_e2e.rs)
               add_filtered_package "$package" "test_impact_cli"
               ;;
+            crates/suite-cli/tests/guard_e2e.rs)
+              add_filtered_package "$package" "guard_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
