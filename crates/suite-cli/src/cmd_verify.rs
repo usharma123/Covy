@@ -115,21 +115,13 @@ pub struct ContextAnomalyVerifyArgs {
     pub pretty: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ExperimentManifest {
     experiments: Vec<ExperimentEntry>,
 }
 
-impl Default for ExperimentManifest {
-    fn default() -> Self {
-        Self {
-            experiments: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ExperimentEntry {
     id: String,
@@ -142,22 +134,7 @@ struct ExperimentEntry {
     allow_fallbacks: bool,
 }
 
-impl Default for ExperimentEntry {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            workflow: String::new(),
-            commands: Vec::new(),
-            artifacts: Vec::new(),
-            metrics: Vec::new(),
-            runtime_versions: Vec::new(),
-            fallback_reasons: Vec::new(),
-            allow_fallbacks: false,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ExperimentMetric {
     name: String,
@@ -167,38 +144,20 @@ struct ExperimentMetric {
     evidence: Vec<String>,
 }
 
-impl Default for ExperimentMetric {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            value: None,
-            min: None,
-            max: None,
-            evidence: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ExperimentRuntimeVersion {
     name: String,
     version: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ReducerDriftFixture {
     cases: Vec<ReducerDriftCase>,
 }
 
-impl Default for ReducerDriftFixture {
-    fn default() -> Self {
-        Self { cases: Vec::new() }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ReducerDriftCase {
     id: String,
@@ -209,7 +168,7 @@ struct ReducerDriftCase {
     required_markers: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct MemoryLintFixture {
     memories: Vec<MemoryLintFixtureMemory>,
@@ -217,18 +176,6 @@ struct MemoryLintFixture {
     expected_issue_count: usize,
     expected_issue_kinds: Vec<String>,
     clean_memory_ids: Vec<i64>,
-}
-
-impl Default for MemoryLintFixture {
-    fn default() -> Self {
-        Self {
-            memories: Vec::new(),
-            hook_events: Vec::new(),
-            expected_issue_count: 0,
-            expected_issue_kinds: Vec::new(),
-            clean_memory_ids: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,42 +208,11 @@ impl Default for MemoryLintFixtureMemory {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct MemoryLintFixtureHookEvent {
     runtime: String,
     event_kind: String,
-}
-
-impl Default for MemoryLintFixtureHookEvent {
-    fn default() -> Self {
-        Self {
-            runtime: String::new(),
-            event_kind: String::new(),
-        }
-    }
-}
-
-impl Default for ReducerDriftCase {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            command_argv: Vec::new(),
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-            required_markers: Vec::new(),
-        }
-    }
-}
-
-impl Default for ExperimentRuntimeVersion {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            version: String::new(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -685,7 +601,7 @@ pub(crate) fn verify_experiments_payload(
     required_workflows: &[String],
     include_score: bool,
 ) -> Result<serde_json::Value> {
-    let manifest_raw = std::fs::read_to_string(&manifest_path)
+    let manifest_raw = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("failed to read '{}'", manifest_path.display()))?;
     let manifest: ExperimentManifest = serde_json::from_str(&manifest_raw)
         .with_context(|| format!("failed to parse '{}'", manifest_path.display()))?;

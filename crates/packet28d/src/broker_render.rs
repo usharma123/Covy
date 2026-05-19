@@ -273,9 +273,7 @@ pub(crate) fn build_budget_preflight_section(
     if !allowed_sections.contains("budget_notes") {
         return None;
     }
-    let Some(budget_tokens) = request.budget_tokens else {
-        return None;
-    };
+    let budget_tokens = request.budget_tokens?;
     let low_budget_threshold = 256_u64.max(broker_default_budget_tokens() / 4);
     if budget_tokens > low_budget_threshold {
         return None;

@@ -729,11 +729,14 @@ fn plan_test_gate_score(
         .filter(|warning| warning.rule == "missing_testmap_mapping")
         .count() as u64
         * 15;
-    let stale_testmap_penalty = warnings
+    let stale_testmap_penalty = if warnings
         .iter()
         .any(|warning| warning.rule == "stale_testmap")
-        .then_some(10)
-        .unwrap_or(0);
+    {
+        10
+    } else {
+        0
+    };
 
     100u64.saturating_sub(
         missing_gate_penalty + broad_gate_penalty + missing_mapping_penalty + stale_testmap_penalty,
