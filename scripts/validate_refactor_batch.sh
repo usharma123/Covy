@@ -118,6 +118,9 @@ else
             crates/suite-cli/tests/system_wrapper_e2e.rs)
               add_filtered_package "$package" "system_wrapper"
               ;;
+            crates/suite-cli/tests/system_infra_e2e.rs)
+              add_filtered_package "$package" "system_infra"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
