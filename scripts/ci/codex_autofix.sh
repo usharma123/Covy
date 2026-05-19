@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 FAILURE_LOG="${CI_FAILURE_LOG:-$ROOT/.packet28/ci-autofix/failure.log}"
 OUT_DIR="${CODEX_AUTOFIX_DIR:-$ROOT/.packet28/ci-autofix}"
-CODEX_CMD="${CODEX_CMD:-codex exec}"
+CODEX_BIN="${CODEX_BIN:-codex}"
+CODEX_CMD="${CODEX_CMD:-}"
 VERIFY_CMD="${CODEX_AUTOFIX_VERIFY:-cargo test --workspace --all-targets}"
 RUN_URL="${CI_RUN_URL:-unknown}"
 DRY_RUN="${CODEX_AUTOFIX_DRY_RUN:-0}"
@@ -25,6 +26,8 @@ Constraints:
 - Do not modify secrets, workflow permissions, release credentials, or unrelated generated artifacts.
 - Do not run destructive git commands.
 - Do not push, commit, or open a PR; the workflow will handle that after verification.
+- If the failure is caused by external infrastructure, credentials, or a flaky service, make no
+  code changes and explain that clearly.
 - Prefer targeted tests first, then run this verification command before finishing:
   ${VERIFY_CMD}
 
@@ -39,14 +42,23 @@ if [[ "$DRY_RUN" == "1" || "$DRY_RUN" == "true" || "$DRY_RUN" == "TRUE" ]]; then
   exit 0
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
+if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
   echo "codex CLI not found; skipping autofix" >&2
   exit 78
 fi
 
-echo "Running Codex autofix with: $CODEX_CMD" >&2
-# shellcheck disable=SC2086
-$CODEX_CMD "$(cat "$OUT_DIR/prompt.txt")" 2>&1 | tee "$OUT_DIR/codex.log"
+if [[ -n "$CODEX_CMD" ]]; then
+  echo "Running Codex autofix with override: $CODEX_CMD" >&2
+  # CODEX_CMD is an intentional escape hatch for CI experiments.
+  bash -lc "$CODEX_CMD" <"$OUT_DIR/prompt.txt" 2>&1 | tee "$OUT_DIR/codex.log"
+else
+  echo "Running Codex autofix with: $CODEX_BIN exec --cd '$ROOT' --sandbox workspace-write" >&2
+  "$CODEX_BIN" exec \
+    --cd "$ROOT" \
+    --sandbox workspace-write \
+    --output-last-message "$OUT_DIR/final.md" \
+    - <"$OUT_DIR/prompt.txt" 2>&1 | tee "$OUT_DIR/codex.log"
+fi
 
 if git diff --quiet -- . ':!.packet28'; then
   echo "Codex completed but produced no tracked diff" >&2
@@ -55,3 +67,4 @@ fi
 
 echo "Codex produced a diff:" >&2
 git diff --stat -- . ':!.packet28'
+git diff -- . ':!.packet28' >"$OUT_DIR/diff.patch"

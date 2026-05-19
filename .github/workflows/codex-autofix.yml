@@ -106,7 +106,7 @@ jobs:
             exit 0
           fi
           cargo fmt --check
-          cargo test --workspace --all-targets
+          bash -lc "$CODEX_AUTOFIX_VERIFY"
 
       - name: Open autofix pull request
         if: success()
@@ -125,12 +125,26 @@ jobs:
           git restore --staged .packet28 || true
           git commit -m "Codex autofix for CI run ${RUN_ID}"
           git push --force-with-lease origin "$branch"
-          gh pr create \
-            --draft \
-            --title "Codex autofix for CI run ${RUN_ID}" \
-            --body "Automated Codex attempt to fix failing CI run ${RUN_URL}." \
-            --base main \
-            --head "$branch"
+          body_file=".packet28/ci-autofix/pr-body.md"
+          {
+            echo "Automated Codex attempt to fix failing CI run ${RUN_URL}."
+            echo
+            if test -s .packet28/ci-autofix/final.md; then
+              echo "## Codex summary"
+              cat .packet28/ci-autofix/final.md
+            fi
+          } > "$body_file"
+          existing_pr="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // ""')"
+          if test -n "$existing_pr"; then
+            gh pr edit "$existing_pr" --body-file "$body_file"
+          else
+            gh pr create \
+              --draft \
+              --title "Codex autofix for CI run ${RUN_ID}" \
+              --body-file "$body_file" \
+              --base main \
+              --head "$branch"
+          fi
 
       - name: Upload autofix artifacts
         if: always()
