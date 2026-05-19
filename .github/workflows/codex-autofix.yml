@@ -59,6 +59,17 @@ jobs:
           ref: ${{ env.CHECKOUT_REF }}
           fetch-depth: 0
 
+      - name: Validate autofix script
+        run: |
+          bash -n scripts/ci/codex_autofix.sh
+          mkdir -p .packet28/ci-autofix
+          printf 'simulated failing test log\n' > .packet28/ci-autofix/failure.log
+          CODEX_AUTOFIX_DRY_RUN=1 \
+            CI_FAILURE_LOG="$GITHUB_WORKSPACE/.packet28/ci-autofix/failure.log" \
+            CI_RUN_URL="$RUN_URL" \
+            scripts/ci/codex_autofix.sh
+          test -s .packet28/ci-autofix/prompt.txt
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2

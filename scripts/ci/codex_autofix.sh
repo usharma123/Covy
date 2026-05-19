@@ -7,13 +7,9 @@ OUT_DIR="${CODEX_AUTOFIX_DIR:-$ROOT/.packet28/ci-autofix}"
 CODEX_CMD="${CODEX_CMD:-codex exec}"
 VERIFY_CMD="${CODEX_AUTOFIX_VERIFY:-cargo test --workspace --all-targets}"
 RUN_URL="${CI_RUN_URL:-unknown}"
+DRY_RUN="${CODEX_AUTOFIX_DRY_RUN:-0}"
 
 mkdir -p "$OUT_DIR"
-
-if ! command -v codex >/dev/null 2>&1; then
-  echo "codex CLI not found; skipping autofix" >&2
-  exit 78
-fi
 
 if [[ ! -s "$FAILURE_LOG" ]]; then
   echo "CI failure log is missing or empty: $FAILURE_LOG" >&2
@@ -37,6 +33,16 @@ Failure log path: ${FAILURE_LOG}
 
 Start by reading the failure log, identify the failing command and root cause, patch the repo, run the relevant tests, then run the verification command above.
 PROMPT
+
+if [[ "$DRY_RUN" == "1" || "$DRY_RUN" == "true" || "$DRY_RUN" == "TRUE" ]]; then
+  echo "Codex autofix dry run wrote prompt: $OUT_DIR/prompt.txt" >&2
+  exit 0
+fi
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "codex CLI not found; skipping autofix" >&2
+  exit 78
+fi
 
 echo "Running Codex autofix with: $CODEX_CMD" >&2
 # shellcheck disable=SC2086
