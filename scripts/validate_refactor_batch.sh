@@ -166,6 +166,9 @@ else
             crates/suite-cli/tests/memory_cli_e2e.rs)
               add_filtered_package "$package" "memory_cli"
               ;;
+            crates/suite-cli/tests/feedback_graph_e2e.rs)
+              add_filtered_package "$package" "feedback_graph"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
