@@ -216,6 +216,9 @@ else
             crates/suite-cli/tests/context_assemble_e2e.rs)
               add_filtered_package "$package" "context_assemble_cli"
               ;;
+            crates/suite-cli/tests/context_correlate_e2e.rs)
+              add_filtered_package "$package" "context_correlate_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
