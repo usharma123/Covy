@@ -33,8 +33,8 @@ jobs:
         run: |
           cargo test -p suite-cli rust_workspace_fingerprint_changes_for_out_of_band_source_edit
           cargo test -p suite-cli agent_status_reports_safe_cache_policy
-          cargo test -p suite-cli test_packet28_hook_reducer_runner_reuses_cached_summary_without_rerunning_command --test e2e_smoke
-          cargo test -p suite-cli test_packet28_hook_reducer_runner_busts_cache_after_out_of_band_file_edit --test e2e_smoke
+          cargo test -p suite-cli test_hook_runner_cli_reuses_cached_summary_without_rerunning_command --test hook_runner_e2e
+          cargo test -p suite-cli test_hook_runner_cli_busts_cache_after_out_of_band_file_edit --test hook_runner_e2e
 
       - name: Run hook benchmark suite
         env:
