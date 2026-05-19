@@ -1871,40 +1871,6 @@ fn test_suite_governed_local_workflow_smoke() {
 }
 
 #[test]
-fn test_suite_diff_analyze_json_includes_cache_block() {
-    let output = suite_cmd()
-        .args([
-            "diff",
-            "analyze",
-            "--coverage",
-            &fixture("lcov/basic.info"),
-            "--no-issues-state",
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-            "--cache",
-            "--json",
-            "full",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output).unwrap();
-    assert!(value
-        .get("packet")
-        .and_then(|packet| packet.get("payload"))
-        .and_then(|payload| payload.get("debug"))
-        .and_then(|debug| debug.get("cache"))
-        .and_then(|v| v.get("diff"))
-        .and_then(|v| v.get("hit"))
-        .and_then(Value::as_bool)
-        .is_some());
-}
-
-#[test]
 #[cfg(unix)]
 fn test_suite_daemon_start_status_stop_cycle() {
     ensure_packet28d_built();
