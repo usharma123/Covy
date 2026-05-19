@@ -2190,6 +2190,9 @@ fn build_reducer_packet(
 
 fn build_bash_packet(input: &Value, response: &Value) -> Option<HookReducerPacket> {
     let command = json_string(input, "command")?;
+    if let Some(packet) = build_bash_grep_packet(&command, response) {
+        return Some(packet);
+    }
     let output = hook_output_text(response);
     let summary = first_nonempty_line(&output)
         .unwrap_or_else(|| format!("command completed: {}", compact_text(&command, 100)));
@@ -2236,6 +2239,63 @@ fn build_bash_packet(input: &Value, response: &Value) -> Option<HookReducerPacke
     ))
 }
 
+fn build_bash_grep_packet(command: &str, response: &Value) -> Option<HookReducerPacket> {
+    let (query, paths) = parse_bash_grep_command(command)?;
+    let input = json!({
+        "pattern": query,
+        "include": paths,
+    });
+    let mut packet = build_grep_packet(&input, response)?;
+    packet.packet_type = "packet28.hook.bash.grep.v1".to_string();
+    packet.tool_name = "Bash".to_string();
+    packet.command = Some(command.to_string());
+    packet.reducer_family = Some("shell_native".to_string());
+    packet.compact_path = Some("bash_grep_post_capture".to_string());
+    Some(packet)
+}
+
+fn parse_bash_grep_command(command: &str) -> Option<(String, Vec<String>)> {
+    let decision = crate::route_registry::decide_command_route(command);
+    if !matches!(decision.kind, crate::route_registry::RouteKind::NativeTool)
+        || !decision
+            .native_tool
+            .as_ref()
+            .is_some_and(|tool| matches!(tool.kind, crate::route_registry::NativeToolKind::Grep))
+    {
+        return None;
+    }
+    parse_grep_argv(&decision.argv)
+}
+
+fn parse_grep_argv(argv: &[String]) -> Option<(String, Vec<String>)> {
+    let mut query = None::<String>;
+    let mut paths = Vec::<String>::new();
+    let mut iter = argv.iter().skip(1).peekable();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-e" | "--regexp" => {
+                query = iter.next().cloned();
+            }
+            "-m" | "--max-count" | "-A" | "--after-context" | "-B" | "--before-context" | "-C"
+            | "--context" | "--include" | "--exclude" | "--glob" | "-g" => {
+                let _ = iter.next();
+            }
+            "-F" | "--fixed-strings" | "-i" | "--ignore-case" | "-w" | "--word-regexp" | "-n"
+            | "--line-number" | "-H" | "--with-filename" | "-h" | "--no-filename" | "-I" | "-R"
+            | "-r" | "--recursive" | "--hidden" | "--no-heading" => {}
+            value if value.starts_with('-') => {}
+            value => {
+                if query.is_none() {
+                    query = Some(value.to_string());
+                } else {
+                    paths.push(value.to_string());
+                }
+            }
+        }
+    }
+    Some((query?, paths))
+}
+
 fn build_read_packet(input: &Value, response: &Value) -> Option<HookReducerPacket> {
     let path = json_string(input, "file_path")
         .or_else(|| json_string(input, "path"))
@@ -2272,10 +2332,12 @@ fn build_grep_packet(input: &Value, response: &Value) -> Option<HookReducerPacke
     let query = json_string(input, "pattern")
         .or_else(|| json_string(input, "query"))
         .or_else(|| json_string(input, "search"))?;
-    let extracted_matches = extract_grep_hook_matches(response);
+    let include_paths = json_array_strings(input, "include");
+    let default_path = (include_paths.len() == 1).then(|| include_paths[0].clone());
+    let extracted_matches = extract_grep_hook_matches(response, default_path.as_deref());
     let mut paths = json_array_strings(response, "files")
         .into_iter()
-        .chain(json_array_strings(input, "include"))
+        .chain(include_paths)
         .chain(extracted_matches.iter().map(|item| item.0.clone()))
         .collect::<Vec<_>>();
     paths.sort();
@@ -2315,7 +2377,10 @@ fn build_grep_packet(input: &Value, response: &Value) -> Option<HookReducerPacke
     Some(packet)
 }
 
-fn extract_grep_hook_matches(response: &Value) -> Vec<(String, usize, String)> {
+fn extract_grep_hook_matches(
+    response: &Value,
+    default_path: Option<&str>,
+) -> Vec<(String, usize, String)> {
     if let Some(items) = response.get("matches").and_then(Value::as_array) {
         let mut matches = Vec::new();
         for item in items {
@@ -2341,19 +2406,32 @@ fn extract_grep_hook_matches(response: &Value) -> Vec<(String, usize, String)> {
     }
     hook_output_text(response)
         .lines()
-        .filter_map(parse_grep_hook_output_line)
+        .filter_map(|line| parse_grep_hook_output_line(line, default_path))
         .collect()
 }
 
-fn parse_grep_hook_output_line(line: &str) -> Option<(String, usize, String)> {
-    let (path, rest) = line.split_once(':')?;
-    let (line_no, text) = rest.split_once(':')?;
+fn parse_grep_hook_output_line(
+    line: &str,
+    default_path: Option<&str>,
+) -> Option<(String, usize, String)> {
+    let (first, rest) = line.split_once(':')?;
+    let (path, line_no, text) = if first.parse::<usize>().is_ok() {
+        let default_path = default_path?;
+        (
+            default_path.to_string(),
+            first.to_string(),
+            rest.to_string(),
+        )
+    } else {
+        let (line_no, text) = rest.split_once(':')?;
+        (first.to_string(), line_no.to_string(), text.to_string())
+    };
     let line_no = line_no.parse::<usize>().ok()?;
     let path = path.trim().trim_start_matches("./").replace('\\', "/");
     if path.is_empty() {
         return None;
     }
-    Some((path, line_no, text.to_string()))
+    Some((path, line_no, text))
 }
 
 fn render_grep_hook_preview(summary: &str, matches: &[(String, usize, String)]) -> String {
@@ -2994,6 +3072,34 @@ mod tests {
         assert_eq!(
             packet.search_query.as_deref(),
             Some(r"fn classify\|Mutation")
+        );
+        assert!(packet
+            .regions
+            .contains(&"crates/packet28-reducer-core/src/command.rs:16-16".to_string()));
+        assert!(packet
+            .regions
+            .contains(&"crates/packet28-reducer-core/src/command.rs:34-34".to_string()));
+        let preview = packet.compact_preview.unwrap();
+        assert!(preview.contains("Grep found 2 matches"));
+        assert!(preview.contains("crates/packet28-reducer-core/src/command.rs:16:"));
+    }
+
+    #[test]
+    fn bash_grep_post_capture_preserves_actionable_regions_without_pretool_rewrite() {
+        let input = json!({
+            "command": r"grep -n 'fn classify\|Mutation\|fn classify_command' crates/packet28-reducer-core/src/command.rs"
+        });
+        let response = json!({
+            "stdout": "16:pub fn classify_command(command: &str) -> Option<CommandReducerSpec> {\n34:pub fn classify_command_argv(command: &str, argv: &[String]) -> Option<CommandReducerSpec> {\n"
+        });
+
+        let packet = build_bash_packet(&input, &response).unwrap();
+
+        assert_eq!(packet.tool_name, "Bash");
+        assert_eq!(packet.packet_type, "packet28.hook.bash.grep.v1");
+        assert_eq!(
+            packet.search_query.as_deref(),
+            Some(r"fn classify\|Mutation\|fn classify_command")
         );
         assert!(packet
             .regions

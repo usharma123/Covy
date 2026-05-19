@@ -64,6 +64,9 @@ jobs:
       - name: Build benchmark dependencies
         run: cargo build -p suite-cli -p packet28d -p packet28-reducer-core -p packet28-search-cli
 
+      - name: Run hook grep regression tests
+        run: cargo test -p suite-cli grep
+
       - name: Run p28 search CLI tests
         run: cargo test -p packet28-search-cli --tests
 
