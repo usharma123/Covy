@@ -766,11 +766,11 @@ pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_
     let mut summaries = Vec::new();
 
     if fixture.cases.is_empty() {
-        issues.push(json!({
-            "case_id": "<fixture>",
-            "kind": "missing_cases",
-            "detail": "fixture must contain at least one reducer drift case",
-        }));
+        issues.push(reducer_drift_issue(
+            "<fixture>",
+            "missing_cases",
+            "fixture must contain at least one reducer drift case",
+        ));
     }
 
     for (index, case) in fixture.cases.iter().enumerate() {
@@ -781,35 +781,35 @@ pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_
             id.to_string()
         };
         if id.is_empty() {
-            issues.push(json!({
-                "case_id": case_id,
-                "kind": "missing_id",
-                "detail": "case id is required",
-            }));
+            issues.push(reducer_drift_issue(
+                &case_id,
+                "missing_id",
+                "case id is required",
+            ));
         }
         if case.command_argv.is_empty() {
-            issues.push(json!({
-                "case_id": case_id,
-                "kind": "missing_command_argv",
-                "detail": "command_argv must contain the command and arguments",
-            }));
+            issues.push(reducer_drift_issue(
+                &case_id,
+                "missing_command_argv",
+                "command_argv must contain the command and arguments",
+            ));
             continue;
         }
         if case.required_markers.is_empty() {
-            issues.push(json!({
-                "case_id": case_id,
-                "kind": "missing_required_markers",
-                "detail": "required_markers must name reducer output that cannot drift away",
-            }));
+            issues.push(reducer_drift_issue(
+                &case_id,
+                "missing_required_markers",
+                "required_markers must name reducer output that cannot drift away",
+            ));
         }
 
         let command = case.command_argv.join(" ");
         let Some(spec) = classify_command_argv(&command, &case.command_argv) else {
-            issues.push(json!({
-                "case_id": case_id,
-                "kind": "unclassified_command",
-                "detail": command,
-            }));
+            issues.push(reducer_drift_issue(
+                &case_id,
+                "unclassified_command",
+                command,
+            ));
             continue;
         };
         let reduction = reduce_command_output(&spec, &case.stdout, &case.stderr, case.exit_code)?;
@@ -821,17 +821,13 @@ pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_
         for marker in &case.required_markers {
             let marker = marker.trim();
             if marker.is_empty() {
-                issues.push(json!({
-                    "case_id": case_id,
-                    "kind": "empty_marker",
-                    "detail": "required marker is empty",
-                }));
+                issues.push(reducer_drift_issue(
+                    &case_id,
+                    "empty_marker",
+                    "required marker is empty",
+                ));
             } else if !reduced_text.contains(marker) {
-                issues.push(json!({
-                    "case_id": case_id,
-                    "kind": "missing_marker",
-                    "detail": marker,
-                }));
+                issues.push(reducer_drift_issue(&case_id, "missing_marker", marker));
             }
         }
         summaries.push(json!({
@@ -853,6 +849,18 @@ pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_
         "issues": issues,
         "summaries": summaries,
     }))
+}
+
+fn reducer_drift_issue(
+    case_id: impl Into<String>,
+    kind: impl Into<String>,
+    detail: impl Into<String>,
+) -> serde_json::Value {
+    json!({
+        "case_id": case_id.into(),
+        "kind": kind.into(),
+        "detail": detail.into(),
+    })
 }
 
 fn score_experiment_manifest(
