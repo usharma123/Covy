@@ -366,6 +366,9 @@ else
             crates/suite-cli/tests/discover_e2e.rs)
               add_filtered_test "$package" "discover_e2e" "discover_"
               ;;
+            crates/suite-cli/tests/discover_sessions_e2e.rs)
+              add_filtered_test "$package" "discover_sessions_e2e" "discover_sessions"
+              ;;
             crates/suite-cli/tests/session_e2e.rs)
               add_filtered_test "$package" "session_e2e" "session_cli"
               ;;
