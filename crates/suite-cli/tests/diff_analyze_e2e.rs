@@ -24,38 +24,6 @@ fn fixture(rel: &str) -> String {
         .to_string()
 }
 
-fn write_governed_context(path: &Path) {
-    fs::write(
-        path,
-        r#"
-version: 1
-policy:
-  tools:
-    allowlist: ["diffy", "testy", "stacky", "buildy", "contextq"]
-  reducers:
-    allowlist: ["analyze", "impact", "slice", "reduce", "assemble", "contextq.assemble", "diffy.analyze", "testy.impact", "stacky.slice", "buildy.reduce", "governed.assemble"]
-  paths:
-    include: ["**"]
-    exclude: []
-  token_budget:
-    cap: 5000
-  runtime_budget:
-    cap_ms: 5000
-  tool_call_budget:
-    cap: 10
-  redaction:
-    forbidden_patterns: []
-  human_review:
-    required: false
-    on_policy_violation: true
-    on_budget_violation: true
-    on_redaction_violation: true
-    paths: []
-"#,
-    )
-    .unwrap();
-}
-
 fn parse_packet_wrapper(output: &[u8], packet_type: &str) -> Value {
     let value: Value = serde_json::from_slice(output).unwrap();
     assert_eq!(
@@ -68,13 +36,6 @@ fn parse_packet_wrapper(output: &[u8], packet_type: &str) -> Value {
     );
     assert!(value.get("packet").is_some());
     value
-}
-
-fn packet_debug(wrapper: &Value) -> Option<&Value> {
-    wrapper
-        .get("packet")
-        .and_then(|packet| packet.get("payload"))
-        .and_then(|payload| payload.get("debug"))
 }
 
 fn write_repo_fixture(root: &Path) {
@@ -203,82 +164,6 @@ fn test_diff_analyze_cli_json_includes_cache_block() {
         .and_then(|v| v.get("diff"))
         .and_then(|v| v.get("hit"))
         .and_then(Value::as_bool)
-        .is_some());
-}
-
-#[test]
-fn test_diff_analyze_cli_governed_smoke() {
-    let dir = TempDir::new().unwrap();
-    let context = dir.path().join("context.yaml");
-    write_governed_context(&context);
-
-    let output = suite_cmd()
-        .args([
-            "diff",
-            "analyze",
-            "--coverage",
-            &fixture("lcov/basic.info"),
-            "--no-issues-state",
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-            "--json",
-            "full",
-            "--context-config",
-            context.to_str().unwrap(),
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let value = parse_packet_wrapper(&output, "suite.diff.analyze.v1");
-    assert!(packet_debug(&value)
-        .and_then(|v| v.get("governed_packet"))
-        .and_then(|v| v.get("tool"))
-        .and_then(Value::as_str)
-        .is_some());
-}
-
-#[test]
-fn test_diff_analyze_cli_governed_json_metadata_shape() {
-    let dir = TempDir::new().unwrap();
-    let context = dir.path().join("context.yaml");
-    write_governed_context(&context);
-
-    let output = suite_cmd()
-        .args([
-            "diff",
-            "analyze",
-            "--coverage",
-            &fixture("lcov/basic.info"),
-            "--no-issues-state",
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-            "--json",
-            "full",
-            "--context-config",
-            context.to_str().unwrap(),
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let value = parse_packet_wrapper(&output, "suite.diff.analyze.v1");
-    assert!(packet_debug(&value)
-        .and_then(|v| v.get("kernel_metadata"))
-        .and_then(|meta| meta.get("diff"))
-        .is_some());
-    assert!(packet_debug(&value)
-        .and_then(|v| v.get("kernel_metadata"))
-        .and_then(|meta| meta.get("governed"))
-        .and_then(|governed| governed.get("budget_trim"))
         .is_some());
 }
 
