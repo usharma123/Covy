@@ -411,6 +411,9 @@ else
             crates/suite-cli/tests/mcp_memory_e2e.rs)
               add_filtered_test "$package" "mcp_memory_e2e" "mcp_memory"
               ;;
+            crates/suite-cli/tests/support/mcp_memory.rs)
+              add_filtered_test "$package" "mcp_memory_e2e" "mcp_memory"
+              ;;
             crates/suite-cli/tests/mcp_memory_maintenance_e2e.rs)
               add_filtered_test "$package" "mcp_memory_maintenance_e2e" "mcp_memory_maintenance"
               ;;
