@@ -554,6 +554,9 @@ else
             crates/suite-cli/tests/map_proxy_e2e.rs)
               add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               ;;
+            crates/suite-cli/tests/map_proxy_formats_e2e.rs)
+              add_filtered_test "$package" "map_proxy_formats_e2e" "map_proxy_cli"
+              ;;
             crates/suite-cli/tests/map_proxy_governed_e2e.rs)
               add_filtered_test "$package" "map_proxy_governed_e2e" "map_proxy_governed"
               ;;
@@ -566,6 +569,7 @@ else
             crates/suite-cli/tests/support/map_proxy.rs)
               add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               add_filtered_test "$package" "map_proxy_cache_e2e" "map_proxy_cache"
+              add_filtered_test "$package" "map_proxy_formats_e2e" "map_proxy_cli"
               add_filtered_test "$package" "map_proxy_profiles_e2e" "map_proxy_profiles"
               ;;
             crates/suite-cli/tests/support/map_proxy_packet.rs)
