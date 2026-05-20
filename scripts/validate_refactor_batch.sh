@@ -379,6 +379,9 @@ else
             crates/suite-cli/tests/mcp_handoff_e2e.rs)
               add_filtered_test "$package" "mcp_handoff_e2e" "mcp_handoff"
               ;;
+            crates/suite-cli/tests/support/mcp_handoff.rs)
+              add_filtered_test "$package" "mcp_handoff_e2e" "mcp_handoff"
+              ;;
             crates/suite-cli/tests/mcp_native_e2e.rs)
               add_filtered_test "$package" "mcp_native_e2e" "mcp_native"
               ;;
