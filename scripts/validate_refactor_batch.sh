@@ -309,6 +309,13 @@ else
             crates/suite-cli/tests/setup_index_e2e.rs)
               add_filtered_test "$package" "setup_index_e2e" "setup_index"
               ;;
+            crates/suite-cli/tests/setup_index_daemon_e2e.rs)
+              add_filtered_test "$package" "setup_index_daemon_e2e" "setup_index_daemon"
+              ;;
+            crates/suite-cli/tests/support/setup_index.rs)
+              add_filtered_test "$package" "setup_index_e2e" "setup_index"
+              add_filtered_test "$package" "setup_index_daemon_e2e" "setup_index_daemon"
+              ;;
             crates/suite-cli/tests/setup_windsurf_e2e.rs)
               add_filtered_test "$package" "setup_windsurf_e2e" "setup_windsurf"
               ;;
