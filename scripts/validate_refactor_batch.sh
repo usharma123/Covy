@@ -442,6 +442,13 @@ else
             crates/suite-cli/tests/hook_telemetry_e2e.rs)
               add_filtered_test "$package" "hook_telemetry_e2e" "hook_telemetry"
               ;;
+            crates/suite-cli/tests/hook_telemetry_session_e2e.rs)
+              add_filtered_test "$package" "hook_telemetry_session_e2e" "hook_telemetry_session"
+              ;;
+            crates/suite-cli/tests/support/hook_telemetry.rs)
+              add_filtered_test "$package" "hook_telemetry_e2e" "hook_telemetry"
+              add_filtered_test "$package" "hook_telemetry_session_e2e" "hook_telemetry_session"
+              ;;
             crates/suite-cli/tests/hook_rewrite_e2e.rs)
               add_filtered_test "$package" "hook_rewrite_e2e" "hook_rewrite_cli"
               ;;
