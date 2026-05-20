@@ -366,6 +366,13 @@ else
             crates/suite-cli/tests/hook_rewrite_e2e.rs)
               add_filtered_test "$package" "hook_rewrite_e2e" "hook_rewrite_cli"
               ;;
+            crates/suite-cli/tests/hook_rewrite_runtimes_e2e.rs)
+              add_filtered_test "$package" "hook_rewrite_runtimes_e2e" "hook_rewrite_runtimes"
+              ;;
+            crates/suite-cli/tests/support/hook_rewrite.rs)
+              add_filtered_test "$package" "hook_rewrite_e2e" "hook_rewrite_cli"
+              add_filtered_test "$package" "hook_rewrite_runtimes_e2e" "hook_rewrite_runtimes"
+              ;;
             crates/suite-cli/tests/hook_runner_e2e.rs)
               add_filtered_test "$package" "hook_runner_e2e" "hook_runner_cli"
               ;;
