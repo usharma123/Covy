@@ -401,6 +401,12 @@ else
             crates/suite-cli/tests/memory_migration_e2e.rs)
               add_filtered_test "$package" "memory_migration_e2e" "memory_migration"
               ;;
+            crates/suite-cli/tests/support/memory_migration.rs)
+              add_filtered_test "$package" "memory_migration_e2e" "memory_migration"
+              ;;
+            crates/suite-cli/tests/support/memory_migration_assertions.rs)
+              add_filtered_test "$package" "memory_migration_e2e" "memory_migration"
+              ;;
             crates/suite-cli/tests/wakeup_scope_e2e.rs)
               add_filtered_test "$package" "wakeup_scope_e2e" "wakeup_scope"
               ;;
