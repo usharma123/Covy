@@ -50,10 +50,6 @@ enum Beta {
     .unwrap();
 }
 
-fn kernel_cache_file(root: &Path) -> PathBuf {
-    root.join(".packet28").join("packet-cache-v2.bin")
-}
-
 fn parse_packet_wrapper(output: &[u8], packet_type: &str) -> Value {
     let value: Value = serde_json::from_slice(output).unwrap();
     assert_eq!(
@@ -148,29 +144,6 @@ fn test_map_proxy_cli_map_repo_json_smoke() {
 }
 
 #[test]
-fn test_map_proxy_cli_map_repo_cache_flag_writes_kernel_cache_file() {
-    let dir = TempDir::new().unwrap();
-    write_repo_fixture(dir.path());
-    let cache_file = kernel_cache_file(dir.path());
-    assert!(!cache_file.exists());
-
-    suite_cmd()
-        .args([
-            "map",
-            "repo",
-            "--repo-root",
-            dir.path().to_str().unwrap(),
-            "--cache",
-            "--json",
-        ])
-        .assert()
-        .success();
-
-    assert!(cache_file.exists());
-    assert!(fs::metadata(cache_file).unwrap().len() > 0);
-}
-
-#[test]
 fn test_map_proxy_cli_proxy_run_rich_json_smoke() {
     let output = suite_cmd()
         .args([
@@ -197,30 +170,6 @@ fn test_map_proxy_cli_proxy_run_rich_json_smoke() {
         .and_then(Value::as_array)
         .map(|v| !v.is_empty())
         .unwrap_or(false));
-}
-
-#[test]
-fn test_map_proxy_cli_proxy_run_cache_flag_writes_kernel_cache_file() {
-    let dir = TempDir::new().unwrap();
-    let cache_file = kernel_cache_file(dir.path());
-    assert!(!cache_file.exists());
-
-    suite_cmd()
-        .args([
-            "proxy",
-            "run",
-            "--cache",
-            "--cwd",
-            dir.path().to_str().unwrap(),
-            "--json",
-            "--",
-            "ls",
-        ])
-        .assert()
-        .success();
-
-    assert!(cache_file.exists());
-    assert!(fs::metadata(cache_file).unwrap().len() > 0);
 }
 
 #[test]
@@ -431,44 +380,6 @@ fn test_map_proxy_cli_compact_packets_respect_byte_slo_and_estimate() {
         .and_then(Value::as_u64)
         .unwrap() as usize;
     assert_eq!(proxy_est_bytes, proxy_packet_bytes);
-}
-
-#[test]
-fn test_map_proxy_cli_map_repo_terminal_shows_cache_hit_and_miss() {
-    let dir = TempDir::new().unwrap();
-    write_repo_fixture(dir.path());
-
-    let first = suite_cmd()
-        .args([
-            "map",
-            "repo",
-            "--repo-root",
-            dir.path().to_str().unwrap(),
-            "--cache",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let first_out = String::from_utf8(first).unwrap();
-    assert!(first_out.contains("cache: miss"));
-
-    let second = suite_cmd()
-        .args([
-            "map",
-            "repo",
-            "--repo-root",
-            dir.path().to_str().unwrap(),
-            "--cache",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let second_out = String::from_utf8(second).unwrap();
-    assert!(second_out.contains("cache: hit"));
 }
 
 #[test]

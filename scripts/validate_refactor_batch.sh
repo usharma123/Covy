@@ -399,6 +399,9 @@ else
             crates/suite-cli/tests/map_proxy_e2e.rs)
               add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               ;;
+            crates/suite-cli/tests/map_proxy_cache_e2e.rs)
+              add_filtered_test "$package" "map_proxy_cache_e2e" "map_proxy_cache"
+              ;;
             crates/suite-cli/tests/map_proxy_profiles_e2e.rs)
               add_filtered_test "$package" "map_proxy_profiles_e2e" "map_proxy_profiles"
               ;;
