@@ -3,7 +3,7 @@ set -eo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/validate_refactor_batch.sh [--full] [package[:filter] ...] [package:test-target:filter ...]
+Usage: scripts/validate_refactor_batch.sh [--full] [--tests-only] [--list] [package[:filter] ...] [package:test-target:filter ...]
 
 Runs the fast validation gate for an incremental refactor batch:
   - cargo fmt --check
@@ -12,16 +12,27 @@ Runs the fast validation gate for an incremental refactor batch:
 
 Pass --full to run workspace clippy and cargo test --all-features after the
 targeted package tests.
+Pass --tests-only for the quick edit loop; it skips fmt and clippy but keeps the
+same targeted cargo test selection. Do not use it as the pre-commit gate.
+Pass --list to print the selected commands without running them.
 Pass package names or package:filter pairs to override auto-detection.
 USAGE
 }
 
 full=false
+tests_only=false
+list_only=false
 declare -a requested=()
 for arg in "$@"; do
   case "$arg" in
     --full)
       full=true
+      ;;
+    --tests-only)
+      tests_only=true
+      ;;
+    --list)
+      list_only=true
       ;;
     -h|--help)
       usage
@@ -32,6 +43,14 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+run_cmd() {
+  echo "+ $*"
+  if [[ "$list_only" == true ]]; then
+    return 0
+  fi
+  "$@"
+}
 
 package_name_for_dir() {
   local crate_dir="$1"
@@ -321,32 +340,35 @@ else
   )
 fi
 
-echo "+ cargo fmt --check"
-cargo fmt --check
-
-if [[ "$full" == true ]]; then
-  echo "+ cargo clippy --all-targets --all-features -- -D warnings"
-  cargo clippy --all-targets --all-features -- -D warnings
-elif ((${#lint_packages[@]})); then
-  for package in "${lint_packages[@]}"; do
-    echo "+ cargo clippy -p $package --all-targets --all-features -- -D warnings"
-    cargo clippy -p "$package" --all-targets --all-features -- -D warnings
-  done
-  for spec in "${lint_test_specs[@]}"; do
-    package="${spec%%:*}"
-    test_target="${spec#*:}"
-    echo "+ cargo clippy -p $package --test $test_target --all-features -- -D warnings"
-    cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
-  done
-elif ((${#lint_test_specs[@]})); then
-  for spec in "${lint_test_specs[@]}"; do
-    package="${spec%%:*}"
-    test_target="${spec#*:}"
-    echo "+ cargo clippy -p $package --test $test_target --all-features -- -D warnings"
-    cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
-  done
+if [[ "$tests_only" == false ]]; then
+  run_cmd cargo fmt --check
 else
-  echo "No Rust package changes detected; skipped cargo clippy."
+  echo "Skipping cargo fmt because --tests-only was provided."
+fi
+
+if [[ "$tests_only" == true ]]; then
+  echo "Skipping cargo clippy because --tests-only was provided."
+else
+  if [[ "$full" == true ]]; then
+    run_cmd cargo clippy --all-targets --all-features -- -D warnings
+  elif ((${#lint_packages[@]})); then
+    for package in "${lint_packages[@]}"; do
+      run_cmd cargo clippy -p "$package" --all-targets --all-features -- -D warnings
+    done
+    for spec in "${lint_test_specs[@]}"; do
+      package="${spec%%:*}"
+      test_target="${spec#*:}"
+      run_cmd cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
+    done
+  elif ((${#lint_test_specs[@]})); then
+    for spec in "${lint_test_specs[@]}"; do
+      package="${spec%%:*}"
+      test_target="${spec#*:}"
+      run_cmd cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
+    done
+  else
+    echo "No Rust package changes detected; skipped cargo clippy."
+  fi
 fi
 
 for spec in "${filtered_test_specs[@]}"; do
@@ -357,8 +379,7 @@ for spec in "${filtered_test_specs[@]}"; do
   if has_item "$package" "${full_packages[@]}" || has_item "$package" "${lib_packages[@]}"; then
     continue
   fi
-  echo "+ cargo test -p $package --test $test_target --all-features $filter -- --test-threads=1"
-  cargo test -p "$package" --test "$test_target" --all-features "$filter" -- --test-threads=1
+  run_cmd cargo test -p "$package" --test "$test_target" --all-features "$filter" -- --test-threads=1
 done
 
 for spec in "${filtered_specs[@]}"; do
@@ -367,26 +388,22 @@ for spec in "${filtered_specs[@]}"; do
   if has_item "$package" "${full_packages[@]}" || has_item "$package" "${lib_packages[@]}"; then
     continue
   fi
-  echo "+ cargo test -p $package --all-features $filter -- --test-threads=1"
-  cargo test -p "$package" --all-features "$filter" -- --test-threads=1
+  run_cmd cargo test -p "$package" --all-features "$filter" -- --test-threads=1
 done
 
 for package in "${lib_packages[@]}"; do
   if has_item "$package" "${full_packages[@]}"; then
     continue
   fi
-  echo "+ cargo test -p $package --all-features --lib"
-  cargo test -p "$package" --all-features --lib
+  run_cmd cargo test -p "$package" --all-features --lib
 done
 
 for package in "${full_packages[@]}"; do
-  echo "+ cargo test -p $package --all-features"
-  cargo test -p "$package" --all-features
+  run_cmd cargo test -p "$package" --all-features
 done
 
 if [[ "$full" == true ]]; then
-  echo "+ cargo test --all-features"
-  cargo test --all-features
+  run_cmd cargo test --all-features
 elif ((
   ${#filtered_test_specs[@]} == 0 &&
   ${#filtered_specs[@]} == 0 &&

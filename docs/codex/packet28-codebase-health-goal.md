@@ -56,6 +56,9 @@ Execution rules:
 - After each meaningful batch, run the relevant formatter, linter, and tests.
 - Prefer the fast batch gate for ordinary incremental commits:
   - scripts/validate_refactor_batch.sh
+- During local iteration, use the test-only selector before the commit gate when the full lint path is slowing feedback:
+  - scripts/validate_refactor_batch.sh --tests-only
+  - scripts/validate_refactor_batch.sh --list
 - The fast batch gate must run:
   - cargo fmt --check
   - package-scoped cargo clippy for changed Rust packages
