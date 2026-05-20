@@ -428,6 +428,9 @@ else
             crates/suite-cli/tests/support/daemon_task.rs)
               add_filtered_test "$package" "daemon_task_e2e" "daemon_task_cli"
               ;;
+            crates/suite-cli/tests/support/daemon_task_submit.rs)
+              add_filtered_test "$package" "daemon_task_submit_normalize_e2e" "daemon_task_submit_normalize"
+              ;;
             crates/suite-cli/tests/daemon_task_submit_failure_e2e.rs)
               add_filtered_test "$package" "daemon_task_submit_failure_e2e" "failed_submit"
               ;;
