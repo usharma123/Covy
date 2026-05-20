@@ -162,6 +162,12 @@ else
             crates/suite-cli/tests/verify_e2e.rs)
               add_filtered_test "$package" "verify_e2e" "verify"
               ;;
+            crates/suite-cli/tests/setup_e2e.rs)
+              add_filtered_test "$package" "setup_e2e" "test_"
+              ;;
+            crates/suite-cli/tests/setup_index_e2e.rs)
+              add_filtered_test "$package" "setup_index_e2e" "setup_index"
+              ;;
             crates/suite-cli/tests/governed_workflow_e2e.rs)
               add_filtered_test "$package" "governed_workflow_e2e" "governed_workflow"
               ;;
@@ -238,6 +244,7 @@ else
               add_filtered_test "$package" "mcp_memory_e2e" "mcp_memory"
               add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
               add_filtered_test "$package" "mcp_memory_pending_e2e" "mcp_memory_pending"
+              add_filtered_test "$package" "setup_index_e2e" "setup_index"
               ;;
             crates/suite-cli/tests/mcp_handoff_e2e.rs)
               add_filtered_test "$package" "mcp_handoff_e2e" "mcp_handoff"
