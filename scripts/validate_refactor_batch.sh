@@ -414,6 +414,9 @@ else
             crates/suite-cli/tests/via_daemon_e2e.rs)
               add_filtered_test "$package" "via_daemon_e2e" "via_daemon_cli"
               ;;
+            crates/suite-cli/tests/via_daemon_root_e2e.rs)
+              add_filtered_test "$package" "via_daemon_root_e2e" "via_daemon_root"
+              ;;
             crates/suite-cli/tests/via_daemon_test_e2e.rs)
               add_filtered_test "$package" "via_daemon_test_e2e" "via_daemon_test"
               ;;
