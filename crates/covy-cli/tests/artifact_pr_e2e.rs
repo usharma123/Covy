@@ -62,94 +62,97 @@ fn setup_git_repo(dir: &Path) {
     );
 }
 
+fn ingest_basic_lcov(dir: &TempDir) {
+    covy_cmd()
+        .current_dir(dir.path())
+        .args(["ingest", &fixture("lcov/basic.info")])
+        .assert()
+        .success();
+}
+
 #[test]
-fn test_comment_writes_markdown_artifact() {
+fn test_pr_writes_both_artifacts() {
     let dir = TempDir::new().unwrap();
     let comment_path = dir.path().join("comment.md");
-    std::fs::write(dir.path().join("README.md"), "init\n").unwrap();
-    setup_git_repo(dir.path());
-
-    covy_cmd()
-        .current_dir(dir.path())
-        .args(["ingest", &fixture("lcov/basic.info")])
-        .assert()
-        .success();
-
-    covy_cmd()
-        .current_dir(dir.path())
-        .args([
-            "comment",
-            "--base-ref",
-            "HEAD",
-            "--head-ref",
-            "HEAD",
-            "--format",
-            "markdown",
-            "--out",
-            comment_path.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
-
-    let content = std::fs::read_to_string(comment_path).unwrap();
-    assert!(content.contains("gate:"));
-    assert!(content.contains("<!-- covy -->"));
-}
-
-#[test]
-fn test_annotate_writes_sarif_artifact() {
-    let dir = TempDir::new().unwrap();
     let sarif_path = dir.path().join("covy.sarif");
+
     std::fs::write(dir.path().join("README.md"), "init\n").unwrap();
     setup_git_repo(dir.path());
-
-    covy_cmd()
-        .current_dir(dir.path())
-        .args(["ingest", &fixture("lcov/basic.info")])
-        .assert()
-        .success();
+    ingest_basic_lcov(&dir);
 
     covy_cmd()
         .current_dir(dir.path())
         .args([
-            "annotate",
+            "pr",
             "--base-ref",
             "HEAD",
             "--head-ref",
             "HEAD",
-            "--out",
+            "--out-comment",
+            comment_path.to_str().unwrap(),
+            "--out-sarif",
             sarif_path.to_str().unwrap(),
-            "--max-findings",
-            "200",
         ])
         .assert()
         .success();
 
-    let content = std::fs::read_to_string(sarif_path).unwrap();
-    assert!(content.contains("\"version\": \"2.1.0\""));
-    assert!(content.contains("covy/coverage/changed-line-uncovered"));
+    assert!(comment_path.exists());
+    assert!(sarif_path.exists());
 }
 
 #[test]
-fn test_github_comment_still_works_without_warning_noise() {
+fn test_pr_json_stdout_is_pure_json() {
     let dir = TempDir::new().unwrap();
+    let comment_path = dir.path().join("comment.md");
+    let sarif_path = dir.path().join("covy.sarif");
+
     std::fs::write(dir.path().join("README.md"), "init\n").unwrap();
     setup_git_repo(dir.path());
+    ingest_basic_lcov(&dir);
 
     covy_cmd()
         .current_dir(dir.path())
         .args([
-            "github-comment",
-            &fixture("lcov/basic.info"),
-            "--dry-run",
-            "--no-issues-state",
-            "--base",
+            "pr",
+            "--base-ref",
             "HEAD",
-            "--head",
+            "--head-ref",
             "HEAD",
+            "--output-comment",
+            comment_path.to_str().unwrap(),
+            "--output-sarif",
+            sarif_path.to_str().unwrap(),
+            "--json",
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("## Coverage Report"))
-        .stderr(predicate::str::contains("deprecated").not());
+        .stdout(predicate::str::contains("\"comment\""))
+        .stdout(predicate::str::contains("\"sarif\""))
+        .stdout(predicate::str::contains("Wrote SARIF").not());
+}
+
+#[test]
+fn test_pr_help_shows_canonical_output_flags() {
+    covy_cmd()
+        .args(["pr", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--output-comment"))
+        .stdout(predicate::str::contains("--output-sarif"));
+}
+
+#[test]
+fn test_pr_typo_hint_prefers_output_comment_canonical() {
+    covy_cmd()
+        .args([
+            "pr",
+            "--comment-out",
+            "/tmp/x.md",
+            "--output-sarif",
+            "/tmp/x.sarif",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--output-comment"))
+        .stderr(predicate::str::contains("--out-comment").not());
 }

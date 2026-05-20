@@ -208,6 +208,9 @@ else
             crates/covy-cli/tests/artifact_e2e.rs)
               add_filtered_test "$package" "artifact_e2e" "test_"
               ;;
+            crates/covy-cli/tests/artifact_pr_e2e.rs)
+              add_filtered_test "$package" "artifact_pr_e2e" "pr"
+              ;;
             crates/covy-cli/tests/e2e_test.rs)
               add_filtered_test "$package" "e2e_test" "test_"
               ;;
