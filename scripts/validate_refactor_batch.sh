@@ -665,6 +665,9 @@ else
             crates/suite-cli/tests/context_assemble_e2e.rs)
               add_filtered_test "$package" "context_assemble_e2e" "context_assemble_cli"
               ;;
+            crates/suite-cli/tests/support/context_assemble.rs)
+              add_filtered_test "$package" "context_assemble_e2e" "context_assemble_cli"
+              ;;
             crates/suite-cli/tests/context_recall_daemon_e2e.rs)
               add_filtered_test "$package" "context_recall_daemon_e2e" "context_recall_daemon_cli"
               ;;
