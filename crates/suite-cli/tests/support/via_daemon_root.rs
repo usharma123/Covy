@@ -33,7 +33,7 @@ pub fn fixture(rel: &str) -> String {
         .to_string()
 }
 
-fn write_repo_fixture(root: &Path) {
+pub fn write_repo_fixture(root: &Path) {
     let src = root.join("src");
     fs::create_dir_all(&src).unwrap();
     fs::write(
@@ -58,56 +58,11 @@ enum Beta {
     .unwrap();
 }
 
-fn git(root: &Path, args: &[&str]) {
+pub fn init_repo(root: &Path) {
     let status = std::process::Command::new("git")
         .current_dir(root)
-        .args(args)
+        .args(["init"])
         .status()
         .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
-}
-
-fn init_repo(root: &Path) {
-    git(root, &["init"]);
-}
-
-pub fn setup_changed_repo(root: &Path) {
-    write_repo_fixture(root);
-    init_repo(root);
-    git(root, &["add", "src/alpha.rs", "src/beta.rs"]);
-    git(
-        root,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "init",
-        ],
-    );
-    fs::write(
-        root.join("src/alpha.rs"),
-        r#"
-use crate::beta::Beta;
-
-fn alpha() -> i32 { 2 }
-struct Alpha;
-"#,
-    )
-    .unwrap();
-    git(root, &["add", "src/alpha.rs"]);
-    git(
-        root,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "change alpha",
-        ],
-    );
+    assert!(status.success(), "git init failed with {status}");
 }
