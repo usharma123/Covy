@@ -1,58 +1,16 @@
-use assert_cmd::Command;
+#[path = "support/map_proxy.rs"]
+mod map_proxy;
+#[path = "support/map_proxy_packet.rs"]
+mod map_proxy_packet;
+#[path = "support/map_proxy_payload.rs"]
+mod map_proxy_payload;
+
+use map_proxy::{suite_cmd, write_repo_fixture};
+use map_proxy_packet::parse_packet_wrapper;
+use map_proxy_payload::packet_payload;
 use serde_json::Value;
-use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
-
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
-
-fn write_repo_fixture(root: &Path) {
-    let src = root.join("src");
-    fs::create_dir_all(&src).unwrap();
-    fs::write(
-        src.join("alpha.rs"),
-        r#"
-use crate::beta::Beta;
-
-fn alpha() {}
-struct Alpha;
-"#,
-    )
-    .unwrap();
-    fs::write(
-        src.join("beta.rs"),
-        r#"
-fn beta() {}
-enum Beta {
-  A,
-}
-"#,
-    )
-    .unwrap();
-}
-
-fn parse_packet_wrapper(output: &[u8], packet_type: &str) -> Value {
-    let value: Value = serde_json::from_slice(output).unwrap();
-    assert_eq!(
-        value.get("schema_version").and_then(Value::as_str),
-        Some("suite.packet.v1")
-    );
-    assert_eq!(
-        value.get("packet_type").and_then(Value::as_str),
-        Some(packet_type)
-    );
-    assert!(value.get("packet").is_some());
-    value
-}
-
-fn packet_payload(wrapper: &Value) -> &Value {
-    wrapper
-        .get("packet")
-        .and_then(|packet| packet.get("payload"))
-        .expect("packet.payload should exist")
-}
 
 #[test]
 fn test_map_proxy_profiles_map_repo_and_handle_fetch_share_hash() {
