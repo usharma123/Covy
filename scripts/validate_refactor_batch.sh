@@ -171,6 +171,9 @@ else
             crates/covy-cli/tests/impact_e2e.rs)
               add_filtered_test "$package" "impact_e2e" "impact"
               ;;
+            crates/covy-cli/tests/merge_e2e.rs)
+              add_filtered_test "$package" "merge_e2e" "merge"
+              ;;
             crates/covy-cli/tests/shard_e2e.rs)
               add_filtered_test "$package" "shard_e2e" "shard"
               ;;
