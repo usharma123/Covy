@@ -286,6 +286,9 @@ else
             crates/suite-cli/tests/mcp_memory_e2e.rs)
               add_filtered_test "$package" "mcp_memory_e2e" "mcp_memory"
               ;;
+            crates/suite-cli/tests/mcp_memory_maintenance_e2e.rs)
+              add_filtered_test "$package" "mcp_memory_maintenance_e2e" "mcp_memory_maintenance"
+              ;;
             crates/suite-cli/tests/mcp_context_e2e.rs)
               add_filtered_test "$package" "mcp_context_e2e" "mcp_context"
               ;;
@@ -300,6 +303,7 @@ else
               ;;
             crates/suite-cli/tests/support/mod.rs|crates/suite-cli/tests/support/mcp.rs)
               add_filtered_test "$package" "mcp_memory_e2e" "mcp_memory"
+              add_filtered_test "$package" "mcp_memory_maintenance_e2e" "mcp_memory_maintenance"
               add_filtered_test "$package" "mcp_context_e2e" "mcp_context"
               add_filtered_test "$package" "mcp_context_transcript_e2e" "mcp_context_transcript"
               add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
