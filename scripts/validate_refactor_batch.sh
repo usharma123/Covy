@@ -316,6 +316,9 @@ else
             crates/suite-cli/tests/mcp_native_e2e.rs)
               add_filtered_test "$package" "mcp_native_e2e" "mcp_native"
               ;;
+            crates/suite-cli/tests/mcp_native_artifact_e2e.rs)
+              add_filtered_test "$package" "mcp_native_artifact_e2e" "mcp_native_artifact"
+              ;;
             crates/suite-cli/tests/mcp_native_read_e2e.rs)
               add_filtered_test "$package" "mcp_native_read_e2e" "mcp_native_read"
               ;;
