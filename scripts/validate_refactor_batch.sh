@@ -503,6 +503,13 @@ else
             crates/suite-cli/tests/discover_e2e.rs)
               add_filtered_test "$package" "discover_e2e" "discover_"
               ;;
+            crates/suite-cli/tests/discover_opportunities_e2e.rs)
+              add_filtered_test "$package" "discover_opportunities_e2e" "discover_"
+              ;;
+            crates/suite-cli/tests/support/discover.rs)
+              add_filtered_test "$package" "discover_e2e" "discover_"
+              add_filtered_test "$package" "discover_opportunities_e2e" "discover_"
+              ;;
             crates/suite-cli/tests/discover_sessions_e2e.rs)
               add_filtered_test "$package" "discover_sessions_e2e" "discover_sessions"
               ;;
