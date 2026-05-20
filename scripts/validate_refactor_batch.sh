@@ -227,6 +227,9 @@ else
             crates/covy-cli/tests/ingest_e2e.rs)
               add_filtered_test "$package" "ingest_e2e" "ingest"
               ;;
+            crates/covy-cli/tests/ingest_legacy_e2e.rs)
+              add_filtered_test "$package" "ingest_legacy_e2e" "ingest"
+              ;;
             crates/covy-cli/tests/impact_e2e.rs)
               add_filtered_test "$package" "impact_e2e" "impact"
               ;;
