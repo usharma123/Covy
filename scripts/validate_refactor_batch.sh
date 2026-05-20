@@ -317,6 +317,9 @@ else
             crates/suite-cli/tests/feedback_graph_e2e.rs)
               add_filtered_test "$package" "feedback_graph_e2e" "feedback_graph"
               ;;
+            crates/suite-cli/tests/feedback_graph_transcript_e2e.rs)
+              add_filtered_test "$package" "feedback_graph_transcript_e2e" "feedback_graph_transcript"
+              ;;
             crates/suite-cli/tests/transcript_e2e.rs)
               add_filtered_test "$package" "transcript_e2e" "transcript_round_trip"
               ;;
