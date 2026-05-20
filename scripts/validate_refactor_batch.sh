@@ -189,6 +189,9 @@ else
             crates/suite-cli/tests/setup_e2e.rs)
               add_filtered_test "$package" "setup_e2e" "test_"
               ;;
+            crates/suite-cli/tests/setup_cursor_e2e.rs)
+              add_filtered_test "$package" "setup_cursor_e2e" "setup_cursor"
+              ;;
             crates/suite-cli/tests/setup_index_e2e.rs)
               add_filtered_test "$package" "setup_index_e2e" "setup_index"
               ;;
