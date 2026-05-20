@@ -156,6 +156,9 @@ else
         if [[ -f "$crate_dir/Cargo.toml" ]]; then
           package="$(package_name_for_dir "$crate_dir")"
           case "$path" in
+            crates/covy-cli/tests/artifact_e2e.rs)
+              add_filtered_test "$package" "artifact_e2e" "test_"
+              ;;
             crates/covy-cli/tests/e2e_test.rs)
               add_filtered_test "$package" "e2e_test" "test_"
               ;;
