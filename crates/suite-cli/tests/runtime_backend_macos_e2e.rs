@@ -3,7 +3,10 @@
 mod runtime_backend;
 
 #[cfg(target_os = "macos")]
-use runtime_backend::{ensure_packet28d_built, make_executable, suite_cmd};
+use runtime_backend::{
+    ensure_packet28d_built, large_agents_text, suite_cmd, swap_reports,
+    wait_for_active_swap_report, write_executable_script,
+};
 #[cfg(target_os = "macos")]
 use serde_json::{json, Value};
 #[cfg(target_os = "macos")]
@@ -16,24 +19,14 @@ use std::time::Duration;
 fn test_runtime_backend_macos_run_command_auto_backend_swaps_instruction_file_and_restores_it() {
     ensure_packet28d_built();
     let dir = tempfile::tempdir().unwrap();
-    let original = format!(
-        "# Large AGENTS\n\n{}\n",
-        (0..120)
-            .map(|idx| format!(
-                "## Section {idx}\nPacket28 should compress repeated instruction text while keeping task aware guidance."
-            ))
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    );
+    let original = large_agents_text(120);
     fs::write(dir.path().join("AGENTS.md"), &original).unwrap();
 
     let claude = dir.path().join("claude");
-    fs::write(
+    write_executable_script(
         &claude,
         "#!/bin/sh\nprintf '%s|%s\\n' \"$PACKET28_RUNTIME_BACKEND\" \"$PACKET28_AGENT_FAMILY\"\ncat AGENTS.md\n",
-    )
-    .unwrap();
-    make_executable(&claude);
+    );
 
     let output = suite_cmd()
         .current_dir(dir.path())
@@ -51,10 +44,7 @@ fn test_runtime_backend_macos_run_command_auto_backend_swaps_instruction_file_an
         original
     );
 
-    let reports = fs::read_dir(dir.path().join(".packet28/runtime/macos-swap"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
+    let reports = swap_reports(&dir.path().join(".packet28/runtime/macos-swap"));
     assert_eq!(reports.len(), 1);
     let report: Value = serde_json::from_slice(&fs::read(&reports[0]).unwrap()).unwrap();
     assert_eq!(
@@ -115,8 +105,7 @@ fn test_runtime_backend_macos_run_command_recovers_stale_swap_session_before_lau
     .unwrap();
 
     let claude = dir.path().join("claude");
-    fs::write(&claude, "#!/bin/sh\ncat AGENTS.md\n").unwrap();
-    make_executable(&claude);
+    write_executable_script(&claude, "#!/bin/sh\ncat AGENTS.md\n");
 
     let output = suite_cmd()
         .current_dir(dir.path())
@@ -143,25 +132,15 @@ fn test_runtime_backend_macos_run_command_recovers_stale_swap_session_before_lau
 fn test_runtime_backend_macos_run_command_restores_files_after_sigterm() {
     ensure_packet28d_built();
     let dir = tempfile::tempdir().unwrap();
-    let original = format!(
-        "# Large AGENTS\n\n{}\n",
-        (0..80)
-            .map(|idx| format!(
-                "## Section {idx}\nPacket28 should compress repeated instruction text while keeping task aware guidance."
-            ))
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    );
+    let original = large_agents_text(80);
     let agents = dir.path().join("AGENTS.md");
     fs::write(&agents, &original).unwrap();
 
     let claude = dir.path().join("claude");
-    fs::write(
+    write_executable_script(
         &claude,
         "#!/bin/sh\nprintf '%s' \"$PACKET28_RUNTIME_BACKEND\" > child-backend.txt\nwhile true; do sleep 1; done\n",
-    )
-    .unwrap();
-    make_executable(&claude);
+    );
 
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
         .current_dir(dir.path())
@@ -170,28 +149,7 @@ fn test_runtime_backend_macos_run_command_restores_files_after_sigterm() {
         .unwrap();
 
     let report_dir = dir.path().join(".packet28/runtime/macos-swap");
-    let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(10) {
-        if report_dir.exists()
-            && fs::read_dir(&report_dir)
-                .unwrap()
-                .filter_map(Result::ok)
-                .any(|entry| {
-                    serde_json::from_slice::<Value>(&fs::read(entry.path()).unwrap())
-                        .ok()
-                        .and_then(|report| {
-                            report
-                                .get("state")
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                        })
-                        .is_some_and(|state| state == "active")
-                })
-        {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    wait_for_active_swap_report(&report_dir, Duration::from_secs(10));
 
     unsafe {
         libc::kill(child.id() as i32, libc::SIGTERM);
