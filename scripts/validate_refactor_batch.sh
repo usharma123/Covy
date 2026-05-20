@@ -478,12 +478,20 @@ else
             crates/suite-cli/tests/feedback_graph_e2e.rs)
               add_filtered_test "$package" "feedback_graph_e2e" "feedback_graph"
               ;;
+            crates/suite-cli/tests/feedback_graph_learn_e2e.rs)
+              add_filtered_test "$package" "feedback_graph_learn_e2e" "feedback_graph_learn"
+              ;;
+            crates/suite-cli/tests/feedback_graph_distill_e2e.rs)
+              add_filtered_test "$package" "feedback_graph_distill_e2e" "feedback_graph_distill"
+              ;;
             crates/suite-cli/tests/feedback_graph_transcript_e2e.rs)
               add_filtered_test "$package" "feedback_graph_transcript_e2e" "feedback_graph_transcript"
               ;;
             crates/suite-cli/tests/support/feedback_graph.rs)
               add_filtered_test "$package" "feedback_cli_e2e" "feedback_cli"
               add_filtered_test "$package" "feedback_graph_e2e" "feedback_graph"
+              add_filtered_test "$package" "feedback_graph_learn_e2e" "feedback_graph_learn"
+              add_filtered_test "$package" "feedback_graph_distill_e2e" "feedback_graph_distill"
               add_filtered_test "$package" "feedback_graph_transcript_e2e" "feedback_graph_transcript"
               ;;
             crates/suite-cli/tests/transcript_e2e.rs)
