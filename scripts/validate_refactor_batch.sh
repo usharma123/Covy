@@ -263,6 +263,9 @@ else
               add_filtered_test "$package" "shard_e2e" "shard"
               add_filtered_test "$package" "shard_update_e2e" "shard_update"
               ;;
+            crates/covy-cli/tests/support/shard_plan.rs)
+              add_filtered_test "$package" "shard_e2e" "shard"
+              ;;
             crates/covy-cli/tests/testmap_e2e.rs)
               add_filtered_test "$package" "testmap_e2e" "testmap"
               ;;

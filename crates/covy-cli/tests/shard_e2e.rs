@@ -1,16 +1,18 @@
 #[path = "support/shard.rs"]
 mod shard;
+#[path = "support/shard_plan.rs"]
+mod shard_plan;
 
 use predicates::prelude::*;
 use shard::covy_cmd;
+use shard_plan::{write_basic_tasks_file, write_tests_file, write_tier_tasks_file};
 use tempfile::TempDir;
 
 #[test]
 fn test_shard_plan_json_and_file_outputs() {
     let dir = TempDir::new().unwrap();
-    let tests_file = dir.path().join("tests.txt");
+    let tests_file = write_tests_file(dir.path(), "tests.txt", "t1\nt2\nt3\n");
     let out_dir = dir.path().join("shards");
-    std::fs::write(&tests_file, "t1\nt2\nt3\n").unwrap();
 
     covy_cmd()
         .args([
@@ -37,12 +39,11 @@ fn test_shard_plan_json_and_file_outputs() {
 #[test]
 fn test_shard_plan_supports_python_nodeids() {
     let dir = TempDir::new().unwrap();
-    let tests_file = dir.path().join("py-tests.txt");
-    std::fs::write(
-        &tests_file,
+    let tests_file = write_tests_file(
+        dir.path(),
+        "py-tests.txt",
         "tests/test_mod.py::test_one\ntests/test_mod.py::test_two\n",
-    )
-    .unwrap();
+    );
 
     covy_cmd()
         .args([
@@ -63,15 +64,7 @@ fn test_shard_plan_supports_python_nodeids() {
 #[test]
 fn test_shard_plan_supports_tasks_json() {
     let dir = TempDir::new().unwrap();
-    let tasks_file = dir.path().join("tasks.json");
-    let payload = serde_json::json!({
-        "schema_version": 1,
-        "tasks": [
-            {"id": "com.foo.BarTest", "selector": "com.foo.BarTest", "est_ms": 1000},
-            {"id": "tests/test_mod.py::test_one", "selector": "tests/test_mod.py::test_one", "est_ms": 800}
-        ]
-    });
-    std::fs::write(&tasks_file, serde_json::to_string(&payload).unwrap()).unwrap();
+    let tasks_file = write_basic_tasks_file(dir.path());
 
     covy_cmd()
         .args([
@@ -92,8 +85,7 @@ fn test_shard_plan_supports_tasks_json() {
 #[test]
 fn test_shard_plan_accepts_whale_lpt_algorithm() {
     let dir = TempDir::new().unwrap();
-    let tests_file = dir.path().join("tests.txt");
-    std::fs::write(&tests_file, "com.foo.A\ncom.foo.B\ncom.foo.C\n").unwrap();
+    let tests_file = write_tests_file(dir.path(), "tests.txt", "com.foo.A\ncom.foo.B\ncom.foo.C\n");
 
     covy_cmd()
         .args([
@@ -116,8 +108,7 @@ fn test_shard_plan_accepts_whale_lpt_algorithm() {
 #[test]
 fn test_shard_plan_rejects_invalid_algorithm() {
     let dir = TempDir::new().unwrap();
-    let tests_file = dir.path().join("tests.txt");
-    std::fs::write(&tests_file, "com.foo.A\n").unwrap();
+    let tests_file = write_tests_file(dir.path(), "tests.txt", "com.foo.A\n");
 
     covy_cmd()
         .args([
@@ -138,15 +129,7 @@ fn test_shard_plan_rejects_invalid_algorithm() {
 #[test]
 fn test_shard_plan_pr_tier_excludes_slow_tagged_tasks() {
     let dir = TempDir::new().unwrap();
-    let tasks_file = dir.path().join("tasks.json");
-    let payload = serde_json::json!({
-        "schema_version": 1,
-        "tasks": [
-            {"id": "fast-test", "selector": "fast-test", "est_ms": 1000, "tags": ["unit"]},
-            {"id": "slow-test", "selector": "slow-test", "est_ms": 2000, "tags": ["slow"]}
-        ]
-    });
-    std::fs::write(&tasks_file, serde_json::to_string(&payload).unwrap()).unwrap();
+    let tasks_file = write_tier_tasks_file(dir.path());
 
     covy_cmd()
         .args([
@@ -169,15 +152,7 @@ fn test_shard_plan_pr_tier_excludes_slow_tagged_tasks() {
 #[test]
 fn test_shard_plan_nightly_tier_keeps_slow_tagged_tasks() {
     let dir = TempDir::new().unwrap();
-    let tasks_file = dir.path().join("tasks.json");
-    let payload = serde_json::json!({
-        "schema_version": 1,
-        "tasks": [
-            {"id": "fast-test", "selector": "fast-test", "est_ms": 1000, "tags": ["unit"]},
-            {"id": "slow-test", "selector": "slow-test", "est_ms": 2000, "tags": ["slow"]}
-        ]
-    });
-    std::fs::write(&tasks_file, serde_json::to_string(&payload).unwrap()).unwrap();
+    let tasks_file = write_tier_tasks_file(dir.path());
 
     covy_cmd()
         .args([
