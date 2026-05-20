@@ -753,6 +753,9 @@ else
             crates/suite-cli/tests/context_correlate_e2e.rs)
               add_filtered_test "$package" "context_correlate_e2e" "context_correlate_cli"
               ;;
+            crates/suite-cli/tests/support/context_correlate.rs)
+              add_filtered_test "$package" "context_correlate_e2e" "context_correlate_cli"
+              ;;
             crates/suite-cli/tests/stack_build_e2e.rs)
               add_filtered_test "$package" "stack_build_e2e" "stack_build_cli"
               ;;
