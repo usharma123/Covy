@@ -1,34 +1,20 @@
 #![cfg(unix)]
 
-use assert_cmd::Command;
+#[path = "support/setup_runtime_hooks.rs"]
+mod setup_runtime_hooks;
+
 use predicates::prelude::*;
 use serde_json::Value;
+use setup_runtime_hooks::{doctor_command, run_setup};
 use std::fs;
 use tempfile::TempDir;
-
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
 
 #[test]
 fn test_setup_runtime_hooks_copilot_writes_instructions_and_pretool_hook() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
 
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "setup",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--runtime",
-            "copilot",
-            "--yes",
-        ])
-        .assert()
-        .success();
+    run_setup(root.path(), home.path(), "copilot");
 
     assert!(root
         .path()
@@ -47,17 +33,7 @@ fn test_setup_runtime_hooks_copilot_writes_instructions_and_pretool_hook() {
     assert!(command.contains(" hook copilot "));
     assert!(command.contains(root.path().to_str().unwrap()));
 
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "doctor",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--agent",
-            "copilot",
-        ])
+    doctor_command(root.path(), home.path(), "copilot")
         .assert()
         .success()
         .stdout(predicate::str::contains("copilot_hook_config"));
@@ -68,20 +44,7 @@ fn test_setup_runtime_hooks_opencode_writes_instructions_and_rewrite_plugin() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
 
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "setup",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--runtime",
-            "opencode",
-            "--yes",
-        ])
-        .assert()
-        .success();
+    run_setup(root.path(), home.path(), "opencode");
 
     assert!(root.path().join("AGENTS.md").exists());
     let plugin_path = home
@@ -94,17 +57,7 @@ fn test_setup_runtime_hooks_opencode_writes_instructions_and_rewrite_plugin() {
     assert!(plugin.contains("Packet28 rewrite"));
     assert!(plugin.contains("tool.execute.before"));
 
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "doctor",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--agent",
-            "opencode",
-        ])
+    doctor_command(root.path(), home.path(), "opencode")
         .assert()
         .success()
         .stdout(predicate::str::contains("opencode_plugin"));
@@ -115,20 +68,7 @@ fn test_setup_runtime_hooks_hermes_writes_instructions_plugin_and_config() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
 
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "setup",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--runtime",
-            "hermes",
-            "--yes",
-        ])
-        .assert()
-        .success();
+    run_setup(root.path(), home.path(), "hermes");
 
     assert!(root.path().join("AGENTS.md").exists());
     let plugin_dir = home
@@ -143,17 +83,7 @@ fn test_setup_runtime_hooks_hermes_writes_instructions_plugin_and_config() {
     assert!(manifest.contains("packet28-rewrite"));
     assert!(config.contains("packet28-rewrite"));
 
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "doctor",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--agent",
-            "hermes",
-        ])
+    doctor_command(root.path(), home.path(), "hermes")
         .assert()
         .success()
         .stdout(predicate::str::contains("hermes_plugin"));
@@ -164,20 +94,7 @@ fn test_setup_runtime_hooks_gemini_writes_before_tool_hook_and_prompt() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
 
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "setup",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--runtime",
-            "gemini",
-            "--yes",
-        ])
-        .assert()
-        .success();
+    run_setup(root.path(), home.path(), "gemini");
 
     assert!(root.path().join("GEMINI.md").exists());
     let settings_path = home.path().join(".gemini").join("settings.json");
@@ -190,17 +107,7 @@ fn test_setup_runtime_hooks_gemini_writes_before_tool_hook_and_prompt() {
     assert!(command.contains(" hook gemini "));
     assert!(command.contains(root.path().to_str().unwrap()));
 
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .env("PATH", "/usr/bin:/bin")
-        .args([
-            "doctor",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--agent",
-            "gemini",
-        ])
+    doctor_command(root.path(), home.path(), "gemini")
         .assert()
         .success()
         .stdout(predicate::str::contains("gemini_hook_config"))
