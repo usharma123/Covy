@@ -1,41 +1,16 @@
-use assert_cmd::Command;
+#[path = "support/ingest.rs"]
+mod ingest;
+
+use ingest::{covy_cmd, fixture, ingest_fixture};
 use predicates::prelude::*;
-use std::path::PathBuf;
 use tempfile::TempDir;
-
-fn covy_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("covy")
-}
-
-fn fixture(rel: &str) -> String {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    workspace
-        .join("tests")
-        .join("fixtures")
-        .join(rel)
-        .to_string_lossy()
-        .to_string()
-}
 
 #[test]
 fn test_ingest_lcov() {
     let dir = TempDir::new().unwrap();
     let output = dir.path().join("coverage.bin");
 
-    covy_cmd()
-        .args([
-            "ingest",
-            &fixture("lcov/basic.info"),
-            "--output",
-            output.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    ingest_fixture("lcov/basic.info", &output);
 
     assert!(output.exists());
 }
@@ -45,15 +20,7 @@ fn test_ingest_then_report() {
     let dir = TempDir::new().unwrap();
     let state_file = dir.path().join("state.bin");
 
-    covy_cmd()
-        .args([
-            "ingest",
-            &fixture("lcov/basic.info"),
-            "--output",
-            state_file.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    ingest_fixture("lcov/basic.info", &state_file);
 
     covy_cmd()
         .args([
@@ -85,15 +52,7 @@ fn test_ingest_cobertura() {
     let dir = TempDir::new().unwrap();
     let output = dir.path().join("coverage.bin");
 
-    covy_cmd()
-        .args([
-            "ingest",
-            &fixture("cobertura/basic.xml"),
-            "--output",
-            output.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    ingest_fixture("cobertura/basic.xml", &output);
 
     assert!(output.exists());
 }
@@ -103,15 +62,7 @@ fn test_ingest_jacoco() {
     let dir = TempDir::new().unwrap();
     let output = dir.path().join("coverage.bin");
 
-    covy_cmd()
-        .args([
-            "ingest",
-            &fixture("jacoco/basic.xml"),
-            "--output",
-            output.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    ingest_fixture("jacoco/basic.xml", &output);
 
     assert!(output.exists());
 }
@@ -121,15 +72,7 @@ fn test_ingest_gocov() {
     let dir = TempDir::new().unwrap();
     let output = dir.path().join("coverage.bin");
 
-    covy_cmd()
-        .args([
-            "ingest",
-            &fixture("gocov/basic.out"),
-            "--output",
-            output.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
+    ingest_fixture("gocov/basic.out", &output);
 
     assert!(output.exists());
 }
