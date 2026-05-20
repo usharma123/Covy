@@ -668,6 +668,9 @@ else
             crates/suite-cli/tests/test_impact_e2e.rs)
               add_filtered_test "$package" "test_impact_e2e" "test_impact_cli"
               ;;
+            crates/suite-cli/tests/support/test_impact.rs)
+              add_filtered_test "$package" "test_impact_e2e" "test_impact_cli"
+              ;;
             crates/suite-cli/tests/via_daemon_e2e.rs)
               add_filtered_test "$package" "via_daemon_e2e" "via_daemon_cli"
               ;;
