@@ -320,6 +320,16 @@ else
             crates/suite-cli/tests/agent_cli_e2e.rs)
               add_filtered_test "$package" "agent_cli_e2e" "agent_cli"
               ;;
+            crates/suite-cli/tests/agent_handoff_e2e.rs|crates/suite-cli/tests/support/mcp_io.rs)
+              add_filtered_test "$package" "agent_handoff_e2e" "agent_handoff"
+              ;;
+            crates/suite-cli/tests/support/agent.rs)
+              add_filtered_test "$package" "agent_cli_e2e" "agent_cli"
+              ;;
+            crates/suite-cli/tests/support/agent_core.rs)
+              add_filtered_test "$package" "agent_cli_e2e" "agent_cli"
+              add_filtered_test "$package" "agent_handoff_e2e" "agent_handoff"
+              ;;
             crates/suite-cli/tests/daemon_lifecycle_e2e.rs)
               add_filtered_test "$package" "daemon_lifecycle_e2e" "daemon_lifecycle_cli"
               ;;
