@@ -274,6 +274,9 @@ else
             crates/suite-cli/tests/memory_cli_e2e.rs)
               add_filtered_test "$package" "memory_cli_e2e" "memory_cli"
               ;;
+            crates/suite-cli/tests/memory_maintenance_e2e.rs)
+              add_filtered_test "$package" "memory_maintenance_e2e" "memory_maintenance"
+              ;;
             crates/suite-cli/tests/mcp_memory_e2e.rs)
               add_filtered_test "$package" "mcp_memory_e2e" "mcp_memory"
               ;;
