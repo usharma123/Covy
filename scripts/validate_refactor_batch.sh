@@ -414,6 +414,10 @@ else
             crates/suite-cli/tests/mcp_proxy_e2e.rs)
               add_filtered_test "$package" "mcp_proxy_e2e" "mcp_proxy_cli"
               ;;
+            crates/suite-cli/tests/support/mcp_proxy.rs)
+              add_filtered_test "$package" "mcp_proxy_cache_e2e" "mcp_proxy_cache"
+              add_filtered_test "$package" "mcp_proxy_e2e" "mcp_proxy_cli"
+              ;;
             crates/suite-cli/src/cmd_wakeup.rs)
               add_filtered_package "$package" "test_wakeup_scopes_context_by_path_symbol_and_intent"
               ;;
