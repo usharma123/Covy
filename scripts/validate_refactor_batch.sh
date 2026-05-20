@@ -328,6 +328,9 @@ else
             crates/suite-cli/tests/governed_workflow_e2e.rs)
               add_filtered_test "$package" "governed_workflow_e2e" "governed_workflow"
               ;;
+            crates/suite-cli/tests/support/governed_workflow.rs)
+              add_filtered_test "$package" "governed_workflow_e2e" "governed_workflow"
+              ;;
             crates/suite-cli/tests/rewrite_e2e.rs)
               add_filtered_test "$package" "rewrite_e2e" "top_level_rewrite"
               ;;
