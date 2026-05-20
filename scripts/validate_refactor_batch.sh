@@ -702,18 +702,29 @@ else
             crates/suite-cli/tests/map_proxy_profiles_e2e.rs)
               add_filtered_test "$package" "map_proxy_profiles_e2e" "map_proxy_profiles"
               ;;
+            crates/suite-cli/tests/map_proxy_profiles_proxy_e2e.rs)
+              add_filtered_test "$package" "map_proxy_profiles_proxy_e2e" "map_proxy_profiles_proxy"
+              ;;
             crates/suite-cli/tests/support/map_proxy.rs)
               add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               add_filtered_test "$package" "map_proxy_cache_e2e" "map_proxy_cache"
+              add_filtered_test "$package" "map_proxy_formats_e2e" "map_proxy_cli"
+              add_filtered_test "$package" "map_proxy_profiles_e2e" "map_proxy_profiles"
+              add_filtered_test "$package" "map_proxy_profiles_proxy_e2e" "map_proxy_profiles_proxy"
+              ;;
+            crates/suite-cli/tests/support/map_proxy_repo.rs)
+              add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               add_filtered_test "$package" "map_proxy_formats_e2e" "map_proxy_cli"
               add_filtered_test "$package" "map_proxy_profiles_e2e" "map_proxy_profiles"
               ;;
             crates/suite-cli/tests/support/map_proxy_packet.rs)
               add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               add_filtered_test "$package" "map_proxy_profiles_e2e" "map_proxy_profiles"
+              add_filtered_test "$package" "map_proxy_profiles_proxy_e2e" "map_proxy_profiles_proxy"
               ;;
             crates/suite-cli/tests/support/map_proxy_payload.rs)
               add_filtered_test "$package" "map_proxy_profiles_e2e" "map_proxy_profiles"
+              add_filtered_test "$package" "map_proxy_profiles_proxy_e2e" "map_proxy_profiles_proxy"
               ;;
             crates/suite-cli/tests/mcp_proxy_cache_e2e.rs)
               add_filtered_test "$package" "mcp_proxy_cache_e2e" "mcp_proxy_cache"

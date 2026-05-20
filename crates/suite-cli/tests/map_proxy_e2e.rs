@@ -2,9 +2,12 @@
 mod map_proxy;
 #[path = "support/map_proxy_packet.rs"]
 mod map_proxy_packet;
+#[path = "support/map_proxy_repo.rs"]
+mod map_proxy_repo;
 
-use map_proxy::{suite_cmd, write_repo_fixture};
+use map_proxy::suite_cmd;
 use map_proxy_packet::parse_packet_wrapper;
+use map_proxy_repo::write_repo_fixture;
 use serde_json::Value;
 use tempfile::TempDir;
 
