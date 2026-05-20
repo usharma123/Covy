@@ -1,38 +1,17 @@
-use assert_cmd::Command;
+#[path = "support/run_reducer.rs"]
+mod run_reducer;
+
 use predicates::prelude::*;
+#[cfg(unix)]
+use run_reducer::{prepended_path, write_executable_script};
+use run_reducer::{suite_cmd, write_cargo_fixture};
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::path::Path;
 use tempfile::TempDir;
-
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
-
-#[cfg(unix)]
-fn write_executable_script(path: &Path, content: &str) {
-    fs::write(path, content).unwrap();
-    let mut perms = fs::metadata(path).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).unwrap();
-}
 
 #[test]
 fn test_run_reducer_reduces_cargo_check() {
     let root = TempDir::new().unwrap();
-    fs::write(
-        root.path().join("Cargo.toml"),
-        "[package]\nname = \"p28-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(root.path().join("src")).unwrap();
-    fs::write(
-        root.path().join("src/lib.rs"),
-        "pub fn ok() -> bool { true }\n",
-    )
-    .unwrap();
+    write_cargo_fixture(root.path());
 
     suite_cmd()
         .current_dir(root.path())
@@ -67,11 +46,7 @@ fn test_run_reducer_reduces_tree_command() {
         &bin_dir.path().join("tree"),
         "#!/bin/sh\nprintf 'src\\n├── lib.rs\\n└── bin\\n    └── cli.rs\\n\\n1 directory, 2 files\\n'\n",
     );
-    let path_env = format!(
-        "{}:{}",
-        bin_dir.path().display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = prepended_path(bin_dir.path());
 
     suite_cmd()
         .current_dir(root.path())
@@ -109,11 +84,7 @@ fn test_run_reducer_reduces_npm_test_and_pytest() {
         &bin_dir.path().join("pytest"),
         "#!/bin/sh\nprintf '2 passed in 0.01s\\n'\n",
     );
-    let path_env = format!(
-        "{}:{}",
-        bin_dir.path().display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let path_env = prepended_path(bin_dir.path());
 
     suite_cmd()
         .current_dir(root.path())
