@@ -1,7 +1,6 @@
 mod support;
 
 use serde_json::json;
-use std::fs;
 use std::io::BufReader;
 use std::process::Stdio;
 use support::mcp::{
@@ -14,13 +13,6 @@ use tempfile::TempDir;
 fn test_mcp_context_transcript_wakeup_and_learn_project() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    fs::write(
-        root.path().join("Cargo.toml"),
-        "[package]\nname = \"mcp-learn-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\nserde = \"1\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(root.path().join("src")).unwrap();
-    fs::write(root.path().join("src/lib.rs"), "pub fn fixture() {}\n").unwrap();
 
     let mut child = packet28_process()
         .current_dir(root.path())
@@ -235,34 +227,6 @@ fn test_mcp_context_transcript_wakeup_and_learn_project() {
     assert_eq!(
         wakeup["result"]["structuredContent"]["memories"][0]["project"].as_str(),
         Some("mcp-project-b")
-    );
-
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":10,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.learn_project",
-                "arguments":{"directory":root.path().to_str().unwrap(), "name":"McpLearnFixture", "memoir":"McpLearnMemoir", "limit":5}
-            }
-        }),
-    );
-    let learned = read_mcp_message_for_id(&mut stdout, 10);
-    assert_eq!(
-        learned["result"]["structuredContent"]["project_name"].as_str(),
-        Some("McpLearnFixture")
-    );
-    assert_eq!(
-        learned["result"]["structuredContent"]["memoir_name"].as_str(),
-        Some("McpLearnMemoir")
-    );
-    assert!(
-        learned["result"]["structuredContent"]["total_concepts"]
-            .as_u64()
-            .unwrap()
-            >= 3
     );
 
     let _ = child.kill();

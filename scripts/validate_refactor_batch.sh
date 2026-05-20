@@ -395,6 +395,9 @@ else
             crates/suite-cli/tests/mcp_context_transcript_e2e.rs)
               add_filtered_test "$package" "mcp_context_transcript_e2e" "mcp_context_transcript"
               ;;
+            crates/suite-cli/tests/mcp_context_learn_e2e.rs)
+              add_filtered_test "$package" "mcp_context_learn_e2e" "mcp_context_learn"
+              ;;
             crates/suite-cli/tests/mcp_graph_e2e.rs)
               add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
               ;;
@@ -409,6 +412,7 @@ else
               add_filtered_test "$package" "mcp_memory_maintenance_e2e" "mcp_memory_maintenance"
               add_filtered_test "$package" "mcp_context_e2e" "mcp_context"
               add_filtered_test "$package" "mcp_context_transcript_e2e" "mcp_context_transcript"
+              add_filtered_test "$package" "mcp_context_learn_e2e" "mcp_context_learn"
               add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
               add_filtered_test "$package" "mcp_graph_distill_e2e" "mcp_graph_distill"
               add_filtered_test "$package" "mcp_memory_pending_e2e" "mcp_memory_pending"
