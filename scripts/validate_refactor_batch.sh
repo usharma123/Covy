@@ -488,8 +488,12 @@ else
             crates/suite-cli/tests/daemon_task_e2e.rs)
               add_filtered_test "$package" "daemon_task_e2e" "daemon_task_cli"
               ;;
-            crates/suite-cli/tests/support/daemon_task.rs)
+            crates/suite-cli/tests/daemon_task_launch_e2e.rs)
+              add_filtered_test "$package" "daemon_task_launch_e2e" "daemon_task_cli"
+              ;;
+            crates/suite-cli/tests/support/daemon_task.rs|crates/suite-cli/tests/support/daemon_task_core.rs|crates/suite-cli/tests/support/daemon_task_mcp.rs|crates/suite-cli/tests/support/daemon_task_seed.rs)
               add_filtered_test "$package" "daemon_task_e2e" "daemon_task_cli"
+              add_filtered_test "$package" "daemon_task_launch_e2e" "daemon_task_cli"
               ;;
             crates/suite-cli/tests/support/daemon_task_submit.rs)
               add_filtered_test "$package" "daemon_task_submit_normalize_e2e" "daemon_task_submit_normalize"
