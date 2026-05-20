@@ -460,6 +460,9 @@ else
             crates/suite-cli/tests/mcp_context_e2e.rs)
               add_filtered_test "$package" "mcp_context_e2e" "mcp_context"
               ;;
+            crates/suite-cli/tests/support/mcp_context.rs)
+              add_filtered_test "$package" "mcp_context_e2e" "mcp_context"
+              ;;
             crates/suite-cli/tests/mcp_context_transcript_e2e.rs)
               add_filtered_test "$package" "mcp_context_transcript_e2e" "mcp_context_transcript"
               ;;
