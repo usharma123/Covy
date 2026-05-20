@@ -3,7 +3,7 @@ set -eo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/validate_refactor_batch.sh [--full] [--tests-only] [--list] [package[:filter] ...] [package:test-target:filter ...]
+Usage: scripts/validate_refactor_batch.sh [--full] [--tests-only] [--parallel-tests] [--timings] [--list] [package[:filter] ...] [package:test-target:filter ...]
 
 Runs the fast validation gate for an incremental refactor batch:
   - cargo fmt --check
@@ -14,6 +14,10 @@ Pass --full to run workspace clippy and cargo test --all-features after the
 targeted package tests.
 Pass --tests-only for the quick edit loop; it skips fmt and clippy but keeps the
 same targeted cargo test selection. Do not use it as the pre-commit gate.
+Pass --parallel-tests for local feedback when a selected test group is known to
+be safe under the Rust test harness' default parallelism. The default remains
+serial filtered tests for deterministic pre-commit validation.
+Pass --timings to print elapsed seconds for each cargo command.
 Pass --list to print the selected commands without running them.
 Pass package names or package:filter pairs to override auto-detection.
 USAGE
@@ -21,6 +25,8 @@ USAGE
 
 full=false
 tests_only=false
+parallel_tests=false
+timings=false
 list_only=false
 declare -a requested=()
 for arg in "$@"; do
@@ -30,6 +36,12 @@ for arg in "$@"; do
       ;;
     --tests-only)
       tests_only=true
+      ;;
+    --parallel-tests)
+      parallel_tests=true
+      ;;
+    --timings)
+      timings=true
       ;;
     --list)
       list_only=true
@@ -49,7 +61,44 @@ run_cmd() {
   if [[ "$list_only" == true ]]; then
     return 0
   fi
+  if [[ "$timings" == false ]]; then
+    "$@"
+    return
+  fi
+
+  local started_at="$SECONDS"
+  set +e
   "$@"
+  local status=$?
+  set -e
+  local elapsed=$((SECONDS - started_at))
+  if ((status == 0)); then
+    echo "ok (${elapsed}s): $*"
+  else
+    echo "failed (${elapsed}s): $*" >&2
+  fi
+  return "$status"
+}
+
+run_filtered_cargo_test() {
+  local package="$1"
+  local test_target="$2"
+  local filter="$3"
+  if [[ "$parallel_tests" == true ]]; then
+    run_cmd cargo test -p "$package" --test "$test_target" --all-features "$filter"
+  else
+    run_cmd cargo test -p "$package" --test "$test_target" --all-features "$filter" -- --test-threads=1
+  fi
+}
+
+run_filtered_package_test() {
+  local package="$1"
+  local filter="$2"
+  if [[ "$parallel_tests" == true ]]; then
+    run_cmd cargo test -p "$package" --all-features "$filter"
+  else
+    run_cmd cargo test -p "$package" --all-features "$filter" -- --test-threads=1
+  fi
 }
 
 package_name_for_dir() {
@@ -513,6 +562,9 @@ else
     for spec in "${lint_test_specs[@]}"; do
       package="${spec%%:*}"
       test_target="${spec#*:}"
+      if has_item "$package" "${lint_packages[@]}"; then
+        continue
+      fi
       run_cmd cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
     done
   elif ((${#lint_test_specs[@]})); then
@@ -534,7 +586,7 @@ for spec in "${filtered_test_specs[@]}"; do
   if has_item "$package" "${full_packages[@]}" || has_item "$package" "${lib_packages[@]}"; then
     continue
   fi
-  run_cmd cargo test -p "$package" --test "$test_target" --all-features "$filter" -- --test-threads=1
+  run_filtered_cargo_test "$package" "$test_target" "$filter"
 done
 
 for spec in "${filtered_specs[@]}"; do
@@ -543,7 +595,7 @@ for spec in "${filtered_specs[@]}"; do
   if has_item "$package" "${full_packages[@]}" || has_item "$package" "${lib_packages[@]}"; then
     continue
   fi
-  run_cmd cargo test -p "$package" --all-features "$filter" -- --test-threads=1
+  run_filtered_package_test "$package" "$filter"
 done
 
 for package in "${lib_packages[@]}"; do

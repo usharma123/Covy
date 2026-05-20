@@ -58,6 +58,8 @@ Execution rules:
   - scripts/validate_refactor_batch.sh
 - During local iteration, use the test-only selector before the commit gate when the full lint path is slowing feedback:
   - scripts/validate_refactor_batch.sh --tests-only
+  - scripts/validate_refactor_batch.sh --tests-only --parallel-tests
+  - scripts/validate_refactor_batch.sh --timings
   - scripts/validate_refactor_batch.sh --list
 - The fast batch gate must run:
   - cargo fmt --check
