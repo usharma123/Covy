@@ -642,8 +642,15 @@ else
             crates/suite-cli/tests/diff_analyze_e2e.rs)
               add_filtered_test "$package" "diff_analyze_e2e" "diff_analyze_cli"
               ;;
+            crates/suite-cli/tests/diff_analyze_task_focus_e2e.rs)
+              add_filtered_test "$package" "diff_analyze_task_focus_e2e" "diff_analyze_cli_task_id"
+              ;;
             crates/suite-cli/tests/diff_analyze_governed_e2e.rs)
               add_filtered_test "$package" "diff_analyze_governed_e2e" "diff_analyze_governed"
+              ;;
+            crates/suite-cli/tests/support/diff_analyze.rs)
+              add_filtered_test "$package" "diff_analyze_e2e" "diff_analyze_cli"
+              add_filtered_test "$package" "diff_analyze_task_focus_e2e" "diff_analyze_cli_task_id"
               ;;
             crates/suite-cli/tests/test_impact_e2e.rs)
               add_filtered_test "$package" "test_impact_e2e" "test_impact_cli"
