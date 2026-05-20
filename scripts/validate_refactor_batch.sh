@@ -389,6 +389,9 @@ else
             crates/suite-cli/tests/run_raw_artifact_families_e2e.rs)
               add_filtered_test "$package" "run_raw_artifact_families_e2e" "run_raw_artifact_families"
               ;;
+            crates/suite-cli/tests/support/run_raw_artifact_families.rs)
+              add_filtered_test "$package" "run_raw_artifact_families_e2e" "run_raw_artifact_families"
+              ;;
             crates/suite-cli/tests/support/run_raw_artifact.rs)
               add_filtered_test "$package" "run_raw_artifact_e2e" "run_raw_artifact"
               add_filtered_test "$package" "run_raw_artifact_families_e2e" "run_raw_artifact_families"
