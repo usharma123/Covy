@@ -597,13 +597,19 @@ else
             crates/suite-cli/tests/context_via_daemon_e2e.rs)
               add_filtered_test "$package" "context_via_daemon_e2e" "context_via_daemon_cli"
               ;;
+            crates/suite-cli/tests/context_via_daemon_store_e2e.rs)
+              add_filtered_test "$package" "context_via_daemon_store_e2e" "context_via_daemon_cli"
+              ;;
             crates/suite-cli/tests/support/context_packet.rs)
               add_filtered_test "$package" "context_state_e2e" "context_state_cli"
               add_filtered_test "$package" "context_via_daemon_e2e" "context_via_daemon_cli"
               ;;
+            crates/suite-cli/tests/support/context_daemon_core.rs)
+              add_filtered_test "$package" "context_via_daemon_e2e" "context_via_daemon_cli"
+              add_filtered_test "$package" "context_via_daemon_store_e2e" "context_via_daemon_cli"
+              ;;
             crates/suite-cli/tests/support/context_daemon.rs)
               add_filtered_test "$package" "context_recall_daemon_e2e" "context_recall_daemon_cli"
-              add_filtered_test "$package" "context_via_daemon_e2e" "context_via_daemon_cli"
               ;;
             crates/suite-cli/tests/context_state_e2e.rs)
               add_filtered_test "$package" "context_state_e2e" "context_state_cli"

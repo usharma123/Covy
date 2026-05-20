@@ -1,15 +1,18 @@
-#[path = "support/context_daemon.rs"]
-mod context_daemon;
+#[path = "support/context_daemon_core.rs"]
+mod context_daemon_core;
 #[path = "support/context_packet.rs"]
 mod context_packet;
 
-use context_daemon::{
-    ensure_packet28d_built, init_repo, suite_cmd, write_context_packet, write_packet_value,
-};
+use context_daemon_core::{ensure_packet28d_built, init_repo, suite_cmd};
 use context_packet::{packet_payload, parse_packet_wrapper, write_state_event};
-use predicates::prelude::*;
 use serde_json::{json, Value};
+use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
+
+fn write_packet_value(path: &Path, value: &Value) {
+    fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+}
 
 #[test]
 #[cfg(unix)]
@@ -20,8 +23,6 @@ fn test_context_via_daemon_cli_non_assemble_smoke() {
     let diff = dir.path().join("diff.json");
     let impact = dir.path().join("impact.json");
     let event = dir.path().join("event.json");
-    let packet_a = dir.path().join("a.json");
-    let packet_b = dir.path().join("b.json");
 
     write_packet_value(
         &diff,
@@ -78,20 +79,6 @@ fn test_context_via_daemon_cli_non_assemble_smoke() {
   "symbols": [],
   "data": {"type": "focus_set"}
 }"#,
-    );
-    write_context_packet(
-        &packet_a,
-        "diffy",
-        "Diff gate",
-        "critical regression in coverage",
-        "src/lib.rs",
-    );
-    write_context_packet(
-        &packet_b,
-        "testy",
-        "Impact plan",
-        "selected tests for src/lib.rs",
-        "src/lib.rs",
     );
 
     let correlate_output = suite_cmd()
@@ -173,116 +160,6 @@ fn test_context_via_daemon_cli_non_assemble_smoke() {
             .and_then(Value::as_str),
         Some("task-state")
     );
-
-    suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "--via-daemon",
-            "context",
-            "assemble",
-            "--packet",
-            packet_a.to_str().unwrap(),
-            "--packet",
-            packet_b.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
-
-    let store_list_output = suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "--via-daemon",
-            "context",
-            "store",
-            "list",
-            "--root",
-            ".",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let store_list_value: Value = serde_json::from_slice(&store_list_output).unwrap();
-    let entries = store_list_value
-        .get("entries")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap();
-    assert!(!entries.is_empty());
-
-    let key = entries[0]
-        .get("cache_key")
-        .and_then(Value::as_str)
-        .unwrap()
-        .to_string();
-
-    suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "--via-daemon",
-            "context",
-            "store",
-            "get",
-            "--root",
-            ".",
-            "--key",
-            &key,
-            "--json",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(&key));
-
-    suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "--via-daemon",
-            "context",
-            "store",
-            "stats",
-            "--root",
-            ".",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"stats\""));
-
-    suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "--via-daemon",
-            "context",
-            "recall",
-            "--root",
-            ".",
-            "--query",
-            "critical regression",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "\"query\":\"critical regression\"",
-        ));
-
-    suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "--via-daemon",
-            "context",
-            "store",
-            "prune",
-            "--root",
-            ".",
-            "--all",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"report\""));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
