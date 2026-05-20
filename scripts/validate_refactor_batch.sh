@@ -180,6 +180,16 @@ else
             crates/covy-cli/tests/testmap_e2e.rs)
               add_filtered_test "$package" "testmap_e2e" "testmap"
               ;;
+            crates/packet28-search-cli/tests/e2e.rs)
+              add_filtered_test "$package" "e2e" "_"
+              ;;
+            crates/packet28-search-cli/tests/daemon_e2e.rs)
+              add_filtered_test "$package" "daemon_e2e" "daemon"
+              ;;
+            crates/packet28-search-cli/tests/support/mod.rs)
+              add_filtered_test "$package" "e2e" "_"
+              add_filtered_test "$package" "daemon_e2e" "daemon"
+              ;;
             crates/suite-cli/src/cmd_verify.rs)
               add_filtered_package "$package" "verify"
               ;;
