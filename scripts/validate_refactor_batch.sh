@@ -143,8 +143,8 @@ else
             crates/suite-cli/tests/verify_e2e.rs)
               add_filtered_test "$package" "verify_e2e" "verify"
               ;;
-            crates/suite-cli/tests/e2e_smoke.rs)
-              add_lint_test "$package" "e2e_smoke"
+            crates/suite-cli/tests/governed_workflow_e2e.rs)
+              add_filtered_test "$package" "governed_workflow_e2e" "governed_workflow"
               ;;
             crates/suite-cli/tests/rewrite_e2e.rs)
               add_filtered_test "$package" "rewrite_e2e" "top_level_rewrite"

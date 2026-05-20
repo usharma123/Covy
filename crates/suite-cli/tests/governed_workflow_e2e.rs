@@ -109,7 +109,7 @@ fn packet_payload(wrapper: &Value) -> &Value {
 }
 
 #[test]
-fn test_suite_governed_local_workflow_smoke() {
+fn test_governed_workflow_cli_runs_local_packet_flow() {
     let dir = TempDir::new().unwrap();
     let manifest = dir.path().join("manifest.jsonl");
     let testmap = dir.path().join("testmap.bin");

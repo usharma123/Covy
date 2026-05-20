@@ -82,7 +82,7 @@ CASES: tuple[Case, ...] = (
         needle="packet28.search",
         expected_paths=(
             "crates/suite-cli/src/cmd_mcp.rs",
-            "crates/suite-cli/tests/e2e_smoke.rs",
+            "crates/suite-cli/tests/setup_e2e.rs",
         ),
         rg_paths=("crates",),
     ),

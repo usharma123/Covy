@@ -5,7 +5,7 @@ This experiment exercises `Packet28 plan validate` on the Packet28 repository wi
 Inputs:
 
 - `coverage.lcov` marks `crates/suite-cli/src/cmd_plan.rs` as an uncovered changed target.
-- `testmap-manifest.jsonl` maps that file to the existing `crates/suite-cli/tests/e2e_smoke.rs` test path.
+- `testmap-manifest.jsonl` maps that file to the existing `crates/suite-cli/tests/governed_workflow_e2e.rs` test path.
 - `steps-mapped.json` reads the CLI file, edits it, then runs the mapped test path.
 
 Commands:
