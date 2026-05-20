@@ -318,6 +318,12 @@ else
             crates/suite-cli/tests/runtime_backend_e2e.rs)
               add_filtered_test "$package" "runtime_backend_e2e" "runtime_backend_cli"
               ;;
+            crates/suite-cli/tests/runtime_backend_macos_e2e.rs)
+              add_filtered_test "$package" "runtime_backend_macos_e2e" "runtime_backend_macos"
+              ;;
+            crates/suite-cli/tests/support/runtime_backend.rs)
+              add_filtered_test "$package" "runtime_backend_macos_e2e" "runtime_backend_macos"
+              ;;
             crates/suite-cli/tests/memory_pending_e2e.rs)
               add_filtered_test "$package" "memory_pending_e2e" "memory_pending"
               ;;
