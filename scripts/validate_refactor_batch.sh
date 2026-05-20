@@ -310,6 +310,13 @@ else
             crates/suite-cli/tests/gain_formats_e2e.rs)
               add_filtered_test "$package" "gain_formats_e2e" "savings_formats"
               ;;
+            crates/suite-cli/tests/gain_quota_graph_e2e.rs)
+              add_filtered_test "$package" "gain_quota_graph_e2e" "gain_quota_graph"
+              ;;
+            crates/suite-cli/tests/support/gain.rs)
+              add_filtered_test "$package" "gain_formats_e2e" "savings_formats"
+              add_filtered_test "$package" "gain_quota_graph_e2e" "gain_quota_graph"
+              ;;
             crates/suite-cli/tests/run_raw_artifact_e2e.rs)
               add_filtered_test "$package" "run_raw_artifact_e2e" "run_raw_artifact"
               ;;
