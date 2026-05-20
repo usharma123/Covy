@@ -1,103 +1,17 @@
-use assert_cmd::Command;
-use predicates::prelude::*;
-use serde_json::json;
-use std::fs;
-use std::path::PathBuf;
-use tempfile::TempDir;
+#[path = "support/dashboard.rs"]
+mod dashboard;
 
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
+use dashboard::{context_anomaly_history_fixture, seed_dashboard_product_state, suite_cmd};
+use predicates::prelude::*;
+use std::fs;
+use tempfile::TempDir;
 
 #[test]
 fn test_dashboard_local_product_metrics() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    let trend_fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("docs")
-        .join("context-anomalies")
-        .join("history.jsonl");
-    std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(root.path())
-        .status()
-        .unwrap();
-    fs::write(root.path().join("tracked.txt"), "changed\n").unwrap();
-
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .args([
-            "run",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--json",
-            "git",
-            "status",
-            "--short",
-        ])
-        .assert()
-        .success();
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["memory", "store", "dashboard memory"])
-        .assert()
-        .success();
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["transcript", "append", "dashboard transcript context"])
-        .assert()
-        .success();
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["feedback", "record", "dashboard", "shows feedback"])
-        .assert()
-        .success();
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["graph", "link", "Dashboard", "Packet28"])
-        .assert()
-        .success();
-    let task_id = "task-dashboard-handoff";
-    for (context_version, body) in [
-        (
-            "ctx-dashboard-1",
-            "cargo test -p suite-cli dashboard_handoff_test $PACKET28_DASHBOARD_MISSING_ENV_12345",
-        ),
-        (
-            "ctx-dashboard-2",
-            "cargo test -p suite-cli dashboard_handoff_test",
-        ),
-        (
-            "ctx-dashboard-3",
-            "cargo test -p suite-cli dashboard_handoff_test $PACKET28_DASHBOARD_MISSING_ENV_12345",
-        ),
-    ] {
-        let path =
-            packet28_daemon_core::task_version_json_path(root.path(), task_id, context_version);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            serde_json::to_vec_pretty(&json!({
-                "context_version": context_version,
-                "artifact_id": context_version,
-                "brief": "## Task Objective\nDashboard handoff readiness.",
-                "sections": [{
-                    "id": "verification",
-                    "title": "Verification",
-                    "body": body
-                }],
-                "changed_paths_since_checkpoint": ["src/lib.rs"],
-                "next_action_summary": "surface dashboard handoff readiness"
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-    }
+    let trend_fixture = context_anomaly_history_fixture();
+    seed_dashboard_product_state(root.path(), home.path());
 
     suite_cmd()
         .current_dir(root.path())

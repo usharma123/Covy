@@ -530,6 +530,9 @@ else
             crates/suite-cli/tests/dashboard_e2e.rs)
               add_filtered_test "$package" "dashboard_e2e" "dashboard_local"
               ;;
+            crates/suite-cli/tests/support/dashboard.rs)
+              add_filtered_test "$package" "dashboard_e2e" "dashboard_local"
+              ;;
             crates/suite-cli/tests/doctor_e2e.rs)
               add_filtered_test "$package" "doctor_e2e" "doctor_cli"
               ;;
