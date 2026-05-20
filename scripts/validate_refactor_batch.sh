@@ -228,11 +228,15 @@ else
             crates/suite-cli/tests/mcp_memory_e2e.rs)
               add_filtered_test "$package" "mcp_memory_e2e" "mcp_memory"
               ;;
+            crates/suite-cli/tests/mcp_graph_e2e.rs)
+              add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
+              ;;
             crates/suite-cli/tests/mcp_memory_pending_e2e.rs)
               add_filtered_test "$package" "mcp_memory_pending_e2e" "mcp_memory_pending"
               ;;
             crates/suite-cli/tests/support/mod.rs|crates/suite-cli/tests/support/mcp.rs)
               add_filtered_test "$package" "mcp_memory_e2e" "mcp_memory"
+              add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
               add_filtered_test "$package" "mcp_memory_pending_e2e" "mcp_memory_pending"
               ;;
             crates/suite-cli/tests/mcp_handoff_e2e.rs)
