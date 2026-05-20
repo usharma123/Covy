@@ -1,26 +1,10 @@
-use assert_cmd::Command;
+#[path = "support/check.rs"]
+mod check;
+
+use check::{covy_cmd, fixture};
 use predicates::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tempfile::TempDir;
-
-fn covy_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("covy")
-}
-
-fn fixture(rel: &str) -> String {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    workspace
-        .join("tests")
-        .join("fixtures")
-        .join(rel)
-        .to_string_lossy()
-        .to_string()
-}
 
 fn setup_git_repo(dir: &Path) {
     let init_status = std::process::Command::new("git")
@@ -254,67 +238,4 @@ fn test_check_json_output_stays_on_stdout() {
         .success()
         .stdout(predicate::str::contains("\"passed\""))
         .stderr(predicate::str::contains("\"passed\"").not());
-}
-
-#[test]
-fn test_check_input_works_for_state_file() {
-    let dir = TempDir::new().unwrap();
-    let state_file = dir.path().join("state.bin");
-
-    covy_cmd()
-        .args([
-            "ingest",
-            &fixture("lcov/basic.info"),
-            "--output",
-            state_file.to_str().unwrap(),
-        ])
-        .assert()
-        .success();
-
-    covy_cmd()
-        .args([
-            "check",
-            "--input",
-            state_file.to_str().unwrap(),
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"passed\""));
-}
-
-#[test]
-fn test_check_rejects_conflicting_input_and_stdin() {
-    let dir = TempDir::new().unwrap();
-    let state_file = dir.path().join("state.bin");
-    std::fs::write(&state_file, "not-real-state").unwrap();
-
-    covy_cmd()
-        .args(["check", "--stdin", "--input", state_file.to_str().unwrap()])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Cannot combine --input with --stdin",
-        ));
-}
-
-#[test]
-fn test_check_missing_input_file_fails_with_usage_code() {
-    covy_cmd()
-        .args([
-            "check",
-            "--input",
-            "/definitely/missing/state.bin",
-            "--base",
-            "HEAD",
-            "--head",
-            "HEAD",
-        ])
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("No coverage data found"));
 }

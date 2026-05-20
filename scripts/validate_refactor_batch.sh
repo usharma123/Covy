@@ -214,6 +214,13 @@ else
             crates/covy-cli/tests/check_e2e.rs)
               add_filtered_test "$package" "check_e2e" "check"
               ;;
+            crates/covy-cli/tests/check_input_e2e.rs)
+              add_filtered_test "$package" "check_input_e2e" "check_input"
+              ;;
+            crates/covy-cli/tests/support/check.rs)
+              add_filtered_test "$package" "check_e2e" "check"
+              add_filtered_test "$package" "check_input_e2e" "check_input"
+              ;;
             crates/covy-cli/tests/ingest_e2e.rs)
               add_filtered_test "$package" "ingest_e2e" "ingest"
               ;;
