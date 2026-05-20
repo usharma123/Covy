@@ -353,6 +353,9 @@ else
             crates/suite-cli/tests/run_reducer_runtime_e2e.rs)
               add_filtered_test "$package" "run_reducer_runtime_e2e" "run_reducer_runtime"
               ;;
+            crates/suite-cli/tests/run_reducer_runtime_languages_e2e.rs)
+              add_filtered_test "$package" "run_reducer_runtime_languages_e2e" "run_reducer_runtime"
+              ;;
             crates/suite-cli/tests/runtime_backend_e2e.rs)
               add_filtered_test "$package" "runtime_backend_e2e" "runtime_backend_cli"
               ;;
