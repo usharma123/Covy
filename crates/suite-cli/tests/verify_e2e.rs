@@ -1,59 +1,10 @@
-use assert_cmd::Command;
+#[path = "support/verify.rs"]
+mod verify;
+
 use predicates::prelude::*;
-use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
-
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
-
-#[test]
-fn test_verify_filters_runs_inline_toml_tests() {
-    let root = TempDir::new().unwrap();
-    let home = root.path().join("home");
-    fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(root.path().join(".packet28")).unwrap();
-    fs::write(
-        root.path().join(".packet28").join("filters.toml"),
-        r#"
-schema_version = 1
-
-[filters.demo]
-match_command = "^demo-tool\\b"
-strip_lines_matching = ["^debug:"]
-on_empty = "demo-tool: ok"
-
-[[tests.demo]]
-name = "drops debug noise"
-input = """
-debug: first
-useful
-"""
-expected = "useful"
-"#,
-    )
-    .unwrap();
-
-    suite_cmd()
-        .current_dir(root.path())
-        .env("HOME", &home)
-        .args([
-            "verify",
-            "filters",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--json",
-            "--require-all",
-            "--trust",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"ok\":true"))
-        .stdout(predicate::str::contains("\"passed\":1"))
-        .stdout(predicate::str::contains("\"trusted_filters\""))
-        .stdout(predicate::str::contains("drops debug noise"));
-}
+use verify::suite_cmd;
 
 #[test]
 fn test_verify_experiments_checks_manifest_evidence() {
@@ -223,72 +174,4 @@ fn test_verify_experiments_checks_manifest_evidence() {
         .assert()
         .success()
         .stdout(predicate::str::contains("1 experiment(s) verified"));
-}
-
-#[test]
-fn test_verify_handoffs_reports_ci_summary_and_threshold() {
-    let root = TempDir::new().unwrap();
-    let task_id = "task-verify-handoffs";
-    for (context_version, body) in [
-        (
-            "ctx-ci-1",
-            "cargo test -p suite-cli ci_handoff_test $PACKET28_CI_MISSING_ENV_12345",
-        ),
-        ("ctx-ci-2", "cargo test -p suite-cli ci_handoff_test"),
-        (
-            "ctx-ci-3",
-            "cargo test -p suite-cli ci_handoff_test $PACKET28_CI_MISSING_ENV_12345",
-        ),
-    ] {
-        let path =
-            packet28_daemon_core::task_version_json_path(root.path(), task_id, context_version);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            &path,
-            serde_json::to_vec_pretty(&json!({
-                "context_version": context_version,
-                "artifact_id": context_version,
-                "brief": "## Task Objective\nCI handoff readiness.",
-                "sections": [{
-                    "id": "verification",
-                    "title": "Verification",
-                    "body": body
-                }],
-                "changed_paths_since_checkpoint": ["src/lib.rs"],
-                "next_action_summary": "verify CI handoff summary"
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-    }
-
-    suite_cmd()
-        .current_dir(root.path())
-        .args([
-            "verify",
-            "handoffs",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--json",
-        ])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("\"ok\":false"))
-        .stdout(predicate::str::contains("\"regression_count\":1"));
-
-    suite_cmd()
-        .current_dir(root.path())
-        .args([
-            "verify",
-            "handoffs",
-            "--root",
-            root.path().to_str().unwrap(),
-            "--max-regressions",
-            "1",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("handoff_latest_status=blocked"))
-        .stdout(predicate::str::contains("handoff_regression_count=1"))
-        .stdout(predicate::str::contains("handoff_ok=true"));
 }

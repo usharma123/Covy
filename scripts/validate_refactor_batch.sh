@@ -259,6 +259,17 @@ else
             crates/suite-cli/tests/verify_e2e.rs)
               add_filtered_test "$package" "verify_e2e" "verify"
               ;;
+            crates/suite-cli/tests/verify_filters_e2e.rs)
+              add_filtered_test "$package" "verify_filters_e2e" "verify_filters"
+              ;;
+            crates/suite-cli/tests/verify_handoffs_e2e.rs)
+              add_filtered_test "$package" "verify_handoffs_e2e" "verify_handoffs"
+              ;;
+            crates/suite-cli/tests/support/verify.rs)
+              add_filtered_test "$package" "verify_e2e" "verify"
+              add_filtered_test "$package" "verify_filters_e2e" "verify_filters"
+              add_filtered_test "$package" "verify_handoffs_e2e" "verify_handoffs"
+              ;;
             crates/suite-cli/tests/setup_e2e.rs)
               add_filtered_test "$package" "setup_e2e" "test_"
               ;;
