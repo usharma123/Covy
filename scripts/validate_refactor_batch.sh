@@ -171,6 +171,9 @@ else
             crates/covy-cli/tests/shard_e2e.rs)
               add_filtered_test "$package" "shard_e2e" "shard"
               ;;
+            crates/covy-cli/tests/testmap_e2e.rs)
+              add_filtered_test "$package" "testmap_e2e" "testmap"
+              ;;
             crates/suite-cli/src/cmd_verify.rs)
               add_filtered_package "$package" "verify"
               ;;
