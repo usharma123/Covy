@@ -159,6 +159,9 @@ else
             crates/covy-cli/tests/e2e_test.rs)
               add_filtered_test "$package" "e2e_test" "test_"
               ;;
+            crates/covy-cli/tests/ingest_e2e.rs)
+              add_filtered_test "$package" "ingest_e2e" "ingest"
+              ;;
             crates/covy-cli/tests/shard_e2e.rs)
               add_filtered_test "$package" "shard_e2e" "shard"
               ;;
