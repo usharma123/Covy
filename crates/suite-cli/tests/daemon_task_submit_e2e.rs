@@ -1,99 +1,10 @@
-use assert_cmd::Command;
+#[path = "support/daemon_task_submit.rs"]
+mod daemon_task_submit;
+
+use daemon_task_submit::{ensure_packet28d_built, setup_changed_repo, suite_cmd};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::Path;
-use std::sync::OnceLock;
 use tempfile::TempDir;
-
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
-
-fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
-    });
-}
-
-fn write_repo_fixture(root: &Path) {
-    let src = root.join("src");
-    fs::create_dir_all(&src).unwrap();
-    fs::write(
-        src.join("alpha.rs"),
-        r#"
-use crate::beta::Beta;
-
-fn alpha() {}
-struct Alpha;
-"#,
-    )
-    .unwrap();
-    fs::write(
-        src.join("beta.rs"),
-        r#"
-fn beta() {}
-enum Beta {
-  A,
-}
-"#,
-    )
-    .unwrap();
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
-}
-
-fn setup_changed_repo(root: &Path) {
-    write_repo_fixture(root);
-    git(root, &["init"]);
-    git(root, &["add", "src/alpha.rs", "src/beta.rs"]);
-    git(
-        root,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "init",
-        ],
-    );
-    fs::write(
-        root.join("src/alpha.rs"),
-        r#"
-use crate::beta::Beta;
-
-fn alpha() -> i32 { 2 }
-struct Alpha;
-"#,
-    )
-    .unwrap();
-    git(root, &["add", "src/alpha.rs"]);
-    git(
-        root,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "change alpha",
-        ],
-    );
-}
 
 #[test]
 #[cfg(unix)]
