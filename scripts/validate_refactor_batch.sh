@@ -472,6 +472,9 @@ else
             crates/suite-cli/tests/mcp_graph_e2e.rs)
               add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
               ;;
+            crates/suite-cli/tests/support/mcp_graph.rs)
+              add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
+              ;;
             crates/suite-cli/tests/mcp_graph_inspect_e2e.rs)
               add_filtered_test "$package" "mcp_graph_inspect_e2e" "mcp_graph_inspect"
               ;;

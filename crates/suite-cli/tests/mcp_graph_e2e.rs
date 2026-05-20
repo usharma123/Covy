@@ -1,68 +1,37 @@
+#[path = "support/mcp_graph.rs"]
+mod mcp_graph;
+
 mod support;
 
+use mcp_graph::McpGraphServer;
 use serde_json::json;
-use std::io::BufReader;
-use std::process::Stdio;
-use support::mcp::{
-    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id,
-    write_mcp_message,
-};
-use tempfile::TempDir;
 
 #[test]
 fn test_mcp_graph_tools_round_trip() {
-    let root = TempDir::new().unwrap();
-    let home = TempDir::new().unwrap();
-    let mut child = packet28_process()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .args(["mcp", "serve", "--root", root.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    let mut server = McpGraphServer::start();
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":2,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_create",
-                "arguments":{"name":"McpMemoir", "description":"MCP graph container"}
-            }
-        }),
+    let graph_memoir = server.call_tool(
+        2,
+        "packet28.graph_create",
+        json!({"name":"McpMemoir", "description":"MCP graph container"}),
     );
-    let graph_memoir = read_mcp_message_for_id(&mut stdout, 2);
     assert_eq!(
         graph_memoir["result"]["structuredContent"]["name"].as_str(),
         Some("McpMemoir")
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":3,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_add_concept",
-                "arguments":{
-                    "name":"Packet28",
-                    "description":"local context runtime",
-                    "memoir":"McpMemoir",
-                    "labels":["domain:context"],
-                    "confidence":0.91,
-                    "source_ids":["memory:mcp"]
-                }
-            }
+    let graph_concept = server.call_tool(
+        3,
+        "packet28.graph_add_concept",
+        json!({
+            "name":"Packet28",
+            "description":"local context runtime",
+            "memoir":"McpMemoir",
+            "labels":["domain:context"],
+            "confidence":0.91,
+            "source_ids":["memory:mcp"]
         }),
     );
-    let graph_concept = read_mcp_message_for_id(&mut stdout, 3);
     assert_eq!(
         graph_concept["result"]["structuredContent"]["name"].as_str(),
         Some("Packet28")
@@ -76,73 +45,41 @@ fn test_mcp_graph_tools_round_trip() {
         Some(0.91)
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":4,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_refine",
-                "arguments":{"name":"Packet28", "description":"local context runtime with reducers"}
-            }
-        }),
+    let refined = server.call_tool(
+        4,
+        "packet28.graph_refine",
+        json!({"name":"Packet28", "description":"local context runtime with reducers"}),
     );
-    let refined = read_mcp_message_for_id(&mut stdout, 4);
     assert_eq!(
         refined["result"]["structuredContent"]["description"].as_str(),
         Some("local context runtime with reducers")
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":5,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_add_concept",
-                "arguments":{"name":"Reducers", "memoir":"McpMemoir"}
-            }
-        }),
+    let reducer_concept = server.call_tool(
+        5,
+        "packet28.graph_add_concept",
+        json!({"name":"Reducers", "memoir":"McpMemoir"}),
     );
-    let reducer_concept = read_mcp_message_for_id(&mut stdout, 5);
     assert_eq!(
         reducer_concept["result"]["structuredContent"]["memoir_name"].as_str(),
         Some("McpMemoir")
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":6,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_link",
-                "arguments":{"source":"Packet28", "target":"Reducers", "relation":"uses"}
-            }
-        }),
+    let relation = server.call_tool(
+        6,
+        "packet28.graph_link",
+        json!({"source":"Packet28", "target":"Reducers", "relation":"uses"}),
     );
-    let relation = read_mcp_message_for_id(&mut stdout, 6);
     assert_eq!(
         relation["result"]["structuredContent"]["relation"].as_str(),
         Some("uses")
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":7,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_search",
-                "arguments":{"query":"context", "memoir":"McpMemoir", "label":"domain:context", "limit": 5}
-            }
-        }),
+    let graph_search = server.call_tool(
+        7,
+        "packet28.graph_search",
+        json!({"query":"context", "memoir":"McpMemoir", "label":"domain:context", "limit": 5}),
     );
-    let graph_search = read_mcp_message_for_id(&mut stdout, 7);
     assert!(!graph_search["result"]["structuredContent"]
         .as_array()
         .unwrap()
@@ -152,37 +89,17 @@ fn test_mcp_graph_tools_round_trip() {
         Some("McpMemoir")
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":8,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_export",
-                "arguments":{"format":"dot", "limit": 5}
-            }
-        }),
+    let graph_export = server.call_tool(
+        8,
+        "packet28.graph_export",
+        json!({"format":"dot", "limit": 5}),
     );
-    let graph_export = read_mcp_message_for_id(&mut stdout, 8);
     assert_eq!(
         graph_export["result"]["structuredContent"]["format"].as_str(),
         Some("dot")
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":9,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_stats",
-                "arguments":{}
-            }
-        }),
-    );
-    let graph_stats = read_mcp_message_for_id(&mut stdout, 9);
+    let graph_stats = server.call_tool(9, "packet28.graph_stats", json!({}));
     assert!(
         graph_stats["result"]["structuredContent"]["relation_count"]
             .as_i64()
@@ -190,12 +107,5 @@ fn test_mcp_graph_tools_round_trip() {
             >= 1
     );
 
-    let _ = child.kill();
-    let _ = child.wait();
-    packet28_cmd()
-        .current_dir(root.path())
-        .env("HOME", home.path())
-        .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
-        .assert()
-        .success();
+    server.stop();
 }
