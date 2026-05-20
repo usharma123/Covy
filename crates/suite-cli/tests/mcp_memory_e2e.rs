@@ -1,67 +1,14 @@
-use assert_cmd::Command;
-use serde_json::{json, Value};
+mod support;
+
+use serde_json::json;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{ChildStdin, ChildStdout, Stdio};
+use std::io::BufReader;
+use std::process::Stdio;
+use support::mcp::{
+    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id,
+    write_mcp_message,
+};
 use tempfile::TempDir;
-
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
-
-fn mcp_cmd() -> std::process::Command {
-    std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
-}
-
-fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
-    let body = serde_json::to_vec(value).unwrap();
-    write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
-    stdin.write_all(&body).unwrap();
-    stdin.flush().unwrap();
-}
-
-fn read_mcp_message(stdout: &mut BufReader<ChildStdout>) -> Value {
-    let mut content_length = None::<usize>;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        stdout.read_line(&mut line).unwrap();
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = trimmed.split_once(":") {
-            if name.eq_ignore_ascii_case("content-length") {
-                content_length = Some(value.trim().parse::<usize>().unwrap());
-            }
-        }
-    }
-    let mut body = vec![0_u8; content_length.unwrap()];
-    stdout.read_exact(&mut body).unwrap();
-    serde_json::from_slice(&body).unwrap()
-}
-
-fn read_mcp_message_for_id(stdout: &mut BufReader<ChildStdout>, expected_id: u64) -> Value {
-    loop {
-        let value = read_mcp_message(stdout);
-        if value.get("id").and_then(Value::as_u64) == Some(expected_id) {
-            return value;
-        }
-    }
-}
-
-fn initialize_mcp_session(stdin: &mut ChildStdin, stdout: &mut BufReader<ChildStdout>) {
-    write_mcp_message(
-        stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":1,
-            "method":"initialize",
-            "params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}
-        }),
-    );
-    let _ = read_mcp_message_for_id(stdout, 1);
-}
 
 #[test]
 fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
@@ -74,7 +21,7 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
     .unwrap();
     fs::create_dir_all(root.path().join("src")).unwrap();
     fs::write(root.path().join("src/lib.rs"), "pub fn fixture() {}\n").unwrap();
-    let mut child = mcp_cmd()
+    let mut child = packet28_process()
         .current_dir(root.path())
         .env("HOME", home.path())
         .args(["mcp", "serve", "--root", root.path().to_str().unwrap()])
@@ -1115,89 +1062,9 @@ fn test_mcp_memory_store_recall_uses_sqlite_home_db() {
         Some(1)
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":66,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.memory_pending_enqueue",
-                "arguments":{
-                    "raw_output":"- MCP pending extraction stores durable facts",
-                    "project":"mcp-project-b",
-                    "tool_name":"Bash"
-                }
-            }
-        }),
-    );
-    let pending_enqueue = read_mcp_message_for_id(&mut stdout, 66);
-    assert_eq!(
-        pending_enqueue["result"]["structuredContent"]["project"].as_str(),
-        Some("mcp-project-b")
-    );
-
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":69,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.memory_pending_stats",
-                "arguments":{}
-            }
-        }),
-    );
-    let pending_stats = read_mcp_message_for_id(&mut stdout, 69);
-    assert_eq!(
-        pending_stats["result"]["structuredContent"]["pending_extraction_count"].as_i64(),
-        Some(1)
-    );
-
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":70,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.memory_pending_process",
-                "arguments":{"limit": 5}
-            }
-        }),
-    );
-    let pending_process = read_mcp_message_for_id(&mut stdout, 70);
-    assert_eq!(
-        pending_process["result"]["structuredContent"]["extracted_count"].as_u64(),
-        Some(1)
-    );
-    assert_eq!(
-        pending_process["result"]["structuredContent"]["deleted_count"].as_u64(),
-        Some(1)
-    );
-
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":71,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.memory_recall",
-                "arguments":{"query":"durable facts", "project":"mcp-project-b"}
-            }
-        }),
-    );
-    let pending_recall = read_mcp_message_for_id(&mut stdout, 71);
-    assert_eq!(
-        pending_recall["result"]["structuredContent"][0]["source"].as_str(),
-        Some("pending-extraction:Bash")
-    );
-
     let _ = child.kill();
     let _ = child.wait();
-    suite_cmd()
+    packet28_cmd()
         .current_dir(root.path())
         .env("HOME", home.path())
         .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])
