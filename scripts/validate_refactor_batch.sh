@@ -168,6 +168,9 @@ else
             crates/suite-cli/tests/setup_index_e2e.rs)
               add_filtered_test "$package" "setup_index_e2e" "setup_index"
               ;;
+            crates/suite-cli/tests/setup_windsurf_e2e.rs)
+              add_filtered_test "$package" "setup_windsurf_e2e" "setup_windsurf"
+              ;;
             crates/suite-cli/tests/governed_workflow_e2e.rs)
               add_filtered_test "$package" "governed_workflow_e2e" "governed_workflow"
               ;;
