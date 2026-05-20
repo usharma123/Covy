@@ -252,6 +252,9 @@ else
             crates/suite-cli/tests/mcp_native_e2e.rs)
               add_filtered_test "$package" "mcp_native_e2e" "mcp_native"
               ;;
+            crates/suite-cli/tests/mcp_native_stdio_e2e.rs)
+              add_filtered_test "$package" "mcp_native_stdio_e2e" "mcp_native_stdio"
+              ;;
             crates/suite-cli/tests/feedback_graph_e2e.rs)
               add_filtered_test "$package" "feedback_graph_e2e" "feedback_graph"
               ;;

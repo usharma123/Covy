@@ -2,7 +2,7 @@ use assert_cmd::Command;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::OnceLock;
 use tempfile::TempDir;
@@ -33,13 +33,6 @@ fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     stdin.flush().unwrap();
 }
 
-fn write_mcp_message_newline(stdin: &mut ChildStdin, value: &Value) {
-    let body = serde_json::to_vec(value).unwrap();
-    stdin.write_all(&body).unwrap();
-    stdin.write_all(b"\n").unwrap();
-    stdin.flush().unwrap();
-}
-
 fn read_mcp_message(stdout: &mut BufReader<ChildStdout>) -> Value {
     let mut content_length = None::<usize>;
     let mut line = String::new();
@@ -59,19 +52,6 @@ fn read_mcp_message(stdout: &mut BufReader<ChildStdout>) -> Value {
     let mut body = vec![0_u8; content_length.unwrap()];
     stdout.read_exact(&mut body).unwrap();
     serde_json::from_slice(&body).unwrap()
-}
-
-fn read_mcp_message_newline(stdout: &mut BufReader<ChildStdout>) -> Value {
-    let mut line = String::new();
-    loop {
-        line.clear();
-        stdout.read_line(&mut line).unwrap();
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        return serde_json::from_str(trimmed).unwrap();
-    }
 }
 
 fn read_mcp_message_for_id(stdout: &mut BufReader<ChildStdout>, expected_id: u64) -> Value {
@@ -107,17 +87,6 @@ fn initialize_mcp_session(stdin: &mut ChildStdin, stdout: &mut BufReader<ChildSt
         }),
     );
     let _ = read_mcp_message_for_id(stdout, 1);
-}
-
-fn workspace_packet28_version() -> String {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = workspace.parent().unwrap().parent().unwrap();
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    let value: toml::Value = toml::from_str(&manifest).unwrap();
-    value["workspace"]["package"]["version"]
-        .as_str()
-        .unwrap()
-        .to_string()
 }
 
 fn write_intention_via_mcp(
@@ -570,74 +539,4 @@ fn test_mcp_native_tools_return_slim_results_and_fetch_full_artifacts() {
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
         .assert()
         .success();
-}
-
-#[test]
-#[cfg(unix)]
-fn test_mcp_native_accepts_newline_json_stdio() {
-    ensure_packet28d_built();
-    let dir = TempDir::new().unwrap();
-    init_repo(dir.path());
-
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(dir.path());
-
-    write_mcp_message_newline(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":1,
-            "method":"initialize",
-            "params":{"protocolVersion":"2025-11-25","capabilities":{"roots":{}},"clientInfo":{"name":"claude-code","version":"2.1.72"}}
-        }),
-    );
-    let initialize = read_mcp_message_newline(&mut stdout);
-    assert_eq!(initialize["result"]["serverInfo"]["name"], "Packet28");
-    assert_eq!(
-        initialize["result"]["serverInfo"]["version"],
-        workspace_packet28_version()
-    );
-    assert_eq!(initialize["result"]["protocolVersion"], "2024-11-05");
-    assert!(initialize["result"]["capabilities"]["experimental"].is_null());
-
-    write_mcp_message_newline(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":2,
-            "method":"tools/list"
-        }),
-    );
-    let tools = read_mcp_message_newline(&mut stdout);
-    assert!(tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "packet28_write_intention"));
-    assert!(tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "packet28_search"));
-    assert!(tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "packet28_read_regions"));
-    assert!(tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "packet28_glob"));
-    assert!(tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "packet28_fetch_tool_result"));
-    assert!(!tools["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "packet28_sync"));
-
-    let _ = child.kill();
 }
