@@ -344,6 +344,9 @@ else
             crates/suite-cli/tests/run_filter_e2e.rs)
               add_filtered_test "$package" "run_filter_e2e" "run_filter"
               ;;
+            crates/suite-cli/tests/run_filter_builtin_e2e.rs)
+              add_filtered_test "$package" "run_filter_builtin_e2e" "run_filter"
+              ;;
             crates/suite-cli/tests/run_reducer_e2e.rs)
               add_filtered_test "$package" "run_reducer_e2e" "run_reducer"
               ;;
