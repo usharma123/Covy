@@ -453,6 +453,13 @@ else
             crates/suite-cli/tests/hypothesis_cli_e2e.rs)
               add_filtered_test "$package" "hypothesis_cli_e2e" "hypothesis_cli"
               ;;
+            crates/suite-cli/tests/hypothesis_mcp_e2e.rs)
+              add_filtered_test "$package" "hypothesis_mcp_e2e" "hypothesis_mcp"
+              ;;
+            crates/suite-cli/tests/support/hypothesis.rs)
+              add_filtered_test "$package" "hypothesis_cli_e2e" "hypothesis_cli"
+              add_filtered_test "$package" "hypothesis_mcp_e2e" "hypothesis_mcp"
+              ;;
             crates/suite-cli/tests/discover_e2e.rs)
               add_filtered_test "$package" "discover_e2e" "discover_"
               ;;
