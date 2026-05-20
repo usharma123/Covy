@@ -666,6 +666,16 @@ else
             crates/suite-cli/tests/stack_build_e2e.rs)
               add_filtered_test "$package" "stack_build_e2e" "stack_build_cli"
               ;;
+            crates/suite-cli/tests/stack_build_via_daemon_e2e.rs)
+              add_filtered_test "$package" "stack_build_via_daemon_e2e" "stack_build_cli_via_daemon"
+              ;;
+            crates/suite-cli/tests/support/stack_build.rs)
+              add_filtered_test "$package" "stack_build_e2e" "stack_build_cli"
+              add_filtered_test "$package" "stack_build_via_daemon_e2e" "stack_build_cli_via_daemon"
+              ;;
+            crates/suite-cli/tests/support/stack_build_daemon.rs)
+              add_filtered_test "$package" "stack_build_via_daemon_e2e" "stack_build_cli_via_daemon"
+              ;;
             crates/suite-cli/tests/map_proxy_e2e.rs)
               add_filtered_test "$package" "map_proxy_e2e" "map_proxy_cli"
               ;;
