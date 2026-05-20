@@ -434,6 +434,9 @@ else
             crates/suite-cli/tests/mcp_context_transcript_e2e.rs)
               add_filtered_test "$package" "mcp_context_transcript_e2e" "mcp_context_transcript"
               ;;
+            crates/suite-cli/tests/support/mcp_context_transcript.rs)
+              add_filtered_test "$package" "mcp_context_transcript_e2e" "mcp_context_transcript"
+              ;;
             crates/suite-cli/tests/mcp_context_learn_e2e.rs)
               add_filtered_test "$package" "mcp_context_learn_e2e" "mcp_context_learn"
               ;;
