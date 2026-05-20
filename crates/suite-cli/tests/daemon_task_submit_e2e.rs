@@ -1,9 +1,14 @@
 #[path = "support/daemon_task_submit.rs"]
 mod daemon_task_submit;
+#[path = "support/daemon_task_submit_map.rs"]
+mod daemon_task_submit_map;
 
-use daemon_task_submit::{ensure_packet28d_built, setup_changed_repo, suite_cmd};
-use serde_json::{json, Value};
-use std::fs;
+use daemon_task_submit::{
+    ensure_packet28d_built, setup_changed_repo, suite_cmd, task_spec_with_file_watch,
+    write_task_spec,
+};
+use daemon_task_submit_map::map_repo_step;
+use serde_json::Value;
 use tempfile::TempDir;
 
 #[test]
@@ -13,52 +18,15 @@ fn test_daemon_task_submit_returns_watch_id_and_watch_list() {
     let dir = TempDir::new().unwrap();
     setup_changed_repo(dir.path());
     let spec_path = dir.path().join("task-spec.json");
-    fs::write(
+    write_task_spec(
         &spec_path,
-        serde_json::to_string_pretty(&json!({
-            "task_id": "task-watch",
-            "sequence": {
-                "steps": [
-                    {
-                        "id": "map",
-                        "target": "mapy.repo",
-                        "depends_on": [],
-                        "input_packets": [],
-                        "policy_context": {
-                            "task_id": "task-watch"
-                        },
-                        "reducer_input": {
-                            "repo_root": dir.path(),
-                            "focus_paths": [],
-                            "focus_symbols": [],
-                            "max_files": 10,
-                            "max_symbols": 20,
-                            "include_tests": false
-                        },
-                        "budget": {}
-                    }
-                ],
-                "budget": {},
-                "reactive": {
-                    "enabled": true,
-                    "task_id": "task-watch",
-                    "append_focused_map": true
-                }
-            },
-            "watches": [
-                {
-                    "kind": "file",
-                    "task_id": "task-watch",
-                    "root": dir.path(),
-                    "paths": ["src"],
-                    "include_globs": ["src/**"],
-                    "exclude_globs": []
-                }
-            ]
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        task_spec_with_file_watch(
+            dir.path(),
+            "task-watch",
+            vec![map_repo_step(dir.path(), "task-watch", Some("map"), &[])],
+            "file",
+        ),
+    );
 
     suite_cmd()
         .args(["daemon", "start", "--root", dir.path().to_str().unwrap()])

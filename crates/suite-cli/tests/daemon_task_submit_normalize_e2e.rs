@@ -2,10 +2,15 @@
 
 #[path = "support/daemon_task_submit.rs"]
 mod daemon_task_submit;
+#[path = "support/daemon_task_submit_map.rs"]
+mod daemon_task_submit_map;
 
-use daemon_task_submit::{ensure_packet28d_built, setup_changed_repo, suite_cmd};
-use serde_json::{json, Value};
-use std::fs;
+use daemon_task_submit::{
+    ensure_packet28d_built, setup_changed_repo, suite_cmd, task_spec_with_file_watch,
+    write_task_spec,
+};
+use daemon_task_submit_map::map_repo_step;
+use serde_json::Value;
 use tempfile::TempDir;
 
 #[test]
@@ -14,69 +19,18 @@ fn test_daemon_task_submit_normalize_autofills_blank_and_missing_step_ids() {
     let dir = TempDir::new().unwrap();
     setup_changed_repo(dir.path());
     let spec_path = dir.path().join("task-spec.json");
-    fs::write(
+    write_task_spec(
         &spec_path,
-        serde_json::to_string_pretty(&json!({
-            "task_id": "task-autofill",
-            "sequence": {
-                "steps": [
-                    {
-                        "id": "",
-                        "target": "mapy.repo",
-                        "depends_on": [],
-                        "input_packets": [],
-                        "policy_context": {
-                            "task_id": "task-autofill"
-                        },
-                        "reducer_input": {
-                            "repo_root": dir.path(),
-                            "focus_paths": [],
-                            "focus_symbols": [],
-                            "max_files": 10,
-                            "max_symbols": 20,
-                            "include_tests": false
-                        },
-                        "budget": {}
-                    },
-                    {
-                        "target": "mapy.repo",
-                        "depends_on": ["mapy-repo-0"],
-                        "input_packets": [],
-                        "policy_context": {
-                            "task_id": "task-autofill"
-                        },
-                        "reducer_input": {
-                            "repo_root": dir.path(),
-                            "focus_paths": [],
-                            "focus_symbols": [],
-                            "max_files": 10,
-                            "max_symbols": 20,
-                            "include_tests": false
-                        },
-                        "budget": {}
-                    }
-                ],
-                "budget": {},
-                "reactive": {
-                    "enabled": true,
-                    "task_id": "task-autofill",
-                    "append_focused_map": true
-                }
-            },
-            "watches": [
-                {
-                    "kind": "File",
-                    "task_id": "task-autofill",
-                    "root": dir.path(),
-                    "paths": ["src"],
-                    "include_globs": ["src/**"],
-                    "exclude_globs": []
-                }
-            ]
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        task_spec_with_file_watch(
+            dir.path(),
+            "task-autofill",
+            vec![
+                map_repo_step(dir.path(), "task-autofill", Some(""), &[]),
+                map_repo_step(dir.path(), "task-autofill", None, &["mapy-repo-0"]),
+            ],
+            "File",
+        ),
+    );
 
     suite_cmd()
         .args(["daemon", "start", "--root", dir.path().to_str().unwrap()])
@@ -151,51 +105,15 @@ fn test_daemon_task_submit_normalize_accepts_pascal_case_watch_kind() {
     let dir = TempDir::new().unwrap();
     setup_changed_repo(dir.path());
     let spec_path = dir.path().join("task-spec-watch.json");
-    fs::write(
+    write_task_spec(
         &spec_path,
-        serde_json::to_string_pretty(&json!({
-            "task_id": "task-watch-kind",
-            "sequence": {
-                "steps": [
-                    {
-                        "target": "mapy.repo",
-                        "depends_on": [],
-                        "input_packets": [],
-                        "policy_context": {
-                            "task_id": "task-watch-kind"
-                        },
-                        "reducer_input": {
-                            "repo_root": dir.path(),
-                            "focus_paths": [],
-                            "focus_symbols": [],
-                            "max_files": 10,
-                            "max_symbols": 20,
-                            "include_tests": false
-                        },
-                        "budget": {}
-                    }
-                ],
-                "budget": {},
-                "reactive": {
-                    "enabled": true,
-                    "task_id": "task-watch-kind",
-                    "append_focused_map": true
-                }
-            },
-            "watches": [
-                {
-                    "kind": "File",
-                    "task_id": "task-watch-kind",
-                    "root": dir.path(),
-                    "paths": ["src"],
-                    "include_globs": ["src/**"],
-                    "exclude_globs": []
-                }
-            ]
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        task_spec_with_file_watch(
+            dir.path(),
+            "task-watch-kind",
+            vec![map_repo_step(dir.path(), "task-watch-kind", None, &[])],
+            "File",
+        ),
+    );
 
     suite_cmd()
         .args(["daemon", "start", "--root", dir.path().to_str().unwrap()])

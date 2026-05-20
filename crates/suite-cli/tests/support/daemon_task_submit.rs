@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -91,4 +92,38 @@ struct Alpha;
             "change alpha",
         ],
     );
+}
+
+pub fn task_spec_with_file_watch(
+    root: &Path,
+    task_id: &str,
+    steps: Vec<Value>,
+    watch_kind: &str,
+) -> Value {
+    json!({
+        "task_id": task_id,
+        "sequence": {
+            "steps": steps,
+            "budget": {},
+            "reactive": {
+                "enabled": true,
+                "task_id": task_id,
+                "append_focused_map": true
+            }
+        },
+        "watches": [
+            {
+                "kind": watch_kind,
+                "task_id": task_id,
+                "root": root,
+                "paths": ["src"],
+                "include_globs": ["src/**"],
+                "exclude_globs": []
+            }
+        ]
+    })
+}
+
+pub fn write_task_spec(path: &Path, spec: Value) {
+    fs::write(path, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
 }

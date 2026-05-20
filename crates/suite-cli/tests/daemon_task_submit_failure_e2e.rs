@@ -1,9 +1,11 @@
 #[path = "support/daemon_task_submit.rs"]
 mod daemon_task_submit;
 
-use daemon_task_submit::{ensure_packet28d_built, setup_changed_repo, suite_cmd};
+use daemon_task_submit::{
+    ensure_packet28d_built, setup_changed_repo, suite_cmd, task_spec_with_file_watch,
+    write_task_spec,
+};
 use serde_json::{json, Value};
-use std::fs;
 use tempfile::TempDir;
 
 #[test]
@@ -13,43 +15,23 @@ fn test_daemon_task_submit_failed_submit_cleans_up_task_and_watches() {
     let dir = TempDir::new().unwrap();
     setup_changed_repo(dir.path());
     let spec_path = dir.path().join("bad-task-spec.json");
-    fs::write(
+    write_task_spec(
         &spec_path,
-        serde_json::to_string_pretty(&json!({
-            "task_id": "task-invalid",
-            "sequence": {
-                "steps": [
-                    {
-                        "id": "",
-                        "target": "nope.reducer",
-                        "depends_on": [],
-                        "input_packets": [],
-                        "policy_context": {},
-                        "reducer_input": {},
-                        "budget": {}
-                    }
-                ],
-                "budget": {},
-                "reactive": {
-                    "enabled": true,
-                    "task_id": "task-invalid",
-                    "append_focused_map": true
-                }
-            },
-            "watches": [
-                {
-                    "kind": "file",
-                    "task_id": "task-invalid",
-                    "root": dir.path(),
-                    "paths": ["src"],
-                    "include_globs": ["src/**"],
-                    "exclude_globs": []
-                }
-            ]
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        task_spec_with_file_watch(
+            dir.path(),
+            "task-invalid",
+            vec![json!({
+                "id": "",
+                "target": "nope.reducer",
+                "depends_on": [],
+                "input_packets": [],
+                "policy_context": {},
+                "reducer_input": {},
+                "budget": {}
+            })],
+            "file",
+        ),
+    );
 
     suite_cmd()
         .args(["daemon", "start", "--root", dir.path().to_str().unwrap()])
