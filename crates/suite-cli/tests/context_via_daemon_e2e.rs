@@ -1,39 +1,15 @@
 #[path = "support/context_daemon.rs"]
 mod context_daemon;
+#[path = "support/context_packet.rs"]
+mod context_packet;
 
 use context_daemon::{
     ensure_packet28d_built, init_repo, suite_cmd, write_context_packet, write_packet_value,
 };
+use context_packet::{packet_payload, parse_packet_wrapper, write_state_event};
 use predicates::prelude::*;
 use serde_json::{json, Value};
-use std::fs;
-use std::path::Path;
 use tempfile::TempDir;
-
-fn write_state_event(path: &Path, content: &str) {
-    fs::write(path, content).unwrap();
-}
-
-fn parse_packet_wrapper(output: &[u8], packet_type: &str) -> Value {
-    let value: Value = serde_json::from_slice(output).unwrap();
-    assert_eq!(
-        value.get("schema_version").and_then(Value::as_str),
-        Some("suite.packet.v1")
-    );
-    assert_eq!(
-        value.get("packet_type").and_then(Value::as_str),
-        Some(packet_type)
-    );
-    assert!(value.get("packet").is_some());
-    value
-}
-
-fn packet_payload(wrapper: &Value) -> &Value {
-    wrapper
-        .get("packet")
-        .and_then(|packet| packet.get("payload"))
-        .expect("packet.payload should exist")
-}
 
 #[test]
 #[cfg(unix)]
