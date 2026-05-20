@@ -1,11 +1,10 @@
-use assert_cmd::Command;
+#[path = "support/feedback_graph.rs"]
+mod feedback_graph;
+
+use feedback_graph::suite_cmd;
 use predicates::prelude::*;
 use rusqlite::Connection;
 use tempfile::TempDir;
-
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
 
 #[test]
 fn test_feedback_graph_transcript_wakeup_filters_project_recall() {

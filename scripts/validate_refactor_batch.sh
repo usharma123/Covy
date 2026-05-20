@@ -408,10 +408,18 @@ else
             crates/suite-cli/tests/mcp_native_stdio_e2e.rs)
               add_filtered_test "$package" "mcp_native_stdio_e2e" "mcp_native_stdio"
               ;;
+            crates/suite-cli/tests/feedback_cli_e2e.rs)
+              add_filtered_test "$package" "feedback_cli_e2e" "feedback_cli"
+              ;;
             crates/suite-cli/tests/feedback_graph_e2e.rs)
               add_filtered_test "$package" "feedback_graph_e2e" "feedback_graph"
               ;;
             crates/suite-cli/tests/feedback_graph_transcript_e2e.rs)
+              add_filtered_test "$package" "feedback_graph_transcript_e2e" "feedback_graph_transcript"
+              ;;
+            crates/suite-cli/tests/support/feedback_graph.rs)
+              add_filtered_test "$package" "feedback_cli_e2e" "feedback_cli"
+              add_filtered_test "$package" "feedback_graph_e2e" "feedback_graph"
               add_filtered_test "$package" "feedback_graph_transcript_e2e" "feedback_graph_transcript"
               ;;
             crates/suite-cli/tests/transcript_e2e.rs)

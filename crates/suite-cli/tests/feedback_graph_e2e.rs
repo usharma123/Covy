@@ -1,15 +1,13 @@
-use assert_cmd::Command;
+#[path = "support/feedback_graph.rs"]
+mod feedback_graph;
+
+use feedback_graph::suite_cmd;
 use predicates::prelude::*;
-use rusqlite::Connection;
 use std::fs;
 use tempfile::TempDir;
 
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
-
 #[test]
-fn test_feedback_graph_cli_use_sqlite() {
+fn test_feedback_graph_cli_learn_and_graph_use_sqlite() {
     let home = TempDir::new().unwrap();
     let project = TempDir::new().unwrap();
     fs::write(
@@ -19,74 +17,6 @@ fn test_feedback_graph_cli_use_sqlite() {
     .unwrap();
     fs::create_dir_all(project.path().join("src")).unwrap();
     fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
-    suite_cmd()
-        .env("HOME", home.path())
-        .args([
-            "feedback",
-            "record",
-            "test subject",
-            "prefer focused reducers",
-            "--topic",
-            "reducers",
-            "--context",
-            "test context",
-            "--predicted",
-            "verbose reducers",
-            "--reason",
-            "too noisy",
-            "--source",
-            "cli-test",
-            "--project",
-            "coverage-b",
-            "--json",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("prefer focused reducers"))
-        .stdout(predicate::str::contains("\"topic\":\"reducers\""))
-        .stdout(predicate::str::contains("\"project\":\"coverage-b\""))
-        .stdout(predicate::str::contains(
-            "\"predicted\":\"verbose reducers\"",
-        ));
-
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["feedback", "search", "focused", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("prefer focused reducers"));
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["feedback", "list", "--topic", "reducers", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"topic\":\"reducers\""));
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["feedback", "apply", "1", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"applied_count\":1"));
-    let conn = Connection::open(home.path().join(".packet28").join("packet28.db")).unwrap();
-    let feedback_fts_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM feedback_fts_all", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(feedback_fts_rows, 1);
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["feedback", "stats", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"feedback_count\":1"))
-        .stdout(predicate::str::contains("\"applied_count\":1"));
-    suite_cmd()
-        .env("HOME", home.path())
-        .args(["feedback", "delete", "1", "--json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"deleted\":1"));
 
     suite_cmd()
         .env("HOME", home.path())
