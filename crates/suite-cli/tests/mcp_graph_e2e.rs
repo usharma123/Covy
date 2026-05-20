@@ -190,68 +190,6 @@ fn test_mcp_graph_tools_round_trip() {
             >= 1
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":10,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_show",
-                "arguments":{"name":"McpMemoir", "limit": 5}
-            }
-        }),
-    );
-    let graph_show = read_mcp_message_for_id(&mut stdout, 10);
-    assert_eq!(
-        graph_show["result"]["structuredContent"]["memoir"]["name"].as_str(),
-        Some("McpMemoir")
-    );
-    assert_eq!(
-        graph_show["result"]["structuredContent"]["concepts"][0]["revision"].as_i64(),
-        Some(2)
-    );
-
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":11,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_inspect",
-                "arguments":{"limit": 5}
-            }
-        }),
-    );
-    let graph = read_mcp_message_for_id(&mut stdout, 11);
-    assert!(graph["result"]["structuredContent"]["concepts"].is_array());
-
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":12,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.graph_inspect_concept",
-                "arguments":{"name":"Packet28", "memoir":"McpMemoir", "depth": 1}
-            }
-        }),
-    );
-    let graph_concept_inspect = read_mcp_message_for_id(&mut stdout, 12);
-    assert_eq!(
-        graph_concept_inspect["result"]["structuredContent"]["concept"]["name"].as_str(),
-        Some("Packet28")
-    );
-    assert!(
-        graph_concept_inspect["result"]["structuredContent"]["neighbors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|concept| concept["name"] == "Reducers")
-    );
-
     let _ = child.kill();
     let _ = child.wait();
     packet28_cmd()

@@ -407,6 +407,9 @@ else
             crates/suite-cli/tests/mcp_graph_e2e.rs)
               add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
               ;;
+            crates/suite-cli/tests/mcp_graph_inspect_e2e.rs)
+              add_filtered_test "$package" "mcp_graph_inspect_e2e" "mcp_graph_inspect"
+              ;;
             crates/suite-cli/tests/mcp_graph_distill_e2e.rs)
               add_filtered_test "$package" "mcp_graph_distill_e2e" "mcp_graph_distill"
               ;;
@@ -420,6 +423,7 @@ else
               add_filtered_test "$package" "mcp_context_transcript_e2e" "mcp_context_transcript"
               add_filtered_test "$package" "mcp_context_learn_e2e" "mcp_context_learn"
               add_filtered_test "$package" "mcp_graph_e2e" "mcp_graph"
+              add_filtered_test "$package" "mcp_graph_inspect_e2e" "mcp_graph_inspect"
               add_filtered_test "$package" "mcp_graph_distill_e2e" "mcp_graph_distill"
               add_filtered_test "$package" "mcp_memory_pending_e2e" "mcp_memory_pending"
               add_filtered_test "$package" "setup_index_e2e" "setup_index"
