@@ -566,6 +566,9 @@ else
             crates/suite-cli/tests/guard_e2e.rs)
               add_filtered_test "$package" "guard_e2e" "guard_cli"
               ;;
+            crates/suite-cli/tests/guard_validate_e2e.rs)
+              add_filtered_test "$package" "guard_validate_e2e" "guard_cli"
+              ;;
             crates/suite-cli/tests/context_assemble_e2e.rs)
               add_filtered_test "$package" "context_assemble_e2e" "context_assemble_cli"
               ;;
