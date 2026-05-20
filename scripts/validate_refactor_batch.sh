@@ -318,6 +318,9 @@ else
             crates/suite-cli/tests/gain_e2e.rs)
               add_filtered_test "$package" "gain_e2e" "gain"
               ;;
+            crates/suite-cli/tests/gain_failures_e2e.rs)
+              add_filtered_test "$package" "gain_failures_e2e" "gain"
+              ;;
             crates/suite-cli/tests/gain_formats_e2e.rs)
               add_filtered_test "$package" "gain_formats_e2e" "savings_formats"
               ;;
