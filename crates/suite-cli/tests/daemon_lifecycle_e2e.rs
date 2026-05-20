@@ -1,63 +1,12 @@
-use assert_cmd::Command;
+#[path = "support/daemon_lifecycle.rs"]
+mod daemon_lifecycle;
+
+use daemon_lifecycle::{ensure_packet28d_built, init_repo, suite_cmd, write_repo_fixture};
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
-
-fn suite_cmd() -> Command {
-    assert_cmd::cargo::cargo_bin_cmd!("Packet28")
-}
-
-fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
-    });
-}
-
-fn write_repo_fixture(root: &Path) {
-    let src = root.join("src");
-    fs::create_dir_all(&src).unwrap();
-    fs::write(
-        src.join("alpha.rs"),
-        r#"
-use crate::beta::Beta;
-
-fn alpha() {}
-struct Alpha;
-"#,
-    )
-    .unwrap();
-    fs::write(
-        src.join("beta.rs"),
-        r#"
-fn beta() {}
-enum Beta {
-  A,
-}
-"#,
-    )
-    .unwrap();
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
-}
-
-fn init_repo(root: &Path) {
-    git(root, &["init"]);
-}
 
 #[test]
 #[cfg(unix)]
@@ -185,75 +134,6 @@ fn test_daemon_lifecycle_cli_index_rebuild_and_status() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(ready, "expected daemon index to become ready");
-
-    suite_cmd()
-        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
-        .assert()
-        .success();
-}
-
-#[test]
-#[cfg(unix)]
-fn test_daemon_lifecycle_cli_suppresses_disconnect_log_noise() {
-    ensure_packet28d_built();
-    let dir = TempDir::new().unwrap();
-    write_repo_fixture(dir.path());
-    init_repo(dir.path());
-
-    suite_cmd()
-        .args(["daemon", "start", "--root", dir.path().to_str().unwrap()])
-        .assert()
-        .success();
-
-    let status_output = suite_cmd()
-        .args([
-            "daemon",
-            "status",
-            "--root",
-            dir.path().to_str().unwrap(),
-            "--json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let status: Value = serde_json::from_slice(&status_output).unwrap();
-    let socket = PathBuf::from(status.get("socket_path").and_then(Value::as_str).unwrap());
-    let start = std::time::Instant::now();
-    let mut stream = loop {
-        match std::os::unix::net::UnixStream::connect(&socket) {
-            Ok(stream) => break stream,
-            Err(err)
-                if err.kind() == std::io::ErrorKind::NotFound
-                    && start.elapsed() < Duration::from_secs(15) =>
-            {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Err(err) => panic!(
-                "failed to connect to daemon socket {}: {err}",
-                socket.display()
-            ),
-        }
-    };
-    packet28_daemon_core::write_socket_message(
-        &mut stream,
-        &packet28_daemon_core::DaemonRequest::Status,
-    )
-    .unwrap();
-    drop(stream);
-
-    std::thread::sleep(Duration::from_millis(300));
-
-    let log_path = dir.path().join(".packet28/daemon/packet28d.log");
-    let start = std::time::Instant::now();
-    while !log_path.exists() && start.elapsed() < Duration::from_secs(2) {
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    let log = fs::read_to_string(&log_path).unwrap();
-    assert!(!log.contains("request handling failed: Broken pipe"));
-    assert!(!log.contains("request handling failed: Connection reset"));
-    assert!(!log.contains("request handling failed: unexpected end of file"));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
