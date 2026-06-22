@@ -57,6 +57,7 @@ pub mod economics;
 mod memory_db;
 mod memory_feedback_transcript;
 mod memory_graph_render;
+mod memory_graph_store;
 mod memory_lint;
 mod memory_local_store;
 mod memory_project_scan;
