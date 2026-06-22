@@ -54,6 +54,7 @@ pub mod cmd_verify;
 pub mod cmd_wakeup;
 pub mod economics;
 mod memory_store;
+mod memory_store_types;
 pub mod packet28_agent;
 pub mod route_registry;
 mod runtime_integrations;
