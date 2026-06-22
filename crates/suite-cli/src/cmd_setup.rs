@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::Colorize;
-use packet28_daemon_core::{
-    DaemonIndexRebuildRequest, DaemonRequest, DaemonResponse, RelaunchPreference,
-};
+#[cfg(test)]
+use packet28_daemon_core::RelaunchPreference;
+use packet28_daemon_core::{DaemonIndexRebuildRequest, DaemonRequest, DaemonResponse};
 use serde_json::{json, Value};
 use toml::value::Table as TomlTable;
 
@@ -36,6 +36,18 @@ use crate::cmd_setup_runtime::{
     RuntimeKind,
 };
 use crate::runtime_integrations::hermes;
+
+#[path = "cmd_setup_commands.rs"]
+mod setup_commands;
+use setup_commands::{
+    apply_generated_relaunch_command, generated_packet28_hook_command,
+    resolve_packet28_agent_command, resolve_packet28_mcp_command,
+};
+#[cfg(test)]
+use setup_commands::{
+    generated_relaunch_command, guarded_packet28_hook_command, resolve_packet28_cli_command,
+    shell_escape,
+};
 
 const PACKET28_CLAUDE_HTTP_HOOK_PATH: &str = "/packet28/claude-hook";
 const PACKET28_CLAUDE_HTTP_TOKEN_HEADER: &str = "X-Packet28-Hook-Token";
@@ -1851,144 +1863,6 @@ fn write_hook_runtime_config(root: &Path, any_hooks_configured: bool) -> Result<
         format!("{}\n", serde_json::to_string_pretty(&config)?),
     )?;
     Ok(McpConfigStatus::Written)
-}
-
-fn apply_generated_relaunch_command(
-    config: &mut packet28_daemon_core::HookRuntimeConfig,
-    root: &Path,
-    packet28_agent: Option<String>,
-) -> bool {
-    let should_manage_existing = config.relaunch_command.is_empty()
-        || is_generated_relaunch_command(&config.relaunch_command);
-    if !should_manage_existing {
-        return false;
-    }
-    match packet28_agent {
-        Some(packet28_agent) => {
-            let desired_command = generated_relaunch_command(&packet28_agent, root);
-            if config.relaunch_preference == RelaunchPreference::DaemonManaged
-                && config.relaunch_command == desired_command
-            {
-                return false;
-            }
-            config.relaunch_preference = RelaunchPreference::DaemonManaged;
-            config.relaunch_command = desired_command;
-            true
-        }
-        None => {
-            if config.relaunch_preference == RelaunchPreference::HostManaged
-                && config.relaunch_command.is_empty()
-            {
-                return false;
-            }
-            config.relaunch_preference = RelaunchPreference::HostManaged;
-            config.relaunch_command.clear();
-            true
-        }
-    }
-}
-
-fn generated_relaunch_command(packet28_agent: &str, root: &Path) -> Vec<String> {
-    vec![
-        packet28_agent.to_string(),
-        "--wait-for-handoff".to_string(),
-        "--root".to_string(),
-        root.display().to_string(),
-        "--".to_string(),
-        "claude".to_string(),
-        "--continue".to_string(),
-    ]
-}
-
-fn is_generated_relaunch_command(command: &[String]) -> bool {
-    command
-        .first()
-        .map(|value| {
-            Path::new(value)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(value)
-                == "packet28-agent"
-        })
-        .unwrap_or(false)
-}
-
-fn resolve_packet28_agent_command() -> Option<String> {
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_packet28-agent") {
-        if !path.trim().is_empty() {
-            return Some(path);
-        }
-    }
-    if let Ok(current) = std::env::current_exe() {
-        if let Some(parent) = current.parent() {
-            let sibling = parent.join("packet28-agent");
-            if sibling.exists() {
-                return Some(sibling.display().to_string());
-            }
-        }
-    }
-    let output = std::process::Command::new("which")
-        .arg("packet28-agent")
-        .output();
-    if let Ok(output) = output {
-        if output.status.success() {
-            let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !command.is_empty() {
-                return Some(command);
-            }
-        }
-    }
-    None
-}
-
-fn shell_escape(value: String) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('$', "\\$")
-        .replace('`', "\\`")
-}
-
-fn generated_packet28_hook_command(runtime: &str, root: &Path) -> String {
-    guarded_packet28_hook_command(&resolve_packet28_cli_command(), runtime, root)
-}
-
-fn guarded_packet28_hook_command(packet28_command: &str, runtime: &str, root: &Path) -> String {
-    let command_arg = shell_escape(packet28_command.to_string());
-    let root_arg = shell_escape(root.display().to_string());
-    format!(
-        "sh -c 'if [ -x \"$1\" ] || command -v \"$1\" >/dev/null 2>&1; then exec \"$1\" hook {runtime} --root \"$2\"; fi; exit 0' packet28-hook \"{command_arg}\" \"{root_arg}\""
-    )
-}
-
-fn resolve_packet28_mcp_command() -> String {
-    let output = std::process::Command::new("which")
-        .arg("packet28-mcp")
-        .output();
-    if let Ok(output) = output {
-        if output.status.success() {
-            let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !command.is_empty() {
-                return command;
-            }
-        }
-    }
-    "packet28-mcp".to_string()
-}
-
-fn resolve_packet28_cli_command() -> String {
-    for candidate in ["Packet28", "packet28"] {
-        let output = std::process::Command::new("which").arg(candidate).output();
-        if let Ok(output) = output {
-            if output.status.success() {
-                let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !command.is_empty() {
-                    return command;
-                }
-            }
-        }
-    }
-    "Packet28".to_string()
 }
 
 fn write_agent_file(path: &Path, content: &str) -> Result<bool> {
