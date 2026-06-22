@@ -20,6 +20,8 @@ use packet28_daemon_core::{
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+#[path = "cmd_mcp_config.rs"]
+mod config;
 #[allow(dead_code)]
 #[path = "cmd_mcp_native.rs"]
 mod native_tools;
@@ -31,6 +33,8 @@ mod proxy;
 mod proxy_catalog;
 #[path = "cmd_mcp_proxy_upstream.rs"]
 mod proxy_upstream;
+#[path = "cmd_mcp_smoke.rs"]
+mod smoke;
 #[allow(dead_code)]
 #[path = "cmd_mcp_support.rs"]
 mod support;
@@ -39,6 +43,7 @@ mod tool_catalog;
 #[path = "cmd_mcp_transport.rs"]
 mod transport;
 
+use crate::cmd_mcp::config::McpProxyConfig;
 use crate::cmd_mcp::native_tools::{
     handle_packet28_fetch_context, handle_packet28_fetch_raw_output,
     handle_packet28_fetch_tool_result, handle_packet28_glob, handle_packet28_prepare_handoff,
@@ -60,6 +65,7 @@ use crate::cmd_mcp::prompt_resource::{
     resolve_current_task_id,
 };
 use crate::cmd_mcp::proxy::{load_proxy_config, serve_proxy_stdio};
+pub(crate) use crate::cmd_mcp::smoke::smoke_test_agent_config;
 use crate::cmd_mcp::support::{
     broker_task_status_via_session, classify_error_message, extract_named_string, extract_paths,
     extract_symbols, is_retryable_error, maybe_store_result_artifact, resolve_session_task_id,
@@ -89,7 +95,6 @@ use crate::memory_store::{
 use crate::route_registry::{
     build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
 };
-use crate::runtime_integrations::windsurf;
 
 #[derive(Args)]
 pub struct McpArgs {
@@ -340,25 +345,6 @@ fn is_fff_empty_result(text: &str) -> bool {
     trimmed == "0 matches." || trimmed.starts_with("0 results ")
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(default)]
-#[derive(Default)]
-struct McpProxyConfig {
-    #[serde(rename = "mcpServers")]
-    mcp_servers: BTreeMap<String, McpProxyServerConfig>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize, Default)]
-#[serde(default)]
-struct McpProxyServerConfig {
-    command: String,
-    args: Vec<String>,
-    env: BTreeMap<String, String>,
-    cwd: Option<String>,
-    timeout_ms: Option<u64>,
-    compact_tools: Vec<String>,
-}
-
 pub fn run(args: McpArgs) -> Result<i32> {
     match args.command {
         McpCommands::Serve(args) => run_serve(args),
@@ -398,163 +384,6 @@ fn run_smoke_test(args: McpSmokeTestArgs) -> Result<i32> {
         report.server_name, report.tool_count
     );
     Ok(0)
-}
-
-pub(crate) struct McpSmokeReport {
-    pub(crate) server_name: String,
-    pub(crate) tool_count: usize,
-}
-
-pub(crate) fn smoke_test_agent_config(agent: &str) -> Result<McpSmokeReport> {
-    let server = load_agent_mcp_server(agent)?;
-    smoke_test_mcp_server(&server)
-}
-
-fn load_agent_mcp_server(agent: &str) -> Result<McpProxyServerConfig> {
-    match agent {
-        "windsurf" => load_named_mcp_server(&windsurf_mcp_config_path(), "packet28"),
-        other => Err(anyhow!(
-            "unsupported MCP config '{other}'; supported values: windsurf"
-        )),
-    }
-}
-
-fn windsurf_mcp_config_path() -> PathBuf {
-    windsurf::mcp_config_path(&dirs_home())
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-}
-
-fn load_named_mcp_server(path: &Path, name: &str) -> Result<McpProxyServerConfig> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("failed to read '{}'", path.display()))?;
-    let config: McpProxyConfig = serde_json::from_str(&content)
-        .with_context(|| format!("invalid MCP config '{}'", path.display()))?;
-    config
-        .mcp_servers
-        .get(name)
-        .cloned()
-        .with_context(|| format!("MCP server '{name}' missing from '{}'", path.display()))
-}
-
-fn smoke_test_mcp_server(server: &McpProxyServerConfig) -> Result<McpSmokeReport> {
-    if server.command.trim().is_empty() {
-        return Err(anyhow!("MCP server command is empty"));
-    }
-    let mut harness = ConfiguredMcpHarness::start(server)?;
-    harness.send(&json!({
-        "jsonrpc":"2.0",
-        "id":1,
-        "method":"initialize",
-        "params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"packet28-smoke-test","version":"1"}}
-    }))?;
-    let initialize = harness.read_response(1)?;
-    let server_name = initialize["result"]["serverInfo"]["name"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_string();
-
-    harness.send(&json!({
-        "jsonrpc":"2.0",
-        "id":2,
-        "method":"tools/list"
-    }))?;
-    let tools = harness.read_response(2)?;
-    let tool_names = tools["result"]["tools"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
-        .collect::<Vec<_>>();
-    if !tool_names.contains(&"packet28_search") {
-        return Err(anyhow!("packet28_search missing from tools/list"));
-    }
-    Ok(McpSmokeReport {
-        server_name,
-        tool_count: tool_names.len(),
-    })
-}
-
-struct ConfiguredMcpHarness {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-}
-
-impl ConfiguredMcpHarness {
-    fn start(server: &McpProxyServerConfig) -> Result<Self> {
-        let mut command = Command::new(&server.command);
-        command.args(&server.args);
-        if let Some(cwd) = server.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
-            command.current_dir(cwd);
-        }
-        for (key, value) in &server.env {
-            command.env(key, value);
-        }
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "failed to start configured MCP server `{}`",
-                    render_command_preview(&server.command, &server.args)
-                )
-            })?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("failed to capture MCP stdin"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("failed to capture MCP stdout"))?;
-        Ok(Self {
-            child,
-            stdin,
-            stdout: BufReader::new(stdout),
-        })
-    }
-
-    fn send(&mut self, value: &Value) -> Result<()> {
-        write_message(&mut self.stdin, value, McpMessageFraming::ContentLength)
-    }
-
-    fn read_response(&mut self, expected_id: u64) -> Result<Value> {
-        let started = Instant::now();
-        loop {
-            if started.elapsed() > Duration::from_secs(10) {
-                return Err(anyhow!(
-                    "timed out waiting for MCP response id={expected_id}"
-                ));
-            }
-            let Some((value, _)) = read_message(&mut self.stdout)? else {
-                return Err(anyhow!(
-                    "MCP stream closed before response id={expected_id}"
-                ));
-            };
-            if value.get("id").and_then(Value::as_u64) == Some(expected_id) {
-                if let Some(error) = value.get("error") {
-                    return Err(anyhow!(
-                        "MCP response id={expected_id} returned error: {error}"
-                    ));
-                }
-                return Ok(value);
-            }
-        }
-    }
-}
-
-impl Drop for ConfiguredMcpHarness {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
