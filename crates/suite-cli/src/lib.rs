@@ -32,6 +32,7 @@ pub mod cmd_guard;
 pub mod cmd_hook;
 mod cmd_hook_http;
 mod cmd_hook_runner;
+mod cmd_hook_support;
 pub mod cmd_hypothesis;
 pub mod cmd_impact;
 pub mod cmd_init;
