@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::memory_graph_render::{render_graph_ascii, render_graph_dot};
 pub(crate) use crate::memory_lint::lint_memory_records;
 use crate::memory_project_scan::{
     collect_project_configs, collect_project_dependencies, collect_project_entrypoints,
@@ -1916,38 +1917,6 @@ fn parse_json_string_array(value: Option<&str>) -> Vec<String> {
     value
         .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
         .unwrap_or_default()
-}
-
-fn render_graph_dot(graph: &GraphInspect) -> String {
-    let mut out = String::from("digraph packet28_graph {\n");
-    for concept in &graph.concepts {
-        out.push_str(&format!("  {:?};\n", concept.name));
-    }
-    for relation in &graph.relations {
-        out.push_str(&format!(
-            "  {:?} -> {:?} [label={:?}];\n",
-            relation.source, relation.target, relation.relation
-        ));
-    }
-    out.push_str("}\n");
-    out
-}
-
-fn render_graph_ascii(graph: &GraphInspect) -> String {
-    let mut out = String::new();
-    for concept in &graph.concepts {
-        out.push_str(&format!("* {}\n", concept.name));
-        if let Some(description) = &concept.description {
-            out.push_str(&format!("  {}\n", description));
-        }
-    }
-    for relation in &graph.relations {
-        out.push_str(&format!(
-            "{} -{}-> {}\n",
-            relation.source, relation.relation, relation.target
-        ));
-    }
-    out
 }
 
 pub(crate) fn local_store_stats() -> Result<LocalStoreStats> {
