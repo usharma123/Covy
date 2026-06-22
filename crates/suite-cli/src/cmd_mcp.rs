@@ -24,6 +24,8 @@ use serde_json::{json, Map, Value};
 mod config;
 #[path = "cmd_mcp_fff.rs"]
 mod fff;
+#[path = "cmd_mcp_native_dispatch.rs"]
+mod native_dispatch;
 #[allow(dead_code)]
 #[path = "cmd_mcp_native.rs"]
 mod native_tools;
@@ -457,411 +459,81 @@ fn handle_tool_call(
     let canonical_name = canonical_tool_name(requested_name);
     let name = canonical_name.as_str();
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-    let payload = match name {
-        "packet28.search" => {
-            let mut request: Packet28SearchArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                Some(request.query.as_str()),
-                "packet28.search",
-            )?;
-            track_task(session, root, &request.task_id)?;
-            handle_packet28_search(root, session, request)?
-        }
-        "packet28.search_fast" => {
-            let request: Packet28SearchFastArgs = serde_json::from_value(arguments)?;
-            handle_packet28_search_fast(root, session, request)?
-        }
-        "packet28.read_regions" => {
-            let mut request: Packet28ReadRegionsArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                Some(request.path.as_str()),
-                "packet28.read_regions",
-            )?;
-            track_task(session, root, &request.task_id)?;
-            handle_packet28_read_regions(root, session, request)?
-        }
-        "packet28.glob" => {
-            let mut request: Packet28GlobArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                Some(request.pattern.as_str()),
-                "packet28.glob",
-            )?;
-            track_task(session, root, &request.task_id)?;
-            handle_packet28_glob(root, session, request)?
-        }
-        "packet28.fetch_tool_result" => {
-            let mut request: Packet28FetchToolResultArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                None,
-                "packet28.fetch_tool_result",
-            )?;
-            track_task(session, root, &request.task_id)?;
-            handle_packet28_fetch_tool_result(root, request)?
-        }
-        "packet28.fetch_raw_output" => {
-            let mut request: Packet28FetchRawOutputArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                Some(request.handle.as_str()),
-                "packet28.fetch_raw_output",
-            )?;
-            track_task(session, root, &request.task_id)?;
-            handle_packet28_fetch_raw_output(root, request)?
-        }
-        "packet28.fetch_context" => {
-            let mut request: Packet28FetchContextArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                None,
-                "packet28.fetch_context",
-            )?;
-            track_task(session, root, &request.task_id)?;
-            handle_packet28_fetch_context(root, request)?
-        }
-        "packet28.verify_handoff" => {
-            let mut request: Packet28VerifyHandoffArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_verify_handoff(root, request)?
-        }
-        "packet28.prompt_pressure" => {
-            let mut request: Packet28PromptPressureArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_prompt_pressure(root, request)?
-        }
-        "packet28.handoff_diff" => {
-            let mut request: Packet28HandoffDiffArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .left_artifact_id
-                    .as_deref()
-                    .or(request.left_context_version.as_deref())
-                    .or(request.right_artifact_id.as_deref())
-                    .or(request.right_context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_diff(root, request)?
-        }
-        "packet28.handoff_compress" => {
-            let mut request: Packet28HandoffCompressionArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_compress(root, request)?
-        }
-        "packet28.handoff_lint_dependencies" => {
-            let mut request: Packet28HandoffDependencyLintArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_lint_dependencies(root, request)?
-        }
-        "packet28.handoff_lint_paths" => {
-            let mut request: Packet28HandoffPathLintArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_lint_paths(root, request)?
-        }
-        "packet28.handoff_lint_tests" => {
-            let mut request: Packet28HandoffTestLintArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_lint_tests(root, request)?
-        }
-        "packet28.handoff_lint_stale_commands" => {
-            let mut request: Packet28HandoffStaleCommandLintArgs =
-                serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_lint_stale_commands(root, request)?
-        }
-        "packet28.handoff_lint_environment" => {
-            let mut request: Packet28HandoffEnvironmentLintArgs =
-                serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_lint_environment(root, request)?
-        }
-        "packet28.handoff_lint_all" => {
-            let mut request: Packet28HandoffLintAllArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_lint_all(root, request)?
-        }
-        "packet28.handoff_fix_plan" => {
-            let mut request: Packet28HandoffFixPlanArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .artifact_id
-                    .as_deref()
-                    .or(request.context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_fix_plan(root, request)?
-        }
-        "packet28.handoff_repair_verify" => {
-            let mut request: Packet28HandoffRepairVerifyArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request
-                    .after_artifact_id
-                    .as_deref()
-                    .or(request.after_context_version.as_deref())
-                    .or(request.before_artifact_id.as_deref())
-                    .or(request.before_context_version.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_repair_verify(root, request)?
-        }
-        "packet28.handoff_lint_trends" => {
-            let mut request: Packet28HandoffLintTrendArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_lint_trends(root, request)?
-        }
-        "packet28.handoff_lint_regressions" => {
-            let mut request: Packet28HandoffLintRegressionArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_handoff_lint_regressions(root, request)?
-        }
-        "packet28.prepare_handoff" | "packet28.handoff" => {
-            let mut request: Packet28PrepareHandoffArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
-            track_task(session, root, &request.task_id)?;
-            handle_packet28_prepare_handoff(root, request)?
-        }
-        "packet28.validate_plan" => {
-            let mut request: Packet28ValidatePlanArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(session, root, &request.task_id, None, name)?;
-            track_task(session, root, &request.task_id)?;
-            handle_packet28_validate_plan(root, request)?
-        }
-        "packet28.action_critic" => {
-            let mut request: Packet28ActionCriticArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request.query.as_deref().or(request.tool_name.as_deref()),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_action_critic(root, request)?
-        }
-        "packet28.recommend_next_tool" => {
-            let mut request: Packet28RecommendNextToolArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request.query.as_deref(),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_recommend_next_tool(root, request)?
-        }
-        "packet28.validate_tool_outcome" => {
-            let mut request: Packet28ValidateToolOutcomeArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request.command.as_deref(),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_validate_tool_outcome(root, request)?
-        }
-        "packet28.agent_status" => handle_packet28_agent_status(root, arguments)?,
-        "packet28.patch_risk" => {
-            let mut request: Packet28PatchRiskArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                request.paths.first().map(String::as_str),
-                name,
-            )?;
-            track_task(session, root, &request.task_id)?;
-            native_tools::handle_packet28_patch_risk(root, request)?
-        }
-        "packet28.verify_experiments" => {
-            let request: VerifyExperimentsToolArgs = serde_json::from_value(arguments)?;
-            let manifest = root.join(
-                request
-                    .manifest
-                    .as_deref()
-                    .unwrap_or("docs/experiments/manifest.json"),
-            );
-            crate::cmd_verify::verify_experiments_payload(
-                root,
-                &manifest,
-                &request.require_workflows.unwrap_or_default(),
-                false,
-            )?
-        }
-        "packet28.reducer_drift" => {
-            let request: ReducerDriftToolArgs = serde_json::from_value(arguments)?;
-            let fixture = root.join(
-                request
-                    .fixture
-                    .as_deref()
-                    .unwrap_or("docs/reducer-drift/fixtures.json"),
-            );
-            crate::cmd_verify::verify_reducer_drift_payload(&fixture)?
-        }
-        "packet28.hypothesis_add" => {
-            let mut request: HypothesisAddToolArgs = serde_json::from_value(arguments)?;
-            request.task_id = Some(resolve_session_task_id(
-                session,
-                root,
-                request.task_id.as_deref().unwrap_or_default(),
-                Some(request.text.as_str()),
-                name,
-            )?);
-            let task_id = request.task_id.as_deref().unwrap_or_default();
-            track_task(session, root, task_id)?;
-            serde_json::to_value(crate::cmd_hypothesis::add_hypothesis_record(
-                root,
-                task_id,
-                request.id,
-                &request.text,
-                request.paths.unwrap_or_default(),
-                request.symbols.unwrap_or_default(),
-                request.artifact_id,
-            )?)?
-        }
-        "packet28.hypothesis_list" => {
-            let mut request: HypothesisListToolArgs = serde_json::from_value(arguments)?;
-            request.task_id = Some(resolve_session_task_id(
-                session,
-                root,
-                request.task_id.as_deref().unwrap_or_default(),
-                None,
-                name,
-            )?);
-            let task_id = request.task_id.as_deref().unwrap_or_default();
-            track_task(session, root, task_id)?;
-            serde_json::to_value(crate::cmd_hypothesis::active_hypotheses(root, task_id)?)?
-        }
-        "packet28.hypothesis_resolve" => {
-            let mut request: HypothesisResolveToolArgs = serde_json::from_value(arguments)?;
-            request.task_id = Some(resolve_session_task_id(
-                session,
-                root,
-                request.task_id.as_deref().unwrap_or_default(),
-                Some(request.id.as_str()),
-                name,
-            )?);
-            let status = match request.status.trim() {
+    let payload = if let Some(native_payload) =
+        native_dispatch::handle_native_tool_call(root, session, name, &arguments)?
+    {
+        native_payload
+    } else {
+        match name {
+            "packet28.verify_experiments" => {
+                let request: VerifyExperimentsToolArgs = serde_json::from_value(arguments)?;
+                let manifest = root.join(
+                    request
+                        .manifest
+                        .as_deref()
+                        .unwrap_or("docs/experiments/manifest.json"),
+                );
+                crate::cmd_verify::verify_experiments_payload(
+                    root,
+                    &manifest,
+                    &request.require_workflows.unwrap_or_default(),
+                    false,
+                )?
+            }
+            "packet28.reducer_drift" => {
+                let request: ReducerDriftToolArgs = serde_json::from_value(arguments)?;
+                let fixture = root.join(
+                    request
+                        .fixture
+                        .as_deref()
+                        .unwrap_or("docs/reducer-drift/fixtures.json"),
+                );
+                crate::cmd_verify::verify_reducer_drift_payload(&fixture)?
+            }
+            "packet28.hypothesis_add" => {
+                let mut request: HypothesisAddToolArgs = serde_json::from_value(arguments)?;
+                request.task_id = Some(resolve_session_task_id(
+                    session,
+                    root,
+                    request.task_id.as_deref().unwrap_or_default(),
+                    Some(request.text.as_str()),
+                    name,
+                )?);
+                let task_id = request.task_id.as_deref().unwrap_or_default();
+                track_task(session, root, task_id)?;
+                serde_json::to_value(crate::cmd_hypothesis::add_hypothesis_record(
+                    root,
+                    task_id,
+                    request.id,
+                    &request.text,
+                    request.paths.unwrap_or_default(),
+                    request.symbols.unwrap_or_default(),
+                    request.artifact_id,
+                )?)?
+            }
+            "packet28.hypothesis_list" => {
+                let mut request: HypothesisListToolArgs = serde_json::from_value(arguments)?;
+                request.task_id = Some(resolve_session_task_id(
+                    session,
+                    root,
+                    request.task_id.as_deref().unwrap_or_default(),
+                    None,
+                    name,
+                )?);
+                let task_id = request.task_id.as_deref().unwrap_or_default();
+                track_task(session, root, task_id)?;
+                serde_json::to_value(crate::cmd_hypothesis::active_hypotheses(root, task_id)?)?
+            }
+            "packet28.hypothesis_resolve" => {
+                let mut request: HypothesisResolveToolArgs = serde_json::from_value(arguments)?;
+                request.task_id = Some(resolve_session_task_id(
+                    session,
+                    root,
+                    request.task_id.as_deref().unwrap_or_default(),
+                    Some(request.id.as_str()),
+                    name,
+                )?);
+                let status = match request.status.trim() {
                 "confirmed" | "confirm" => "confirmed",
                 "rejected" | "reject" => "rejected",
                 other => {
@@ -870,405 +542,406 @@ fn handle_tool_call(
                     ))
                 }
             };
-            let task_id = request.task_id.as_deref().unwrap_or_default();
-            track_task(session, root, task_id)?;
-            serde_json::to_value(crate::cmd_hypothesis::resolve_hypothesis_record(
-                root,
-                task_id,
-                &request.id,
-                status,
-                request.note,
-            )?)?
+                let task_id = request.task_id.as_deref().unwrap_or_default();
+                track_task(session, root, task_id)?;
+                serde_json::to_value(crate::cmd_hypothesis::resolve_hypothesis_record(
+                    root,
+                    task_id,
+                    &request.id,
+                    status,
+                    request.note,
+                )?)?
+            }
+            "packet28.reduce" => {
+                let request: ReduceToolArgs = serde_json::from_value(arguments)?;
+                handle_packet28_reduce(request)?
+            }
+            "packet28.rewrite" => {
+                let request: RewriteToolArgs = serde_json::from_value(arguments)?;
+                handle_packet28_rewrite(root, request)
+            }
+            "packet28.doctor" => {
+                let request: DoctorToolArgs = serde_json::from_value(arguments)?;
+                handle_packet28_doctor(root, request)?
+            }
+            "packet28.write_intention" => {
+                let mut request: Packet28WriteIntentionArgs = serde_json::from_value(arguments)?;
+                request.task_id = resolve_session_task_id(
+                    session,
+                    root,
+                    &request.task_id,
+                    Some(request.text.as_str()),
+                    "packet28.write_intention",
+                )?;
+                track_task(session, root, &request.task_id)?;
+                crate::task_runtime::store_active_task(
+                    root,
+                    &packet28_daemon_core::ActiveTaskRecord {
+                        task_id: request.task_id.clone(),
+                        session_id: None,
+                        updated_at_unix: packet28_daemon_core::now_unix(),
+                    },
+                )?;
+                handle_packet28_write_intention(root, session, request)?
+            }
+            "packet28.memory_store" => {
+                let request: MemoryStoreToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(store_memory_with_metadata(MemoryStoreInput {
+                    content: &request.content,
+                    tags: request.tags.as_deref(),
+                    topic: request.topic.as_deref(),
+                    importance: request.importance.as_deref(),
+                    keywords: request.keywords.as_deref(),
+                    project: request.project.as_deref(),
+                    source: request.source.as_deref(),
+                    raw_excerpt: request.raw_excerpt.as_deref(),
+                })?)?
+            }
+            "packet28.memory_recall" => {
+                let request: MemoryRecallToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(recall_memories_filtered(MemoryRecallQuery {
+                    query: &request.query,
+                    limit: request.limit.unwrap_or(10),
+                    topic: request.topic.as_deref(),
+                    project: request.project.as_deref(),
+                    tag: request.tag.as_deref(),
+                    keyword: request.keyword.as_deref(),
+                })?)?
+            }
+            "packet28.memory_list" => {
+                let request: MemoryListToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(list_memories_filtered(MemoryListQuery {
+                    limit: request.limit.unwrap_or(20),
+                    topic: request.topic.as_deref(),
+                    project: request.project.as_deref(),
+                    all: request.all.unwrap_or(false),
+                    sort: request.sort.as_deref().unwrap_or("recent"),
+                })?)?
+            }
+            "packet28.memory_update" => {
+                let request: MemoryUpdateToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(update_memory(MemoryUpdateInput {
+                    id: request.id,
+                    content: request.content.as_deref(),
+                    tags: request.tags.as_deref(),
+                    topic: request.topic.as_deref(),
+                    importance: request.importance.as_deref(),
+                    keywords: request.keywords.as_deref(),
+                    project: request.project.as_deref(),
+                    source: request.source.as_deref(),
+                    raw_excerpt: request.raw_excerpt.as_deref(),
+                })?)?
+            }
+            "packet28.memory_forget" => {
+                let request: MemoryForgetToolArgs = serde_json::from_value(arguments)?;
+                let deleted = match (request.id, request.topic.as_deref()) {
+                    (Some(id), None) => forget_memory(id)?,
+                    (None, Some(topic)) => forget_memories_by_topic(topic)?,
+                    _ => return Err(anyhow!("pass exactly one of id or topic")),
+                };
+                json!({ "deleted": deleted })
+            }
+            "packet28.memory_topics" => serde_json::to_value(memory_topics()?)?,
+            "packet28.memory_stats" => serde_json::to_value(local_store_stats()?)?,
+            "packet28.memory_health" => {
+                let request: MemoryHealthToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(memory_health(
+                    request.topic.as_deref(),
+                    request.stale_after_days.unwrap_or(30),
+                    request.consolidation_threshold.unwrap_or(10),
+                )?)?
+            }
+            "packet28.memory_lint" => {
+                let request: MemoryLintToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(lint_memories(root, request.limit.unwrap_or(200))?)?
+            }
+            "packet28.context_anomalies" => {
+                serde_json::to_value(crate::cmd_dashboard::context_anomaly_digest(root)?)?
+            }
+            "packet28.verify_context_anomalies" => {
+                let request: VerifyContextAnomaliesToolArgs = serde_json::from_value(arguments)?;
+                crate::cmd_verify::verify_context_anomalies_payload(
+                    root,
+                    request.max_anomalies.unwrap_or(999),
+                    request.max_high.unwrap_or(0),
+                    request.max_trend_age_ms,
+                )?
+            }
+            "packet28.memory_consolidate" => {
+                let request: MemoryConsolidateToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(consolidate_memories(
+                    request.topic.as_deref(),
+                    request.keep_originals.unwrap_or(false),
+                )?)?
+            }
+            "packet28.memory_decay" => {
+                let request: MemoryDecayToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(decay_memories(request.factor.unwrap_or(0.95))?)?
+            }
+            "packet28.memory_prune" => {
+                let request: MemoryPruneToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(prune_memories(
+                    request.threshold.unwrap_or(0.1),
+                    request.dry_run.unwrap_or(false),
+                )?)?
+            }
+            "packet28.memory_embed" => {
+                let request: MemoryEmbedToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(embed_memories(
+                    request.id,
+                    request.all.unwrap_or(false),
+                    request.dimensions.unwrap_or(384),
+                )?)?
+            }
+            "packet28.memory_extract_patterns" => {
+                let request: MemoryExtractPatternsToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(extract_memory_patterns(
+                    &request.topic,
+                    request.memoir.as_deref(),
+                    request.min_cluster_size.unwrap_or(3),
+                )?)?
+            }
+            "packet28.memory_pending_enqueue" => {
+                let request: MemoryPendingEnqueueToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(enqueue_pending_extraction(PendingExtractionInput {
+                    project: request.project.as_deref(),
+                    tool_name: request.tool_name.as_deref(),
+                    raw_output: &request.raw_output,
+                })?)?
+            }
+            "packet28.memory_pending_list" => {
+                let request: MemoryPendingListToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(list_pending_extractions(request.limit.unwrap_or(20))?)?
+            }
+            "packet28.memory_pending_process" => {
+                let request: MemoryPendingProcessToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(process_pending_extractions(
+                    request.limit.unwrap_or(20),
+                    request.dry_run.unwrap_or(false),
+                )?)?
+            }
+            "packet28.memory_pending_delete" => {
+                let request: MemoryPendingDeleteToolArgs = serde_json::from_value(arguments)?;
+                serde_json::json!({ "deleted": delete_pending_extractions(&request.ids)? })
+            }
+            "packet28.memory_pending_stats" => {
+                let stats = local_store_stats()?;
+                serde_json::json!({ "pending_extraction_count": stats.pending_extraction_count })
+            }
+            "packet28.feedback_record" => {
+                let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(record_feedback_with_metadata(FeedbackInput {
+                    subject: &request.subject,
+                    correction: &request.correction,
+                    topic: request.topic.as_deref(),
+                    context: request.context.as_deref(),
+                    predicted: request.predicted.as_deref(),
+                    reason: request.reason.as_deref(),
+                    source: request.source.as_deref(),
+                    project: request.project.as_deref(),
+                })?)?
+            }
+            "packet28.feedback_search" => {
+                let request: FeedbackSearchToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(search_feedback_filtered(
+                    &request.query,
+                    request.project.as_deref(),
+                    request.limit.unwrap_or(10),
+                )?)?
+            }
+            "packet28.feedback_list" => {
+                let request: FeedbackListToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(list_feedback(
+                    request.topic.as_deref(),
+                    request.limit.unwrap_or(20),
+                )?)?
+            }
+            "packet28.feedback_apply" => {
+                let request: FeedbackIdToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(apply_feedback(request.id)?)?
+            }
+            "packet28.feedback_delete" => {
+                let request: FeedbackIdToolArgs = serde_json::from_value(arguments)?;
+                serde_json::json!({ "deleted": delete_feedback(request.id)? })
+            }
+            "packet28.feedback_stats" => serde_json::to_value(feedback_stats()?)?,
+            "packet28.wakeup" => {
+                let request: WakeupToolArgs = serde_json::from_value(arguments)?;
+                let paths = request
+                    .paths
+                    .as_ref()
+                    .or(request.path.as_ref())
+                    .cloned()
+                    .unwrap_or_default();
+                let symbols = request
+                    .symbols
+                    .as_ref()
+                    .or(request.symbol.as_ref())
+                    .cloned()
+                    .unwrap_or_default();
+                serde_json::to_value(build_wakeup_report_scoped(
+                    request.query.as_deref(),
+                    request.project.as_deref(),
+                    WakeupScope {
+                        paths: paths.iter().map(String::as_str).collect(),
+                        symbols: symbols.iter().map(String::as_str).collect(),
+                        intent: request.intent.as_deref(),
+                    },
+                    request.limit.unwrap_or(5),
+                    request.max_tokens.unwrap_or(500),
+                    request.format.as_deref().unwrap_or("markdown"),
+                )?)?
+            }
+            "packet28.learn_project" => {
+                let request: LearnProjectToolArgs = serde_json::from_value(arguments)?;
+                let dir = request
+                    .directory
+                    .unwrap_or_else(|| root.display().to_string());
+                serde_json::to_value(learn_project_graph(
+                    Path::new(&dir),
+                    request.name.as_deref(),
+                    request.memoir.as_deref(),
+                    request.limit.unwrap_or(20),
+                )?)?
+            }
+            "packet28.transcript_append" => {
+                let request: TranscriptAppendToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(append_transcript_message(TranscriptAppendInput {
+                    session: request.session.as_deref(),
+                    agent: request.agent.as_deref(),
+                    role: request.role.as_deref(),
+                    content: &request.content,
+                    source: request.source.as_deref(),
+                    project: request.project.as_deref(),
+                })?)?
+            }
+            "packet28.transcript_list" => {
+                let request: TranscriptListToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(list_transcript_sessions(request.limit.unwrap_or(20))?)?
+            }
+            "packet28.transcript_show" => {
+                let request: TranscriptShowToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(show_transcript_session(
+                    &request.session,
+                    request.limit.unwrap_or(100),
+                )?)?
+            }
+            "packet28.transcript_search" => {
+                let request: TranscriptSearchToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(search_transcripts_filtered(
+                    &request.query,
+                    request.project.as_deref(),
+                    request.limit.unwrap_or(10),
+                )?)?
+            }
+            "packet28.transcript_stats" => serde_json::to_value(transcript_stats()?)?,
+            "packet28.transcript_export" => {
+                let request: TranscriptExportToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(export_transcripts(
+                    request.session.as_deref(),
+                    request.limit.unwrap_or(10_000),
+                )?)?
+            }
+            "packet28.transcript_import" => {
+                let request: TranscriptImportToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(import_transcripts_from_str(&request.content)?)?
+            }
+            "packet28.graph_create" => {
+                let request: GraphCreateToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(create_graph_memoir(
+                    request.name.as_deref(),
+                    request.description.as_deref(),
+                )?)?
+            }
+            "packet28.graph_list" => serde_json::to_value(list_graph_memoirs()?)?,
+            "packet28.graph_show" => {
+                let request: GraphShowToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(show_graph_memoir(
+                    request.name.as_deref(),
+                    request.limit.unwrap_or(50),
+                )?)?
+            }
+            "packet28.graph_add_concept" => {
+                let request: GraphConceptToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(add_concept_with_metadata(
+                    &request.name,
+                    request.description.as_deref(),
+                    request.memoir.as_deref(),
+                    &request.labels.unwrap_or_default(),
+                    request.confidence,
+                    &request.source_ids.unwrap_or_default(),
+                )?)?
+            }
+            "packet28.graph_refine" => {
+                let request: GraphRefineToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(refine_concept(&request.name, &request.description)?)?
+            }
+            "packet28.graph_link" => {
+                let request: GraphLinkToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(link_concepts(
+                    &request.source,
+                    &request.target,
+                    request.relation.as_deref().unwrap_or("related_to"),
+                )?)?
+            }
+            "packet28.graph_search" => {
+                let request: GraphSearchToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(search_concepts_filtered(
+                    &request.query,
+                    request.memoir.as_deref(),
+                    request.label.as_deref(),
+                    request.limit.unwrap_or(10),
+                )?)?
+            }
+            "packet28.graph_export" => {
+                let request: GraphExportToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(export_graph(
+                    request.format.as_deref().unwrap_or("json"),
+                    request.limit.unwrap_or(100),
+                )?)?
+            }
+            "packet28.graph_stats" => serde_json::to_value(graph_stats()?)?,
+            "packet28.graph_delete" => {
+                let request: GraphDeleteToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(delete_concept(&request.name)?)?
+            }
+            "packet28.graph_inspect" => {
+                let request: GraphInspectToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(inspect_graph(request.limit.unwrap_or(50))?)?
+            }
+            "packet28.graph_inspect_concept" => {
+                let request: GraphInspectConceptToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(inspect_graph_concept(
+                    &request.name,
+                    request.memoir.as_deref(),
+                    request.depth.unwrap_or(1),
+                )?)?
+            }
+            "packet28.graph_distill" => {
+                let request: GraphDistillToolArgs = serde_json::from_value(arguments)?;
+                serde_json::to_value(distill_memories_to_graph(
+                    &request.from_topic,
+                    request.into.as_deref(),
+                    request.limit.unwrap_or(100),
+                )?)?
+            }
+            "packet28.task_status" => {
+                let task_id = resolve_session_task_id(
+                    session,
+                    root,
+                    arguments
+                        .get("task_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    None,
+                    "packet28.task_status",
+                )?;
+                track_task(session, root, &task_id)?;
+                serde_json::to_value(broker_task_status_via_session(root, session, &task_id)?)?
+            }
+            "packet28.capabilities" => capabilities_payload(),
+            _ => return Err(anyhow!("unsupported tool '{name}'")),
         }
-        "packet28.reduce" => {
-            let request: ReduceToolArgs = serde_json::from_value(arguments)?;
-            handle_packet28_reduce(request)?
-        }
-        "packet28.rewrite" => {
-            let request: RewriteToolArgs = serde_json::from_value(arguments)?;
-            handle_packet28_rewrite(root, request)
-        }
-        "packet28.doctor" => {
-            let request: DoctorToolArgs = serde_json::from_value(arguments)?;
-            handle_packet28_doctor(root, request)?
-        }
-        "packet28.write_intention" => {
-            let mut request: Packet28WriteIntentionArgs = serde_json::from_value(arguments)?;
-            request.task_id = resolve_session_task_id(
-                session,
-                root,
-                &request.task_id,
-                Some(request.text.as_str()),
-                "packet28.write_intention",
-            )?;
-            track_task(session, root, &request.task_id)?;
-            crate::task_runtime::store_active_task(
-                root,
-                &packet28_daemon_core::ActiveTaskRecord {
-                    task_id: request.task_id.clone(),
-                    session_id: None,
-                    updated_at_unix: packet28_daemon_core::now_unix(),
-                },
-            )?;
-            handle_packet28_write_intention(root, session, request)?
-        }
-        "packet28.memory_store" => {
-            let request: MemoryStoreToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(store_memory_with_metadata(MemoryStoreInput {
-                content: &request.content,
-                tags: request.tags.as_deref(),
-                topic: request.topic.as_deref(),
-                importance: request.importance.as_deref(),
-                keywords: request.keywords.as_deref(),
-                project: request.project.as_deref(),
-                source: request.source.as_deref(),
-                raw_excerpt: request.raw_excerpt.as_deref(),
-            })?)?
-        }
-        "packet28.memory_recall" => {
-            let request: MemoryRecallToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(recall_memories_filtered(MemoryRecallQuery {
-                query: &request.query,
-                limit: request.limit.unwrap_or(10),
-                topic: request.topic.as_deref(),
-                project: request.project.as_deref(),
-                tag: request.tag.as_deref(),
-                keyword: request.keyword.as_deref(),
-            })?)?
-        }
-        "packet28.memory_list" => {
-            let request: MemoryListToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(list_memories_filtered(MemoryListQuery {
-                limit: request.limit.unwrap_or(20),
-                topic: request.topic.as_deref(),
-                project: request.project.as_deref(),
-                all: request.all.unwrap_or(false),
-                sort: request.sort.as_deref().unwrap_or("recent"),
-            })?)?
-        }
-        "packet28.memory_update" => {
-            let request: MemoryUpdateToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(update_memory(MemoryUpdateInput {
-                id: request.id,
-                content: request.content.as_deref(),
-                tags: request.tags.as_deref(),
-                topic: request.topic.as_deref(),
-                importance: request.importance.as_deref(),
-                keywords: request.keywords.as_deref(),
-                project: request.project.as_deref(),
-                source: request.source.as_deref(),
-                raw_excerpt: request.raw_excerpt.as_deref(),
-            })?)?
-        }
-        "packet28.memory_forget" => {
-            let request: MemoryForgetToolArgs = serde_json::from_value(arguments)?;
-            let deleted = match (request.id, request.topic.as_deref()) {
-                (Some(id), None) => forget_memory(id)?,
-                (None, Some(topic)) => forget_memories_by_topic(topic)?,
-                _ => return Err(anyhow!("pass exactly one of id or topic")),
-            };
-            json!({ "deleted": deleted })
-        }
-        "packet28.memory_topics" => serde_json::to_value(memory_topics()?)?,
-        "packet28.memory_stats" => serde_json::to_value(local_store_stats()?)?,
-        "packet28.memory_health" => {
-            let request: MemoryHealthToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(memory_health(
-                request.topic.as_deref(),
-                request.stale_after_days.unwrap_or(30),
-                request.consolidation_threshold.unwrap_or(10),
-            )?)?
-        }
-        "packet28.memory_lint" => {
-            let request: MemoryLintToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(lint_memories(root, request.limit.unwrap_or(200))?)?
-        }
-        "packet28.context_anomalies" => {
-            serde_json::to_value(crate::cmd_dashboard::context_anomaly_digest(root)?)?
-        }
-        "packet28.verify_context_anomalies" => {
-            let request: VerifyContextAnomaliesToolArgs = serde_json::from_value(arguments)?;
-            crate::cmd_verify::verify_context_anomalies_payload(
-                root,
-                request.max_anomalies.unwrap_or(999),
-                request.max_high.unwrap_or(0),
-                request.max_trend_age_ms,
-            )?
-        }
-        "packet28.memory_consolidate" => {
-            let request: MemoryConsolidateToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(consolidate_memories(
-                request.topic.as_deref(),
-                request.keep_originals.unwrap_or(false),
-            )?)?
-        }
-        "packet28.memory_decay" => {
-            let request: MemoryDecayToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(decay_memories(request.factor.unwrap_or(0.95))?)?
-        }
-        "packet28.memory_prune" => {
-            let request: MemoryPruneToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(prune_memories(
-                request.threshold.unwrap_or(0.1),
-                request.dry_run.unwrap_or(false),
-            )?)?
-        }
-        "packet28.memory_embed" => {
-            let request: MemoryEmbedToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(embed_memories(
-                request.id,
-                request.all.unwrap_or(false),
-                request.dimensions.unwrap_or(384),
-            )?)?
-        }
-        "packet28.memory_extract_patterns" => {
-            let request: MemoryExtractPatternsToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(extract_memory_patterns(
-                &request.topic,
-                request.memoir.as_deref(),
-                request.min_cluster_size.unwrap_or(3),
-            )?)?
-        }
-        "packet28.memory_pending_enqueue" => {
-            let request: MemoryPendingEnqueueToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(enqueue_pending_extraction(PendingExtractionInput {
-                project: request.project.as_deref(),
-                tool_name: request.tool_name.as_deref(),
-                raw_output: &request.raw_output,
-            })?)?
-        }
-        "packet28.memory_pending_list" => {
-            let request: MemoryPendingListToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(list_pending_extractions(request.limit.unwrap_or(20))?)?
-        }
-        "packet28.memory_pending_process" => {
-            let request: MemoryPendingProcessToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(process_pending_extractions(
-                request.limit.unwrap_or(20),
-                request.dry_run.unwrap_or(false),
-            )?)?
-        }
-        "packet28.memory_pending_delete" => {
-            let request: MemoryPendingDeleteToolArgs = serde_json::from_value(arguments)?;
-            serde_json::json!({ "deleted": delete_pending_extractions(&request.ids)? })
-        }
-        "packet28.memory_pending_stats" => {
-            let stats = local_store_stats()?;
-            serde_json::json!({ "pending_extraction_count": stats.pending_extraction_count })
-        }
-        "packet28.feedback_record" => {
-            let request: FeedbackRecordToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(record_feedback_with_metadata(FeedbackInput {
-                subject: &request.subject,
-                correction: &request.correction,
-                topic: request.topic.as_deref(),
-                context: request.context.as_deref(),
-                predicted: request.predicted.as_deref(),
-                reason: request.reason.as_deref(),
-                source: request.source.as_deref(),
-                project: request.project.as_deref(),
-            })?)?
-        }
-        "packet28.feedback_search" => {
-            let request: FeedbackSearchToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(search_feedback_filtered(
-                &request.query,
-                request.project.as_deref(),
-                request.limit.unwrap_or(10),
-            )?)?
-        }
-        "packet28.feedback_list" => {
-            let request: FeedbackListToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(list_feedback(
-                request.topic.as_deref(),
-                request.limit.unwrap_or(20),
-            )?)?
-        }
-        "packet28.feedback_apply" => {
-            let request: FeedbackIdToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(apply_feedback(request.id)?)?
-        }
-        "packet28.feedback_delete" => {
-            let request: FeedbackIdToolArgs = serde_json::from_value(arguments)?;
-            serde_json::json!({ "deleted": delete_feedback(request.id)? })
-        }
-        "packet28.feedback_stats" => serde_json::to_value(feedback_stats()?)?,
-        "packet28.wakeup" => {
-            let request: WakeupToolArgs = serde_json::from_value(arguments)?;
-            let paths = request
-                .paths
-                .as_ref()
-                .or(request.path.as_ref())
-                .cloned()
-                .unwrap_or_default();
-            let symbols = request
-                .symbols
-                .as_ref()
-                .or(request.symbol.as_ref())
-                .cloned()
-                .unwrap_or_default();
-            serde_json::to_value(build_wakeup_report_scoped(
-                request.query.as_deref(),
-                request.project.as_deref(),
-                WakeupScope {
-                    paths: paths.iter().map(String::as_str).collect(),
-                    symbols: symbols.iter().map(String::as_str).collect(),
-                    intent: request.intent.as_deref(),
-                },
-                request.limit.unwrap_or(5),
-                request.max_tokens.unwrap_or(500),
-                request.format.as_deref().unwrap_or("markdown"),
-            )?)?
-        }
-        "packet28.learn_project" => {
-            let request: LearnProjectToolArgs = serde_json::from_value(arguments)?;
-            let dir = request
-                .directory
-                .unwrap_or_else(|| root.display().to_string());
-            serde_json::to_value(learn_project_graph(
-                Path::new(&dir),
-                request.name.as_deref(),
-                request.memoir.as_deref(),
-                request.limit.unwrap_or(20),
-            )?)?
-        }
-        "packet28.transcript_append" => {
-            let request: TranscriptAppendToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(append_transcript_message(TranscriptAppendInput {
-                session: request.session.as_deref(),
-                agent: request.agent.as_deref(),
-                role: request.role.as_deref(),
-                content: &request.content,
-                source: request.source.as_deref(),
-                project: request.project.as_deref(),
-            })?)?
-        }
-        "packet28.transcript_list" => {
-            let request: TranscriptListToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(list_transcript_sessions(request.limit.unwrap_or(20))?)?
-        }
-        "packet28.transcript_show" => {
-            let request: TranscriptShowToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(show_transcript_session(
-                &request.session,
-                request.limit.unwrap_or(100),
-            )?)?
-        }
-        "packet28.transcript_search" => {
-            let request: TranscriptSearchToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(search_transcripts_filtered(
-                &request.query,
-                request.project.as_deref(),
-                request.limit.unwrap_or(10),
-            )?)?
-        }
-        "packet28.transcript_stats" => serde_json::to_value(transcript_stats()?)?,
-        "packet28.transcript_export" => {
-            let request: TranscriptExportToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(export_transcripts(
-                request.session.as_deref(),
-                request.limit.unwrap_or(10_000),
-            )?)?
-        }
-        "packet28.transcript_import" => {
-            let request: TranscriptImportToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(import_transcripts_from_str(&request.content)?)?
-        }
-        "packet28.graph_create" => {
-            let request: GraphCreateToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(create_graph_memoir(
-                request.name.as_deref(),
-                request.description.as_deref(),
-            )?)?
-        }
-        "packet28.graph_list" => serde_json::to_value(list_graph_memoirs()?)?,
-        "packet28.graph_show" => {
-            let request: GraphShowToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(show_graph_memoir(
-                request.name.as_deref(),
-                request.limit.unwrap_or(50),
-            )?)?
-        }
-        "packet28.graph_add_concept" => {
-            let request: GraphConceptToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(add_concept_with_metadata(
-                &request.name,
-                request.description.as_deref(),
-                request.memoir.as_deref(),
-                &request.labels.unwrap_or_default(),
-                request.confidence,
-                &request.source_ids.unwrap_or_default(),
-            )?)?
-        }
-        "packet28.graph_refine" => {
-            let request: GraphRefineToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(refine_concept(&request.name, &request.description)?)?
-        }
-        "packet28.graph_link" => {
-            let request: GraphLinkToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(link_concepts(
-                &request.source,
-                &request.target,
-                request.relation.as_deref().unwrap_or("related_to"),
-            )?)?
-        }
-        "packet28.graph_search" => {
-            let request: GraphSearchToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(search_concepts_filtered(
-                &request.query,
-                request.memoir.as_deref(),
-                request.label.as_deref(),
-                request.limit.unwrap_or(10),
-            )?)?
-        }
-        "packet28.graph_export" => {
-            let request: GraphExportToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(export_graph(
-                request.format.as_deref().unwrap_or("json"),
-                request.limit.unwrap_or(100),
-            )?)?
-        }
-        "packet28.graph_stats" => serde_json::to_value(graph_stats()?)?,
-        "packet28.graph_delete" => {
-            let request: GraphDeleteToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(delete_concept(&request.name)?)?
-        }
-        "packet28.graph_inspect" => {
-            let request: GraphInspectToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(inspect_graph(request.limit.unwrap_or(50))?)?
-        }
-        "packet28.graph_inspect_concept" => {
-            let request: GraphInspectConceptToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(inspect_graph_concept(
-                &request.name,
-                request.memoir.as_deref(),
-                request.depth.unwrap_or(1),
-            )?)?
-        }
-        "packet28.graph_distill" => {
-            let request: GraphDistillToolArgs = serde_json::from_value(arguments)?;
-            serde_json::to_value(distill_memories_to_graph(
-                &request.from_topic,
-                request.into.as_deref(),
-                request.limit.unwrap_or(100),
-            )?)?
-        }
-        "packet28.task_status" => {
-            let task_id = resolve_session_task_id(
-                session,
-                root,
-                arguments
-                    .get("task_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                None,
-                "packet28.task_status",
-            )?;
-            track_task(session, root, &task_id)?;
-            serde_json::to_value(broker_task_status_via_session(root, session, &task_id)?)?
-        }
-        "packet28.capabilities" => capabilities_payload(),
-        _ => return Err(anyhow!("unsupported tool '{name}'")),
     };
     Ok(json!({
         "content": [
