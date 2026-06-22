@@ -47,6 +47,7 @@ pub mod cmd_plan;
 pub mod cmd_proxy;
 pub mod cmd_run;
 pub mod cmd_setup;
+mod cmd_setup_index;
 mod cmd_setup_render;
 mod cmd_setup_runtime;
 pub mod cmd_shard;

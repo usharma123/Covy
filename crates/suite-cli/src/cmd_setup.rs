@@ -5,19 +5,22 @@ use std::net::TcpListener;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::Colorize;
 use packet28_daemon_core::{
-    DaemonIndexRebuildRequest, DaemonIndexStatusRequest, DaemonIndexStatusResponse, DaemonRequest,
-    DaemonResponse, RelaunchPreference,
+    DaemonIndexRebuildRequest, DaemonRequest, DaemonResponse, RelaunchPreference,
 };
 use serde_json::{json, Value};
 use toml::value::Table as TomlTable;
 
 use crate::agent_surface;
+#[cfg(test)]
+use crate::cmd_setup_index::classify_setup_index_status;
+use crate::cmd_setup_index::{
+    render_setup_index_progress, verify_setup_index, SetupIndexVerification,
+};
 use crate::cmd_setup_render::{
     format_runtime_detection_badge, format_setup_badge, render_setup_banner,
     render_setup_detection_overview, render_setup_intro, render_setup_menu_hint,
@@ -61,21 +64,6 @@ enum McpConfigStatus {
     AlreadyConfigured,
     Declined,
 }
-
-#[derive(Debug)]
-enum SetupIndexVerification {
-    Ready(DaemonIndexStatusResponse),
-    Building(DaemonIndexStatusResponse),
-    Failed {
-        response: Option<DaemonIndexStatusResponse>,
-        reason: String,
-    },
-}
-
-const SETUP_INDEX_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
-const SETUP_INDEX_VERIFY_POLL: Duration = Duration::from_millis(100);
-const REGEX_INDEX_DIR_NAME: &str = "regex-v1";
-const REGEX_INDEX_MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SetupMode {
@@ -676,231 +664,6 @@ fn prompt_menu_selection(prompt: &str, max: usize, default: usize) -> Result<Opt
             "hint:".cyan().bold()
         );
     }
-}
-
-fn verify_setup_index(root: &Path) -> Result<SetupIndexVerification> {
-    let start = Instant::now();
-    let mut rendered_progress = None::<String>;
-    let first_response = fetch_index_status(root)?;
-    match classify_setup_index_status(root, &first_response, false) {
-        SetupIndexVerification::Ready(_) | SetupIndexVerification::Failed { .. } => {
-            return Ok(classify_setup_index_status(root, &first_response, false));
-        }
-        SetupIndexVerification::Building(_) => {
-            render_setup_index_progress_line(&first_response, &mut rendered_progress)?;
-        }
-    }
-    let mut last_response = first_response;
-    loop {
-        if start.elapsed() >= SETUP_INDEX_VERIFY_TIMEOUT {
-            break;
-        }
-        std::thread::sleep(SETUP_INDEX_VERIFY_POLL);
-        let response = fetch_index_status(root)?;
-        match classify_setup_index_status(root, &response, false) {
-            SetupIndexVerification::Ready(_) | SetupIndexVerification::Failed { .. } => {
-                finish_setup_index_progress_line(&mut rendered_progress)?;
-                return Ok(classify_setup_index_status(root, &response, false));
-            }
-            SetupIndexVerification::Building(_) => {
-                render_setup_index_progress_line(&response, &mut rendered_progress)?;
-                last_response = response;
-            }
-        }
-    }
-
-    finish_setup_index_progress_line(&mut rendered_progress)?;
-    Ok(classify_setup_index_status(root, &last_response, true))
-}
-
-fn render_setup_index_progress_line(
-    response: &DaemonIndexStatusResponse,
-    rendered_progress: &mut Option<String>,
-) -> Result<()> {
-    let line = format!(
-        "    {} {}",
-        format_setup_badge("indexing", SetupBadgeStyle::Warning),
-        render_setup_index_progress(response)
-    );
-    if rendered_progress.as_deref() == Some(line.as_str()) {
-        return Ok(());
-    }
-
-    let padding = rendered_progress
-        .as_ref()
-        .map(|previous| " ".repeat(previous.len().saturating_sub(line.len())))
-        .unwrap_or_default();
-    print!("\r{line}{padding}");
-    io::stdout().flush()?;
-    *rendered_progress = Some(line);
-    Ok(())
-}
-
-fn finish_setup_index_progress_line(rendered_progress: &mut Option<String>) -> Result<()> {
-    if rendered_progress.is_some() {
-        println!();
-        io::stdout().flush()?;
-    }
-    *rendered_progress = None;
-    Ok(())
-}
-
-fn render_setup_index_progress(response: &DaemonIndexStatusResponse) -> String {
-    format!(
-        "repo {}  regex {}",
-        render_index_stage(
-            response.manifest.status.as_str(),
-            response.manifest.indexed_files,
-            response.manifest.total_files,
-        ),
-        render_index_stage(
-            response
-                .manifest
-                .regex_status
-                .as_deref()
-                .unwrap_or("missing"),
-            response.manifest.regex_indexed_files,
-            response.manifest.regex_total_files,
-        ),
-    )
-}
-
-fn render_index_stage(status: &str, indexed_files: usize, total_files: usize) -> String {
-    match status {
-        "queued" => "queued".to_string(),
-        "missing" => "missing".to_string(),
-        "ready" => {
-            if total_files > 0 {
-                format!("ready {}", render_progress_bar(total_files, total_files))
-            } else {
-                "ready".to_string()
-            }
-        }
-        other => {
-            if total_files > 0 {
-                format!(
-                    "{other} {}",
-                    render_progress_bar(indexed_files.min(total_files), total_files)
-                )
-            } else {
-                other.to_string()
-            }
-        }
-    }
-}
-
-fn render_progress_bar(indexed_files: usize, total_files: usize) -> String {
-    if total_files == 0 {
-        return "[----------------] --% (0/0)".to_string();
-    }
-    let width = 16usize;
-    let completed = indexed_files.min(total_files);
-    let filled = completed.saturating_mul(width) / total_files;
-    let percent = completed.saturating_mul(100) / total_files;
-    format!(
-        "[{}{}] {:>3}% ({}/{})",
-        "#".repeat(filled),
-        "-".repeat(width.saturating_sub(filled)),
-        percent,
-        completed,
-        total_files
-    )
-}
-
-fn fetch_index_status(root: &Path) -> Result<DaemonIndexStatusResponse> {
-    match crate::cmd_daemon::send_request(
-        root,
-        &DaemonRequest::DaemonIndexStatus {
-            request: DaemonIndexStatusRequest {
-                root: root.display().to_string(),
-            },
-        },
-    )? {
-        DaemonResponse::DaemonIndexStatus { response } => Ok(response),
-        DaemonResponse::Error { message } => anyhow::bail!(message),
-        other => anyhow::bail!("unexpected index status response: {other:?}"),
-    }
-}
-
-fn classify_setup_index_status(
-    root: &Path,
-    response: &DaemonIndexStatusResponse,
-    timed_out: bool,
-) -> SetupIndexVerification {
-    if setup_index_ready(root, response) {
-        return SetupIndexVerification::Ready(response.clone());
-    }
-
-    if let Some(reason) = setup_index_failure_reason(root, response, timed_out) {
-        return SetupIndexVerification::Failed {
-            response: Some(response.clone()),
-            reason,
-        };
-    }
-
-    SetupIndexVerification::Building(response.clone())
-}
-
-fn setup_index_ready(root: &Path, response: &DaemonIndexStatusResponse) -> bool {
-    response.ready
-        && response.manifest.status == "ready"
-        && response.manifest.regex_status.as_deref() == Some("ready")
-        && response.manifest.regex_generation.is_some()
-        && response
-            .manifest
-            .regex_weight_table_version
-            .unwrap_or_default()
-            > 0
-        && regex_index_artifacts_present(root)
-}
-
-fn setup_index_failure_reason(
-    root: &Path,
-    response: &DaemonIndexStatusResponse,
-    timed_out: bool,
-) -> Option<String> {
-    let manifest = &response.manifest;
-    if manifest.status == "corrupt" {
-        return Some(
-            manifest
-                .last_error
-                .clone()
-                .unwrap_or_else(|| "repo index manifest is corrupt".to_string()),
-        );
-    }
-    if manifest.regex_status.as_deref() == Some("corrupt") {
-        return Some(
-            manifest
-                .regex_stale_reason
-                .clone()
-                .or_else(|| manifest.last_error.clone())
-                .unwrap_or_else(|| "regex trigram index is corrupt".to_string()),
-        );
-    }
-    if manifest.status == "ready" && manifest.regex_status.as_deref() != Some("ready") {
-        return Some(
-            manifest
-                .regex_stale_reason
-                .clone()
-                .or_else(|| manifest.last_error.clone())
-                .unwrap_or_else(|| "regex trigram index is not ready".to_string()),
-        );
-    }
-    if timed_out && !regex_index_artifacts_present(root) {
-        return Some("regex trigram index artifacts are missing".to_string());
-    }
-    if timed_out && manifest.status == "missing" && manifest.regex_status.is_none() {
-        return Some("setup did not create the repo or regex search index".to_string());
-    }
-    None
-}
-
-fn regex_index_artifacts_present(root: &Path) -> bool {
-    let dir = root
-        .join(".packet28")
-        .join("index")
-        .join(REGEX_INDEX_DIR_NAME);
-    dir.join(REGEX_INDEX_MANIFEST_FILE).is_file()
 }
 
 fn configure_runtime_mcp(
