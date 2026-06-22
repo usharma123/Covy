@@ -3,10 +3,8 @@ use std::io::{self, Write};
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::cmd_setup::{
-    runtime_supports_hooks, runtime_supports_mcp, RuntimeInfo, SetupMode, SetupPlanChoice,
-    SetupRuntimeScope,
-};
+use crate::cmd_setup::{SetupMode, SetupPlanChoice, SetupRuntimeScope};
+use crate::cmd_setup_runtime::{runtime_supports_hooks, runtime_supports_mcp, RuntimeInfo};
 
 const SETUP_BANNER_MIN_WIDTH: usize = 58;
 
