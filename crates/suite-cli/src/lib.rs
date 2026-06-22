@@ -55,6 +55,7 @@ pub mod cmd_wakeup;
 pub mod economics;
 mod memory_graph_render;
 mod memory_lint;
+mod memory_local_store;
 mod memory_project_scan;
 mod memory_scoring;
 mod memory_store;
