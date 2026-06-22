@@ -12,7 +12,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use packet28_daemon_core::{
     hook_runtime_config_path, load_task_events, load_task_registry, task_artifact_dir,
     task_brief_markdown_path, task_state_json_path, task_version_json_path, BrokerAction,
-    BrokerPlanStep, BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
+    BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
     BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
     BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
     BrokerWriteStateResponse, DaemonRequest, DaemonResponse, TaskRecord,
