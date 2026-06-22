@@ -1,9 +1,8 @@
 use anyhow::Result;
 use rusqlite::params;
 
-use crate::memory_store::{
-    normalize_non_empty, open_memory_db, store_memory_with_metadata, table_count, timestamp_unix_ms,
-};
+use crate::memory_db::{normalize_non_empty, open_memory_db, table_count, timestamp_unix_ms};
+use crate::memory_store::store_memory_with_metadata;
 use crate::memory_store_types::*;
 
 pub(crate) fn local_store_stats() -> Result<LocalStoreStats> {

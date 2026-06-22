@@ -53,6 +53,7 @@ pub mod cmd_transcript;
 pub mod cmd_verify;
 pub mod cmd_wakeup;
 pub mod economics;
+mod memory_db;
 mod memory_feedback_transcript;
 mod memory_graph_render;
 mod memory_lint;

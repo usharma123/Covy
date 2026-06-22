@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
 
-use crate::memory_store::{
+use crate::memory_db::{
     expanded_filter_limit, fts_match_query, normalize_non_empty, open_memory_db, table_count,
     timestamp_unix_ms,
 };
