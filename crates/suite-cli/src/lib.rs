@@ -54,6 +54,7 @@ pub mod cmd_verify;
 pub mod cmd_wakeup;
 pub mod economics;
 mod memory_lint;
+mod memory_project_scan;
 mod memory_store;
 mod memory_store_types;
 pub mod packet28_agent;
