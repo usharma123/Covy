@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -10,10 +9,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use packet28_daemon_core::{
-    hook_runtime_config_path, load_task_events, load_task_registry, task_artifact_dir,
-    task_brief_markdown_path, task_state_json_path, task_version_json_path, BrokerAction,
-    BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
-    BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
+    load_task_events, task_artifact_dir, task_brief_markdown_path, task_state_json_path,
+    task_version_json_path, BrokerAction, BrokerPrepareHandoffRequest, BrokerResponseMode,
+    BrokerTaskStatusRequest, BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
     BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
     BrokerWriteStateResponse, DaemonRequest, DaemonResponse, TaskRecord,
 };
@@ -22,6 +20,8 @@ use serde_json::{json, Map, Value};
 
 #[path = "cmd_mcp_config.rs"]
 mod config;
+#[path = "cmd_mcp_core_tools.rs"]
+mod core_tools;
 #[path = "cmd_mcp_fff.rs"]
 mod fff;
 #[path = "cmd_mcp_memory_tools.rs"]
@@ -54,41 +54,37 @@ mod tool_catalog;
 mod transport;
 
 use crate::cmd_mcp::config::McpProxyConfig;
+use crate::cmd_mcp::core_tools::handle_packet28_agent_status;
 use crate::cmd_mcp::fff::FffMcpClient;
 use crate::cmd_mcp::native_tools::{
     handle_packet28_fetch_context, handle_packet28_fetch_raw_output,
     handle_packet28_fetch_tool_result, handle_packet28_glob, handle_packet28_prepare_handoff,
     handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
-    handle_packet28_validate_plan, handle_packet28_write_intention, Packet28ActionCriticArgs,
-    Packet28FetchContextArgs, Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs,
-    Packet28GlobArgs, Packet28HandoffCompressionArgs, Packet28HandoffDependencyLintArgs,
-    Packet28HandoffDiffArgs, Packet28HandoffEnvironmentLintArgs, Packet28HandoffFixPlanArgs,
-    Packet28HandoffLintAllArgs, Packet28HandoffLintRegressionArgs, Packet28HandoffLintTrendArgs,
-    Packet28HandoffPathLintArgs, Packet28HandoffRepairVerifyArgs,
-    Packet28HandoffStaleCommandLintArgs, Packet28HandoffTestLintArgs, Packet28PatchRiskArgs,
-    Packet28PrepareHandoffArgs, Packet28PromptPressureArgs, Packet28ReadRegionsArgs,
-    Packet28RecommendNextToolArgs, Packet28SearchArgs, Packet28SearchFastArgs,
-    Packet28ValidatePlanArgs, Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
-    Packet28WriteIntentionArgs,
+    handle_packet28_validate_plan, Packet28ActionCriticArgs, Packet28FetchContextArgs,
+    Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs, Packet28GlobArgs,
+    Packet28HandoffCompressionArgs, Packet28HandoffDependencyLintArgs, Packet28HandoffDiffArgs,
+    Packet28HandoffEnvironmentLintArgs, Packet28HandoffFixPlanArgs, Packet28HandoffLintAllArgs,
+    Packet28HandoffLintRegressionArgs, Packet28HandoffLintTrendArgs, Packet28HandoffPathLintArgs,
+    Packet28HandoffRepairVerifyArgs, Packet28HandoffStaleCommandLintArgs,
+    Packet28HandoffTestLintArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
+    Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
+    Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
+    Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
 };
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
     resolve_current_task_id,
 };
 use crate::cmd_mcp::proxy::{load_proxy_config, serve_proxy_stdio};
-use crate::cmd_mcp::response::{capabilities_payload, summarize_tool_payload};
+use crate::cmd_mcp::response::summarize_tool_payload;
 pub(crate) use crate::cmd_mcp::smoke::smoke_test_agent_config;
 use crate::cmd_mcp::support::{
     broker_task_status_via_session, classify_error_message, extract_named_string, extract_paths,
     extract_symbols, is_retryable_error, maybe_store_result_artifact, resolve_session_task_id,
     store_tool_artifact, summarize_json_value, track_task,
 };
-use crate::cmd_mcp::tool_args::*;
 use crate::cmd_mcp::tool_catalog::{canonical_tool_name, tools_list_payload};
 use crate::cmd_mcp::transport::{read_message, write_message, McpMessageFraming};
-use crate::route_registry::{
-    build_route_rewrite, decide_command_route_with_cwd_and_root, NativeToolKind, RouteKind,
-};
 
 #[derive(Args)]
 pub struct McpArgs {
@@ -452,144 +448,12 @@ fn handle_tool_call(
         memory_tools::handle_memory_tool_call(root, name, &arguments)?
     {
         memory_payload
+    } else if let Some(core_payload) =
+        core_tools::handle_core_tool_call(root, session, name, &arguments)?
+    {
+        core_payload
     } else {
-        match name {
-            "packet28.verify_experiments" => {
-                let request: VerifyExperimentsToolArgs = serde_json::from_value(arguments)?;
-                let manifest = root.join(
-                    request
-                        .manifest
-                        .as_deref()
-                        .unwrap_or("docs/experiments/manifest.json"),
-                );
-                crate::cmd_verify::verify_experiments_payload(
-                    root,
-                    &manifest,
-                    &request.require_workflows.unwrap_or_default(),
-                    false,
-                )?
-            }
-            "packet28.reducer_drift" => {
-                let request: ReducerDriftToolArgs = serde_json::from_value(arguments)?;
-                let fixture = root.join(
-                    request
-                        .fixture
-                        .as_deref()
-                        .unwrap_or("docs/reducer-drift/fixtures.json"),
-                );
-                crate::cmd_verify::verify_reducer_drift_payload(&fixture)?
-            }
-            "packet28.hypothesis_add" => {
-                let mut request: HypothesisAddToolArgs = serde_json::from_value(arguments)?;
-                request.task_id = Some(resolve_session_task_id(
-                    session,
-                    root,
-                    request.task_id.as_deref().unwrap_or_default(),
-                    Some(request.text.as_str()),
-                    name,
-                )?);
-                let task_id = request.task_id.as_deref().unwrap_or_default();
-                track_task(session, root, task_id)?;
-                serde_json::to_value(crate::cmd_hypothesis::add_hypothesis_record(
-                    root,
-                    task_id,
-                    request.id,
-                    &request.text,
-                    request.paths.unwrap_or_default(),
-                    request.symbols.unwrap_or_default(),
-                    request.artifact_id,
-                )?)?
-            }
-            "packet28.hypothesis_list" => {
-                let mut request: HypothesisListToolArgs = serde_json::from_value(arguments)?;
-                request.task_id = Some(resolve_session_task_id(
-                    session,
-                    root,
-                    request.task_id.as_deref().unwrap_or_default(),
-                    None,
-                    name,
-                )?);
-                let task_id = request.task_id.as_deref().unwrap_or_default();
-                track_task(session, root, task_id)?;
-                serde_json::to_value(crate::cmd_hypothesis::active_hypotheses(root, task_id)?)?
-            }
-            "packet28.hypothesis_resolve" => {
-                let mut request: HypothesisResolveToolArgs = serde_json::from_value(arguments)?;
-                request.task_id = Some(resolve_session_task_id(
-                    session,
-                    root,
-                    request.task_id.as_deref().unwrap_or_default(),
-                    Some(request.id.as_str()),
-                    name,
-                )?);
-                let status = match request.status.trim() {
-                "confirmed" | "confirm" => "confirmed",
-                "rejected" | "reject" => "rejected",
-                other => {
-                    return Err(anyhow!(
-                        "packet28.hypothesis_resolve status must be confirmed or rejected, got '{other}'"
-                    ))
-                }
-            };
-                let task_id = request.task_id.as_deref().unwrap_or_default();
-                track_task(session, root, task_id)?;
-                serde_json::to_value(crate::cmd_hypothesis::resolve_hypothesis_record(
-                    root,
-                    task_id,
-                    &request.id,
-                    status,
-                    request.note,
-                )?)?
-            }
-            "packet28.reduce" => {
-                let request: ReduceToolArgs = serde_json::from_value(arguments)?;
-                handle_packet28_reduce(request)?
-            }
-            "packet28.rewrite" => {
-                let request: RewriteToolArgs = serde_json::from_value(arguments)?;
-                handle_packet28_rewrite(root, request)
-            }
-            "packet28.doctor" => {
-                let request: DoctorToolArgs = serde_json::from_value(arguments)?;
-                handle_packet28_doctor(root, request)?
-            }
-            "packet28.write_intention" => {
-                let mut request: Packet28WriteIntentionArgs = serde_json::from_value(arguments)?;
-                request.task_id = resolve_session_task_id(
-                    session,
-                    root,
-                    &request.task_id,
-                    Some(request.text.as_str()),
-                    "packet28.write_intention",
-                )?;
-                track_task(session, root, &request.task_id)?;
-                crate::task_runtime::store_active_task(
-                    root,
-                    &packet28_daemon_core::ActiveTaskRecord {
-                        task_id: request.task_id.clone(),
-                        session_id: None,
-                        updated_at_unix: packet28_daemon_core::now_unix(),
-                    },
-                )?;
-                handle_packet28_write_intention(root, session, request)?
-            }
-            "packet28.task_status" => {
-                let task_id = resolve_session_task_id(
-                    session,
-                    root,
-                    arguments
-                        .get("task_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    None,
-                    "packet28.task_status",
-                )?;
-                track_task(session, root, &task_id)?;
-                serde_json::to_value(broker_task_status_via_session(root, session, &task_id)?)?
-            }
-            "packet28.capabilities" => capabilities_payload(),
-            _ => return Err(anyhow!("unsupported tool '{name}'")),
-        }
+        return Err(anyhow!("unsupported tool '{name}'"));
     };
     Ok(json!({
         "content": [
@@ -599,135 +463,6 @@ fn handle_tool_call(
             }
         ],
         "structuredContent": payload
-    }))
-}
-
-fn handle_packet28_reduce(request: ReduceToolArgs) -> Result<Value> {
-    let spec = packet28_reducer_core::classify_command(&request.command)
-        .ok_or_else(|| anyhow!("unsupported command for packet28.reduce"))?;
-    let reduction = packet28_reducer_core::reduce_command_output(
-        &spec,
-        request.stdout.as_deref().unwrap_or_default(),
-        request.stderr.as_deref().unwrap_or_default(),
-        request.exit_code.unwrap_or(0),
-    )?;
-    Ok(json!({
-        "command": request.command,
-        "reduction": reduction,
-        "reducer_family": spec.family,
-        "reducer_kind": spec.canonical_kind,
-    }))
-}
-
-fn handle_packet28_rewrite(root: &Path, request: RewriteToolArgs) -> Value {
-    let cwd = request
-        .cwd
-        .clone()
-        .unwrap_or_else(|| root.display().to_string());
-    let decision = decide_command_route_with_cwd_and_root(&request.command, Path::new(&cwd), root);
-    let task_id = request.task_id.as_deref().unwrap_or("packet28-mcp-rewrite");
-    let rewritten = build_route_rewrite(
-        root,
-        task_id,
-        request.session_id.as_deref(),
-        &cwd,
-        &decision,
-    );
-    let native_tool = decision.native_tool.as_ref().map(|tool| match tool.kind {
-        NativeToolKind::Tree => "tree",
-        NativeToolKind::Read => "read",
-        NativeToolKind::Grep => "grep",
-        NativeToolKind::Env => "env",
-    });
-    json!({
-        "command": request.command,
-        "route": match decision.kind {
-            RouteKind::ReducerRewrite => "reducer_rewrite",
-            RouteKind::NativeTool => "native_tool",
-            RouteKind::TomlFilterRewrite => "toml_filter_rewrite",
-            RouteKind::CompoundRewrite => "compound_rewrite",
-            RouteKind::ProxyPassthrough => "proxy_passthrough",
-            RouteKind::RawPassthrough => "raw_passthrough",
-        },
-        "reason": decision.reason,
-        "env_assignments": decision.env_assignments,
-        "native_tool": native_tool,
-        "rewritten_command": rewritten,
-        "reducer_family": decision.reducer_spec.as_ref().map(|spec| spec.family.clone()),
-        "reducer_kind": decision
-            .reducer_spec
-            .as_ref()
-            .map(|spec| spec.canonical_kind.clone()),
-    })
-}
-
-fn handle_packet28_doctor(root: &Path, request: DoctorToolArgs) -> Result<Value> {
-    let mut command = Command::new(std::env::current_exe()?);
-    command.arg("doctor").arg("--root").arg(root).arg("--json");
-    if let Some(agent) = request.agent {
-        command.arg("--agent").arg(agent);
-    }
-    let output = command.output().context("failed to run Packet28 doctor")?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "Packet28 doctor failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    serde_json::from_slice(&output.stdout).context("Packet28 doctor did not return JSON")
-}
-
-fn handle_packet28_agent_status(root: &Path, arguments: Value) -> Result<Value> {
-    #[derive(Deserialize, Default)]
-    struct AgentStatusArgs {
-        task_id: Option<String>,
-    }
-
-    let request = serde_json::from_value::<AgentStatusArgs>(arguments).unwrap_or_default();
-    let active = crate::task_runtime::load_active_task(root);
-    let task_id = request
-        .task_id
-        .or_else(|| active.as_ref().map(|record| record.task_id.clone()));
-    let registry = load_task_registry(root).ok();
-    let task = task_id.as_ref().and_then(|id| {
-        registry
-            .as_ref()
-            .and_then(|registry| registry.tasks.get(id))
-    });
-    let cache_entries = task
-        .map(|task| task.hook_reducer_cache.len())
-        .unwrap_or_default();
-    let workspace_guarded_entries = task
-        .map(|task| {
-            task.hook_reducer_cache
-                .values()
-                .filter(|entry| entry.workspace_fingerprint.is_some())
-                .count()
-        })
-        .unwrap_or_default();
-
-    Ok(json!({
-        "status": "ok",
-        "root": root.display().to_string(),
-        "active_task_id": active.as_ref().map(|record| record.task_id.clone()),
-        "task_id": task_id,
-        "hook_config_present": hook_runtime_config_path(root).exists(),
-        "reducer_cache_safety": {
-            "workspace_fingerprint_enabled": true,
-            "policy": "safe_by_default",
-            "cache_entries": cache_entries,
-            "workspace_guarded_entries": workspace_guarded_entries
-        },
-        "mcp": {
-            "manual_json_rpc_required": false,
-            "recommended_path": "Packet28 setup --runtime all --yes"
-        },
-        "task": task.map(|task| json!({
-            "latest_context_version": task.latest_context_version,
-            "latest_hook_command_kind": task.latest_hook_command_kind,
-            "hook_window_est_tokens": task.hook_window_est_tokens,
-            "hook_threshold_exceeded": task.hook_threshold_exceeded
-        }))
     }))
 }
 
