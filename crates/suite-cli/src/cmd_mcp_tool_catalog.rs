@@ -9,9 +9,14 @@ fn cursor_safe_tool_name(name: &str) -> String {
 }
 
 pub(super) fn canonical_tool_name(name: &str) -> String {
-    name.strip_prefix("packet28_")
+    let dotted = name
+        .strip_prefix("packet28_")
         .map(|suffix| format!("packet28.{suffix}"))
-        .unwrap_or_else(|| name.to_string())
+        .unwrap_or_else(|| name.to_string());
+    match dotted.as_str() {
+        "packet28.handoff" => "packet28.prepare_handoff".to_string(),
+        _ => dotted,
+    }
 }
 
 fn rewrite_tool_names_for_cursor(payload: &mut Value) {
@@ -52,14 +57,9 @@ fn is_core_mcp_tool(name: &str) -> bool {
             | "packet28.fetch_raw_output"
             | "packet28.fetch_context"
             | "packet28.prepare_handoff"
-            | "packet28.handoff"
             | "packet28.write_intention"
             | "packet28.task_status"
             | "packet28.capabilities"
-            | "packet28.action_critic"
-            | "packet28.recommend_next_tool"
-            | "packet28.validate_tool_outcome"
-            | "packet28.patch_risk"
     )
 }
 pub(super) fn tools_list_payload(toolset: McpToolset) -> Value {
@@ -352,18 +352,6 @@ pub(super) fn tools_list_payload(toolset: McpToolset) -> Value {
                 {
                     "name": "packet28.prepare_handoff",
                     "description": "Prepare a compact Packet28 handoff packet for bootstrapping a fresh worker after a checkpoint.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "task_id": {"type":"string"},
-                            "query": {"type":"string"},
-                            "response_mode": {"type":"string","enum":["slim","full"]}
-                        }
-                    }
-                },
-                {
-                    "name": "packet28.handoff",
-                    "description": "Compatibility alias for packet28.prepare_handoff.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {

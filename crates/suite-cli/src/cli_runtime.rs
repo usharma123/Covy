@@ -679,4 +679,32 @@ mod tests {
 
         assert!(matches!(cli.command, Some(Commands::Plan(_))));
     }
+
+    #[test]
+    fn daemon_task_watch_parses_after_seq_cursor() {
+        let cli = Cli::try_parse_from([
+            "Packet28",
+            "daemon",
+            "task",
+            "watch",
+            "--task-id",
+            "task-1",
+            "--after-seq",
+            "42",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Daemon(daemon)) => match daemon.command {
+                cmd_daemon::DaemonCommands::Task(task) => match task.command {
+                    cmd_daemon::TaskCommands::Watch(args) => {
+                        assert_eq!(args.after_seq, Some(42));
+                    }
+                    _ => panic!("unexpected daemon task command"),
+                },
+                _ => panic!("unexpected daemon command"),
+            },
+            _ => panic!("unexpected command"),
+        }
+    }
 }

@@ -128,7 +128,7 @@ fn test_mcp_native_stdio_accepts_newline_json() {
         initialize["result"]["serverInfo"]["version"],
         workspace_packet28_version()
     );
-    assert_eq!(initialize["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(initialize["result"]["protocolVersion"], "2025-03-26");
     assert!(initialize["result"]["capabilities"]["experimental"].is_null());
 
     write_mcp_message_newline(
@@ -170,6 +170,39 @@ fn test_mcp_native_stdio_accepts_newline_json() {
         .unwrap()
         .iter()
         .any(|tool| tool["name"] == "packet28_sync"));
+
+    write_mcp_message_newline(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":3,
+            "params":{}
+        }),
+    );
+    let missing_method = read_mcp_message_newline(&mut stdout);
+    assert_eq!(missing_method["error"]["code"], -32600);
+
+    write_mcp_message_newline(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":4,
+            "method":"definitely/unknown"
+        }),
+    );
+    let unknown_method = read_mcp_message_newline(&mut stdout);
+    assert_eq!(unknown_method["error"]["code"], -32601);
+
+    write_mcp_message_newline(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":5,
+            "method":"tools/list"
+        }),
+    );
+    let after_error = read_mcp_message_newline(&mut stdout);
+    assert!(after_error["result"]["tools"].as_array().is_some());
 
     let _ = child.kill();
 }

@@ -615,7 +615,7 @@ fn extract_vitest_failure(output: &str) -> Option<String> {
 }
 
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
-    format!("{family}:{kind}:{}", argv.join("\u{1f}"))
+    crate::cache_fingerprint(family, kind, argv)
 }
 
 fn compact_vitest_failures(output: &str) -> String {

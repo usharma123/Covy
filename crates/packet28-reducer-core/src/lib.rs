@@ -29,3 +29,9 @@ pub use search::{
 #[cfg(test)]
 pub(crate) use search::{parse_grep_output_line, render_search_compact_preview, search_without_rg};
 pub use types::*;
+
+pub(crate) fn cache_fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
+    let material = format!("{family}:{kind}:{}", argv.join("\u{1f}"));
+    let digest = blake3::hash(material.as_bytes()).to_hex().to_string();
+    format!("{family}:{kind}:{digest}")
+}

@@ -1,5 +1,15 @@
 use super::*;
 use fs2::FileExt;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone)]
+pub struct TaskEventLogRead {
+    pub events: Vec<DaemonEventFrame>,
+    pub next_offset: u64,
+}
 
 pub fn ensure_daemon_dir(root: &Path) -> Result<PathBuf> {
     let dir = daemon_dir(root);
@@ -20,9 +30,9 @@ pub fn ensure_daemon_dir(root: &Path) -> Result<PathBuf> {
 
 pub fn write_runtime_info(root: &Path, info: &DaemonRuntimeInfo) -> Result<()> {
     ensure_daemon_dir(root)?;
-    fs::write(pid_path(root), format!("{}\n", info.pid))
+    write_atomically(&pid_path(root), format!("{}\n", info.pid).as_bytes())
         .with_context(|| format!("failed to write pid file for '{}'", root.display()))?;
-    fs::write(runtime_path(root), serde_json::to_vec_pretty(info)?)
+    write_atomically(&runtime_path(root), &serde_json::to_vec_pretty(info)?)
         .with_context(|| format!("failed to write runtime file for '{}'", root.display()))?;
     Ok(())
 }
@@ -51,40 +61,46 @@ pub fn remove_runtime_files(root: &Path) -> Result<()> {
 
 pub fn load_watch_registry(root: &Path) -> Result<WatchRegistry> {
     let path = watch_registry_path(root);
-    if !path.exists() {
-        return Ok(WatchRegistry::default());
-    }
-    let raw = fs::read(&path)
-        .with_context(|| format!("failed to read watch registry '{}'", path.display()))?;
-    Ok(serde_json::from_slice(&raw)?)
+    with_registry_lock(root, &path, RegistryLockMode::Shared, || {
+        if !path.exists() {
+            return Ok(WatchRegistry::default());
+        }
+        let raw = fs::read(&path)
+            .with_context(|| format!("failed to read watch registry '{}'", path.display()))?;
+        Ok(serde_json::from_slice(&raw)?)
+    })
 }
 
 pub fn save_watch_registry(root: &Path, registry: &WatchRegistry) -> Result<()> {
-    ensure_daemon_dir(root)?;
     let path = watch_registry_path(root);
     let bytes = serde_json::to_vec_pretty(registry)?;
-    write_atomically(&path, &bytes)
-        .with_context(|| format!("failed to write watch registry '{}'", path.display()))?;
-    Ok(())
+    with_registry_lock(root, &path, RegistryLockMode::Exclusive, || {
+        write_atomically(&path, &bytes)
+            .with_context(|| format!("failed to write watch registry '{}'", path.display()))?;
+        Ok(())
+    })
 }
 
 pub fn load_task_registry(root: &Path) -> Result<TaskRegistry> {
     let path = task_registry_path(root);
-    if !path.exists() {
-        return Ok(TaskRegistry::default());
-    }
-    let raw = fs::read(&path)
-        .with_context(|| format!("failed to read task registry '{}'", path.display()))?;
-    Ok(serde_json::from_slice(&raw)?)
+    with_registry_lock(root, &path, RegistryLockMode::Shared, || {
+        if !path.exists() {
+            return Ok(TaskRegistry::default());
+        }
+        let raw = fs::read(&path)
+            .with_context(|| format!("failed to read task registry '{}'", path.display()))?;
+        Ok(serde_json::from_slice(&raw)?)
+    })
 }
 
 pub fn save_task_registry(root: &Path, registry: &TaskRegistry) -> Result<()> {
-    ensure_daemon_dir(root)?;
     let path = task_registry_path(root);
     let bytes = serde_json::to_vec_pretty(registry)?;
-    write_atomically(&path, &bytes)
-        .with_context(|| format!("failed to write task registry '{}'", path.display()))?;
-    Ok(())
+    with_registry_lock(root, &path, RegistryLockMode::Exclusive, || {
+        write_atomically(&path, &bytes)
+            .with_context(|| format!("failed to write task registry '{}'", path.display()))?;
+        Ok(())
+    })
 }
 
 pub fn append_task_event(root: &Path, frame: &DaemonEventFrame) -> Result<()> {
@@ -99,7 +115,7 @@ pub fn append_task_event(root: &Path, frame: &DaemonEventFrame) -> Result<()> {
         .append(true)
         .open(&path)
         .with_context(|| format!("failed to open task event log '{}'", path.display()))?;
-    file.lock_exclusive()
+    FileExt::lock_exclusive(&file)
         .with_context(|| format!("failed to lock task event log '{}'", path.display()))?;
     file.write_all(&bytes)
         .with_context(|| format!("failed to append task event log '{}'", path.display()))?;
@@ -109,17 +125,65 @@ pub fn append_task_event(root: &Path, frame: &DaemonEventFrame) -> Result<()> {
 }
 
 pub fn load_task_events(root: &Path, task_id: &str) -> Result<Vec<DaemonEventFrame>> {
+    Ok(load_task_events_from_offset(root, task_id, 0)?.events)
+}
+
+pub fn task_event_log_len(root: &Path, task_id: &str) -> Result<u64> {
     let path = task_event_log_path(root, task_id);
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(0);
     }
-    let raw = fs::read_to_string(&path)
+    Ok(fs::metadata(&path)
+        .with_context(|| format!("failed to stat task event log '{}'", path.display()))?
+        .len())
+}
+
+pub fn load_task_events_from_offset(
+    root: &Path,
+    task_id: &str,
+    offset: u64,
+) -> Result<TaskEventLogRead> {
+    let path = task_event_log_path(root, task_id);
+    if !path.exists() {
+        return Ok(TaskEventLogRead {
+            events: Vec::new(),
+            next_offset: 0,
+        });
+    }
+    let mut file = fs::File::open(&path)
         .with_context(|| format!("failed to read task event log '{}'", path.display()))?;
+    let len = file
+        .metadata()
+        .with_context(|| format!("failed to stat task event log '{}'", path.display()))?
+        .len();
+    let start = offset.min(len);
+    file.seek(SeekFrom::Start(start))
+        .with_context(|| format!("failed to seek task event log '{}'", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut next_offset = start;
+    let mut line = String::new();
     let mut events = Vec::new();
-    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        events.push(serde_json::from_str(line)?);
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .with_context(|| format!("failed to read task event log '{}'", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        next_offset = next_offset.saturating_add(read as u64);
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.trim().is_empty() {
+            continue;
+        }
+        if let Ok(frame) = serde_json::from_str(trimmed) {
+            events.push(frame);
+        }
     }
-    Ok(events)
+    Ok(TaskEventLogRead {
+        events,
+        next_offset,
+    })
 }
 
 pub fn resolve_workspace_root(start: &Path) -> PathBuf {
@@ -176,7 +240,7 @@ pub fn now_unix() -> u64 {
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temp_path = path.with_extension("tmp");
+    let temp_path = atomic_temp_path(path);
     let mut file = fs::File::create(&temp_path)
         .with_context(|| format!("failed to create temp file '{}'", temp_path.display()))?;
     file.write_all(bytes)
@@ -193,9 +257,71 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RegistryLockMode {
+    Shared,
+    Exclusive,
+}
+
+fn with_registry_lock<T>(
+    root: &Path,
+    registry_path: &Path,
+    mode: RegistryLockMode,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    ensure_daemon_dir(root)?;
+    let lock_path = registry_lock_path(registry_path);
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open registry lock '{}'", lock_path.display()))?;
+    match mode {
+        RegistryLockMode::Shared => FileExt::lock_shared(&file)
+            .with_context(|| format!("failed to lock registry '{}'", registry_path.display()))?,
+        RegistryLockMode::Exclusive => FileExt::lock_exclusive(&file)
+            .with_context(|| format!("failed to lock registry '{}'", registry_path.display()))?,
+    }
+
+    let result = operation();
+    let unlock_result = FileExt::unlock(&file)
+        .with_context(|| format!("failed to unlock registry '{}'", registry_path.display()));
+    match (result, unlock_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(err), _) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
+    }
+}
+
+fn registry_lock_path(registry_path: &Path) -> PathBuf {
+    let file_name = registry_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("registry");
+    registry_path.with_file_name(format!(".{file_name}.lock"))
+}
+
+fn atomic_temp_path(path: &Path) -> PathBuf {
+    let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("packet28");
+    path.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        counter
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -229,5 +355,105 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].seq, 1);
         assert_eq!(loaded[1].event.kind, "task_completed");
+    }
+
+    #[test]
+    fn task_event_reads_skip_corrupt_lines_and_report_offsets() {
+        let dir = tempdir().unwrap();
+        let path = task_event_log_path(dir.path(), "task/demo");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            concat!(
+                "{\"seq\":1,\"task_id\":\"task/demo\",\"event\":{\"kind\":\"task_started\",\"occurred_at_unix\":1,\"data\":{}}}\n",
+                "{not-json}\n",
+                "{\"seq\":2,\"task_id\":\"task/demo\",\"event\":{\"kind\":\"task_completed\",\"occurred_at_unix\":2,\"data\":{}}}\n"
+            ),
+        )
+        .unwrap();
+
+        let full = load_task_events_from_offset(dir.path(), "task/demo", 0).unwrap();
+        assert_eq!(full.events.len(), 2);
+        assert_eq!(full.events[0].seq, 1);
+        assert_eq!(full.events[1].seq, 2);
+        assert_eq!(full.next_offset, fs::metadata(&path).unwrap().len());
+
+        let after_full =
+            load_task_events_from_offset(dir.path(), "task/demo", full.next_offset).unwrap();
+        assert!(after_full.events.is_empty());
+        assert_eq!(after_full.next_offset, full.next_offset);
+    }
+
+    #[test]
+    fn atomic_temp_paths_are_unique_for_same_target() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("registry.json");
+        let first = atomic_temp_path(&path);
+        let second = atomic_temp_path(&path);
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(dir.path()));
+        assert_eq!(second.parent(), Some(dir.path()));
+    }
+
+    #[test]
+    fn registry_lock_path_is_hidden_sibling() {
+        let dir = tempdir().unwrap();
+        let registry = task_registry_path(dir.path());
+
+        assert_eq!(
+            registry_lock_path(&registry),
+            daemon_dir(dir.path()).join(".task-registry-v1.json.lock")
+        );
+    }
+
+    #[test]
+    fn save_task_registry_waits_for_registry_lock() {
+        let dir = tempdir().unwrap();
+        ensure_daemon_dir(dir.path()).unwrap();
+        let lock_path = registry_lock_path(&task_registry_path(dir.path()));
+        let lock_file = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        FileExt::lock_exclusive(&lock_file).unwrap();
+
+        let root = dir.path().to_path_buf();
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            tx.send(save_task_registry(&root, &TaskRegistry::default()))
+                .unwrap();
+        });
+
+        assert!(rx.recv_timeout(Duration::from_millis(75)).is_err());
+        FileExt::unlock(&lock_file).unwrap();
+        rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn load_task_registry_waits_for_registry_lock() {
+        let dir = tempdir().unwrap();
+        save_task_registry(dir.path(), &TaskRegistry::default()).unwrap();
+        let lock_path = registry_lock_path(&task_registry_path(dir.path()));
+        let lock_file = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        FileExt::lock_exclusive(&lock_file).unwrap();
+
+        let root = dir.path().to_path_buf();
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || tx.send(load_task_registry(&root)).unwrap());
+
+        assert!(rx.recv_timeout(Duration::from_millis(75)).is_err());
+        FileExt::unlock(&lock_file).unwrap();
+        rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        handle.join().unwrap();
     }
 }

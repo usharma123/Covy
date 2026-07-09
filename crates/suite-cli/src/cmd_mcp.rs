@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use packet28_daemon_core::{
-    load_task_events, task_artifact_dir, task_brief_markdown_path, task_state_json_path,
-    task_version_json_path, BrokerAction, BrokerPrepareHandoffRequest, BrokerResponseMode,
-    BrokerTaskStatusRequest, BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
+    load_task_events, load_task_events_from_offset, task_artifact_dir, task_brief_markdown_path,
+    task_event_log_len, task_state_json_path, task_version_json_path, BrokerAction,
+    BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
+    BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
     BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
     BrokerWriteStateResponse, DaemonRequest, DaemonResponse, TaskRecord,
 };
@@ -86,6 +87,11 @@ use crate::cmd_mcp::support::{
 use crate::cmd_mcp::tool_catalog::{canonical_tool_name, tools_list_payload};
 use crate::cmd_mcp::transport::{read_message, write_message, McpMessageFraming};
 
+const MCP_PROTOCOL_VERSION_2024_11_05: &str = "2024-11-05";
+const MCP_PROTOCOL_VERSION_2025_03_26: &str = "2025-03-26";
+const MCP_LATEST_PROTOCOL_VERSION: &str = MCP_PROTOCOL_VERSION_2025_03_26;
+const MCP_NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
 #[derive(Args)]
 pub struct McpArgs {
     #[command(subcommand)]
@@ -146,6 +152,7 @@ struct McpSessionState {
     shutdown: bool,
     toolset: McpToolset,
     tracked_tasks: BTreeMap<String, u64>,
+    tracked_task_offsets: BTreeMap<String, u64>,
     current_task_id: Option<String>,
     framing: Option<McpMessageFraming>,
     tool_owners: BTreeMap<String, String>,
@@ -222,12 +229,18 @@ fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
         if let Ok(mut guard) = session.lock() {
             guard.framing = Some(framing);
         }
-        let method = request
-            .get("method")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("missing method"))?;
         let params = request.get("params").cloned().unwrap_or(Value::Null);
         let id = request.get("id").cloned();
+        let Some(method) = request.get("method").and_then(Value::as_str) else {
+            if let Some(id) = id {
+                let response = mcp_error_response(id, -32600, "missing method");
+                let mut guard = writer
+                    .lock()
+                    .map_err(|_| anyhow!("failed to lock MCP stdout"))?;
+                write_message(&mut *guard, &response, framing)?;
+            }
+            continue;
+        };
 
         if id.is_none() {
             let _ = handle_notification(&root, &session, method, params);
@@ -236,14 +249,11 @@ fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
 
         let response = match handle_method(&root, &session, method, params) {
             Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-            Err(err) => json!({
-                "jsonrpc":"2.0",
-                "id":id,
-                "error":{
-                    "code":-32000,
-                    "message":err.to_string()
-                }
-            }),
+            Err(err) => mcp_error_response(
+                id.unwrap_or(Value::Null),
+                mcp_error_code(&err),
+                &err.to_string(),
+            ),
         };
         let mut guard = writer
             .lock()
@@ -263,31 +273,38 @@ fn start_notification_thread(
     session: Arc<Mutex<McpSessionState>>,
 ) {
     thread::spawn(move || loop {
-        let (initialized, shutdown, tracked_tasks, framing) = match session.lock() {
-            Ok(guard) => (
-                guard.initialized,
-                guard.shutdown,
-                guard.tracked_tasks.clone(),
-                guard.framing,
-            ),
-            Err(_) => return,
-        };
+        let (initialized, shutdown, tracked_tasks, tracked_task_offsets, framing) =
+            match session.lock() {
+                Ok(guard) => (
+                    guard.initialized,
+                    guard.shutdown,
+                    guard.tracked_tasks.clone(),
+                    guard.tracked_task_offsets.clone(),
+                    guard.framing,
+                ),
+                Err(_) => return,
+            };
         if shutdown {
             return;
         }
         if !initialized || framing.is_none() {
-            thread::sleep(Duration::from_millis(250));
+            thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
             continue;
         }
         let framing = framing.unwrap_or(McpMessageFraming::ContentLength);
 
         for (task_id, last_seen_seq) in tracked_tasks {
-            let frames = match load_task_events(&root, &task_id) {
-                Ok(frames) => frames,
+            let previous_offset = tracked_task_offsets.get(&task_id).copied().unwrap_or(0);
+            let read = match load_task_events_from_offset(&root, &task_id, previous_offset) {
+                Ok(read) => read,
                 Err(_) => continue,
             };
             let mut newest_delivered_seq = last_seen_seq;
-            for frame in frames.into_iter().filter(|frame| frame.seq > last_seen_seq) {
+            for frame in read
+                .events
+                .into_iter()
+                .filter(|frame| frame.seq > last_seen_seq)
+            {
                 if frame.event.kind != "context_updated" {
                     newest_delivered_seq = newest_delivered_seq.max(frame.seq);
                     continue;
@@ -327,15 +344,18 @@ fn start_notification_thread(
                 }
                 newest_delivered_seq = newest_delivered_seq.max(frame.seq);
             }
-            if newest_delivered_seq > last_seen_seq {
+            if newest_delivered_seq > last_seen_seq || read.next_offset != previous_offset {
                 if let Ok(mut guard) = session.lock() {
                     if let Some(current) = guard.tracked_tasks.get_mut(&task_id) {
                         *current = newest_delivered_seq;
                     }
+                    guard
+                        .tracked_task_offsets
+                        .insert(task_id.clone(), read.next_offset);
                 }
             }
         }
-        thread::sleep(Duration::from_millis(250));
+        thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
     });
 }
 
@@ -370,11 +390,13 @@ fn handle_method(
                         .ok()
                         .and_then(|frames| frames.last().map(|frame| frame.seq))
                         .unwrap_or(last_seen_seq);
-                    guard.tracked_tasks.insert(task_id, latest_seq);
+                    let offset = task_event_log_len(root, &task_id).unwrap_or(0);
+                    guard.tracked_tasks.insert(task_id.clone(), latest_seq);
+                    guard.tracked_task_offsets.insert(task_id, offset);
                 }
             }
             Ok(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": negotiated_protocol_version(&params),
                 "capabilities": {
                     "tools": {},
                     "resources": {},
@@ -425,6 +447,40 @@ fn handle_method(
         })),
         "resources/read" => handle_resource_read(root, session, params),
         _ => Err(anyhow!("unsupported MCP method '{method}'")),
+    }
+}
+
+fn negotiated_protocol_version(params: &Value) -> &'static str {
+    match params.get("protocolVersion").and_then(Value::as_str) {
+        Some(MCP_PROTOCOL_VERSION_2024_11_05) => MCP_PROTOCOL_VERSION_2024_11_05,
+        Some(MCP_PROTOCOL_VERSION_2025_03_26) => MCP_PROTOCOL_VERSION_2025_03_26,
+        _ => MCP_LATEST_PROTOCOL_VERSION,
+    }
+}
+
+fn mcp_error_response(id: Value, code: i64, message: &str) -> Value {
+    json!({
+        "jsonrpc":"2.0",
+        "id":id,
+        "error":{
+            "code":code,
+            "message":message
+        }
+    })
+}
+
+fn mcp_error_code(err: &anyhow::Error) -> i64 {
+    let message = err.to_string();
+    if message.starts_with("unsupported MCP method") {
+        -32601
+    } else if message.contains("missing ")
+        || message.contains("invalid ")
+        || message.contains("expected ")
+        || message.contains("failed to parse")
+    {
+        -32602
+    } else {
+        -32603
     }
 }
 
@@ -522,8 +578,14 @@ mod tests {
         assert!(core_names.contains(&"packet28_read_regions"));
         assert!(core_names.contains(&"packet28_fetch_tool_result"));
         assert!(core_names.contains(&"packet28_write_intention"));
+        assert!(core_names.contains(&"packet28_prepare_handoff"));
+        assert!(!core_names.contains(&"packet28_handoff"));
         assert!(!core_names.contains(&"packet28_memory_store"));
-        assert!(core_tools.len() <= 16);
+        assert!(!core_names.contains(&"packet28_action_critic"));
+        assert!(!core_names.contains(&"packet28_recommend_next_tool"));
+        assert!(!core_names.contains(&"packet28_validate_tool_outcome"));
+        assert!(!core_names.contains(&"packet28_patch_risk"));
+        assert!(core_tools.len() <= 12);
 
         let all_session = Arc::new(Mutex::new(McpSessionState {
             toolset: McpToolset::All,
@@ -533,6 +595,7 @@ mod tests {
             handle_method(root.path(), &all_session, "tools/list", Value::Null).unwrap();
         let core_bytes = serde_json::to_vec(&core_payload).unwrap().len();
         let all_bytes = serde_json::to_vec(&all_payload).unwrap().len();
+        assert!(core_bytes <= 8 * 1024, "core={core_bytes}");
         assert!(
             core_bytes * 4 < all_bytes,
             "core={core_bytes} all={all_bytes}"
@@ -540,7 +603,16 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_product_compatibility_aliases() {
+    fn tools_list_omits_handoff_alias_but_accepts_compatibility_names() {
+        assert_eq!(
+            canonical_tool_name("packet28_handoff"),
+            "packet28.prepare_handoff"
+        );
+        assert_eq!(
+            canonical_tool_name("packet28.handoff"),
+            "packet28.prepare_handoff"
+        );
+
         let root = tempfile::tempdir().unwrap();
         let session = Arc::new(Mutex::new(McpSessionState {
             toolset: McpToolset::All,
@@ -554,10 +626,12 @@ mod tests {
             .filter_map(|tool| tool["name"].as_str())
             .collect::<Vec<_>>();
 
+        assert!(tool_names.contains(&"packet28_prepare_handoff"));
+        assert!(!tool_names.contains(&"packet28_handoff"));
+
         for required in [
             "packet28_reduce",
             "packet28_rewrite",
-            "packet28_handoff",
             "packet28_verify_handoff",
             "packet28_prompt_pressure",
             "packet28_handoff_diff",
@@ -950,6 +1024,20 @@ mod tests {
         assert_eq!(
             response["structuredContent"]["largest_removable_sections"][0]["id"],
             "search_evidence"
+        );
+        assert!(
+            response["structuredContent"]["pointer_savings_tokens"]
+                .as_u64()
+                .unwrap()
+                > 100
+        );
+        assert!(
+            response["structuredContent"]["pointer_total_tokens"]
+                .as_u64()
+                .unwrap()
+                < response["structuredContent"]["total_tokens"]
+                    .as_u64()
+                    .unwrap()
         );
         assert!(
             serde_json::to_string(&response["structuredContent"])

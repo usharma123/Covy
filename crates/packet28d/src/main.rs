@@ -155,6 +155,7 @@ fn serve(root: PathBuf) -> Result<()> {
 
     let runtime = DaemonRuntimeInfo {
         pid: std::process::id(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
         started_at_unix: now_unix(),
         ready_at_unix: None,
         socket_path: listener.endpoint(),

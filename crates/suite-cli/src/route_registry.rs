@@ -131,6 +131,9 @@ fn decide_command_route_inner(
     if is_rtk_ignored_command(&argv) {
         return raw_passthrough("ignored_command");
     }
+    if is_grep_extraction_command(&argv) {
+        return raw_passthrough("grep_extraction_mode");
+    }
     if policy_excludes_command(trimmed, &argv, policy_root) {
         return raw_passthrough("config_excluded");
     }
@@ -353,7 +356,8 @@ pub fn build_route_rewrite(
         RouteKind::ProxyPassthrough => build_proxy_rewrite(root, task_id, cwd, &decision.argv),
         RouteKind::RawPassthrough => return None,
     };
-    Some(apply_wrapper_prefix(&decision.wrapper_prefix, rewritten))
+    let rewritten = apply_wrapper_prefix(&decision.wrapper_prefix, rewritten);
+    is_rewrite_output_safe(&rewritten).then_some(rewritten)
 }
 
 fn raw_passthrough(reason: &str) -> RouteDecision {
@@ -449,6 +453,29 @@ fn is_packet28_invocation(argv: &[String]) -> bool {
         .and_then(|name| name.to_str())
         .map(|name| matches!(name, "Packet28" | "packet28" | "covy"))
         .unwrap_or(false)
+}
+
+fn is_grep_extraction_command(argv: &[String]) -> bool {
+    matches!(argv.first().map(String::as_str), Some("grep" | "rg"))
+        && argv.iter().skip(1).any(|arg| match arg.as_str() {
+            "-o"
+            | "--only-matching"
+            | "-c"
+            | "--count"
+            | "-l"
+            | "--files-with-matches"
+            | "-L"
+            | "--files-without-match"
+            | "-q"
+            | "--quiet"
+            | "--silent" => true,
+            value if value.starts_with("--only-matching=") || value.starts_with("--count=") => true,
+            value if value.starts_with('-') && !value.starts_with("--") => value
+                .trim_start_matches('-')
+                .chars()
+                .any(|ch| matches!(ch, 'o' | 'c' | 'l' | 'L' | 'q')),
+            _ => false,
+        })
 }
 
 fn is_rtk_ignored_command(argv: &[String]) -> bool {
@@ -653,17 +680,19 @@ fn build_compound_rewrite(
 ) -> Option<String> {
     let parts = split_compound_command(command)?;
     let cwd_path = Path::new(cwd);
-    let mut rewrite_next_segment = true;
+    let mut previous_operator_allows_rewrite = true;
     let mut changed = false;
     let mut out = Vec::with_capacity(parts.len());
-    for part in parts {
+    for (idx, part) in parts.iter().enumerate() {
         match part {
             CompoundPart::Operator(op) => {
-                rewrite_next_segment = op != "|";
+                previous_operator_allows_rewrite = *op != "|";
                 out.push(op.to_string());
             }
             CompoundPart::Segment(segment) => {
-                let rewritten = if rewrite_next_segment {
+                let stdout_feeds_pipe =
+                    matches!(parts.get(idx + 1), Some(CompoundPart::Operator("|")));
+                let rewritten = if previous_operator_allows_rewrite && !stdout_feeds_pipe {
                     let decision =
                         decide_command_route_inner(segment, Some(cwd_path), Some(root), false);
                     build_route_rewrite(root, task_id, session_id, cwd, &decision)
@@ -735,17 +764,21 @@ fn compound_has_rewritable_segment(
     let Some(parts) = split_compound_command(command) else {
         return false;
     };
-    let mut rewrite_next_segment = true;
-    for part in parts {
+    let mut previous_operator_allows_rewrite = true;
+    for (idx, part) in parts.iter().enumerate() {
         match part {
-            CompoundPart::Operator(op) => rewrite_next_segment = op != "|",
-            CompoundPart::Segment(segment) if rewrite_next_segment => {
+            CompoundPart::Operator(op) => previous_operator_allows_rewrite = *op != "|",
+            CompoundPart::Segment(segment) => {
+                let stdout_feeds_pipe =
+                    matches!(parts.get(idx + 1), Some(CompoundPart::Operator("|")));
+                if !previous_operator_allows_rewrite || stdout_feeds_pipe {
+                    continue;
+                }
                 let decision = decide_command_route_inner(segment, cwd, policy_root, false);
                 if decision.kind != RouteKind::RawPassthrough {
                     return true;
                 }
             }
-            CompoundPart::Segment(_) => {}
         }
     }
     false
@@ -826,6 +859,9 @@ fn join_compound_parts(parts: &[String]) -> String {
 }
 
 fn strip_supported_postprocess(command: &str) -> (String, Option<Postprocess>) {
+    if std::env::var_os("PACKET28_ENABLE_PIPE_POSTPROCESS_REWRITE").is_none() {
+        return (command.trim().to_string(), None);
+    }
     let Some(pipe_idx) = find_last_top_level_pipe(command) else {
         return (command.trim().to_string(), None);
     };
@@ -985,6 +1021,10 @@ fn shell_join(argv: &[String]) -> String {
         .join(" ")
 }
 
+fn is_rewrite_output_safe(command: &str) -> bool {
+    command.chars().all(|ch| ch == '\t' || ch >= ' ')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1080,16 +1120,10 @@ mod tests {
     }
 
     #[test]
-    fn routes_reducer_commands_with_truncation_pipe() {
+    fn declines_reducer_commands_with_truncation_pipe() {
         let decision = decide_command_route("git show HEAD | head -n 20");
-        assert_eq!(decision.kind, RouteKind::ReducerRewrite);
-        assert_eq!(
-            decision
-                .reducer_spec
-                .as_ref()
-                .map(|spec| spec.canonical_kind.as_str()),
-            Some("git_show")
-        );
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
     }
 
     #[test]
@@ -1107,10 +1141,10 @@ mod tests {
     }
 
     #[test]
-    fn routes_pipe_commands_with_supported_left_side() {
+    fn declines_pipe_commands_with_supported_left_side() {
         let decision = decide_command_route("git status --short | wc -l");
-        assert_eq!(decision.kind, RouteKind::CompoundRewrite);
-        assert_eq!(decision.reason.as_deref(), Some("compound_rewrite"));
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
     }
 
     #[test]
@@ -1138,9 +1172,22 @@ mod tests {
             tmp.path(),
         );
         let rewritten = build_route_rewrite(tmp.path(), "task-pipe", None, ".", &decision).unwrap();
-        assert!(rewritten.contains(" cargo test | grep FAIL && "));
+        assert!(rewritten.contains("cargo test | grep FAIL &&"));
         assert!(rewritten.contains(" git status --short"));
-        assert_eq!(rewritten.matches("hook reducer-runner").count(), 2);
+        assert_eq!(rewritten.matches("hook reducer-runner").count(), 1);
+    }
+
+    #[test]
+    fn reducer_rewrite_output_does_not_contain_control_characters() {
+        let tmp = tempfile::tempdir().unwrap();
+        let decision =
+            decide_command_route_with_cwd_and_root("git status --short", tmp.path(), tmp.path());
+        let rewritten =
+            build_route_rewrite(tmp.path(), "task-safe-output", None, ".", &decision).unwrap();
+        assert!(
+            rewritten.chars().all(|ch| ch == '\t' || ch >= ' '),
+            "{rewritten:?}"
+        );
     }
 
     #[test]
@@ -1686,56 +1733,24 @@ mod tests {
     }
 
     #[test]
-    fn routes_grep_with_head_pipe_to_native_tool_limit() {
+    fn declines_grep_with_head_pipe_to_preserve_stream_semantics() {
         let decision = decide_command_route("rg task_id crates/suite-cli/src | head -n 5");
-        assert_eq!(decision.kind, RouteKind::NativeTool);
-        assert_eq!(
-            decision.native_tool.as_ref().map(|plan| plan.argv.clone()),
-            Some(vec![
-                "compact".to_string(),
-                "grep".to_string(),
-                "--max-total-matches".to_string(),
-                "5".to_string(),
-                "task_id".to_string(),
-                "crates/suite-cli/src".to_string(),
-            ])
-        );
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
     }
 
     #[test]
-    fn routes_tree_with_head_pipe_to_native_tool_limit() {
+    fn declines_tree_with_head_pipe_to_preserve_stream_semantics() {
         let decision = decide_command_route("tree -L 2 crates | head -n 10");
-        assert_eq!(decision.kind, RouteKind::NativeTool);
-        assert_eq!(
-            decision.native_tool.as_ref().map(|plan| plan.argv.clone()),
-            Some(vec![
-                "compact".to_string(),
-                "tree".to_string(),
-                "--max-depth".to_string(),
-                "2".to_string(),
-                "--max-entries".to_string(),
-                "10".to_string(),
-                "crates".to_string(),
-            ])
-        );
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
     }
 
     #[test]
-    fn routes_cat_with_sed_pipe_to_read_range() {
+    fn declines_cat_with_sed_pipe_to_preserve_stream_semantics() {
         let decision = decide_command_route("cat Cargo.toml | sed -n '1,20p'");
-        assert_eq!(decision.kind, RouteKind::NativeTool);
-        assert_eq!(
-            decision.native_tool.as_ref().map(|plan| plan.argv.clone()),
-            Some(vec![
-                "compact".to_string(),
-                "read".to_string(),
-                "--line-start".to_string(),
-                "1".to_string(),
-                "--line-end".to_string(),
-                "20".to_string(),
-                "Cargo.toml".to_string(),
-            ])
-        );
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
     }
 
     #[test]
@@ -1748,6 +1763,21 @@ mod tests {
     fn routes_grep_glob_path_to_native_tool() {
         let decision = decide_command_route("rg task_id crates/**/*.rs");
         assert_eq!(decision.kind, RouteKind::NativeTool);
+    }
+
+    #[test]
+    fn declines_extraction_mode_grep_rewrites() {
+        for command in [
+            "grep -o 'BUG-[0-9]*' bug.md",
+            "grep -c BUG bug.md",
+            "grep -l BUG bug.md",
+            "grep -q BUG bug.md",
+            "rg --files-with-matches BUG crates",
+            "rg -oc BUG crates",
+        ] {
+            let decision = decide_command_route(command);
+            assert_eq!(decision.kind, RouteKind::RawPassthrough, "{command}");
+        }
     }
 
     #[test]

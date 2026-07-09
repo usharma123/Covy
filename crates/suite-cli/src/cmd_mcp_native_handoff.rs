@@ -100,6 +100,15 @@ pub(crate) fn handle_packet28_prompt_pressure(
     let next_prompt = args.next_prompt.unwrap_or_default();
     let context_tokens = estimate_tokens_for_value(&payload);
     let next_prompt_tokens = estimate_tokens_for_text(&next_prompt);
+    let pointer_context = format!("Read `packet28://task/{task_id}/brief` for full context.");
+    let pointer_context_tokens = estimate_tokens_for_text(&pointer_context);
+    let pointer_total_tokens = pointer_context_tokens.saturating_add(next_prompt_tokens);
+    let pointer_savings_tokens = context_tokens.saturating_sub(pointer_context_tokens);
+    let pointer_savings_pct = if context_tokens == 0 {
+        0.0
+    } else {
+        ((pointer_savings_tokens as f64 / context_tokens as f64) * 1000.0).round() / 10.0
+    };
     let total_tokens = context_tokens.saturating_add(next_prompt_tokens);
     let remaining_tokens = budget_tokens as i64 - total_tokens as i64;
     let mut removable_sections = Vec::new();
@@ -138,11 +147,15 @@ pub(crate) fn handle_packet28_prompt_pressure(
         "context_tokens": context_tokens,
         "next_prompt_tokens": next_prompt_tokens,
         "total_tokens": total_tokens,
+        "pointer_context_tokens": pointer_context_tokens,
+        "pointer_total_tokens": pointer_total_tokens,
+        "pointer_savings_tokens": pointer_savings_tokens,
+        "pointer_savings_pct": pointer_savings_pct,
         "remaining_tokens": remaining_tokens,
         "pressure": pressure,
         "over_budget": total_tokens > budget_tokens,
         "largest_removable_sections": largest_removable_sections,
-        "summary": format!("prompt_pressure={pressure} total_tokens={total_tokens} remaining_tokens={remaining_tokens}"),
+        "summary": format!("prompt_pressure={pressure} total_tokens={total_tokens} remaining_tokens={remaining_tokens} pointer_savings_tokens={pointer_savings_tokens}"),
     }))
 }
 

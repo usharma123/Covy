@@ -31,6 +31,7 @@ fn persist_root_override(target: &str, policy_context: &Value) -> Option<String>
 pub(crate) fn build_status(state: &DaemonState) -> Result<DaemonStatus> {
     Ok(DaemonStatus {
         pid: state.runtime.pid,
+        version: state.runtime.version.clone(),
         socket_path: state.runtime.socket_path.clone(),
         workspace_root: state.runtime.workspace_root.clone(),
         started_at_unix: state.runtime.started_at_unix,

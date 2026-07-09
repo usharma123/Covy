@@ -276,10 +276,8 @@ pub(crate) fn track_task(
     root: &Path,
     task_id: &str,
 ) -> Result<()> {
-    let latest_seq = load_task_events(root, task_id)?
-        .last()
-        .map(|frame| frame.seq)
-        .unwrap_or(0);
+    let read = load_task_events_from_offset(root, task_id, 0)?;
+    let latest_seq = read.events.last().map(|frame| frame.seq).unwrap_or(0);
     let mut guard = session
         .lock()
         .map_err(|_| anyhow!("failed to lock MCP session"))?;
@@ -287,6 +285,10 @@ pub(crate) fn track_task(
         .tracked_tasks
         .entry(task_id.to_string())
         .or_insert(latest_seq);
+    guard
+        .tracked_task_offsets
+        .entry(task_id.to_string())
+        .or_insert(read.next_offset);
     guard.current_task_id = Some(task_id.to_string());
     Ok(())
 }

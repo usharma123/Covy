@@ -151,6 +151,8 @@ pub struct TaskWatchArgs {
     #[arg(long, default_value_t = 0)]
     pub replay_last: usize,
     #[arg(long)]
+    pub after_seq: Option<u64>,
+    #[arg(long)]
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,

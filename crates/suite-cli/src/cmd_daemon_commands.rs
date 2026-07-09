@@ -373,7 +373,8 @@ pub(crate) fn run_task(args: TaskArgs) -> Result<i32> {
             {
                 let root = resolve_root_arg(&args.root);
                 ensure_daemon(&root)?;
-                let (stream, replayed) = subscribe_task(&root, &args.task_id, args.replay_last)?;
+                let (stream, replayed) =
+                    subscribe_task(&root, &args.task_id, args.replay_last, args.after_seq)?;
                 let mut reader = BufReader::new(stream);
                 if !args.json {
                     println!("task={} replayed={}", args.task_id, replayed);

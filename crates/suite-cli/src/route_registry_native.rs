@@ -226,6 +226,9 @@ fn parse_cat_read_path(argv: &[String]) -> Option<String> {
 }
 
 fn classify_grep_tool(argv: &[String]) -> Option<NativeToolPlan> {
+    if has_grep_extraction_mode(argv) {
+        return None;
+    }
     let mut tool_argv = vec!["compact".to_string(), "grep".to_string()];
     let mut fixed_string = false;
     let mut case_insensitive = false;
@@ -268,6 +271,28 @@ fn classify_grep_tool(argv: &[String]) -> Option<NativeToolPlan> {
     Some(NativeToolPlan {
         kind: NativeToolKind::Grep,
         argv: tool_argv,
+    })
+}
+
+fn has_grep_extraction_mode(argv: &[String]) -> bool {
+    argv.iter().skip(1).any(|arg| match arg.as_str() {
+        "-o"
+        | "--only-matching"
+        | "-c"
+        | "--count"
+        | "-l"
+        | "--files-with-matches"
+        | "-L"
+        | "--files-without-match"
+        | "-q"
+        | "--quiet"
+        | "--silent" => true,
+        value if value.starts_with("--only-matching=") || value.starts_with("--count=") => true,
+        value if value.starts_with('-') && !value.starts_with("--") => value
+            .trim_start_matches('-')
+            .chars()
+            .any(|ch| matches!(ch, 'o' | 'c' | 'l' | 'L' | 'q')),
+        _ => false,
     })
 }
 

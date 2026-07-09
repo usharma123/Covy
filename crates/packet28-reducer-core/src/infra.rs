@@ -692,7 +692,7 @@ fn extract_html_title(stdout: &str) -> Option<String> {
 }
 
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
-    format!("{family}:{kind}:{}", argv.join("\u{1f}"))
+    crate::cache_fingerprint(family, kind, argv)
 }
 
 fn classify_aws_kind(argv: &[String]) -> Option<&'static str> {

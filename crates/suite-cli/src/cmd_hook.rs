@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use packet28_daemon_core::{
     hook_runtime_config_path, now_unix, ActiveTaskRecord, BrokerAction, BrokerGetContextRequest,
@@ -57,6 +57,7 @@ pub enum HookCommands {
     ServeHttp(HookHttpServerArgs),
     ReducerRunner(ReducerRunnerArgs),
     ReduceFixture(ReduceFixtureArgs),
+    Rewrite(HookRewriteArgs),
 }
 
 #[derive(Args, Clone)]
@@ -91,6 +92,27 @@ pub struct HookStatsArgs {
     pub json: bool,
     #[arg(long)]
     pub pretty: bool,
+}
+
+#[derive(Args, Clone)]
+pub struct HookRewriteArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[command(subcommand)]
+    pub command: HookRewriteCommand,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum HookRewriteCommand {
+    On,
+    Off,
+    Status(HookRewriteStatusArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct HookRewriteStatusArgs {
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Clone)]
@@ -152,6 +174,7 @@ pub fn run(args: HookArgs) -> Result<i32> {
         HookCommands::ServeHttp(args) => run_hook_http_server(args),
         HookCommands::ReducerRunner(args) => run_reducer_runner(args),
         HookCommands::ReduceFixture(args) => run_reduce_fixture(args),
+        HookCommands::Rewrite(args) => run_hook_rewrite(args),
     }
 }
 
@@ -878,6 +901,85 @@ fn load_hook_runtime_config(root: &Path) -> HookRuntimeConfig {
         .unwrap_or_default()
 }
 
+fn run_hook_rewrite(args: HookRewriteArgs) -> Result<i32> {
+    let root = PathBuf::from(args.root);
+    match args.command {
+        HookRewriteCommand::On => {
+            set_hook_rewrite_enabled(&root, true)?;
+            println!(
+                "Packet28 hook command rewriting is enabled for {}",
+                root.display()
+            );
+        }
+        HookRewriteCommand::Off => {
+            set_hook_rewrite_enabled(&root, false)?;
+            println!(
+                "Packet28 hook command rewriting is disabled for {}; PostToolUse capture remains enabled",
+                root.display()
+            );
+        }
+        HookRewriteCommand::Status(args) => {
+            let config = load_hook_runtime_config(&root);
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "root": root,
+                        "rewrite_enabled": config.rewrite_enabled,
+                        "hooks_enabled": config.hooks_enabled,
+                        "fallback_post_tool_capture": config.fallback_post_tool_capture
+                    }))?
+                );
+            } else {
+                let state = if config.rewrite_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                println!(
+                    "Packet28 hook command rewriting is {state} for {}",
+                    root.display()
+                );
+            }
+        }
+    }
+    Ok(0)
+}
+
+fn set_hook_rewrite_enabled(root: &Path, enabled: bool) -> Result<()> {
+    let mut config = load_hook_runtime_config(root);
+    config.rewrite_enabled = enabled;
+    write_hook_runtime_config(root, &config)
+}
+
+fn write_hook_runtime_config(root: &Path, config: &HookRuntimeConfig) -> Result<()> {
+    let path = hook_runtime_config_path(root);
+    let bytes = format!("{}\n", serde_json::to_string_pretty(config)?);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create '{}'", parent.display()))?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("hook-runtime-v1.json");
+    let temp_path = path.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        now_unix_millis()
+    ));
+    fs::write(&temp_path, bytes.as_bytes())
+        .with_context(|| format!("failed to write '{}'", temp_path.display()))?;
+    fs::rename(&temp_path, &path).with_context(|| {
+        format!(
+            "failed to atomically replace '{}' with '{}'",
+            path.display(),
+            temp_path.display()
+        )
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1174,7 +1276,7 @@ mod tests {
         .unwrap();
         let command = rewrite["command"].as_str().unwrap();
         assert!(command.contains("| grep FAIL &&"));
-        assert_eq!(command.matches("hook reducer-runner").count(), 2);
+        assert_eq!(command.matches("hook reducer-runner").count(), 1);
     }
 
     #[test]

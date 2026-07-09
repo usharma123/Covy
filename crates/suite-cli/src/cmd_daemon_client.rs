@@ -289,6 +289,7 @@ pub(crate) fn subscribe_task(
     root: &Path,
     task_id: &str,
     replay_last: usize,
+    after_seq: Option<u64>,
 ) -> Result<(DaemonStream, usize)> {
     let stream = connect_daemon_endpoint(&daemon_endpoint(root))?;
     let mut writer = BufWriter::new(stream.try_clone()?);
@@ -298,6 +299,7 @@ pub(crate) fn subscribe_task(
         &DaemonRequest::TaskSubscribe {
             task_id: task_id.to_string(),
             replay_last,
+            after_seq,
         },
     )?;
     match read_socket_message(&mut reader)? {
