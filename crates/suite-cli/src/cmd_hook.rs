@@ -681,7 +681,6 @@ fn render_hook_output(
                 let mut hook_output = json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
-                        "permissionDecision": "allow",
                         "updatedInput": updated_input,
                     }
                 });
@@ -1123,7 +1122,7 @@ mod tests {
         .unwrap();
         let payload: Value = serde_json::from_str(&body).unwrap();
         let output = &payload["hookSpecificOutput"];
-        assert_eq!(output["permissionDecision"], "allow");
+        assert!(output.get("permissionDecision").is_none());
         assert_eq!(
             output["updatedInput"]["command"],
             "Packet28 hook reducer-runner -- git status"
@@ -1132,6 +1131,45 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("broad_search"));
+    }
+
+    #[test]
+    fn runtime_rewrite_outputs_do_not_auto_allow_permissions() {
+        let updated_input = json!({"command": "Packet28 hook reducer-runner -- git status"});
+        let copilot = render_runtime_hook_output(
+            ExternalHookRuntime::Copilot,
+            HookEventKind::PreToolUse,
+            &json!({"tool_name": "runTerminalCommand"}),
+            Some(updated_input.clone()),
+        )
+        .unwrap()
+        .unwrap();
+        let copilot: Value = serde_json::from_str(&copilot).unwrap();
+        assert!(copilot["hookSpecificOutput"]
+            .get("permissionDecision")
+            .is_none());
+
+        let cursor = render_runtime_hook_output(
+            ExternalHookRuntime::Cursor,
+            HookEventKind::PreToolUse,
+            &json!({}),
+            Some(updated_input.clone()),
+        )
+        .unwrap()
+        .unwrap();
+        let cursor: Value = serde_json::from_str(&cursor).unwrap();
+        assert!(cursor.get("permission").is_none());
+
+        let gemini = render_runtime_hook_output(
+            ExternalHookRuntime::Gemini,
+            HookEventKind::PreToolUse,
+            &json!({}),
+            Some(updated_input),
+        )
+        .unwrap()
+        .unwrap();
+        let gemini: Value = serde_json::from_str(&gemini).unwrap();
+        assert!(gemini.get("decision").is_none());
     }
 
     #[test]
@@ -1236,6 +1274,26 @@ mod tests {
         let after = workspace_cache_fingerprint(dir.path(), dir.path(), &spec);
 
         assert_ne!(before, after);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rust_workspace_fingerprint_skips_symlink_cycles() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]\nname=\"demo\"\n").unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn value() -> i32 { 1 }\n",
+        )
+        .unwrap();
+        symlink(dir.path(), dir.path().join("src/loop")).unwrap();
+        let spec = classify_command("cargo test --lib").unwrap();
+
+        let fingerprint = workspace_cache_fingerprint(dir.path(), dir.path(), &spec);
+        assert!(!fingerprint.is_empty());
     }
 
     #[test]

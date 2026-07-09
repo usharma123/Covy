@@ -51,7 +51,7 @@ fn test_hook_rewrite_runtimes_cursor_pretool_rewrites_and_returns_empty_json_on_
         );
         assert_eq!(status, 0);
         let rendered: Value = serde_json::from_str(stdout.trim()).unwrap();
-        assert_eq!(rendered["permission"].as_str(), Some("allow"));
+        assert!(rendered.get("permission").is_none());
         let rewritten = rendered["updated_input"]["command"].as_str().unwrap();
         assert!(rewritten.contains("hook reducer-runner"));
         assert!(rewritten.contains("--family git"));
@@ -116,7 +116,7 @@ fn test_hook_rewrite_runtimes_gemini_before_tool_rewrites_shell_command() {
     );
     assert_eq!(status, 0);
     let rendered: Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(rendered["decision"].as_str(), Some("allow"));
+    assert!(rendered.get("decision").is_none());
     let rewritten = rendered["hookSpecificOutput"]["tool_input"]["command"]
         .as_str()
         .unwrap();
@@ -136,9 +136,7 @@ fn test_hook_rewrite_runtimes_gemini_before_tool_rewrites_shell_command() {
         .unwrap(),
     );
     assert_eq!(status, 0);
-    let rendered: Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(rendered["decision"].as_str(), Some("allow"));
-    assert!(rendered.get("hookSpecificOutput").is_none());
+    assert!(stdout.trim().is_empty());
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

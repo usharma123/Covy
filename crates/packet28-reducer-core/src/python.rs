@@ -87,7 +87,8 @@ pub fn classify_python_command(command: &str, argv: &[String]) -> Option<Command
         .cloned()
         .collect::<Vec<_>>();
 
-    let mutation = canonical_kind == "python_ruff_format" && !contains_any(argv, &["--check"]);
+    let mutation = matches!(canonical_kind, "python_pip_install")
+        || canonical_kind == "python_ruff_format" && !contains_any(argv, &["--check"]);
     Some(CommandReducerSpec {
         family: "python".to_string(),
         canonical_kind: canonical_kind.to_string(),
@@ -926,6 +927,8 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         let spec = classify_python_command("pip install pytest", &argv).unwrap();
+        assert!(spec.mutation);
+        assert!(!spec.cacheable);
         let reduction = reduce_python_command(
             &spec,
             "Collecting pytest\nSuccessfully installed iniconfig-2.0.0 pytest-8.2.0\n",

@@ -117,16 +117,11 @@ fn build_bash_grep_packet(command: &str, response: &Value) -> Option<HookReducer
 }
 
 fn parse_bash_grep_command(command: &str) -> Option<(String, Vec<String>)> {
-    let decision = crate::route_registry::decide_command_route(command);
-    if !matches!(decision.kind, crate::route_registry::RouteKind::NativeTool)
-        || !decision
-            .native_tool
-            .as_ref()
-            .is_some_and(|tool| matches!(tool.kind, crate::route_registry::NativeToolKind::Grep))
-    {
+    let argv = shell_words::split(command).ok()?;
+    if !matches!(argv.first().map(String::as_str), Some("grep" | "rg")) {
         return None;
     }
-    parse_grep_argv(&decision.argv)
+    parse_grep_argv(&argv)
 }
 
 fn parse_grep_argv(argv: &[String]) -> Option<(String, Vec<String>)> {

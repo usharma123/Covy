@@ -101,6 +101,8 @@ pub struct GrepArgs {
     pub cwd: Option<String>,
     #[arg(long, default_value_t = false)]
     pub fixed_string: bool,
+    #[arg(long, default_value_t = false, hide = true)]
+    pub basic_regexp: bool,
     #[arg(long, default_value_t = false)]
     pub ignore_case: bool,
     #[arg(long, default_value_t = false)]
@@ -467,7 +469,7 @@ fn run_read(args: ReadArgs) -> Result<i32> {
 fn run_grep(args: GrepArgs) -> Result<i32> {
     let root = resolve_root(&args.root)?;
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let query = normalize_grep_query(&args.query);
+    let query = normalize_grep_query(&args.query, args.fixed_string, args.basic_regexp);
     let mut requested_paths = Vec::<String>::new();
     for raw_path in &args.paths {
         for path in expand_repo_paths(&root, &cwd, raw_path)? {
@@ -519,8 +521,39 @@ fn run_grep(args: GrepArgs) -> Result<i32> {
     Ok(0)
 }
 
-fn normalize_grep_query(query: &str) -> String {
-    query.replace(r"\|", "|")
+fn normalize_grep_query(query: &str, fixed_string: bool, basic_regexp: bool) -> String {
+    if fixed_string {
+        return query.to_string();
+    }
+    if basic_regexp {
+        return normalize_basic_grep_query(query);
+    }
+    query.to_string()
+}
+
+fn normalize_basic_grep_query(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    let mut chars = query.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            let Some(next) = chars.next() else {
+                out.push(ch);
+                break;
+            };
+            if matches!(next, '|' | '+' | '?' | '(' | ')' | '{' | '}') {
+                out.push(next);
+            } else {
+                out.push(ch);
+                out.push(next);
+            }
+        } else if matches!(ch, '|' | '+' | '?' | '(' | ')' | '{' | '}') {
+            out.push('\\');
+            out.push(ch);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn run_json(args: JsonArgs) -> Result<i32> {
@@ -1289,8 +1322,21 @@ mod tests {
     #[test]
     fn compact_grep_normalizes_basic_alternation() {
         assert_eq!(
-            normalize_grep_query(r"fn classify\|Mutation\|fn classify_command"),
+            normalize_grep_query(r"fn classify\|Mutation\|fn classify_command", false, true),
             "fn classify|Mutation|fn classify_command"
+        );
+    }
+
+    #[test]
+    fn compact_grep_preserves_fixed_string_backslash_pipe() {
+        assert_eq!(normalize_grep_query(r"a\|b", true, true), r"a\|b");
+    }
+
+    #[test]
+    fn compact_grep_escapes_bre_literals_for_rust_regex() {
+        assert_eq!(
+            normalize_grep_query(r"a+b|c?(d){2}", false, true),
+            r"a\+b\|c\?\(d\)\{2\}"
         );
     }
 }

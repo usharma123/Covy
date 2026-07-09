@@ -72,7 +72,11 @@ fn decide_command_route_inner(
     policy_root: Option<&Path>,
     allow_compound: bool,
 ) -> RouteDecision {
-    let sanitized = strip_supported_trailing_redirects(command.trim());
+    let raw_trimmed = command.trim();
+    let sanitized = strip_supported_trailing_redirects(raw_trimmed);
+    if sanitized != raw_trimmed && contains_shell_composition(&sanitized) {
+        return raw_passthrough("shell_composition");
+    }
     let (normalized, postprocess) = strip_supported_postprocess(&sanitized);
     let trimmed = normalized.trim();
     if trimmed.is_empty() {
@@ -243,6 +247,15 @@ fn try_expand_globs(argv: &[String], cwd: &Path) -> Option<Vec<String>> {
     const MAX_MATCHES_PER_PATTERN: usize = 100;
     const MAX_TOTAL_ARGS: usize = 500;
 
+    let command_name = argv.first().map(String::as_str);
+    if matches!(command_name, Some("grep" | "rg" | "find")) {
+        return None;
+    }
+    let path_only_command = matches!(
+        command_name,
+        Some("ls" | "cat" | "head" | "tail" | "sed" | "wc" | "diff")
+    );
+
     let mut expanded = Vec::with_capacity(argv.len());
     let mut total_args = 0usize;
     let mut any_expanded = false;
@@ -264,6 +277,11 @@ fn try_expand_globs(argv: &[String], cwd: &Path) -> Option<Vec<String>> {
             continue;
         }
         if !contains_glob_chars(arg) {
+            expanded.push(arg.clone());
+            total_args += 1;
+            continue;
+        }
+        if !path_only_command && !arg.contains('/') && !Path::new(arg).is_absolute() {
             expanded.push(arg.clone());
             total_args += 1;
             continue;
@@ -855,7 +873,7 @@ fn join_compound_parts(parts: &[String]) -> String {
             out.push(' ');
         }
     }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    out
 }
 
 fn strip_supported_postprocess(command: &str) -> (String, Option<Postprocess>) {
@@ -1004,6 +1022,9 @@ fn contains_disallowed_shell_expansion(command: &str) -> bool {
 }
 
 fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
     if value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '='))
@@ -1080,6 +1101,49 @@ mod tests {
     fn routes_simple_reads_to_native_tool() {
         let decision = decide_command_route("head -n 20 README.md");
         assert_eq!(decision.kind, RouteKind::NativeTool);
+    }
+
+    #[test]
+    fn read_rewrites_decline_value_flags_and_multiple_paths() {
+        for command in ["head -c 100 README.md", "head README.md CHANGELOG.md"] {
+            let decision = decide_command_route(command);
+            assert_ne!(decision.kind, RouteKind::NativeTool, "{command}");
+        }
+    }
+
+    #[test]
+    fn native_grep_declines_flags_it_cannot_preserve() {
+        for command in [
+            "grep -A 5 pattern file",
+            "rg -t rust foo",
+            "grep -v pattern file",
+            "rg -g '*.rs' pat",
+        ] {
+            let decision = decide_command_route(command);
+            assert_ne!(decision.kind, RouteKind::NativeTool, "{command}");
+        }
+    }
+
+    #[test]
+    fn glob_expansion_does_not_rewrite_grep_patterns_or_find_filters() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::write(tmp.path().join("Todo"), "").unwrap();
+        fs::write(tmp.path().join("src/lib.rs"), "todo\n").unwrap();
+
+        let grep = decide_command_route_with_cwd("grep '[Tt]odo' src", tmp.path());
+        assert_eq!(grep.kind, RouteKind::NativeTool);
+        assert_eq!(grep.original_argv, None);
+        assert!(grep
+            .native_tool
+            .as_ref()
+            .unwrap()
+            .argv
+            .contains(&"[Tt]odo".to_string()));
+
+        let find = decide_command_route_with_cwd("find . -name '*.rs'", tmp.path());
+        assert_eq!(find.kind, RouteKind::RawPassthrough);
+        assert_eq!(find.reason.as_deref(), Some("shell_glob"));
     }
 
     #[test]
@@ -1161,6 +1225,39 @@ mod tests {
         assert!(rewritten.contains(" cargo test"));
         assert!(rewritten.contains("&& htop ||"));
         assert!(rewritten.contains(" git status --short"));
+    }
+
+    #[test]
+    fn compound_rewrite_preserves_quoted_whitespace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let decision = decide_command_route_with_cwd_and_root(
+            "grep 'a  b' src && git status --short",
+            tmp.path(),
+            tmp.path(),
+        );
+        let rewritten =
+            build_route_rewrite(tmp.path(), "task-whitespace", None, ".", &decision).unwrap();
+        assert!(rewritten.contains("'a  b'"), "{rewritten}");
+    }
+
+    #[test]
+    fn compound_with_trailing_redirect_passes_through() {
+        let decision = decide_command_route("cargo check && cargo test >/dev/null");
+        assert_eq!(decision.kind, RouteKind::RawPassthrough);
+        assert_eq!(decision.reason.as_deref(), Some("shell_composition"));
+    }
+
+    #[test]
+    fn shell_join_preserves_empty_arguments() {
+        assert_eq!(
+            shell_join(&[
+                "git".to_string(),
+                "log".to_string(),
+                "--author".to_string(),
+                String::new()
+            ]),
+            "git log --author ''"
+        );
     }
 
     #[test]
@@ -1437,7 +1534,7 @@ mod tests {
             "rg packet README.md",
             "grep packet README.md",
             "ls -la",
-            "find . -maxdepth 1 -type f",
+            "find . -maxdepth 1",
             "tsc --noEmit",
             "eslint src",
             "biome check .",

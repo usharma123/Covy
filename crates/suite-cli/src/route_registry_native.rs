@@ -95,13 +95,31 @@ fn classify_tree_tool(argv: &[String]) -> Option<NativeToolPlan> {
         "ls" => {
             for arg in argv.iter().skip(1) {
                 if arg.starts_with('-') {
-                    if arg.contains('a') {
+                    if arg == "--" {
+                        continue;
+                    }
+                    if arg == "--all" || arg == "--almost-all" {
                         hidden = true;
+                        continue;
                     }
-                    if arg.contains('R') {
-                        max_depth = Some("8".to_string());
+                    if arg.starts_with("--color") {
+                        continue;
                     }
-                    continue;
+                    let short_flags = arg.strip_prefix('-')?;
+                    if !arg.starts_with("--")
+                        && short_flags.chars().all(|ch| {
+                            matches!(ch, 'a' | 'A' | 'l' | 'h' | '1' | 'C' | 'F' | 'G' | 'R')
+                        })
+                    {
+                        if short_flags.chars().any(|ch| matches!(ch, 'a' | 'A')) {
+                            hidden = true;
+                        }
+                        if arg.contains('R') {
+                            max_depth = Some("8".to_string());
+                        }
+                        continue;
+                    }
+                    return None;
                 }
                 paths.push(arg.clone());
             }
@@ -111,14 +129,13 @@ fn classify_tree_tool(argv: &[String]) -> Option<NativeToolPlan> {
             while let Some(arg) = iter.next() {
                 match arg.as_str() {
                     "-maxdepth" => {
-                        if let Some(value) = iter.next() {
-                            max_depth = Some(value.clone());
-                        }
+                        max_depth = Some(iter.next()?.clone());
                     }
-                    "-name" | "-type" | "-path" => {
-                        let _ = iter.next();
+                    "--" => {
+                        paths.extend(iter.cloned());
+                        break;
                     }
-                    value if value.starts_with('-') => {}
+                    value if value.starts_with('-') => return None,
                     value => paths.push(value.to_string()),
                 }
             }
@@ -129,11 +146,13 @@ fn classify_tree_tool(argv: &[String]) -> Option<NativeToolPlan> {
                 match arg.as_str() {
                     "-a" => hidden = true,
                     "-L" => {
-                        if let Some(value) = iter.next() {
-                            max_depth = Some(value.clone());
-                        }
+                        max_depth = Some(iter.next()?.clone());
                     }
-                    value if value.starts_with('-') => {}
+                    "--" => {
+                        paths.extend(iter.cloned());
+                        break;
+                    }
+                    value if value.starts_with('-') => return None,
                     value => paths.push(value.to_string()),
                 }
             }
@@ -180,7 +199,7 @@ fn classify_read_tool(argv: &[String]) -> Option<NativeToolPlan> {
             tool_argv.push(path);
         }
         "sed" => {
-            if argv.len() < 4 || argv.get(1).map(String::as_str) != Some("-n") {
+            if argv.len() != 4 || argv.get(1).map(String::as_str) != Some("-n") {
                 return None;
             }
             let range = argv.get(2)?;
@@ -229,6 +248,7 @@ fn classify_grep_tool(argv: &[String]) -> Option<NativeToolPlan> {
     if has_grep_extraction_mode(argv) {
         return None;
     }
+    let program = argv.first()?.as_str();
     let mut tool_argv = vec!["compact".to_string(), "grep".to_string()];
     let mut fixed_string = false;
     let mut case_insensitive = false;
@@ -238,21 +258,41 @@ fn classify_grep_tool(argv: &[String]) -> Option<NativeToolPlan> {
     let mut iter = argv.iter().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "-F" => fixed_string = true,
-            "-i" => case_insensitive = true,
-            "-w" => whole_word = true,
-            "-e" => query = iter.next().cloned(),
-            value if value.starts_with('-') => {}
-            value => {
-                if query.is_none() {
-                    query = Some(value.to_string());
-                } else {
-                    paths.push(value.to_string());
+            "--" => {
+                for value in iter {
+                    push_grep_operand(value, &mut query, &mut paths)?;
                 }
+                break;
+            }
+            "-F" | "--fixed-strings" => fixed_string = true,
+            "-i" | "--ignore-case" => case_insensitive = true,
+            "-w" | "--word-regexp" => whole_word = true,
+            "-e" | "--regexp" => set_grep_query(&mut query, iter.next()?.clone())?,
+            value if value.starts_with("--regexp=") => {
+                set_grep_query(&mut query, value["--regexp=".len()..].to_string())?
+            }
+            value if value.starts_with("-e") && value.len() > 2 => {
+                set_grep_query(&mut query, value[2..].to_string())?
+            }
+            value if value.starts_with('-') && !value.starts_with("--") => {
+                if value[1..].chars().all(|ch| matches!(ch, 'F' | 'i' | 'w')) {
+                    fixed_string |= value.contains('F');
+                    case_insensitive |= value.contains('i');
+                    whole_word |= value.contains('w');
+                } else {
+                    return None;
+                }
+            }
+            value if value.starts_with('-') => return None,
+            value => {
+                push_grep_operand(value, &mut query, &mut paths)?;
             }
         }
     }
     let query = query?;
+    if program == "grep" && !fixed_string {
+        tool_argv.push("--basic-regexp".to_string());
+    }
     if fixed_string {
         tool_argv.push("--fixed-string".to_string());
     }
@@ -272,6 +312,26 @@ fn classify_grep_tool(argv: &[String]) -> Option<NativeToolPlan> {
         kind: NativeToolKind::Grep,
         argv: tool_argv,
     })
+}
+
+fn push_grep_operand(
+    value: &str,
+    query: &mut Option<String>,
+    paths: &mut Vec<String>,
+) -> Option<()> {
+    if query.is_none() {
+        *query = Some(value.to_string());
+    } else {
+        paths.push(value.to_string());
+    }
+    Some(())
+}
+
+fn set_grep_query(query: &mut Option<String>, value: String) -> Option<()> {
+    if query.replace(value).is_some() {
+        return None;
+    }
+    Some(())
 }
 
 fn has_grep_extraction_mode(argv: &[String]) -> bool {
@@ -399,21 +459,40 @@ fn parse_line_count_and_path(argv: Vec<String>) -> Option<(usize, String)> {
     let mut iter = argv.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "-n" => {
-                count = iter.next()?.parse().ok()?;
+            "-n" | "--lines" => {
+                count = parse_line_count(iter.next()?.as_str())?;
+            }
+            "--" => {
+                path = Some(iter.next()?);
+                if iter.next().is_some() {
+                    return None;
+                }
+                break;
+            }
+            value if value.starts_with("--lines=") => {
+                count = parse_line_count(&value["--lines=".len()..])?;
             }
             value
                 if value.starts_with('-')
                     && value.len() > 1
                     && value[1..].chars().all(|ch| ch.is_ascii_digit()) =>
             {
-                count = value[1..].parse().ok()?;
+                count = parse_line_count(&value[1..])?;
             }
-            value if value.starts_with('-') => {}
-            value => path = Some(value.to_string()),
+            value if value.starts_with('-') => return None,
+            value => {
+                if path.is_some() {
+                    return None;
+                }
+                path = Some(value.to_string());
+            }
         }
     }
     Some((count, path?))
+}
+
+fn parse_line_count(value: &str) -> Option<usize> {
+    value.parse::<usize>().ok()
 }
 
 pub(super) fn contains_glob_chars(value: &str) -> bool {

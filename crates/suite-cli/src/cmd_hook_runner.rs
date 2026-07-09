@@ -192,8 +192,8 @@ pub(crate) fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
         thread::sleep(Duration::from_millis(200));
     };
 
-    let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
-    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+    let stdout = read_to_string_lossy(&stdout_path).unwrap_or_default();
+    let stderr = read_to_string_lossy(&stderr_path).unwrap_or_default();
     let exit_code = status.code().unwrap_or(1);
     let reduced = reduce_command_output(&spec, &stdout, &stderr, exit_code)?;
     let artifact = json!({
@@ -407,16 +407,23 @@ fn collect_rust_workspace_paths(dir: &Path, paths: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            continue;
+        }
         let name = path
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("");
-        if path.is_dir() {
+        if file_type.is_dir() {
             if matches!(name, ".git" | ".packet28" | "target" | "node_modules") {
                 continue;
             }
             collect_rust_workspace_paths(&path, paths);
-        } else if path.is_file()
+        } else if file_type.is_file()
             && (path.extension().and_then(|value| value.to_str()) == Some("rs")
                 || matches!(name, "Cargo.toml" | "Cargo.lock"))
         {
@@ -472,6 +479,9 @@ fn cached_reducer_packet(
     command_text: &str,
     workspace_fingerprint: Option<&str>,
 ) -> Option<(HookReducerPacket, i32)> {
+    if spec.mutation {
+        return None;
+    }
     let registry = load_task_registry(root).ok()?;
     let task = registry.tasks.get(task_id)?;
     let entry = task.hook_reducer_cache.get(&spec.cache_fingerprint)?;
@@ -525,6 +535,9 @@ fn cache_entry_matches(
     spec: &CommandReducerSpec,
     workspace_fingerprint: Option<&str>,
 ) -> bool {
+    if spec.mutation {
+        return false;
+    }
     if entry.reducer_family != spec.family || entry.canonical_command_kind != spec.canonical_kind {
         return false;
     }
@@ -539,9 +552,47 @@ fn cache_entry_matches(
     {
         return false;
     }
-    if entry.reducer_family == "github" {
+    if let Some(ttl_secs) =
+        remote_state_cache_ttl_secs(&entry.reducer_family, &entry.canonical_command_kind)
+    {
         let age = now_unix().saturating_sub(entry.occurred_at_unix);
-        return age <= 300;
+        return age <= ttl_secs;
     }
     true
+}
+
+fn read_to_string_lossy(path: &Path) -> std::io::Result<String> {
+    fs::read(path).map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+}
+
+fn remote_state_cache_ttl_secs(family: &str, kind: &str) -> Option<u64> {
+    match family {
+        "github" => Some(300),
+        "infra"
+            if kind.starts_with("aws_")
+                || kind == "psql_query"
+                || kind.starts_with("docker_")
+                || kind.starts_with("docker_compose_")
+                || kind.starts_with("kubectl_")
+                || kind == "curl_fetch" =>
+        {
+            Some(300)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_non_utf8_output_lossily() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stdout.bin");
+        fs::write(&path, [b'o', b'k', 0xff, b'\n']).unwrap();
+
+        let text = read_to_string_lossy(&path).unwrap();
+        assert_eq!(text, "ok\u{fffd}\n");
+    }
 }

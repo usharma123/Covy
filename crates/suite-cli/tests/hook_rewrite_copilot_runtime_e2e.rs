@@ -29,10 +29,9 @@ fn test_hook_rewrite_copilot_runtime_rewrites_vscode_and_denies_cli_with_suggest
     );
     assert_eq!(status, 0);
     let rendered: Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(
-        rendered["hookSpecificOutput"]["permissionDecision"].as_str(),
-        Some("allow")
-    );
+    assert!(rendered["hookSpecificOutput"]
+        .get("permissionDecision")
+        .is_none());
     let rewritten = rendered["hookSpecificOutput"]["updatedInput"]["command"]
         .as_str()
         .unwrap();

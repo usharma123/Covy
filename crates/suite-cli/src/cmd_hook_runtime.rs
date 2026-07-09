@@ -229,8 +229,6 @@ pub(super) fn render_runtime_hook_output(
             Ok(Some(serde_json::to_string(&json!({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "permissionDecisionReason": "Packet28 auto-rewrite",
                     "updatedInput": updated_input,
                 },
             }))?))
@@ -243,7 +241,6 @@ pub(super) fn render_runtime_hook_output(
         (ExternalHookRuntime::Copilot, HookEventKind::PreToolUse, None) => Ok(None),
         (ExternalHookRuntime::Cursor, HookEventKind::PreToolUse, Some(updated_input)) => {
             Ok(Some(serde_json::to_string(&json!({
-                "permission": "allow",
                 "updated_input": updated_input,
             }))?))
         }
@@ -252,17 +249,12 @@ pub(super) fn render_runtime_hook_output(
         }
         (ExternalHookRuntime::Gemini, HookEventKind::PreToolUse, Some(updated_input)) => {
             Ok(Some(serde_json::to_string(&json!({
-                "decision": "allow",
                 "hookSpecificOutput": {
                     "tool_input": updated_input,
                 },
             }))?))
         }
-        (ExternalHookRuntime::Gemini, HookEventKind::PreToolUse, None) => {
-            Ok(Some(serde_json::to_string(&json!({
-                "decision": "allow",
-            }))?))
-        }
+        (ExternalHookRuntime::Gemini, HookEventKind::PreToolUse, None) => Ok(None),
         _ => Ok(None),
     }
 }

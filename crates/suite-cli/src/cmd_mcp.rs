@@ -1345,39 +1345,42 @@ mod tests {
         let events_path = events_dir.join(format!("{task_id}.events.jsonl"));
         std::fs::write(
             &events_path,
-            [
-                json!({
-                    "seq": 1,
-                    "task_id": task_id,
-                    "event": {
-                        "kind": "command_finished",
-                        "occurred_at_unix": 10,
-                        "data": {"command": "cargo test -p suite-cli stale_command_test"}
-                    }
-                })
-                .to_string(),
-                json!({
-                    "seq": 2,
-                    "task_id": task_id,
-                    "event": {
-                        "kind": "file_edited",
-                        "occurred_at_unix": 20,
-                        "data": {"paths": ["src/lib.rs"]}
-                    }
-                })
-                .to_string(),
-                json!({
-                    "seq": 3,
-                    "task_id": task_id,
-                    "event": {
-                        "kind": "command_finished",
-                        "occurred_at_unix": 30,
-                        "data": {"command": "cargo test -p suite-cli fresh_command_test"}
-                    }
-                })
-                .to_string(),
-            ]
-            .join("\n"),
+            format!(
+                "{}\n",
+                [
+                    json!({
+                        "seq": 1,
+                        "task_id": task_id,
+                        "event": {
+                            "kind": "command_finished",
+                            "occurred_at_unix": 10,
+                            "data": {"command": "cargo test -p suite-cli stale_command_test"}
+                        }
+                    })
+                    .to_string(),
+                    json!({
+                        "seq": 2,
+                        "task_id": task_id,
+                        "event": {
+                            "kind": "file_edited",
+                            "occurred_at_unix": 20,
+                            "data": {"paths": ["src/lib.rs"]}
+                        }
+                    })
+                    .to_string(),
+                    json!({
+                        "seq": 3,
+                        "task_id": task_id,
+                        "event": {
+                            "kind": "command_finished",
+                            "occurred_at_unix": 30,
+                            "data": {"command": "cargo test -p suite-cli fresh_command_test"}
+                        }
+                    })
+                    .to_string(),
+                ]
+                .join("\n")
+            ),
         )
         .unwrap();
         let session = Arc::new(Mutex::new(McpSessionState::default()));
@@ -1493,29 +1496,32 @@ mod tests {
         let events_path = events_dir.join(format!("{task_id}.events.jsonl"));
         std::fs::write(
             &events_path,
-            [
-                json!({
-                    "seq": 1,
-                    "task_id": task_id,
-                    "event": {
-                        "kind": "command_finished",
-                        "occurred_at_unix": 10,
-                        "data": {"command": "cargo test -p suite-cli stale_command_test"}
-                    }
-                })
-                .to_string(),
-                json!({
-                    "seq": 2,
-                    "task_id": task_id,
-                    "event": {
-                        "kind": "file_edited",
-                        "occurred_at_unix": 20,
-                        "data": {"paths": ["src/lib.rs"]}
-                    }
-                })
-                .to_string(),
-            ]
-            .join("\n"),
+            format!(
+                "{}\n",
+                [
+                    json!({
+                        "seq": 1,
+                        "task_id": task_id,
+                        "event": {
+                            "kind": "command_finished",
+                            "occurred_at_unix": 10,
+                            "data": {"command": "cargo test -p suite-cli stale_command_test"}
+                        }
+                    })
+                    .to_string(),
+                    json!({
+                        "seq": 2,
+                        "task_id": task_id,
+                        "event": {
+                            "kind": "file_edited",
+                            "occurred_at_unix": 20,
+                            "data": {"paths": ["src/lib.rs"]}
+                        }
+                    })
+                    .to_string(),
+                ]
+                .join("\n")
+            ),
         )
         .unwrap();
         let session = Arc::new(Mutex::new(McpSessionState::default()));

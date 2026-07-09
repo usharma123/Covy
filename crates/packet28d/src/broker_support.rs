@@ -50,8 +50,9 @@ pub(crate) fn emit_task_event(
     kind: &str,
     data: Value,
 ) -> Result<()> {
-    let (root, frame, subscribers) = {
-        let mut guard = state.lock().map_err(lock_err)?;
+    let mut guard = state.lock().map_err(lock_err)?;
+    let root = guard.root.clone();
+    let frame = {
         let task = guard
             .tasks
             .tasks
@@ -70,21 +71,14 @@ pub(crate) fn emit_task_event(
                 data,
             },
         };
-        let subscribers = guard.subscribers.get(task_id).cloned().unwrap_or_default();
-        (guard.root.clone(), frame, subscribers)
+        append_task_event(&root, &frame)?;
+        frame
     };
-    append_task_event(&root, &frame)?;
-    let mut still_open = Vec::new();
-    for subscriber in subscribers {
-        if subscriber.send(frame.clone()).is_ok() {
-            still_open.push(subscriber);
+    if let Some(subscribers) = guard.subscribers.get_mut(task_id) {
+        subscribers.retain(|subscriber| subscriber.send(frame.clone()).is_ok());
+        if subscribers.is_empty() {
+            guard.subscribers.remove(task_id);
         }
-    }
-    let mut guard = state.lock().map_err(lock_err)?;
-    if still_open.is_empty() {
-        guard.subscribers.remove(task_id);
-    } else {
-        guard.subscribers.insert(task_id.to_string(), still_open);
     }
     persist_state(&guard)?;
     Ok(())

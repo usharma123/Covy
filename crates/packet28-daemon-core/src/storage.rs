@@ -152,6 +152,8 @@ pub fn load_task_events_from_offset(
     }
     let mut file = fs::File::open(&path)
         .with_context(|| format!("failed to read task event log '{}'", path.display()))?;
+    FileExt::lock_shared(&file)
+        .with_context(|| format!("failed to lock task event log '{}'", path.display()))?;
     let len = file
         .metadata()
         .with_context(|| format!("failed to stat task event log '{}'", path.display()))?
@@ -171,6 +173,9 @@ pub fn load_task_events_from_offset(
         if read == 0 {
             break;
         }
+        if !line.ends_with('\n') {
+            break;
+        }
         next_offset = next_offset.saturating_add(read as u64);
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.trim().is_empty() {
@@ -180,6 +185,8 @@ pub fn load_task_events_from_offset(
             events.push(frame);
         }
     }
+    FileExt::unlock(reader.get_ref())
+        .with_context(|| format!("failed to unlock task event log '{}'", path.display()))?;
     Ok(TaskEventLogRead {
         events,
         next_offset,
@@ -382,6 +389,26 @@ mod tests {
             load_task_events_from_offset(dir.path(), "task/demo", full.next_offset).unwrap();
         assert!(after_full.events.is_empty());
         assert_eq!(after_full.next_offset, full.next_offset);
+    }
+
+    #[test]
+    fn task_event_reads_do_not_advance_past_partial_trailing_line() {
+        let dir = tempdir().unwrap();
+        let path = task_event_log_path(dir.path(), "task/demo");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let complete = "{\"seq\":1,\"task_id\":\"task/demo\",\"event\":{\"kind\":\"task_started\",\"occurred_at_unix\":1,\"data\":{}}}\n";
+        fs::write(
+            &path,
+            format!(
+                "{complete}{{\"seq\":2,\"task_id\":\"task/demo\",\"event\":{{\"kind\":\"task_completed\""
+            ),
+        )
+        .unwrap();
+
+        let read = load_task_events_from_offset(dir.path(), "task/demo", 0).unwrap();
+        assert_eq!(read.events.len(), 1);
+        assert_eq!(read.events[0].seq, 1);
+        assert_eq!(read.next_offset, complete.len() as u64);
     }
 
     #[test]

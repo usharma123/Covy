@@ -241,6 +241,23 @@ fn github_cache_ttl_secs() -> u64 {
     300
 }
 
+fn remote_state_cache_ttl_secs(family: &str, kind: &str) -> Option<u64> {
+    match family {
+        "github" => Some(github_cache_ttl_secs()),
+        "infra"
+            if kind.starts_with("aws_")
+                || kind == "psql_query"
+                || kind.starts_with("docker_")
+                || kind.starts_with("docker_compose_")
+                || kind.starts_with("kubectl_")
+                || kind == "curl_fetch" =>
+        {
+            Some(github_cache_ttl_secs())
+        }
+        _ => None,
+    }
+}
+
 fn lifecycle_kind(lifecycle: &packet28_daemon_core::HookLifecycleEvent) -> Option<&str> {
     lifecycle
         .canonical_command_kind
@@ -307,7 +324,9 @@ fn invalidate_epochs_for_packet(
                 task.hook_rust_epoch = task.hook_rust_epoch.saturating_add(1);
             }
         }
-        _ if packet.operation_kind == suite_packet_core::ToolOperationKind::Edit => {
+        _ if packet_is_mutation(packet)
+            || packet.operation_kind == suite_packet_core::ToolOperationKind::Edit =>
+        {
             task.hook_fs_epoch = task.hook_fs_epoch.saturating_add(1);
             task.hook_git_epoch = task.hook_git_epoch.saturating_add(1);
             if packet_touches_rust(&packet.paths) {
@@ -322,6 +341,9 @@ fn cache_hit_for_packet(
     task: &TaskRecord,
     packet: &packet28_daemon_core::HookReducerPacket,
 ) -> bool {
+    if packet_is_mutation(packet) {
+        return false;
+    }
     let Some(fingerprint) = packet.cache_fingerprint.as_deref() else {
         return false;
     };
@@ -343,9 +365,11 @@ fn cache_hit_for_packet(
     {
         return false;
     }
-    if entry.reducer_family == "github" {
+    if let Some(ttl_secs) =
+        remote_state_cache_ttl_secs(&entry.reducer_family, &entry.canonical_command_kind)
+    {
         let age = now_unix().saturating_sub(entry.occurred_at_unix);
-        return age <= github_cache_ttl_secs();
+        return age <= ttl_secs;
     }
     true
 }
@@ -356,6 +380,9 @@ fn update_cache_for_packet(
     artifact_id: Option<String>,
 ) {
     if packet.cacheable != Some(true) {
+        return;
+    }
+    if packet_is_mutation(packet) {
         return;
     }
     let Some(fingerprint) = packet.cache_fingerprint.as_ref() else {
@@ -673,6 +700,155 @@ mod tests {
         let task = load_task_record(&state, "task-cache").unwrap();
         assert_eq!(task.hook_window_est_tokens, 10);
         assert_eq!(task.hook_window_est_bytes, 40);
+    }
+
+    #[test]
+    fn mutation_packets_are_never_cache_hits_or_cache_entries() {
+        let state = test_state();
+        let mutation = packet28_daemon_core::HookReducerPacket {
+            reducer_family: Some("infra".to_string()),
+            canonical_command_kind: Some("kubectl_apply".to_string()),
+            summary: "deployment.apps/api configured".to_string(),
+            command: Some("kubectl apply -f deploy.yaml".to_string()),
+            cache_fingerprint: Some("infra:kubectl_apply:deploy".to_string()),
+            cacheable: Some(true),
+            mutation: Some(true),
+            ..packet("kubectl apply")
+        };
+
+        let first = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-mutation-cache".to_string(),
+                reducer_packet: Some(mutation.clone()),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(!first.cache_hit);
+
+        let second = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-mutation-cache".to_string(),
+                reducer_packet: Some(mutation),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(!second.cache_hit);
+
+        let task = load_task_record(&state, "task-mutation-cache").unwrap();
+        assert!(task.hook_reducer_cache.is_empty());
+    }
+
+    #[test]
+    fn infra_mutation_busts_cached_infra_reads() {
+        let state = test_state();
+        let read = packet28_daemon_core::HookReducerPacket {
+            reducer_family: Some("infra".to_string()),
+            canonical_command_kind: Some("docker_ps".to_string()),
+            summary: "docker ps listed 1 container(s)".to_string(),
+            command: Some("docker ps".to_string()),
+            cache_fingerprint: Some("infra:docker_ps".to_string()),
+            cacheable: Some(true),
+            mutation: Some(false),
+            ..packet("docker ps")
+        };
+        let first = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-infra-epoch".to_string(),
+                reducer_packet: Some(read.clone()),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(!first.cache_hit);
+        let cached = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-infra-epoch".to_string(),
+                reducer_packet: Some(read.clone()),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(cached.cache_hit);
+
+        let mutation = packet28_daemon_core::HookReducerPacket {
+            reducer_family: Some("infra".to_string()),
+            canonical_command_kind: Some("docker_run".to_string()),
+            summary: "docker run completed".to_string(),
+            command: Some("docker run alpine echo hi".to_string()),
+            cache_fingerprint: Some("infra:docker_run".to_string()),
+            cacheable: Some(false),
+            mutation: Some(true),
+            ..packet("docker run")
+        };
+        let _ = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-infra-epoch".to_string(),
+                reducer_packet: Some(mutation),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+
+        let after_mutation = hook_ingest(
+            state,
+            HookIngestRequest {
+                task_id: "task-infra-epoch".to_string(),
+                reducer_packet: Some(read),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(!after_mutation.cache_hit);
+    }
+
+    #[test]
+    fn remote_state_cache_entries_expire() {
+        let state = test_state();
+        let read = packet28_daemon_core::HookReducerPacket {
+            reducer_family: Some("infra".to_string()),
+            canonical_command_kind: Some("aws_sts_get_caller_identity".to_string()),
+            summary: "aws caller arn:aws:iam::123:user/demo".to_string(),
+            command: Some("aws sts get-caller-identity".to_string()),
+            cache_fingerprint: Some("infra:aws_sts".to_string()),
+            cacheable: Some(true),
+            mutation: Some(false),
+            ..packet("aws sts")
+        };
+        let first = hook_ingest(
+            state.clone(),
+            HookIngestRequest {
+                task_id: "task-remote-ttl".to_string(),
+                reducer_packet: Some(read.clone()),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(!first.cache_hit);
+
+        {
+            let mut guard = state.lock().unwrap();
+            let task = guard.tasks.tasks.get_mut("task-remote-ttl").unwrap();
+            let entry = task.hook_reducer_cache.get_mut("infra:aws_sts").unwrap();
+            entry.occurred_at_unix = now_unix().saturating_sub(github_cache_ttl_secs() + 1);
+        }
+
+        let after_ttl = hook_ingest(
+            state,
+            HookIngestRequest {
+                task_id: "task-remote-ttl".to_string(),
+                reducer_packet: Some(read),
+                ..HookIngestRequest::default()
+            },
+        )
+        .unwrap();
+        assert!(!after_ttl.cache_hit);
     }
 
     #[test]
