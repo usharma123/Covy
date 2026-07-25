@@ -14,7 +14,7 @@ use packet28_daemon_core::{
     BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
     BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
     BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
-    BrokerWriteStateResponse, DaemonRequest, DaemonResponse, TaskRecord,
+    DaemonRequest, DaemonResponse, TaskRecord,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -44,7 +44,6 @@ mod proxy_upstream;
 mod response;
 #[path = "cmd_mcp_smoke.rs"]
 mod smoke;
-#[allow(dead_code)]
 #[path = "cmd_mcp_support.rs"]
 mod support;
 #[path = "cmd_mcp_tool_args.rs"]

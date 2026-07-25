@@ -368,22 +368,6 @@ fn send_daemon_request_via_session(
     crate::cmd_daemon::send_request(root, request)
 }
 
-pub(crate) fn broker_write_state_via_session(
-    root: &Path,
-    session: &Arc<Mutex<McpSessionState>>,
-    request: BrokerWriteStateRequest,
-) -> Result<BrokerWriteStateResponse> {
-    match send_daemon_request_via_session(
-        root,
-        session,
-        &DaemonRequest::BrokerWriteState { request },
-    )? {
-        DaemonResponse::BrokerWriteState { response } => Ok(response),
-        DaemonResponse::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
-    }
-}
-
 pub(crate) fn broker_write_state_batch_via_session(
     root: &Path,
     session: &Arc<Mutex<McpSessionState>>,
