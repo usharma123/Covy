@@ -1,0 +1,699 @@
+use super::*;
+use packet28_daemon_core::{DaemonIndexManifest, DaemonIndexStatusResponse};
+use tempfile::tempdir;
+
+fn runtime(name: &'static str, slug: &'static str, detected: bool, has_mcp: bool) -> RuntimeInfo {
+    RuntimeInfo {
+        kind: match slug {
+            "claude" => RuntimeKind::Claude,
+            "cursor" => RuntimeKind::Cursor,
+            "codex" => RuntimeKind::Codex,
+            "windsurf" => RuntimeKind::Windsurf,
+            "copilot" => RuntimeKind::Copilot,
+            "gemini" => RuntimeKind::Gemini,
+            "opencode" => RuntimeKind::OpenCode,
+            "hermes" => RuntimeKind::Hermes,
+            "cline" => RuntimeKind::Cline,
+            "roo" => RuntimeKind::Roo,
+            "kilocode" => RuntimeKind::KiloCode,
+            "antigravity" => RuntimeKind::Antigravity,
+            other => panic!("unknown runtime slug: {other}"),
+        },
+        name,
+        slug,
+        prompt_targets: has_mcp
+            .then(|| PromptTarget {
+                path: PathBuf::from(format!("{slug}.md")),
+                format: agent_surface::AgentPromptFormat::Agents,
+            })
+            .into_iter()
+            .collect(),
+        detected,
+    }
+}
+
+#[test]
+fn select_setup_runtimes_prefers_detected_runtimes_for_all() {
+    let runtimes = vec![
+        runtime("Claude Code", "claude", false, true),
+        runtime("Cursor", "cursor", false, true),
+        runtime("Codex", "codex", true, false),
+        runtime("Windsurf", "windsurf", true, false),
+    ];
+    let choice = SetupPlanChoice {
+        mode: SetupMode::Recommended,
+        runtime_scope: SetupRuntimeScope::Detected,
+        fallback_only: false,
+    };
+
+    let selected = select_setup_runtimes(&runtimes, &choice);
+    let slugs: Vec<&str> = selected.iter().map(|runtime| runtime.slug).collect();
+
+    assert_eq!(slugs, vec!["codex", "windsurf"]);
+}
+
+#[test]
+fn select_setup_runtimes_supports_all_and_single_scopes() {
+    let runtimes = vec![
+        runtime("Claude Code", "claude", false, true),
+        runtime("Cursor", "cursor", true, true),
+    ];
+    let all_choice = SetupPlanChoice {
+        mode: SetupMode::Custom,
+        runtime_scope: SetupRuntimeScope::All,
+        fallback_only: false,
+    };
+    let single_choice = SetupPlanChoice {
+        mode: SetupMode::Custom,
+        runtime_scope: SetupRuntimeScope::Single("claude".to_string()),
+        fallback_only: false,
+    };
+
+    let all_selected = select_setup_runtimes(&runtimes, &all_choice);
+    let all_slugs: Vec<&str> = all_selected.iter().map(|runtime| runtime.slug).collect();
+    let single_selected = select_setup_runtimes(&runtimes, &single_choice);
+    let single_slugs: Vec<&str> = single_selected.iter().map(|runtime| runtime.slug).collect();
+
+    assert_eq!(all_slugs, vec!["claude", "cursor"]);
+    assert_eq!(single_slugs, vec!["claude"]);
+}
+
+#[test]
+fn explicit_setup_choice_maps_default_flags_to_recommended() {
+    let runtimes = vec![
+        runtime("Claude Code", "claude", true, true),
+        runtime("Codex", "codex", true, true),
+    ];
+    let args = SetupArgs {
+        root: ".".to_string(),
+        yes: true,
+        fallback_only: false,
+        runtime: "all".to_string(),
+    };
+
+    let choice = explicit_setup_choice(&args, &runtimes).unwrap();
+
+    assert_eq!(
+        choice,
+        SetupPlanChoice {
+            mode: SetupMode::Recommended,
+            runtime_scope: SetupRuntimeScope::Detected,
+            fallback_only: false,
+        }
+    );
+}
+
+#[test]
+fn explicit_setup_choice_maps_runtime_override_to_custom_single_scope() {
+    let runtimes = vec![runtime("Claude Code", "claude", false, true)];
+    let args = SetupArgs {
+        root: ".".to_string(),
+        yes: false,
+        fallback_only: false,
+        runtime: "claude".to_string(),
+    };
+
+    let choice = explicit_setup_choice(&args, &runtimes).unwrap();
+
+    assert_eq!(
+        choice,
+        SetupPlanChoice {
+            mode: SetupMode::Custom,
+            runtime_scope: SetupRuntimeScope::Single("claude".to_string()),
+            fallback_only: false,
+        }
+    );
+}
+
+#[test]
+fn detect_runtimes_includes_instruction_only_parity_targets() {
+    let root = tempdir().unwrap();
+    let runtimes = detect_runtimes(root.path());
+    let by_slug = runtimes
+        .iter()
+        .map(|runtime| (runtime.slug, runtime))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(
+        by_slug["copilot"].prompt_targets[0].path,
+        root.path().join(".github").join("copilot-instructions.md")
+    );
+    assert_eq!(
+        by_slug["gemini"].prompt_targets[0].path,
+        root.path().join("GEMINI.md")
+    );
+    assert_eq!(
+        by_slug["cline"].prompt_targets[0].path,
+        root.path().join(".clinerules")
+    );
+    assert_eq!(
+        by_slug["roo"].prompt_targets[0].path,
+        root.path().join(".roo").join("rules").join("packet28.md")
+    );
+    assert_eq!(
+        by_slug["kilocode"].prompt_targets[0].path,
+        root.path()
+            .join(".kilocode")
+            .join("rules")
+            .join("packet28-rules.md")
+    );
+    assert_eq!(
+        by_slug["antigravity"].prompt_targets[0].path,
+        root.path()
+            .join(".agents")
+            .join("rules")
+            .join("antigravity-packet28-rules.md")
+    );
+
+    assert!(!runtime_supports_mcp(by_slug["copilot"].kind));
+    assert!(runtime_supports_hooks(by_slug["copilot"].kind));
+    assert!(!runtime_supports_mcp(by_slug["gemini"].kind));
+    assert!(runtime_supports_hooks(by_slug["gemini"].kind));
+    assert!(!runtime_supports_mcp(by_slug["opencode"].kind));
+    assert!(runtime_supports_hooks(by_slug["opencode"].kind));
+    assert!(!runtime_supports_mcp(by_slug["hermes"].kind));
+    assert!(runtime_supports_hooks(by_slug["hermes"].kind));
+
+    for slug in ["cline", "roo", "kilocode", "antigravity"] {
+        assert!(!runtime_supports_mcp(by_slug[slug].kind));
+        assert!(!runtime_supports_hooks(by_slug[slug].kind));
+    }
+}
+
+#[test]
+fn write_claude_hook_config_installs_packet28_hooks() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".claude").join("settings.json");
+    let status = write_claude_hook_config(&path, dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+    let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    // Hooks should be at top-level event keys, not nested under "packet28".
+    assert!(value["hooks"]["SessionStart"].is_array());
+    assert!(value["hooks"]["PostToolUse"].is_array());
+    assert!(value["hooks"]["PostToolUseFailure"].is_array());
+    assert!(value["hooks"].get("packet28").is_none());
+    assert_eq!(
+        value["hooks"]["SessionStart"][0]["hooks"][0]["type"].as_str(),
+        Some("command")
+    );
+    assert_eq!(
+        value["hooks"]["UserPromptSubmit"][0]["hooks"][0]["type"].as_str(),
+        Some("command")
+    );
+    assert_eq!(
+        value["hooks"]["PreToolUse"][0]["hooks"][0]["type"].as_str(),
+        Some("http")
+    );
+    assert_eq!(
+        value["hooks"]["Stop"][0]["hooks"][0]["type"].as_str(),
+        Some("http")
+    );
+    let http_url = value["hooks"]["PreToolUse"][0]["hooks"][0]["url"]
+        .as_str()
+        .unwrap();
+    assert!(http_url.starts_with("http://127.0.0.1:"));
+    assert_eq!(
+        value["allowedHttpHookUrls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>(),
+        vec![http_url]
+    );
+}
+
+#[test]
+fn generated_packet28_hook_command_exits_zero_when_binary_is_missing() {
+    let dir = tempdir().unwrap();
+    for runtime in ["claude", "cursor", "copilot", "gemini", "windsurf"] {
+        let command = guarded_packet28_hook_command("/missing/Packet28", runtime, dir.path());
+        assert!(command.contains(&format!(" hook {runtime} ")));
+        assert!(command.contains("exit 0"));
+
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "generated {runtime} hook failed: status={:?} stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
+fn write_claude_hook_config_replaces_legacy_command_hooks() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".claude").join("settings.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let command = resolve_packet28_cli_command();
+    let root_arg = shell_escape(dir.path().display().to_string());
+    let hook_command = format!("{command} hook claude --root \"{root_arg}\"");
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": ".*",
+                    "hooks": [{"type": "command", "command": hook_command}]
+                }]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let status = write_claude_hook_config(&path, dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+    let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let entries = value["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["hooks"][0]["type"].as_str(), Some("http"));
+}
+
+#[test]
+fn write_claude_hook_config_removes_stale_packet28_command_paths() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".claude").join("settings.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+            &path,
+            serde_json::to_string_pretty(&json!({
+                "hooks": {
+                    "SessionStart": [
+                        {
+                            "matcher": "startup|resume|clear|compact",
+                            "hooks": [{"type": "command", "command": "/missing/Packet28 hook claude --root \"/tmp/demo\""}]
+                        },
+                        {
+                            "matcher": "startup|resume|clear|compact",
+                            "hooks": [{"type": "command", "command": "/other/tool"}]
+                        }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+    let status = write_claude_hook_config(&path, dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+
+    let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let entries = value["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    let commands = entries
+        .iter()
+        .filter_map(|entry| entry["hooks"][0]["command"].as_str())
+        .collect::<Vec<_>>();
+    assert!(commands
+        .iter()
+        .any(|command| command.contains(" hook claude ")));
+    assert!(commands.contains(&"/other/tool"));
+    assert!(!commands
+        .iter()
+        .any(|command| command.starts_with("/missing/Packet28")));
+}
+
+#[test]
+fn write_cursor_hook_config_installs_packet28_hooks() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".cursor").join("hooks.json");
+    let status = write_cursor_hook_config(&path, dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+    let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(value["hooks"]["beforeSubmitPrompt"].is_array());
+    assert!(value["hooks"]["beforeShellExecution"].is_array());
+    assert!(value["hooks"]["afterShellExecution"].is_array());
+    assert!(value["hooks"]["stop"].is_array());
+}
+
+#[test]
+fn write_gemini_hook_config_installs_packet28_before_tool_hook() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".gemini").join("settings.json");
+    let status = write_gemini_hook_config(&path, dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+    let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let hooks = value["hooks"]["BeforeTool"].as_array().unwrap();
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0]["matcher"].as_str(), Some("run_shell_command"));
+    let command = hooks[0]["hooks"][0]["command"].as_str().unwrap();
+    assert!(command.contains(" hook gemini "));
+}
+
+#[test]
+fn write_copilot_hook_config_installs_packet28_pretool_hook() {
+    let dir = tempdir().unwrap();
+    let path = dir
+        .path()
+        .join(".github")
+        .join("hooks")
+        .join("packet28-rewrite.json");
+    let status = write_copilot_hook_config(&path, dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+    let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let hooks = value["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0]["type"].as_str(), Some("command"));
+    assert_eq!(hooks[0]["timeout"].as_i64(), Some(5));
+    let command = hooks[0]["command"].as_str().unwrap();
+    assert!(command.contains(" hook copilot "));
+}
+
+#[test]
+fn write_opencode_plugin_installs_packet28_rewrite_plugin() {
+    let dir = tempdir().unwrap();
+    let path = dir
+        .path()
+        .join(".config")
+        .join("opencode")
+        .join("plugins")
+        .join("packet28.ts");
+    let status = write_opencode_plugin(&path, true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+    let content = fs::read_to_string(&path).unwrap();
+    assert!(content.contains("Packet28 rewrite"));
+    assert!(content.contains("tool.execute.before"));
+    assert!(content.contains("args as Record<string, unknown>).command = rewritten"));
+
+    let status = write_opencode_plugin(&path, true).unwrap();
+    assert!(matches!(status, McpConfigStatus::AlreadyConfigured));
+}
+
+#[test]
+fn opencode_plugin_smoke_rewrites_and_passes_through_empty_stdout() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+
+    let dir = tempdir().unwrap();
+    let path = dir
+        .path()
+        .join(".config")
+        .join("opencode")
+        .join("plugins")
+        .join("packet28.ts");
+    write_opencode_plugin(&path, true).unwrap();
+    let script = r#"
+const fs = require("fs")
+let code = fs.readFileSync(process.argv[1], "utf8")
+code = code.replace(/^import type .*$/m, "")
+code = code.replace("export const Packet28OpenCodePlugin: Plugin =", "const Packet28OpenCodePlugin =")
+code = code.replaceAll("(args as Record<string, unknown>)", "args")
+code += `
+;(async () => {
+  const calls = []
+  function $(strings, ...values) {
+    const rendered = strings.reduce((acc, part, index) => acc + part + (index < values.length ? values[index] : ""), "")
+    calls.push({ rendered, values })
+    return {
+      quiet() { return this },
+      nothrow() {
+        const command = String(values[0] ?? "")
+        if (command === "git status --short") return Promise.resolve({ stdout: "rewritten git status\\n" })
+        return Promise.resolve({ stdout: "" })
+      },
+      then(resolve) { resolve({ stdout: "" }) },
+    }
+  }
+  const plugin = await Packet28OpenCodePlugin({ $ })
+  const rewriteArgs = { command: "git status --short" }
+  const passthroughArgs = { command: "htop" }
+  await plugin["tool.execute.before"]({ tool: "bash" }, { args: rewriteArgs })
+  await plugin["tool.execute.before"]({ tool: "shell" }, { args: passthroughArgs })
+  console.log(rewriteArgs.command)
+  console.log(passthroughArgs.command)
+})().catch((err) => { console.error(err); process.exit(1) })
+`
+eval(code)
+"#;
+    let output = std::process::Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "node smoke failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "rewritten git status\nhtop\n"
+    );
+}
+
+#[test]
+fn write_hermes_plugin_installs_plugin_and_enables_config() {
+    let dir = tempdir().unwrap();
+    let status = write_hermes_plugin(dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+
+    let plugin_dir = hermes::plugin_dir(dir.path());
+    let init = fs::read_to_string(plugin_dir.join("__init__.py")).unwrap();
+    let manifest = fs::read_to_string(plugin_dir.join("plugin.yaml")).unwrap();
+    let config = fs::read_to_string(hermes::config_path(dir.path())).unwrap();
+    assert!(init.contains("Packet28 rewrite"));
+    assert!(manifest.contains("packet28-rewrite"));
+    assert!(hermes_config_enables_packet28(&config).unwrap());
+
+    let status = write_hermes_plugin(dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::AlreadyConfigured));
+}
+
+#[test]
+#[cfg(unix)]
+fn hermes_plugin_smoke_rewrites_and_passes_through_empty_stdout() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+
+    let dir = tempdir().unwrap();
+    write_hermes_plugin(dir.path(), true).unwrap();
+    let init = hermes::plugin_dir(dir.path()).join("__init__.py");
+    let script = r#"
+import importlib.util
+import subprocess
+import sys
+spec = importlib.util.spec_from_file_location("packet28_rewrite", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+class FakeResult:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+def fake_run(argv, **kwargs):
+    assert argv[0:2] == ["Packet28", "rewrite"]
+    if argv[2] == "git status --short":
+        return FakeResult("rewritten git status\n")
+    return FakeResult("")
+mod.subprocess.run = fake_run
+rewrite_args = {"command": "git status --short"}
+mod._pre_tool_call(tool_name="terminal", args=rewrite_args)
+passthrough_args = {"command": "htop"}
+mod._pre_tool_call(tool_name="terminal", args=passthrough_args)
+print(rewrite_args["command"])
+print(passthrough_args["command"])
+"#;
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .arg(init)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "python smoke failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "rewritten git status\nhtop\n"
+    );
+}
+
+#[test]
+fn patch_hermes_config_preserves_existing_enabled_plugins() {
+    let config = patch_hermes_config(
+        r#"
+theme: dark
+plugins:
+  enabled:
+    - existing-plugin
+"#,
+    )
+    .unwrap();
+    assert!(config.contains("existing-plugin"));
+    assert!(hermes_config_enables_packet28(&config).unwrap());
+}
+
+#[test]
+fn write_windsurf_hook_config_installs_packet28_hooks() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".windsurf").join("hooks.json");
+    let status = write_windsurf_hook_config(&path, dir.path(), true).unwrap();
+    assert!(matches!(status, McpConfigStatus::Written));
+    let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(value["hooks"]["pre_user_prompt"].is_array());
+    assert!(value["hooks"]["pre_run_command"].is_array());
+    assert!(value["hooks"]["post_run_command"].is_array());
+    assert!(value["hooks"]["post_cascade_response"].is_array());
+}
+
+#[test]
+fn generated_relaunch_is_disabled_when_packet28_agent_is_missing() {
+    let mut config = packet28_daemon_core::HookRuntimeConfig {
+        relaunch_preference: RelaunchPreference::DaemonManaged,
+        relaunch_command: generated_relaunch_command(),
+        ..packet28_daemon_core::HookRuntimeConfig::default()
+    };
+    let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
+    assert!(changed);
+    assert_eq!(config.relaunch_preference, RelaunchPreference::HostManaged);
+    assert!(config.relaunch_command.is_empty());
+}
+
+#[test]
+fn generated_relaunch_preserves_custom_commands() {
+    let original = vec!["custom-agent-runner".to_string(), "--resume".to_string()];
+    let mut config = packet28_daemon_core::HookRuntimeConfig {
+        relaunch_preference: RelaunchPreference::DaemonManaged,
+        relaunch_command: original.clone(),
+        ..packet28_daemon_core::HookRuntimeConfig::default()
+    };
+    let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
+    assert!(!changed);
+    assert_eq!(config.relaunch_command, original);
+}
+
+#[test]
+fn generated_relaunch_launches_delegated_runtime_directly() {
+    let mut config = packet28_daemon_core::HookRuntimeConfig::default();
+    let changed = apply_generated_relaunch_command(
+        &mut config,
+        Path::new("/tmp/repo"),
+        Some("/usr/local/bin/packet28-agent".to_string()),
+    );
+    assert!(changed);
+    assert_eq!(
+        config.relaunch_preference,
+        RelaunchPreference::DaemonManaged
+    );
+    assert_eq!(
+        config.relaunch_command,
+        vec!["claude".to_string(), "--continue".to_string()]
+    );
+}
+
+#[test]
+fn legacy_packet28_agent_relaunch_is_migrated_to_direct_runtime() {
+    let mut config = packet28_daemon_core::HookRuntimeConfig {
+        relaunch_preference: RelaunchPreference::DaemonManaged,
+        relaunch_command: vec![
+            "/usr/local/bin/packet28-agent".to_string(),
+            "--wait-for-handoff".to_string(),
+            "--root".to_string(),
+            "/tmp/repo".to_string(),
+            "--".to_string(),
+            "claude".to_string(),
+            "--continue".to_string(),
+        ],
+        ..packet28_daemon_core::HookRuntimeConfig::default()
+    };
+
+    let changed = apply_generated_relaunch_command(
+        &mut config,
+        Path::new("/tmp/repo"),
+        Some("/usr/local/bin/packet28-agent".to_string()),
+    );
+
+    assert!(changed);
+    assert_eq!(config.relaunch_command, generated_relaunch_command());
+}
+
+fn setup_index_status(
+    status: &str,
+    regex_status: Option<&str>,
+    ready: bool,
+) -> DaemonIndexStatusResponse {
+    DaemonIndexStatusResponse {
+        manifest: DaemonIndexManifest {
+            status: status.to_string(),
+            generation: 7,
+            regex_generation: regex_status.map(|_| 7),
+            regex_status: regex_status.map(str::to_string),
+            regex_weight_table_version: regex_status.map(|_| 1),
+            ..DaemonIndexManifest::default()
+        },
+        ready,
+        ..DaemonIndexStatusResponse::default()
+    }
+}
+
+#[test]
+fn classify_setup_index_status_reports_ready_when_regex_index_is_usable() {
+    let dir = tempdir().unwrap();
+    let regex_dir = dir.path().join(".packet28").join("index").join("regex-v1");
+    fs::create_dir_all(&regex_dir).unwrap();
+    fs::write(regex_dir.join("manifest.json"), "{}").unwrap();
+    let response = setup_index_status("ready", Some("ready"), true);
+
+    assert!(matches!(
+        classify_setup_index_status(dir.path(), &response, false),
+        SetupIndexVerification::Ready(_)
+    ));
+}
+
+#[test]
+fn classify_setup_index_status_reports_building_while_index_is_in_progress() {
+    let dir = tempdir().unwrap();
+    let response = setup_index_status("building", Some("building"), false);
+
+    assert!(matches!(
+        classify_setup_index_status(dir.path(), &response, false),
+        SetupIndexVerification::Building(_)
+    ));
+}
+
+#[test]
+fn classify_setup_index_status_reports_failure_when_regex_artifacts_are_missing_after_timeout() {
+    let dir = tempdir().unwrap();
+    let response = setup_index_status("building", Some("building"), false);
+
+    match classify_setup_index_status(dir.path(), &response, true) {
+        SetupIndexVerification::Failed { reason, .. } => {
+            assert!(reason.contains("regex trigram index artifacts are missing"));
+        }
+        other => panic!("expected failed setup classification, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_setup_index_status_reports_failure_when_repo_index_claims_ready_without_regex() {
+    let dir = tempdir().unwrap();
+    let response = setup_index_status("ready", Some("building"), false);
+
+    match classify_setup_index_status(dir.path(), &response, false) {
+        SetupIndexVerification::Failed { reason, .. } => {
+            assert!(reason.contains("regex trigram index is not ready"));
+        }
+        other => panic!("expected failed setup classification, got {other:?}"),
+    }
+}
