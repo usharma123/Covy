@@ -11,8 +11,9 @@ use std::io::BufReader;
 #[cfg(not(unix))]
 use crate::cmd_daemon::daemon_not_supported;
 use crate::cmd_daemon::{
-    ensure_daemon, resolve_root_arg, send_request, subscribe_task, IndexArgs, IndexCommands,
-    JsonRootArgs, StatusRootArgs, TaskArgs, TaskCommands, WatchArgs, WatchCommands,
+    ensure_daemon, resolve_root_arg, send_request, send_request_without_start, subscribe_task,
+    IndexArgs, IndexCommands, JsonRootArgs, StatusRootArgs, TaskArgs, TaskCommands, WatchArgs,
+    WatchCommands,
 };
 
 pub(crate) fn run_start(args: StatusRootArgs) -> Result<i32> {
@@ -24,7 +25,7 @@ pub(crate) fn run_start(args: StatusRootArgs) -> Result<i32> {
 
 pub(crate) fn run_stop(args: StatusRootArgs) -> Result<i32> {
     let root = resolve_root_arg(&args.root);
-    match send_request(&root, &DaemonRequest::Stop) {
+    match send_request_without_start(&root, &DaemonRequest::Stop) {
         Ok(DaemonResponse::Ack { message }) => {
             println!("{message}");
             Ok(0)

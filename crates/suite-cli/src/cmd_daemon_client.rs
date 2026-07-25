@@ -315,6 +315,23 @@ pub fn send_request(_root: &Path, _request: &DaemonRequest) -> Result<DaemonResp
 }
 
 #[cfg(unix)]
+pub(crate) fn send_request_without_start(
+    root: &Path,
+    request: &DaemonRequest,
+) -> Result<DaemonResponse> {
+    let root = normalize_daemon_root(root);
+    send_request_existing_daemon(&root, request)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn send_request_without_start(
+    _root: &Path,
+    _request: &DaemonRequest,
+) -> Result<DaemonResponse> {
+    daemon_not_supported()
+}
+
+#[cfg(unix)]
 impl PersistentDaemonClient {
     pub fn connect(root: &Path) -> Result<Self> {
         let root = normalize_daemon_root(root);

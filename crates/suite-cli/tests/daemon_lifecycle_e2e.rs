@@ -10,6 +10,23 @@ use tempfile::TempDir;
 
 #[test]
 #[cfg(unix)]
+fn test_daemon_lifecycle_cli_stop_does_not_start_missing_daemon() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    assert!(!dir.path().join(".packet28").exists());
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout("stopping\n");
+
+    assert!(!dir.path().join(".packet28").exists());
+}
+
+#[test]
+#[cfg(unix)]
 fn test_daemon_lifecycle_cli_start_status_stop_cycle() {
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();
