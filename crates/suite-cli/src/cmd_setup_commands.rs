@@ -4,7 +4,7 @@ use packet28_daemon_core::RelaunchPreference;
 
 pub(super) fn apply_generated_relaunch_command(
     config: &mut packet28_daemon_core::HookRuntimeConfig,
-    root: &Path,
+    _root: &Path,
     packet28_agent: Option<String>,
 ) -> bool {
     let should_manage_existing = config.relaunch_command.is_empty()
@@ -13,8 +13,8 @@ pub(super) fn apply_generated_relaunch_command(
         return false;
     }
     match packet28_agent {
-        Some(packet28_agent) => {
-            let desired_command = generated_relaunch_command(&packet28_agent, root);
+        Some(_) => {
+            let desired_command = generated_relaunch_command();
             if config.relaunch_preference == RelaunchPreference::DaemonManaged
                 && config.relaunch_command == desired_command
             {
@@ -37,29 +37,25 @@ pub(super) fn apply_generated_relaunch_command(
     }
 }
 
-pub(super) fn generated_relaunch_command(packet28_agent: &str, root: &Path) -> Vec<String> {
-    vec![
-        packet28_agent.to_string(),
-        "--wait-for-handoff".to_string(),
-        "--root".to_string(),
-        root.display().to_string(),
-        "--".to_string(),
-        "claude".to_string(),
-        "--continue".to_string(),
-    ]
+pub(super) fn generated_relaunch_command() -> Vec<String> {
+    // The daemon's task_launch_agent path already prepares and consumes the
+    // handoff before spawning this command. Launch the delegated runtime
+    // directly so packet28-agent does not wait for and consume it a second time.
+    vec!["claude".to_string(), "--continue".to_string()]
 }
 
 fn is_generated_relaunch_command(command: &[String]) -> bool {
-    command
-        .first()
-        .map(|value| {
-            Path::new(value)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(value)
-                == "packet28-agent"
-        })
-        .unwrap_or(false)
+    command == generated_relaunch_command()
+        || command
+            .first()
+            .map(|value| {
+                Path::new(value)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(value)
+                    == "packet28-agent"
+            })
+            .unwrap_or(false)
 }
 
 pub(super) fn resolve_packet28_agent_command() -> Option<String> {

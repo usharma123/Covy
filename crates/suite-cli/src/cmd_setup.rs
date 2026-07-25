@@ -1669,10 +1669,7 @@ plugins:
     fn generated_relaunch_is_disabled_when_packet28_agent_is_missing() {
         let mut config = packet28_daemon_core::HookRuntimeConfig {
             relaunch_preference: RelaunchPreference::DaemonManaged,
-            relaunch_command: vec![
-                "packet28-agent".to_string(),
-                "--wait-for-handoff".to_string(),
-            ],
+            relaunch_command: generated_relaunch_command(),
             ..packet28_daemon_core::HookRuntimeConfig::default()
         };
         let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
@@ -1695,7 +1692,7 @@ plugins:
     }
 
     #[test]
-    fn generated_relaunch_uses_packet28_agent_when_available() {
+    fn generated_relaunch_launches_delegated_runtime_directly() {
         let mut config = packet28_daemon_core::HookRuntimeConfig::default();
         let changed = apply_generated_relaunch_command(
             &mut config,
@@ -1709,8 +1706,34 @@ plugins:
         );
         assert_eq!(
             config.relaunch_command,
-            generated_relaunch_command("/usr/local/bin/packet28-agent", Path::new("/tmp/repo"))
+            vec!["claude".to_string(), "--continue".to_string()]
         );
+    }
+
+    #[test]
+    fn legacy_packet28_agent_relaunch_is_migrated_to_direct_runtime() {
+        let mut config = packet28_daemon_core::HookRuntimeConfig {
+            relaunch_preference: RelaunchPreference::DaemonManaged,
+            relaunch_command: vec![
+                "/usr/local/bin/packet28-agent".to_string(),
+                "--wait-for-handoff".to_string(),
+                "--root".to_string(),
+                "/tmp/repo".to_string(),
+                "--".to_string(),
+                "claude".to_string(),
+                "--continue".to_string(),
+            ],
+            ..packet28_daemon_core::HookRuntimeConfig::default()
+        };
+
+        let changed = apply_generated_relaunch_command(
+            &mut config,
+            Path::new("/tmp/repo"),
+            Some("/usr/local/bin/packet28-agent".to_string()),
+        );
+
+        assert!(changed);
+        assert_eq!(config.relaunch_command, generated_relaunch_command());
     }
 
     fn setup_index_status(
