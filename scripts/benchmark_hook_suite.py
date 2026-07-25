@@ -333,6 +333,7 @@ def run_compact_grep_integrity_case(root: Path, artifact_dir: Path, shell: str |
         "grep",
         "--root",
         str(root),
+        "--basic-regexp",
         pattern,
         target_path,
     ]

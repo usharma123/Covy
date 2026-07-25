@@ -46,6 +46,7 @@ fn pretool_keeps_grep_on_native_compact_path_with_basic_alternation() {
 
     assert!(command.contains(" compact grep "));
     assert!(!command.contains("hook reducer-runner"));
+    assert!(command.contains("--basic-regexp"));
     assert!(command.contains("fn classify\\|Mutation"));
     assert!(command.contains("crates/packet28-reducer-core/src/command.rs"));
 }
