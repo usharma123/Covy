@@ -8,17 +8,20 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "covy"
 path = "src/main.rs"
 
 [dependencies]
-testy-cli-common = { version = "0.2.0", path = "../testy-cli-common" }
-covy-ingest = { version = "0.2.0", path = "../covy-ingest" }
-diffy-core = { version = "0.2.0", path = "../diffy-core" }
-testy-core = { version = "0.2.0", path = "../testy-core" }
-suite-foundation-core = { version = "0.2.0", path = "../suite-foundation-core" }
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
+testy-cli-common.workspace = true
+covy-ingest.workspace = true
+diffy-core.workspace = true
+testy-core.workspace = true
+suite-foundation-core.workspace = true
+suite-packet-core.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde.workspace = true

@@ -8,6 +8,9 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
-covy-ingest = { version = "0.2.0", path = "../covy-ingest" }
+suite-packet-core.workspace = true
+covy-ingest.workspace = true

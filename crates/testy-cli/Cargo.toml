@@ -8,13 +8,16 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "testy"
 path = "src/main.rs"
 
 [dependencies]
-testy-cli-common = { version = "0.2.0", path = "../testy-cli-common" }
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
+testy-cli-common.workspace = true
+suite-packet-core.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 colored.workspace = true

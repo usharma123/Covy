@@ -8,9 +8,12 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
-suite-foundation-core = { version = "0.2.0", path = "../suite-foundation-core" }
+suite-packet-core.workspace = true
+suite-foundation-core.workspace = true
 roaring.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true

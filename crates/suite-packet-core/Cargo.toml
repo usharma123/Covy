@@ -8,6 +8,9 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 roaring.workspace = true
 thiserror.workspace = true

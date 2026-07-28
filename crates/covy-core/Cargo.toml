@@ -8,11 +8,14 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
-suite-foundation-core = { version = "0.2.0", path = "../suite-foundation-core" }
-diffy-core = { version = "0.2.0", path = "../diffy-core" }
-testy-core = { version = "0.2.0", path = "../testy-core" }
+suite-packet-core.workspace = true
+suite-foundation-core.workspace = true
+diffy-core.workspace = true
+testy-core.workspace = true
 
 [dev-dependencies]
 roaring.workspace = true
