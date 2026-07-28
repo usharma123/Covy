@@ -57,7 +57,9 @@ pub struct ContextStorePruneReport {
     pub reasons: EvictionCounters,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub struct RecallBudgetEstimate {
     pub est_tokens: u64,
@@ -107,7 +109,9 @@ pub struct CachePacket {
     pub metadata: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub struct DeltaReuse {
     pub reused_from: Option<String>,

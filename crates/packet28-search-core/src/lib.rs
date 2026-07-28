@@ -1,3 +1,5 @@
+extern crate packet28_binary_codec as wincode;
+
 mod weights;
 
 use std::cmp::Reverse;
@@ -72,7 +74,9 @@ struct OverlayState {
     deleted_paths: BTreeSet<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 struct DocRecord {
     doc_id: u32,
@@ -1631,7 +1635,7 @@ fn build_layer(
     write_atomic(regex_index_dir(root).join(postings_name), &postings)?;
     write_atomic(
         regex_index_dir(root).join(docs_name),
-        &bincode::serialize(&serialized_docs)?,
+        &wincode::serialize(&serialized_docs)?,
     )?;
     load_layer(root, lookup_name, postings_name, docs_name)
 }
@@ -1821,7 +1825,7 @@ fn load_layer(
     }
     let raw = fs::read(&docs_path)
         .with_context(|| format!("failed to read docs file '{}'", docs_path.display()))?;
-    let docs = bincode::deserialize::<Vec<DocRecord>>(&raw)
+    let docs = wincode::deserialize::<Vec<DocRecord>>(&raw)
         .with_context(|| format!("failed to decode docs file '{}'", docs_path.display()))?;
     let lookup = mmap_optional(&lookup_path)
         .with_context(|| format!("failed to map lookup file '{}'", lookup_path.display()))?;

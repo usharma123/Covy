@@ -138,7 +138,15 @@ impl TestMapIndex {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    Default,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 pub struct TestTimingHistory {
     pub generated_at: u64,
     pub duration_ms: BTreeMap<String, u64>,

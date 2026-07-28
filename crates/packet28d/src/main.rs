@@ -1,3 +1,5 @@
+extern crate packet28_binary_codec as wincode;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{BufReader, BufWriter, ErrorKind};

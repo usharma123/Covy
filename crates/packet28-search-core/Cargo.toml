@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 blake3.workspace = true
-bincode.workspace = true
+packet28-binary-codec.workspace = true
 ignore.workspace = true
 memmap2.workspace = true
 regex.workspace = true

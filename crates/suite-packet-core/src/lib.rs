@@ -1,3 +1,5 @@
+extern crate packet28_binary_codec as wincode;
+
 pub mod agent;
 pub mod context;
 pub mod coverage;

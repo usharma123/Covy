@@ -63,7 +63,7 @@ pub(crate) fn load_index_snapshot_file(
         return None;
     }
     let raw = fs::read(index_snapshot_path(root)).ok()?;
-    let snapshot = bincode::deserialize::<mapy_core::RepoIndexSnapshot>(&raw).ok()?;
+    let snapshot = wincode::deserialize::<mapy_core::RepoIndexSnapshot>(&raw).ok()?;
     if snapshot.version == 0 {
         return None;
     }
@@ -76,7 +76,7 @@ pub(crate) fn save_index_snapshot_file(
 ) -> Result<()> {
     fs::create_dir_all(index_dir(root))
         .with_context(|| format!("failed to create index dir '{}'", index_dir(root).display()))?;
-    let encoded = bincode::serialize(snapshot)?;
+    let encoded = wincode::serialize(snapshot)?;
     fs::write(index_snapshot_path(root), encoded).with_context(|| {
         format!(
             "failed to write index snapshot '{}'",

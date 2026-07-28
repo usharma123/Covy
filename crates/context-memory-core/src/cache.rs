@@ -592,7 +592,7 @@ mod tests {
         cache.save_to_disk(&config).unwrap();
         let cache_path = persist_cache_path_v2(dir.path());
         let raw = fs::read(cache_path).unwrap();
-        let envelope: PersistEnvelopeV2 = bincode::deserialize(&raw).unwrap();
+        let envelope: PersistEnvelopeV2 = wincode::deserialize(&raw).unwrap();
         assert_eq!(envelope.version, PERSIST_CACHE_VERSION);
         assert_eq!(envelope.entries.len(), 1);
         assert!(!envelope.recall_docs.is_empty());
@@ -676,7 +676,7 @@ mod tests {
         };
         let path = persist_cache_path_v1(dir.path());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, bincode::serialize(&legacy_envelope).unwrap()).unwrap();
+        fs::write(path, wincode::serialize(&legacy_envelope).unwrap()).unwrap();
 
         let loaded = PacketCache::load_from_disk(&config);
         let hits = loaded.recall(

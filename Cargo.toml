@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/covy-core", "crates/covy-ingest", "crates/covy-cli", "crates/diffy-cli", "crates/testy-cli", "crates/suite-packet-core", "crates/suite-foundation-core", "crates/suite-policy-core", "crates/suite-proxy-core", "crates/suite-ingest", "crates/mapy-core", "crates/diffy-core", "crates/testy-core", "crates/suite-cli", "crates/testy-cli-common", "crates/guardy-core", "crates/contextq-core", "crates/context-kernel-core", "crates/context-memory-core", "crates/context-scheduler-core", "crates/stacky-core", "crates/buildy-core", "crates/context-instruct-shim", "crates/packet28-daemon-core", "crates/packet28-daemon-protocol", "crates/packet28-reducer-core", "crates/packet28-search-core", "crates/packet28-search-cli", "crates/packet28d"]
+members = ["crates/covy-core", "crates/covy-ingest", "crates/covy-cli", "crates/diffy-cli", "crates/testy-cli", "crates/packet28-binary-codec", "crates/suite-packet-core", "crates/suite-foundation-core", "crates/suite-policy-core", "crates/suite-proxy-core", "crates/suite-ingest", "crates/mapy-core", "crates/diffy-core", "crates/testy-core", "crates/suite-cli", "crates/testy-cli-common", "crates/guardy-core", "crates/contextq-core", "crates/context-kernel-core", "crates/context-memory-core", "crates/context-scheduler-core", "crates/stacky-core", "crates/buildy-core", "crates/context-instruct-shim", "crates/packet28-daemon-core", "crates/packet28-daemon-protocol", "crates/packet28-reducer-core", "crates/packet28-search-core", "crates/packet28-search-cli", "crates/packet28d"]
 resolver = "2"
 
 [workspace.package]
@@ -23,6 +23,7 @@ covy-ingest = { version = "0.2.0", path = "crates/covy-ingest" }
 diffy-core = { version = "0.2.0", path = "crates/diffy-core" }
 guardy-core = { version = "0.2.0", path = "crates/guardy-core" }
 mapy-core = { version = "0.2.0", path = "crates/mapy-core" }
+packet28-binary-codec = { version = "0.2.0", path = "crates/packet28-binary-codec" }
 packet28-daemon-core = { version = "0.2.0", path = "crates/packet28-daemon-core" }
 packet28-daemon-protocol = { version = "0.2.0", path = "crates/packet28-daemon-protocol" }
 packet28-reducer-core = { version = "0.2.0", path = "crates/packet28-reducer-core" }
@@ -47,7 +48,8 @@ serde_json = { version = "1", features = ["raw_value"] }
 serde_yaml = "0.9"
 toml = "0.8"
 toml_edit = "0.22"
-bincode = "1"
+wincode-impl = { package = "wincode", version = "=0.4.2", features = ["derive"] }
+wincode-derive-impl = { package = "wincode-derive", version = "=0.4.1" }
 regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

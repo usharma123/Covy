@@ -12,6 +12,7 @@ homepage.workspace = true
 workspace = true
 
 [dependencies]
+packet28-binary-codec.workspace = true
 roaring.workspace = true
 thiserror.workspace = true
 serde.workspace = true

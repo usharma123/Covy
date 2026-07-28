@@ -1,3 +1,5 @@
+extern crate packet28_binary_codec as wincode;
+
 pub mod error {
     pub use suite_packet_core::error::*;
 }

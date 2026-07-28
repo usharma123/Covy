@@ -36,7 +36,7 @@ serde_json.workspace = true
 suite-packet-core.workspace = true
 testy-core.workspace = true
 blake3.workspace = true
-bincode.workspace = true
+packet28-binary-codec.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

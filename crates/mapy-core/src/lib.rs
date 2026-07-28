@@ -1,3 +1,5 @@
+extern crate packet28_binary_codec as wincode;
+
 mod ast;
 mod runtime;
 mod scan;

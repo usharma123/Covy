@@ -1,12 +1,16 @@
 use super::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 pub(crate) struct PersistEnvelopeV1 {
     pub(crate) version: u32,
     pub(crate) entries: Vec<PersistPacketCacheEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub(crate) struct PersistEnvelopeV2 {
     pub(crate) version: u32,
@@ -21,7 +25,9 @@ pub(crate) struct PersistEnvelopeV2 {
     pub(crate) task_index: HashMap<String, BTreeSet<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 pub(crate) struct PersistPacketCacheEntry {
     cache_key: String,
     target: String,
@@ -32,7 +38,9 @@ pub(crate) struct PersistPacketCacheEntry {
     delta_reuse: DeltaReuse,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 pub(crate) struct PersistCachePacket {
     packet_id: Option<String>,
     body_json: String,
@@ -154,7 +162,7 @@ impl PacketCache {
             task_index: filter_ref_index_for_live_keys(&self.task_index, &live_keys),
         };
 
-        let encoded = bincode::serialize(&envelope).map_err(|source| {
+        let encoded = wincode::serialize(&envelope).map_err(|source| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("failed to serialize cache envelope: {source}"),
@@ -179,7 +187,7 @@ impl PacketCache {
 
     pub(crate) fn try_load_v2(&mut self, config: &PersistConfig) -> Option<()> {
         let raw = fs::read(persist_cache_path_v2(&config.root_dir)).ok()?;
-        let envelope = match bincode::deserialize::<PersistEnvelopeV2>(&raw) {
+        let envelope = match wincode::deserialize::<PersistEnvelopeV2>(&raw) {
             Ok(envelope) => envelope,
             Err(_) => {
                 self.evict_reason(EvictionReason::CorruptLoadRecovery, 1);
@@ -215,7 +223,7 @@ impl PacketCache {
 
     pub(crate) fn try_load_v1(&mut self, config: &PersistConfig) -> Option<()> {
         let raw = fs::read(persist_cache_path_v1(&config.root_dir)).ok()?;
-        let envelope = match bincode::deserialize::<PersistEnvelopeV1>(&raw) {
+        let envelope = match wincode::deserialize::<PersistEnvelopeV1>(&raw) {
             Ok(envelope) => envelope,
             Err(_) => {
                 self.evict_reason(EvictionReason::CorruptLoadRecovery, 1);

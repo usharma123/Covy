@@ -155,7 +155,19 @@ pub struct RepoQueryPayloadRich {
     pub truncation: TruncationSummary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub struct IndexedSymbolDef {
     pub kind: String,
@@ -163,7 +175,17 @@ pub struct IndexedSymbolDef {
     pub line: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Default,
+    PartialEq,
+    Eq,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub struct RepoIndexFileEntry {
     pub path: String,
@@ -175,7 +197,17 @@ pub struct RepoIndexFileEntry {
     pub token_lines: BTreeMap<String, Vec<usize>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Default,
+    PartialEq,
+    Eq,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub struct RepoIndexSnapshot {
     pub version: u32,
@@ -191,7 +223,9 @@ pub struct RepoIndexUpdateSummary {
     pub changed_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub(crate) struct CacheEntry {
     pub size: u64,
@@ -204,7 +238,9 @@ pub(crate) struct CacheEntry {
     pub token_lines: BTreeMap<String, Vec<usize>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 #[serde(default)]
 pub(crate) struct RepoScanCache {
     pub version: u32,

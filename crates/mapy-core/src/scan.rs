@@ -191,7 +191,7 @@ pub(crate) fn load_scan_cache(root: &Path) -> RepoScanCache {
         raw
     };
 
-    let cache = if let Ok(cache) = bincode::deserialize::<RepoScanCache>(&raw) {
+    let cache = if let Ok(cache) = wincode::deserialize::<RepoScanCache>(&raw) {
         cache
     } else if let Ok(cache) = serde_json::from_slice::<RepoScanCache>(&raw) {
         cache
@@ -214,7 +214,7 @@ pub(crate) fn write_scan_cache(root: &Path, cache: &RepoScanCache) {
         }
     }
 
-    let Ok(encoded) = bincode::serialize(cache) else {
+    let Ok(encoded) = wincode::serialize(cache) else {
         return;
     };
 

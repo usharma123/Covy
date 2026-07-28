@@ -1,6 +1,5 @@
 use std::io::Cursor;
 
-use bincode::Options;
 use roaring::RoaringBitmap;
 
 use crate::error::CovyError;
@@ -11,14 +10,9 @@ pub const TESTMAP_SCHEMA_VERSION: u16 = 3;
 const TESTMAP_MAGIC: &[u8; 7] = b"P28TMAP";
 const TESTMAP_HEADER_LEN: usize = TESTMAP_MAGIC.len() + std::mem::size_of::<u16>();
 
-fn wire_options() -> impl Options {
-    bincode::DefaultOptions::new()
-        .with_fixint_encoding()
-        .with_little_endian()
-        .reject_trailing_bytes()
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct LegacyTestMapMetadataV1 {
     schema_version: u16,
     path_norm_version: u16,
@@ -27,7 +21,9 @@ struct LegacyTestMapMetadataV1 {
     granularity: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct LegacyTestMapIndexV1 {
     metadata: LegacyTestMapMetadataV1,
     test_language: std::collections::BTreeMap<String, String>,
@@ -35,7 +31,9 @@ struct LegacyTestMapIndexV1 {
     file_to_tests: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct LegacyTestMapMetadataV2 {
     schema_version: u16,
     path_norm_version: u16,
@@ -47,7 +45,9 @@ struct LegacyTestMapMetadataV2 {
     toolchain_fingerprint: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct LegacyTestMapIndexV2 {
     metadata: LegacyTestMapMetadataV2,
     test_language: std::collections::BTreeMap<String, String>,
@@ -58,7 +58,9 @@ struct LegacyTestMapIndexV2 {
     coverage: Vec<Vec<Vec<u32>>>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct StoredTestMapMetadataV3 {
     schema_version: u16,
     path_norm_version: u16,
@@ -98,18 +100,22 @@ impl StoredTestMapMetadataV3 {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct StoredSparseFileCoverageV3 {
     file_idx: u64,
     lines: Vec<u8>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct StoredSparseTestCoverageRowV3 {
     files: Vec<StoredSparseFileCoverageV3>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, wincode::SchemaWrite)]
 struct StoredTestMapIndexV3Ref<'a> {
     metadata: StoredTestMapMetadataV3,
     test_language: &'a std::collections::BTreeMap<String, String>,
@@ -120,7 +126,7 @@ struct StoredTestMapIndexV3Ref<'a> {
     sparse_coverage: &'a [StoredSparseTestCoverageRowV3],
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, wincode::SchemaRead)]
 struct StoredTestMapIndexV3 {
     metadata: StoredTestMapMetadataV3,
     test_language: std::collections::BTreeMap<String, String>,
@@ -148,8 +154,7 @@ pub fn serialize_testmap(index: &TestMapIndex) -> Result<Vec<u8>, CovyError> {
         file_index: &index.file_index,
         sparse_coverage: &stored_sparse_coverage,
     };
-    let payload = wire_options()
-        .serialize(&stored)
+    let payload = wincode::serialize(&stored)
         .map_err(|error| CovyError::Cache(format!("Failed to serialize testmap: {error}")))?;
     let mut bytes = Vec::with_capacity(TESTMAP_HEADER_LEN + payload.len());
     bytes.extend_from_slice(TESTMAP_MAGIC);
@@ -164,7 +169,7 @@ pub fn deserialize_testmap(data: &[u8]) -> Result<TestMapIndex, CovyError> {
         return deserialize_v3_testmap(data);
     }
 
-    if let Ok(stored) = wire_options().deserialize::<LegacyTestMapIndexV2>(data) {
+    if let Ok(stored) = wincode::deserialize::<LegacyTestMapIndexV2>(data) {
         return match stored.metadata.schema_version {
             2 => migrate_v2_testmap(stored),
             1 => Ok(normalize_struct_v1_testmap(stored)),
@@ -172,8 +177,7 @@ pub fn deserialize_testmap(data: &[u8]) -> Result<TestMapIndex, CovyError> {
         };
     }
 
-    let legacy: LegacyTestMapIndexV1 = wire_options()
-        .deserialize(data)
+    let legacy: LegacyTestMapIndexV1 = wincode::deserialize(data)
         .map_err(|error| CovyError::Cache(format!("Failed to deserialize testmap: {error}")))?;
     if legacy.metadata.schema_version != 1 {
         return Err(unsupported_version(legacy.metadata.schema_version));
@@ -192,8 +196,7 @@ fn deserialize_v3_testmap(data: &[u8]) -> Result<TestMapIndex, CovyError> {
     if version != TESTMAP_SCHEMA_VERSION {
         return Err(unsupported_version(version));
     }
-    let stored: StoredTestMapIndexV3 = wire_options()
-        .deserialize(&data[TESTMAP_HEADER_LEN..])
+    let stored: StoredTestMapIndexV3 = wincode::deserialize(&data[TESTMAP_HEADER_LEN..])
         .map_err(|error| CovyError::Cache(format!("Failed to deserialize testmap: {error}")))?;
     if stored.metadata.schema_version != TESTMAP_SCHEMA_VERSION {
         return Err(CovyError::Cache(format!(
@@ -533,7 +536,7 @@ mod tests {
             file_index: &index.file_index,
             sparse_coverage,
         };
-        let payload = wire_options().serialize(&stored).unwrap();
+        let payload = wincode::serialize(&stored).unwrap();
         let mut bytes = Vec::with_capacity(TESTMAP_HEADER_LEN + payload.len());
         bytes.extend_from_slice(TESTMAP_MAGIC);
         bytes.extend_from_slice(&header_version.to_le_bytes());
@@ -633,7 +636,7 @@ mod tests {
     #[test]
     fn deserialize_exact_v2_should_migrate_dense_rows_to_v3_sparse_rows() {
         let legacy = sample_legacy_v2(2);
-        let bytes = wire_options().serialize(&legacy).unwrap();
+        let bytes = wincode::serialize(&legacy).unwrap();
 
         let restored = deserialize_testmap(&bytes).unwrap();
 
@@ -696,7 +699,7 @@ mod tests {
             },
         };
 
-        let bytes = wire_options().serialize(&legacy).unwrap();
+        let bytes = wincode::serialize(&legacy).unwrap();
         let restored = deserialize_testmap(&bytes).unwrap();
 
         assert_eq!(restored.metadata.schema_version, 1);
@@ -719,7 +722,7 @@ mod tests {
         let legacy = sample_legacy_v2(1);
         let expected_test_to_files = legacy.test_to_files.clone();
         let expected_file_to_tests = legacy.file_to_tests.clone();
-        let bytes = wire_options().serialize(&legacy).unwrap();
+        let bytes = wincode::serialize(&legacy).unwrap();
 
         let restored = deserialize_testmap(&bytes).unwrap();
 
@@ -783,7 +786,7 @@ mod tests {
 
     #[test]
     fn deserialize_v2_should_reject_trailing_payload_bytes() {
-        let mut bytes = wire_options().serialize(&sample_legacy_v2(2)).unwrap();
+        let mut bytes = wincode::serialize(&sample_legacy_v2(2)).unwrap();
         bytes.push(0);
 
         assert!(deserialize_testmap(&bytes).is_err());
@@ -803,7 +806,7 @@ mod tests {
             test_to_files: BTreeMap::new(),
             file_to_tests: BTreeMap::new(),
         };
-        let mut bytes = wire_options().serialize(&legacy).unwrap();
+        let mut bytes = wincode::serialize(&legacy).unwrap();
         bytes.push(0);
 
         assert!(deserialize_testmap(&bytes).is_err());

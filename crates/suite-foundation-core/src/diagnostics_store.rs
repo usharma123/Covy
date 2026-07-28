@@ -50,7 +50,7 @@ pub fn serialize_diagnostics_with_metadata(
     let mut blocks: Vec<(String, Vec<u8>)> = Vec::with_capacity(data.issues_by_file.len());
     for (path, issues) in &data.issues_by_file {
         let stored: Vec<StoredIssue> = issues.iter().map(stored_issue_from_runtime).collect();
-        let bytes = bincode::serialize(&stored)
+        let bytes = wincode::serialize(&stored)
             .map_err(|e| CovyError::Cache(format!("Failed to serialize diagnostics block: {e}")))?;
         blocks.push((path.clone(), bytes));
     }
@@ -118,7 +118,7 @@ pub fn deserialize_diagnostics_with_metadata(
     }
 
     // Legacy fallback
-    let stored: StoredDiagnosticsData = bincode::deserialize(data)
+    let stored: StoredDiagnosticsData = wincode::deserialize(data)
         .map_err(|e| CovyError::Cache(format!("Failed to deserialize diagnostics: {e}")))?;
     Ok((stored.into_runtime(), None))
 }
@@ -390,7 +390,7 @@ fn decode_issues_block(
         ));
     }
 
-    let stored: Vec<StoredIssue> = bincode::deserialize(&data[start..end])
+    let stored: Vec<StoredIssue> = wincode::deserialize(&data[start..end])
         .map_err(|e| CovyError::Cache(format!("Failed to deserialize diagnostics block: {e}")))?;
 
     Ok(stored.into_iter().map(runtime_issue_from_stored).collect())
@@ -409,7 +409,7 @@ fn decode_issues_block_from_reader(
     let mut block = vec![0u8; entry.len as usize];
     file.read_exact(&mut block)?;
 
-    let stored: Vec<StoredIssue> = bincode::deserialize(&block)
+    let stored: Vec<StoredIssue> = wincode::deserialize(&block)
         .map_err(|e| CovyError::Cache(format!("Failed to deserialize diagnostics block: {e}")))?;
     Ok(stored.into_iter().map(runtime_issue_from_stored).collect())
 }
@@ -524,7 +524,9 @@ fn read_u64(file: &mut File) -> Result<u64, CovyError> {
     Ok(u64::from_le_bytes(buf))
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct StoredIssue {
     path: String,
     line: u32,
@@ -537,7 +539,9 @@ struct StoredIssue {
     fingerprint: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct StoredDiagnosticsData {
     issues_by_file: std::collections::BTreeMap<String, Vec<StoredIssue>>,
     format: Option<DiagnosticsFormat>,
