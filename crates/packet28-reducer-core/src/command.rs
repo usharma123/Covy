@@ -339,4 +339,24 @@ mod tests {
         assert!(classify_command("cargo test | tail -n 30").is_some());
         assert!(classify_command("git diff | sed -n '1,20p'").is_some());
     }
+
+    #[test]
+    fn representative_mutations_are_never_cacheable() {
+        for command in [
+            "git switch main",
+            "cargo install ripgrep",
+            "cargo fmt --all",
+            "npx svgo icon.svg",
+            "pip install pytest",
+            "ruff format src",
+            "bundle install",
+            "docker run alpine echo hi",
+            "kubectl apply -f deploy.yaml",
+            "wget https://example.com/archive.tgz",
+        ] {
+            let spec = classify_command(command).expect(command);
+            assert!(spec.mutation, "{command}");
+            assert!(!spec.cacheable, "{command}");
+        }
+    }
 }

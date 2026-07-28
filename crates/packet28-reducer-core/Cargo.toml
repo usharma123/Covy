@@ -10,6 +10,7 @@ homepage.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+blake3.workspace = true
 ignore.workspace = true
 regex.workspace = true
 serde.workspace = true

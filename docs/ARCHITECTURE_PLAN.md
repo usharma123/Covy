@@ -1,29 +1,130 @@
 # Packet28 Architecture Plan
 
-Packet28 implements the RTK/ICM parity slice with Packet28-native components:
+This document describes the current module boundaries after the codebase-health
+refactor. It is an architecture map and follow-up plan, not a claim that every
+runtime path has been benchmarked or revalidated.
 
-- `packet28-reducer-core`: deterministic command reducers and compact previews.
-- `route_registry.rs`: command classification, rewrite planning, native-tool routing, and fallback reasons.
-- `cmd_run.rs`: reducer-aware execution plus platform agent backend preservation.
-- `savings_analytics.rs`: local `.packet28/run-savings.jsonl` records for `gain`, `discover`, and dashboard.
-- `memory_store.rs`: local SQLite schema for memory, graph, feedback, sessions, and MCP call history.
-- `cmd_mcp.rs`: MCP stdio server, compact search/read/glob tools, memory/feedback/graph tools, rewrite/reduce/doctor aliases, and handoff/status tools.
-- `cmd_setup.rs`, `cmd_doctor.rs`, `runtime_integrations.rs`: agent setup and validation for Claude, Cursor, Codex, and Windsurf.
-- `packet28d` and daemon client modules: task state, handoff assembly, persistent context, and search/index support.
+## Current Boundaries
 
-## RTK Mapping
+### CLI and reducers
 
-RTK’s core path is command proxy plus hook rewrite. Packet28 maps this to route registry decisions, runtime hooks, reducer-aware `Packet28 run`, and raw artifact recovery through Packet28 artifacts. RTK’s broader custom filter and telemetry systems are deferred.
+- `crates/suite-cli/src/cli_defs.rs` defines the top-level CLI surface, while
+  `cli_runtime.rs` resolves configuration and dispatches commands.
+- `crates/packet28-reducer-core` owns deterministic command classification and
+  output reduction.
+- `route_registry.rs` coordinates route decisions. `route_registry_native.rs`
+  owns compact native-tool planning and `route_registry_policy.rs` owns
+  workspace policy and wrapper exclusions. `cmd_run.rs` executes the selected
+  route and records reduction results and fallback provenance.
 
-## ICM Mapping
+### MCP
 
-ICM’s core path is local memory plus MCP and hooks. Packet28 maps this to SQLite memory/feedback/graph commands, `wakeup`, MCP tools, dashboard, and handoff/context assembly. ICM’s vector/FTS/memoir/transcript breadth is deferred.
+- `cmd_mcp.rs` remains the MCP command, server-session, and request-dispatch
+  facade.
+- Protocol framing, response shaping, prompt/resources, smoke checks, shared
+  support, tool arguments, and the tool catalog live in the corresponding
+  `cmd_mcp_{transport,response,prompt_resource,smoke,support,tool_args,tool_catalog}.rs`
+  modules.
+- Core and memory dispatch are separated into `cmd_mcp_core_tools.rs` and
+  `cmd_mcp_memory_tools.rs`.
+- Native tools are split by dispatch, arguments, artifacts, search, reads, FFF,
+  and handoff behavior in the `cmd_mcp_native*.rs` modules.
+- Upstream proxy configuration, catalog handling, and upstream calls are split
+  across `cmd_mcp_proxy*.rs`; the FFF client is in `cmd_mcp_fff.rs`.
+
+### Hooks and setup
+
+- `cmd_hook.rs` owns hook CLI/event orchestration. Runtime normalization, packet
+  construction, reducer execution, HTTP serving, and shared helpers live in
+  `cmd_hook_runtime.rs`, `cmd_hook_packets.rs`, `cmd_hook_runner.rs`,
+  `cmd_hook_http.rs`, and `cmd_hook_support.rs`.
+- `cmd_setup.rs` coordinates setup. Command resolution, hook writers, plugin
+  installation, index verification, rendering, and runtime detection live in
+  the `cmd_setup_{commands,hooks,plugins,index,render,runtime}.rs` modules.
+- `agent_surface.rs` and `runtime_integrations.rs` contain generated agent
+  guidance and runtime-specific integration material rather than setup control
+  flow.
+
+### Dashboard and memory
+
+- `cmd_dashboard.rs` assembles dashboard data and anomaly summaries;
+  `cmd_dashboard_render.rs` owns text, HTML, and interactive rendering.
+- `memory_store.rs` is the memory API facade and primary memory CRUD/recall
+  implementation. Database setup, data types, scoring, local hook/extraction
+  storage, feedback/transcripts, graph storage, graph rendering, project
+  scanning, and linting are separated into the `memory_*.rs` modules.
+- `savings_analytics.rs` owns local run-savings records consumed by gain,
+  discover, and dashboard views.
+
+### System commands
+
+- `cmd_system.rs` owns arguments and command-level orchestration.
+- Dependency summaries, JSON filtering, output envelopes, search/find, source
+  reads, and command summaries live under `cmd_system/`.
+
+### Daemon and tests
+
+- `crates/packet28-daemon-core` owns shared protocol, path, storage, integrity,
+  and request/response types.
+- `crates/packet28d` owns the server process. Broker context/handoff/search
+  operations, hooks, indexing, launch, planning, runtime files, server
+  transports, state, and watches are separate modules.
+- `cmd_daemon.rs` defines the CLI surface; `cmd_daemon_client.rs` and
+  `cmd_daemon_commands.rs` own client transport/lifecycle and command handlers.
+- Large route-registry and hook unit suites are in
+  `route_registry_tests.rs` and `cmd_hook_tests.rs`. Packet28d tests are split
+  by broker behavior under `crates/packet28d/src/tests/`, and CLI integration
+  tests are organized by workflow under `crates/suite-cli/tests/` with shared
+  fixtures in `tests/support/`.
+
+## Reliability Fallbacks to Retain
+
+These paths protect correctness, portability, or graceful degradation and are
+not cleanup targets without an equivalent replacement and focused tests:
+
+- raw or proxy passthrough when a route is excluded by policy or cannot be
+  safely rewritten;
+- raw execution and artifact recovery for unsupported reducer families, with
+  explicit fallback provenance in savings/tool results;
+- post-tool hook capture when pre-tool rewriting is unavailable or unsupported;
+- guidance-file setup for runtimes without usable MCP integration;
+- local reducer/search behavior when the daemon or preferred search backend is
+  unavailable, with the selected backend or fallback reason surfaced;
+- transcript LIKE fallback when SQLite FTS cannot satisfy the query.
+
+Compatibility aliases and legacy data readers may also be reliability
+boundaries. Verify their callers, persisted-data role, and tests before removal.
+
+## Remaining Cleanup Targets
+
+- Continue reducing the size of orchestration facades such as `cmd_mcp.rs`,
+  `cmd_setup.rs`, `cmd_dashboard.rs`, `cmd_system.rs`, `memory_store.rs`, and
+  `packet28d/src/main.rs` when a cohesive responsibility can be extracted.
+- Narrow broad internal re-exports and remove `allow(dead_code)` exceptions only
+  after static reference checks and targeted runtime tests show they are
+  unnecessary.
+- Split remaining large implementation or test modules by behavior when doing so
+  improves navigation without adding forwarding-only abstraction layers.
+- Audit compatibility aliases, old runtime adapters, and legacy readers
+  separately from fallback-preservation work. Uncertain paths should be
+  documented and isolated rather than removed opportunistically.
 
 ## Verification Strategy
 
-Every supported feature needs one of:
+Each refactor batch should use the smallest relevant unit and E2E tests, then
+run `scripts/validate_refactor_batch.sh`. Major checkpoints require:
 
-- focused unit tests for routing/schema/tool-list behavior,
-- E2E CLI tests for generated setup or command execution,
-- MCP stdio tests for initialize/tools-list/tools-call behavior,
-- workspace-level `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`.
+```text
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+```
+
+MCP boundaries additionally need initialize/tools-list/tools-call stdio tests;
+setup and hook boundaries need generated-config and rewrite E2E tests; daemon
+boundaries need lifecycle, task, handoff, index, and disconnect coverage.
+
+RTK parity remains centered on route selection, hook rewriting, reducer-aware
+execution, and raw artifact recovery. ICM parity remains centered on local
+memory, MCP/hooks, dashboard signals, and daemon-backed context/handoff
+assembly. Broader parity work should be tracked separately from structural
+cleanup.

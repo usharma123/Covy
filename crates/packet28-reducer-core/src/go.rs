@@ -232,7 +232,7 @@ fn merge_paths(base: &[String], extra: &[String]) -> Vec<String> {
 }
 
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
-    format!("{family}:{kind}:{}", argv.join("\u{1f}"))
+    crate::cache_fingerprint(family, kind, argv)
 }
 
 fn compact_go_test_failures(output: &str) -> String {

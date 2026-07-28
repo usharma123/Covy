@@ -87,17 +87,7 @@ Use Packet28 as the primary context broker for this task.\n\
             // Return a lean pointer to the brief resource instead of embedding
             // up to 4KB of brief excerpt directly into the prompt. The agent
             // reads the resource only when it needs the full context.
-            let prompt = format!(
-                "Continue Packet28 task `{task_id}`.\n\n\
-Status: version={}, handoff_ready={}, push={}\n\n\
-Read `packet28://task/{task_id}/brief` for full context. Let hooks handle reducer capture. Use `packet28.write_intention` for objective changes.",
-                status
-                    .latest_context_version
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string()),
-                status.handoff_ready,
-                status.supports_push,
-            );
+            let prompt = continue_task_prompt(&task_id, &status);
             Ok(prompt_response(
                 "Continue the current Packet28 task.",
                 prompt,
@@ -135,6 +125,20 @@ fn prompt_response(description: &str, text: String) -> Value {
             }
         ]
     })
+}
+
+fn continue_task_prompt(task_id: &str, status: &BrokerTaskStatusResponse) -> String {
+    format!(
+        "Continue Packet28 task `{task_id}`.\n\n\
+Status: version={}, handoff_ready={}, push={}\n\n\
+Read `packet28://task/{task_id}/brief` for full context. Let hooks handle reducer capture. Use `packet28.write_intention` for objective changes.",
+        status
+            .latest_context_version
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string()),
+        status.handoff_ready,
+        status.supports_push,
+    )
 }
 
 fn prompt_argument(arguments: &Map<String, Value>, key: &str) -> Option<String> {
@@ -353,4 +357,26 @@ fn materialize_task_artifacts(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continue_task_prompt_uses_brief_pointer_instead_of_embedded_context() {
+        let status = BrokerTaskStatusResponse {
+            latest_context_version: Some("ctx-pointer".to_string()),
+            handoff_ready: true,
+            supports_push: false,
+            ..Default::default()
+        };
+        let prompt = continue_task_prompt("task-pointer", &status);
+
+        assert!(prompt.contains("packet28://task/task-pointer/brief"));
+        assert!(prompt.contains("Status: version=ctx-pointer, handoff_ready=true, push=false"));
+        assert!(prompt.len() < 320);
+        assert!(!prompt.contains("## Task Objective"));
+        assert!(!prompt.contains("\"sections\""));
+    }
 }

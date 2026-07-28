@@ -276,10 +276,8 @@ pub(crate) fn track_task(
     root: &Path,
     task_id: &str,
 ) -> Result<()> {
-    let latest_seq = load_task_events(root, task_id)?
-        .last()
-        .map(|frame| frame.seq)
-        .unwrap_or(0);
+    let read = load_task_events_from_offset(root, task_id, 0)?;
+    let latest_seq = read.events.last().map(|frame| frame.seq).unwrap_or(0);
     let mut guard = session
         .lock()
         .map_err(|_| anyhow!("failed to lock MCP session"))?;
@@ -287,6 +285,10 @@ pub(crate) fn track_task(
         .tracked_tasks
         .entry(task_id.to_string())
         .or_insert(latest_seq);
+    guard
+        .tracked_task_offsets
+        .entry(task_id.to_string())
+        .or_insert(read.next_offset);
     guard.current_task_id = Some(task_id.to_string());
     Ok(())
 }
@@ -364,22 +366,6 @@ fn send_daemon_request_via_session(
     request: &DaemonRequest,
 ) -> Result<DaemonResponse> {
     crate::cmd_daemon::send_request(root, request)
-}
-
-pub(crate) fn broker_write_state_via_session(
-    root: &Path,
-    session: &Arc<Mutex<McpSessionState>>,
-    request: BrokerWriteStateRequest,
-) -> Result<BrokerWriteStateResponse> {
-    match send_daemon_request_via_session(
-        root,
-        session,
-        &DaemonRequest::BrokerWriteState { request },
-    )? {
-        DaemonResponse::BrokerWriteState { response } => Ok(response),
-        DaemonResponse::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
-    }
 }
 
 pub(crate) fn broker_write_state_batch_via_session(

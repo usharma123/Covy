@@ -327,7 +327,7 @@ fn normalize_paths(paths: Vec<String>) -> Vec<String> {
 }
 
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
-    format!("{family}:{kind}:{}", argv.join("\u{1f}"))
+    crate::cache_fingerprint(family, kind, argv)
 }
 
 fn first_nonempty_line(value: &str) -> Option<String> {

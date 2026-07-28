@@ -12,7 +12,9 @@ pub use crate::cmd_daemon_client::{
     execute_sequence, execute_test_map, execute_test_shard, send_cover_check, send_kernel_request,
     send_packet_fetch, send_request, via_daemon_env_enabled, PersistentDaemonClient,
 };
-pub(crate) use crate::cmd_daemon_client::{ensure_daemon, resolve_root_arg, restart_daemon};
+pub(crate) use crate::cmd_daemon_client::{
+    ensure_daemon, resolve_root_arg, restart_daemon, send_request_without_start,
+};
 pub(crate) use crate::cmd_daemon_commands::{
     run_index, run_start, run_status, run_stop, run_task, run_watch,
 };
@@ -150,6 +152,8 @@ pub struct TaskWatchArgs {
     pub root: String,
     #[arg(long, default_value_t = 0)]
     pub replay_last: usize,
+    #[arg(long)]
+    pub after_seq: Option<u64>,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]

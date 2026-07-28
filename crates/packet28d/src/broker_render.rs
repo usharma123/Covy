@@ -136,6 +136,91 @@ fn shrink_section_to_budget(
     Some(candidate)
 }
 
+struct SectionBudgetSelection {
+    selected: Vec<BrokerSection>,
+    pruned: Vec<BrokerEvictionCandidate>,
+    used_tokens: u64,
+    used_bytes: u64,
+    budget_tokens: u64,
+    budget_bytes: u64,
+}
+
+impl SectionBudgetSelection {
+    fn new(budget_tokens: u64, budget_bytes: u64) -> Self {
+        let (used_tokens, used_bytes) = estimate_brief_banner_cost();
+        Self {
+            selected: Vec::new(),
+            pruned: Vec::new(),
+            used_tokens,
+            used_bytes,
+            budget_tokens,
+            budget_bytes,
+        }
+    }
+
+    fn remaining_tokens(&self) -> u64 {
+        self.budget_tokens.saturating_sub(self.used_tokens)
+    }
+
+    fn remaining_bytes(&self) -> u64 {
+        self.budget_bytes.saturating_sub(self.used_bytes)
+    }
+
+    fn consider(&mut self, section: BrokerSection, must_keep: bool) {
+        let (est_tokens, est_bytes) = estimate_rendered_section_cost(&section);
+        if est_tokens + self.used_tokens <= self.budget_tokens
+            && est_bytes + self.used_bytes <= self.budget_bytes
+        {
+            self.push_selected(section, est_tokens, est_bytes);
+            return;
+        }
+
+        if must_keep {
+            if let Some(shrunk) =
+                shrink_section_to_budget(&section, self.remaining_tokens(), self.remaining_bytes())
+            {
+                let (shrunk_tokens, shrunk_bytes) = estimate_rendered_section_cost(&shrunk);
+                self.push_selected(shrunk, shrunk_tokens, shrunk_bytes);
+                return;
+            }
+        }
+
+        self.prune(section, est_tokens);
+    }
+
+    fn prune(&mut self, section: BrokerSection, est_tokens: u64) {
+        self.pruned.push(BrokerEvictionCandidate {
+            section_id: section.id,
+            reason: "budget_pruned".to_string(),
+            est_tokens,
+        });
+    }
+
+    fn push_selected(&mut self, section: BrokerSection, est_tokens: u64, est_bytes: u64) {
+        self.used_tokens = self.used_tokens.saturating_add(est_tokens);
+        self.used_bytes = self.used_bytes.saturating_add(est_bytes);
+        self.selected.push(section);
+    }
+
+    fn enforce_max_sections(&mut self, max_sections: usize) {
+        if self.selected.len() <= max_sections {
+            return;
+        }
+        for section in self.selected.drain(max_sections..) {
+            let (est_tokens, _) = estimate_rendered_section_cost(&section);
+            self.pruned.push(BrokerEvictionCandidate {
+                section_id: section.id,
+                reason: "budget_pruned".to_string(),
+                est_tokens,
+            });
+        }
+    }
+
+    fn into_parts(self) -> (Vec<BrokerSection>, Vec<BrokerEvictionCandidate>) {
+        (self.selected, self.pruned)
+    }
+}
+
 pub(crate) fn prune_sections_for_budget(
     action: BrokerAction,
     sections: Vec<BrokerSection>,
@@ -151,58 +236,16 @@ pub(crate) fn prune_sections_for_budget(
         .iter()
         .copied()
         .collect::<HashSet<_>>();
-    let mut selected = Vec::new();
-    let mut pruned = Vec::new();
-    let (mut used_tokens, mut used_bytes) = estimate_brief_banner_cost();
+    let mut selection = SectionBudgetSelection::new(budget_tokens, budget_bytes);
     let min_remaining_tokens_for_optional = ((budget_tokens as f64) * 0.2).ceil() as u64;
     let min_remaining_bytes_for_optional = ((budget_bytes as f64) * 0.2).ceil() as u64;
-
-    let consider = |section: BrokerSection,
-                    must_keep: bool,
-                    selected: &mut Vec<BrokerSection>,
-                    pruned: &mut Vec<BrokerEvictionCandidate>,
-                    used_tokens: &mut u64,
-                    used_bytes: &mut u64| {
-        let (est_tokens, est_bytes) = estimate_rendered_section_cost(&section);
-        if est_tokens + *used_tokens <= budget_tokens && est_bytes + *used_bytes <= budget_bytes {
-            *used_tokens = (*used_tokens).saturating_add(est_tokens);
-            *used_bytes = (*used_bytes).saturating_add(est_bytes);
-            selected.push(section);
-            return;
-        }
-        let remaining_tokens = budget_tokens.saturating_sub(*used_tokens);
-        let remaining_bytes = budget_bytes.saturating_sub(*used_bytes);
-        if must_keep {
-            if let Some(shrunk) =
-                shrink_section_to_budget(&section, remaining_tokens, remaining_bytes)
-            {
-                let (shrunk_tokens, shrunk_bytes) = estimate_rendered_section_cost(&shrunk);
-                *used_tokens = (*used_tokens).saturating_add(shrunk_tokens);
-                *used_bytes = (*used_bytes).saturating_add(shrunk_bytes);
-                selected.push(shrunk);
-                return;
-            }
-        }
-        pruned.push(BrokerEvictionCandidate {
-            section_id: section.id.clone(),
-            reason: "budget_pruned".to_string(),
-            est_tokens,
-        });
-    };
 
     let mut objective = sections
         .iter()
         .find(|section| section.id == "task_objective")
         .cloned();
     if let Some(objective) = objective.take() {
-        consider(
-            objective,
-            true,
-            &mut selected,
-            &mut pruned,
-            &mut used_tokens,
-            &mut used_bytes,
-        );
+        selection.consider(objective, true);
     }
 
     for section_id in action_critical_section_ids(action) {
@@ -211,14 +254,7 @@ pub(crate) fn prune_sections_for_budget(
             .find(|section| section.id == *section_id)
             .cloned()
         {
-            consider(
-                section,
-                true,
-                &mut selected,
-                &mut pruned,
-                &mut used_tokens,
-                &mut used_bytes,
-            );
+            selection.consider(section, true);
         }
     }
 
@@ -226,41 +262,18 @@ pub(crate) fn prune_sections_for_budget(
         if section.id == "task_objective" || critical_ids.contains(section.id.as_str()) {
             continue;
         }
-        let remaining_tokens = budget_tokens.saturating_sub(used_tokens);
-        let remaining_bytes = budget_bytes.saturating_sub(used_bytes);
-        if remaining_tokens < min_remaining_tokens_for_optional
-            || remaining_bytes < min_remaining_bytes_for_optional
+        if selection.remaining_tokens() < min_remaining_tokens_for_optional
+            || selection.remaining_bytes() < min_remaining_bytes_for_optional
         {
             let (est_tokens, _) = estimate_rendered_section_cost(&section);
-            pruned.push(BrokerEvictionCandidate {
-                section_id: section.id.clone(),
-                reason: "budget_pruned".to_string(),
-                est_tokens,
-            });
+            selection.prune(section, est_tokens);
             continue;
         }
-        consider(
-            section,
-            false,
-            &mut selected,
-            &mut pruned,
-            &mut used_tokens,
-            &mut used_bytes,
-        );
+        selection.consider(section, false);
     }
 
-    if selected.len() > max_sections {
-        for section in selected.drain(max_sections..) {
-            let (est_tokens, _) = estimate_rendered_section_cost(&section);
-            pruned.push(BrokerEvictionCandidate {
-                section_id: section.id,
-                reason: "budget_pruned".to_string(),
-                est_tokens,
-            });
-        }
-    }
-
-    (selected, pruned)
+    selection.enforce_max_sections(max_sections);
+    selection.into_parts()
 }
 
 pub(crate) fn build_budget_preflight_section(
@@ -273,9 +286,7 @@ pub(crate) fn build_budget_preflight_section(
     if !allowed_sections.contains("budget_notes") {
         return None;
     }
-    let Some(budget_tokens) = request.budget_tokens else {
-        return None;
-    };
+    let budget_tokens = request.budget_tokens?;
     let low_budget_threshold = 256_u64.max(broker_default_budget_tokens() / 4);
     if budget_tokens > low_budget_threshold {
         return None;

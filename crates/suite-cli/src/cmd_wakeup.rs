@@ -177,16 +177,17 @@ pub(crate) fn build_wakeup_report_scoped(
         });
     }
     let stats = local_store_stats()?;
-    let (pack, included_items, estimated_tokens, truncated) = render_budgeted_pack(
-        &memories,
-        &feedback,
-        &transcripts,
-        &graph,
-        query,
-        &scope,
-        max_tokens,
-        &format,
-    );
+    let (pack, included_items, estimated_tokens, truncated) =
+        render_budgeted_pack(WakeupPackInput {
+            memories: &memories,
+            feedback: &feedback,
+            transcripts: &transcripts,
+            graph: &graph,
+            query,
+            scope: &scope,
+            max_tokens,
+            format: &format,
+        });
     Ok(WakeupReport {
         kind: "packet28.wakeup.v1",
         query: query.map(ToOwned::to_owned),
@@ -251,22 +252,32 @@ fn normalize_wakeup_format(format: &str) -> Result<String> {
     }
 }
 
-fn render_budgeted_pack(
-    memories: &[MemoryRecord],
-    feedback: &[FeedbackRecord],
-    transcripts: &[TranscriptMessage],
-    graph: &GraphInspect,
-    query: Option<&str>,
-    scope: &NormalizedWakeupScope,
+struct WakeupPackInput<'a> {
+    memories: &'a [MemoryRecord],
+    feedback: &'a [FeedbackRecord],
+    transcripts: &'a [TranscriptMessage],
+    graph: &'a GraphInspect,
+    query: Option<&'a str>,
+    scope: &'a NormalizedWakeupScope,
     max_tokens: usize,
-    format: &str,
+    format: &'a str,
+}
+
+fn render_budgeted_pack(
+    input: WakeupPackInput<'_>,
 ) -> (String, Vec<WakeupIncludedItem>, usize, bool) {
-    let mut candidates = wakeup_candidates(memories, feedback, transcripts, graph, query);
-    if scope.has_terms() {
+    let mut candidates = wakeup_candidates(
+        input.memories,
+        input.feedback,
+        input.transcripts,
+        input.graph,
+        input.query,
+    );
+    if input.scope.has_terms() {
         candidates = candidates
             .into_iter()
             .filter_map(|mut candidate| {
-                let score = scope.match_score(&candidate.scope_text);
+                let score = input.scope.match_score(&candidate.scope_text);
                 if score <= 0.0 {
                     return None;
                 }
@@ -282,7 +293,7 @@ fn render_budgeted_pack(
             .then_with(|| a.source.cmp(b.source))
             .then_with(|| a.id.cmp(&b.id))
     });
-    let max_chars = max_tokens.saturating_mul(4);
+    let max_chars = input.max_tokens.saturating_mul(4);
     let mut used_chars = 0usize;
     let mut included = Vec::new();
     let mut truncated = false;
@@ -307,7 +318,13 @@ fn render_budgeted_pack(
         }
     }
     let estimated_tokens = estimate_tokens_for_items(&included);
-    let pack = render_pack(&included, max_tokens, estimated_tokens, truncated, format);
+    let pack = render_pack(
+        &included,
+        input.max_tokens,
+        estimated_tokens,
+        truncated,
+        input.format,
+    );
     (pack, included, estimated_tokens, truncated)
 }
 

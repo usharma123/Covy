@@ -74,8 +74,14 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
 
     let mutation = matches!(
         canonical_kind,
-        "docker_build" | "docker_compose_build" | "docker_run" | "docker_exec" | "kubectl_apply"
+        "docker_build"
+            | "docker_compose_build"
+            | "docker_run"
+            | "docker_exec"
+            | "kubectl_apply"
+            | "wget_fetch"
     );
+    let cacheable = !mutation;
     Some(CommandReducerSpec {
         family: "infra".to_string(),
         canonical_kind: canonical_kind.to_string(),
@@ -84,7 +90,7 @@ pub fn classify_infra_command(command: &str, argv: &[String]) -> Option<CommandR
         command: command.to_string(),
         argv: argv.to_vec(),
         cache_fingerprint: fingerprint("infra", canonical_kind, argv),
-        cacheable: true,
+        cacheable,
         mutation,
         paths,
         equivalence_key: None,
@@ -195,12 +201,18 @@ fn classify_curl(argv: &[String]) -> bool {
             "-w",
             "--write-out",
             "-d",
+            "-F",
+            "-T",
             "--data",
             "--data-binary",
             "--data-raw",
             "--data-urlencode",
+            "--form",
+            "--form-string",
             "--head",
             "-I",
+            "--json",
+            "--upload-file",
         ],
     ) {
         return false;
@@ -309,7 +321,7 @@ fn compact(value: &str, limit: usize) -> String {
 fn explicit_curl_method(argv: &[String]) -> Option<String> {
     let mut iter = argv.iter();
     while let Some(arg) = iter.next() {
-        if arg == "-X" {
+        if arg == "-X" || arg == "--request" {
             return iter.next().map(|value| value.to_ascii_uppercase());
         }
         if let Some(method) = arg.strip_prefix("-X") {
@@ -692,7 +704,7 @@ fn extract_html_title(stdout: &str) -> Option<String> {
 }
 
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
-    format!("{family}:{kind}:{}", argv.join("\u{1f}"))
+    crate::cache_fingerprint(family, kind, argv)
 }
 
 fn classify_aws_kind(argv: &[String]) -> Option<&'static str> {
@@ -1348,7 +1360,34 @@ mod tests {
             let spec = classify_infra_command(command, &argv).unwrap();
             assert_eq!(spec.canonical_kind, expected, "{command}");
             assert!(spec.mutation, "{command}");
+            assert!(!spec.cacheable, "{command}");
         }
+    }
+
+    #[test]
+    fn classify_infra_declines_mutating_curl_forms() {
+        for command in [
+            "curl -F file=@payload.txt https://example.com/upload",
+            "curl -T payload.txt https://example.com/upload",
+            "curl --json '{\"ok\":true}' https://example.com/api",
+            "curl --request POST https://example.com/api",
+        ] {
+            let argv = shell_words::split(command).unwrap();
+            assert!(
+                classify_infra_command(command, &argv).is_none(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_wget_fetch_as_uncacheable_mutation() {
+        let command = "wget https://example.com/releases/pkg.tar.gz";
+        let argv = shell_words::split(command).unwrap();
+        let spec = classify_infra_command(command, &argv).unwrap();
+        assert_eq!(spec.canonical_kind, "wget_fetch");
+        assert!(spec.mutation);
+        assert!(!spec.cacheable);
     }
 
     #[test]

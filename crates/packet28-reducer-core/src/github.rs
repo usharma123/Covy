@@ -131,7 +131,7 @@ fn contains_any(argv: &[String], denied: &[&str]) -> bool {
 }
 
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
-    format!("{family}:{kind}:{}", argv.join("\u{1f}"))
+    crate::cache_fingerprint(family, kind, argv)
 }
 
 fn first_nonempty_line(value: &str) -> Option<String> {

@@ -29,6 +29,8 @@ pub enum DaemonRequest {
     TaskSubscribe {
         task_id: String,
         replay_last: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after_seq: Option<u64>,
     },
     WatchList {
         task_id: Option<String>,
@@ -267,6 +269,8 @@ pub enum DaemonResponse {
     TaskSubscribeAck {
         task_id: String,
         replayed: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after_seq: Option<u64>,
     },
     WatchList {
         watches: Vec<WatchRegistration>,
@@ -358,6 +362,7 @@ pub enum DaemonResponse {
 #[serde(default)]
 pub struct DaemonRuntimeInfo {
     pub pid: u32,
+    pub version: String,
     pub started_at_unix: u64,
     pub ready_at_unix: Option<u64>,
     pub socket_path: String,
@@ -369,6 +374,7 @@ pub struct DaemonRuntimeInfo {
 #[serde(default)]
 pub struct DaemonStatus {
     pub pid: u32,
+    pub version: String,
     pub socket_path: String,
     pub workspace_root: String,
     pub started_at_unix: u64,
@@ -394,4 +400,74 @@ pub struct DaemonEventFrame {
     pub seq: u64,
     pub task_id: String,
     pub event: DaemonEvent,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_subscribe_missing_after_seq_defaults_to_none() {
+        let request: DaemonRequest = serde_json::from_value(serde_json::json!({
+            "type": "task_subscribe",
+            "task_id": "task-1",
+            "replay_last": 10
+        }))
+        .unwrap();
+
+        match request {
+            DaemonRequest::TaskSubscribe {
+                task_id,
+                replay_last,
+                after_seq,
+            } => {
+                assert_eq!(task_id, "task-1");
+                assert_eq!(replay_last, 10);
+                assert_eq!(after_seq, None);
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task_subscribe_none_after_seq_serializes_like_legacy_request() {
+        let request = DaemonRequest::TaskSubscribe {
+            task_id: "task-1".to_string(),
+            replay_last: 10,
+            after_seq: None,
+        };
+
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "type": "task_subscribe",
+                "task_id": "task-1",
+                "replay_last": 10
+            })
+        );
+    }
+
+    #[test]
+    fn task_subscribe_ack_missing_after_seq_defaults_to_none() {
+        let response: DaemonResponse = serde_json::from_value(serde_json::json!({
+            "type": "task_subscribe_ack",
+            "task_id": "task-1",
+            "replayed": 2
+        }))
+        .unwrap();
+
+        match response {
+            DaemonResponse::TaskSubscribeAck {
+                task_id,
+                replayed,
+                after_seq,
+            } => {
+                assert_eq!(task_id, "task-1");
+                assert_eq!(replayed, 2);
+                assert_eq!(after_seq, None);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::cmd_mcp::transport::render_command_preview;
 
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};

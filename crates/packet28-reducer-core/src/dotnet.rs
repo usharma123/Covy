@@ -184,7 +184,7 @@ fn compact(value: &str, limit: usize) -> String {
 }
 
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
-    format!("{family}:{kind}:{}", argv.join("\u{1f}"))
+    crate::cache_fingerprint(family, kind, argv)
 }
 
 #[cfg(test)]

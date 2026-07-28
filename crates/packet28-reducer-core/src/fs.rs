@@ -264,7 +264,31 @@ fn extract_tree_paths(argv: &[String]) -> Vec<String> {
 }
 
 fn classify_grep(argv: &[String]) -> bool {
-    argv.len() >= 2 && !contains_any(argv, &["--binary-files", "-z", "--null-data"])
+    argv.len() >= 2
+        && !contains_any(argv, &["--binary-files", "-z", "--null-data"])
+        && !has_grep_extraction_mode(argv)
+}
+
+fn has_grep_extraction_mode(argv: &[String]) -> bool {
+    argv.iter().skip(1).any(|arg| match arg.as_str() {
+        "-o"
+        | "--only-matching"
+        | "-c"
+        | "--count"
+        | "-l"
+        | "--files-with-matches"
+        | "-L"
+        | "--files-without-match"
+        | "-q"
+        | "--quiet"
+        | "--silent" => true,
+        value if value.starts_with("--only-matching=") || value.starts_with("--count=") => true,
+        value if value.starts_with('-') && !value.starts_with("--") => value
+            .trim_start_matches('-')
+            .chars()
+            .any(|ch| matches!(ch, 'o' | 'c' | 'l' | 'L' | 'q')),
+        _ => false,
+    })
 }
 
 fn classify_find(argv: &[String]) -> bool {
@@ -639,7 +663,7 @@ fn strip_prefix<'a>(path: &'a str, prefix: &str) -> &'a str {
 }
 
 fn fingerprint(family: &str, kind: &str, argv: &[String]) -> String {
-    format!("{family}:{kind}:{}", argv.join("\u{1f}"))
+    crate::cache_fingerprint(family, kind, argv)
 }
 
 #[cfg(test)]

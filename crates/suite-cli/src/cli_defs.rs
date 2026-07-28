@@ -73,178 +73,262 @@ pub enum Commands {
     /// Run a formatter such as prettier, black, ruff, or biome with compact output
     Format(cmd_system::FormatterArgs),
     /// Run npm with compact output
+    #[command(hide = true)]
     Npm(cmd_system::ToolArgs),
     /// Run npx with compact output
+    #[command(hide = true)]
     Npx(cmd_system::ToolArgs),
     /// Run the TypeScript compiler with compact output
+    #[command(hide = true)]
     Tsc(cmd_system::ToolArgs),
     /// Run Vitest with compact output
+    #[command(hide = true)]
     Vitest(cmd_system::ToolArgs),
     /// Run pytest with compact output
+    #[command(hide = true)]
     Pytest(cmd_system::ToolArgs),
     /// Run Ruff with compact output
+    #[command(hide = true)]
     Ruff(cmd_system::ToolArgs),
     /// Run ls with compact output
+    #[command(hide = true)]
     Ls(cmd_system::ToolArgs),
     /// Run tree with compact output
+    #[command(hide = true)]
     Tree(cmd_system::ToolArgs),
     /// Run wc with compact output
+    #[command(hide = true)]
     Wc(cmd_system::ToolArgs),
     /// Run wget with compact output
+    #[command(hide = true)]
     Wget(cmd_system::ToolArgs),
     /// Run curl with compact output
+    #[command(hide = true)]
     Curl(cmd_system::ToolArgs),
     /// Run docker with compact output
+    #[command(hide = true)]
     Docker(cmd_system::ToolArgs),
     /// Run kubectl with compact output
+    #[command(hide = true)]
     Kubectl(cmd_system::ToolArgs),
     /// Run gh with compact output
+    #[command(hide = true)]
     Gh(cmd_system::ToolArgs),
     /// Run glab with compact output
+    #[command(hide = true)]
     Glab(cmd_system::ToolArgs),
     /// Run aws with compact output
+    #[command(hide = true)]
     Aws(cmd_system::ToolArgs),
     /// Run psql with compact output
+    #[command(hide = true)]
     Psql(cmd_system::ToolArgs),
     /// Run git with compact output
+    #[command(hide = true)]
     Git(cmd_system::ToolArgs),
     /// Run Graphite gt with compact output
+    #[command(hide = true)]
     Gt(cmd_system::ToolArgs),
     /// Run Cargo with compact output
+    #[command(hide = true)]
     Cargo(cmd_system::ToolArgs),
     /// Run Go with compact output
+    #[command(hide = true)]
     Go(cmd_system::ToolArgs),
     /// Run dotnet with compact output
+    #[command(hide = true)]
     Dotnet(cmd_system::ToolArgs),
     /// Run golangci-lint with compact output
     #[command(name = "golangci-lint")]
+    #[command(hide = true)]
     GolangciLint(cmd_system::ToolArgs),
     /// Run Gradle wrapper with compact output
     #[command(name = "gradlew")]
+    #[command(hide = true)]
     Gradlew(cmd_system::ToolArgs),
     /// Run Rake with compact output
+    #[command(hide = true)]
     Rake(cmd_system::ToolArgs),
     /// Run RSpec with compact output
+    #[command(hide = true)]
     Rspec(cmd_system::ToolArgs),
     /// Run RuboCop with compact output
+    #[command(hide = true)]
     Rubocop(cmd_system::ToolArgs),
     /// Run mypy with compact output
+    #[command(hide = true)]
     Mypy(cmd_system::ToolArgs),
     /// Run pip with compact output
+    #[command(hide = true)]
     Pip(cmd_system::ToolArgs),
     /// Run pnpm with compact output
+    #[command(hide = true)]
     Pnpm(cmd_system::ToolArgs),
     /// Run Bundler with compact output
+    #[command(hide = true)]
     Bundle(cmd_system::ToolArgs),
     /// Run Homebrew with compact output
+    #[command(hide = true)]
     Brew(cmd_system::ToolArgs),
     /// Run Composer with compact output
+    #[command(hide = true)]
     Composer(cmd_system::ToolArgs),
     /// Run df with compact output
+    #[command(hide = true)]
     Df(cmd_system::ToolArgs),
     /// Run du with compact output
+    #[command(hide = true)]
     Du(cmd_system::ToolArgs),
     /// Run make with compact output
+    #[command(hide = true)]
     Make(cmd_system::ToolArgs),
     /// Run Maven with compact output
+    #[command(hide = true)]
     Mvn(cmd_system::ToolArgs),
     /// Run Poetry with compact output
+    #[command(hide = true)]
     Poetry(cmd_system::ToolArgs),
     /// Run uv with compact output
+    #[command(hide = true)]
     Uv(cmd_system::ToolArgs),
     /// Run Terraform with compact output
+    #[command(hide = true)]
     Terraform(cmd_system::ToolArgs),
     /// Run OpenTofu with compact output
+    #[command(hide = true)]
     Tofu(cmd_system::ToolArgs),
     /// Run ansible-playbook with compact output
     #[command(name = "ansible-playbook")]
+    #[command(hide = true)]
     AnsiblePlaybook(cmd_system::ToolArgs),
     /// Run fail2ban-client with compact output
     #[command(name = "fail2ban-client")]
+    #[command(hide = true)]
     Fail2banClient(cmd_system::ToolArgs),
     /// Run gcloud with compact output
+    #[command(hide = true)]
     Gcloud(cmd_system::ToolArgs),
     /// Run hadolint with compact output
+    #[command(hide = true)]
     Hadolint(cmd_system::ToolArgs),
     /// Run Helm with compact output
+    #[command(hide = true)]
     Helm(cmd_system::ToolArgs),
     /// Run iptables with compact output
+    #[command(hide = true)]
     Iptables(cmd_system::ToolArgs),
     /// Run markdownlint with compact output
+    #[command(hide = true)]
     Markdownlint(cmd_system::ToolArgs),
     /// Run Mix with compact output
+    #[command(hide = true)]
     Mix(cmd_system::ToolArgs),
     /// Run ping with compact output
+    #[command(hide = true)]
     Ping(cmd_system::ToolArgs),
     /// Run PlatformIO pio with compact output
+    #[command(hide = true)]
     Pio(cmd_system::ToolArgs),
     /// Run pre-commit with compact output
     #[command(name = "pre-commit")]
+    #[command(hide = true)]
     PreCommit(cmd_system::ToolArgs),
     /// Run ps with compact output
+    #[command(hide = true)]
     Ps(cmd_system::ToolArgs),
     /// Run Quarto with compact output
+    #[command(hide = true)]
     Quarto(cmd_system::ToolArgs),
     /// Run rsync with compact output
+    #[command(hide = true)]
     Rsync(cmd_system::ToolArgs),
     /// Run ShellCheck with compact output
+    #[command(hide = true)]
     Shellcheck(cmd_system::ToolArgs),
     /// Run Shopify CLI with compact output
+    #[command(hide = true)]
     Shopify(cmd_system::ToolArgs),
     /// Run sops with compact output
+    #[command(hide = true)]
     Sops(cmd_system::ToolArgs),
     /// Run systemctl with compact output
+    #[command(hide = true)]
     Systemctl(cmd_system::ToolArgs),
     /// Run Trunk with compact output
+    #[command(hide = true)]
     Trunk(cmd_system::ToolArgs),
     /// Run yamllint with compact output
+    #[command(hide = true)]
     Yamllint(cmd_system::ToolArgs),
     /// Run Liquibase with compact output
+    #[command(hide = true)]
     Liquibase(cmd_system::ToolArgs),
     /// Run basedpyright with compact output
+    #[command(hide = true)]
     Basedpyright(cmd_system::ToolArgs),
     /// Run Biome with compact output
+    #[command(hide = true)]
     Biome(cmd_system::ToolArgs),
     /// Run GCC with compact output
+    #[command(hide = true)]
     Gcc(cmd_system::ToolArgs),
     /// Run G++ with compact output
     #[command(name = "g++")]
+    #[command(hide = true)]
     Gpp(cmd_system::ToolArgs),
     /// Run Gradle with compact output
+    #[command(hide = true)]
     Gradle(cmd_system::ToolArgs),
     /// Run Jira CLI with compact output
+    #[command(hide = true)]
     Jira(cmd_system::ToolArgs),
     /// Run Jujutsu jj with compact output
+    #[command(hide = true)]
     Jj(cmd_system::ToolArgs),
     /// Run jq with compact output
+    #[command(hide = true)]
     Jq(cmd_system::ToolArgs),
     /// Run just with compact output
+    #[command(hide = true)]
     Just(cmd_system::ToolArgs),
     /// Run mise with compact output
+    #[command(hide = true)]
     Mise(cmd_system::ToolArgs),
     /// Run Nx with compact output
+    #[command(hide = true)]
     Nx(cmd_system::ToolArgs),
     /// Run Ollama with compact output
+    #[command(hide = true)]
     Ollama(cmd_system::ToolArgs),
     /// Run oxlint with compact output
+    #[command(hide = true)]
     Oxlint(cmd_system::ToolArgs),
     /// Run skopeo with compact output
+    #[command(hide = true)]
     Skopeo(cmd_system::ToolArgs),
     /// Run ssh with compact output
+    #[command(hide = true)]
     Ssh(cmd_system::ToolArgs),
     /// Run stat with compact output
+    #[command(hide = true)]
     Stat(cmd_system::ToolArgs),
     /// Run Swift with compact output
+    #[command(hide = true)]
     Swift(cmd_system::ToolArgs),
     /// Run go-task task with compact output
+    #[command(hide = true)]
     Task(cmd_system::ToolArgs),
     /// Run Turborepo turbo with compact output
+    #[command(hide = true)]
     Turbo(cmd_system::ToolArgs),
     /// Run ty with compact output
+    #[command(hide = true)]
     Ty(cmd_system::ToolArgs),
     /// Run xcodebuild with compact output
+    #[command(hide = true)]
     Xcodebuild(cmd_system::ToolArgs),
     /// Run yadm with compact output
+    #[command(hide = true)]
     Yadm(cmd_system::ToolArgs),
     /// Generate a local two-line heuristic summary of a source file
     Smart(cmd_system::SmartArgs),
@@ -428,4 +512,28 @@ pub enum MapCommands {
     Repo(cmd_map_repo::RepoArgs),
     /// Query cached repo symbols with low-token output
     Query(cmd_map_query::QueryArgs),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn top_level_help_hides_reducer_tool_wrappers() {
+        let mut help = Vec::new();
+        Cli::command().write_long_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+
+        assert!(!help.contains("Run ping with compact output"));
+        assert!(!help.contains("Run npm with compact output"));
+        assert!(help.contains("Run Packet28 as an MCP stdio server"));
+        assert!(help.contains("Run Packet28-managed runtime hook handlers"));
+    }
+
+    #[test]
+    fn hidden_reducer_tool_wrappers_remain_parseable() {
+        let cli = Cli::try_parse_from(["Packet28", "ping", "127.0.0.1"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Ping(_))));
+    }
 }

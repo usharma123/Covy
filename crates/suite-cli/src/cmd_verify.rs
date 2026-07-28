@@ -115,21 +115,13 @@ pub struct ContextAnomalyVerifyArgs {
     pub pretty: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ExperimentManifest {
     experiments: Vec<ExperimentEntry>,
 }
 
-impl Default for ExperimentManifest {
-    fn default() -> Self {
-        Self {
-            experiments: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ExperimentEntry {
     id: String,
@@ -142,22 +134,7 @@ struct ExperimentEntry {
     allow_fallbacks: bool,
 }
 
-impl Default for ExperimentEntry {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            workflow: String::new(),
-            commands: Vec::new(),
-            artifacts: Vec::new(),
-            metrics: Vec::new(),
-            runtime_versions: Vec::new(),
-            fallback_reasons: Vec::new(),
-            allow_fallbacks: false,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ExperimentMetric {
     name: String,
@@ -167,38 +144,20 @@ struct ExperimentMetric {
     evidence: Vec<String>,
 }
 
-impl Default for ExperimentMetric {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            value: None,
-            min: None,
-            max: None,
-            evidence: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ExperimentRuntimeVersion {
     name: String,
     version: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ReducerDriftFixture {
     cases: Vec<ReducerDriftCase>,
 }
 
-impl Default for ReducerDriftFixture {
-    fn default() -> Self {
-        Self { cases: Vec::new() }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ReducerDriftCase {
     id: String,
@@ -209,7 +168,7 @@ struct ReducerDriftCase {
     required_markers: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct MemoryLintFixture {
     memories: Vec<MemoryLintFixtureMemory>,
@@ -217,18 +176,6 @@ struct MemoryLintFixture {
     expected_issue_count: usize,
     expected_issue_kinds: Vec<String>,
     clean_memory_ids: Vec<i64>,
-}
-
-impl Default for MemoryLintFixture {
-    fn default() -> Self {
-        Self {
-            memories: Vec::new(),
-            hook_events: Vec::new(),
-            expected_issue_count: 0,
-            expected_issue_kinds: Vec::new(),
-            clean_memory_ids: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,42 +208,11 @@ impl Default for MemoryLintFixtureMemory {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct MemoryLintFixtureHookEvent {
     runtime: String,
     event_kind: String,
-}
-
-impl Default for MemoryLintFixtureHookEvent {
-    fn default() -> Self {
-        Self {
-            runtime: String::new(),
-            event_kind: String::new(),
-        }
-    }
-}
-
-impl Default for ReducerDriftCase {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            command_argv: Vec::new(),
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-            required_markers: Vec::new(),
-        }
-    }
-}
-
-impl Default for ExperimentRuntimeVersion {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            version: String::new(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -304,6 +220,18 @@ struct ExperimentIssue {
     experiment_id: String,
     kind: String,
     detail: String,
+}
+
+fn experiment_issue(
+    experiment_id: impl Into<String>,
+    kind: impl Into<String>,
+    detail: impl Into<String>,
+) -> ExperimentIssue {
+    ExperimentIssue {
+        experiment_id: experiment_id.into(),
+        kind: kind.into(),
+        detail: detail.into(),
+    }
 }
 
 pub fn run(args: VerifyArgs) -> Result<i32> {
@@ -685,7 +613,7 @@ pub(crate) fn verify_experiments_payload(
     required_workflows: &[String],
     include_score: bool,
 ) -> Result<serde_json::Value> {
-    let manifest_raw = std::fs::read_to_string(&manifest_path)
+    let manifest_raw = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("failed to read '{}'", manifest_path.display()))?;
     let manifest: ExperimentManifest = serde_json::from_str(&manifest_raw)
         .with_context(|| format!("failed to parse '{}'", manifest_path.display()))?;
@@ -850,11 +778,11 @@ pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_
     let mut summaries = Vec::new();
 
     if fixture.cases.is_empty() {
-        issues.push(json!({
-            "case_id": "<fixture>",
-            "kind": "missing_cases",
-            "detail": "fixture must contain at least one reducer drift case",
-        }));
+        issues.push(reducer_drift_issue(
+            "<fixture>",
+            "missing_cases",
+            "fixture must contain at least one reducer drift case",
+        ));
     }
 
     for (index, case) in fixture.cases.iter().enumerate() {
@@ -865,35 +793,35 @@ pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_
             id.to_string()
         };
         if id.is_empty() {
-            issues.push(json!({
-                "case_id": case_id,
-                "kind": "missing_id",
-                "detail": "case id is required",
-            }));
+            issues.push(reducer_drift_issue(
+                &case_id,
+                "missing_id",
+                "case id is required",
+            ));
         }
         if case.command_argv.is_empty() {
-            issues.push(json!({
-                "case_id": case_id,
-                "kind": "missing_command_argv",
-                "detail": "command_argv must contain the command and arguments",
-            }));
+            issues.push(reducer_drift_issue(
+                &case_id,
+                "missing_command_argv",
+                "command_argv must contain the command and arguments",
+            ));
             continue;
         }
         if case.required_markers.is_empty() {
-            issues.push(json!({
-                "case_id": case_id,
-                "kind": "missing_required_markers",
-                "detail": "required_markers must name reducer output that cannot drift away",
-            }));
+            issues.push(reducer_drift_issue(
+                &case_id,
+                "missing_required_markers",
+                "required_markers must name reducer output that cannot drift away",
+            ));
         }
 
         let command = case.command_argv.join(" ");
         let Some(spec) = classify_command_argv(&command, &case.command_argv) else {
-            issues.push(json!({
-                "case_id": case_id,
-                "kind": "unclassified_command",
-                "detail": command,
-            }));
+            issues.push(reducer_drift_issue(
+                &case_id,
+                "unclassified_command",
+                command,
+            ));
             continue;
         };
         let reduction = reduce_command_output(&spec, &case.stdout, &case.stderr, case.exit_code)?;
@@ -905,17 +833,13 @@ pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_
         for marker in &case.required_markers {
             let marker = marker.trim();
             if marker.is_empty() {
-                issues.push(json!({
-                    "case_id": case_id,
-                    "kind": "empty_marker",
-                    "detail": "required marker is empty",
-                }));
+                issues.push(reducer_drift_issue(
+                    &case_id,
+                    "empty_marker",
+                    "required marker is empty",
+                ));
             } else if !reduced_text.contains(marker) {
-                issues.push(json!({
-                    "case_id": case_id,
-                    "kind": "missing_marker",
-                    "detail": marker,
-                }));
+                issues.push(reducer_drift_issue(&case_id, "missing_marker", marker));
             }
         }
         summaries.push(json!({
@@ -937,6 +861,18 @@ pub(crate) fn verify_reducer_drift_payload(fixture_path: &Path) -> Result<serde_
         "issues": issues,
         "summaries": summaries,
     }))
+}
+
+fn reducer_drift_issue(
+    case_id: impl Into<String>,
+    kind: impl Into<String>,
+    detail: impl Into<String>,
+) -> serde_json::Value {
+    json!({
+        "case_id": case_id.into(),
+        "kind": kind.into(),
+        "detail": detail.into(),
+    })
 }
 
 fn score_experiment_manifest(
@@ -1119,53 +1055,53 @@ fn verify_experiment_manifest(
     for workflow in required_workflows {
         let workflow = workflow.trim();
         if !workflow.is_empty() && !covered_workflows.contains(workflow) {
-            issues.push(ExperimentIssue {
-                experiment_id: "<manifest>".to_string(),
-                kind: "missing_required_workflow".to_string(),
-                detail: workflow.to_string(),
-            });
+            issues.push(experiment_issue(
+                "<manifest>",
+                "missing_required_workflow",
+                workflow,
+            ));
         }
     }
     if manifest.experiments.is_empty() {
-        issues.push(ExperimentIssue {
-            experiment_id: "<manifest>".to_string(),
-            kind: "missing_experiments".to_string(),
-            detail: "manifest must contain at least one experiment".to_string(),
-        });
+        issues.push(experiment_issue(
+            "<manifest>",
+            "missing_experiments",
+            "manifest must contain at least one experiment",
+        ));
     }
     for experiment in &manifest.experiments {
         let id = experiment.id.trim();
         let issue_id = if id.is_empty() { "<missing-id>" } else { id };
         if id.is_empty() {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "missing_id".to_string(),
-                detail: "experiment id is required".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "missing_id",
+                "experiment id is required",
+            ));
         } else if !seen_ids.insert(id.to_string()) {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "duplicate_id".to_string(),
-                detail: "experiment id appears more than once".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "duplicate_id",
+                "experiment id appears more than once",
+            ));
         }
         if experiment.workflow.trim().is_empty() {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "uncovered_workflow".to_string(),
-                detail: "workflow must name the agent workflow this experiment covers".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "uncovered_workflow",
+                "workflow must name the agent workflow this experiment covers",
+            ));
         }
         if experiment
             .commands
             .iter()
             .all(|command| command.trim().is_empty())
         {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "missing_command_evidence".to_string(),
-                detail: "at least one non-empty command is required".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "missing_command_evidence",
+                "at least one non-empty command is required",
+            ));
         }
         for command in experiment
             .commands
@@ -1175,37 +1111,33 @@ fn verify_experiment_manifest(
         {
             if let Some(command_path) = local_script_command_path(command) {
                 if !root.join(&command_path).exists() {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "missing_command_path".to_string(),
-                        detail: command_path,
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "missing_command_path",
+                        command_path,
+                    ));
                 }
             }
         }
         if experiment.artifacts.is_empty() {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "missing_artifact".to_string(),
-                detail: "at least one artifact path is required".to_string(),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "missing_artifact",
+                "at least one artifact path is required",
+            ));
         }
         for artifact in &experiment.artifacts {
             let artifact = artifact.trim();
             if artifact.is_empty() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_artifact".to_string(),
-                    detail: "artifact path is empty".to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_artifact",
+                    "artifact path is empty",
+                ));
                 continue;
             }
             if !root.join(artifact).exists() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_artifact".to_string(),
-                    detail: artifact.to_string(),
-                });
+                issues.push(experiment_issue(issue_id, "missing_artifact", artifact));
             }
         }
         let artifact_evidence = experiment
@@ -1223,36 +1155,36 @@ fn verify_experiment_manifest(
         for metric in &experiment.metrics {
             let metric_name = metric.name.trim();
             if metric_name.is_empty() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_metric_name".to_string(),
-                    detail: "metric name is required".to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_metric_name",
+                    "metric name is required",
+                ));
             }
             let Some(value) = metric.value else {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_metric_value".to_string(),
-                    detail: metric_name.to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_metric_value",
+                    metric_name,
+                ));
                 continue;
             };
             if let Some(min) = metric.min {
                 if value < min {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "metric_below_min".to_string(),
-                        detail: format!("{metric_name} value={value} min={min}"),
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "metric_below_min",
+                        format!("{metric_name} value={value} min={min}"),
+                    ));
                 }
             }
             if let Some(max) = metric.max {
                 if value > max {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "metric_above_max".to_string(),
-                        detail: format!("{metric_name} value={value} max={max}"),
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "metric_above_max",
+                        format!("{metric_name} value={value} max={max}"),
+                    ));
                 }
             }
             let evidence = metric
@@ -1262,38 +1194,37 @@ fn verify_experiment_manifest(
                 .filter(|evidence| !evidence.is_empty())
                 .collect::<Vec<_>>();
             if evidence.is_empty() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_metric_evidence".to_string(),
-                    detail: metric_name.to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_metric_evidence",
+                    metric_name,
+                ));
             }
             for evidence in evidence {
                 if !artifact_evidence.contains(evidence) {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "missing_metric_artifact_evidence".to_string(),
-                        detail: format!("{metric_name}: {evidence}"),
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "missing_metric_artifact_evidence",
+                        format!("{metric_name}: {evidence}"),
+                    ));
                 }
             }
         }
         for runtime in &experiment.runtime_versions {
             if runtime.name.trim().is_empty() || runtime.version.trim().is_empty() {
-                issues.push(ExperimentIssue {
-                    experiment_id: issue_id.to_string(),
-                    kind: "missing_runtime_version".to_string(),
-                    detail: "runtime version entries require non-empty name and version"
-                        .to_string(),
-                });
+                issues.push(experiment_issue(
+                    issue_id,
+                    "missing_runtime_version",
+                    "runtime version entries require non-empty name and version",
+                ));
             }
         }
         if !experiment.allow_fallbacks && !experiment.fallback_reasons.is_empty() {
-            issues.push(ExperimentIssue {
-                experiment_id: issue_id.to_string(),
-                kind: "unexpected_fallback".to_string(),
-                detail: experiment.fallback_reasons.join("; "),
-            });
+            issues.push(experiment_issue(
+                issue_id,
+                "unexpected_fallback",
+                experiment.fallback_reasons.join("; "),
+            ));
         }
         if experiment.allow_fallbacks {
             for reason in experiment
@@ -1303,11 +1234,11 @@ fn verify_experiment_manifest(
                 .filter(|reason| !reason.is_empty())
             {
                 if !artifact_evidence.contains(reason) {
-                    issues.push(ExperimentIssue {
-                        experiment_id: issue_id.to_string(),
-                        kind: "missing_fallback_artifact_evidence".to_string(),
-                        detail: reason.to_string(),
-                    });
+                    issues.push(experiment_issue(
+                        issue_id,
+                        "missing_fallback_artifact_evidence",
+                        reason,
+                    ));
                 }
             }
         }

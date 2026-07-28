@@ -43,9 +43,10 @@ where
         if let DaemonRequest::TaskSubscribe {
             task_id,
             replay_last,
+            after_seq,
         } = request
         {
-            return handle_task_subscribe(state, &mut writer, task_id, replay_last);
+            return handle_task_subscribe(state, &mut writer, task_id, replay_last, after_seq);
         }
         let response = match handle_request(state.clone(), watch_tx.clone(), request) {
             Ok(value) => value,
@@ -65,19 +66,17 @@ fn handle_task_subscribe(
     writer: &mut impl std::io::Write,
     task_id: String,
     replay_last: usize,
+    after_seq: Option<u64>,
 ) -> Result<()> {
     let root = state.lock().map_err(lock_err)?.root.clone();
     let replay = load_task_events(&root, &task_id)?;
-    let replay = if replay_last == 0 || replay_last >= replay.len() {
-        replay
-    } else {
-        replay[replay.len().saturating_sub(replay_last)..].to_vec()
-    };
+    let replay = select_replay_events(replay, replay_last, after_seq);
     write_socket_response(
         writer,
         &DaemonResponse::TaskSubscribeAck {
             task_id: task_id.clone(),
             replayed: replay.len(),
+            after_seq,
         },
     )?;
     for frame in replay {
@@ -106,6 +105,25 @@ fn handle_task_subscribe(
         }
     }
     Ok(())
+}
+
+fn select_replay_events(
+    events: Vec<DaemonEventFrame>,
+    replay_last: usize,
+    after_seq: Option<u64>,
+) -> Vec<DaemonEventFrame> {
+    let replay: Vec<_> = match after_seq {
+        Some(after_seq) => events
+            .into_iter()
+            .filter(|frame| frame.seq > after_seq)
+            .collect(),
+        None => events,
+    };
+    if replay_last == 0 || replay_last >= replay.len() {
+        replay
+    } else {
+        replay[replay.len().saturating_sub(replay_last)..].to_vec()
+    }
 }
 
 fn write_socket_response(
@@ -380,5 +398,41 @@ fn handle_request(
             let response = daemon_index_clear(state)?;
             Ok(DaemonResponse::DaemonIndexClear { response })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(seq: u64) -> DaemonEventFrame {
+        DaemonEventFrame {
+            seq,
+            task_id: "task-1".to_string(),
+            event: DaemonEvent {
+                kind: "test".to_string(),
+                occurred_at_unix: seq,
+                data: json!({ "seq": seq }),
+            },
+        }
+    }
+
+    #[test]
+    fn replay_after_seq_returns_only_later_frames() {
+        let selected = select_replay_events(vec![frame(1), frame(2), frame(3)], 0, Some(1));
+        assert_eq!(
+            selected.iter().map(|frame| frame.seq).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn replay_last_limits_frames_after_cursor() {
+        let selected =
+            select_replay_events(vec![frame(1), frame(2), frame(3), frame(4)], 2, Some(1));
+        assert_eq!(
+            selected.iter().map(|frame| frame.seq).collect::<Vec<_>>(),
+            vec![3, 4]
+        );
     }
 }
