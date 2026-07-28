@@ -47,7 +47,7 @@ jobs:
       RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, inputs.run_id) }}
       CHECKOUT_REF: ${{ github.event.workflow_run.head_sha || inputs.ref }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_AUTOFIX_VERIFY: cargo test --workspace --all-targets
+      CODEX_AUTOFIX_VERIFY: cargo test --locked --workspace --all-targets
     steps:
       - name: Require OpenAI credentials
         if: env.OPENAI_API_KEY == ''
@@ -55,7 +55,7 @@ jobs:
           echo "OPENAI_API_KEY is not configured; skipping Codex autofix."
           exit 78
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ env.CHECKOUT_REF }}
           fetch-depth: 0
@@ -71,13 +71,15 @@ jobs:
             scripts/ci/codex_autofix.sh
           test -s .packet28/ci-autofix/prompt.txt
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-node@v6
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          node-version: "22"
+          toolchain: 1.93.1
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.23.1"
 
       - name: Install Codex CLI
         run: |
@@ -149,7 +151,7 @@ jobs:
 
       - name: Upload autofix artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: codex-autofix-${{ env.RUN_ID }}
           path: .packet28/ci-autofix

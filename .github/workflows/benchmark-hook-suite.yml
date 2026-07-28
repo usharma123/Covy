@@ -54,21 +54,23 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.93.1
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Build benchmark dependencies
-        run: cargo build -p suite-cli -p packet28d -p packet28-reducer-core -p packet28-search-cli
+        run: cargo build --locked -p suite-cli -p packet28d -p packet28-reducer-core -p packet28-search-cli
 
       - name: Run hook grep regression tests
-        run: cargo test -p suite-cli grep
+        run: cargo test --locked -p suite-cli grep
 
       - name: Run p28 search CLI tests
-        run: cargo test -p packet28-search-cli --tests
+        run: cargo test --locked -p packet28-search-cli --tests
 
       - name: Run hook benchmark suite
         env:
@@ -117,7 +119,7 @@ jobs:
           cat .packet28/benchmarks/ci-agentic-tokenomics/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hook benchmark artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: benchmark-suites
           path: .packet28/benchmarks

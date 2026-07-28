@@ -6,7 +6,7 @@ FAILURE_LOG="${CI_FAILURE_LOG:-$ROOT/.packet28/ci-autofix/failure.log}"
 OUT_DIR="${CODEX_AUTOFIX_DIR:-$ROOT/.packet28/ci-autofix}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 CODEX_CMD="${CODEX_CMD:-}"
-VERIFY_CMD="${CODEX_AUTOFIX_VERIFY:-cargo test --workspace --all-targets}"
+VERIFY_CMD="${CODEX_AUTOFIX_VERIFY:-cargo test --locked --workspace --all-targets}"
 RUN_URL="${CI_RUN_URL:-unknown}"
 DRY_RUN="${CODEX_AUTOFIX_DRY_RUN:-0}"
 

@@ -48,7 +48,7 @@ for platform_key in "${!PLATFORMS[@]}"; do
     rustup target add "$target"
   fi
 
-  cargo build --release --target "$target" 2>&1 | tail -3
+  cargo build --locked --release --target "$target" 2>&1 | tail -3
 
   # Create platform package
   pkg_dir="$DIST_DIR/@packet28/${platform_key}"
