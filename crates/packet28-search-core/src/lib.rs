@@ -292,6 +292,12 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
             loaded: None,
         });
     }
+    if manifest.status != "ready" {
+        return Ok(RegexIndexRuntime {
+            manifest,
+            loaded: None,
+        });
+    }
     if let Some(expected) = manifest.base_commit.as_deref() {
         if current_git_commit(root).as_deref() != Some(expected) {
             let expected_commit = expected.to_string();
@@ -321,7 +327,7 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
     {
         Ok(base) => base,
         Err(err) => {
-            mark_manifest_unloaded(&mut manifest, "corrupt", err.to_string());
+            mark_manifest_unloaded(&mut manifest, "corrupt", format!("{err:#}"));
             return Ok(RegexIndexRuntime {
                 manifest,
                 loaded: None,
@@ -338,7 +344,7 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
     {
         Ok(overlay) => overlay,
         Err(err) => {
-            mark_manifest_unloaded(&mut manifest, "corrupt", err.to_string());
+            mark_manifest_unloaded(&mut manifest, "corrupt", format!("{err:#}"));
             return Ok(RegexIndexRuntime {
                 manifest,
                 loaded: None,
@@ -375,28 +381,37 @@ where
     manifest.include_tests = include_tests;
     manifest.status = "building".to_string();
     manifest.last_build_started_at_unix = Some(started);
-    manifest.stale_reason = None;
+    manifest.stale_reason = Some(format!(
+        "full regex index rebuild started at {started} has not published a ready generation"
+    ));
     manifest.last_error = None;
     save_manifest(root, &manifest)?;
 
-    let docs = scan_documents_with_progress(root, &mut on_progress)?;
-    let base_layer = build_layer(
-        root,
-        &docs,
-        BASE_LOOKUP_FILE_NAME,
-        BASE_POSTINGS_FILE_NAME,
-        BASE_DOCS_FILE_NAME,
-    )?;
-    let overlay_docs = Vec::<IndexedDocument>::new();
-    let overlay_layer = build_layer(
-        root,
-        &overlay_docs,
-        OVERLAY_LOOKUP_FILE_NAME,
-        OVERLAY_POSTINGS_FILE_NAME,
-        OVERLAY_DOCS_FILE_NAME,
-    )?;
-    let overlay_state = OverlayState::default();
-    save_overlay_state(root, &overlay_state)?;
+    let build_result = (|| -> Result<_> {
+        let docs = scan_documents_with_progress(root, &mut on_progress)?;
+        let base_layer = build_layer(
+            root,
+            &docs,
+            BASE_LOOKUP_FILE_NAME,
+            BASE_POSTINGS_FILE_NAME,
+            BASE_DOCS_FILE_NAME,
+        )?;
+        let overlay_docs = Vec::<IndexedDocument>::new();
+        let overlay_layer = build_layer(
+            root,
+            &overlay_docs,
+            OVERLAY_LOOKUP_FILE_NAME,
+            OVERLAY_POSTINGS_FILE_NAME,
+            OVERLAY_DOCS_FILE_NAME,
+        )?;
+        let overlay_state = OverlayState::default();
+        save_overlay_state(root, &overlay_state)?;
+        Ok((docs, base_layer, overlay_layer, overlay_state))
+    })();
+    let (docs, base_layer, overlay_layer, overlay_state) = match build_result {
+        Ok(built) => built,
+        Err(error) => return Err(record_index_build_failure(root, &mut manifest, error)),
+    };
 
     manifest.generation = manifest.generation.saturating_add(1);
     manifest.status = "ready".to_string();
@@ -462,31 +477,50 @@ pub fn update_overlay_index(
     for (idx, doc) in overlay_docs.iter_mut().enumerate() {
         doc.doc_id = idx as u32;
     }
-    let overlay_layer = build_layer(
-        root,
-        &overlay_docs,
-        OVERLAY_LOOKUP_FILE_NAME,
-        OVERLAY_POSTINGS_FILE_NAME,
-        OVERLAY_DOCS_FILE_NAME,
-    )?;
-    save_overlay_state(root, &overlay_state)?;
-
     let mut manifest = load_manifest(root);
+    manifest.status = "building".to_string();
+    let started = now_unix();
+    manifest.last_build_started_at_unix = Some(started);
+    manifest.stale_reason = Some(format!(
+        "regex index overlay update started at {started} has not published a ready generation"
+    ));
+    manifest.last_error = None;
+    save_manifest(root, &manifest)?;
+
+    let build_result = (|| -> Result<_> {
+        let overlay_layer = build_layer(
+            root,
+            &overlay_docs,
+            OVERLAY_LOOKUP_FILE_NAME,
+            OVERLAY_POSTINGS_FILE_NAME,
+            OVERLAY_DOCS_FILE_NAME,
+        )?;
+        let base_layer = load_layer(
+            root,
+            BASE_LOOKUP_FILE_NAME,
+            BASE_POSTINGS_FILE_NAME,
+            BASE_DOCS_FILE_NAME,
+        )
+        .context("failed to validate base layer before overlay publication")?;
+        save_overlay_state(root, &overlay_state)?;
+        Ok((base_layer, overlay_layer))
+    })();
+    let (base_layer, overlay_layer) = match build_result {
+        Ok(built) => built,
+        Err(error) => return Err(record_index_build_failure(root, &mut manifest, error)),
+    };
+
     manifest.status = "ready".to_string();
     manifest.overlay_files = overlay_docs.len();
     manifest.stale_reason = None;
     manifest.last_build_completed_at_unix = Some(now_unix());
+    manifest.last_error = None;
     save_manifest(root, &manifest)?;
 
     Ok(RegexIndexRuntime {
         manifest,
         loaded: Some(Arc::new(LoadedIndex {
-            base: load_layer(
-                root,
-                BASE_LOOKUP_FILE_NAME,
-                BASE_POSTINGS_FILE_NAME,
-                BASE_DOCS_FILE_NAME,
-            )?,
+            base: base_layer,
             overlay: overlay_layer,
             overlay_state,
         })),
@@ -1329,15 +1363,13 @@ fn paths_for_hash(
 }
 
 fn lookup_doc_ids_quiet(layer: &LoadedLayer, hash: u64) -> Option<Vec<PostingEntry>> {
+    // INVARIANT: `load_layer` validates every lookup range and posting block before
+    // constructing an immutable `LoadedLayer`, so decoding cannot fail here.
     let lookup = layer.lookup.as_ref()?;
     let postings = layer.postings.as_ref()?;
     let meta = lookup_posting_range(lookup, hash)?;
-    let offset = meta.offset as usize;
-    let len = meta.len as usize;
-    if postings.len() < offset + len {
-        return None;
-    }
-    decode_postings(&postings[offset..offset + len]).ok()
+    let (start, end) = checked_posting_bounds(meta.offset, meta.len, postings.len()).ok()?;
+    decode_postings(&postings[start..end]).ok()
 }
 
 fn lookup_doc_ids_cached(
@@ -1374,13 +1406,12 @@ fn lookup_doc_ids(
     let Some(meta) = lookup_posting_range(lookup, hash) else {
         return Ok(None);
     };
-    let offset = meta.offset as usize;
-    let len = meta.len as usize;
-    if postings.len() < offset + len {
-        return Ok(None);
-    }
-    engine.postings_bytes_read = engine.postings_bytes_read.saturating_add(len as u64);
-    Ok(Some(decode_postings(&postings[offset..offset + len])?))
+    let (start, end) = checked_posting_bounds(meta.offset, meta.len, postings.len())
+        .context("loaded regex index has an invalid posting range")?;
+    engine.postings_bytes_read = engine
+        .postings_bytes_read
+        .saturating_add(u64::from(meta.len));
+    Ok(Some(decode_postings(&postings[start..end])?))
 }
 
 fn verify_path(
@@ -1577,9 +1608,8 @@ fn build_layer(
     docs_name: &str,
 ) -> Result<LoadedLayer> {
     fs::create_dir_all(regex_index_dir(root))?;
-    let segment_paths = write_segment_files(root, lookup_name, docs)?;
-    let (rows, postings) = merge_segment_files(&segment_paths)?;
-    cleanup_segment_files(&segment_paths);
+    let segment_files = write_segment_files(root, lookup_name, docs)?;
+    let (rows, postings) = merge_and_cleanup_segment_files(segment_files)?;
     let mut lookup = Vec::with_capacity(rows.len() * LOOKUP_ROW_BYTES);
     for (hash, offset, len, doc_count) in rows {
         lookup.extend_from_slice(&hash.to_le_bytes());
@@ -1610,8 +1640,8 @@ fn write_segment_files(
     root: &Path,
     lookup_name: &str,
     docs: &[IndexedDocument],
-) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
+) -> Result<SegmentFiles> {
+    let mut files = SegmentFiles::default();
     for (segment_idx, batch) in docs.chunks(SEGMENT_DOC_BATCH_SIZE).enumerate() {
         let mut pairs = Vec::<(u64, u32, PositionSummary)>::new();
         for doc in batch {
@@ -1623,9 +1653,28 @@ fn write_segment_files(
         pairs.dedup();
         let path = regex_index_dir(root).join(format!("{lookup_name}.{segment_idx:05}.segment"));
         write_segment_file(&path, &pairs)?;
-        paths.push(path);
+        files.paths.push(path);
     }
-    Ok(paths)
+    Ok(files)
+}
+
+#[derive(Debug, Default)]
+struct SegmentFiles {
+    paths: Vec<PathBuf>,
+}
+
+impl SegmentFiles {
+    fn paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+}
+
+impl Drop for SegmentFiles {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn write_segment_file(path: &Path, pairs: &[(u64, u32, PositionSummary)]) -> Result<()> {
@@ -1642,12 +1691,23 @@ fn write_segment_file(path: &Path, pairs: &[(u64, u32, PositionSummary)]) -> Res
     Ok(())
 }
 
+fn merge_and_cleanup_segment_files(
+    segment_files: SegmentFiles,
+) -> Result<(Vec<PostingRow>, Vec<u8>)> {
+    merge_segment_files(segment_files.paths())
+}
+
 fn merge_segment_files(segment_paths: &[PathBuf]) -> Result<(Vec<PostingRow>, Vec<u8>)> {
     let mut readers = Vec::new();
     let mut heap = BinaryHeap::<Reverse<HeapItem>>::new();
     for (segment_idx, path) in segment_paths.iter().enumerate() {
-        let mut reader = BufReader::new(File::open(path)?);
-        if let Some((hash, doc_id, summary)) = read_segment_pair(&mut reader)? {
+        let mut reader = BufReader::new(
+            File::open(path)
+                .with_context(|| format!("failed to open segment '{}'", path.display()))?,
+        );
+        if let Some((hash, doc_id, summary)) = read_segment_pair(&mut reader)
+            .with_context(|| format!("failed to decode segment '{}'", path.display()))?
+        {
             heap.push(Reverse(HeapItem {
                 hash,
                 doc_id,
@@ -1676,8 +1736,10 @@ fn merge_segment_files(segment_paths: &[PathBuf]) -> Result<(Vec<PostingRow>, Ve
                 summary: item.summary,
             }),
         }
+        let path = &segment_paths[item.segment_idx];
         if let Some((next_hash, next_doc_id, next_summary)) =
-            read_segment_pair(&mut readers[item.segment_idx])?
+            read_segment_pair(&mut readers[item.segment_idx])
+                .with_context(|| format!("failed to decode segment '{}'", path.display()))?
         {
             heap.push(Reverse(HeapItem {
                 hash: next_hash,
@@ -1691,12 +1753,21 @@ fn merge_segment_files(segment_paths: &[PathBuf]) -> Result<(Vec<PostingRow>, Ve
     Ok((rows, postings))
 }
 
-fn read_segment_pair(reader: &mut BufReader<File>) -> Result<Option<(u64, u32, PositionSummary)>> {
+fn read_segment_pair(reader: &mut impl Read) -> Result<Option<(u64, u32, PositionSummary)>> {
     let mut record = [0u8; SEGMENT_RECORD_BYTES];
-    match reader.read_exact(&mut record) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error.into()),
+    let mut filled = 0usize;
+    while filled < record.len() {
+        match reader.read(&mut record[filled..]) {
+            Ok(0) if filled == 0 => return Ok(None),
+            Ok(0) => {
+                return Err(anyhow!(
+                    "truncated segment record: expected {SEGMENT_RECORD_BYTES} bytes, found {filled}"
+                ));
+            }
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error).context("failed while reading segment record"),
+        }
     }
     Ok(Some((
         u64::from_le_bytes(record[0..8].try_into().expect("segment hash width")),
@@ -1728,12 +1799,6 @@ fn flush_posting_group(
     ));
 }
 
-fn cleanup_segment_files(segment_paths: &[PathBuf]) {
-    for path in segment_paths {
-        let _ = fs::remove_file(path);
-    }
-}
-
 fn load_layer(
     root: &Path,
     lookup_name: &str,
@@ -1748,24 +1813,32 @@ fn load_layer(
     let lookup_exists = lookup_path.exists();
     let postings_exists = postings_path.exists();
     let present_files = docs_exists as u8 + lookup_exists as u8 + postings_exists as u8;
-    if present_files > 0 && present_files < 3 {
+    if present_files != 3 {
         return Err(anyhow!(
-            "partial regex index layer detected for '{}'",
-            docs_name
+            "incomplete regex index layer '{}': expected docs, lookup, and postings files; found {present_files}/3",
+            docs_path.display()
         ));
     }
-    let docs = if docs_path.exists() {
-        let raw = fs::read(&docs_path)?;
-        bincode::deserialize::<Vec<DocRecord>>(&raw)?
-    } else {
-        Vec::new()
-    };
+    let raw = fs::read(&docs_path)
+        .with_context(|| format!("failed to read docs file '{}'", docs_path.display()))?;
+    let docs = bincode::deserialize::<Vec<DocRecord>>(&raw)
+        .with_context(|| format!("failed to decode docs file '{}'", docs_path.display()))?;
+    let lookup = mmap_optional(&lookup_path)
+        .with_context(|| format!("failed to map lookup file '{}'", lookup_path.display()))?;
+    let postings = mmap_optional(&postings_path)
+        .with_context(|| format!("failed to map postings file '{}'", postings_path.display()))?;
+    validate_layer_files(
+        &docs,
+        lookup.as_deref().unwrap_or(&[]),
+        postings.as_deref().unwrap_or(&[]),
+        &docs_path,
+        &lookup_path,
+        &postings_path,
+    )?;
     let doc_ids_by_path = docs
         .iter()
         .map(|doc| (doc.path.clone(), doc.doc_id))
         .collect::<HashMap<_, _>>();
-    let lookup = mmap_optional(&lookup_path)?;
-    let postings = mmap_optional(&postings_path)?;
     Ok(LoadedLayer {
         docs,
         doc_ids_by_path,
@@ -1790,6 +1863,20 @@ fn mark_manifest_unloaded(manifest: &mut RegexIndexManifest, status: &str, reaso
     manifest.last_error = Some(reason);
 }
 
+fn record_index_build_failure(
+    root: &Path,
+    manifest: &mut RegexIndexManifest,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    mark_manifest_unloaded(manifest, "corrupt", format!("{error:#}"));
+    if let Err(save_error) = save_manifest(root, manifest) {
+        return error.context(format!(
+            "failed to persist regex index failure provenance: {save_error:#}"
+        ));
+    }
+    error
+}
+
 fn mmap_optional(path: &Path) -> Result<Option<Mmap>> {
     if !path.exists() || fs::metadata(path)?.len() == 0 {
         return Ok(None);
@@ -1797,6 +1884,131 @@ fn mmap_optional(path: &Path) -> Result<Option<Mmap>> {
     let file = File::open(path)?;
     let map = unsafe { Mmap::map(&file)? };
     Ok(Some(map))
+}
+
+fn validate_layer_files(
+    docs: &[DocRecord],
+    lookup: &[u8],
+    postings: &[u8],
+    docs_path: &Path,
+    lookup_path: &Path,
+    postings_path: &Path,
+) -> Result<()> {
+    let mut paths = BTreeSet::new();
+    for (expected_id, doc) in docs.iter().enumerate() {
+        let actual_id = usize::try_from(doc.doc_id).context("document id does not fit usize")?;
+        anyhow::ensure!(
+            actual_id == expected_id,
+            "docs file '{}' has non-contiguous document id {} at row {expected_id}",
+            docs_path.display(),
+            doc.doc_id
+        );
+        anyhow::ensure!(
+            paths.insert(doc.path.as_str()),
+            "docs file '{}' contains duplicate path '{}'",
+            docs_path.display(),
+            doc.path
+        );
+    }
+
+    let trailing = lookup.len() % LOOKUP_ROW_BYTES;
+    anyhow::ensure!(
+        trailing == 0,
+        "lookup file '{}' has a partial trailing row: {trailing} of {LOOKUP_ROW_BYTES} bytes",
+        lookup_path.display()
+    );
+
+    let postings_len =
+        u64::try_from(postings.len()).context("postings file length does not fit u64")?;
+    let mut previous_hash = None;
+    let mut expected_offset = 0u64;
+    for (row_index, row) in lookup.chunks_exact(LOOKUP_ROW_BYTES).enumerate() {
+        let hash = u64::from_le_bytes(row[0..8].try_into().expect("lookup hash width"));
+        let meta = LookupPostingMeta {
+            offset: u64::from_le_bytes(row[8..16].try_into().expect("lookup offset width")),
+            len: u32::from_le_bytes(row[16..20].try_into().expect("lookup length width")),
+            doc_count: u32::from_le_bytes(
+                row[20..24].try_into().expect("lookup document count width"),
+            ),
+        };
+        if let Some(previous) = previous_hash {
+            anyhow::ensure!(
+                hash > previous,
+                "lookup file '{}' row {row_index} has hash {hash} after {previous}; hashes must be strictly increasing",
+                lookup_path.display()
+            );
+        }
+        anyhow::ensure!(
+            meta.len > 0 && meta.doc_count > 0,
+            "lookup file '{}' row {row_index} has an empty posting block",
+            lookup_path.display()
+        );
+        let (start, end) = checked_posting_bounds(meta.offset, meta.len, postings.len())
+            .with_context(|| {
+                format!(
+                    "lookup file '{}' row {row_index} hash {hash} has invalid range into '{}'",
+                    lookup_path.display(),
+                    postings_path.display()
+                )
+            })?;
+        anyhow::ensure!(
+            meta.offset == expected_offset,
+            "lookup file '{}' row {row_index} starts at {}, expected contiguous offset {expected_offset}",
+            lookup_path.display(),
+            meta.offset
+        );
+        let entries = decode_postings(&postings[start..end]).with_context(|| {
+            format!(
+                "lookup file '{}' row {row_index} hash {hash} references an invalid posting block in '{}'",
+                lookup_path.display(),
+                postings_path.display()
+            )
+        })?;
+        let expected_doc_count =
+            usize::try_from(meta.doc_count).context("posting document count does not fit usize")?;
+        anyhow::ensure!(
+            entries.len() == expected_doc_count,
+            "lookup file '{}' row {row_index} declares {} documents but its posting block contains {}",
+            lookup_path.display(),
+            meta.doc_count,
+            entries.len()
+        );
+        for entry in entries {
+            anyhow::ensure!(
+                usize::try_from(entry.doc_id)
+                    .ok()
+                    .is_some_and(|id| id < docs.len()),
+                "lookup file '{}' row {row_index} references missing document id {}",
+                lookup_path.display(),
+                entry.doc_id
+            );
+        }
+        previous_hash = Some(hash);
+        expected_offset = u64::try_from(end).context("posting end does not fit u64")?;
+    }
+    anyhow::ensure!(
+        expected_offset == postings_len,
+        "postings file '{}' has {} unreferenced trailing bytes",
+        postings_path.display(),
+        postings_len.saturating_sub(expected_offset)
+    );
+    Ok(())
+}
+
+fn checked_posting_bounds(offset: u64, len: u32, postings_len: usize) -> Result<(usize, usize)> {
+    let end = offset
+        .checked_add(u64::from(len))
+        .ok_or_else(|| anyhow!("posting range offset {offset} + length {len} overflows u64"))?;
+    let postings_len =
+        u64::try_from(postings_len).context("postings file length does not fit u64")?;
+    anyhow::ensure!(
+        end <= postings_len,
+        "posting range {offset}..{end} exceeds postings length {postings_len}"
+    );
+    Ok((
+        usize::try_from(offset).context("posting offset does not fit usize")?,
+        usize::try_from(end).context("posting end does not fit usize")?,
+    ))
 }
 
 fn encode_postings(entries: &[PostingEntry]) -> Vec<u8> {
@@ -1819,19 +2031,51 @@ fn decode_postings(bytes: &[u8]) -> Result<Vec<PostingEntry>> {
         return Err(anyhow!("invalid posting block"));
     }
     let count = u32::from_le_bytes(bytes[0..4].try_into().expect("length checked")) as usize;
+    let minimum_len = count
+        .checked_mul(3)
+        .and_then(|len| len.checked_add(4))
+        .ok_or_else(|| anyhow!("posting block document count overflows its encoded size"))?;
+    anyhow::ensure!(
+        bytes.len() >= minimum_len,
+        "posting block declares {count} documents but is only {} bytes",
+        bytes.len()
+    );
     let mut doc_ids = Vec::with_capacity(count);
     let mut index = 4usize;
     let mut current = 0u32;
-    while index < bytes.len() && doc_ids.len() < count {
+    for position in 0..count {
         let (delta, consumed) = decode_varint(&bytes[index..])?;
-        current = current.saturating_add(delta);
+        anyhow::ensure!(
+            position == 0 || delta > 0,
+            "posting block document ids are not strictly increasing"
+        );
+        current = current
+            .checked_add(delta)
+            .ok_or_else(|| anyhow!("posting document id delta overflows u32"))?;
         doc_ids.push(current);
         index += consumed;
     }
-    let summary_end = index.saturating_add(count.saturating_mul(2));
-    if bytes.len() < summary_end {
-        return Err(anyhow!("posting block missing positional summaries"));
-    }
+    let summary_len = count
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("posting summary length overflows usize"))?;
+    let summary_end = index
+        .checked_add(summary_len)
+        .ok_or_else(|| anyhow!("posting summary range overflows usize"))?;
+    anyhow::ensure!(
+        bytes.len() >= summary_end,
+        "posting block missing positional summaries"
+    );
+    anyhow::ensure!(
+        bytes.len() == summary_end,
+        "posting block has {} trailing bytes",
+        bytes.len() - summary_end
+    );
+    anyhow::ensure!(
+        bytes[index..summary_end]
+            .chunks_exact(2)
+            .all(|summary| summary[1] <= 1),
+        "posting block contains an invalid repeated-position flag"
+    );
     Ok(doc_ids
         .into_iter()
         .enumerate()
@@ -1861,19 +2105,28 @@ fn encode_varint(mut value: u32, out: &mut Vec<u8>) {
 
 fn decode_varint(bytes: &[u8]) -> Result<(u32, usize)> {
     let mut result = 0u32;
-    let mut shift = 0u32;
-    for (idx, byte) in bytes.iter().enumerate() {
+    for (idx, byte) in bytes.iter().take(5).enumerate() {
+        if idx == 4 && *byte > 0x0f {
+            return Err(anyhow!("varint overflows u32"));
+        }
         let value = u32::from(byte & 0x7f);
-        result |= value << shift;
+        result |= value << (idx * 7);
         if byte & 0x80 == 0 {
             return Ok((result, idx + 1));
         }
-        shift += 7;
+    }
+    if bytes.len() >= 5 {
+        return Err(anyhow!("varint overflows u32"));
     }
     Err(anyhow!("unterminated varint"))
 }
 
 fn lookup_posting_range(lookup: &[u8], hash: u64) -> Option<LookupPostingMeta> {
+    debug_assert_eq!(
+        lookup.len() % LOOKUP_ROW_BYTES,
+        0,
+        "lookup bytes must be validated before querying"
+    );
     let rows = lookup.len() / LOOKUP_ROW_BYTES;
     let mut low = 0usize;
     let mut high = rows;
@@ -2569,6 +2822,9 @@ fn now_unix() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+    use std::sync::Barrier;
+
     use super::*;
 
     fn build_fixture_index(root: &Path) -> RegexIndexRuntime {
@@ -2605,6 +2861,160 @@ mod tests {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
+    }
+
+    fn encoded_segment_record(hash: u64, doc_id: u32, summary: PositionSummary) -> Vec<u8> {
+        let mut record = Vec::with_capacity(SEGMENT_RECORD_BYTES);
+        record.extend_from_slice(&hash.to_le_bytes());
+        record.extend_from_slice(&doc_id.to_le_bytes());
+        record.extend_from_slice(&summary.encode());
+        record
+    }
+
+    fn corrupt_first_lookup_range(root: &Path, offset: u64, len: u32) {
+        let path = regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME);
+        let mut lookup = fs::read(&path).unwrap();
+        assert!(lookup.len() >= LOOKUP_ROW_BYTES);
+        lookup[8..16].copy_from_slice(&offset.to_le_bytes());
+        lookup[16..20].copy_from_slice(&len.to_le_bytes());
+        fs::write(path, lookup).unwrap();
+    }
+
+    #[test]
+    fn read_segment_pair_returns_none_at_a_clean_record_boundary() {
+        let expected = (
+            17,
+            3,
+            PositionSummary {
+                buckets: 0x29,
+                repeated: true,
+            },
+        );
+        let mut reader = Cursor::new(encoded_segment_record(expected.0, expected.1, expected.2));
+
+        assert_eq!(read_segment_pair(&mut reader).unwrap(), Some(expected));
+        assert_eq!(read_segment_pair(&mut reader).unwrap(), None);
+    }
+
+    #[test]
+    fn read_segment_pair_rejects_every_truncated_record_boundary() {
+        for length in 1..SEGMENT_RECORD_BYTES {
+            let mut reader = Cursor::new(vec![0u8; length]);
+            let error = read_segment_pair(&mut reader).unwrap_err();
+
+            assert!(
+                error.to_string().contains(&format!(
+                    "expected {SEGMENT_RECORD_BYTES} bytes, found {length}"
+                )),
+                "length={length}, error={error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_segment_files_cleans_temporary_segments_after_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("corrupt.segment");
+        fs::write(&path, vec![0u8; SEGMENT_RECORD_BYTES - 1]).unwrap();
+        let files = SegmentFiles {
+            paths: vec![path.clone()],
+        };
+
+        let error = merge_and_cleanup_segment_files(files).unwrap_err();
+
+        assert!(
+            !path.exists() && error.to_string().contains("failed to decode segment"),
+            "path_exists={}, error={error:#}",
+            path.exists()
+        );
+    }
+
+    #[test]
+    fn merge_segment_files_accepts_clean_eof_and_cleans_temporary_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("complete.segment");
+        fs::write(&path, encoded_segment_record(7, 2, PositionSummary::new(4))).unwrap();
+        let files = SegmentFiles {
+            paths: vec![path.clone()],
+        };
+
+        let (rows, _) = merge_and_cleanup_segment_files(files).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn decode_postings_rejects_every_truncated_block_prefix() {
+        let entries = [
+            PostingEntry {
+                doc_id: 0,
+                summary: PositionSummary::new(0),
+            },
+            PostingEntry {
+                doc_id: 127,
+                summary: PositionSummary::new(7),
+            },
+            PostingEntry {
+                doc_id: 128,
+                summary: PositionSummary::new(15),
+            },
+        ];
+        let encoded = encode_postings(&entries);
+
+        for prefix_len in 0..encoded.len() {
+            let result = decode_postings(&encoded[..prefix_len]);
+            assert!(
+                result.is_err(),
+                "truncated posting prefix {prefix_len}/{} decoded successfully",
+                encoded.len()
+            );
+        }
+        assert_eq!(decode_postings(&encoded).unwrap(), entries);
+    }
+
+    #[test]
+    fn decode_postings_rejects_impossible_count_before_allocating() {
+        let encoded = u32::MAX.to_le_bytes();
+
+        let error = decode_postings(&encoded).unwrap_err();
+
+        assert!(
+            error.to_string().contains("declares 4294967295 documents"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn decode_varint_rejects_values_larger_than_u32() {
+        let error = decode_varint(&[0xff, 0xff, 0xff, 0xff, 0x10]).unwrap_err();
+
+        assert!(error.to_string().contains("overflows u32"), "{error:#}");
+    }
+
+    #[test]
+    fn checked_posting_bounds_matches_exhaustive_small_ranges() {
+        for postings_len in 0usize..=16 {
+            for offset in 0u64..=18 {
+                for len in 0u32..=18 {
+                    let expected = offset
+                        .checked_add(u64::from(len))
+                        .is_some_and(|end| end <= postings_len as u64);
+                    assert_eq!(
+                        checked_posting_bounds(offset, len, postings_len).is_ok(),
+                        expected,
+                        "offset={offset}, len={len}, postings_len={postings_len}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn checked_posting_bounds_rejects_u64_overflow() {
+        let error = checked_posting_bounds(u64::MAX, 1, usize::MAX).unwrap_err();
+
+        assert!(error.to_string().contains("overflows u64"), "{error:#}");
     }
 
     #[test]
@@ -2814,6 +3224,242 @@ mod tests {
         assert!(!loaded.is_loaded());
         assert_eq!(loaded.manifest.status, "corrupt");
         assert!(loaded.manifest.stale_reason.is_some());
+    }
+
+    #[test]
+    fn load_runtime_rejects_every_partial_lookup_row_without_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        drop(build_fixture_index(root));
+        let lookup_path = regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME);
+        let original = fs::read(&lookup_path).unwrap();
+        let complete_prefix_len = original.len() - LOOKUP_ROW_BYTES;
+
+        for trailing in 1..LOOKUP_ROW_BYTES {
+            fs::write(&lookup_path, &original[..complete_prefix_len + trailing]).unwrap();
+            let runtime = load_runtime(root).unwrap();
+            let reason = runtime.manifest.stale_reason.as_deref().unwrap_or_default();
+
+            assert!(
+                !runtime.is_loaded()
+                    && runtime.manifest.status == "corrupt"
+                    && runtime.manifest.last_error.as_deref() == Some(reason)
+                    && reason.contains("failed to load base regex index layer")
+                    && reason.contains(BASE_LOOKUP_FILE_NAME)
+                    && reason.contains(&format!(
+                        "partial trailing row: {trailing} of {LOOKUP_ROW_BYTES} bytes"
+                    )),
+                "trailing={trailing}, manifest={:?}",
+                runtime.manifest
+            );
+        }
+    }
+
+    #[test]
+    fn load_runtime_rejects_every_truncated_final_posting_block_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        drop(build_fixture_index(root));
+        let lookup = fs::read(regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME)).unwrap();
+        let postings_path = regex_index_dir(root).join(BASE_POSTINGS_FILE_NAME);
+        let postings = fs::read(&postings_path).unwrap();
+        let final_row = &lookup[lookup.len() - LOOKUP_ROW_BYTES..];
+        let offset = u64::from_le_bytes(final_row[8..16].try_into().unwrap()) as usize;
+        let len = u32::from_le_bytes(final_row[16..20].try_into().unwrap()) as usize;
+        assert_eq!(offset + len, postings.len());
+
+        for prefix_len in 0..len {
+            fs::write(&postings_path, &postings[..offset + prefix_len]).unwrap();
+            let runtime = load_runtime(root).unwrap();
+
+            assert!(
+                !runtime.is_loaded()
+                    && runtime.manifest.status == "corrupt"
+                    && runtime
+                        .manifest
+                        .last_error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("invalid range")),
+                "prefix={prefix_len}/{len}, manifest={:?}",
+                runtime.manifest
+            );
+        }
+    }
+
+    #[test]
+    fn load_runtime_rejects_a_completely_missing_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        drop(build_fixture_index(root));
+        for name in [
+            BASE_DOCS_FILE_NAME,
+            BASE_LOOKUP_FILE_NAME,
+            BASE_POSTINGS_FILE_NAME,
+        ] {
+            fs::remove_file(regex_index_dir(root).join(name)).unwrap();
+        }
+
+        let runtime = load_runtime(root).unwrap();
+
+        assert!(!runtime.is_loaded());
+        assert_eq!(runtime.manifest.status, "corrupt");
+        assert!(
+            runtime
+                .manifest
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("found 0/3")),
+            "{:?}",
+            runtime.manifest
+        );
+    }
+
+    #[test]
+    fn load_runtime_preserves_an_unpublished_generation_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let runtime = build_fixture_index(root);
+        let mut manifest = runtime.manifest;
+        manifest.status = "building".to_string();
+        manifest.stale_reason = Some("interrupted overlay generation 17".to_string());
+        save_manifest(root, &manifest).unwrap();
+
+        let runtime = load_runtime(root).unwrap();
+
+        assert!(!runtime.is_loaded());
+        assert_eq!(
+            runtime.manifest.stale_reason.as_deref(),
+            Some("interrupted overlay generation 17")
+        );
+    }
+
+    #[test]
+    fn load_runtime_rejects_an_overflowing_posting_range_with_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        drop(build_fixture_index(root));
+        corrupt_first_lookup_range(root, u64::MAX, 1);
+
+        let runtime = load_runtime(root).unwrap();
+        let reason = runtime.manifest.last_error.as_deref().unwrap_or_default();
+
+        assert!(
+            !runtime.is_loaded()
+                && runtime.manifest.status == "corrupt"
+                && runtime.manifest.stale_reason.as_deref() == Some(reason)
+                && reason.contains("failed to load base regex index layer")
+                && reason.contains(BASE_LOOKUP_FILE_NAME)
+                && reason.contains(BASE_POSTINGS_FILE_NAME)
+                && reason.contains("overflows u64"),
+            "manifest={:?}",
+            runtime.manifest
+        );
+    }
+
+    #[test]
+    fn load_runtime_rejects_an_out_of_bounds_posting_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        drop(build_fixture_index(root));
+        let postings_len = fs::metadata(regex_index_dir(root).join(BASE_POSTINGS_FILE_NAME))
+            .unwrap()
+            .len();
+        corrupt_first_lookup_range(root, postings_len, 1);
+
+        let runtime = load_runtime(root).unwrap();
+
+        assert!(!runtime.is_loaded());
+        assert!(
+            runtime
+                .manifest
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("exceeds postings length")),
+            "{:?}",
+            runtime.manifest
+        );
+    }
+
+    #[test]
+    fn failed_overlay_validation_persists_provenance_without_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let runtime = build_fixture_index(root);
+        let lookup_path = regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME);
+        let lookup = fs::read(&lookup_path).unwrap();
+        write_atomic(lookup_path, &lookup[..lookup.len() - 1]).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Replacement;\n").unwrap();
+
+        let error =
+            update_overlay_index(root, Some(&runtime), &[String::from("src/lib.rs")]).unwrap_err();
+        let manifest = load_manifest(root);
+
+        assert!(
+            manifest.status == "corrupt"
+                && manifest.last_error.as_deref().is_some_and(|reason| {
+                    reason.contains("failed to validate base layer before overlay publication")
+                        && reason.contains("partial trailing row")
+                })
+                && !load_runtime(root).unwrap().is_loaded(),
+            "error={error:#}, manifest={manifest:?}"
+        );
+    }
+
+    #[test]
+    fn concurrent_readers_keep_the_published_generation_while_loaders_reject_a_building_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let runtime = build_fixture_index(root);
+        let mut manifest = runtime.manifest.clone();
+        manifest.status = "building".to_string();
+        manifest.stale_reason = Some("generation replacement in progress".to_string());
+        save_manifest(root, &manifest).unwrap();
+        let lookup_path = regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME);
+        let lookup = fs::read(&lookup_path).unwrap();
+        let truncated_lookup = lookup[..lookup.len() - 1].to_vec();
+        let request = SearchRequest {
+            query: "Alpha".to_string(),
+            fixed_string: true,
+            ..SearchRequest::default()
+        };
+        let barrier = Arc::new(Barrier::new(10));
+
+        std::thread::scope(|scope| {
+            let query_handles = (0..4)
+                .map(|_| {
+                    let barrier = Arc::clone(&barrier);
+                    let request = request.clone();
+                    let runtime = &runtime;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        indexed_search(root, runtime, &request).map(|result| result.match_count)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let load_handles = (0..4)
+                .map(|_| {
+                    let barrier = Arc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        load_runtime(root).map(|runtime| runtime.is_loaded())
+                    })
+                })
+                .collect::<Vec<_>>();
+            let writer_barrier = Arc::clone(&barrier);
+            let writer = scope.spawn(move || {
+                writer_barrier.wait();
+                write_atomic(lookup_path, &truncated_lookup)
+            });
+
+            barrier.wait();
+            writer.join().unwrap().unwrap();
+            for handle in query_handles {
+                assert!(handle.join().unwrap().unwrap() > 0);
+            }
+            for handle in load_handles {
+                assert!(!handle.join().unwrap().unwrap());
+            }
+        });
     }
 
     #[test]
