@@ -1,0 +1,42 @@
+{
+  "captured_on": "2026-07-28",
+  "command": "cargo run --release -p testy-core --example testmap_scale --locked -- --iterations 8",
+  "environment": {
+    "architecture": "arm64",
+    "rustc": "1.93.1 (01f6ddf75 2026-02-11)",
+    "source_revision": "e56d3f0ede4fef1fb2a26170afcf71ee8cd5e9c2"
+  },
+  "result": {
+    "build_micros": 3898,
+    "fixture": {
+      "changed_files": 40,
+      "changed_lines_per_file": 256,
+      "dense_cells": 2000000,
+      "files": 1000,
+      "files_per_test": 12,
+      "iterations": 8,
+      "lines_per_cell": 16,
+      "max_tests": 50,
+      "non_empty_cells": 24000,
+      "tests": 2000
+    },
+    "implementation": "legacy_dense",
+    "plan_median_micros": 654174,
+    "plan_micros": [
+      616782,
+      617109,
+      633101,
+      644879,
+      654174,
+      658068,
+      676875,
+      685873
+    ],
+    "plan_signature": "dd7c2c02c56fa050d879ebd12b71e367982b96dac192187c2a0ed61028fe6171",
+    "profile": "release",
+    "schema": "packet28-testmap-scale-v1",
+    "selected_tests": 50,
+    "serialize_micros": 12332,
+    "serialized_bytes": 17613076
+  }
+}

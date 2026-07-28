@@ -27,6 +27,11 @@ What it does:
   - large cached state (`200k` issues in `issues.bin`)
   - explicit SARIF parse path (`--issues ...`)
 
+## Focused experiments
+
+- [`per-05-testmap/`](per-05-testmap/) contains the deterministic dense-to-sparse
+  test-map planning and persistence comparison.
+
 ## Generated Fixtures
 
 - `benchmarks/generated/lcov-100k.info`
