@@ -1,4 +1,26 @@
+//! Deterministic daemon endpoint and artifact paths.
+
 use super::*;
+
+pub const DAEMON_DIR_NAME: &str = ".packet28/daemon";
+pub const SOCKET_FILE_NAME: &str = "packet28d.sock";
+pub const PID_FILE_NAME: &str = "pid";
+pub const RUNTIME_FILE_NAME: &str = "runtime.json";
+pub const READY_FILE_NAME: &str = "ready";
+pub const LOG_FILE_NAME: &str = "packet28d.log";
+pub const WATCH_REGISTRY_FILE_NAME: &str = "watch-registry-v1.json";
+pub const TASK_REGISTRY_FILE_NAME: &str = "task-registry-v1.json";
+pub const TASK_EVENTS_DIR_NAME: &str = "tasks";
+pub const TASK_ARTIFACTS_DIR_NAME: &str = "task";
+pub const TASK_BRIEF_MARKDOWN_FILE_NAME: &str = "brief.md";
+pub const TASK_BRIEF_JSON_FILE_NAME: &str = "brief.json";
+pub const TASK_STATE_JSON_FILE_NAME: &str = "state.json";
+pub const HOOK_RUNTIME_CONFIG_FILE_NAME: &str = "hook-runtime-v1.json";
+pub const AGENT_ACTIVE_TASK_FILE_NAME: &str = "active-task.json";
+pub const INDEX_DIR_NAME: &str = ".packet28/index";
+pub const INDEX_MANIFEST_FILE_NAME: &str = "manifest.json";
+pub const INDEX_SNAPSHOT_FILE_NAME: &str = "repo-index-v1.bin";
+const SOCKET_DIR_NAME: &str = "packet28d-sockets";
 
 pub fn daemon_dir(root: &Path) -> PathBuf {
     root.join(DAEMON_DIR_NAME)
@@ -121,6 +143,19 @@ fn safe_task_id(task_id: &str) -> String {
         "task".to_string()
     } else {
         safe
+    }
+}
+
+/// Resolves the nearest ancestor Git workspace, falling back to the input path.
+pub fn resolve_workspace_root(start: &Path) -> PathBuf {
+    let mut dir = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+    loop {
+        if dir.join(".git").exists() {
+            return dir;
+        }
+        if !dir.pop() {
+            return start.to_path_buf();
+        }
     }
 }
 

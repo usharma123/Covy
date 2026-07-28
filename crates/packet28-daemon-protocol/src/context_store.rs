@@ -1,3 +1,5 @@
+//! Context-store and recall payloads.
+
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -71,7 +73,7 @@ pub struct ContextRecallRequest {
     pub packet_types: Vec<String>,
     pub path_filters: Vec<String>,
     pub symbol_filters: Vec<String>,
-    pub mode: Option<context_memory_core::RecallMode>,
+    pub mode: Option<suite_packet_core::memory::RecallMode>,
     pub include_debug: bool,
 }
 

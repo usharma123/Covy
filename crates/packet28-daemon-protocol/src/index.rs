@@ -1,3 +1,5 @@
+//! Daemon index management payloads.
+
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

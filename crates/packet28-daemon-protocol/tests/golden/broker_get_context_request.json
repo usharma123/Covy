@@ -1,0 +1,26 @@
+{
+  "type": "broker_get_context",
+  "request": {
+    "task_id": "task-1",
+    "action": "inspect",
+    "budget_tokens": 2048,
+    "budget_bytes": null,
+    "since_version": null,
+    "focus_paths": ["crates/packet28d"],
+    "focus_symbols": [],
+    "tool_name": null,
+    "tool_result_kind": null,
+    "query": null,
+    "include_sections": [],
+    "exclude_sections": [],
+    "verbosity": null,
+    "response_mode": null,
+    "include_self_context": true,
+    "max_sections": null,
+    "default_max_items_per_section": null,
+    "section_item_limits": {},
+    "persist_artifacts": null,
+    "recall_mode": null,
+    "include_debug_memory": false
+  }
+}

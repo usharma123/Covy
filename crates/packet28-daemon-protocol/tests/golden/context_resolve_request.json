@@ -1,0 +1,16 @@
+{
+  "type": "context_resolve",
+  "request": {
+    "workspace_root": "/repo",
+    "source_kind": "instruction_file",
+    "source_path": "AGENTS.md",
+    "source_sha256": "abc123",
+    "source_content": "# Instructions",
+    "task_id": "task-1",
+    "task_label": "remediation",
+    "budget_tokens": 4096,
+    "schema_version": 1,
+    "agent_family": "codex",
+    "backend_kind": "linux_preload"
+  }
+}

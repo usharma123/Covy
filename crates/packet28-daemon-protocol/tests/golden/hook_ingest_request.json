@@ -1,0 +1,14 @@
+{
+  "type": "hook_ingest",
+  "request": {
+    "task_id": "task-1",
+    "session_id": "session-1",
+    "event_kind": "pre_compact",
+    "matcher": null,
+    "source": null,
+    "boundary_kind": "pre_compact",
+    "lifecycle_event": null,
+    "reducer_packet": null,
+    "host_context_budget_tokens": 200000
+  }
+}

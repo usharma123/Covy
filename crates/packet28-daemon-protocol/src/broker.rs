@@ -1,3 +1,5 @@
+//! Broker request, response, and state-transfer payloads.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -114,7 +116,7 @@ pub struct BrokerGetContextRequest {
     pub default_max_items_per_section: Option<usize>,
     pub section_item_limits: BTreeMap<String, usize>,
     pub persist_artifacts: Option<bool>,
-    pub recall_mode: Option<context_memory_core::RecallMode>,
+    pub recall_mode: Option<suite_packet_core::memory::RecallMode>,
     pub include_debug_memory: bool,
 }
 
@@ -347,7 +349,7 @@ pub struct BrokerEstimateContextRequest {
     pub default_max_items_per_section: Option<usize>,
     pub section_item_limits: BTreeMap<String, usize>,
     pub persist_artifacts: Option<bool>,
-    pub recall_mode: Option<context_memory_core::RecallMode>,
+    pub recall_mode: Option<suite_packet_core::memory::RecallMode>,
     pub include_debug_memory: bool,
 }
 

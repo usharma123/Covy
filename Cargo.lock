@@ -1361,14 +1361,23 @@ version = "0.2.63"
 dependencies = [
  "anyhow",
  "blake3",
- "context-kernel-core",
- "context-memory-core",
  "fs2",
- "packet28-reducer-core",
+ "packet28-daemon-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "packet28-daemon-protocol"
+version = "0.2.63"
+dependencies = [
+ "blake3",
  "serde",
  "serde_json",
  "suite-packet-core",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]

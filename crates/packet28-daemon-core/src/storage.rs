@@ -1,7 +1,16 @@
-use super::*;
-use fs2::FileExt;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::fs;
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use anyhow::{Context, Result};
+use fs2::FileExt;
+use packet28_daemon_protocol::message::{DaemonEventFrame, DaemonRuntimeInfo};
+use packet28_daemon_protocol::paths::{
+    daemon_dir, pid_path, ready_path, runtime_path, socket_path, task_event_log_path,
+    task_events_dir, task_registry_path, watch_registry_path, workspace_socket_path,
+};
+use packet28_daemon_protocol::task::{TaskRegistry, WatchRegistry};
 
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -193,52 +202,6 @@ pub fn load_task_events_from_offset(
     })
 }
 
-pub fn resolve_workspace_root(start: &Path) -> PathBuf {
-    let mut dir = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
-    loop {
-        if dir.join(".git").exists() {
-            return dir;
-        }
-        if !dir.pop() {
-            return start.to_path_buf();
-        }
-    }
-}
-
-pub fn write_socket_message<W: Write, T: Serialize>(writer: &mut W, value: &T) -> Result<()> {
-    let bytes = serde_json::to_vec(value)?;
-    if bytes.len() > MAX_SOCKET_MESSAGE_BYTES {
-        anyhow::bail!(
-            "socket frame too large: {} bytes exceeds limit of {}",
-            bytes.len(),
-            MAX_SOCKET_MESSAGE_BYTES
-        );
-    }
-    let len = bytes.len() as u64;
-    writer.write_all(&len.to_be_bytes())?;
-    writer.write_all(&bytes)?;
-    writer.flush()?;
-    Ok(())
-}
-
-pub fn read_socket_message<R: Read, T: for<'de> Deserialize<'de>>(reader: &mut R) -> Result<T> {
-    let mut len_bytes = [0_u8; 8];
-    reader.read_exact(&mut len_bytes)?;
-    let len = usize::try_from(u64::from_be_bytes(len_bytes))
-        .context("socket frame length does not fit in usize")?;
-    if len == 0 {
-        anyhow::bail!("socket frame length must be greater than zero");
-    }
-    if len > MAX_SOCKET_MESSAGE_BYTES {
-        anyhow::bail!(
-            "socket frame too large: {len} bytes exceeds limit of {MAX_SOCKET_MESSAGE_BYTES}"
-        );
-    }
-    let mut body = vec![0_u8; len];
-    reader.read_exact(&mut body)?;
-    Ok(serde_json::from_slice(&body)?)
-}
-
 pub fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -326,6 +289,7 @@ fn atomic_temp_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use packet28_daemon_protocol::message::DaemonEvent;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;

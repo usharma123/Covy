@@ -1,3 +1,5 @@
+//! Task lifecycle, launch, watch, and registry payloads.
+
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

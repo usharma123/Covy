@@ -1,0 +1,29 @@
+# Packet28 daemon protocol
+
+`packet28-daemon-protocol` is the implementation-free contract shared by
+Packet28 daemon clients and the daemon runtime.
+
+Use explicit modules for new code:
+
+```rust
+use packet28_daemon_protocol::frame::{read_frame, write_frame};
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::paths::socket_path;
+```
+
+The crate contains serializable messages, length-prefixed JSON framing, and
+deterministic endpoint paths. It does not contain daemon persistence, kernel,
+memory, reducer, search, or transport-loop implementations.
+
+## Migrating from `packet28-daemon-core`
+
+Existing root imports continue to compile through daemon-core's unconditional
+compatibility facade, including for consumers that disable default features:
+
+```rust
+use packet28_daemon_core::{read_socket_message, DaemonRequest};
+```
+
+Migrate clients to the protocol crate and its explicit modules. Runtime code
+that needs registry persistence should instead use
+`packet28_daemon_core::storage`.
