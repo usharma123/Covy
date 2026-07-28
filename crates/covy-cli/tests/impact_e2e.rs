@@ -29,7 +29,7 @@ fn test_impact_json_runs_with_diff_integration() {
 }
 
 #[test]
-fn test_impact_record_builds_v2_testmap() {
+fn test_impact_record_builds_sparse_testmap() {
     let dir = TempDir::new().unwrap();
     let per_test_dir = dir.path().join("per-test-lcov");
     std::fs::create_dir_all(&per_test_dir).unwrap();
@@ -69,7 +69,8 @@ fn test_impact_record_builds_v2_testmap() {
     );
     assert!(!map.tests.is_empty());
     assert!(!map.file_index.is_empty());
-    assert_eq!(map.tests.len(), map.coverage.len());
+    assert_eq!(map.tests.len(), map.sparse_coverage.len());
+    assert!(map.coverage.is_empty());
 }
 
 #[test]

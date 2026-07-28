@@ -203,9 +203,9 @@ fn run_plan(args: ImpactPlanRequest, adapters: &ImpactAdapters) -> Result<Impact
     let bytes = std::fs::read(&args.testmap)
         .with_context(|| format!("Failed to read testmap at {}", args.testmap))?;
     let map = crate::cache::deserialize_testmap(&bytes)?;
-    if map.coverage.is_empty() || map.file_index.is_empty() || map.tests.is_empty() {
+    if !map.has_line_coverage() {
         anyhow::bail!(
-            "Testmap '{}' does not include line-level v2 coverage data. Rebuild with `covy impact record`.",
+            "Testmap '{}' does not include line-level coverage data. Rebuild with `covy impact record`.",
             args.testmap
         );
     }
@@ -387,7 +387,8 @@ fn build_testmap_index(
     index.metadata.granularity = "line".to_string();
     index.metadata.commit_sha = resolve_commit_sha(base_ref);
 
-    let mut per_test_lines: BTreeMap<String, BTreeMap<String, Vec<u32>>> = BTreeMap::new();
+    let mut per_test_lines: BTreeMap<String, BTreeMap<String, roaring::RoaringBitmap>> =
+        BTreeMap::new();
     let mut file_index_set: BTreeSet<String> = BTreeSet::new();
 
     for (test_id, input) in by_test {
@@ -427,12 +428,11 @@ fn build_testmap_index(
         }
 
         suite_foundation_core::pathmap::auto_normalize_paths(&mut combined, None);
-        let mut line_map: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+        let mut line_map = BTreeMap::new();
 
-        for (file, fc) in &combined.files {
+        for (file, fc) in combined.files {
             file_index_set.insert(file.clone());
-            let lines: Vec<u32> = fc.lines_covered.iter().collect();
-            line_map.insert(file.clone(), lines);
+            line_map.insert(file.clone(), fc.lines_covered);
             index
                 .test_to_files
                 .entry(canonical_test_id.clone())
@@ -458,24 +458,27 @@ fn build_testmap_index(
     index.tests = per_test_lines.keys().cloned().collect();
     index.file_index = file_index_set.into_iter().collect();
 
-    let mut coverage = Vec::with_capacity(index.tests.len());
     let mut non_empty_cells = 0usize;
-    for test_id in &index.tests {
-        let mut row = Vec::with_capacity(index.file_index.len());
-        let map = per_test_lines.get(test_id);
-        for file in &index.file_index {
-            let lines = map
-                .and_then(|m| m.get(file))
-                .cloned()
-                .unwrap_or_else(Vec::new);
-            if !lines.is_empty() {
-                non_empty_cells += 1;
-            }
-            row.push(lines);
-        }
-        coverage.push(row);
-    }
-    index.coverage = coverage;
+    index.sparse_coverage = per_test_lines
+        .into_values()
+        .map(|line_map| {
+            let files = line_map
+                .into_iter()
+                .filter_map(|(file, lines)| {
+                    if lines.is_empty() {
+                        return None;
+                    }
+                    non_empty_cells += 1;
+                    let file_idx = index
+                        .file_index
+                        .binary_search(&file)
+                        .expect("coverage path was collected into the canonical file index");
+                    Some(crate::testmap::SparseFileCoverage { file_idx, lines })
+                })
+                .collect();
+            crate::testmap::SparseTestCoverageRow { files }
+        })
+        .collect();
 
     let summary = ImpactRecordSummary {
         tests_total: index.tests.len(),
@@ -706,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_record_builds_v2_testmap_and_summary() {
+    fn test_run_record_builds_sparse_testmap_and_summary() {
         let dir = tempfile::TempDir::new().unwrap();
         let per_test_dir = dir.path().join("per-test-lcov");
         std::fs::create_dir_all(&per_test_dir).unwrap();
@@ -743,7 +746,15 @@ mod tests {
         let bytes = std::fs::read(&testmap).unwrap();
         let map = crate::cache::deserialize_testmap(&bytes).unwrap();
         assert_eq!(map.tests.len(), 1);
-        assert_eq!(map.coverage.len(), 1);
+        assert_eq!(map.tests.len(), map.sparse_coverage.len());
+        assert_eq!(
+            map.sparse_coverage
+                .iter()
+                .map(|row| row.files.len())
+                .sum::<usize>(),
+            summary.non_empty_cells
+        );
+        assert!(map.coverage.is_empty());
         assert!(!map.file_index.is_empty());
         assert!(map.metadata.generated_at > 0);
     }
@@ -806,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn test_run_plan_rejects_non_v2_testmap() {
+    fn test_run_plan_rejects_testmap_without_line_coverage() {
         let dir = tempfile::TempDir::new().unwrap();
         let testmap = dir.path().join("testmap.bin");
 
@@ -829,7 +840,7 @@ mod tests {
 
         assert!(err
             .to_string()
-            .contains("does not include line-level v2 coverage data"));
+            .contains("does not include line-level coverage data"));
     }
 
     #[test]
