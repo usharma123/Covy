@@ -1576,81 +1576,260 @@ fn loads_packet_file() {
     assert_eq!(packet.packet_id.as_deref(), Some("a"));
 }
 
+fn instruction_request(mode: suite_packet_core::InstructionRenderMode) -> KernelRequest {
+    KernelRequest {
+        target: "packet28.instruction.summarize".to_string(),
+        reducer_input: serde_json::to_value(InstructionSummaryRequest {
+            path: "AGENTS.md".to_string(),
+            content: "# Coverage\n\n- Prefer deterministic reducers.\n- Keep tool activity compact.\n\n## Auth\nTouch src/auth.rs carefully and preserve cache keys.\n\n## Cache\nKeep snapshot invalidation correct.\n".to_string(),
+            content_sha256: "untrusted-caller-hint".to_string(),
+            mode,
+            stable_config: suite_packet_core::InstructionStableConfig {
+                focus_terms: vec!["auth".to_string()],
+                ..suite_packet_core::InstructionStableConfig::default()
+            },
+            task_id: Some("task-auth".to_string()),
+            budget_tokens: Some(128),
+            schema_version: 1,
+            source_kind: Some("instruction_file".to_string()),
+            backend_kind: Some("linux_preload".to_string()),
+            agent_family: Some("codex".to_string()),
+        })
+        .unwrap(),
+        policy_context: json!({
+            "task_id": "task-auth",
+            "instruction_mode": mode,
+        }),
+        ..KernelRequest::default()
+    }
+}
+
+fn instruction_payload(response: &KernelResponse) -> InstructionSummaryPayload {
+    let packet = response.output_packets.first().unwrap();
+    let envelope: suite_packet_core::EnvelopeV1<InstructionSummaryPayload> =
+        serde_json::from_value(packet.body.clone()).unwrap();
+    envelope.payload
+}
+
 #[test]
-fn instruction_summary_reducer_emits_virtual_header_and_reuses_cache() {
+fn instruction_summary_stable_mode_reuses_metadata_independent_cache() {
     let dir = tempdir().unwrap();
     let kernel =
         Kernel::with_v1_reducers_and_persistence(PersistConfig::new(dir.path().to_path_buf()));
+    let request = instruction_request(suite_packet_core::InstructionRenderMode::Stable);
+
+    let first = kernel.execute(request.clone()).unwrap();
+    let first_payload = instruction_payload(&first);
+    assert!(first_payload.summary_text.starts_with("# [p28:stable:v1]"));
+    assert!(!first_payload.summary_text.contains("task-auth"));
+    assert_eq!(first_payload.task_label, "stable");
+    assert_eq!(first_payload.backend_kind, "backend_independent");
+    assert_eq!(first_payload.agent_family, "agent_independent");
+    assert_ne!(first_payload.content_sha256, "untrusted-caller-hint");
+    assert_eq!(first.metadata["cache"]["hit"].as_bool(), Some(false));
+    assert_eq!(
+        first.metadata["cache"]["miss_reason"].as_str(),
+        Some("not_found")
+    );
+
+    let mut changed_metadata = request;
+    changed_metadata.reducer_input["task_id"] = json!("task-other");
+    changed_metadata.reducer_input["backend_kind"] = json!("macos_swap");
+    changed_metadata.reducer_input["agent_family"] = json!("claude");
+    changed_metadata.policy_context = json!({
+        "task_id": "task-other",
+        "instruction_mode": "stable",
+    });
+    let second = kernel.execute(changed_metadata).unwrap();
+    assert_eq!(second.metadata["cache"]["hit"].as_bool(), Some(true));
+    assert_eq!(
+        instruction_payload(&second).rendered_sha256,
+        first_payload.rendered_sha256
+    );
+}
+
+#[test]
+fn instruction_summary_stable_cache_key_covers_every_stable_input() {
+    let dir = tempdir().unwrap();
+    let kernel =
+        Kernel::with_v1_reducers_and_persistence(PersistConfig::new(dir.path().to_path_buf()));
+    let base_request = instruction_request(suite_packet_core::InstructionRenderMode::Stable);
+
+    let first = kernel.execute(base_request.clone()).unwrap();
+    assert_eq!(first.metadata["cache"]["hit"].as_bool(), Some(false));
+
+    let mut caller_hash_only = base_request.clone();
+    caller_hash_only.reducer_input["content_sha256"] = json!("another-untrusted-hint");
+    assert_eq!(
+        kernel.execute(caller_hash_only).unwrap().metadata["cache"]["hit"].as_bool(),
+        Some(true),
+        "caller-provided source hashes must not alter cache identity"
+    );
+    let mut normalized_config = base_request.clone();
+    normalized_config.reducer_input["stable_config"]["focus_terms"] = json!([" AUTH ", "auth"]);
+    assert_eq!(
+        kernel.execute(normalized_config).unwrap().metadata["cache"]["hit"].as_bool(),
+        Some(true),
+        "semantically equivalent stable config must share cache identity"
+    );
+
+    let mut variants = Vec::new();
+    let mut source = base_request.clone();
+    source.reducer_input["content"] = json!("# Changed\n\nDifferent source bytes.\n");
+    variants.push(source);
+    let mut path = base_request.clone();
+    path.reducer_input["path"] = json!("CLAUDE.md");
+    variants.push(path);
+    let mut schema = base_request.clone();
+    schema.reducer_input["schema_version"] = json!(2);
+    variants.push(schema);
+    let mut budget = base_request.clone();
+    budget.reducer_input["budget_tokens"] = json!(256);
+    variants.push(budget);
+    let mut config = base_request;
+    config.reducer_input["stable_config"]["focus_terms"] = json!(["cache"]);
+    variants.push(config);
+
+    for variant in variants {
+        let response = kernel.execute(variant).unwrap();
+        assert_eq!(response.metadata["cache"]["hit"].as_bool(), Some(false));
+    }
+}
+
+#[test]
+fn instruction_summary_defaults_to_exact_passthrough_without_cache() {
+    let dir = tempdir().unwrap();
+    let kernel =
+        Kernel::with_v1_reducers_and_persistence(PersistConfig::new(dir.path().to_path_buf()));
+    let source = "# Exact\r\n\r\n  Preserve spacing.\r\n";
     let request = KernelRequest {
         target: "packet28.instruction.summarize".to_string(),
         reducer_input: json!({
             "path": "AGENTS.md",
-            "content": "# Coverage\n\n- Prefer deterministic reducers.\n- Keep tool activity compact.\n\n## Auth\nTouch src/auth.rs carefully and preserve cache keys.\n",
-            "content_sha256": "",
-            "task_id": "task-auth",
-            "budget_tokens": 128,
+            "content": source,
+            "content_sha256": "not-trusted",
+            "task_id": "task-a",
             "schema_version": 1,
-        }),
-        policy_context: json!({
-            "task_id": "task-auth",
         }),
         ..KernelRequest::default()
     };
 
     let first = kernel.execute(request.clone()).unwrap();
-    let first_packet = first.output_packets.first().unwrap();
-    let first_envelope: suite_packet_core::EnvelopeV1<InstructionSummaryPayload> =
-        serde_json::from_value(first_packet.body.clone()).unwrap();
-    assert!(first_envelope
-        .payload
-        .summary_text
-        .starts_with("# [p28:virtual] sha256:"));
-    assert!(first_envelope
-        .payload
-        .summary_text
-        .contains("task:task-auth"));
-    assert_eq!(first.metadata["cache"]["hit"].as_bool(), Some(false));
-
     let second = kernel.execute(request).unwrap();
-    assert_eq!(second.metadata["cache"]["hit"].as_bool(), Some(true));
+
+    assert_eq!(instruction_payload(&first).summary_text, source);
+    assert_eq!(instruction_payload(&second).summary_text, source);
+    assert_eq!(first.metadata["cache"]["hit"].as_bool(), Some(false));
+    assert_eq!(second.metadata["cache"]["hit"].as_bool(), Some(false));
+    assert_eq!(first.metadata["cache"]["key"].as_str(), Some(""));
+    assert_eq!(second.metadata["cache"]["key"].as_str(), Some(""));
+    assert_eq!(
+        first.metadata["cache"]["miss_reason"].as_str(),
+        Some("disabled")
+    );
+    assert_eq!(
+        second.metadata["cache"]["miss_reason"].as_str(),
+        Some("disabled")
+    );
 }
 
 #[test]
-fn instruction_summary_cache_key_changes_with_schema_version() {
+fn stable_render_is_byte_identical_across_task_and_snapshot_changes() {
+    let request = InstructionSummaryRequest {
+        mode: suite_packet_core::InstructionRenderMode::Stable,
+        ..serde_json::from_value(
+            instruction_request(suite_packet_core::InstructionRenderMode::Stable).reducer_input,
+        )
+        .unwrap()
+    };
+    let first_snapshot = suite_packet_core::AgentSnapshotPayload {
+        task_id: "task-a".to_string(),
+        focus_paths: vec!["src/auth.rs".to_string()],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let second_snapshot = suite_packet_core::AgentSnapshotPayload {
+        task_id: "task-b".to_string(),
+        focus_paths: vec!["src/cache.rs".to_string()],
+        event_count: 99,
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+
+    let first = render_instruction(&request, Some(&first_snapshot)).unwrap();
+    let mut other_task = request;
+    other_task.task_id = Some("task-b".to_string());
+    other_task.backend_kind = Some("macos_swap".to_string());
+    other_task.agent_family = Some("claude".to_string());
+    let second = render_instruction(&other_task, Some(&second_snapshot)).unwrap();
+
+    assert_eq!(first.summary_text(), second.summary_text());
+    assert_eq!(first.rendered_sha256(), second.rendered_sha256());
+    assert_eq!(first.snapshot_sha256(), None);
+    assert_eq!(second.snapshot_sha256(), None);
+}
+
+#[test]
+fn adaptive_snapshot_drift_changes_bytes_and_never_reuses_cache() {
     let dir = tempdir().unwrap();
     let kernel =
         Kernel::with_v1_reducers_and_persistence(PersistConfig::new(dir.path().to_path_buf()));
-    let base_request = KernelRequest {
-        target: "packet28.instruction.summarize".to_string(),
-        reducer_input: json!({
-            "path": "AGENTS.md",
-            "content": "# Coverage\n\n## Testing\nAlways keep reducer caches deterministic.\n",
-            "content_sha256": "",
-            "task_id": "task-one",
-            "budget_tokens": 128,
-            "schema_version": 1,
-        }),
-        policy_context: json!({
-            "task_id": "task-one",
-        }),
-        ..KernelRequest::default()
-    };
+    let request = instruction_request(suite_packet_core::InstructionRenderMode::Adaptive);
 
-    let first = kernel.execute(base_request.clone()).unwrap();
-    assert_eq!(first.metadata["cache"]["hit"].as_bool(), Some(false));
-
-    let second = kernel
+    kernel
         .execute(KernelRequest {
+            target: "agenty.state.write".to_string(),
             reducer_input: json!({
-                "path": "AGENTS.md",
-                "content": "# Coverage\n\n## Testing\nAlways keep reducer caches deterministic.\n",
-                "content_sha256": "",
-                "task_id": "task-one",
-                "budget_tokens": 128,
-                "schema_version": 2,
+                "task_id": "task-auth",
+                "event_id": "focus-auth",
+                "occurred_at_unix": 1,
+                "actor": "agent",
+                "kind": "focus_set",
+                "paths": ["src/auth.rs"],
+                "symbols": ["authenticate"],
+                "data": {"type": "focus_set"}
             }),
-            ..base_request
+            ..KernelRequest::default()
         })
         .unwrap();
+    let first = kernel.execute(request.clone()).unwrap();
+
+    kernel
+        .execute(KernelRequest {
+            target: "agenty.state.write".to_string(),
+            reducer_input: json!({
+                "task_id": "task-auth",
+                "event_id": "focus-cache",
+                "occurred_at_unix": 2,
+                "actor": "agent",
+                "kind": "focus_set",
+                "paths": ["src/cache.rs"],
+                "symbols": ["invalidate_cache"],
+                "data": {"type": "focus_set"}
+            }),
+            ..KernelRequest::default()
+        })
+        .unwrap();
+    let second = kernel.execute(request).unwrap();
+    let first_payload = instruction_payload(&first);
+    let second_payload = instruction_payload(&second);
+
+    assert_eq!(first.metadata["cache"]["hit"].as_bool(), Some(false));
     assert_eq!(second.metadata["cache"]["hit"].as_bool(), Some(false));
+    assert_eq!(first.metadata["cache"]["key"].as_str(), Some(""));
+    assert_eq!(second.metadata["cache"]["key"].as_str(), Some(""));
+    assert_eq!(
+        first.metadata["cache"]["miss_reason"].as_str(),
+        Some("disabled")
+    );
+    assert_eq!(
+        second.metadata["cache"]["miss_reason"].as_str(),
+        Some("disabled")
+    );
+    assert_ne!(
+        first_payload.snapshot_sha256,
+        second_payload.snapshot_sha256
+    );
+    assert_ne!(
+        first_payload.rendered_sha256,
+        second_payload.rendered_sha256
+    );
 }

@@ -2,6 +2,8 @@
 
 use super::*;
 
+pub use suite_packet_core::{InstructionRenderMode, InstructionStableConfig};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonRequest {
@@ -159,6 +161,8 @@ pub struct ContextResolveRequest {
     pub source_path: Option<String>,
     pub source_sha256: String,
     pub source_content: String,
+    pub render_mode: Option<InstructionRenderMode>,
+    pub stable_config: Option<InstructionStableConfig>,
     pub task_id: Option<String>,
     pub task_label: Option<String>,
     pub budget_tokens: Option<u64>,
@@ -173,6 +177,14 @@ pub enum ContextResolveOutcome {
     Rewrite {
         content: String,
         content_sha256: String,
+        #[serde(default)]
+        render_mode: InstructionRenderMode,
+        #[serde(default)]
+        stable_config_sha256: String,
+        #[serde(default)]
+        snapshot_sha256: Option<String>,
+        #[serde(default)]
+        rendered_sha256: String,
         task_label: String,
         original_bytes: usize,
         rewritten_bytes: usize,
@@ -203,6 +215,8 @@ pub struct InstructionFileResolveRequest {
     pub path: String,
     pub content_sha256: String,
     pub content: String,
+    pub render_mode: Option<InstructionRenderMode>,
+    pub stable_config: Option<InstructionStableConfig>,
     pub task_id: Option<String>,
     pub budget_tokens: Option<u64>,
     pub schema_version: u32,
@@ -214,6 +228,14 @@ pub enum InstructionFileResolveOutcome {
     Rewrite {
         content: String,
         content_sha256: String,
+        #[serde(default)]
+        render_mode: InstructionRenderMode,
+        #[serde(default)]
+        stable_config_sha256: String,
+        #[serde(default)]
+        snapshot_sha256: Option<String>,
+        #[serde(default)]
+        rendered_sha256: String,
         task_label: String,
         original_bytes: usize,
         rewritten_bytes: usize,
@@ -859,5 +881,135 @@ mod tests {
             }
             other => panic!("unexpected response: {other:?}"),
         }
+    }
+
+    #[test]
+    fn legacy_context_rewrite_response_defaults_new_instruction_telemetry() {
+        let response: DaemonResponse = serde_json::from_value(serde_json::json!({
+            "type": "context_resolve",
+            "response": {
+                "source_kind": "instruction_file",
+                "source_path": "AGENTS.md",
+                "outcome": {
+                    "decision": "rewrite",
+                    "content": "# compact",
+                    "content_sha256": "source",
+                    "task_label": "task-a",
+                    "original_bytes": 100,
+                    "rewritten_bytes": 10,
+                    "cache_hit": false,
+                    "matched_terms": [],
+                    "section_titles": [],
+                    "schema_version": 1
+                }
+            }
+        }))
+        .unwrap();
+
+        let DaemonResponse::ContextResolve { response } = response else {
+            panic!("expected context resolve response");
+        };
+        let ContextResolveOutcome::Rewrite {
+            render_mode,
+            stable_config_sha256,
+            snapshot_sha256,
+            rendered_sha256,
+            ..
+        } = response.outcome
+        else {
+            panic!("expected rewrite outcome");
+        };
+        assert_eq!(render_mode, InstructionRenderMode::Passthrough);
+        assert!(stable_config_sha256.is_empty());
+        assert_eq!(snapshot_sha256, None);
+        assert!(rendered_sha256.is_empty());
+    }
+
+    #[test]
+    fn legacy_context_request_defaults_to_passthrough_selection() {
+        let request: DaemonRequest = serde_json::from_value(serde_json::json!({
+            "type": "context_resolve",
+            "request": {
+                "workspace_root": "/repo",
+                "source_kind": "instruction_file",
+                "source_path": "AGENTS.md",
+                "source_sha256": "source",
+                "source_content": "# Instructions",
+                "task_id": "task-a",
+                "budget_tokens": 512,
+                "schema_version": 1,
+                "backend_kind": "linux_preload"
+            }
+        }))
+        .unwrap();
+
+        let DaemonRequest::ContextResolve { request } = request else {
+            panic!("expected context resolve request");
+        };
+        assert_eq!(request.render_mode, None);
+        assert_eq!(request.stable_config, None);
+    }
+
+    #[test]
+    fn legacy_instruction_file_request_defaults_to_passthrough_selection() {
+        let request: DaemonRequest = serde_json::from_value(serde_json::json!({
+            "type": "instruction_file_resolve",
+            "request": {
+                "workspace_root": "/repo",
+                "path": "AGENTS.md",
+                "content_sha256": "source",
+                "content": "# Instructions",
+                "task_id": "task-a",
+                "budget_tokens": 512,
+                "schema_version": 1
+            }
+        }))
+        .unwrap();
+
+        let DaemonRequest::InstructionFileResolve { request } = request else {
+            panic!("expected instruction file resolve request");
+        };
+        assert_eq!(request.render_mode, None);
+        assert_eq!(request.stable_config, None);
+    }
+
+    #[test]
+    fn legacy_instruction_file_rewrite_defaults_new_instruction_telemetry() {
+        let response: DaemonResponse = serde_json::from_value(serde_json::json!({
+            "type": "instruction_file_resolve",
+            "response": {
+                "path": "AGENTS.md",
+                "outcome": {
+                    "decision": "rewrite",
+                    "content": "# compact",
+                    "content_sha256": "source",
+                    "task_label": "task-a",
+                    "original_bytes": 100,
+                    "rewritten_bytes": 10,
+                    "cache_hit": false,
+                    "matched_terms": [],
+                    "section_titles": []
+                }
+            }
+        }))
+        .unwrap();
+
+        let DaemonResponse::InstructionFileResolve { response } = response else {
+            panic!("expected instruction file resolve response");
+        };
+        let InstructionFileResolveOutcome::Rewrite {
+            render_mode,
+            stable_config_sha256,
+            snapshot_sha256,
+            rendered_sha256,
+            ..
+        } = response.outcome
+        else {
+            panic!("expected rewrite outcome");
+        };
+        assert_eq!(render_mode, InstructionRenderMode::Passthrough);
+        assert!(stable_config_sha256.is_empty());
+        assert_eq!(snapshot_sha256, None);
+        assert!(rendered_sha256.is_empty());
     }
 }

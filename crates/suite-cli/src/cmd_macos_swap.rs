@@ -773,6 +773,8 @@ fn stage_instruction_swaps(
                 source_path: Some(file_name.to_string()),
                 source_sha256: original_sha256.clone(),
                 source_content: content,
+                render_mode: None,
+                stable_config: None,
                 task_id: None,
                 task_label: None,
                 budget_tokens: Some(DEFAULT_BUDGET_TOKENS),

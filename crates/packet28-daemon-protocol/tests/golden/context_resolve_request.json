@@ -6,6 +6,14 @@
     "source_path": "AGENTS.md",
     "source_sha256": "abc123",
     "source_content": "# Instructions",
+    "render_mode": "stable",
+    "stable_config": {
+      "renderer_version": 1,
+      "max_sections": 4,
+      "max_lines_per_section": 6,
+      "max_focus_terms": 12,
+      "focus_terms": []
+    },
     "task_id": "task-1",
     "task_label": "remediation",
     "budget_tokens": 4096,

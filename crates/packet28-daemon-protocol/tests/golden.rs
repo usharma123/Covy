@@ -19,6 +19,10 @@ fn instruction_adapter_request_matches_golden_contract() {
             source_path: Some("AGENTS.md".to_string()),
             source_sha256: "abc123".to_string(),
             source_content: "# Instructions".to_string(),
+            render_mode: Some(packet28_daemon_protocol::message::InstructionRenderMode::Stable),
+            stable_config: Some(
+                packet28_daemon_protocol::message::InstructionStableConfig::default(),
+            ),
             task_id: Some("task-1".to_string()),
             task_label: Some("remediation".to_string()),
             budget_tokens: Some(4096),

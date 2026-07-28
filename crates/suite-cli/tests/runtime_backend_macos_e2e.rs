@@ -28,6 +28,11 @@ fn test_runtime_backend_macos_run_command_auto_backend_swaps_instruction_file_an
     let dir = tempfile::tempdir().unwrap();
     let original = large_agents_text(120);
     fs::write(dir.path().join("AGENTS.md"), &original).unwrap();
+    fs::write(
+        dir.path().join("packet28-instruction.json"),
+        r#"{"schema_version":1,"mode":"adaptive","stable_config":{}}"#,
+    )
+    .unwrap();
 
     let claude = dir.path().join("claude");
     write_executable_script(
@@ -48,7 +53,10 @@ fn test_runtime_backend_macos_run_command_auto_backend_swaps_instruction_file_an
     let reports = swap_reports(&dir.path().join(".packet28/runtime/macos-swap"));
     assert_eq!(reports.len(), 1);
     let report: Value = serde_json::from_slice(&fs::read(&reports[0]).unwrap()).unwrap();
-    assert!(stdout.contains("# [p28:virtual] sha256:"));
+    assert!(
+        stdout.contains("# [p28:adaptive:v1]"),
+        "expected virtualized instruction content, got {stdout:?}; report={report}"
+    );
     assert_eq!(
         fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
         original

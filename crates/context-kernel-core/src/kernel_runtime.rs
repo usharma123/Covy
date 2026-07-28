@@ -155,20 +155,21 @@ impl Kernel {
 
         enforce_budget(&target, BudgetStage::Input, req.budget, input_usage)?;
 
-        let cache_lookup = if cache_enabled_for_request(&target, &req.policy_context) {
-            let cache_input = cache_input_for_request(&req, &target, policy_guard.as_ref());
-            Some({
-                let cache = self
-                    .memory
-                    .lock()
-                    .map_err(|source| KernelError::CacheLock {
-                        detail: source.to_string(),
-                    })?;
-                cache.lookup_with_hooks(&target, &cache_input, hooks)
-            })
-        } else {
-            None
-        };
+        let cache_lookup =
+            if cache_enabled_for_request(&target, &req.policy_context, &req.reducer_input) {
+                let cache_input = cache_input_for_request(&req, &target, policy_guard.as_ref());
+                Some({
+                    let cache = self
+                        .memory
+                        .lock()
+                        .map_err(|source| KernelError::CacheLock {
+                            detail: source.to_string(),
+                        })?;
+                    cache.lookup_with_hooks(&target, &cache_input, hooks)
+                })
+            } else {
+                None
+            };
 
         if let Some(entry) = cache_lookup
             .as_ref()
@@ -274,6 +275,11 @@ impl Kernel {
         enforce_budget(&target, BudgetStage::Total, req.budget, total_usage)?;
 
         let output_packets = reducer_result.output_packets;
+        let cache_miss_reason = if cache_lookup.is_some() {
+            "not_found"
+        } else {
+            "disabled"
+        };
         let mut response = KernelResponse {
             request_id,
             target: target.clone(),
@@ -298,7 +304,7 @@ impl Kernel {
                             .map(|lookup| lookup.cache_key.clone())
                             .unwrap_or_default(),
                         "entry_age_secs": Value::Null,
-                        "miss_reason": "not_found",
+                        "miss_reason": cache_miss_reason,
                     }
                 }),
             ),

@@ -348,6 +348,14 @@ pub(crate) fn cache_input_for_request(
     target: &str,
     policy_guard: Option<&PolicyGuard>,
 ) -> Value {
+    if target == "packet28.instruction.summarize" {
+        return json!({
+            "target": target,
+            "instruction": instruction_stable_cache_input(&req.reducer_input)
+                .unwrap_or_else(|| req.reducer_input.clone()),
+        });
+    }
+
     let inputs = req
         .input_packets
         .iter()
@@ -388,13 +396,21 @@ fn cache_policy_context_overrides(policy_context: &Value) -> Value {
     value
 }
 
-pub(crate) fn cache_enabled_for_request(target: &str, policy_context: &Value) -> bool {
+pub(crate) fn cache_enabled_for_request(
+    target: &str,
+    policy_context: &Value,
+    reducer_input: &Value,
+) -> bool {
     if policy_context
         .get("disable_cache")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
         return false;
+    }
+
+    if target == "packet28.instruction.summarize" {
+        return instruction_request_cacheable(reducer_input);
     }
 
     target != "agenty.state.snapshot"
