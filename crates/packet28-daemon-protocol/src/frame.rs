@@ -1,4 +1,32 @@
 //! Length-prefixed JSON framing shared by daemon transports.
+//!
+//! Frames use an eight-byte big-endian payload length followed by one JSON
+//! value. Both readers and writers enforce [`MAX_SOCKET_MESSAGE_BYTES`].
+//!
+//! # Examples
+//!
+//! ```
+//! use std::io::Cursor;
+//!
+//! use packet28_daemon_protocol::frame::{read_frame, write_frame};
+//! use packet28_daemon_protocol::{DaemonRequest, DaemonResponse};
+//!
+//! let mut wire = Vec::new();
+//! write_frame(&mut wire, &DaemonRequest::Status)?;
+//! let request: DaemonRequest = read_frame(&mut Cursor::new(wire))?;
+//! assert!(matches!(request, DaemonRequest::Status));
+//!
+//! let mut response_wire = Vec::new();
+//! write_frame(
+//!     &mut response_wire,
+//!     &DaemonResponse::Ack {
+//!         message: "ready".to_owned(),
+//!     },
+//! )?;
+//! let response: DaemonResponse = read_frame(&mut Cursor::new(response_wire))?;
+//! assert!(matches!(response, DaemonResponse::Ack { .. }));
+//! # Ok::<(), packet28_daemon_protocol::frame::FrameError>(())
+//! ```
 
 use std::io::{Read, Write};
 

@@ -8,6 +8,34 @@ use super::*;
 /// as a task that is both cancelled and pending a replan. Serialization keeps
 /// the original `running`, `cancel_requested`, and `pending_replan` fields so
 /// existing task registries and clients remain compatible.
+///
+/// # Examples
+///
+/// Lifecycle changes go through checked transitions:
+///
+/// ```
+/// use packet28_daemon_protocol::task::TaskLifecycle;
+///
+/// let mut lifecycle = TaskLifecycle::Idle;
+/// lifecycle.start()?;
+/// assert!(lifecycle.is_running());
+/// assert!(!lifecycle.finish_run()?);
+/// assert_eq!(lifecycle, TaskLifecycle::Idle);
+/// # Ok::<(), packet28_daemon_protocol::task::TaskLifecycleTransitionError>(())
+/// ```
+///
+/// The former parallel boolean representation cannot be constructed through
+/// the public API, so contradictory states are rejected at compile time:
+///
+/// ```compile_fail
+/// use packet28_daemon_protocol::task::TaskLifecycle;
+///
+/// let _invalid = TaskLifecycle {
+///     running: true,
+///     cancel_requested: true,
+///     pending_replan: true,
+/// };
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TaskLifecycle {
     /// The task is registered but has no work in flight.
