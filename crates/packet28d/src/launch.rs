@@ -243,64 +243,6 @@ pub(crate) fn spawn_owned_child_waiter(
     Ok(())
 }
 
-pub(crate) fn task_await_handoff(
-    state: Arc<Mutex<DaemonState>>,
-    request: TaskAwaitHandoffRequest,
-) -> Result<TaskAwaitHandoffResponse> {
-    if request.task_id.trim().is_empty() {
-        anyhow::bail!("daemon task await-handoff requires task_id");
-    }
-    let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(300_000));
-    let poll = Duration::from_millis(request.poll_ms.unwrap_or(250).max(10));
-    let started = Instant::now();
-    let mut polls = 0_u64;
-    loop {
-        polls = polls.saturating_add(1);
-        let status = broker_task_status(
-            state.clone(),
-            BrokerTaskStatusRequest {
-                task_id: request.task_id.clone(),
-            },
-        )?;
-        let is_newer_than_after = request
-            .after_context_version
-            .as_ref()
-            .is_none_or(|after| status.latest_context_version.as_deref() != Some(after.as_str()));
-        if status.handoff_ready && is_newer_than_after {
-            return Ok(TaskAwaitHandoffResponse {
-                task_status: status,
-                waited_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
-                polls,
-            });
-        }
-        if started.elapsed() >= timeout {
-            let waiting_for_newer_context =
-                request.after_context_version.as_ref().is_some_and(|after| {
-                    status.latest_context_version.as_deref() == Some(after.as_str())
-                });
-            let reason = if waiting_for_newer_context {
-                request
-                    .after_context_version
-                    .as_ref()
-                    .map(|after| {
-                        format!("newer handoff than context version '{after}' did not become ready")
-                    })
-                    .unwrap_or_else(|| "handoff did not become ready".to_string())
-            } else {
-                status
-                    .handoff_reason
-                    .unwrap_or_else(|| "handoff did not become ready".to_string())
-            };
-            anyhow::bail!(
-                "timed out waiting for Packet28 handoff for task '{}': {}",
-                request.task_id,
-                reason
-            );
-        }
-        thread::sleep(poll);
-    }
-}
-
 pub(crate) struct TaskLaunchBootstrap {
     pub(crate) mode: &'static str,
     pub(crate) task_id: String,
@@ -397,27 +339,6 @@ fn task_prepare_launch_bootstrap(
     let root = state.lock().map_err(lock_err)?.root.clone();
     let bootstrap_path = task_agent_bootstrap_path(&root, &request.task_id);
     let handoff_path = task_agent_handoff_path(&root, &request.task_id);
-    let after_context_version = if request.wait_for_handoff {
-        load_task_record(&state, &request.task_id).and_then(|task| {
-            task.latest_agent_bootstrap_mode
-                .as_deref()
-                .filter(|mode| *mode == "handoff")
-                .and(task.latest_agent_context_version.clone())
-        })
-    } else {
-        None
-    };
-    if request.wait_for_handoff {
-        let _ = task_await_handoff(
-            state.clone(),
-            TaskAwaitHandoffRequest {
-                task_id: request.task_id.clone(),
-                timeout_ms: request.handoff_timeout_ms,
-                poll_ms: request.handoff_poll_ms,
-                after_context_version,
-            },
-        )?;
-    }
 
     let status = broker_task_status(
         state.clone(),
@@ -452,6 +373,11 @@ pub(crate) fn task_launch_agent(
     }
     if request.command.is_empty() {
         anyhow::bail!("daemon task launch-agent requires a delegated command after --");
+    }
+    if request.wait_for_handoff {
+        anyhow::bail!(
+            "daemon task launch-agent handoff waiting must run on the async orchestration boundary"
+        );
     }
     let (root, generation, _launch_lease) = {
         let mut guard = state.lock().map_err(lock_err)?;

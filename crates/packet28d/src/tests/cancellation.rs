@@ -30,12 +30,14 @@ fn wait_until_cancelled(generation: &TaskGenerationToken) {
 fn cancel_before_start_is_idempotent_and_stale_events_do_not_resurrect_task() {
     let state = daemon_test_state();
     let generation = insert_task_generation(&state, "task-cancel-before-start");
-    let (subscriber, receiver) = mpsc::channel();
-    state
-        .lock()
-        .unwrap()
-        .subscribers
-        .insert("task-cancel-before-start".to_string(), vec![subscriber]);
+    let (subscriber, mut receiver) = tokio::sync::mpsc::channel(1);
+    state.lock().unwrap().subscribers.insert(
+        "task-cancel-before-start".to_string(),
+        vec![crate::state::TaskSubscriber {
+            id: 1,
+            sender: subscriber,
+        }],
+    );
 
     let (removed, watch_ids) = cancel_task(state.clone(), "task-cancel-before-start").unwrap();
     assert!(removed.is_some());
@@ -61,8 +63,8 @@ fn cancel_before_start_is_idempotent_and_stale_events_do_not_resurrect_task() {
         .tasks
         .contains_key("task-cancel-before-start"));
     assert!(matches!(
-        receiver.recv_timeout(Duration::from_millis(10)),
-        Err(RecvTimeoutError::Disconnected)
+        receiver.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
     ));
 }
 

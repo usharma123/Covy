@@ -95,11 +95,26 @@ fn emit_task_event_locked(
         frame
     };
     if let Some(subscribers) = state.subscribers.get_mut(task_id) {
-        subscribers.retain(|subscriber| subscriber.send(frame.clone()).is_ok());
+        subscribers.retain(
+            |subscriber| match subscriber.sender.try_send(frame.clone()) {
+                Ok(()) => true,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    daemon_log(&format!(
+                        "subscriber lagged task_id={task_id} subscriber_id={}; \
+                         closing stream for replay from sequence {}",
+                        subscriber.id,
+                        frame.seq.saturating_sub(1)
+                    ));
+                    false
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
+            },
+        );
         if subscribers.is_empty() {
             state.subscribers.remove(task_id);
         }
     }
+    state.changes.notify();
     persist_state(state)?;
     Ok(true)
 }

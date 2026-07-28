@@ -16,6 +16,8 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
     ));
     let (index_tx, index_rx) = mpsc::channel();
     thread::spawn(move || while index_rx.recv().is_ok() {});
+    let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
+    thread::spawn(move || while background_rx.blocking_recv().is_some() {});
     Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
@@ -29,6 +31,9 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
         source_file_cache: BTreeMap::new(),
         interactive_index: InteractiveIndexRuntime::default(),
         index_tx,
+        background_tx,
+        shutdown: ShutdownSignal::new(),
+        changes: StateChangeSignal::new(),
         shutting_down: false,
     }))
 }

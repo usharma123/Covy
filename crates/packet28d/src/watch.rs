@@ -2,9 +2,78 @@ use super::*;
 
 const TASK_CANCELLATION_QUIESCE_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Clone)]
+pub(crate) struct WatchIngress {
+    sender: tokio::sync::mpsc::Sender<WatchEventMsg>,
+    overflowed: Arc<Mutex<HashMap<(String, TaskGenerationId), WatchEventMsg>>>,
+    overflow_ready: Arc<tokio::sync::Notify>,
+}
+
+impl WatchIngress {
+    pub(crate) fn new(capacity: usize) -> (Self, tokio::sync::mpsc::Receiver<WatchEventMsg>) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(capacity);
+        (
+            Self {
+                sender,
+                overflowed: Arc::new(Mutex::new(HashMap::new())),
+                overflow_ready: Arc::new(tokio::sync::Notify::new()),
+            },
+            receiver,
+        )
+    }
+
+    pub(crate) fn send(&self, message: WatchEventMsg) {
+        match self.sender.try_send(message) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(message)) => {
+                let key = (message.watch_id.clone(), message.generation);
+                let mut overflowed = self
+                    .overflowed
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let pending = overflowed.entry(key).or_insert_with(|| WatchEventMsg {
+                    watch_id: message.watch_id.clone(),
+                    generation: message.generation,
+                    paths: Vec::new(),
+                    error: None,
+                    overflowed: true,
+                });
+                pending.overflowed = true;
+                if pending.error.is_none() {
+                    pending.error = message.error;
+                }
+                for path in message.paths {
+                    if !pending.paths.contains(&path) {
+                        pending.paths.push(path);
+                    }
+                }
+                drop(overflowed);
+                self.overflow_ready.notify_one();
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+        }
+    }
+
+    fn drain_overflowed(&self) -> Vec<WatchEventMsg> {
+        let mut overflowed = self
+            .overflowed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        overflowed.drain().map(|(_, message)| message).collect()
+    }
+
+    #[cfg(test)]
+    fn overflow_len(&self) -> usize {
+        self.overflowed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+}
+
 pub(crate) fn register_task_and_watches(
     state: Arc<Mutex<DaemonState>>,
-    watch_tx: Sender<WatchEventMsg>,
+    watch_tx: WatchIngress,
     spec: TaskSubmitSpec,
 ) -> Result<(TaskRecord, Vec<WatchRegistration>)> {
     let root = {
@@ -368,7 +437,7 @@ pub(crate) fn remove_watch(
 
 pub(crate) fn restore_watchers(
     state: &Arc<Mutex<DaemonState>>,
-    watch_tx: &Sender<WatchEventMsg>,
+    watch_tx: &WatchIngress,
 ) -> Result<()> {
     let watch_ids = state
         .lock()
@@ -388,7 +457,7 @@ pub(crate) fn restore_watchers(
 
 pub(crate) fn install_watch(
     state: Arc<Mutex<DaemonState>>,
-    watch_tx: Sender<WatchEventMsg>,
+    watch_tx: WatchIngress,
     watch_id: String,
 ) -> Result<()> {
     let (spec, generation) = {
@@ -415,19 +484,21 @@ pub(crate) fn install_watch(
     let mut watcher = PollWatcher::new(
         move |result: notify::Result<Event>| match result {
             Ok(event) => {
-                let _ = watch_tx.send(WatchEventMsg {
+                watch_tx.send(WatchEventMsg {
                     watch_id: callback_watch_id.clone(),
                     generation,
                     paths: event.paths,
                     error: None,
+                    overflowed: false,
                 });
             }
             Err(err) => {
-                let _ = watch_tx.send(WatchEventMsg {
+                watch_tx.send(WatchEventMsg {
                     watch_id: callback_watch_id.clone(),
                     generation,
                     paths: Vec::new(),
                     error: Some(err.to_string()),
+                    overflowed: false,
                 });
             }
         },
@@ -464,41 +535,69 @@ pub(crate) fn install_watch(
     Ok(())
 }
 
-pub(crate) fn spawn_watch_processor(
+pub(crate) async fn run_watch_processor(
     state: Arc<Mutex<DaemonState>>,
-    watch_rx: Receiver<WatchEventMsg>,
+    ingress: WatchIngress,
+    mut watch_rx: tokio::sync::mpsc::Receiver<WatchEventMsg>,
+    blocking_pool: crate::runtime::BlockingPool,
 ) {
-    thread::spawn(move || {
-        let mut pending = HashMap::<(String, TaskGenerationId), PendingWatchEvent>::new();
-        loop {
-            flush_due_watch_events(state.clone(), &mut pending);
-            let timeout = next_watch_timeout(&pending).unwrap_or(Duration::from_secs(60));
-            match watch_rx.recv_timeout(timeout) {
-                Ok(message) => {
-                    if state
-                        .lock()
-                        .map_err(lock_err)
-                        .map(|guard| guard.shutting_down)
-                        .unwrap_or(false)
-                    {
-                        break;
-                    }
-                    merge_watch_event(state.clone(), &mut pending, message);
+    let mut shutdown = match state.lock().map_err(lock_err) {
+        Ok(guard) => guard.shutdown.subscribe(),
+        Err(error) => {
+            daemon_log(&format!(
+                "watch processor could not subscribe to shutdown: {error}"
+            ));
+            return;
+        }
+    };
+    let mut pending = HashMap::<(String, TaskGenerationId), PendingWatchEvent>::new();
+    let mut workers = tokio::task::JoinSet::new();
+    loop {
+        for message in ingress.drain_overflowed() {
+            merge_watch_event(state.clone(), &mut pending, message);
+        }
+        for message in take_due_watch_events(&mut pending) {
+            let worker_state = state.clone();
+            let worker_pool = blocking_pool.clone();
+            workers.spawn(async move {
+                worker_pool
+                    .run(move || process_watch_event(worker_state, message))
+                    .await
+            });
+        }
+
+        let next_deadline = next_watch_deadline(&pending);
+        tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
                 }
-                Err(RecvTimeoutError::Timeout) => {
-                    if state
-                        .lock()
-                        .map_err(lock_err)
-                        .map(|guard| guard.shutting_down)
-                        .unwrap_or(false)
-                    {
-                        break;
+            }
+            message = watch_rx.recv() => {
+                let Some(message) = message else {
+                    break;
+                };
+                merge_watch_event(state.clone(), &mut pending, message);
+            }
+            () = ingress.overflow_ready.notified() => {}
+            () = sleep_until_optional(next_deadline), if next_deadline.is_some() => {}
+            joined = workers.join_next(), if !workers.is_empty() => {
+                match joined {
+                    Some(Err(error)) => {
+                        daemon_log(&format!("watch worker failed to join: {error}"));
                     }
+                    Some(Ok(Err(error))) => {
+                        daemon_log(&format!("watch event processing failed: {error}"));
+                    }
+                    Some(Ok(Ok(()))) | None => {}
                 }
-                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
-    });
+    }
+
+    workers.abort_all();
+    while workers.join_next().await.is_some() {}
 }
 
 fn process_watch_event(state: Arc<Mutex<DaemonState>>, message: WatchEventMsg) -> Result<()> {
@@ -563,6 +662,7 @@ fn process_watch_event(state: Arc<Mutex<DaemonState>>, message: WatchEventMsg) -
         "watch_triggered",
         json!({
             "watch_id": message.watch_id,
+            "queue_overflowed": message.overflowed,
             "paths": message
                 .paths
                 .iter()
@@ -662,16 +762,26 @@ fn merge_watch_event(
     message: WatchEventMsg,
 ) {
     let debounce_ms = watch_debounce_ms(&state, &message.watch_id).unwrap_or(250);
-    let due_at = Instant::now() + Duration::from_millis(debounce_ms);
+    merge_watch_event_with_debounce(pending, message, debounce_ms);
+}
+
+fn merge_watch_event_with_debounce(
+    pending: &mut HashMap<(String, TaskGenerationId), PendingWatchEvent>,
+    message: WatchEventMsg,
+    debounce_ms: u64,
+) {
+    let due_at = tokio::time::Instant::now() + Duration::from_millis(debounce_ms);
     let key = (message.watch_id.clone(), message.generation);
     let entry = pending.entry(key).or_insert_with(|| PendingWatchEvent {
         watch_id: message.watch_id.clone(),
         generation: message.generation,
         paths: Vec::new(),
         error: None,
+        overflowed: false,
         due_at,
     });
     entry.due_at = due_at;
+    entry.overflowed |= message.overflowed;
     if entry.error.is_none() {
         entry.error = message.error.clone();
     }
@@ -682,39 +792,39 @@ fn merge_watch_event(
     }
 }
 
-fn flush_due_watch_events(
-    state: Arc<Mutex<DaemonState>>,
+fn take_due_watch_events(
     pending: &mut HashMap<(String, TaskGenerationId), PendingWatchEvent>,
-) {
-    let now = Instant::now();
+) -> Vec<WatchEventMsg> {
+    let now = tokio::time::Instant::now();
     let ready_ids = pending
         .iter()
         .filter(|(_, item)| item.due_at <= now)
         .map(|(key, _)| key.clone())
         .collect::<Vec<_>>();
-    for key in ready_ids {
-        if let Some(item) = pending.remove(&key) {
-            let message = WatchEventMsg {
+    ready_ids
+        .into_iter()
+        .filter_map(|key| {
+            pending.remove(&key).map(|item| WatchEventMsg {
                 watch_id: item.watch_id,
                 generation: item.generation,
                 paths: item.paths,
                 error: item.error,
-            };
-            if let Err(err) = process_watch_event(state.clone(), message) {
-                daemon_log(&format!("watch event processing failed: {err}"));
-            }
-        }
-    }
+                overflowed: item.overflowed,
+            })
+        })
+        .collect()
 }
 
-fn next_watch_timeout(
+fn next_watch_deadline(
     pending: &HashMap<(String, TaskGenerationId), PendingWatchEvent>,
-) -> Option<Duration> {
-    let now = Instant::now();
-    pending
-        .values()
-        .map(|item| item.due_at.saturating_duration_since(now))
-        .min()
+) -> Option<tokio::time::Instant> {
+    pending.values().map(|item| item.due_at).min()
+}
+
+async fn sleep_until_optional(deadline: Option<tokio::time::Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline).await;
+    }
 }
 
 fn watch_debounce_ms(state: &Arc<Mutex<DaemonState>>, watch_id: &str) -> Option<u64> {
@@ -726,4 +836,107 @@ fn watch_debounce_ms(state: &Arc<Mutex<DaemonState>>, watch_id: &str) -> Option<
             .find(|watch| watch.watch_id == watch_id)
             .and_then(|watch| watch.spec.debounce_ms)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn generation() -> TaskGenerationId {
+        TaskGenerationRegistry::default()
+            .create("task-watch")
+            .unwrap()
+            .id()
+    }
+
+    fn message(generation: TaskGenerationId, path: &str) -> WatchEventMsg {
+        WatchEventMsg {
+            watch_id: "watch-1".to_string(),
+            generation,
+            paths: vec![PathBuf::from(path)],
+            error: None,
+            overflowed: false,
+        }
+    }
+
+    #[test]
+    fn bounded_watch_ingress_coalesces_overflow_by_generation() {
+        let generation = generation();
+        let (ingress, mut receiver) = WatchIngress::new(1);
+        ingress.send(message(generation, "src/one.rs"));
+        ingress.send(message(generation, "src/two.rs"));
+        ingress.send(message(generation, "src/three.rs"));
+
+        assert_eq!(ingress.overflow_len(), 1);
+        let queued = receiver.try_recv().unwrap();
+        assert_eq!(queued.paths, vec![PathBuf::from("src/one.rs")]);
+        let overflowed = ingress.drain_overflowed();
+        assert_eq!(overflowed.len(), 1);
+        assert!(overflowed[0].overflowed);
+        assert_eq!(
+            overflowed[0].paths,
+            vec![PathBuf::from("src/two.rs"), PathBuf::from("src/three.rs")]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn debounce_deadline_resets_and_fires_once() {
+        let generation = generation();
+        let mut pending = HashMap::new();
+        merge_watch_event_with_debounce(&mut pending, message(generation, "src/one.rs"), 250);
+        tokio::time::advance(Duration::from_millis(200)).await;
+        merge_watch_event_with_debounce(&mut pending, message(generation, "src/two.rs"), 250);
+        tokio::time::advance(Duration::from_millis(249)).await;
+        assert!(take_due_watch_events(&mut pending).is_empty());
+
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let due = take_due_watch_events(&mut pending);
+        assert_eq!(due.len(), 1);
+        assert_eq!(
+            due[0].paths,
+            vec![PathBuf::from("src/one.rs"), PathBuf::from("src/two.rs")]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_cancels_pending_debounce_work() {
+        let state = crate::tests::support::daemon_test_state();
+        let generation = {
+            let mut guard = state.lock().unwrap();
+            guard.tasks.tasks.insert(
+                "task-watch".to_string(),
+                TaskRecord {
+                    task_id: "task-watch".to_string(),
+                    ..TaskRecord::default()
+                },
+            );
+            let generation = guard.task_generations.create("task-watch").unwrap().id();
+            guard.watches.watches.push(WatchRegistration {
+                watch_id: "watch-1".to_string(),
+                spec: WatchSpec {
+                    task_id: "task-watch".to_string(),
+                    debounce_ms: Some(1_000),
+                    ..WatchSpec::default()
+                },
+                active: true,
+                ..WatchRegistration::default()
+            });
+            generation
+        };
+        let root = state.lock().unwrap().root.clone();
+        let (ingress, receiver) = WatchIngress::new(1);
+        let processor = tokio::spawn(run_watch_processor(
+            state.clone(),
+            ingress.clone(),
+            receiver,
+            crate::runtime::BlockingPool::new(1),
+        ));
+        ingress.send(message(generation, "src/one.rs"));
+        tokio::task::yield_now().await;
+        state.lock().unwrap().shutdown.request();
+
+        processor.await.unwrap();
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(load_task_events(&root, "task-watch").unwrap().is_empty());
+    }
 }

@@ -104,56 +104,54 @@ pub(crate) fn enqueue_incremental_index_paths(
     Ok(normalized)
 }
 
-pub(crate) fn spawn_index_worker(state: Arc<Mutex<DaemonState>>, index_rx: Receiver<IndexCommand>) {
-    thread::spawn(move || {
-        let mut pending_paths = BTreeSet::<String>::new();
-        let mut full_rebuild = false;
-        loop {
-            let message = if full_rebuild || !pending_paths.is_empty() {
-                index_rx.recv_timeout(Duration::from_millis(INDEX_BATCH_DEBOUNCE_MS))
-            } else {
-                match index_rx.recv() {
-                    Ok(message) => Ok(message),
-                    Err(_) => return,
-                }
-            };
-            match message {
-                Ok(IndexCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
-                Ok(IndexCommand::Clear) => {
-                    if let Err(err) = perform_index_clear(&state) {
-                        daemon_log(&format!("index clear failed: {err}"));
-                    }
-                    full_rebuild = false;
-                    pending_paths.clear();
-                }
-                Ok(IndexCommand::RebuildFull) => {
-                    full_rebuild = true;
-                    pending_paths.clear();
-                }
-                Ok(IndexCommand::ReindexPaths(paths)) => {
-                    for path in paths {
-                        pending_paths.insert(path);
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {}
+pub(crate) fn run_index_worker(state: Arc<Mutex<DaemonState>>, index_rx: Receiver<IndexCommand>) {
+    let mut pending_paths = BTreeSet::<String>::new();
+    let mut full_rebuild = false;
+    loop {
+        let message = if full_rebuild || !pending_paths.is_empty() {
+            index_rx.recv_timeout(Duration::from_millis(INDEX_BATCH_DEBOUNCE_MS))
+        } else {
+            match index_rx.recv() {
+                Ok(message) => Ok(message),
+                Err(_) => return,
             }
-            if full_rebuild {
-                if let Err(err) = perform_full_index_rebuild(&state) {
-                    daemon_log(&format!("full index rebuild failed: {err}"));
+        };
+        match message {
+            Ok(IndexCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
+            Ok(IndexCommand::Clear) => {
+                if let Err(err) = perform_index_clear(&state) {
+                    daemon_log(&format!("index clear failed: {err}"));
                 }
                 full_rebuild = false;
                 pending_paths.clear();
-                continue;
             }
-            if !pending_paths.is_empty() {
-                let paths = pending_paths.iter().cloned().collect::<Vec<_>>();
+            Ok(IndexCommand::RebuildFull) => {
+                full_rebuild = true;
                 pending_paths.clear();
-                if let Err(err) = perform_incremental_index_update(&state, &paths) {
-                    daemon_log(&format!("incremental index update failed: {err}"));
+            }
+            Ok(IndexCommand::ReindexPaths(paths)) => {
+                for path in paths {
+                    pending_paths.insert(path);
                 }
             }
+            Err(RecvTimeoutError::Timeout) => {}
         }
-    });
+        if full_rebuild {
+            if let Err(err) = perform_full_index_rebuild(&state) {
+                daemon_log(&format!("full index rebuild failed: {err}"));
+            }
+            full_rebuild = false;
+            pending_paths.clear();
+            continue;
+        }
+        if !pending_paths.is_empty() {
+            let paths = pending_paths.iter().cloned().collect::<Vec<_>>();
+            pending_paths.clear();
+            if let Err(err) = perform_incremental_index_update(&state, &paths) {
+                daemon_log(&format!("incremental index update failed: {err}"));
+            }
+        }
+    }
 }
 
 fn perform_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {

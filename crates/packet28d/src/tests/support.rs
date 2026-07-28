@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub(super) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
+pub(crate) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
     let root = std::env::temp_dir().join(format!(
         "packet28-broker-test-{}-{}-{}",
         now_unix_millis(),
@@ -17,6 +17,8 @@ pub(super) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
     ));
     let (index_tx, index_rx) = mpsc::channel();
     thread::spawn(move || while index_rx.recv().is_ok() {});
+    let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
+    thread::spawn(move || while background_rx.blocking_recv().is_some() {});
     Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
@@ -30,11 +32,14 @@ pub(super) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
         source_file_cache: BTreeMap::new(),
         interactive_index: InteractiveIndexRuntime::default(),
         index_tx,
+        background_tx,
+        shutdown: ShutdownSignal::new(),
+        changes: StateChangeSignal::new(),
         shutting_down: false,
     }))
 }
 
-pub(super) fn daemon_test_root(state: &Arc<Mutex<DaemonState>>) -> PathBuf {
+pub(crate) fn daemon_test_root(state: &Arc<Mutex<DaemonState>>) -> PathBuf {
     state.lock().unwrap().root.clone()
 }
 

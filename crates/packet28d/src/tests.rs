@@ -11,7 +11,8 @@ mod handoff;
 mod instruction_resolution;
 mod plan_validation;
 mod search;
-mod support;
+pub(crate) mod support;
+mod transport_runtime;
 
 #[test]
 fn explicit_limits_override_verbosity_alias() {

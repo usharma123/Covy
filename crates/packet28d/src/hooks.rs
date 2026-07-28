@@ -182,39 +182,17 @@ fn maybe_prepare_handoff_from_hooks(
                 )
                 && !config.relaunch_command.is_empty()
             {
-                response.relaunch_requested = true;
-                let relaunch_task_id = task_id.to_string();
-                let relaunch_command = config.relaunch_command.clone();
-                let relaunch_state = state.clone();
-                thread::spawn(move || {
-                    // Brief delay to let the current session complete its stop.
-                    thread::sleep(Duration::from_millis(500));
-                    let result = task_launch_agent(
-                        relaunch_state,
-                        TaskLaunchAgentRequest {
-                            task_id: relaunch_task_id.clone(),
-                            task: None,
-                            wait_for_handoff: false,
-                            handoff_timeout_ms: None,
-                            handoff_poll_ms: None,
-                            command: relaunch_command,
-                        },
-                    );
-                    match result {
-                        Ok(launched) => {
-                            eprintln!(
-                                "packet28: auto-relaunched agent pid={} task={}",
-                                launched.pid, relaunch_task_id
-                            );
-                        }
-                        Err(err) => {
-                            eprintln!(
-                                "packet28: auto-relaunch failed for task {}: {err:#}",
-                                relaunch_task_id
-                            );
-                        }
-                    }
-                });
+                match guard
+                    .background_tx
+                    .try_send(BackgroundCommand::RelaunchAgent {
+                        task_id: task_id.to_string(),
+                        command: config.relaunch_command.clone(),
+                    }) {
+                    Ok(()) => response.relaunch_requested = true,
+                    Err(error) => daemon_log(&format!(
+                        "auto-relaunch queue rejected task {task_id}: {error}"
+                    )),
+                }
             }
         }
     } else if threshold_exceeded && snapshot.latest_intention.is_none() {

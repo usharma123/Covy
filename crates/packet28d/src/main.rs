@@ -2,7 +2,7 @@ extern crate packet28_binary_codec as wincode;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::io::{BufReader, BufWriter, ErrorKind};
+use std::io::ErrorKind;
 use std::net::TcpListener;
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
@@ -51,7 +51,7 @@ use packet28_daemon_protocol::context_store::{
     ContextStoreListRequest, ContextStoreListResponse, ContextStorePruneDaemonRequest,
     ContextStorePruneResponse, ContextStoreStatsRequest, ContextStoreStatsResponse,
 };
-use packet28_daemon_protocol::frame::{read_frame, write_frame};
+use packet28_daemon_protocol::frame::write_frame;
 use packet28_daemon_protocol::index::{
     DaemonIndexClearResponse, DaemonIndexManifest, DaemonIndexRebuildRequest,
     DaemonIndexRebuildResponse, DaemonIndexState, DaemonIndexStatusResponse,
@@ -85,6 +85,7 @@ mod index;
 mod instruction_files;
 mod launch;
 mod planning;
+mod runtime;
 mod runtime_files;
 mod server;
 mod state;
@@ -110,24 +111,25 @@ use crate::hooks::hook_ingest;
 use crate::index::{
     build_index_status, daemon_index_clear, daemon_index_rebuild, daemon_index_status,
     daemon_packet28_search, enqueue_full_index_rebuild, enqueue_incremental_index_paths,
-    spawn_index_worker,
+    run_index_worker,
 };
 use crate::instruction_files::resolve_instruction_file;
-use crate::launch::{task_await_handoff, task_launch_agent};
+use crate::launch::task_launch_agent;
 use crate::planning::*;
+use crate::runtime::{BlockingPool, DaemonRuntimeConfig, ShutdownSignal, StateChangeSignal};
 use crate::runtime_files::{
     clear_index_files, default_index_manifest, load_index_manifest_file, load_index_snapshot_file,
     save_index_manifest_file, save_index_snapshot_file,
 };
-use crate::server::{handle_connection, handle_tcp_connection};
+use crate::server::handle_connection;
 use crate::state::{
-    CachedSourceFile, DaemonState, IndexCommand, InteractiveIndexRuntime, OwnedChildProcess,
-    PendingWatchEvent, TaskGenerationId, TaskGenerationRegistry, TaskGenerationToken,
-    TaskSequenceObserver, WatchEventMsg,
+    BackgroundCommand, CachedSourceFile, DaemonState, IndexCommand, InteractiveIndexRuntime,
+    OwnedChildProcess, PendingWatchEvent, TaskGenerationId, TaskGenerationRegistry,
+    TaskGenerationToken, TaskSequenceObserver, WatchEventMsg,
 };
 use crate::watch::{
     cancel_task, register_task_and_watches, remove_watch, restore_watchers, run_sequence_for_task,
-    spawn_watch_processor,
+    run_watch_processor, WatchIngress,
 };
 
 #[derive(Parser)]
@@ -169,6 +171,7 @@ fn serve(root: PathBuf) -> Result<()> {
     std::env::set_current_dir(&root)
         .with_context(|| format!("failed to set daemon cwd to '{}'", root.display()))?;
     ensure_daemon_dir(&root)?;
+    let config = DaemonRuntimeConfig::from_env()?;
     let daemon_log_path = log_path(&root);
     let listener = bind_daemon_listener(&root)?;
 
@@ -198,6 +201,9 @@ fn serve(root: PathBuf) -> Result<()> {
     let snapshot = load_index_snapshot_file(&root, &manifest);
     let regex_runtime = packet28_search_core::load_runtime(&root).unwrap_or_default();
     let (index_tx, index_rx) = mpsc::channel();
+    let (background_tx, background_rx) =
+        tokio::sync::mpsc::channel(config.background_queue_capacity);
+    let shutdown = ShutdownSignal::new();
     let state = Arc::new(Mutex::new(DaemonState {
         root: root.clone(),
         kernel,
@@ -215,13 +221,14 @@ fn serve(root: PathBuf) -> Result<()> {
             regex_runtime: Some(regex_runtime),
         },
         index_tx,
+        background_tx,
+        shutdown: shutdown.clone(),
+        changes: StateChangeSignal::new(),
         shutting_down: false,
     }));
 
-    let (watch_tx, watch_rx) = mpsc::channel();
+    let (watch_tx, watch_rx) = WatchIngress::new(config.watch_queue_capacity);
     restore_watchers(&state, &watch_tx)?;
-    spawn_watch_processor(state.clone(), watch_rx);
-    spawn_index_worker(state.clone(), index_rx);
     {
         let should_queue = {
             let guard = state.lock().map_err(lock_err)?;
@@ -242,39 +249,295 @@ fn serve(root: PathBuf) -> Result<()> {
     }
     mark_ready(&state)?;
 
-    loop {
-        if state.lock().map_err(lock_err)?.shutting_down {
-            break;
+    let blocking_pool = BlockingPool::new(config.max_blocking_operations);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("packet28d-runtime")
+        .build()
+        .context("failed to create packet28d Tokio runtime")?;
+    let runtime_result = runtime.block_on(run_daemon_runtime(DaemonRuntimeInputs {
+        listener,
+        state: state.clone(),
+        watch_tx,
+        watch_rx,
+        background_rx,
+        index_rx,
+        blocking_pool,
+        config: config.clone(),
+    }));
+    shutdown.request();
+    runtime.shutdown_timeout(config.shutdown_grace);
+
+    daemon_log("shutting down packet28d");
+    let cleanup_result = remove_runtime_files(&root);
+    runtime_result?;
+    cleanup_result?;
+    Ok(())
+}
+
+struct DaemonRuntimeInputs {
+    listener: DaemonListener,
+    state: Arc<Mutex<DaemonState>>,
+    watch_tx: WatchIngress,
+    watch_rx: tokio::sync::mpsc::Receiver<WatchEventMsg>,
+    background_rx: tokio::sync::mpsc::Receiver<BackgroundCommand>,
+    index_rx: Receiver<IndexCommand>,
+    blocking_pool: BlockingPool,
+    config: DaemonRuntimeConfig,
+}
+
+async fn run_daemon_runtime(inputs: DaemonRuntimeInputs) -> Result<()> {
+    let DaemonRuntimeInputs {
+        listener,
+        state,
+        watch_tx,
+        watch_rx,
+        background_rx,
+        index_rx,
+        blocking_pool,
+        config,
+    } = inputs;
+    let mut watch_task = tokio::spawn(run_watch_processor(
+        state.clone(),
+        watch_tx.clone(),
+        watch_rx,
+        blocking_pool.clone(),
+    ));
+    let mut background_task = tokio::spawn(run_background_tasks(
+        state.clone(),
+        background_rx,
+        blocking_pool.clone(),
+    ));
+    let index_state = state.clone();
+    let mut index_task =
+        tokio::task::spawn_blocking(move || run_index_worker(index_state, index_rx));
+    let transport_result = run_transport(
+        listener,
+        state.clone(),
+        watch_tx,
+        blocking_pool,
+        config.clone(),
+    )
+    .await;
+
+    let shutdown = {
+        let mut guard = state.lock().map_err(lock_err)?;
+        guard.shutting_down = true;
+        guard.watcher_handles.clear();
+        let _ = guard.index_tx.send(IndexCommand::Shutdown);
+        guard.shutdown.clone()
+    };
+    shutdown.request();
+    join_owned_runtime_task("watch processor", config.shutdown_grace, &mut watch_task).await;
+    join_owned_runtime_task(
+        "background processor",
+        config.shutdown_grace,
+        &mut background_task,
+    )
+    .await;
+    join_owned_runtime_task("index worker", config.shutdown_grace, &mut index_task).await;
+    transport_result
+}
+
+async fn join_owned_runtime_task(
+    name: &str,
+    grace: Duration,
+    task: &mut tokio::task::JoinHandle<()>,
+) {
+    match tokio::time::timeout(grace, &mut *task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            daemon_log(&format!("{name} failed to join: {error}"));
         }
-        match listener.accept() {
-            Ok(DaemonAcceptedStream::Unix(stream)) => {
-                let state = state.clone();
-                let watch_tx = watch_tx.clone();
-                thread::spawn(move || {
-                    if let Err(err) = handle_connection(state, watch_tx, stream) {
-                        daemon_log(&format!("request handling failed: {err}"));
-                    }
+        Err(_) => {
+            daemon_log(&format!("{name} exceeded bounded shutdown grace"));
+            task.abort();
+        }
+    }
+}
+
+async fn run_background_tasks(
+    state: Arc<Mutex<DaemonState>>,
+    mut receiver: tokio::sync::mpsc::Receiver<BackgroundCommand>,
+    blocking_pool: BlockingPool,
+) {
+    let mut shutdown = match state.lock().map_err(lock_err) {
+        Ok(guard) => guard.shutdown.subscribe(),
+        Err(error) => {
+            daemon_log(&format!(
+                "background processor could not subscribe to shutdown: {error}"
+            ));
+            return;
+        }
+    };
+    let mut tasks = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+            }
+            command = receiver.recv() => {
+                let Some(command) = command else {
+                    break;
+                };
+                let task_state = state.clone();
+                let task_pool = blocking_pool.clone();
+                tasks.spawn(async move {
+                    let BackgroundCommand::RelaunchAgent { task_id, command } =
+                        command;
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let log_task_id = task_id.clone();
+                    let result = task_pool
+                        .run(move || {
+                            task_launch_agent(
+                                task_state,
+                                TaskLaunchAgentRequest {
+                                    task_id,
+                                    task: None,
+                                    wait_for_handoff: false,
+                                    handoff_timeout_ms: None,
+                                    handoff_poll_ms: None,
+                                    command,
+                                },
+                            )
+                        })
+                        .await;
+                    match result {
+                        Ok(launched) => daemon_log(&format!(
+                            "auto-relaunched agent pid={} task={log_task_id}",
+                            launched.pid
+                        )),
+                        Err(error) => daemon_log(&format!(
+                            "auto-relaunch failed for task {log_task_id}: {error:#}"
+                        )),
+                        }
                 });
             }
-            Ok(DaemonAcceptedStream::Tcp(stream)) => {
-                let state = state.clone();
-                let watch_tx = watch_tx.clone();
-                thread::spawn(move || {
-                    if let Err(err) = handle_tcp_connection(state, watch_tx, stream) {
-                        daemon_log(&format!("request handling failed: {err}"));
-                    }
-                });
-            }
-            Err(err) => {
-                daemon_log(&format!("listener accept failed: {err}"));
-                return Err(err.into());
+            joined = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(error)) = joined {
+                    daemon_log(&format!("background task failed to join: {error}"));
+                }
             }
         }
     }
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+}
 
-    daemon_log("shutting down packet28d");
-    remove_runtime_files(&root)?;
+async fn run_transport(
+    listener: DaemonListener,
+    state: Arc<Mutex<DaemonState>>,
+    watch_tx: WatchIngress,
+    blocking_pool: BlockingPool,
+    config: DaemonRuntimeConfig,
+) -> Result<()> {
+    let listener = listener.into_async()?;
+    let permits = Arc::new(tokio::sync::Semaphore::new(config.max_connections));
+    let mut shutdown = state.lock().map_err(lock_err)?.shutdown.subscribe();
+    let mut connections = tokio::task::JoinSet::new();
+
+    loop {
+        tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+            }
+            accepted = listener.accept() => {
+                let stream = accepted.context("daemon listener accept failed")?;
+                let Ok(permit) = permits.clone().try_acquire_owned() else {
+                    daemon_log(&format!(
+                        "connection rejected: active connection cap {} reached",
+                        config.max_connections
+                    ));
+                    continue;
+                };
+                let connection_state = state.clone();
+                let connection_watch_tx = watch_tx.clone();
+                let connection_pool = blocking_pool.clone();
+                let connection_config = config.clone();
+                match stream {
+                    DaemonAcceptedStream::Unix(stream) => {
+                        connections.spawn(async move {
+                            let _permit = permit;
+                            handle_connection(
+                                connection_state,
+                                connection_watch_tx,
+                                stream,
+                                connection_config,
+                                connection_pool,
+                            )
+                            .await
+                        });
+                    }
+                    DaemonAcceptedStream::Tcp(stream) => {
+                        connections.spawn(async move {
+                            let _permit = permit;
+                            handle_connection(
+                                connection_state,
+                                connection_watch_tx,
+                                stream,
+                                connection_config,
+                                connection_pool,
+                            )
+                            .await
+                        });
+                    }
+                }
+            }
+            joined = connections.join_next(), if !connections.is_empty() => {
+                log_connection_join(joined);
+            }
+        }
+    }
+    drop(listener);
+
+    let deadline = tokio::time::Instant::now() + config.shutdown_grace;
+    while !connections.is_empty() {
+        match tokio::time::timeout_at(deadline, connections.join_next()).await {
+            Ok(joined) => log_connection_join(joined),
+            Err(_) => {
+                daemon_log(&format!(
+                    "{} connection task(s) exceeded bounded shutdown grace",
+                    connections.len()
+                ));
+                connections.abort_all();
+                while connections.join_next().await.is_some() {}
+                break;
+            }
+        }
+    }
     Ok(())
+}
+
+fn log_connection_join(joined: Option<std::result::Result<Result<()>, tokio::task::JoinError>>) {
+    match joined {
+        Some(Ok(Err(error))) if !is_benign_connection_error(&error) => {
+            daemon_log(&format!("request handling failed: {error}"));
+        }
+        Some(Ok(Err(_))) => {}
+        Some(Err(error)) if !error.is_cancelled() => {
+            daemon_log(&format!("connection task failed to join: {error}"));
+        }
+        Some(Ok(Ok(()))) | Some(Err(_)) | None => {}
+    }
+}
+
+fn is_benign_connection_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| {
+                matches!(
+                    io_error.kind(),
+                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
+                )
+            })
+    })
 }
 
 fn persist_state(state: &DaemonState) -> Result<()> {
@@ -301,11 +564,6 @@ fn mark_ready(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
         runtime.socket_path
     ));
     Ok(())
-}
-
-fn wake_listener(root: &Path) {
-    let _ = UnixStream::connect(socket_path(root))
-        .or_else(|_| UnixStream::connect(workspace_socket_path(root)));
 }
 
 fn daemon_log(message: &str) {
@@ -366,8 +624,13 @@ enum DaemonListener {
 }
 
 enum DaemonAcceptedStream {
-    Unix(UnixStream),
-    Tcp(std::net::TcpStream),
+    Unix(tokio::net::UnixStream),
+    Tcp(tokio::net::TcpStream),
+}
+
+enum AsyncDaemonListener {
+    Unix(tokio::net::UnixListener),
+    Tcp(tokio::net::TcpListener),
 }
 
 impl DaemonListener {
@@ -378,14 +641,33 @@ impl DaemonListener {
         }
     }
 
-    fn accept(&self) -> std::io::Result<DaemonAcceptedStream> {
+    fn into_async(self) -> Result<AsyncDaemonListener> {
         match self {
             DaemonListener::Unix { listener, .. } => {
-                let (stream, _) = listener.accept()?;
-                Ok(DaemonAcceptedStream::Unix(stream))
+                listener.set_nonblocking(true)?;
+                Ok(AsyncDaemonListener::Unix(
+                    tokio::net::UnixListener::from_std(listener)?,
+                ))
             }
             DaemonListener::Tcp { listener, .. } => {
-                let (stream, _) = listener.accept()?;
+                listener.set_nonblocking(true)?;
+                Ok(AsyncDaemonListener::Tcp(tokio::net::TcpListener::from_std(
+                    listener,
+                )?))
+            }
+        }
+    }
+}
+
+impl AsyncDaemonListener {
+    async fn accept(&self) -> std::io::Result<DaemonAcceptedStream> {
+        match self {
+            Self::Unix(listener) => {
+                let (stream, _) = listener.accept().await?;
+                Ok(DaemonAcceptedStream::Unix(stream))
+            }
+            Self::Tcp(listener) => {
+                let (stream, _) = listener.accept().await?;
                 Ok(DaemonAcceptedStream::Tcp(stream))
             }
         }

@@ -7,6 +7,7 @@ pub(crate) struct WatchEventMsg {
     pub(crate) generation: TaskGenerationId,
     pub(crate) paths: Vec<PathBuf>,
     pub(crate) error: Option<String>,
+    pub(crate) overflowed: bool,
 }
 
 pub(crate) struct PendingWatchEvent {
@@ -14,7 +15,8 @@ pub(crate) struct PendingWatchEvent {
     pub(crate) generation: TaskGenerationId,
     pub(crate) paths: Vec<PathBuf>,
     pub(crate) error: Option<String>,
-    pub(crate) due_at: Instant,
+    pub(crate) overflowed: bool,
+    pub(crate) due_at: tokio::time::Instant,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,6 +40,18 @@ pub(crate) enum IndexCommand {
     Shutdown,
 }
 
+pub(crate) enum BackgroundCommand {
+    RelaunchAgent {
+        task_id: String,
+        command: Vec<String>,
+    },
+}
+
+pub(crate) struct TaskSubscriber {
+    pub(crate) id: u64,
+    pub(crate) sender: tokio::sync::mpsc::Sender<DaemonEventFrame>,
+}
+
 pub(crate) struct DaemonState {
     pub(crate) root: PathBuf,
     pub(crate) kernel: Arc<Kernel>,
@@ -47,10 +61,13 @@ pub(crate) struct DaemonState {
     pub(crate) agent_snapshots: BTreeMap<String, suite_packet_core::AgentSnapshotPayload>,
     pub(crate) watches: WatchRegistry,
     pub(crate) watcher_handles: HashMap<String, PollWatcher>,
-    pub(crate) subscribers: HashMap<String, Vec<Sender<DaemonEventFrame>>>,
+    pub(crate) subscribers: HashMap<String, Vec<TaskSubscriber>>,
     pub(crate) source_file_cache: BTreeMap<String, CachedSourceFile>,
     pub(crate) interactive_index: InteractiveIndexRuntime,
     pub(crate) index_tx: Sender<IndexCommand>,
+    pub(crate) background_tx: tokio::sync::mpsc::Sender<BackgroundCommand>,
+    pub(crate) shutdown: crate::runtime::ShutdownSignal,
+    pub(crate) changes: crate::runtime::StateChangeSignal,
     pub(crate) shutting_down: bool,
 }
 
