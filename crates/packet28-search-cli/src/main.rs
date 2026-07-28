@@ -429,7 +429,7 @@ fn execute_search_inproc(
         EngineMode::Fff => execute_fff_search(root, request),
         EngineMode::Indexed => {
             let runtime = load_runtime(root)?;
-            indexed_search(root, &runtime, request)
+            Ok(indexed_search(root, &runtime, request)?)
         }
         EngineMode::Auto => match load_runtime(root) {
             Ok(runtime) => match guarded_fallback_reason(root, &runtime, request)? {
@@ -439,7 +439,7 @@ fn execute_search_inproc(
                     Ok(select_fff_for_auto_fallback(root, request, engine, &result)
                         .unwrap_or(result))
                 }
-                None => indexed_search(root, &runtime, request),
+                None => Ok(indexed_search(root, &runtime, request)?),
             },
             Err(err) => {
                 let mut result = packet28_reducer_core::search(root, request)?;
@@ -859,7 +859,7 @@ fn guard_reason(
         }
         TransportMode::Inproc => {
             let runtime = load_runtime(root)?;
-            guarded_fallback_reason(root, &runtime, request)
+            Ok(guarded_fallback_reason(root, &runtime, request)?)
         }
         TransportMode::Auto => guard_reason_auto(root, request),
     }
@@ -870,8 +870,10 @@ fn guard_reason_auto(root: &Path, request: &SearchRequest) -> Result<Option<Stri
     let workspace_root = resolve_workspace_root(root);
     if let Err(err) = ensure_daemon(&workspace_root) {
         let runtime = load_runtime(root)?;
-        return guarded_fallback_reason(root, &runtime, request)
-            .map(|reason| Some(reason.unwrap_or_else(|| format!("daemon unavailable: {err}"))));
+        let reason = guarded_fallback_reason(root, &runtime, request)?;
+        return Ok(Some(
+            reason.unwrap_or_else(|| format!("daemon unavailable: {err}")),
+        ));
     }
     daemon_guard_reason(root, request)
 }
@@ -879,7 +881,7 @@ fn guard_reason_auto(root: &Path, request: &SearchRequest) -> Result<Option<Stri
 #[cfg(not(unix))]
 fn guard_reason_auto(root: &Path, request: &SearchRequest) -> Result<Option<String>> {
     let runtime = load_runtime(root)?;
-    guarded_fallback_reason(root, &runtime, request)
+    Ok(guarded_fallback_reason(root, &runtime, request)?)
 }
 
 fn daemon_search_request(

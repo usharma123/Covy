@@ -1,5 +1,23 @@
+//! Persistent literal/regex indexing and indexed search verification.
+//!
+//! The crate builds a repository-local index, validates every persisted layer
+//! before publication, and verifies indexed candidates against source files.
+//! Fallible operations return [`SearchError`], allowing callers to distinguish
+//! unavailable indexes, invalid queries, corruption, and typed dependency
+//! failures without parsing an `anyhow` report.
+//!
+//! # Examples
+//!
+//! ```
+//! use packet28_search_core::RegexIndexRuntime;
+//!
+//! let runtime = RegexIndexRuntime::default();
+//! assert!(!runtime.is_loaded());
+//! ```
+
 extern crate packet28_binary_codec as wincode;
 
+mod error;
 mod weights;
 
 use std::cmp::Reverse;
@@ -12,7 +30,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context, Result};
 use ignore::WalkBuilder;
 use memmap2::Mmap;
 use packet28_reducer_core::{
@@ -24,6 +41,7 @@ use regex_syntax::hir::literal::{ExtractKind, Extractor, Seq};
 use regex_syntax::hir::{Hir, HirKind};
 use serde::{Deserialize, Serialize};
 
+pub use crate::error::{Result, SearchError};
 use crate::weights::{pair_weight, WEIGHT_TABLE_VERSION};
 
 const REGEX_INDEX_SCHEMA_VERSION: u32 = 3;
@@ -49,21 +67,74 @@ const MAX_INDEX_VERIFY_NUMERATOR: usize = 1;
 const MAX_INDEX_VERIFY_DENOMINATOR: usize = 2;
 const POSITION_BUCKET_COUNT: usize = 16;
 
+trait ResultContext<T> {
+    fn context<C>(self, context: C) -> Result<T>
+    where
+        C: Into<String>;
+
+    fn with_context<C, F>(self, context: F) -> Result<T>
+    where
+        C: Into<String>,
+        F: FnOnce() -> C;
+}
+
+impl<T, E> ResultContext<T> for std::result::Result<T, E>
+where
+    E: Into<SearchError>,
+{
+    fn context<C>(self, context: C) -> Result<T>
+    where
+        C: Into<String>,
+    {
+        self.map_err(|source| source.into().context(context))
+    }
+
+    fn with_context<C, F>(self, context: F) -> Result<T>
+    where
+        C: Into<String>,
+        F: FnOnce() -> C,
+    {
+        self.map_err(|source| source.into().context(context()))
+    }
+}
+
+macro_rules! ensure_valid_index {
+    ($condition:expr, $($message:tt)+) => {
+        if !$condition {
+            return Err(SearchError::corrupt(format!($($message)+)));
+        }
+    };
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
+/// Persistent metadata describing the currently published regex index.
 pub struct RegexIndexManifest {
+    /// On-disk index schema version.
     pub schema_version: u32,
+    /// Version of the gram weighting table used by the index.
     pub weight_table_version: u32,
+    /// Monotonically increasing publication generation.
     pub generation: u64,
+    /// Whether test files were included during the last full build.
     pub include_tests: bool,
+    /// Persistent lifecycle status such as `building`, `ready`, or `corrupt`.
     pub status: String,
+    /// Number of discovered files in the last full build.
     pub total_files: usize,
+    /// Number of files represented in the base layer.
     pub indexed_files: usize,
+    /// Number of files represented in the overlay layer.
     pub overlay_files: usize,
+    /// Git commit associated with the base layer, when available.
     pub base_commit: Option<String>,
+    /// Reason the index cannot currently serve queries.
     pub stale_reason: Option<String>,
+    /// Unix timestamp at which the latest build started.
     pub last_build_started_at_unix: Option<u64>,
+    /// Unix timestamp at which the latest build completed.
     pub last_build_completed_at_unix: Option<u64>,
+    /// Most recent build, validation, or loading failure.
     pub last_error: Option<String>,
 }
 
@@ -87,12 +158,15 @@ struct DocRecord {
 }
 
 #[derive(Debug, Clone, Default)]
+/// An immutable, validated search index generation and its public manifest.
 pub struct RegexIndexRuntime {
+    /// Metadata for the loaded or unavailable generation.
     pub manifest: RegexIndexManifest,
     loaded: Option<Arc<LoadedIndex>>,
 }
 
 impl RegexIndexRuntime {
+    /// Returns whether validated base and overlay layers are available.
     pub fn is_loaded(&self) -> bool {
         self.loaded.is_some()
     }
@@ -267,6 +341,17 @@ enum Verifier {
     },
 }
 
+/// Loads and validates the index beneath `root`.
+///
+/// Stale or corrupt artifacts are represented as an unloaded runtime whose
+/// manifest records the reason. The `Result` shape is retained for source
+/// compatibility and future load failures that cannot be represented as index
+/// state.
+///
+/// # Errors
+///
+/// The current loader converts artifact validation failures into an unloaded
+/// [`RegexIndexRuntime`]; it does not otherwise return an error.
 pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
     let mut manifest = load_manifest(root);
     if manifest.schema_version == 0 {
@@ -366,10 +451,26 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
     })
 }
 
+/// Rebuilds and atomically publishes every searchable file beneath `root`.
+///
+/// # Errors
+///
+/// Returns [`SearchError::Io`], [`SearchError::BinaryEncode`],
+/// [`SearchError::BinaryDecode`], or [`SearchError::Json`] (possibly wrapped in
+/// [`SearchError::Context`]) when discovery, index construction, validation, or
+/// publication fails. [`SearchError::FailureProvenance`] reports the rarer case
+/// where both the build and recording its failure fail.
 pub fn rebuild_full_index(root: &Path, include_tests: bool) -> Result<RegexIndexRuntime> {
     rebuild_full_index_with_progress(root, include_tests, |_, _| {})
 }
 
+/// Rebuilds the full index and reports `(indexed_files, total_files)` progress.
+///
+/// The callback is invoked before scanning and after each discovered file.
+///
+/// # Errors
+///
+/// Returns the same typed failures as [`rebuild_full_index`].
 pub fn rebuild_full_index_with_progress<F>(
     root: &Path,
     include_tests: bool,
@@ -438,6 +539,16 @@ where
     })
 }
 
+/// Rebuilds the mutable overlay for `changed_paths`.
+///
+/// A missing current runtime or an empty change set intentionally triggers a
+/// full rebuild to preserve the historical behavior.
+///
+/// # Errors
+///
+/// Returns [`SearchError::IndexNotLoaded`] when a supplied runtime has no
+/// validated layers. Filesystem, codec, JSON, corruption, and failure-provenance
+/// errors use the corresponding [`SearchError`] variants.
 pub fn update_overlay_index(
     root: &Path,
     current: Option<&RegexIndexRuntime>,
@@ -447,10 +558,7 @@ pub fn update_overlay_index(
         return rebuild_full_index(root, true);
     }
     let current = current.expect("checked above");
-    let loaded = current
-        .loaded
-        .as_ref()
-        .ok_or_else(|| anyhow!("regex index not loaded"))?;
+    let loaded = current.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
     let mut overlay_state = loaded.overlay_state.clone();
     let normalized = normalize_paths(root, changed_paths);
     let mut overlay_by_path = HashMap::<String, IndexedDocument>::new();
@@ -531,6 +639,12 @@ pub fn update_overlay_index(
     })
 }
 
+/// Removes the persisted regex index beneath `root`.
+///
+/// # Errors
+///
+/// Returns [`SearchError::Context`] with a nested [`SearchError::Io`] when the
+/// index directory cannot be removed.
 pub fn clear_index(root: &Path) -> Result<()> {
     let path = regex_index_dir(root);
     if path.exists() {
@@ -540,6 +654,13 @@ pub fn clear_index(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Returns why a request should use the legacy search engine, if applicable.
+///
+/// # Errors
+///
+/// Returns [`SearchError::InvalidRegexSyntax`] or [`SearchError::InvalidRegex`]
+/// for invalid expressions, and a typed corruption or conversion failure if a
+/// previously validated posting cannot be planned safely.
 pub fn guarded_fallback_reason(
     root: &Path,
     runtime: &RegexIndexRuntime,
@@ -554,10 +675,7 @@ pub fn guarded_fallback_reason(
             .unwrap_or_else(|| "regex search index is not ready".to_string());
         return Ok(Some(reason));
     }
-    let loaded = runtime
-        .loaded
-        .as_ref()
-        .ok_or_else(|| anyhow!("regex index not loaded"))?;
+    let loaded = runtime.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
     let compiled = compile_request(request, loaded.as_ref())?;
     if let Some(reason) = compiled.must_fallback_reason.clone() {
         return Ok(Some(reason));
@@ -608,17 +726,24 @@ pub fn guarded_fallback_reason(
     Ok(None)
 }
 
+/// Executes an indexed search and verifies candidate files against the request.
+///
+/// # Errors
+///
+/// Returns [`SearchError::IndexNotLoaded`] when `runtime` has no validated
+/// generation, [`SearchError::EmptyQuery`] for a blank query, typed regex errors
+/// for invalid expressions, [`SearchError::Io`] when a candidate cannot be read,
+/// or a typed corruption/conversion error for an invalid posting.
 pub fn indexed_search(
     root: &Path,
     runtime: &RegexIndexRuntime,
     request: &SearchRequest,
 ) -> Result<SearchResult> {
-    let loaded = runtime
-        .loaded
-        .as_ref()
-        .ok_or_else(|| anyhow!("regex index not loaded"))?;
+    let loaded = runtime.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
     let query = request.query.trim();
-    anyhow::ensure!(!query.is_empty(), "search query cannot be empty");
+    if query.is_empty() {
+        return Err(SearchError::EmptyQuery);
+    }
 
     let (resolved_paths, mut diagnostics) = resolve_requested_paths(root, &request.requested_paths);
     let requested_filter = requested_filter_set(&resolved_paths);
@@ -757,14 +882,19 @@ fn build_verifier(request: &SearchRequest, query: &str) -> Result<Verifier> {
     let whole_file_prefilter = if request.fixed_string {
         true
     } else {
-        let hir = regex_syntax::parse(query)
-            .with_context(|| format!("unsupported regex syntax for packet28.search: {query}"))?;
+        let hir = regex_syntax::parse(query).map_err(|source| SearchError::InvalidRegexSyntax {
+            query: query.to_string(),
+            source: Box::new(source),
+        })?;
         !hir_has_line_anchors(&hir)
     };
     let regex = RegexBuilder::new(&pattern)
         .case_insensitive(matches!(request.case_sensitive, Some(false)))
         .build()
-        .with_context(|| format!("unsupported regex syntax for packet28.search: {query}"))?;
+        .map_err(|source| SearchError::InvalidRegex {
+            query: query.to_string(),
+            source: Box::new(source),
+        })?;
     Ok(Verifier::Regex {
         regex,
         whole_file_prefilter,
@@ -808,8 +938,10 @@ fn build_search_plan(request: &SearchRequest, query: &str) -> Result<(SearchPlan
         return Ok((SearchPlan::Literal(literal), None));
     }
 
-    let hir = regex_syntax::parse(query)
-        .with_context(|| format!("unsupported regex syntax for packet28.search: {query}"))?;
+    let hir = regex_syntax::parse(query).map_err(|source| SearchError::InvalidRegexSyntax {
+        query: query.to_string(),
+        source: Box::new(source),
+    })?;
     let plan = normalize_plan(plan_from_hir(&hir));
     let planner_fallback = matches!(plan, SearchPlan::All).then(|| {
         "planner could not derive required literals; verifying all indexed candidates".to_string()
@@ -1764,9 +1896,9 @@ fn read_segment_pair(reader: &mut impl Read) -> Result<Option<(u64, u32, Positio
         match reader.read(&mut record[filled..]) {
             Ok(0) if filled == 0 => return Ok(None),
             Ok(0) => {
-                return Err(anyhow!(
+                return Err(SearchError::corrupt(format!(
                     "truncated segment record: expected {SEGMENT_RECORD_BYTES} bytes, found {filled}"
-                ));
+                )));
             }
             Ok(read) => filled += read,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
@@ -1818,10 +1950,10 @@ fn load_layer(
     let postings_exists = postings_path.exists();
     let present_files = docs_exists as u8 + lookup_exists as u8 + postings_exists as u8;
     if present_files != 3 {
-        return Err(anyhow!(
+        return Err(SearchError::corrupt(format!(
             "incomplete regex index layer '{}': expected docs, lookup, and postings files; found {present_files}/3",
             docs_path.display()
-        ));
+        )));
     }
     let raw = fs::read(&docs_path)
         .with_context(|| format!("failed to read docs file '{}'", docs_path.display()))?;
@@ -1870,13 +2002,14 @@ fn mark_manifest_unloaded(manifest: &mut RegexIndexManifest, status: &str, reaso
 fn record_index_build_failure(
     root: &Path,
     manifest: &mut RegexIndexManifest,
-    error: anyhow::Error,
-) -> anyhow::Error {
+    error: SearchError,
+) -> SearchError {
     mark_manifest_unloaded(manifest, "corrupt", format!("{error:#}"));
     if let Err(save_error) = save_manifest(root, manifest) {
-        return error.context(format!(
-            "failed to persist regex index failure provenance: {save_error:#}"
-        ));
+        return SearchError::FailureProvenance {
+            build: Box::new(error),
+            persistence: Box::new(save_error),
+        };
     }
     error
 }
@@ -1901,13 +2034,13 @@ fn validate_layer_files(
     let mut paths = BTreeSet::new();
     for (expected_id, doc) in docs.iter().enumerate() {
         let actual_id = usize::try_from(doc.doc_id).context("document id does not fit usize")?;
-        anyhow::ensure!(
+        ensure_valid_index!(
             actual_id == expected_id,
             "docs file '{}' has non-contiguous document id {} at row {expected_id}",
             docs_path.display(),
             doc.doc_id
         );
-        anyhow::ensure!(
+        ensure_valid_index!(
             paths.insert(doc.path.as_str()),
             "docs file '{}' contains duplicate path '{}'",
             docs_path.display(),
@@ -1916,7 +2049,7 @@ fn validate_layer_files(
     }
 
     let trailing = lookup.len() % LOOKUP_ROW_BYTES;
-    anyhow::ensure!(
+    ensure_valid_index!(
         trailing == 0,
         "lookup file '{}' has a partial trailing row: {trailing} of {LOOKUP_ROW_BYTES} bytes",
         lookup_path.display()
@@ -1936,13 +2069,13 @@ fn validate_layer_files(
             ),
         };
         if let Some(previous) = previous_hash {
-            anyhow::ensure!(
+            ensure_valid_index!(
                 hash > previous,
                 "lookup file '{}' row {row_index} has hash {hash} after {previous}; hashes must be strictly increasing",
                 lookup_path.display()
             );
         }
-        anyhow::ensure!(
+        ensure_valid_index!(
             meta.len > 0 && meta.doc_count > 0,
             "lookup file '{}' row {row_index} has an empty posting block",
             lookup_path.display()
@@ -1955,7 +2088,7 @@ fn validate_layer_files(
                     postings_path.display()
                 )
             })?;
-        anyhow::ensure!(
+        ensure_valid_index!(
             meta.offset == expected_offset,
             "lookup file '{}' row {row_index} starts at {}, expected contiguous offset {expected_offset}",
             lookup_path.display(),
@@ -1970,7 +2103,7 @@ fn validate_layer_files(
         })?;
         let expected_doc_count =
             usize::try_from(meta.doc_count).context("posting document count does not fit usize")?;
-        anyhow::ensure!(
+        ensure_valid_index!(
             entries.len() == expected_doc_count,
             "lookup file '{}' row {row_index} declares {} documents but its posting block contains {}",
             lookup_path.display(),
@@ -1978,7 +2111,7 @@ fn validate_layer_files(
             entries.len()
         );
         for entry in entries {
-            anyhow::ensure!(
+            ensure_valid_index!(
                 usize::try_from(entry.doc_id)
                     .ok()
                     .is_some_and(|id| id < docs.len()),
@@ -1990,7 +2123,7 @@ fn validate_layer_files(
         previous_hash = Some(hash);
         expected_offset = u64::try_from(end).context("posting end does not fit u64")?;
     }
-    anyhow::ensure!(
+    ensure_valid_index!(
         expected_offset == postings_len,
         "postings file '{}' has {} unreferenced trailing bytes",
         postings_path.display(),
@@ -2000,12 +2133,14 @@ fn validate_layer_files(
 }
 
 fn checked_posting_bounds(offset: u64, len: u32, postings_len: usize) -> Result<(usize, usize)> {
-    let end = offset
-        .checked_add(u64::from(len))
-        .ok_or_else(|| anyhow!("posting range offset {offset} + length {len} overflows u64"))?;
+    let end = offset.checked_add(u64::from(len)).ok_or_else(|| {
+        SearchError::corrupt(format!(
+            "posting range offset {offset} + length {len} overflows u64"
+        ))
+    })?;
     let postings_len =
         u64::try_from(postings_len).context("postings file length does not fit u64")?;
-    anyhow::ensure!(
+    ensure_valid_index!(
         end <= postings_len,
         "posting range {offset}..{end} exceeds postings length {postings_len}"
     );
@@ -2032,14 +2167,16 @@ fn encode_postings(entries: &[PostingEntry]) -> Vec<u8> {
 
 fn decode_postings(bytes: &[u8]) -> Result<Vec<PostingEntry>> {
     if bytes.len() < 4 {
-        return Err(anyhow!("invalid posting block"));
+        return Err(SearchError::corrupt("invalid posting block"));
     }
     let count = u32::from_le_bytes(bytes[0..4].try_into().expect("length checked")) as usize;
     let minimum_len = count
         .checked_mul(3)
         .and_then(|len| len.checked_add(4))
-        .ok_or_else(|| anyhow!("posting block document count overflows its encoded size"))?;
-    anyhow::ensure!(
+        .ok_or_else(|| {
+            SearchError::corrupt("posting block document count overflows its encoded size")
+        })?;
+    ensure_valid_index!(
         bytes.len() >= minimum_len,
         "posting block declares {count} documents but is only {} bytes",
         bytes.len()
@@ -2049,32 +2186,32 @@ fn decode_postings(bytes: &[u8]) -> Result<Vec<PostingEntry>> {
     let mut current = 0u32;
     for position in 0..count {
         let (delta, consumed) = decode_varint(&bytes[index..])?;
-        anyhow::ensure!(
+        ensure_valid_index!(
             position == 0 || delta > 0,
             "posting block document ids are not strictly increasing"
         );
         current = current
             .checked_add(delta)
-            .ok_or_else(|| anyhow!("posting document id delta overflows u32"))?;
+            .ok_or_else(|| SearchError::corrupt("posting document id delta overflows u32"))?;
         doc_ids.push(current);
         index += consumed;
     }
     let summary_len = count
         .checked_mul(2)
-        .ok_or_else(|| anyhow!("posting summary length overflows usize"))?;
+        .ok_or_else(|| SearchError::corrupt("posting summary length overflows usize"))?;
     let summary_end = index
         .checked_add(summary_len)
-        .ok_or_else(|| anyhow!("posting summary range overflows usize"))?;
-    anyhow::ensure!(
+        .ok_or_else(|| SearchError::corrupt("posting summary range overflows usize"))?;
+    ensure_valid_index!(
         bytes.len() >= summary_end,
         "posting block missing positional summaries"
     );
-    anyhow::ensure!(
+    ensure_valid_index!(
         bytes.len() == summary_end,
         "posting block has {} trailing bytes",
         bytes.len() - summary_end
     );
-    anyhow::ensure!(
+    ensure_valid_index!(
         bytes[index..summary_end]
             .chunks_exact(2)
             .all(|summary| summary[1] <= 1),
@@ -2111,7 +2248,7 @@ fn decode_varint(bytes: &[u8]) -> Result<(u32, usize)> {
     let mut result = 0u32;
     for (idx, byte) in bytes.iter().take(5).enumerate() {
         if idx == 4 && *byte > 0x0f {
-            return Err(anyhow!("varint overflows u32"));
+            return Err(SearchError::corrupt("varint overflows u32"));
         }
         let value = u32::from(byte & 0x7f);
         result |= value << (idx * 7);
@@ -2120,9 +2257,9 @@ fn decode_varint(bytes: &[u8]) -> Result<(u32, usize)> {
         }
     }
     if bytes.len() >= 5 {
-        return Err(anyhow!("varint overflows u32"));
+        return Err(SearchError::corrupt("varint overflows u32"));
     }
-    Err(anyhow!("unterminated varint"))
+    Err(SearchError::corrupt("unterminated varint"))
 }
 
 fn lookup_posting_range(lookup: &[u8], hash: u64) -> Option<LookupPostingMeta> {

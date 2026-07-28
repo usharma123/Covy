@@ -1,3 +1,5 @@
+//! Generates the checked-in byte-pair weight table used by the search planner.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

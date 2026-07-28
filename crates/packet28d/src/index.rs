@@ -393,7 +393,9 @@ pub(crate) fn daemon_packet28_search(
         }
         return Ok(fallback);
     }
-    packet28_search_core::indexed_search(&root, &runtime, &request)
+    Ok(packet28_search_core::indexed_search(
+        &root, &runtime, &request,
+    )?)
 }
 
 pub(crate) fn daemon_packet28_search_guard(
