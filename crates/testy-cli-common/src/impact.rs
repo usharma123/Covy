@@ -118,7 +118,7 @@ pub struct ImpactPlanArgs {
     #[arg(long)]
     pub max_tests: Option<usize>,
 
-    /// Target changed-lines coverage as a ratio in [0,1]
+    /// Target changed-lines coverage as a ratio in `0..=1`.
     #[arg(long)]
     pub target_coverage: Option<f64>,
 

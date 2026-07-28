@@ -77,7 +77,7 @@ pub struct AssembleArgs {
     #[arg(long)]
     pub(crate) context_config: Option<String>,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     pub(crate) cache: bool,
 
@@ -288,7 +288,7 @@ pub enum StoreCommands {
 
 #[derive(Args)]
 pub struct StoreListArgs {
-    /// Store root directory (uses <root>/.packet28/packet-cache-v1.bin)
+    /// Store root directory (uses `<root>/.packet28/packet-cache-v1.bin`).
     #[arg(long, default_value = ".")]
     pub(crate) root: String,
 
@@ -337,7 +337,7 @@ impl StoreListArgs {
 
 #[derive(Args)]
 pub struct StoreGetArgs {
-    /// Store root directory (uses <root>/.packet28/packet-cache-v1.bin)
+    /// Store root directory (uses `<root>/.packet28/packet-cache-v1.bin`).
     #[arg(long, default_value = ".")]
     pub(crate) root: String,
 
@@ -366,7 +366,7 @@ impl StoreGetArgs {
 
 #[derive(Args)]
 pub struct StorePruneArgs {
-    /// Store root directory (uses <root>/.packet28/packet-cache-v1.bin)
+    /// Store root directory (uses `<root>/.packet28/packet-cache-v1.bin`).
     #[arg(long, default_value = ".")]
     pub(crate) root: String,
 
@@ -399,7 +399,7 @@ impl StorePruneArgs {
 
 #[derive(Args)]
 pub struct StoreStatsArgs {
-    /// Store root directory (uses <root>/.packet28/packet-cache-v1.bin)
+    /// Store root directory (uses `<root>/.packet28/packet-cache-v1.bin`).
     #[arg(long, default_value = ".")]
     pub(crate) root: String,
 
@@ -428,7 +428,7 @@ pub struct RecallArgs {
     #[arg(long)]
     pub(crate) query: String,
 
-    /// Store root directory (uses <root>/.packet28/packet-cache-v1.bin)
+    /// Store root directory (uses `<root>/.packet28/packet-cache-v1.bin`).
     #[arg(long, default_value = ".")]
     pub(crate) root: String,
 

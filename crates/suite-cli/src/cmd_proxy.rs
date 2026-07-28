@@ -59,7 +59,7 @@ pub struct RunArgs {
     #[arg(long)]
     pub debug: bool,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     pub cache: bool,
 

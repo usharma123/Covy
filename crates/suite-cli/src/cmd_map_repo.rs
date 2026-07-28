@@ -56,7 +56,7 @@ pub struct RepoArgs {
     #[arg(long)]
     pub debug: bool,
 
-    /// Persist kernel cache on disk under <repo-root>/.packet28
+    /// Persist kernel cache on disk under `<repo-root>/.packet28`.
     #[arg(long)]
     pub cache: bool,
 

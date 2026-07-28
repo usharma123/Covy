@@ -33,7 +33,7 @@ pub struct ImpactArgs {
     #[arg(long)]
     pub print_command: bool,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     pub cache: bool,
 

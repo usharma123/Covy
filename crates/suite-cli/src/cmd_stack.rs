@@ -28,7 +28,7 @@ pub struct SliceArgs {
     #[arg(long)]
     max_failures: Option<usize>,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     cache: bool,
 

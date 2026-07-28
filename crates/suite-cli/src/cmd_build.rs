@@ -28,7 +28,7 @@ pub struct ReduceArgs {
     #[arg(long)]
     max_diagnostics: Option<usize>,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     cache: bool,
 

@@ -24,7 +24,8 @@ pub struct MapPathsArgs {
     #[arg(long)]
     pub explain: Option<String>,
 
-    /// Coverage report file paths/globs to use for --learn (overrides [ingest].report_paths)
+    /// Coverage report file paths/globs to use for `--learn`
+    /// (overrides `ingest.report_paths`).
     #[arg(long = "paths")]
     pub paths: Vec<String>,
 

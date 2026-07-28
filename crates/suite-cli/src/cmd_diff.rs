@@ -64,7 +64,7 @@ pub struct AnalyzeArgs {
     #[arg(long)]
     input: Option<String>,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     cache: bool,
 
