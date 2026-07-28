@@ -71,7 +71,7 @@ pub fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
     stdin.flush().unwrap();
 }
 
-fn read_mcp_message(stdout: &mut BufReader<ChildStdout>) -> Value {
+pub fn read_mcp_message(stdout: &mut BufReader<ChildStdout>) -> Value {
     let mut content_length = None::<usize>;
     let mut line = String::new();
     loop {

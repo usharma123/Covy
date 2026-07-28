@@ -1,6 +1,11 @@
 use super::*;
 
-use crate::cmd_mcp::proxy_upstream::{send_request_to_upstream, UpstreamClient};
+use crate::cmd_mcp::proxy_upstream::UpstreamPool;
+
+#[derive(Default)]
+pub(crate) struct ProxyCatalog {
+    refresh: tokio::sync::Mutex<()>,
+}
 
 pub(crate) fn owner_for_tool(
     session: &Arc<Mutex<McpSessionState>>,
@@ -32,49 +37,69 @@ pub(crate) fn owner_for_resource(
         .and_then(|guard| guard.resource_owners.get(uri).cloned())
 }
 
-pub(crate) fn ensure_upstream_tools_loaded(
+pub(crate) async fn ensure_upstream_tools_loaded(
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &mut BTreeMap<String, UpstreamClient>,
+    upstreams: &Arc<UpstreamPool>,
+    catalog: &ProxyCatalog,
 ) -> Result<Vec<Value>> {
     if let Ok(guard) = session.lock() {
         if guard.upstream_tools_loaded {
             return Ok(guard.upstream_tools_cache.clone());
         }
     }
-    refresh_upstream_tools(session, upstreams)
+    let _guard = catalog.refresh.lock().await;
+    if let Ok(guard) = session.lock() {
+        if guard.upstream_tools_loaded {
+            return Ok(guard.upstream_tools_cache.clone());
+        }
+    }
+    refresh_upstream_tools(session, upstreams).await
 }
 
-pub(crate) fn ensure_upstream_resources_loaded(
+pub(crate) async fn ensure_upstream_resources_loaded(
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &mut BTreeMap<String, UpstreamClient>,
+    upstreams: &Arc<UpstreamPool>,
+    catalog: &ProxyCatalog,
 ) -> Result<Vec<Value>> {
     if let Ok(guard) = session.lock() {
         if guard.upstream_resources_loaded {
             return Ok(guard.upstream_resources_cache.clone());
         }
     }
-    refresh_upstream_resources(session, upstreams)
+    let _guard = catalog.refresh.lock().await;
+    if let Ok(guard) = session.lock() {
+        if guard.upstream_resources_loaded {
+            return Ok(guard.upstream_resources_cache.clone());
+        }
+    }
+    refresh_upstream_resources(session, upstreams).await
 }
 
-pub(crate) fn ensure_upstream_resource_templates_loaded(
+pub(crate) async fn ensure_upstream_resource_templates_loaded(
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &mut BTreeMap<String, UpstreamClient>,
+    upstreams: &Arc<UpstreamPool>,
+    catalog: &ProxyCatalog,
 ) -> Result<Vec<Value>> {
     if let Ok(guard) = session.lock() {
         if guard.upstream_resource_templates_loaded {
             return Ok(guard.upstream_resource_templates_cache.clone());
         }
     }
+    let _guard = catalog.refresh.lock().await;
+    if let Ok(guard) = session.lock() {
+        if guard.upstream_resource_templates_loaded {
+            return Ok(guard.upstream_resource_templates_cache.clone());
+        }
+    }
     let mut templates = Vec::new();
-    for upstream in upstreams.values_mut() {
-        let response = send_request_to_upstream(
-            upstream,
-            &json!({
+    for upstream in upstreams.values() {
+        let response = upstream
+            .send_request(&json!({
                 "jsonrpc":"2.0",
                 "id": format!("packet28-templates-list-{}", upstream.name),
                 "method":"resources/templates/list"
-            }),
-        )?;
+            }))
+            .await?;
         if let Some(items) = response
             .get("result")
             .and_then(|value| value.get("resourceTemplates"))
@@ -90,22 +115,21 @@ pub(crate) fn ensure_upstream_resource_templates_loaded(
     Ok(templates)
 }
 
-fn refresh_upstream_tools(
+async fn refresh_upstream_tools(
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &mut BTreeMap<String, UpstreamClient>,
+    upstreams: &Arc<UpstreamPool>,
 ) -> Result<Vec<Value>> {
     let native_tool_names = native_tool_names();
     let mut discovered = BTreeMap::<String, Vec<(String, Value)>>::new();
     let mut tool_owners = BTreeMap::new();
-    for upstream in upstreams.values_mut() {
-        let response = send_request_to_upstream(
-            upstream,
-            &json!({
+    for upstream in upstreams.values() {
+        let response = upstream
+            .send_request(&json!({
                 "jsonrpc":"2.0",
                 "id": format!("packet28-tools-refresh-{}", upstream.name),
                 "method":"tools/list"
-            }),
-        )?;
+            }))
+            .await?;
         if let Some(items) = response
             .get("result")
             .and_then(|value| value.get("tools"))
@@ -152,21 +176,20 @@ fn refresh_upstream_tools(
     Ok(rendered_tools)
 }
 
-fn refresh_upstream_resources(
+async fn refresh_upstream_resources(
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &mut BTreeMap<String, UpstreamClient>,
+    upstreams: &Arc<UpstreamPool>,
 ) -> Result<Vec<Value>> {
     let mut resource_owners = BTreeMap::new();
     let mut rendered_resources = Vec::new();
-    for upstream in upstreams.values_mut() {
-        let response = send_request_to_upstream(
-            upstream,
-            &json!({
+    for upstream in upstreams.values() {
+        let response = upstream
+            .send_request(&json!({
                 "jsonrpc":"2.0",
                 "id": format!("packet28-resources-refresh-{}", upstream.name),
                 "method":"resources/list"
-            }),
-        )?;
+            }))
+            .await?;
         if let Some(items) = response
             .get("result")
             .and_then(|value| value.get("resources"))

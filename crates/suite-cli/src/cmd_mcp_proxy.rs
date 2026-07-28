@@ -2,10 +2,15 @@ use super::*;
 use crate::cmd_mcp::proxy_catalog::{
     ensure_upstream_resource_templates_loaded, ensure_upstream_resources_loaded,
     ensure_upstream_tools_loaded, forward_name_for_tool, owner_for_resource, owner_for_tool,
+    ProxyCatalog,
 };
 use crate::cmd_mcp::proxy_upstream::{
-    send_message_to_upstream, send_request_to_upstream, spawn_upstream_clients, UpstreamClient,
+    proxy_output_channel, spawn_upstream_clients, write_proxy_output, ProxyOutput, UpstreamClient,
+    UpstreamPool,
 };
+
+const MAX_PROXY_INFLIGHT: usize = 64;
+const PROXY_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 pub(crate) fn load_proxy_config(path: &Path) -> Result<McpProxyConfig> {
     let bytes = fs::read(path)
@@ -26,70 +31,347 @@ pub(crate) fn serve_proxy_stdio(
     config: McpProxyConfig,
     task_id: String,
 ) -> Result<()> {
-    let stdin = io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-    let writer = Arc::new(Mutex::new(io::stdout()));
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("packet28-mcp-proxy")
+        .build()
+        .context("failed to start MCP proxy runtime")?
+        .block_on(serve_proxy_stdio_async(root, config, task_id))
+}
+
+async fn serve_proxy_stdio_async(
+    root: PathBuf,
+    config: McpProxyConfig,
+    task_id: String,
+) -> Result<()> {
+    let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
     let session = Arc::new(Mutex::new(McpSessionState::default()));
     if let Ok(mut guard) = session.lock() {
         guard.proxy_task_id = Some(task_id.clone());
     }
-    track_task(&session, &root, &task_id)?;
-    start_notification_thread(root.clone(), writer.clone(), session.clone());
-    let mut upstreams = spawn_upstream_clients(&root, &config, writer.clone(), session.clone())?;
-
+    let tracked_root = root.clone();
+    let tracked_session = session.clone();
+    run_blocking("track proxy task", move || {
+        track_task(&tracked_session, &tracked_root, &task_id)
+    })
+    .await?;
+    let (output, output_receiver) = proxy_output_channel();
+    let mut writer = Some(tokio::spawn(write_proxy_output(output_receiver)));
+    let upstreams =
+        match spawn_upstream_clients(&root, &config, output.clone(), session.clone()).await {
+            Ok(upstreams) => upstreams,
+            Err(error) => {
+                drop(output);
+                if let Some(writer) = writer {
+                    let _ = writer.await;
+                }
+                return Err(error);
+            }
+        };
+    let notification_thread =
+        start_proxy_notification_thread(root.clone(), output.clone(), session.clone());
+    let catalog = Arc::new(ProxyCatalog::default());
+    let inflight = Arc::new(tokio::sync::Semaphore::new(MAX_PROXY_INFLIGHT));
+    let mut requests = tokio::task::JoinSet::new();
+    let mut serve_result = Ok(());
     loop {
-        let Some((request, framing)) = read_message(&mut reader)? else {
+        while let Some(joined) = requests.try_join_next() {
+            if let Err(error) = flatten_proxy_task(joined) {
+                serve_result = Err(error);
+                break;
+            }
+        }
+        if serve_result.is_err() {
+            break;
+        }
+        let next = if let Some(writer_task) = writer.as_mut() {
+            tokio::select! {
+                message = crate::cmd_mcp::transport::read_message_async(&mut reader) => message,
+                result = writer_task => {
+                    writer = None;
+                    serve_result = Err(proxy_writer_error(result));
+                    break;
+                }
+            }
+        } else {
+            serve_result = Err(anyhow!("MCP stdout writer stopped"));
+            break;
+        };
+        let Some((request, framing)) = (match next {
+            Ok(message) => message,
+            Err(error) => {
+                serve_result = Err(error);
+                break;
+            }
+        }) else {
             break;
         };
         if let Ok(mut guard) = session.lock() {
             guard.framing = Some(framing);
         }
-        let method = request
-            .get("method")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("missing method"))?;
+        let Some(method) = request.get("method").and_then(Value::as_str) else {
+            if let Some(id) = request.get("id").cloned() {
+                if let Err(error) = output
+                    .send(mcp_error_response(id, -32600, "missing method"), framing)
+                    .await
+                {
+                    serve_result = Err(error);
+                    break;
+                }
+            }
+            continue;
+        };
         let params = request.get("params").cloned().unwrap_or(Value::Null);
         let id = request.get("id").cloned();
 
         if id.is_none() {
-            let _ = handle_proxy_notification(&root, &session, &mut upstreams, method, params);
+            let _ = handle_proxy_notification(&root, &session, &upstreams, method, params).await;
+            continue;
+        }
+        let id = id.unwrap_or(Value::Null);
+
+        // Initialization is the only ordering barrier in an MCP session. Keep it
+        // ahead of pipelined requests while allowing normal calls to run concurrently.
+        if method == "initialize" {
+            let response = match handle_proxy_method(
+                &root,
+                &session,
+                &upstreams,
+                &catalog,
+                method,
+                params,
+                id.clone(),
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(error) => json!({
+                    "jsonrpc":"2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": error.to_string()
+                    }
+                }),
+            };
+            if let Err(error) = output.send(response, framing).await {
+                serve_result = Err(error);
+                break;
+            }
             continue;
         }
 
-        let response = match handle_proxy_method(
-            &root,
-            &session,
-            &mut upstreams,
-            method,
-            params,
-            id.clone().unwrap(),
-        ) {
-            Ok(value) => value,
-            Err(err) => json!({
-                "jsonrpc":"2.0",
-                "id": id,
-                "error": {
-                    "code": -32000,
-                    "message": err.to_string()
-                }
-            }),
+        let permit = match inflight.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                serve_result = Err(anyhow!("MCP proxy request queue closed"));
+                break;
+            }
         };
-        let mut guard = writer
-            .lock()
-            .map_err(|_| anyhow!("failed to lock MCP stdout"))?;
-        write_message(&mut *guard, &response, framing)?;
+        let root = root.clone();
+        let session = session.clone();
+        let upstreams = upstreams.clone();
+        let catalog = catalog.clone();
+        let output = output.clone();
+        let method = method.to_string();
+        requests.spawn(async move {
+            let _permit = permit;
+            let response = match handle_proxy_method(
+                &root,
+                &session,
+                &upstreams,
+                &catalog,
+                &method,
+                params,
+                id.clone(),
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(err) => json!({
+                    "jsonrpc":"2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": err.to_string()
+                    }
+                }),
+            };
+            output.send(response, framing).await
+        });
     }
 
     if let Ok(mut guard) = session.lock() {
         guard.shutdown = true;
     }
-    Ok(())
+    let mut drain_error = None;
+    let drained = tokio::time::timeout(PROXY_SHUTDOWN_GRACE, async {
+        while let Some(joined) = requests.join_next().await {
+            if let Err(error) = flatten_proxy_task(joined) {
+                drain_error.get_or_insert(error);
+            }
+        }
+    })
+    .await
+    .is_ok();
+    if !drained {
+        requests.abort_all();
+        if serve_result.is_ok() {
+            serve_result = Err(anyhow!(
+                "MCP proxy requests did not finish within {}ms shutdown grace",
+                PROXY_SHUTDOWN_GRACE.as_millis()
+            ));
+        }
+    } else if serve_result.is_ok() {
+        serve_result = drain_error.map_or(Ok(()), Err);
+    }
+    upstreams.shutdown().await;
+    while let Some(joined) = requests.join_next().await {
+        if let Err(error) = joined {
+            if !error.is_cancelled() && serve_result.is_ok() {
+                serve_result = Err(anyhow!("MCP proxy request task failed: {error}"));
+            }
+        } else if serve_result.is_ok() {
+            serve_result = Err(anyhow!(
+                "MCP proxy request completed after shutdown cancellation"
+            ));
+        }
+    }
+    let _ = tokio::task::spawn_blocking(move || notification_thread.join()).await;
+    drop(upstreams);
+    drop(output);
+    if let Some(writer) = writer {
+        match writer.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) if serve_result.is_ok() => serve_result = Err(error),
+            Err(error) if serve_result.is_ok() => {
+                serve_result = Err(anyhow!("MCP stdout writer task failed: {error}"))
+            }
+            _ => {}
+        }
+    }
+    serve_result
 }
 
-fn handle_proxy_notification(
+fn proxy_writer_error(
+    result: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> anyhow::Error {
+    match result {
+        Ok(Ok(())) => anyhow!("MCP stdout writer stopped unexpectedly"),
+        Ok(Err(error)) => error,
+        Err(error) => anyhow!("MCP stdout writer task failed: {error}"),
+    }
+}
+
+fn flatten_proxy_task(
+    joined: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> Result<()> {
+    joined.map_err(|error| anyhow!("MCP proxy request task failed: {error}"))?
+}
+
+fn start_proxy_notification_thread(
+    root: PathBuf,
+    output: ProxyOutput,
+    session: Arc<Mutex<McpSessionState>>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || loop {
+        let (initialized, shutdown, tracked_tasks, tracked_task_offsets, framing) =
+            match session.lock() {
+                Ok(guard) => (
+                    guard.initialized,
+                    guard.shutdown,
+                    guard.tracked_tasks.clone(),
+                    guard.tracked_task_offsets.clone(),
+                    guard.framing,
+                ),
+                Err(_) => return,
+            };
+        if shutdown {
+            return;
+        }
+        if !initialized || framing.is_none() {
+            thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
+            continue;
+        }
+        let framing = framing.unwrap_or(McpMessageFraming::ContentLength);
+
+        for (task_id, last_seen_seq) in tracked_tasks {
+            let previous_offset = tracked_task_offsets.get(&task_id).copied().unwrap_or(0);
+            let read = match load_task_events_from_offset(&root, &task_id, previous_offset) {
+                Ok(read) => read,
+                Err(_) => continue,
+            };
+            let mut newest_delivered_seq = last_seen_seq;
+            let mut backpressured = false;
+            for frame in read
+                .events
+                .into_iter()
+                .filter(|frame| frame.seq > last_seen_seq)
+            {
+                if frame.event.kind != "context_updated" {
+                    newest_delivered_seq = newest_delivered_seq.max(frame.seq);
+                    continue;
+                }
+                let mut params = match frame.event.data {
+                    Value::Object(map) => map,
+                    other => {
+                        let mut map = Map::new();
+                        map.insert("data".to_string(), other);
+                        map
+                    }
+                };
+                params.insert("task_id".to_string(), Value::String(task_id.clone()));
+                params.insert(
+                    "context_version".to_string(),
+                    params
+                        .get("context_version")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                params.insert("event_seq".to_string(), Value::Number(frame.seq.into()));
+                let notification = json!({
+                    "jsonrpc":"2.0",
+                    "method":"notifications/packet28.context_updated",
+                    "params": Value::Object(params),
+                });
+                match output.try_send(notification, framing) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        backpressured = true;
+                        break;
+                    }
+                    Err(_) => {
+                        if let Ok(mut guard) = session.lock() {
+                            guard.shutdown = true;
+                        }
+                        return;
+                    }
+                }
+                newest_delivered_seq = newest_delivered_seq.max(frame.seq);
+            }
+            if newest_delivered_seq > last_seen_seq
+                || (!backpressured && read.next_offset != previous_offset)
+            {
+                if let Ok(mut guard) = session.lock() {
+                    if let Some(current) = guard.tracked_tasks.get_mut(&task_id) {
+                        *current = newest_delivered_seq;
+                    }
+                    if !backpressured {
+                        guard
+                            .tracked_task_offsets
+                            .insert(task_id.clone(), read.next_offset);
+                    }
+                }
+            }
+        }
+        thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
+    })
+}
+
+async fn handle_proxy_notification(
     root: &Path,
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &mut BTreeMap<String, UpstreamClient>,
+    upstreams: &Arc<UpstreamPool>,
     method: &str,
     params: Value,
 ) -> Result<()> {
@@ -99,16 +381,17 @@ fn handle_proxy_notification(
         "method": method,
         "params": params,
     });
-    for upstream in upstreams.values_mut() {
-        send_message_to_upstream(upstream, &notification)?;
+    for upstream in upstreams.values() {
+        upstream.send_message(&notification).await?;
     }
     Ok(())
 }
 
-fn handle_proxy_method(
+async fn handle_proxy_method(
     root: &Path,
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &mut BTreeMap<String, UpstreamClient>,
+    upstreams: &Arc<UpstreamPool>,
+    catalog: &ProxyCatalog,
     method: &str,
     params: Value,
     id: Value,
@@ -121,14 +404,14 @@ fn handle_proxy_method(
                 guard.upstream_resources_loaded = false;
                 guard.upstream_resource_templates_loaded = false;
             }
-            for upstream in upstreams.values_mut() {
+            for upstream in upstreams.values() {
                 let request = json!({
                     "jsonrpc":"2.0",
                     "id": format!("packet28-init-{}", upstream.name),
                     "method":"initialize",
                     "params": params.clone(),
                 });
-                let response = send_request_to_upstream(upstream, &request)?;
+                let response = upstream.send_request(&request).await?;
                 if response.get("error").is_some() {
                     return Ok(json!({
                         "jsonrpc":"2.0",
@@ -140,39 +423,40 @@ fn handle_proxy_method(
             Ok(json!({
                 "jsonrpc":"2.0",
                 "id": id,
-                "result": handle_method(root, session, method, params)?,
+                "result": handle_local_method(root, session, method, params).await?,
             }))
         }
         "tools/list" => {
-            let mut result = handle_method(root, session, method, Value::Null)?;
+            let mut result = handle_local_method(root, session, method, Value::Null).await?;
             if let Some(tools) = result.get_mut("tools").and_then(Value::as_array_mut) {
-                tools.extend(ensure_upstream_tools_loaded(session, upstreams)?);
+                tools.extend(ensure_upstream_tools_loaded(session, upstreams, catalog).await?);
             }
             Ok(json!({"jsonrpc":"2.0","id":id,"result":result}))
         }
         "resources/list" => {
-            let mut result = handle_method(root, session, method, Value::Null)?;
+            let mut result = handle_local_method(root, session, method, Value::Null).await?;
             if let Some(resources) = result.get_mut("resources").and_then(Value::as_array_mut) {
-                resources.extend(ensure_upstream_resources_loaded(session, upstreams)?);
+                resources
+                    .extend(ensure_upstream_resources_loaded(session, upstreams, catalog).await?);
             }
             Ok(json!({"jsonrpc":"2.0","id":id,"result":result}))
         }
         "resources/templates/list" => {
-            let mut result = handle_method(root, session, method, Value::Null)?;
+            let mut result = handle_local_method(root, session, method, Value::Null).await?;
             if let Some(templates) = result
                 .get_mut("resourceTemplates")
                 .and_then(Value::as_array_mut)
             {
-                templates.extend(ensure_upstream_resource_templates_loaded(
-                    session, upstreams,
-                )?);
+                templates.extend(
+                    ensure_upstream_resource_templates_loaded(session, upstreams, catalog).await?,
+                );
             }
             Ok(json!({"jsonrpc":"2.0","id":id,"result":result}))
         }
         "prompts/list" => Ok(json!({
             "jsonrpc":"2.0",
             "id":id,
-            "result": handle_method(root, session, method, Value::Null)?,
+            "result": handle_local_method(root, session, method, Value::Null).await?,
         })),
         "prompts/get" => {
             let name = params
@@ -183,22 +467,21 @@ fn handle_proxy_method(
                 return Ok(json!({
                     "jsonrpc":"2.0",
                     "id": id,
-                    "result": handle_method(root, session, method, params)?,
+                    "result": handle_local_method(root, session, method, params).await?,
                 }));
             }
             let upstream = upstreams
-                .values_mut()
+                .values()
                 .next()
                 .ok_or_else(|| anyhow!("no upstream MCP servers configured"))?;
-            send_request_to_upstream(
-                upstream,
-                &json!({
+            upstream
+                .send_request(&json!({
                     "jsonrpc":"2.0",
                     "id": id,
                     "method":"prompts/get",
                     "params": params,
-                }),
-            )
+                }))
+                .await
         }
         "resources/read" => {
             let uri = params
@@ -209,45 +492,68 @@ fn handle_proxy_method(
                 return Ok(json!({
                     "jsonrpc":"2.0",
                     "id": id,
-                    "result": handle_method(root, session, method, params)?,
+                    "result": handle_local_method(root, session, method, params).await?,
                 }));
             }
             if owner_for_resource(session, uri).is_none() {
-                let _ = ensure_upstream_resources_loaded(session, upstreams)?;
+                let _ = ensure_upstream_resources_loaded(session, upstreams, catalog).await?;
             }
             let owner = owner_for_resource(session, uri)
                 .ok_or_else(|| anyhow!("no upstream owns resource '{uri}'"))?;
             let upstream = upstreams
-                .get_mut(&owner)
+                .get(&owner)
                 .ok_or_else(|| anyhow!("missing upstream '{owner}'"))?;
-            let response = send_request_to_upstream(
-                upstream,
-                &json!({
+            let response = upstream
+                .send_request(&json!({
                     "jsonrpc":"2.0",
                     "id": id,
                     "method":"resources/read",
                     "params": params,
-                }),
-            )?;
+                }))
+                .await?;
             Ok(response)
         }
-        "tools/call" => handle_proxy_tool_call(root, session, upstreams, params, id),
+        "tools/call" => handle_proxy_tool_call(root, session, upstreams, catalog, params, id).await,
         _ => {
             let upstream = upstreams
-                .values_mut()
+                .values()
                 .next()
                 .ok_or_else(|| anyhow!("no upstream MCP servers configured"))?;
-            send_request_to_upstream(
-                upstream,
-                &json!({
+            upstream
+                .send_request(&json!({
                     "jsonrpc":"2.0",
                     "id": id,
                     "method": method,
                     "params": params,
-                }),
-            )
+                }))
+                .await
         }
     }
+}
+
+async fn handle_local_method(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
+    let root = root.to_path_buf();
+    let session = session.clone();
+    let method = method.to_string();
+    run_blocking("local MCP method", move || {
+        handle_method(&root, &session, &method, params)
+    })
+    .await
+}
+
+async fn run_blocking<T, F>(operation: &'static str, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .with_context(|| format!("{operation} worker failed"))?
 }
 
 fn next_proxy_invocation(session: &Arc<Mutex<McpSessionState>>) -> Result<(String, u64, String)> {
@@ -263,10 +569,11 @@ fn next_proxy_invocation(session: &Arc<Mutex<McpSessionState>>) -> Result<(Strin
     Ok((task_id, sequence, format!("tool-invocation-{sequence}")))
 }
 
-fn handle_proxy_tool_call(
+async fn handle_proxy_tool_call(
     root: &Path,
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &mut BTreeMap<String, UpstreamClient>,
+    upstreams: &Arc<UpstreamPool>,
+    catalog: &ProxyCatalog,
     params: Value,
     id: Value,
 ) -> Result<Value> {
@@ -276,19 +583,24 @@ fn handle_proxy_tool_call(
         .ok_or_else(|| anyhow!("missing tool name"))?;
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
     if name.starts_with("packet28.") || name.starts_with("packet28_") {
-        let result = handle_tool_call(root, session, params)?;
+        let root = root.to_path_buf();
+        let session = session.clone();
+        let result = run_blocking("native MCP tool", move || {
+            handle_tool_call(&root, &session, params)
+        })
+        .await?;
         return Ok(json!({"jsonrpc":"2.0","id":id,"result":result}));
     }
 
     if owner_for_tool(session, name).is_none() {
-        let _ = ensure_upstream_tools_loaded(session, upstreams)?;
+        let _ = ensure_upstream_tools_loaded(session, upstreams, catalog).await?;
     }
     let owner =
         owner_for_tool(session, name).ok_or_else(|| anyhow!("no upstream owns tool '{name}'"))?;
     let upstream_tool_name = forward_name_for_tool(session, name)
         .ok_or_else(|| anyhow!("no upstream mapping found for tool '{name}'"))?;
     let upstream = upstreams
-        .get_mut(&owner)
+        .get(&owner)
         .ok_or_else(|| anyhow!("missing upstream '{owner}'"))?;
 
     let operation_kind = classify_tool_operation(name, &arguments);
@@ -302,29 +614,41 @@ fn handle_proxy_tool_call(
     let command = extract_named_string(&arguments, &["cmd", "command"]);
     let (task_id, sequence, invocation_id) = next_proxy_invocation(session)?;
 
-    track_task(session, root, &task_id)?;
-    write_auto_capture_state(
-        root,
-        BrokerWriteStateRequest {
-            task_id: task_id.clone(),
-            op: Some(BrokerWriteOp::ToolInvocationStarted),
-            invocation_id: Some(invocation_id.clone()),
-            tool_name: Some(name.to_string()),
-            server_name: Some(owner.clone()),
-            operation_kind: Some(operation_kind),
-            request_summary: Some(request_summary.clone()),
-            request_fingerprint: Some(request_fingerprint.clone()),
-            sequence: Some(sequence),
-            paths: request_paths.clone(),
-            symbols: request_symbols.clone(),
-            ..BrokerWriteStateRequest::default()
-        },
-    )?;
+    let capture_root = root.to_path_buf();
+    let capture_session = session.clone();
+    let capture_task_id = task_id.clone();
+    let capture_invocation_id = invocation_id.clone();
+    let capture_name = name.to_string();
+    let capture_owner = owner.clone();
+    let capture_request_summary = request_summary.clone();
+    let capture_request_fingerprint = request_fingerprint.clone();
+    let capture_request_paths = request_paths.clone();
+    let capture_request_symbols = request_symbols.clone();
+    run_blocking("record upstream MCP invocation", move || {
+        track_task(&capture_session, &capture_root, &capture_task_id)?;
+        write_auto_capture_state(
+            &capture_root,
+            BrokerWriteStateRequest {
+                task_id: capture_task_id,
+                op: Some(BrokerWriteOp::ToolInvocationStarted),
+                invocation_id: Some(capture_invocation_id),
+                tool_name: Some(capture_name),
+                server_name: Some(capture_owner),
+                operation_kind: Some(operation_kind),
+                request_summary: Some(capture_request_summary),
+                request_fingerprint: Some(capture_request_fingerprint),
+                sequence: Some(sequence),
+                paths: capture_request_paths,
+                symbols: capture_request_symbols,
+                ..BrokerWriteStateRequest::default()
+            },
+        )
+    })
+    .await?;
 
     let started_at = Instant::now();
-    let response = send_request_to_upstream(
-        upstream,
-        &json!({
+    let response = upstream
+        .send_request(&json!({
             "jsonrpc":"2.0",
             "id": id,
             "method":"tools/call",
@@ -332,8 +656,8 @@ fn handle_proxy_tool_call(
                 "name": upstream_tool_name,
                 "arguments": arguments.clone(),
             }
-        }),
-    )?;
+        }))
+        .await?;
     let duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
 
     let empty = Value::Null;
@@ -365,131 +689,154 @@ fn handle_proxy_tool_call(
             .and_then(Value::as_str)
             .unwrap_or("upstream tool call failed")
             .to_string();
-        let artifact_id =
-            store_tool_artifact(root, &task_id, &invocation_id, "failure", error).ok();
-        write_auto_capture_state(
-            root,
-            BrokerWriteStateRequest {
-                task_id: task_id.clone(),
-                op: Some(BrokerWriteOp::ToolInvocationFailed),
-                invocation_id: Some(invocation_id.clone()),
-                tool_name: Some(name.to_string()),
-                server_name: Some(owner.clone()),
-                operation_kind: Some(operation_kind),
-                request_summary: Some(request_summary),
-                request_fingerprint: Some(request_fingerprint),
-                error_class,
-                error_message: Some(error_message.clone()),
-                retryable: Some(is_retryable_error(&error_message)),
-                sequence: Some(sequence),
-                duration_ms: Some(duration_ms),
-                paths: paths.clone(),
-                symbols: symbols.clone(),
-                ..BrokerWriteStateRequest::default()
-            },
-        )?;
-        if let Some(artifact_id) = artifact_id {
+        let capture_root = root.to_path_buf();
+        let capture_task_id = task_id;
+        let capture_invocation_id = invocation_id;
+        let capture_name = name.to_string();
+        let capture_owner = owner;
+        let capture_error = error.clone();
+        run_blocking("record failed upstream MCP invocation", move || {
+            let artifact_id = store_tool_artifact(
+                &capture_root,
+                &capture_task_id,
+                &capture_invocation_id,
+                "failure",
+                &capture_error,
+            )
+            .ok();
             write_auto_capture_state(
-                root,
+                &capture_root,
                 BrokerWriteStateRequest {
-                    task_id: task_id.clone(),
-                    op: Some(BrokerWriteOp::EvidenceCaptured),
-                    artifact_id: Some(artifact_id),
-                    note: Some(format!("failure output for {}", name)),
+                    task_id: capture_task_id.clone(),
+                    op: Some(BrokerWriteOp::ToolInvocationFailed),
+                    invocation_id: Some(capture_invocation_id),
+                    tool_name: Some(capture_name.clone()),
+                    server_name: Some(capture_owner),
+                    operation_kind: Some(operation_kind),
+                    request_summary: Some(request_summary),
+                    request_fingerprint: Some(request_fingerprint),
+                    error_class,
+                    error_message: Some(error_message.clone()),
+                    retryable: Some(is_retryable_error(&error_message)),
+                    sequence: Some(sequence),
+                    duration_ms: Some(duration_ms),
+                    paths: paths.clone(),
+                    symbols: symbols.clone(),
                     ..BrokerWriteStateRequest::default()
                 },
             )?;
-        }
-        if !paths.is_empty() || !symbols.is_empty() {
-            write_auto_capture_state(
-                root,
-                BrokerWriteStateRequest {
-                    task_id,
-                    op: Some(BrokerWriteOp::FocusInferred),
-                    note: Some(format!("inferred from failed {}", name)),
-                    paths,
-                    symbols,
-                    ..BrokerWriteStateRequest::default()
-                },
-            )?;
-        }
+            if let Some(artifact_id) = artifact_id {
+                write_auto_capture_state(
+                    &capture_root,
+                    BrokerWriteStateRequest {
+                        task_id: capture_task_id.clone(),
+                        op: Some(BrokerWriteOp::EvidenceCaptured),
+                        artifact_id: Some(artifact_id),
+                        note: Some(format!("failure output for {capture_name}")),
+                        ..BrokerWriteStateRequest::default()
+                    },
+                )?;
+            }
+            if !paths.is_empty() || !symbols.is_empty() {
+                write_auto_capture_state(
+                    &capture_root,
+                    BrokerWriteStateRequest {
+                        task_id: capture_task_id,
+                        op: Some(BrokerWriteOp::FocusInferred),
+                        note: Some(format!("inferred from failed {capture_name}")),
+                        paths,
+                        symbols,
+                        ..BrokerWriteStateRequest::default()
+                    },
+                )?;
+            }
+            Ok(())
+        })
+        .await?;
         return Ok(response);
     }
 
     let result = response.get("result").cloned().unwrap_or(Value::Null);
     let rewrite_response = should_compact_proxy_tool(upstream, name, operation_kind)
         && response.get("result").is_some();
-    let artifact_id = if rewrite_response {
-        Some(store_tool_artifact(
-            root,
-            &task_id,
-            &invocation_id,
-            "result",
-            &result,
-        )?)
-    } else {
-        maybe_store_result_artifact(
-            root,
-            &task_id,
-            &invocation_id,
-            &result,
-            !paths.is_empty() || !symbols.is_empty(),
-        )?
-    };
     let result_summary = if rewrite_response {
         summarize_json_value(&result, 280)
     } else {
         summarize_json_value(&result, 200)
     };
-
-    write_auto_capture_state(
-        root,
-        BrokerWriteStateRequest {
-            task_id: task_id.clone(),
-            op: Some(BrokerWriteOp::ToolInvocationCompleted),
-            invocation_id: Some(invocation_id.clone()),
-            tool_name: Some(name.to_string()),
-            server_name: Some(owner.clone()),
-            operation_kind: Some(operation_kind),
-            request_summary: Some(request_summary),
-            result_summary: Some(result_summary.clone()),
-            request_fingerprint: Some(request_fingerprint),
-            search_query,
-            command,
-            sequence: Some(sequence),
-            duration_ms: Some(duration_ms),
-            artifact_id: artifact_id.clone(),
-            paths: paths.clone(),
-            symbols: symbols.clone(),
-            ..BrokerWriteStateRequest::default()
-        },
-    )?;
-    if !paths.is_empty() || !symbols.is_empty() {
+    let capture_root = root.to_path_buf();
+    let capture_name = name.to_string();
+    let capture_owner = owner.clone();
+    let capture_result_summary = result_summary.clone();
+    let artifact_id = run_blocking("record completed upstream MCP invocation", move || {
+        let artifact_id = if rewrite_response {
+            Some(store_tool_artifact(
+                &capture_root,
+                &task_id,
+                &invocation_id,
+                "result",
+                &result,
+            )?)
+        } else {
+            maybe_store_result_artifact(
+                &capture_root,
+                &task_id,
+                &invocation_id,
+                &result,
+                !paths.is_empty() || !symbols.is_empty(),
+            )?
+        };
         write_auto_capture_state(
-            root,
+            &capture_root,
             BrokerWriteStateRequest {
                 task_id: task_id.clone(),
-                op: Some(BrokerWriteOp::FocusInferred),
-                note: Some(format!("inferred from {}", name)),
-                paths,
-                symbols,
+                op: Some(BrokerWriteOp::ToolInvocationCompleted),
+                invocation_id: Some(invocation_id),
+                tool_name: Some(capture_name.clone()),
+                server_name: Some(capture_owner),
+                operation_kind: Some(operation_kind),
+                request_summary: Some(request_summary),
+                result_summary: Some(capture_result_summary),
+                request_fingerprint: Some(request_fingerprint),
+                search_query,
+                command,
+                sequence: Some(sequence),
+                duration_ms: Some(duration_ms),
+                artifact_id: artifact_id.clone(),
+                paths: paths.clone(),
+                symbols: symbols.clone(),
                 ..BrokerWriteStateRequest::default()
             },
         )?;
-    }
-    let response_artifact_id = artifact_id.clone();
-    if let Some(artifact_id) = artifact_id {
-        write_auto_capture_state(
-            root,
-            BrokerWriteStateRequest {
-                task_id,
-                op: Some(BrokerWriteOp::EvidenceCaptured),
-                artifact_id: Some(artifact_id),
-                note: Some(format!("captured from {}", name)),
-                ..BrokerWriteStateRequest::default()
-            },
-        )?;
-    }
+        if !paths.is_empty() || !symbols.is_empty() {
+            write_auto_capture_state(
+                &capture_root,
+                BrokerWriteStateRequest {
+                    task_id: task_id.clone(),
+                    op: Some(BrokerWriteOp::FocusInferred),
+                    note: Some(format!("inferred from {capture_name}")),
+                    paths,
+                    symbols,
+                    ..BrokerWriteStateRequest::default()
+                },
+            )?;
+        }
+        if let Some(artifact_id) = artifact_id.as_ref() {
+            write_auto_capture_state(
+                &capture_root,
+                BrokerWriteStateRequest {
+                    task_id,
+                    op: Some(BrokerWriteOp::EvidenceCaptured),
+                    artifact_id: Some(artifact_id.clone()),
+                    note: Some(format!("captured from {capture_name}")),
+                    ..BrokerWriteStateRequest::default()
+                },
+            )?;
+        }
+        Ok(artifact_id)
+    })
+    .await?;
+    let response_artifact_id = artifact_id;
 
     if rewrite_response {
         let compact_preview = result_summary.clone();

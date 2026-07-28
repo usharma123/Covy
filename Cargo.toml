@@ -53,6 +53,7 @@ wincode-derive-impl = { package = "wincode-derive", version = "=0.4.1" }
 regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.48", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 rayon = "1"
 shell-words = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }

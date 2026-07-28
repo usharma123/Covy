@@ -97,3 +97,70 @@ while True:
     )
     .unwrap();
 }
+
+pub fn write_concurrent_tool_server(path: &Path) {
+    fs::write(
+        path,
+        r#"import json, sys, threading, time
+
+WRITE_LOCK = threading.Lock()
+RACE_BARRIER = threading.Barrier(2)
+
+def read_message():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, value = line.decode("utf-8").split(":", 1)
+        headers[name.lower().strip()] = value.strip()
+    length = int(headers.get("content-length", "0"))
+    return json.loads(sys.stdin.buffer.read(length))
+
+def write_message(value):
+    body = json.dumps(value).encode("utf-8")
+    with WRITE_LOCK:
+        sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+        sys.stdout.buffer.write(body)
+        sys.stdout.buffer.flush()
+
+def respond_to_tool(message):
+    arguments = message.get("params", {}).get("arguments", {})
+    if arguments.get("barrier"):
+        RACE_BARRIER.wait(timeout=5)
+    time.sleep(arguments.get("delay_ms", 0) / 1000.0)
+    write_message({
+        "jsonrpc": "2.0",
+        "id": message["id"],
+        "result": {
+            "content": [{"type": "text", "text": arguments.get("value", "")}],
+            "structuredContent": {"value": arguments.get("value", "")}
+        }
+    })
+
+while True:
+    message = read_message()
+    if message is None:
+        break
+    msg_id = message.get("id")
+    if msg_id is None:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}, "resources": {}}, "serverInfo": {"name": "concurrent", "version": "1"}}})
+    elif method == "tools/list":
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": [{"name": "concurrent.echo", "description": "concurrent test tool", "inputSchema": {"type": "object", "properties": {"delay_ms": {"type": "integer"}, "value": {"type": "string"}}}}]}})
+    elif method == "resources/list":
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"resources": []}})
+    elif method == "resources/templates/list":
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"resourceTemplates": []}})
+    elif method == "tools/call":
+        threading.Thread(target=respond_to_tool, args=(message,), daemon=True).start()
+    else:
+        write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": "unknown method"}})
+"#,
+    )
+    .unwrap();
+}

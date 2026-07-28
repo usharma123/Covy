@@ -3,16 +3,29 @@ mod mcp_proxy;
 #[path = "support/mcp_proxy_fake.rs"]
 mod mcp_proxy_fake;
 
-use mcp_proxy_fake::{write_colliding_tool_server, write_compact_read_server};
+use mcp_proxy_fake::{
+    write_colliding_tool_server, write_compact_read_server, write_concurrent_tool_server,
+};
 use serde_json::json;
 use std::fs;
+use std::io::BufReader;
+use std::process::ChildStdout;
 use tempfile::TempDir;
 
 use mcp_proxy::{
-    ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message_for_id,
-    start_mcp_proxy_server, start_mcp_proxy_server_with_tool, suite_cmd, write_mcp_message,
-    write_repo_fixture,
+    ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message,
+    read_mcp_message_for_id, start_mcp_proxy_server, start_mcp_proxy_server_with_tool, suite_cmd,
+    write_mcp_message, write_repo_fixture,
 };
+
+fn read_next_mcp_response(stdout: &mut BufReader<ChildStdout>) -> serde_json::Value {
+    loop {
+        let value = read_mcp_message(stdout);
+        if value.get("id").is_some() {
+            return value;
+        }
+    }
+}
 #[test]
 #[cfg(unix)]
 fn test_mcp_proxy_cli_namespaces_colliding_tools() {
@@ -184,6 +197,155 @@ fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
 
     child.kill().unwrap();
     child.wait().unwrap();
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script_path = dir.path().join("concurrent_mcp.py");
+    write_concurrent_tool_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "concurrent": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()],
+                    "timeout_ms": 500
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (mut child, mut stdin, mut stdout, _) = start_mcp_proxy_server_with_tool(
+        dir.path(),
+        &config_path,
+        "task-proxy-concurrent",
+        "concurrent.echo",
+    );
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"slow",
+            "method":"tools/call",
+            "params":{
+                "name":"concurrent.echo",
+                "arguments":{"barrier":true,"delay_ms":100,"value":"slow"}
+            }
+        }),
+    );
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"fast",
+            "method":"tools/call",
+            "params":{
+                "name":"concurrent.echo",
+                "arguments":{"barrier":true,"delay_ms":5,"value":"fast"}
+            }
+        }),
+    );
+
+    let first = read_next_mcp_response(&mut stdout);
+    let second = read_next_mcp_response(&mut stdout);
+    assert_eq!(first["id"], "fast");
+    assert_eq!(first["result"]["structuredContent"]["value"], "fast");
+    assert_eq!(second["id"], "slow");
+    assert_eq!(second["result"]["structuredContent"]["value"], "slow");
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"will-time-out",
+            "method":"tools/call",
+            "params":{
+                "name":"concurrent.echo",
+                "arguments":{"delay_ms":800,"value":"late"}
+            }
+        }),
+    );
+    let timeout = read_next_mcp_response(&mut stdout);
+    assert_eq!(timeout["id"], "will-time-out");
+    assert!(timeout["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("500ms"));
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"after-timeout",
+            "method":"tools/call",
+            "params":{
+                "name":"concurrent.echo",
+                "arguments":{"delay_ms":5,"value":"not-poisoned"}
+            }
+        }),
+    );
+    let after_timeout = read_next_mcp_response(&mut stdout);
+    assert_eq!(after_timeout["id"], "after-timeout");
+    assert_eq!(
+        after_timeout["result"]["structuredContent"]["value"],
+        "not-poisoned"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"after-late",
+            "method":"tools/call",
+            "params":{
+                "name":"concurrent.echo",
+                "arguments":{"delay_ms":5,"value":"still-correct"}
+            }
+        }),
+    );
+    let after_late = read_next_mcp_response(&mut stdout);
+    assert_eq!(after_late["id"], "after-late");
+    assert_eq!(
+        after_late["result"]["structuredContent"]["value"],
+        "still-correct"
+    );
+
+    write_mcp_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"half-close",
+            "method":"tools/call",
+            "params":{
+                "name":"concurrent.echo",
+                "arguments":{"delay_ms":50,"value":"drained-before-shutdown"}
+            }
+        }),
+    );
+    drop(stdin);
+    let drained = read_next_mcp_response(&mut stdout);
+    assert_eq!(drained["id"], "half-close");
+    assert_eq!(
+        drained["result"]["structuredContent"]["value"],
+        "drained-before-shutdown"
+    );
+    assert!(child.wait().unwrap().success());
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
