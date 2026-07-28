@@ -16,7 +16,6 @@ suite-packet-core.workspace = true
 suite-foundation-core.workspace = true
 roaring.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

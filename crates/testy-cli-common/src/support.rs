@@ -34,6 +34,12 @@ pub fn maybe_warn_deprecated(message: &str) {
     }
 }
 
+/// Decode JSON while appending the expected schema to parse failures.
+///
+/// # Errors
+///
+/// Returns an error retaining the JSON decoder message when `input` does not
+/// deserialize into `T`.
 pub fn deserialize_json_with_example<T: serde::de::DeserializeOwned>(
     input: &str,
     type_name: &str,

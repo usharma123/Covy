@@ -142,6 +142,12 @@ pub struct ImpactRunArgs {
     pub command: Vec<String>,
 }
 
+/// Dispatch an impact subcommand and render its CLI output.
+///
+/// # Errors
+///
+/// Returns an error when an input, adapter, persisted state, command execution,
+/// or JSON rendering operation fails.
 pub fn run_impact_command(
     args: ImpactArgs,
     config_path: &str,
@@ -163,6 +169,12 @@ pub fn run_impact_command(
     }
 }
 
+/// Run the compatibility impact-selection command and render its CLI output.
+///
+/// # Errors
+///
+/// Returns an error when configuration, test-map loading, diff collection,
+/// impact selection, or JSON rendering fails.
 pub fn run_legacy_impact(args: LegacyImpactArgs, config_path: &str) -> Result<i32> {
     let adapters = adapters::default_impact_adapters();
     let output = testy_core::command_impact::run_legacy_impact(

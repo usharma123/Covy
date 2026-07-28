@@ -1,11 +1,12 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{Context, Result};
 use suite_foundation_core::CovyConfig;
 #[cfg(test)]
 use suite_packet_core::gate::PlannedTest;
 use suite_packet_core::gate::{ImpactPlan, ImpactResult};
+
+use crate::error::{Result, TestyError};
 
 #[derive(Debug, Clone)]
 pub struct LegacyImpactArgs {
@@ -55,6 +56,12 @@ pub enum ImpactRunOutcome {
     ExitCode(i32),
 }
 
+/// Run legacy impact selection using configuration defaults.
+///
+/// # Errors
+///
+/// Returns [`TestyError`] when configuration, test-map state, diff collection,
+/// policy validation, or response invariants fail.
 pub fn run_legacy_impact(
     args: LegacyImpactArgs,
     config_path: &str,
@@ -97,12 +104,21 @@ pub fn run_legacy_impact(
     Ok(ImpactLegacyOutput {
         result: response
             .impact_result
-            .ok_or_else(|| anyhow::anyhow!("impact legacy response missing result"))?,
+            .ok_or(TestyError::MissingResponseField {
+                operation: "impact legacy",
+                field: "result",
+            })?,
         known_tests: response.known_tests.unwrap_or(0),
         print_command: response.print_command,
     })
 }
 
+/// Record per-test coverage into a persisted test map.
+///
+/// # Errors
+///
+/// Returns [`TestyError`] when manifest or coverage input, state persistence,
+/// an adapter, or the response invariant fails.
 pub fn run_record(
     args: ImpactRecordArgs,
     adapters: &crate::pipeline::ImpactAdapters,
@@ -124,19 +140,28 @@ pub fn run_record(
 
     response
         .record_summary
-        .ok_or_else(|| anyhow::anyhow!("impact record response missing summary"))
+        .ok_or(TestyError::MissingResponseField {
+            operation: "impact record",
+            field: "summary",
+        })
 }
 
+/// Build a budgeted impact plan using configuration defaults.
+///
+/// # Errors
+///
+/// Returns [`TestyError`] for unsupported output format, configuration,
+/// test-map, diff-adapter, or response-invariant failures.
 pub fn run_plan(
     args: ImpactPlanArgs,
     config_path: &str,
     adapters: &crate::pipeline::ImpactAdapters,
 ) -> Result<ImpactPlan> {
     if !args.format.eq_ignore_ascii_case("json") {
-        anyhow::bail!(
+        return Err(TestyError::invalid(format!(
             "Unsupported --format '{}'; only 'json' is supported",
             args.format
-        );
+        )));
     }
 
     let config = CovyConfig::load(Path::new(config_path))?;
@@ -158,20 +183,28 @@ pub fn run_plan(
         adapters,
     )?;
 
-    response
-        .plan
-        .ok_or_else(|| anyhow::anyhow!("impact plan response missing plan"))
+    response.plan.ok_or(TestyError::MissingResponseField {
+        operation: "impact plan",
+        field: "plan",
+    })
 }
 
+/// Execute the command represented by a serialized impact plan.
+///
+/// # Errors
+///
+/// Returns [`TestyError`] when the template is empty, the plan cannot be read
+/// or decoded, or the resolved executable cannot be started.
 pub fn run_impact_run(args: ImpactRunArgs, binary_name: &str) -> Result<ImpactRunOutcome> {
     if args.command.is_empty() {
-        anyhow::bail!(
+        return Err(TestyError::invalid(format!(
             "No command template provided. Use: {binary_name} impact run --plan plan.json -- <command>"
-        );
+        )));
     }
 
-    let content = std::fs::read_to_string(&args.plan_path)
-        .with_context(|| format!("Failed to read plan at {}", args.plan_path))?;
+    let content = std::fs::read_to_string(&args.plan_path).map_err(|source| {
+        TestyError::io("Failed to read plan at", Path::new(&args.plan_path), source)
+    })?;
     let plan: ImpactPlan =
         deserialize_json_with_example(&content, "ImpactPlan", &impact_plan_example(binary_name))?;
 
@@ -182,13 +215,17 @@ pub fn run_impact_run(args: ImpactRunArgs, binary_name: &str) -> Result<ImpactRu
 
     let final_command = build_run_command_args(&args.command, &tests);
     if final_command.is_empty() {
-        anyhow::bail!("Resolved command is empty");
+        return Err(TestyError::invalid("Resolved command is empty"));
     }
 
     let executable = &final_command[0];
     let status = Command::new(executable)
         .args(&final_command[1..])
-        .status()?;
+        .status()
+        .map_err(|source| TestyError::CommandSpawn {
+            program: executable.clone(),
+            source,
+        })?;
     Ok(ImpactRunOutcome::ExitCode(status.code().unwrap_or(1)))
 }
 
@@ -254,8 +291,12 @@ fn deserialize_json_with_example<T: serde::de::DeserializeOwned>(
     type_name: &str,
     example: &str,
 ) -> Result<T> {
-    serde_json::from_str(input).map_err(|e| {
-        anyhow::anyhow!("Failed to parse {type_name}: {e}\n\nExpected JSON shape:\n{example}")
+    serde_json::from_str(input).map_err(|source| {
+        TestyError::json(
+            format!("Failed to parse {type_name}"),
+            source,
+            Some(example),
+        )
     })
 }
 

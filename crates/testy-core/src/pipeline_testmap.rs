@@ -1,9 +1,11 @@
-use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub type TestMapError = anyhow::Error;
+use crate::error::{AdapterResult, Result, TestyError};
+
+/// Error returned by test-map orchestration.
+pub type TestMapError = TestyError;
 
 pub const TESTMAP_MANIFEST_SCHEMA_EXAMPLE: &str = r#"{
   "type": "testmap-build-manifest-jsonl",
@@ -52,7 +54,7 @@ pub struct TestMapResponse {
 
 #[derive(Clone, Copy)]
 pub struct TestMapAdapters {
-    pub ingest_coverage: fn(&Path) -> Result<crate::model::CoverageData>,
+    pub ingest_coverage: fn(&Path) -> AdapterResult<crate::model::CoverageData>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -81,10 +83,13 @@ impl TestMapManifestRecord {
     }
 }
 
-pub fn run_testmap(
-    req: TestMapRequest,
-    adapters: &TestMapAdapters,
-) -> Result<TestMapResponse, TestMapError> {
+/// Resolve manifests, build test-map state, and write its persisted outputs.
+///
+/// # Errors
+///
+/// Returns [`TestMapError`] when glob resolution, manifest decoding, coverage
+/// ingestion, validation, state encoding, or output I/O fails.
+pub fn run_testmap(req: TestMapRequest, adapters: &TestMapAdapters) -> Result<TestMapResponse> {
     let TestMapRequest {
         manifest_globs,
         output_testmap_path,
@@ -93,7 +98,7 @@ pub fn run_testmap(
 
     let (files, warnings) = resolve_manifest_globs(&manifest_globs)?;
     if files.is_empty() {
-        anyhow::bail!("No manifest files found");
+        return Err(TestyError::invalid("No manifest files found"));
     }
 
     let records = load_manifest_records(&files)?;
@@ -117,12 +122,20 @@ pub fn run_testmap(
     })
 }
 
+/// Resolve manifest globs and return unmatched-pattern warnings.
+///
+/// # Errors
+///
+/// Returns [`TestyError::GlobPattern`] when a pattern is invalid.
 pub fn resolve_manifest_globs(patterns: &[String]) -> Result<(Vec<PathBuf>, Vec<String>)> {
     let mut files = Vec::new();
     let mut warnings = Vec::new();
     for pattern in patterns {
         let matches: Vec<_> = glob::glob(pattern)
-            .context(format!("Invalid glob pattern: {pattern}"))?
+            .map_err(|source| TestyError::GlobPattern {
+                pattern: pattern.clone(),
+                source,
+            })?
             .filter_map(|r| r.ok())
             .collect();
         if matches.is_empty() {
@@ -133,22 +146,28 @@ pub fn resolve_manifest_globs(patterns: &[String]) -> Result<(Vec<PathBuf>, Vec<
     Ok((files, warnings))
 }
 
+/// Read and decode JSONL test-map manifest records.
+///
+/// # Errors
+///
+/// Returns [`TestyError::Io`] when a manifest cannot be read or
+/// [`TestyError::Json`] when a non-empty line is invalid JSON.
 pub fn load_manifest_records(files: &[PathBuf]) -> Result<Vec<TestMapManifestRecord>> {
     let mut out = Vec::new();
     for file in files {
         let content = std::fs::read_to_string(file)
-            .with_context(|| format!("Failed to read manifest file {}", file.display()))?;
+            .map_err(|source| TestyError::io("Failed to read manifest file", file, source))?;
         for (idx, line) in content.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
-            let rec: TestMapManifestRecord = serde_json::from_str(line).map_err(|e| {
-                anyhow::anyhow!(
-                    "Invalid JSON on {} line {}: {e}\n\nExpected JSONL shape (one per line):\n  {{\"test_id\": \"com.foo.BarTest\", \"language\": \"java\", \"duration_ms\": 1200, \"coverage_report\": \"path/to/report.xml\"}}",
-                    file.display(),
-                    idx + 1
-                )
+            let rec: TestMapManifestRecord = serde_json::from_str(line).map_err(|source| {
+                TestyError::Json {
+                    context: format!("Invalid JSON on {} line {}", file.display(), idx + 1),
+                    source,
+                    example: "\n\nExpected JSONL shape (one per line):\n  {\"test_id\": \"com.foo.BarTest\", \"language\": \"java\", \"duration_ms\": 1200, \"coverage_report\": \"path/to/report.xml\"}".to_string(),
+                }
             })?;
             out.push(rec);
         }
@@ -156,32 +175,44 @@ pub fn load_manifest_records(files: &[PathBuf]) -> Result<Vec<TestMapManifestRec
     Ok(out)
 }
 
+/// Validate semantic invariants of decoded manifest records.
+///
+/// # Errors
+///
+/// Returns [`TestyError::InvalidInput`] for an empty manifest, invalid test
+/// identifier or language, or a record without coverage input.
 pub fn validate_manifest_records(records: &[TestMapManifestRecord]) -> Result<()> {
     if records.is_empty() {
-        anyhow::bail!("Manifest contains no records");
+        return Err(TestyError::invalid("Manifest contains no records"));
     }
     for (idx, rec) in records.iter().enumerate() {
         if rec.test_id.trim().is_empty() {
-            anyhow::bail!("Record {} has empty test_id", idx + 1);
+            return Err(TestyError::invalid(format!(
+                "Record {} has empty test_id",
+                idx + 1
+            )));
         }
         if let Some(language) = rec.language.as_deref() {
             if language.trim().is_empty() {
-                anyhow::bail!("Record {} has empty language", idx + 1);
+                return Err(TestyError::invalid(format!(
+                    "Record {} has empty language",
+                    idx + 1
+                )));
             }
             if normalize_language(language).is_none() {
-                anyhow::bail!(
+                return Err(TestyError::invalid(format!(
                     "Record {} has unsupported language '{}' (expected java or python)",
                     idx + 1,
                     language
-                );
+                )));
             }
         }
         if rec.coverage_report.as_deref().is_none() && rec.coverage_reports.is_empty() {
-            anyhow::bail!(
+            return Err(TestyError::invalid(format!(
                 "Record {} for test '{}' must provide coverage_report or coverage_reports",
                 idx + 1,
                 rec.test_id
-            );
+            )));
         }
     }
     Ok(())
@@ -193,6 +224,12 @@ pub struct TestMapBuildArtifacts {
     pub map_records: Vec<TestMapRecord>,
 }
 
+/// Build in-memory test-map and timing artifacts from validated records.
+///
+/// # Errors
+///
+/// Returns [`TestyError::Adapter`] when an injected coverage adapter fails,
+/// or [`TestyError::InvalidInput`] for an unsupported language.
 pub fn build_testmap_artifacts(
     records: &[TestMapManifestRecord],
     adapters: &TestMapAdapters,
@@ -216,11 +253,14 @@ pub fn build_testmap_artifacts(
             let normalized_files = if let Some(files) = coverage_cache.get(coverage_path) {
                 files.clone()
             } else {
-                let mut coverage = (adapters.ingest_coverage)(Path::new(coverage_path))
-                    .with_context(|| {
-                        format!(
-                            "Failed to ingest coverage report '{}' for test '{}'",
-                            coverage_path, rec.test_id
+                let mut coverage =
+                    (adapters.ingest_coverage)(Path::new(coverage_path)).map_err(|source| {
+                        TestyError::adapter(
+                            format!(
+                                "Failed to ingest coverage report '{}' for test '{}'",
+                                coverage_path, rec.test_id
+                            ),
+                            source,
                         )
                     })?;
                 suite_foundation_core::pathmap::auto_normalize_paths(&mut coverage, None);
@@ -302,43 +342,85 @@ pub fn build_test_timing_history(
     history
 }
 
+/// Write a test map using the versioned workspace state codec.
+///
+/// # Errors
+///
+/// Returns [`TestyError::Io`] for directory or file failures and
+/// [`TestyError::State`] when encoding fails.
 pub fn write_testmap(path: &Path, index: &crate::testmap::TestMapIndex) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|source| {
+            TestyError::io("Failed to create testmap parent directory", parent, source)
+        })?;
     }
-    let bytes = crate::cache::serialize_testmap(index)?;
-    std::fs::write(path, bytes)?;
+    let bytes = crate::cache::serialize_testmap(index)
+        .map_err(|source| TestyError::state("Failed to encode testmap at", path, source))?;
+    std::fs::write(path, bytes)
+        .map_err(|source| TestyError::io("Failed to write testmap at", path, source))?;
     Ok(())
 }
 
+/// Write test timing history using the versioned workspace state codec.
+///
+/// # Errors
+///
+/// Returns [`TestyError::Io`] for directory or file failures and
+/// [`TestyError::State`] when encoding fails.
 pub fn write_test_timing_history(
     path: &Path,
     timings: &crate::testmap::TestTimingHistory,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).map_err(|source| {
+            TestyError::io(
+                "Failed to create test timing parent directory",
+                parent,
+                source,
+            )
+        })?;
     }
-    let bytes = crate::cache::serialize_test_timings(timings)?;
-    std::fs::write(path, bytes)?;
+    let bytes = crate::cache::serialize_test_timings(timings)
+        .map_err(|source| TestyError::state("Failed to encode test timings at", path, source))?;
+    std::fs::write(path, bytes)
+        .map_err(|source| TestyError::io("Failed to write test timings at", path, source))?;
     Ok(())
 }
 
+/// Load and decode a persisted test map.
+///
+/// # Errors
+///
+/// Returns [`TestyError::Io`] when the state cannot be read or
+/// [`TestyError::State`] when its versioned payload is invalid.
 pub fn load_testmap(path: &Path) -> Result<crate::testmap::TestMapIndex> {
     let bytes = std::fs::read(path)
-        .with_context(|| format!("Failed to read testmap at {}", path.display()))?;
-    crate::cache::deserialize_testmap(&bytes).map_err(Into::into)
+        .map_err(|source| TestyError::io("Failed to read testmap at", path, source))?;
+    crate::cache::deserialize_testmap(&bytes)
+        .map_err(|source| TestyError::state("Failed to decode testmap at", path, source))
 }
 
+/// Load and decode persisted test timing history.
+///
+/// # Errors
+///
+/// Returns [`TestyError::Io`] when the state cannot be read or
+/// [`TestyError::State`] when its versioned payload is invalid.
 pub fn load_test_timing_history(path: &Path) -> Result<crate::testmap::TestTimingHistory> {
     let bytes = std::fs::read(path)
-        .with_context(|| format!("Failed to read test timings at {}", path.display()))?;
-    crate::cache::deserialize_test_timings(&bytes).map_err(Into::into)
+        .map_err(|source| TestyError::io("Failed to read test timings at", path, source))?;
+    crate::cache::deserialize_test_timings(&bytes)
+        .map_err(|source| TestyError::state("Failed to decode test timings at", path, source))
 }
 
 fn resolve_language(rec: &TestMapManifestRecord) -> Result<String> {
     if let Some(raw) = rec.language.as_deref() {
-        return normalize_language(raw)
-            .ok_or_else(|| anyhow::anyhow!("Unsupported language '{}' for {}", raw, rec.test_id));
+        return normalize_language(raw).ok_or_else(|| {
+            TestyError::invalid(format!(
+                "Unsupported language '{}' for {}",
+                raw, rec.test_id
+            ))
+        });
     }
     Ok(infer_language_from_test_id(&rec.test_id))
 }
@@ -364,7 +446,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn fake_ingest(path: &Path) -> Result<crate::model::CoverageData> {
+    fn fake_ingest(path: &Path) -> AdapterResult<crate::model::CoverageData> {
         let mut coverage = crate::model::CoverageData::new();
         let mut fc = crate::model::FileCoverage::new();
         fc.lines_instrumented.insert(1);
@@ -385,7 +467,7 @@ mod tests {
 
     static INGEST_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-    fn counting_ingest(path: &Path) -> Result<crate::model::CoverageData> {
+    fn counting_ingest(path: &Path) -> AdapterResult<crate::model::CoverageData> {
         INGEST_CALLS.fetch_add(1, Ordering::SeqCst);
         fake_ingest(path)
     }

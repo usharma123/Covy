@@ -53,12 +53,24 @@ impl Default for TestmapRunnerOptions {
     }
 }
 
+/// Dispatch a test-map subcommand and render its CLI output.
+///
+/// # Errors
+///
+/// Returns an error when manifest resolution, coverage ingestion, state
+/// persistence, or output serialization fails.
 pub fn run_testmap_command(args: TestmapArgs, options: &TestmapRunnerOptions) -> Result<i32> {
     match args.command {
         TestmapCommands::Build(build) => run_testmap_build(build, options),
     }
 }
 
+/// Build test-map artifacts and render their summary.
+///
+/// # Errors
+///
+/// Returns an error when manifests or coverage cannot be loaded, records are
+/// invalid, artifacts cannot be persisted, or JSON output cannot be serialized.
 pub fn run_testmap_build(build: TestmapBuildArgs, options: &TestmapRunnerOptions) -> Result<i32> {
     if build.schema {
         println!(

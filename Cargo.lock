@@ -2192,7 +2192,6 @@ dependencies = [
 name = "testy-core"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "glob",
  "quick-xml",
  "roaring",

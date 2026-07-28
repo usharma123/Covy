@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 use suite_packet_core::{CoverageFormat, CovyError};
+use testy_core::error::AdapterError;
 
 use crate::adapters::{default_impact_adapters, default_testmap_adapters};
 use crate::impact::{
@@ -274,12 +275,10 @@ fn impact_adapter_preserves_missing_file_error() {
     let adapters = default_impact_adapters();
     let error = (adapters.ingest_coverage_auto)(&fixture("lcov/does-not-exist.info"))
         .expect_err("missing coverage input must fail");
-    let source = error
-        .downcast_ref::<CovyError>()
-        .expect("adapter must preserve the ingestion error");
 
     assert!(matches!(
-        source,
-        CovyError::IoRaw(io_error) if io_error.kind() == ErrorKind::NotFound
+        error,
+        AdapterError::Coverage(CovyError::IoRaw(io_error))
+            if io_error.kind() == ErrorKind::NotFound
     ));
 }

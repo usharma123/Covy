@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use anyhow::Result;
 use suite_packet_core::{CoverageData, CoverageFormat, FileDiff};
+use testy_core::error::{AdapterError, AdapterResult};
 
 pub fn default_impact_adapters() -> testy_core::pipeline::ImpactAdapters {
     testy_core::pipeline::ImpactAdapters {
@@ -17,14 +17,15 @@ pub fn default_testmap_adapters() -> testy_core::pipeline_testmap::TestMapAdapte
     }
 }
 
-fn ingest_coverage_auto(path: &Path) -> Result<CoverageData> {
+fn ingest_coverage_auto(path: &Path) -> AdapterResult<CoverageData> {
     covy_ingest::ingest_path(path).map_err(Into::into)
 }
 
-fn ingest_coverage_with_format(path: &Path, format: CoverageFormat) -> Result<CoverageData> {
+fn ingest_coverage_with_format(path: &Path, format: CoverageFormat) -> AdapterResult<CoverageData> {
     covy_ingest::ingest_path_with_format(path, format).map_err(Into::into)
 }
 
-fn impact_git_diff(base: &str, head: &str) -> Result<Vec<FileDiff>> {
-    diffy_core::diff::git_diff(base, head).map_err(Into::into)
+fn impact_git_diff(base: &str, head: &str) -> AdapterResult<Vec<FileDiff>> {
+    diffy_core::diff::git_diff(base, head)
+        .map_err(|source| AdapterError::external("Failed to collect git diff", source))
 }
