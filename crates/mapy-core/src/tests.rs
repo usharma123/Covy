@@ -1,6 +1,15 @@
 use std::collections::BTreeSet;
+use std::fs::{FileTimes, OpenOptions};
+use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
+
+fn set_modified_time(path: &Path, modified: SystemTime) {
+    let file = OpenOptions::new().write(true).open(path).unwrap();
+    file.set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+}
 
 #[test]
 fn deterministic_tie_breaks_are_lexical() {
@@ -518,6 +527,168 @@ fn repo_query_uses_cache_for_warm_symbol_lookup() {
     .unwrap();
 
     assert_eq!(envelope.files[0].path, "src/lib.rs");
+}
+
+#[test]
+fn cache_detects_same_size_content_change_at_the_same_mtime() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    let source_path = root.join("src/lib.rs");
+    let fixed_mtime =
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000) + Duration::from_nanos(123_456_789);
+    let initial = "pub fn alpha() {}\n";
+    let changed = "pub fn bravo() {}\n";
+    assert_eq!(initial.len(), changed.len());
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(&source_path, initial).unwrap();
+    set_modified_time(&source_path, fixed_mtime);
+
+    let first = build_repo_query(RepoQueryRequest {
+        repo_root: root.to_string_lossy().to_string(),
+        symbol_query: "alpha".to_string(),
+        exact: true,
+        max_results: 5,
+        ..RepoQueryRequest::default()
+    })
+    .unwrap();
+    assert_eq!(first.payload.matches.len(), 1);
+    let first_mtime =
+        crate::scan::metadata_mtime_unix_nanos(&std::fs::metadata(&source_path).unwrap());
+    let first_fingerprint = crate::scan::load_scan_cache(root).files["src/lib.rs"]
+        .content_fingerprint
+        .clone();
+
+    std::fs::write(&source_path, changed).unwrap();
+    set_modified_time(&source_path, fixed_mtime);
+    let second_mtime =
+        crate::scan::metadata_mtime_unix_nanos(&std::fs::metadata(&source_path).unwrap());
+    assert_eq!(first_mtime, second_mtime);
+    assert_eq!(
+        std::fs::metadata(&source_path).unwrap().len(),
+        initial.len() as u64
+    );
+
+    let changed_query = build_repo_query(RepoQueryRequest {
+        repo_root: root.to_string_lossy().to_string(),
+        symbol_query: "bravo".to_string(),
+        exact: true,
+        max_results: 5,
+        ..RepoQueryRequest::default()
+    })
+    .unwrap();
+    assert_eq!(changed_query.payload.matches.len(), 1);
+
+    let stale_query = build_repo_query(RepoQueryRequest {
+        repo_root: root.to_string_lossy().to_string(),
+        symbol_query: "alpha".to_string(),
+        exact: true,
+        max_results: 5,
+        ..RepoQueryRequest::default()
+    })
+    .unwrap();
+    assert!(stale_query.payload.matches.is_empty());
+
+    let updated_cache = crate::scan::load_scan_cache(root);
+    let updated_entry = &updated_cache.files["src/lib.rs"];
+    assert_eq!(updated_entry.mtime_unix_nanos, second_mtime);
+    assert_ne!(updated_entry.content_fingerprint, first_fingerprint);
+}
+
+#[test]
+fn unchanged_content_reuses_cached_parse_metadata() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn warm_hit() {}\n").unwrap();
+
+    let scans = crate::scan::scan_repo(root, false).unwrap();
+    assert_eq!(scans.len(), 1);
+
+    let mut cache = crate::scan::load_scan_cache(root);
+    let entry = cache.files.get_mut("src/lib.rs").unwrap();
+    entry.symbols = vec![("function".to_string(), "cached_marker".to_string())];
+    entry.symbol_defs = vec![IndexedSymbolDef {
+        kind: "function".to_string(),
+        name: "cached_marker".to_string(),
+        line: 7,
+    }];
+    crate::scan::write_scan_cache(root, &cache);
+
+    let warm_scans = crate::scan::scan_repo(root, false).unwrap();
+    assert_eq!(warm_scans.len(), 1);
+    assert_eq!(warm_scans[0].symbols[0].1, "cached_marker");
+    assert_eq!(warm_scans[0].symbol_defs[0].name, "cached_marker");
+    assert_eq!(warm_scans[0].symbol_defs[0].line, 7);
+}
+
+#[test]
+fn old_cache_version_is_invalidated() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    let mut files = std::collections::BTreeMap::new();
+    files.insert("src/lib.rs".to_string(), CacheEntry::default());
+    crate::scan::write_scan_cache(
+        root,
+        &RepoScanCache {
+            version: MAP_CACHE_VERSION - 1,
+            files,
+        },
+    );
+
+    let loaded = crate::scan::load_scan_cache(root);
+    assert_eq!(loaded.version, MAP_CACHE_VERSION);
+    assert!(loaded.files.is_empty());
+}
+
+#[test]
+fn invalid_utf8_does_not_reuse_a_stale_cache_entry() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    let source_path = root.join("src/lib.rs");
+    let fixed_mtime = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let valid = "pub fn alpha() {}\n";
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(&source_path, valid).unwrap();
+    set_modified_time(&source_path, fixed_mtime);
+
+    let initial = build_repo_query(RepoQueryRequest {
+        repo_root: root.to_string_lossy().to_string(),
+        symbol_query: "alpha".to_string(),
+        exact: true,
+        max_results: 5,
+        ..RepoQueryRequest::default()
+    })
+    .unwrap();
+    assert_eq!(initial.payload.matches.len(), 1);
+
+    std::fs::write(&source_path, vec![0xff; valid.len()]).unwrap();
+    set_modified_time(&source_path, fixed_mtime);
+    let after_invalid_write = build_repo_query(RepoQueryRequest {
+        repo_root: root.to_string_lossy().to_string(),
+        symbol_query: "alpha".to_string(),
+        exact: true,
+        max_results: 5,
+        ..RepoQueryRequest::default()
+    })
+    .unwrap();
+
+    assert!(after_invalid_write.payload.matches.is_empty());
+    assert!(!crate::scan::load_scan_cache(root)
+        .files
+        .contains_key("src/lib.rs"));
+}
+
+#[test]
+fn unix_nanosecond_timestamp_preserves_subsecond_and_pre_epoch_values() {
+    let after_epoch = UNIX_EPOCH + Duration::from_secs(3) + Duration::from_nanos(17);
+    assert_eq!(
+        crate::scan::system_time_unix_nanos(after_epoch),
+        3_000_000_017
+    );
+
+    let before_epoch = UNIX_EPOCH.checked_sub(Duration::from_nanos(17)).unwrap();
+    assert_eq!(crate::scan::system_time_unix_nanos(before_epoch), -17);
 }
 
 #[test]

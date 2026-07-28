@@ -3,6 +3,7 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ignore::WalkBuilder;
 use suite_packet_core::CovyError;
@@ -39,9 +40,33 @@ where
         };
         let size = metadata.len();
         let mtime_secs = metadata_mtime_secs(&metadata);
-        if let Some(entry) = cache.files.get(rel) {
-            if entry.size == size && entry.mtime_secs == mtime_secs {
-                out.push(FileScan {
+        let mtime_unix_nanos = metadata_mtime_unix_nanos(&metadata);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                on_progress(idx + 1, total_files);
+                continue;
+            }
+        };
+        let content = match String::from_utf8(bytes) {
+            Ok(content) => content,
+            Err(_) => {
+                cache_dirty |= cache.files.remove(rel).is_some();
+                on_progress(idx + 1, total_files);
+                continue;
+            }
+        };
+        let content_fingerprint = content_fingerprint(&content);
+
+        let mut cached_scan = None;
+        if let Some(entry) = cache.files.get_mut(rel) {
+            if entry.size == size && entry.content_fingerprint == content_fingerprint {
+                if entry.mtime_secs != mtime_secs || entry.mtime_unix_nanos != mtime_unix_nanos {
+                    entry.mtime_secs = mtime_secs;
+                    entry.mtime_unix_nanos = mtime_unix_nanos;
+                    cache_dirty = true;
+                }
+                cached_scan = Some(FileScan {
                     path: rel.clone(),
                     size,
                     symbols: entry.symbols.clone(),
@@ -50,18 +75,13 @@ where
                     token_lines: entry.token_lines.clone(),
                     mtime_secs,
                 });
-                on_progress(idx + 1, total_files);
-                continue;
             }
         }
-
-        let content = match std::fs::read_to_string(&path) {
-            Ok(v) => v,
-            Err(_) => {
-                on_progress(idx + 1, total_files);
-                continue;
-            }
-        };
+        if let Some(scan) = cached_scan {
+            out.push(scan);
+            on_progress(idx + 1, total_files);
+            continue;
+        }
 
         let (symbol_defs, imports, token_lines) = extract_index_metadata(rel, &content);
         let symbols = symbol_defs
@@ -73,6 +93,8 @@ where
             CacheEntry {
                 size,
                 mtime_secs,
+                mtime_unix_nanos,
+                content_fingerprint,
                 symbols: symbols.clone(),
                 symbol_defs: symbol_defs.clone(),
                 imports: imports.clone(),
@@ -213,6 +235,21 @@ pub(crate) fn metadata_mtime_secs(metadata: &Metadata) -> u64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+pub(crate) fn metadata_mtime_unix_nanos(metadata: &Metadata) -> Option<i128> {
+    metadata.modified().ok().map(system_time_unix_nanos)
+}
+
+pub(crate) fn system_time_unix_nanos(time: SystemTime) -> i128 {
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX),
+        Err(error) => -i128::try_from(error.duration().as_nanos()).unwrap_or(i128::MAX),
+    }
+}
+
+pub(crate) fn content_fingerprint(content: &str) -> String {
+    suite_packet_core::canonical_hash_json(&content)
 }
 
 pub(crate) fn is_source_file(path: &Path) -> bool {

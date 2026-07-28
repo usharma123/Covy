@@ -7,7 +7,7 @@ use suite_packet_core::{BudgetCost, CovyError, EnvelopeV1, FileRef, Provenance, 
 
 use crate::scan::{
     extract_index_metadata, is_generated_or_vendor_path, is_source_file, is_test_path,
-    load_scan_cache, metadata_mtime_secs, scan_repo, scan_repo_with_progress,
+    metadata_mtime_secs, scan_repo, scan_repo_with_progress,
 };
 use crate::types::{
     FocusHit, FocusHitRich, IndexedSymbolDef, RankedFile, RankedFileRich, RankedSymbol,
@@ -64,7 +64,7 @@ struct QueryMatchTmp {
     score: f64,
 }
 
-pub(crate) const MAP_CACHE_VERSION: u32 = 4;
+pub(crate) const MAP_CACHE_VERSION: u32 = 5;
 pub(crate) const MAP_CACHE_DIR: &str = ".packet28";
 pub(crate) const MAP_CACHE_FILE: &str = "mapy-cache-v1.bin";
 pub(crate) const MAP_CACHE_FILE_LEGACY: &str = "mapy-cache-v1.json";
@@ -917,38 +917,7 @@ pub fn expand_repo_query_payload(envelope: &EnvelopeV1<RepoQueryPayload>) -> Rep
 }
 
 fn load_query_index(root: &Path, include_tests: bool) -> Result<RepoIndexSnapshot, CovyError> {
-    if include_tests {
-        return build_repo_index(root, true);
-    }
-
-    let cache = load_scan_cache(root);
-    if cache.files.is_empty() {
-        return build_repo_index(root, false);
-    }
-
-    Ok(RepoIndexSnapshot {
-        version: cache.version,
-        include_tests: false,
-        files: cache
-            .files
-            .into_iter()
-            .map(|(path, entry)| {
-                let is_test = is_test_path(&path);
-                (
-                    path.clone(),
-                    RepoIndexFileEntry {
-                        path,
-                        size: entry.size,
-                        mtime_secs: entry.mtime_secs,
-                        is_test,
-                        symbols: entry.symbol_defs,
-                        imports: entry.imports,
-                        token_lines: entry.token_lines,
-                    },
-                )
-            })
-            .collect(),
-    })
+    build_repo_index(root, include_tests)
 }
 
 fn query_match_score(

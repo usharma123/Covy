@@ -196,6 +196,8 @@ pub struct RepoIndexUpdateSummary {
 pub(crate) struct CacheEntry {
     pub size: u64,
     pub mtime_secs: u64,
+    pub mtime_unix_nanos: Option<i128>,
+    pub content_fingerprint: String,
     pub symbols: Vec<(String, String)>,
     pub symbol_defs: Vec<IndexedSymbolDef>,
     pub imports: Vec<String>,
