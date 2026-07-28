@@ -2,6 +2,11 @@
 //!
 //! The crate builds a repository-local index, validates every persisted layer
 //! before publication, and verifies indexed candidates against source files.
+//! Full builds publish an immutable base; incremental updates append immutable
+//! overlay segments plus owned path tombstones. A manifest switch is the only
+//! publication point, so readers retain their `Arc`-owned generation while a
+//! writer prepares the next one. Legacy schema-v3 aggregate overlays remain
+//! readable and migrate to segmented generation records on their next update.
 //! Fallible operations return [`SearchError`], allowing callers to distinguish
 //! unavailable indexes, invalid queries, corruption, and typed dependency
 //! failures without parsing an `anyhow` report.
@@ -22,11 +27,12 @@ mod weights;
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -47,6 +53,7 @@ use crate::weights::{pair_weight, WEIGHT_TABLE_VERSION};
 const REGEX_INDEX_SCHEMA_VERSION: u32 = 3;
 const REGEX_DIR_NAME: &str = "regex-v1";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
+const PREVIOUS_MANIFEST_FILE_NAME: &str = "manifest.previous.json";
 const BASE_LOOKUP_FILE_NAME: &str = "base.lookup.dat";
 const BASE_POSTINGS_FILE_NAME: &str = "base.postings.dat";
 const BASE_DOCS_FILE_NAME: &str = "docs.dat";
@@ -66,6 +73,9 @@ const MAX_INDEX_VERIFY_CANDIDATES: usize = 1024;
 const MAX_INDEX_VERIFY_NUMERATOR: usize = 1;
 const MAX_INDEX_VERIFY_DENOMINATOR: usize = 2;
 const POSITION_BUCKET_COUNT: usize = 16;
+const OVERLAY_COMPACTION_SEGMENTS: usize = 8;
+
+static TEMP_FILE_NONCE: AtomicU64 = AtomicU64::new(0);
 
 trait ResultContext<T> {
     fn context<C>(self, context: C) -> Result<T>
@@ -106,7 +116,7 @@ macro_rules! ensure_valid_index {
     };
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 /// Persistent metadata describing the currently published regex index.
 pub struct RegexIndexManifest {
@@ -126,6 +136,8 @@ pub struct RegexIndexManifest {
     pub indexed_files: usize,
     /// Number of files represented in the overlay layer.
     pub overlay_files: usize,
+    /// Number of immutable overlay segments referenced by this generation.
+    pub overlay_segments: usize,
     /// Git commit associated with the base layer, when available.
     pub base_commit: Option<String>,
     /// Reason the index cannot currently serve queries.
@@ -138,11 +150,12 @@ pub struct RegexIndexManifest {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 struct OverlayState {
     shadowed_paths: BTreeSet<String>,
     deleted_paths: BTreeSet<String>,
+    owners: BTreeMap<String, u64>,
 }
 
 #[derive(
@@ -166,17 +179,33 @@ pub struct RegexIndexRuntime {
 }
 
 impl RegexIndexRuntime {
-    /// Returns whether validated base and overlay layers are available.
+    /// Returns whether a validated base and every referenced overlay segment are available.
     pub fn is_loaded(&self) -> bool {
         self.loaded.is_some()
+    }
+
+    /// Returns true when two reader generations retain the same immutable base layer.
+    pub fn shares_base_with(&self, other: &Self) -> bool {
+        match (self.loaded.as_ref(), other.loaded.as_ref()) {
+            (Some(left), Some(right)) => Arc::ptr_eq(&left.base, &right.base),
+            _ => false,
+        }
     }
 }
 
 #[derive(Debug)]
 struct LoadedIndex {
-    base: LoadedLayer,
-    overlay: LoadedLayer,
+    base: Arc<LoadedLayer>,
+    base_files: LayerFiles,
+    overlays: Vec<LoadedOverlaySegment>,
     overlay_state: OverlayState,
+}
+
+#[derive(Debug, Clone)]
+struct LoadedOverlaySegment {
+    generation: u64,
+    layer: Arc<LoadedLayer>,
+    files: LayerFiles,
 }
 
 #[derive(Debug)]
@@ -317,7 +346,68 @@ struct IndexedGram {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum LayerKind {
     Base,
-    Overlay,
+    Overlay(u64),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct LayerFiles {
+    lookup: String,
+    postings: String,
+    docs: String,
+}
+
+impl LayerFiles {
+    fn legacy_base() -> Self {
+        Self {
+            lookup: BASE_LOOKUP_FILE_NAME.to_string(),
+            postings: BASE_POSTINGS_FILE_NAME.to_string(),
+            docs: BASE_DOCS_FILE_NAME.to_string(),
+        }
+    }
+
+    fn legacy_overlay() -> Self {
+        Self {
+            lookup: OVERLAY_LOOKUP_FILE_NAME.to_string(),
+            postings: OVERLAY_POSTINGS_FILE_NAME.to_string(),
+            docs: OVERLAY_DOCS_FILE_NAME.to_string(),
+        }
+    }
+
+    fn base(generation: u64) -> Self {
+        Self {
+            lookup: format!("base-{generation:020}.lookup.dat"),
+            postings: format!("base-{generation:020}.postings.dat"),
+            docs: format!("base-{generation:020}.docs.dat"),
+        }
+    }
+
+    fn overlay(generation: u64, compacted: bool) -> Self {
+        let suffix = if compacted { "-compacted" } else { "" };
+        Self {
+            lookup: format!("overlay-{generation:020}{suffix}.lookup.dat"),
+            postings: format!("overlay-{generation:020}{suffix}.postings.dat"),
+            docs: format!("overlay-{generation:020}{suffix}.docs.dat"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct OverlaySegmentRecord {
+    generation: u64,
+    files: LayerFiles,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegexGenerationRecord {
+    schema_version: u32,
+    generation: u64,
+    manifest: RegexIndexManifest,
+    base: LayerFiles,
+    segments: Vec<OverlaySegmentRecord>,
+    overlay_state: OverlayState,
 }
 
 #[derive(Default)]
@@ -346,20 +436,35 @@ enum Verifier {
 /// Stale or corrupt artifacts are represented as an unloaded runtime whose
 /// manifest records the reason. The `Result` shape is retained for source
 /// compatibility and future load failures that cannot be represented as index
-/// state.
+/// state. If the current generation is corrupt, only the explicitly retained
+/// previous manifest may be recovered; unreferenced artifacts are never
+/// promoted.
 ///
 /// # Errors
 ///
 /// The current loader converts artifact validation failures into an unloaded
 /// [`RegexIndexRuntime`]; it does not otherwise return an error.
 pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
-    let mut manifest = load_manifest(root);
+    let manifest = match load_manifest_strict(root) {
+        Ok(manifest) => manifest,
+        Err(error) => return recover_previous_runtime(root, None, error),
+    };
     if manifest.schema_version == 0 {
         return Ok(RegexIndexRuntime {
             manifest,
             loaded: None,
         });
     }
+    match load_runtime_from_manifest(root, manifest.clone()) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => recover_previous_runtime(root, Some(manifest), error),
+    }
+}
+
+fn load_runtime_from_manifest(
+    root: &Path,
+    mut manifest: RegexIndexManifest,
+) -> Result<RegexIndexRuntime> {
     if manifest.schema_version != REGEX_INDEX_SCHEMA_VERSION
         || manifest.weight_table_version != WEIGHT_TABLE_VERSION
     {
@@ -406,49 +511,11 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
             });
         }
     }
-    let base = match load_layer(
-        root,
-        BASE_LOOKUP_FILE_NAME,
-        BASE_POSTINGS_FILE_NAME,
-        BASE_DOCS_FILE_NAME,
-    )
-    .context("failed to load base regex index layer")
-    {
-        Ok(base) => base,
-        Err(err) => {
-            mark_manifest_unloaded(&mut manifest, "corrupt", format!("{err:#}"));
-            return Ok(RegexIndexRuntime {
-                manifest,
-                loaded: None,
-            });
-        }
-    };
-    let overlay = match load_layer(
-        root,
-        OVERLAY_LOOKUP_FILE_NAME,
-        OVERLAY_POSTINGS_FILE_NAME,
-        OVERLAY_DOCS_FILE_NAME,
-    )
-    .context("failed to load overlay regex index layer")
-    {
-        Ok(overlay) => overlay,
-        Err(err) => {
-            mark_manifest_unloaded(&mut manifest, "corrupt", format!("{err:#}"));
-            return Ok(RegexIndexRuntime {
-                manifest,
-                loaded: None,
-            });
-        }
-    };
-    let overlay_state = load_overlay_state(root);
-    Ok(RegexIndexRuntime {
-        manifest,
-        loaded: Some(Arc::new(LoadedIndex {
-            base,
-            overlay,
-            overlay_state,
-        })),
-    })
+    if generation_record_path(root, manifest.generation).exists() {
+        let record = load_generation_record(root, manifest.generation)?;
+        return load_recorded_generation(root, manifest, record);
+    }
+    load_legacy_generation(root, manifest)
 }
 
 /// Rebuilds and atomically publishes every searchable file beneath `root`.
@@ -480,69 +547,64 @@ where
     F: FnMut(usize, usize),
 {
     let started = now_unix();
-    let mut manifest = load_manifest(root);
-    manifest.schema_version = REGEX_INDEX_SCHEMA_VERSION;
-    manifest.weight_table_version = WEIGHT_TABLE_VERSION;
-    manifest.include_tests = include_tests;
-    manifest.status = "building".to_string();
-    manifest.last_build_started_at_unix = Some(started);
-    manifest.stale_reason = Some(format!(
-        "full regex index rebuild started at {started} has not published a ready generation"
-    ));
-    manifest.last_error = None;
-    save_manifest(root, &manifest)?;
-
-    let build_result = (|| -> Result<_> {
-        let docs = scan_documents_with_progress(root, &mut on_progress)?;
-        let base_layer = build_layer(
-            root,
-            &docs,
-            BASE_LOOKUP_FILE_NAME,
-            BASE_POSTINGS_FILE_NAME,
-            BASE_DOCS_FILE_NAME,
-        )?;
-        let overlay_docs = Vec::<IndexedDocument>::new();
-        let overlay_layer = build_layer(
-            root,
-            &overlay_docs,
-            OVERLAY_LOOKUP_FILE_NAME,
-            OVERLAY_POSTINGS_FILE_NAME,
-            OVERLAY_DOCS_FILE_NAME,
-        )?;
-        let overlay_state = OverlayState::default();
-        save_overlay_state(root, &overlay_state)?;
-        Ok((docs, base_layer, overlay_layer, overlay_state))
-    })();
-    let (docs, base_layer, overlay_layer, overlay_state) = match build_result {
-        Ok(built) => built,
-        Err(error) => return Err(record_index_build_failure(root, &mut manifest, error)),
+    let previous = load_runtime(root)
+        .ok()
+        .filter(RegexIndexRuntime::is_loaded)
+        .map(|runtime| durable_manifest(&runtime.manifest));
+    let generation = load_manifest(root)
+        .generation
+        .max(previous.as_ref().map_or(0, |manifest| manifest.generation))
+        .saturating_add(1);
+    let mut manifest = RegexIndexManifest {
+        schema_version: REGEX_INDEX_SCHEMA_VERSION,
+        weight_table_version: WEIGHT_TABLE_VERSION,
+        generation,
+        include_tests,
+        status: "ready".to_string(),
+        last_build_started_at_unix: Some(started),
+        ..RegexIndexManifest::default()
     };
 
-    manifest.generation = manifest.generation.saturating_add(1);
-    manifest.status = "ready".to_string();
+    let docs = scan_documents_with_progress(root, &mut on_progress)?;
+    let base_files = LayerFiles::base(generation);
+    let base_layer = build_layer(root, &docs, &base_files)?;
     manifest.total_files = docs.len();
     manifest.indexed_files = docs.len();
     manifest.overlay_files = 0;
+    manifest.overlay_segments = 0;
     manifest.base_commit = current_git_commit(root);
-    manifest.stale_reason = None;
     manifest.last_build_completed_at_unix = Some(now_unix());
-    manifest.last_error = None;
-    save_manifest(root, &manifest)?;
-
-    Ok(RegexIndexRuntime {
-        manifest,
+    let record = RegexGenerationRecord {
+        schema_version: REGEX_INDEX_SCHEMA_VERSION,
+        generation,
+        manifest: manifest.clone(),
+        base: base_files.clone(),
+        segments: Vec::new(),
+        overlay_state: OverlayState::default(),
+    };
+    validate_generation_record(&record)?;
+    save_generation_record(root, &record)?;
+    let runtime = RegexIndexRuntime {
+        manifest: manifest.clone(),
         loaded: Some(Arc::new(LoadedIndex {
-            base: base_layer,
-            overlay: overlay_layer,
-            overlay_state,
+            base: Arc::new(base_layer),
+            base_files,
+            overlays: Vec::new(),
+            overlay_state: OverlayState::default(),
         })),
-    })
+    };
+    publish_manifest(root, previous.as_ref(), &manifest)?;
+    Ok(runtime)
 }
 
-/// Rebuilds the mutable overlay for `changed_paths`.
+/// Appends one immutable overlay segment for `changed_paths`.
 ///
 /// A missing current runtime or an empty change set intentionally triggers a
-/// full rebuild to preserve the historical behavior.
+/// full rebuild to preserve the historical behavior. Each non-empty update
+/// indexes only the supplied paths, retains the validated base `Arc`, and
+/// publishes its generation record before atomically switching the manifest.
+/// Eight segments trigger compaction of live overlay documents; the base is
+/// still retained.
 ///
 /// # Errors
 ///
@@ -559,83 +621,86 @@ pub fn update_overlay_index(
     }
     let current = current.expect("checked above");
     let loaded = current.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
+    let generation = load_manifest(root)
+        .generation
+        .max(current.manifest.generation)
+        .saturating_add(1);
     let mut overlay_state = loaded.overlay_state.clone();
     let normalized = normalize_paths(root, changed_paths);
-    let mut overlay_by_path = HashMap::<String, IndexedDocument>::new();
-    for doc in &loaded.overlay.docs {
-        if overlay_state.deleted_paths.contains(&doc.path) {
-            continue;
-        }
-        let full_path = root.join(&doc.path);
-        if let Some(indexed) = index_document(root, &full_path)? {
-            overlay_by_path.insert(doc.path.clone(), indexed);
-        }
-    }
+    let mut overlay_docs = Vec::<IndexedDocument>::new();
     for path in normalized {
         overlay_state.shadowed_paths.insert(path.clone());
         let full_path = root.join(&path);
-        if !full_path.exists() {
+        let indexed = if full_path.exists() {
+            index_document(root, &full_path)?
+        } else {
+            None
+        };
+        if let Some(mut indexed) = indexed {
+            indexed.doc_id = overlay_docs.len() as u32;
+            overlay_state.deleted_paths.remove(&path);
+            overlay_state.owners.insert(path, generation);
+            overlay_docs.push(indexed);
+        } else {
             overlay_state.deleted_paths.insert(path.clone());
-            overlay_by_path.remove(&path);
-            continue;
-        }
-        overlay_state.deleted_paths.remove(&path);
-        if let Some(indexed) = index_document(root, &full_path)? {
-            overlay_by_path.insert(path, indexed);
+            overlay_state.owners.remove(&path);
         }
     }
-    let mut overlay_docs = overlay_by_path.into_values().collect::<Vec<_>>();
     overlay_docs.sort_by(|left, right| left.path.cmp(&right.path));
     for (idx, doc) in overlay_docs.iter_mut().enumerate() {
         doc.doc_id = idx as u32;
     }
-    let mut manifest = load_manifest(root);
-    manifest.status = "building".to_string();
     let started = now_unix();
-    manifest.last_build_started_at_unix = Some(started);
-    manifest.stale_reason = Some(format!(
-        "regex index overlay update started at {started} has not published a ready generation"
-    ));
-    manifest.last_error = None;
-    save_manifest(root, &manifest)?;
-
-    let build_result = (|| -> Result<_> {
-        let overlay_layer = build_layer(
-            root,
-            &overlay_docs,
-            OVERLAY_LOOKUP_FILE_NAME,
-            OVERLAY_POSTINGS_FILE_NAME,
-            OVERLAY_DOCS_FILE_NAME,
-        )?;
-        let base_layer = load_layer(
-            root,
-            BASE_LOOKUP_FILE_NAME,
-            BASE_POSTINGS_FILE_NAME,
-            BASE_DOCS_FILE_NAME,
-        )
-        .context("failed to validate base layer before overlay publication")?;
-        save_overlay_state(root, &overlay_state)?;
-        Ok((base_layer, overlay_layer))
-    })();
-    let (base_layer, overlay_layer) = match build_result {
-        Ok(built) => built,
-        Err(error) => return Err(record_index_build_failure(root, &mut manifest, error)),
+    let mut overlays = loaded.overlays.clone();
+    if !overlay_docs.is_empty() {
+        let files = LayerFiles::overlay(generation, false);
+        let layer = build_layer(root, &overlay_docs, &files)?;
+        overlays.push(LoadedOverlaySegment {
+            generation,
+            layer: Arc::new(layer),
+            files,
+        });
+    }
+    if overlays.len() >= OVERLAY_COMPACTION_SEGMENTS {
+        let mut compacted_docs = collect_live_overlay_documents(root, &mut overlay_state)?;
+        for (idx, doc) in compacted_docs.iter_mut().enumerate() {
+            doc.doc_id = idx as u32;
+            overlay_state.owners.insert(doc.path.clone(), generation);
+        }
+        let files = LayerFiles::overlay(generation, true);
+        let layer = build_layer(root, &compacted_docs, &files)?;
+        overlays = vec![LoadedOverlaySegment {
+            generation,
+            layer: Arc::new(layer),
+            files,
+        }];
+    }
+    let loaded_index = LoadedIndex {
+        base: Arc::clone(&loaded.base),
+        base_files: loaded.base_files.clone(),
+        overlays,
+        overlay_state,
     };
+    validate_loaded_overlay_state(&loaded_index)?;
 
+    let mut manifest = durable_manifest(&current.manifest);
+    manifest.generation = generation;
     manifest.status = "ready".to_string();
-    manifest.overlay_files = overlay_docs.len();
+    manifest.last_build_started_at_unix = Some(started);
+    manifest.total_files = all_indexed_paths(&loaded_index, None).len();
+    manifest.overlay_files = loaded_index.overlay_state.owners.len();
+    manifest.overlay_segments = loaded_index.overlays.len();
     manifest.stale_reason = None;
-    manifest.last_build_completed_at_unix = Some(now_unix());
     manifest.last_error = None;
-    save_manifest(root, &manifest)?;
+    manifest.last_build_completed_at_unix = Some(now_unix());
+    let record = generation_record_from_loaded(&manifest, &loaded_index);
+    validate_generation_record(&record)?;
+    save_generation_record(root, &record)?;
+    publish_manifest(root, Some(&current.manifest), &manifest)?;
 
     Ok(RegexIndexRuntime {
         manifest,
-        loaded: Some(Arc::new(LoadedIndex {
-            base: base_layer,
-            overlay: overlay_layer,
-            overlay_state,
-        })),
+        loaded: Some(Arc::new(loaded_index)),
     })
 }
 
@@ -1038,8 +1103,7 @@ fn literal_strength_with_siblings(
         .map(|candidate| {
             lookup_posting_count(&loaded.base, candidate.hash)
                 .unwrap_or(0)
-                .saturating_add(lookup_posting_count(&loaded.overlay, candidate.hash).unwrap_or(0))
-                as usize
+                .saturating_add(overlay_posting_count(loaded, candidate.hash)) as usize
         })
         .min()
         .unwrap_or(total_paths);
@@ -1396,14 +1460,16 @@ fn estimate_hash_cardinality(
                 }
             }
         }
-        if let Some(entries) = lookup_doc_ids_quiet(&loaded.overlay, hash) {
-            for entry in entries {
-                if let Some(doc) = loaded.overlay.docs.get(entry.doc_id as usize) {
-                    if loaded.overlay_state.deleted_paths.contains(&doc.path) {
-                        continue;
-                    }
-                    if filter.contains(&doc.path) {
-                        estimate = estimate.saturating_add(1);
+        for segment in &loaded.overlays {
+            if let Some(entries) = lookup_doc_ids_quiet(&segment.layer, hash) {
+                for entry in entries {
+                    if let Some(doc) = segment.layer.docs.get(entry.doc_id as usize) {
+                        if !overlay_doc_is_active(loaded, segment.generation, &doc.path) {
+                            continue;
+                        }
+                        if filter.contains(&doc.path) {
+                            estimate = estimate.saturating_add(1);
+                        }
                     }
                 }
             }
@@ -1412,7 +1478,7 @@ fn estimate_hash_cardinality(
     }
     lookup_posting_count(&loaded.base, hash)
         .unwrap_or(0)
-        .saturating_add(lookup_posting_count(&loaded.overlay, hash).unwrap_or(0)) as usize
+        .saturating_add(overlay_posting_count(loaded, hash)) as usize
 }
 
 fn select_covering_candidates(loaded: &LoadedIndex, literal: &[u8]) -> Vec<SparseCandidate> {
@@ -1420,10 +1486,10 @@ fn select_covering_candidates(loaded: &LoadedIndex, literal: &[u8]) -> Vec<Spars
     candidates.sort_by(|left, right| {
         let left_docs = lookup_posting_count(&loaded.base, left.hash)
             .unwrap_or(0)
-            .saturating_add(lookup_posting_count(&loaded.overlay, left.hash).unwrap_or(0));
+            .saturating_add(overlay_posting_count(loaded, left.hash));
         let right_docs = lookup_posting_count(&loaded.base, right.hash)
             .unwrap_or(0)
-            .saturating_add(lookup_posting_count(&loaded.overlay, right.hash).unwrap_or(0));
+            .saturating_add(overlay_posting_count(loaded, right.hash));
         left_docs
             .cmp(&right_docs)
             .then_with(|| (right.end - right.start).cmp(&(left.end - left.start)))
@@ -1481,16 +1547,22 @@ fn paths_for_hash(
             }
         }
     }
-    if let Some(entries) =
-        lookup_doc_ids_cached(&loaded.overlay, LayerKind::Overlay, hash, cache, engine)?
-    {
-        for entry in entries {
-            if let Some(doc) = loaded.overlay.docs.get(entry.doc_id as usize) {
-                if loaded.overlay_state.deleted_paths.contains(&doc.path) {
-                    continue;
-                }
-                if path_allowed(&doc.path, requested_filter) {
-                    paths.insert(doc.path.clone());
+    for segment in &loaded.overlays {
+        if let Some(entries) = lookup_doc_ids_cached(
+            &segment.layer,
+            LayerKind::Overlay(segment.generation),
+            hash,
+            cache,
+            engine,
+        )? {
+            for entry in entries {
+                if let Some(doc) = segment.layer.docs.get(entry.doc_id as usize) {
+                    if !overlay_doc_is_active(loaded, segment.generation, &doc.path) {
+                        continue;
+                    }
+                    if path_allowed(&doc.path, requested_filter) {
+                        paths.insert(doc.path.clone());
+                    }
                 }
             }
         }
@@ -1736,15 +1808,9 @@ fn index_document(root: &Path, path: &Path) -> Result<Option<IndexedDocument>> {
     }))
 }
 
-fn build_layer(
-    root: &Path,
-    docs: &[IndexedDocument],
-    lookup_name: &str,
-    postings_name: &str,
-    docs_name: &str,
-) -> Result<LoadedLayer> {
+fn build_layer(root: &Path, docs: &[IndexedDocument], files: &LayerFiles) -> Result<LoadedLayer> {
     fs::create_dir_all(regex_index_dir(root))?;
-    let segment_files = write_segment_files(root, lookup_name, docs)?;
+    let segment_files = write_segment_files(root, &files.lookup, docs)?;
     let (rows, postings) = merge_and_cleanup_segment_files(segment_files)?;
     let mut lookup = Vec::with_capacity(rows.len() * LOOKUP_ROW_BYTES);
     for (hash, offset, len, doc_count) in rows {
@@ -1763,13 +1829,13 @@ fn build_layer(
             fingerprint: doc.fingerprint.clone(),
         })
         .collect::<Vec<_>>();
-    write_atomic(regex_index_dir(root).join(lookup_name), &lookup)?;
-    write_atomic(regex_index_dir(root).join(postings_name), &postings)?;
+    write_atomic(regex_index_dir(root).join(&files.lookup), &lookup)?;
+    write_atomic(regex_index_dir(root).join(&files.postings), &postings)?;
     write_atomic(
-        regex_index_dir(root).join(docs_name),
+        regex_index_dir(root).join(&files.docs),
         &wincode::serialize(&serialized_docs)?,
     )?;
-    load_layer(root, lookup_name, postings_name, docs_name)
+    load_layer(root, files)
 }
 
 fn write_segment_files(
@@ -1935,24 +2001,29 @@ fn flush_posting_group(
     ));
 }
 
-fn load_layer(
-    root: &Path,
-    lookup_name: &str,
-    postings_name: &str,
-    docs_name: &str,
-) -> Result<LoadedLayer> {
+fn load_layer(root: &Path, files: &LayerFiles) -> Result<LoadedLayer> {
     let dir = regex_index_dir(root);
-    let docs_path = dir.join(docs_name);
-    let lookup_path = dir.join(lookup_name);
-    let postings_path = dir.join(postings_name);
+    validate_layer_file_names(files)?;
+    let docs_path = dir.join(&files.docs);
+    let lookup_path = dir.join(&files.lookup);
+    let postings_path = dir.join(&files.postings);
     let docs_exists = docs_path.exists();
     let lookup_exists = lookup_path.exists();
     let postings_exists = postings_path.exists();
     let present_files = docs_exists as u8 + lookup_exists as u8 + postings_exists as u8;
     if present_files != 3 {
+        let missing = [
+            (!docs_exists).then_some(files.docs.as_str()),
+            (!lookup_exists).then_some(files.lookup.as_str()),
+            (!postings_exists).then_some(files.postings.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
         return Err(SearchError::corrupt(format!(
-            "incomplete regex index layer '{}': expected docs, lookup, and postings files; found {present_files}/3",
-            docs_path.display()
+            "incomplete regex index layer '{}': expected docs, lookup, and postings files; found {present_files}/3; missing: {missing}",
+            docs_path.display(),
         )));
     }
     let raw = fs::read(&docs_path)
@@ -1984,13 +2055,31 @@ fn load_layer(
 }
 
 fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    let mut file = File::create(&tmp)?;
-    file.write_all(bytes)?;
-    file.flush()?;
-    drop(file);
-    fs::rename(&tmp, &path)?;
-    Ok(())
+    let parent = path.parent().ok_or_else(|| {
+        SearchError::corrupt(format!("index artifact '{}' has no parent", path.display()))
+    })?;
+    fs::create_dir_all(parent)?;
+    let nonce = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
+    let tmp = parent.join(format!(
+        ".{}.{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("artifact"),
+        std::process::id(),
+        nonce
+    ));
+    let result = (|| -> Result<()> {
+        let mut file = File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        drop(file);
+        fs::rename(&tmp, &path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(tmp);
+    }
+    result
 }
 
 fn mark_manifest_unloaded(manifest: &mut RegexIndexManifest, status: &str, reason: String) {
@@ -1999,19 +2088,19 @@ fn mark_manifest_unloaded(manifest: &mut RegexIndexManifest, status: &str, reaso
     manifest.last_error = Some(reason);
 }
 
-fn record_index_build_failure(
-    root: &Path,
-    manifest: &mut RegexIndexManifest,
-    error: SearchError,
-) -> SearchError {
-    mark_manifest_unloaded(manifest, "corrupt", format!("{error:#}"));
-    if let Err(save_error) = save_manifest(root, manifest) {
-        return SearchError::FailureProvenance {
-            build: Box::new(error),
-            persistence: Box::new(save_error),
-        };
+fn validate_layer_file_names(files: &LayerFiles) -> Result<()> {
+    let mut unique = BTreeSet::new();
+    for name in [&files.lookup, &files.postings, &files.docs] {
+        let path = Path::new(name);
+        ensure_valid_index!(
+            !name.is_empty()
+                && !path.is_absolute()
+                && path.components().count() == 1
+                && unique.insert(name),
+            "regex generation references invalid or duplicate layer artifact name '{name}'"
+        );
     }
-    error
+    Ok(())
 }
 
 fn mmap_optional(path: &Path) -> Result<Option<Mmap>> {
@@ -2691,9 +2780,20 @@ fn lookup_summary_for_path(
     if loaded.overlay_state.deleted_paths.contains(path) {
         return None;
     }
-    if let Some(doc_id) = loaded.overlay.doc_ids_by_path.get(path).copied() {
-        return lookup_posting_entry(&loaded.overlay, LayerKind::Overlay, hash, doc_id, cache)
-            .map(|entry| entry.summary);
+    if let Some(owner) = loaded.overlay_state.owners.get(path).copied() {
+        let segment = loaded
+            .overlays
+            .iter()
+            .find(|segment| segment.generation == owner)?;
+        let doc_id = segment.layer.doc_ids_by_path.get(path).copied()?;
+        return lookup_posting_entry(
+            &segment.layer,
+            LayerKind::Overlay(owner),
+            hash,
+            doc_id,
+            cache,
+        )
+        .map(|entry| entry.summary);
     }
     if loaded.overlay_state.shadowed_paths.contains(path) {
         return None;
@@ -2735,17 +2835,59 @@ fn manifest_path(root: &Path) -> PathBuf {
     regex_index_dir(root).join(MANIFEST_FILE_NAME)
 }
 
+fn previous_manifest_path(root: &Path) -> PathBuf {
+    regex_index_dir(root).join(PREVIOUS_MANIFEST_FILE_NAME)
+}
+
+fn generation_record_path(root: &Path, generation: u64) -> PathBuf {
+    regex_index_dir(root).join(format!("generation-{generation:020}.json"))
+}
+
 fn load_manifest(root: &Path) -> RegexIndexManifest {
+    load_manifest_strict(root).unwrap_or_default()
+}
+
+fn load_manifest_strict(root: &Path) -> Result<RegexIndexManifest> {
     let path = manifest_path(root);
-    let Ok(raw) = fs::read(path) else {
-        return RegexIndexManifest::default();
-    };
-    serde_json::from_slice(&raw).unwrap_or_default()
+    if !path.exists() {
+        return Ok(RegexIndexManifest::default());
+    }
+    load_manifest_file(&path)
+}
+
+fn load_manifest_file(path: &Path) -> Result<RegexIndexManifest> {
+    let raw = fs::read(path)
+        .with_context(|| format!("failed to read regex manifest '{}'", path.display()))?;
+    serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to decode regex manifest '{}'", path.display()))
 }
 
 fn save_manifest(root: &Path, manifest: &RegexIndexManifest) -> Result<()> {
     fs::create_dir_all(regex_index_dir(root))?;
     write_atomic(manifest_path(root), &serde_json::to_vec_pretty(manifest)?)
+}
+
+fn publish_manifest(
+    root: &Path,
+    previous: Option<&RegexIndexManifest>,
+    current: &RegexIndexManifest,
+) -> Result<()> {
+    if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
+        write_atomic(
+            previous_manifest_path(root),
+            &serde_json::to_vec_pretty(&durable_manifest(previous))?,
+        )?;
+    }
+    save_manifest(root, current)
+}
+
+fn durable_manifest(manifest: &RegexIndexManifest) -> RegexIndexManifest {
+    let mut durable = manifest.clone();
+    if durable.status == "ready" {
+        durable.stale_reason = None;
+        durable.last_error = None;
+    }
+    durable
 }
 
 fn load_overlay_state(root: &Path) -> OverlayState {
@@ -2755,11 +2897,322 @@ fn load_overlay_state(root: &Path) -> OverlayState {
     serde_json::from_slice(&raw).unwrap_or_default()
 }
 
-fn save_overlay_state(root: &Path, overlay: &OverlayState) -> Result<()> {
+fn generation_record_from_loaded(
+    manifest: &RegexIndexManifest,
+    loaded: &LoadedIndex,
+) -> RegexGenerationRecord {
+    RegexGenerationRecord {
+        schema_version: REGEX_INDEX_SCHEMA_VERSION,
+        generation: manifest.generation,
+        manifest: durable_manifest(manifest),
+        base: loaded.base_files.clone(),
+        segments: loaded
+            .overlays
+            .iter()
+            .map(|segment| OverlaySegmentRecord {
+                generation: segment.generation,
+                files: segment.files.clone(),
+            })
+            .collect(),
+        overlay_state: loaded.overlay_state.clone(),
+    }
+}
+
+fn save_generation_record(root: &Path, record: &RegexGenerationRecord) -> Result<()> {
+    fs::create_dir_all(regex_index_dir(root))?;
     write_atomic(
-        overlay_state_path(root),
-        &serde_json::to_vec_pretty(overlay)?,
+        generation_record_path(root, record.generation),
+        &serde_json::to_vec_pretty(record)?,
     )
+}
+
+fn load_generation_record(root: &Path, generation: u64) -> Result<RegexGenerationRecord> {
+    let path = generation_record_path(root, generation);
+    let raw = fs::read(&path).with_context(|| {
+        format!(
+            "failed to read regex generation record '{}'",
+            path.display()
+        )
+    })?;
+    serde_json::from_slice(&raw).with_context(|| {
+        format!(
+            "failed to decode regex generation record '{}'",
+            path.display()
+        )
+    })
+}
+
+fn validate_generation_record(record: &RegexGenerationRecord) -> Result<()> {
+    ensure_valid_index!(
+        record.schema_version == REGEX_INDEX_SCHEMA_VERSION
+            && record.generation > 0
+            && record.manifest.schema_version == REGEX_INDEX_SCHEMA_VERSION
+            && record.manifest.weight_table_version == WEIGHT_TABLE_VERSION
+            && record.manifest.generation == record.generation
+            && record.manifest.status == "ready",
+        "regex generation {} has inconsistent schema, weight, manifest, or status",
+        record.generation
+    );
+    ensure_valid_index!(
+        record.manifest.overlay_segments == record.segments.len(),
+        "regex generation {} declares {} overlay segments but references {}",
+        record.generation,
+        record.manifest.overlay_segments,
+        record.segments.len()
+    );
+    validate_layer_file_names(&record.base)?;
+    let mut artifact_names = BTreeSet::from([
+        record.base.lookup.as_str(),
+        record.base.postings.as_str(),
+        record.base.docs.as_str(),
+    ]);
+    let mut segment_generations = BTreeSet::new();
+    let mut previous_generation = None;
+    for segment in &record.segments {
+        validate_layer_file_names(&segment.files)?;
+        ensure_valid_index!(
+            segment.generation > 0
+                && segment.generation <= record.generation
+                && previous_generation.is_none_or(|previous| segment.generation > previous)
+                && segment_generations.insert(segment.generation),
+            "regex generation {} has duplicate, non-increasing, or future overlay generation {}",
+            record.generation,
+            segment.generation
+        );
+        for name in [
+            segment.files.lookup.as_str(),
+            segment.files.postings.as_str(),
+            segment.files.docs.as_str(),
+        ] {
+            ensure_valid_index!(
+                artifact_names.insert(name),
+                "regex generation {} references duplicate artifact '{name}'",
+                record.generation
+            );
+        }
+        previous_generation = Some(segment.generation);
+    }
+    ensure_valid_index!(
+        record
+            .overlay_state
+            .owners
+            .keys()
+            .all(|path| record.overlay_state.shadowed_paths.contains(path)),
+        "regex generation {} has an overlay owner that is not shadowed",
+        record.generation
+    );
+    ensure_valid_index!(
+        record.overlay_state.deleted_paths.iter().all(|path| record
+            .overlay_state
+            .shadowed_paths
+            .contains(path)
+            && !record.overlay_state.owners.contains_key(path)),
+        "regex generation {} has inconsistent tombstones",
+        record.generation
+    );
+    ensure_valid_index!(
+        record
+            .overlay_state
+            .owners
+            .values()
+            .all(|owner| segment_generations.contains(owner)),
+        "regex generation {} has an owner for a missing segment",
+        record.generation
+    );
+    ensure_valid_index!(
+        record.manifest.overlay_files == record.overlay_state.owners.len(),
+        "regex generation {} declares {} overlay files but owns {}",
+        record.generation,
+        record.manifest.overlay_files,
+        record.overlay_state.owners.len()
+    );
+    Ok(())
+}
+
+fn load_recorded_generation(
+    root: &Path,
+    manifest: RegexIndexManifest,
+    record: RegexGenerationRecord,
+) -> Result<RegexIndexRuntime> {
+    validate_generation_record(&record)?;
+    ensure_valid_index!(
+        record.manifest == durable_manifest(&manifest),
+        "regex generation {} record does not match its published manifest",
+        manifest.generation
+    );
+    let base = load_layer(root, &record.base)
+        .context("failed to load base regex index layer for published generation")?;
+    let mut overlays = Vec::with_capacity(record.segments.len());
+    for segment in &record.segments {
+        let layer = load_layer(root, &segment.files).with_context(|| {
+            format!(
+                "failed to load regex overlay segment generation {}",
+                segment.generation
+            )
+        })?;
+        overlays.push(LoadedOverlaySegment {
+            generation: segment.generation,
+            layer: Arc::new(layer),
+            files: segment.files.clone(),
+        });
+    }
+    let loaded = LoadedIndex {
+        base: Arc::new(base),
+        base_files: record.base,
+        overlays,
+        overlay_state: record.overlay_state,
+    };
+    validate_loaded_overlay_state(&loaded)?;
+    validate_manifest_counts(&manifest, &loaded)?;
+    Ok(RegexIndexRuntime {
+        manifest,
+        loaded: Some(Arc::new(loaded)),
+    })
+}
+
+fn load_legacy_generation(
+    root: &Path,
+    mut manifest: RegexIndexManifest,
+) -> Result<RegexIndexRuntime> {
+    let base_files = LayerFiles::legacy_base();
+    let base = load_layer(root, &base_files).context("failed to load base regex index layer")?;
+    let overlay_files = LayerFiles::legacy_overlay();
+    let overlay =
+        load_layer(root, &overlay_files).context("failed to load overlay regex index layer")?;
+    let mut overlay_state = load_overlay_state(root);
+    let mut overlays = Vec::new();
+    if !overlay.docs.is_empty() {
+        for doc in &overlay.docs {
+            overlay_state.shadowed_paths.insert(doc.path.clone());
+            if !overlay_state.deleted_paths.contains(&doc.path) {
+                overlay_state
+                    .owners
+                    .insert(doc.path.clone(), manifest.generation);
+            }
+        }
+        overlays.push(LoadedOverlaySegment {
+            generation: manifest.generation,
+            layer: Arc::new(overlay),
+            files: overlay_files,
+        });
+    }
+    manifest.overlay_files = overlay_state.owners.len();
+    manifest.overlay_segments = overlays.len();
+    let loaded = LoadedIndex {
+        base: Arc::new(base),
+        base_files,
+        overlays,
+        overlay_state,
+    };
+    validate_loaded_overlay_state(&loaded)?;
+    Ok(RegexIndexRuntime {
+        manifest,
+        loaded: Some(Arc::new(loaded)),
+    })
+}
+
+fn validate_loaded_overlay_state(loaded: &LoadedIndex) -> Result<()> {
+    for (path, owner) in &loaded.overlay_state.owners {
+        ensure_valid_index!(
+            loaded.overlay_state.shadowed_paths.contains(path)
+                && !loaded.overlay_state.deleted_paths.contains(path),
+            "regex overlay owner for '{path}' conflicts with shadow/tombstone state"
+        );
+        let owner_segment = loaded
+            .overlays
+            .iter()
+            .find(|segment| segment.generation == *owner);
+        ensure_valid_index!(
+            owner_segment
+                .and_then(|segment| segment.layer.doc_ids_by_path.get(path))
+                .is_some(),
+            "regex overlay owner generation {owner} has no document for '{path}'"
+        );
+    }
+    for path in &loaded.overlay_state.deleted_paths {
+        ensure_valid_index!(
+            loaded.overlay_state.shadowed_paths.contains(path)
+                && !loaded.overlay_state.owners.contains_key(path),
+            "regex overlay tombstone for '{path}' conflicts with owner/shadow state"
+        );
+    }
+    for segment in &loaded.overlays {
+        for doc in &segment.layer.docs {
+            ensure_valid_index!(
+                loaded.overlay_state.shadowed_paths.contains(&doc.path),
+                "regex overlay segment {} contains unshadowed document '{}'",
+                segment.generation,
+                doc.path
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_manifest_counts(manifest: &RegexIndexManifest, loaded: &LoadedIndex) -> Result<()> {
+    let actual_files = all_indexed_paths(loaded, None).len();
+    ensure_valid_index!(
+        manifest.overlay_files == loaded.overlay_state.owners.len()
+            && manifest.overlay_segments == loaded.overlays.len()
+            && manifest.total_files == actual_files,
+        "regex generation {} manifest counts do not match loaded layers (files {}/{}, overlays {}/{}, segments {}/{})",
+        manifest.generation,
+        manifest.total_files,
+        actual_files,
+        manifest.overlay_files,
+        loaded.overlay_state.owners.len(),
+        manifest.overlay_segments,
+        loaded.overlays.len()
+    );
+    Ok(())
+}
+
+fn recover_previous_runtime(
+    root: &Path,
+    failed_manifest: Option<RegexIndexManifest>,
+    error: SearchError,
+) -> Result<RegexIndexRuntime> {
+    let failed_generation = failed_manifest
+        .as_ref()
+        .map_or(0, |manifest| manifest.generation);
+    if let Ok(previous) = load_manifest_file(&previous_manifest_path(root)) {
+        if let Ok(mut runtime) = load_runtime_from_manifest(root, previous) {
+            let reason = format!(
+                "recovered generation {} after rejecting generation {}: {error:#}",
+                runtime.manifest.generation, failed_generation
+            );
+            runtime.manifest.stale_reason = Some(reason.clone());
+            runtime.manifest.last_error = Some(reason);
+            return Ok(runtime);
+        }
+    }
+    let mut manifest = failed_manifest.unwrap_or_default();
+    mark_manifest_unloaded(&mut manifest, "corrupt", format!("{error:#}"));
+    Ok(RegexIndexRuntime {
+        manifest,
+        loaded: None,
+    })
+}
+
+fn collect_live_overlay_documents(
+    root: &Path,
+    overlay_state: &mut OverlayState,
+) -> Result<Vec<IndexedDocument>> {
+    let paths = overlay_state.owners.keys().cloned().collect::<Vec<_>>();
+    let mut docs = Vec::with_capacity(paths.len());
+    let mut newly_deleted = Vec::new();
+    for path in paths {
+        match index_document(root, &root.join(&path))? {
+            Some(document) => docs.push(document),
+            None => newly_deleted.push(path),
+        }
+    }
+    for path in newly_deleted {
+        overlay_state.owners.remove(&path);
+        overlay_state.deleted_paths.insert(path);
+    }
+    docs.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(docs)
 }
 
 fn current_git_commit(root: &Path) -> Option<String> {
@@ -2794,15 +3247,28 @@ fn all_indexed_paths(
             paths.insert(doc.path.clone());
         }
     }
-    for doc in &loaded.overlay.docs {
-        if loaded.overlay_state.deleted_paths.contains(&doc.path) {
-            continue;
-        }
-        if path_allowed(&doc.path, requested_filter) {
-            paths.insert(doc.path.clone());
+    for segment in &loaded.overlays {
+        for doc in &segment.layer.docs {
+            if !overlay_doc_is_active(loaded, segment.generation, &doc.path) {
+                continue;
+            }
+            if path_allowed(&doc.path, requested_filter) {
+                paths.insert(doc.path.clone());
+            }
         }
     }
     paths
+}
+
+fn overlay_doc_is_active(loaded: &LoadedIndex, generation: u64, path: &str) -> bool {
+    !loaded.overlay_state.deleted_paths.contains(path)
+        && loaded.overlay_state.owners.get(path) == Some(&generation)
+}
+
+fn overlay_posting_count(loaded: &LoadedIndex, hash: u64) -> u32 {
+    loaded.overlays.iter().fold(0u32, |count, segment| {
+        count.saturating_add(lookup_posting_count(&segment.layer, hash).unwrap_or(0))
+    })
 }
 
 fn path_allowed(path: &str, requested_filter: Option<&BTreeSet<String>>) -> bool {
@@ -3012,8 +3478,17 @@ mod tests {
         record
     }
 
+    fn current_generation_record(root: &Path) -> RegexGenerationRecord {
+        let manifest = load_manifest_strict(root).expect("manifest");
+        load_generation_record(root, manifest.generation).expect("generation record")
+    }
+
+    fn current_base_files(root: &Path) -> LayerFiles {
+        current_generation_record(root).base
+    }
+
     fn corrupt_first_lookup_range(root: &Path, offset: u64, len: u32) {
-        let path = regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME);
+        let path = regex_index_dir(root).join(current_base_files(root).lookup);
         let mut lookup = fs::read(&path).unwrap();
         assert!(lookup.len() >= LOOKUP_ROW_BYTES);
         lookup[8..16].copy_from_slice(&offset.to_le_bytes());
@@ -3201,6 +3676,272 @@ mod tests {
     }
 
     #[test]
+    fn successive_overlay_updates_search_only_the_newest_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
+        fs::write(root.join("src/keep.rs"), "pub struct Keep;\n").unwrap();
+        let base = rebuild_full_index(root, true).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Beta;\n").unwrap();
+        let beta = update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Gamma;\n").unwrap();
+        let gamma = update_overlay_index(root, Some(&beta), &[String::from("src/lib.rs")]).unwrap();
+
+        for query in ["Alpha", "Beta", "Gamma"] {
+            assert_parity(
+                root,
+                &gamma,
+                SearchRequest {
+                    query: query.to_string(),
+                    fixed_string: true,
+                    ..SearchRequest::default()
+                },
+            );
+        }
+        let loaded = gamma.loaded.as_ref().expect("loaded");
+        assert_eq!(loaded.overlays.len(), 2);
+        assert_eq!(
+            loaded.overlay_state.owners.get("src/lib.rs"),
+            Some(&gamma.manifest.generation)
+        );
+        assert!(base.shares_base_with(&gamma));
+    }
+
+    #[test]
+    fn overlay_tombstone_delete_matches_reducer_before_and_after_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
+        fs::write(root.join("src/keep.rs"), "pub struct Keep;\n").unwrap();
+        let base = rebuild_full_index(root, true).unwrap();
+        fs::remove_file(root.join("src/lib.rs")).unwrap();
+
+        let deleted =
+            update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+        let reloaded = load_runtime(root).unwrap();
+        let request = SearchRequest {
+            query: "Alpha".to_string(),
+            fixed_string: true,
+            ..SearchRequest::default()
+        };
+
+        assert_parity(root, &deleted, request.clone());
+        assert_parity(root, &reloaded, request);
+        assert!(deleted.loaded.as_ref().is_some_and(|loaded| loaded
+            .overlay_state
+            .deleted_paths
+            .contains("src/lib.rs")
+            && !loaded.overlay_state.owners.contains_key("src/lib.rs")));
+    }
+
+    #[test]
+    fn overlay_threshold_compaction_preserves_search_parity_and_base_arc() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn revision_0() {}\n").unwrap();
+        let base = rebuild_full_index(root, true).unwrap();
+        let mut runtime = base.clone();
+
+        for revision in 1..=OVERLAY_COMPACTION_SEGMENTS {
+            fs::write(
+                root.join("src/lib.rs"),
+                format!("pub fn revision_{revision}() {{}}\n"),
+            )
+            .unwrap();
+            runtime =
+                update_overlay_index(root, Some(&runtime), &[String::from("src/lib.rs")]).unwrap();
+        }
+        let reloaded = load_runtime(root).unwrap();
+        let request = SearchRequest {
+            query: format!("revision_{OVERLAY_COMPACTION_SEGMENTS}"),
+            fixed_string: true,
+            ..SearchRequest::default()
+        };
+
+        assert_eq!(runtime.manifest.overlay_segments, 1);
+        assert!(base.shares_base_with(&runtime));
+        assert_parity(root, &runtime, request.clone());
+        assert_parity(root, &reloaded, request);
+        assert!(current_generation_record(root).segments[0]
+            .files
+            .docs
+            .contains("-compacted."));
+    }
+
+    #[test]
+    fn corrupt_overlay_generation_record_recovers_the_previous_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let base = build_fixture_index(root);
+        fs::write(root.join("src/lib.rs"), "pub struct Replacement;\n").unwrap();
+        let updated =
+            update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+        fs::write(
+            generation_record_path(root, updated.manifest.generation),
+            b"{",
+        )
+        .unwrap();
+
+        let recovered = load_runtime(root).unwrap();
+
+        assert!(recovered.is_loaded());
+        assert_eq!(recovered.manifest.generation, base.manifest.generation);
+        assert!(recovered
+            .manifest
+            .stale_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("recovered generation")));
+    }
+
+    #[test]
+    fn every_missing_overlay_artifact_recovers_the_previous_generation() {
+        for artifact in 0..3 {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let base = build_fixture_index(root);
+            fs::write(root.join("src/lib.rs"), "pub struct Replacement;\n").unwrap();
+            let updated =
+                update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+            let files = current_generation_record(root).segments[0].files.clone();
+            let file_name = [&files.docs, &files.lookup, &files.postings][artifact];
+            fs::remove_file(regex_index_dir(root).join(file_name)).unwrap();
+
+            let recovered = load_runtime(root).unwrap();
+
+            assert!(
+                recovered.is_loaded()
+                    && recovered.manifest.generation == base.manifest.generation
+                    && recovered
+                        .manifest
+                        .last_error
+                        .as_deref()
+                        .is_some_and(|error| error.contains(file_name)),
+                "artifact={file_name}, updated={:?}, recovered={:?}",
+                updated.manifest,
+                recovered.manifest
+            );
+        }
+    }
+
+    #[test]
+    fn truncated_overlay_lookup_and_postings_recover_previous_generation() {
+        for artifact in ["lookup", "postings"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let base = build_fixture_index(root);
+            fs::write(root.join("src/lib.rs"), "pub struct Replacement;\n").unwrap();
+            let _updated =
+                update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+            let files = current_generation_record(root).segments[0].files.clone();
+            let file_name = if artifact == "lookup" {
+                &files.lookup
+            } else {
+                &files.postings
+            };
+            let path = regex_index_dir(root).join(file_name);
+            let bytes = fs::read(&path).unwrap();
+            fs::write(&path, &bytes[..bytes.len() - 1]).unwrap();
+
+            let recovered = load_runtime(root).unwrap();
+
+            assert!(
+                recovered.is_loaded() && recovered.manifest.generation == base.manifest.generation,
+                "artifact={artifact}, recovered={:?}",
+                recovered.manifest
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_overlay_owner_and_non_increasing_segments_are_recoverable_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let base = build_fixture_index(root);
+        fs::write(root.join("src/lib.rs"), "pub struct Beta;\n").unwrap();
+        let first = update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Gamma;\n").unwrap();
+        let second =
+            update_overlay_index(root, Some(&first), &[String::from("src/lib.rs")]).unwrap();
+        let mut record = current_generation_record(root);
+        record.segments[1].generation = record.segments[0].generation;
+        record
+            .overlay_state
+            .owners
+            .insert("src/lib.rs".to_string(), second.manifest.generation + 1);
+        write_atomic(
+            generation_record_path(root, record.generation),
+            &serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+
+        let recovered = load_runtime(root).unwrap();
+
+        assert!(recovered.is_loaded());
+        assert_eq!(recovered.manifest.generation, first.manifest.generation);
+        assert!(recovered
+            .manifest
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("non-increasing")));
+    }
+
+    #[test]
+    fn corrupt_current_manifest_recovers_only_the_explicit_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let base = build_fixture_index(root);
+        fs::write(root.join("src/lib.rs"), "pub struct Replacement;\n").unwrap();
+        let _updated =
+            update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+        fs::write(manifest_path(root), b"{").unwrap();
+
+        let recovered = load_runtime(root).unwrap();
+
+        assert!(recovered.is_loaded());
+        assert_eq!(recovered.manifest.generation, base.manifest.generation);
+        assert!(recovered.manifest.last_error.is_some());
+    }
+
+    #[test]
+    fn unpublished_orphan_generation_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let runtime = build_fixture_index(root);
+        let orphan_generation = runtime.manifest.generation + 1;
+        fs::write(generation_record_path(root, orphan_generation), b"{").unwrap();
+        fs::write(
+            regex_index_dir(root).join(LayerFiles::overlay(orphan_generation, false).docs),
+            b"partial",
+        )
+        .unwrap();
+
+        let loaded = load_runtime(root).unwrap();
+
+        assert!(loaded.is_loaded());
+        assert_eq!(loaded.manifest.generation, runtime.manifest.generation);
+    }
+
+    #[test]
+    fn corrupt_new_base_recovers_the_previous_full_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let first = build_fixture_index(root);
+        fs::write(root.join("src/new.rs"), "pub struct NewGeneration;\n").unwrap();
+        let second = rebuild_full_index(root, true).unwrap();
+        let files = current_base_files(root);
+        fs::write(regex_index_dir(root).join(files.docs), b"corrupt").unwrap();
+
+        let recovered = load_runtime(root).unwrap();
+
+        assert!(recovered.is_loaded());
+        assert_eq!(recovered.manifest.generation, first.manifest.generation);
+        assert_ne!(recovered.manifest.generation, second.manifest.generation);
+    }
+
+    #[test]
     fn regex_search_builds_and_plan_for_concat_literals() {
         let (plan, fallback) = build_search_plan(
             &SearchRequest {
@@ -3360,7 +4101,8 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
         let _runtime = rebuild_full_index(root, true).unwrap();
-        fs::remove_file(regex_index_dir(root).join(BASE_POSTINGS_FILE_NAME)).unwrap();
+        let files = current_base_files(root);
+        fs::remove_file(regex_index_dir(root).join(&files.postings)).unwrap();
         let loaded = load_runtime(root).unwrap();
         assert!(!loaded.is_loaded());
         assert_eq!(loaded.manifest.status, "corrupt");
@@ -3372,7 +4114,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         drop(build_fixture_index(root));
-        let lookup_path = regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME);
+        let files = current_base_files(root);
+        let lookup_path = regex_index_dir(root).join(&files.lookup);
         let original = fs::read(&lookup_path).unwrap();
         let complete_prefix_len = original.len() - LOOKUP_ROW_BYTES;
 
@@ -3386,7 +4129,7 @@ mod tests {
                     && runtime.manifest.status == "corrupt"
                     && runtime.manifest.last_error.as_deref() == Some(reason)
                     && reason.contains("failed to load base regex index layer")
-                    && reason.contains(BASE_LOOKUP_FILE_NAME)
+                    && reason.contains(&files.lookup)
                     && reason.contains(&format!(
                         "partial trailing row: {trailing} of {LOOKUP_ROW_BYTES} bytes"
                     )),
@@ -3401,8 +4144,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         drop(build_fixture_index(root));
-        let lookup = fs::read(regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME)).unwrap();
-        let postings_path = regex_index_dir(root).join(BASE_POSTINGS_FILE_NAME);
+        let files = current_base_files(root);
+        let lookup = fs::read(regex_index_dir(root).join(&files.lookup)).unwrap();
+        let postings_path = regex_index_dir(root).join(&files.postings);
         let postings = fs::read(&postings_path).unwrap();
         let final_row = &lookup[lookup.len() - LOOKUP_ROW_BYTES..];
         let offset = u64::from_le_bytes(final_row[8..16].try_into().unwrap()) as usize;
@@ -3432,11 +4176,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         drop(build_fixture_index(root));
-        for name in [
-            BASE_DOCS_FILE_NAME,
-            BASE_LOOKUP_FILE_NAME,
-            BASE_POSTINGS_FILE_NAME,
-        ] {
+        let files = current_base_files(root);
+        for name in [&files.docs, &files.lookup, &files.postings] {
             fs::remove_file(regex_index_dir(root).join(name)).unwrap();
         }
 
@@ -3483,14 +4224,15 @@ mod tests {
 
         let runtime = load_runtime(root).unwrap();
         let reason = runtime.manifest.last_error.as_deref().unwrap_or_default();
+        let files = current_base_files(root);
 
         assert!(
             !runtime.is_loaded()
                 && runtime.manifest.status == "corrupt"
                 && runtime.manifest.stale_reason.as_deref() == Some(reason)
                 && reason.contains("failed to load base regex index layer")
-                && reason.contains(BASE_LOOKUP_FILE_NAME)
-                && reason.contains(BASE_POSTINGS_FILE_NAME)
+                && reason.contains(&files.lookup)
+                && reason.contains(&files.postings)
                 && reason.contains("overflows u64"),
             "manifest={:?}",
             runtime.manifest
@@ -3502,9 +4244,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         drop(build_fixture_index(root));
-        let postings_len = fs::metadata(regex_index_dir(root).join(BASE_POSTINGS_FILE_NAME))
-            .unwrap()
-            .len();
+        let postings_len =
+            fs::metadata(regex_index_dir(root).join(current_base_files(root).postings))
+                .unwrap()
+                .len();
         corrupt_first_lookup_range(root, postings_len, 1);
 
         let runtime = load_runtime(root).unwrap();
@@ -3522,55 +4265,68 @@ mod tests {
     }
 
     #[test]
-    fn failed_overlay_validation_persists_provenance_without_publication() {
+    fn incremental_publication_retains_the_validated_base_without_reloading_it() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let runtime = build_fixture_index(root);
-        let lookup_path = regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME);
-        let lookup = fs::read(&lookup_path).unwrap();
-        write_atomic(lookup_path, &lookup[..lookup.len() - 1]).unwrap();
+        let original_record = current_generation_record(root);
         fs::write(root.join("src/lib.rs"), "pub struct Replacement;\n").unwrap();
 
-        let error =
-            update_overlay_index(root, Some(&runtime), &[String::from("src/lib.rs")]).unwrap_err();
-        let manifest = load_manifest(root);
+        let updated =
+            update_overlay_index(root, Some(&runtime), &[String::from("src/lib.rs")]).unwrap();
+        let updated_record = current_generation_record(root);
 
-        assert!(
-            manifest.status == "corrupt"
-                && manifest.last_error.as_deref().is_some_and(|reason| {
-                    reason.contains("failed to validate base layer before overlay publication")
-                        && reason.contains("partial trailing row")
-                })
-                && !load_runtime(root).unwrap().is_loaded(),
-            "error={error:#}, manifest={manifest:?}"
+        assert!(runtime.shares_base_with(&updated));
+        assert_eq!(updated_record.base, original_record.base);
+        assert_eq!(updated_record.segments.len(), 1);
+        assert_eq!(updated.manifest.overlay_files, 1);
+        assert_eq!(
+            load_runtime(root).unwrap().manifest.generation,
+            updated.manifest.generation
         );
     }
 
     #[test]
-    fn concurrent_readers_keep_the_published_generation_while_loaders_reject_a_building_one() {
+    fn concurrent_readers_keep_generation_owned_layers_across_publication() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let runtime = build_fixture_index(root);
-        let mut manifest = runtime.manifest.clone();
-        manifest.status = "building".to_string();
-        manifest.stale_reason = Some("generation replacement in progress".to_string());
-        save_manifest(root, &manifest).unwrap();
-        let lookup_path = regex_index_dir(root).join(BASE_LOOKUP_FILE_NAME);
-        let lookup = fs::read(&lookup_path).unwrap();
-        let truncated_lookup = lookup[..lookup.len() - 1].to_vec();
-        let request = SearchRequest {
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub struct Alpha;\npub struct Replacement;\n",
+        )
+        .unwrap();
+        let updated =
+            update_overlay_index(root, Some(&runtime), &[String::from("src/lib.rs")]).unwrap();
+        let old_request = SearchRequest {
             query: "Alpha".to_string(),
             fixed_string: true,
             ..SearchRequest::default()
         };
-        let barrier = Arc::new(Barrier::new(10));
+        let new_request = SearchRequest {
+            query: "Replacement".to_string(),
+            fixed_string: true,
+            ..SearchRequest::default()
+        };
+        let barrier = Arc::new(Barrier::new(13));
 
         std::thread::scope(|scope| {
-            let query_handles = (0..4)
+            let old_reader_handles = (0..4)
                 .map(|_| {
                     let barrier = Arc::clone(&barrier);
-                    let request = request.clone();
+                    let request = old_request.clone();
                     let runtime = &runtime;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        indexed_search(root, runtime, &request).map(|result| result.match_count)
+                    })
+                })
+                .collect::<Vec<_>>();
+            let new_reader_handles = (0..4)
+                .map(|_| {
+                    let barrier = Arc::clone(&barrier);
+                    let request = new_request.clone();
+                    let runtime = &updated;
                     scope.spawn(move || {
                         barrier.wait();
                         indexed_search(root, runtime, &request).map(|result| result.match_count)
@@ -3582,25 +4338,27 @@ mod tests {
                     let barrier = Arc::clone(&barrier);
                     scope.spawn(move || {
                         barrier.wait();
-                        load_runtime(root).map(|runtime| runtime.is_loaded())
+                        load_runtime(root)
+                            .map(|runtime| (runtime.is_loaded(), runtime.manifest.generation))
                     })
                 })
                 .collect::<Vec<_>>();
-            let writer_barrier = Arc::clone(&barrier);
-            let writer = scope.spawn(move || {
-                writer_barrier.wait();
-                write_atomic(lookup_path, &truncated_lookup)
-            });
 
             barrier.wait();
-            writer.join().unwrap().unwrap();
-            for handle in query_handles {
+            for handle in old_reader_handles {
+                assert!(handle.join().unwrap().unwrap() > 0);
+            }
+            for handle in new_reader_handles {
                 assert!(handle.join().unwrap().unwrap() > 0);
             }
             for handle in load_handles {
-                assert!(!handle.join().unwrap().unwrap());
+                assert_eq!(
+                    handle.join().unwrap().unwrap(),
+                    (true, updated.manifest.generation)
+                );
             }
         });
+        assert!(runtime.shares_base_with(&updated));
     }
 
     #[test]
