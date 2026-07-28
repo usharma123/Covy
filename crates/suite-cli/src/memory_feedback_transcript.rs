@@ -2,13 +2,17 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 
 use crate::memory_db::{
-    expanded_filter_limit, fts_match_query, normalize_non_empty, open_memory_db, table_count,
-    timestamp_unix_ms,
+    expanded_filter_limit, fts_match_query, normalize_non_empty, table_count, timestamp_unix_ms,
+    LocalMemoryStore,
 };
 use crate::memory_store_types::*;
 
 pub(crate) fn record_feedback_with_metadata(input: FeedbackInput<'_>) -> Result<FeedbackRecord> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| record_feedback_on(conn, input))
+}
+
+fn record_feedback_on(conn: &Connection, input: FeedbackInput<'_>) -> Result<FeedbackRecord> {
     let now = timestamp_unix_ms();
     let topic = normalize_non_empty(input.topic, "general");
     conn.execute(
@@ -27,17 +31,24 @@ pub(crate) fn record_feedback_with_metadata(input: FeedbackInput<'_>) -> Result<
             now
         ],
     )?;
-    get_feedback(&conn, conn.last_insert_rowid())
+    get_feedback(conn, conn.last_insert_rowid())
 }
 
 pub(crate) fn append_transcript_message(
     input: TranscriptAppendInput<'_>,
 ) -> Result<TranscriptMessage> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| append_transcript_message_on(conn, input))
+}
+
+fn append_transcript_message_on(
+    conn: &Connection,
+    input: TranscriptAppendInput<'_>,
+) -> Result<TranscriptMessage> {
     let now = timestamp_unix_ms();
     let session_key = normalize_non_empty(input.session, &format!("transcript-{now}"));
     let role = normalize_non_empty(input.role, "assistant");
-    let session_id = ensure_transcript_session(&conn, &session_key, input.agent, now)?;
+    let session_id = ensure_transcript_session(conn, &session_key, input.agent, now)?;
     conn.execute(
         "INSERT INTO transcript_messages
          (session_id, role, content, source, project, created_at_unix_ms)
@@ -51,6 +62,7 @@ pub(crate) fn append_transcript_message(
             now
         ],
     )?;
+    let message_id = conn.last_insert_rowid();
     conn.execute(
         "UPDATE transcript_sessions
          SET agent = COALESCE(?1, agent),
@@ -58,11 +70,11 @@ pub(crate) fn append_transcript_message(
          WHERE id = ?3",
         params![input.agent, now, session_id],
     )?;
-    get_transcript_message(&conn, conn.last_insert_rowid())
+    get_transcript_message(conn, message_id)
 }
 
 pub(crate) fn list_transcript_sessions(limit: usize) -> Result<Vec<TranscriptSession>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let mut stmt = conn.prepare(
         "SELECT
             s.id,
@@ -84,7 +96,7 @@ pub(crate) fn show_transcript_session(
     session_key: &str,
     limit: usize,
 ) -> Result<Vec<TranscriptMessage>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let mut stmt = conn.prepare(
         "SELECT
             m.id, m.session_id, s.session_key, s.agent, m.role, m.content, m.source, m.project,
@@ -107,7 +119,7 @@ pub(crate) fn search_transcripts_filtered(
     project: Option<&str>,
     limit: usize,
 ) -> Result<Vec<TranscriptMessage>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let expanded_limit = expanded_filter_limit(limit, project.is_some());
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
@@ -133,7 +145,7 @@ pub(crate) fn search_transcripts_filtered(
 }
 
 pub(crate) fn transcript_stats() -> Result<TranscriptStats> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     Ok(TranscriptStats {
         session_count: table_count(&conn, "transcript_sessions")?,
         message_count: table_count(&conn, "transcript_messages")?,
@@ -156,7 +168,7 @@ pub(crate) fn search_feedback_filtered(
     project: Option<&str>,
     limit: usize,
 ) -> Result<Vec<FeedbackRecord>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let expanded_limit = expanded_filter_limit(limit, project.is_some());
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
@@ -205,7 +217,7 @@ fn search_feedback_like(
 }
 
 pub(crate) fn list_feedback(topic: Option<&str>, limit: usize) -> Result<Vec<FeedbackRecord>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     if let Some(topic) = topic {
         let topic = normalize_non_empty(Some(topic), "general");
         let mut stmt = conn.prepare(
@@ -232,22 +244,24 @@ pub(crate) fn list_feedback(topic: Option<&str>, limit: usize) -> Result<Vec<Fee
 }
 
 pub(crate) fn delete_feedback(id: i64) -> Result<usize> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     conn.execute("DELETE FROM feedback WHERE id = ?1", params![id])
         .map_err(Into::into)
 }
 
 pub(crate) fn apply_feedback(id: i64) -> Result<FeedbackRecord> {
-    let conn = open_memory_db()?;
-    conn.execute(
-        "UPDATE feedback SET applied_count = applied_count + 1 WHERE id = ?1",
-        params![id],
-    )?;
-    get_feedback(&conn, id)
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| {
+        conn.execute(
+            "UPDATE feedback SET applied_count = applied_count + 1 WHERE id = ?1",
+            params![id],
+        )?;
+        get_feedback(conn, id)
+    })
 }
 
 pub(crate) fn feedback_stats() -> Result<FeedbackStats> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     Ok(FeedbackStats {
         feedback_count: table_count(&conn, "feedback")?,
         applied_count: conn.query_row(
@@ -455,4 +469,46 @@ fn get_transcript_message(conn: &Connection, id: i64) -> Result<TranscriptMessag
         },
     )
     .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcript_workflow_rolls_back_session_when_message_insert_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = LocalMemoryStore::open_path(temp.path().join("memory.db")).unwrap();
+        store
+            .execute_batch(
+                "
+                CREATE TRIGGER fail_transcript_insert
+                BEFORE INSERT ON transcript_messages
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced transcript failure');
+                END;
+                ",
+            )
+            .unwrap();
+
+        let result = store.transaction(|tx| {
+            append_transcript_message_on(
+                tx,
+                TranscriptAppendInput {
+                    session: Some("rollback-session"),
+                    agent: Some("test-agent"),
+                    role: Some("assistant"),
+                    content: "This insert must roll back.",
+                    source: Some("test"),
+                    project: Some("packet28"),
+                },
+            )
+        });
+
+        assert!(result.is_err());
+        assert_eq!(table_count(&store, "transcript_sessions").unwrap(), 0);
+        assert_eq!(table_count(&store, "transcript_messages").unwrap(), 0);
+        assert_eq!(store.metrics().transactions_rolled_back, 1);
+        assert_eq!(store.metrics().connections_opened, 1);
+    }
 }

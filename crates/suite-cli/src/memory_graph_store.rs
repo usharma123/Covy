@@ -5,14 +5,14 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::memory_db::{
-    fts_match_query, normalize_non_empty, open_memory_db, table_count, timestamp_unix_ms,
+    fts_match_query, normalize_non_empty, table_count, timestamp_unix_ms, LocalMemoryStore,
 };
 use crate::memory_graph_render::{render_graph_ascii, render_graph_dot};
 use crate::memory_project_scan::{
     collect_project_configs, collect_project_dependencies, collect_project_entrypoints,
     collect_project_modules, project_identity,
 };
-use crate::memory_store::{list_memories_filtered, split_csv_field};
+use crate::memory_store::{list_memories_filtered_on, split_csv_field};
 use crate::memory_store_types::*;
 
 const DEFAULT_MEMOIR_NAME: &str = "default";
@@ -21,14 +21,22 @@ pub(crate) fn create_graph_memoir(
     name: Option<&str>,
     description: Option<&str>,
 ) -> Result<GraphMemoir> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| create_graph_memoir_on(conn, name, description))
+}
+
+pub(super) fn create_graph_memoir_on(
+    conn: &Connection,
+    name: Option<&str>,
+    description: Option<&str>,
+) -> Result<GraphMemoir> {
     let name = normalize_non_empty(name, DEFAULT_MEMOIR_NAME);
-    upsert_memoir(&conn, &name, description)?;
-    show_graph_memoir_summary(&conn, &name)
+    upsert_memoir(conn, &name, description)?;
+    show_graph_memoir_summary(conn, &name)
 }
 
 pub(crate) fn list_graph_memoirs() -> Result<Vec<GraphMemoir>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let mut stmt = conn.prepare(
         "SELECT m.name
          FROM memoirs m
@@ -44,7 +52,7 @@ pub(crate) fn list_graph_memoirs() -> Result<Vec<GraphMemoir>> {
 }
 
 pub(crate) fn show_graph_memoir(name: Option<&str>, limit: usize) -> Result<GraphMemoirShow> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let name = normalize_non_empty(name, DEFAULT_MEMOIR_NAME);
     upsert_memoir(&conn, &name, None)?;
     let memoir = show_graph_memoir_summary(&conn, &name)?;
@@ -57,10 +65,6 @@ pub(crate) fn show_graph_memoir(name: Option<&str>, limit: usize) -> Result<Grap
     })
 }
 
-pub(crate) fn add_concept(name: &str, description: Option<&str>) -> Result<GraphConcept> {
-    add_concept_with_metadata(name, description, None, &[], None, &[])
-}
-
 pub(crate) fn add_concept_with_metadata(
     name: &str,
     description: Option<&str>,
@@ -69,10 +73,32 @@ pub(crate) fn add_concept_with_metadata(
     confidence: Option<f64>,
     source_ids: &[String],
 ) -> Result<GraphConcept> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| {
+        add_concept_with_metadata_on(
+            conn,
+            name,
+            description,
+            memoir,
+            labels,
+            confidence,
+            source_ids,
+        )
+    })
+}
+
+pub(super) fn add_concept_with_metadata_on(
+    conn: &Connection,
+    name: &str,
+    description: Option<&str>,
+    memoir: Option<&str>,
+    labels: &[String],
+    confidence: Option<f64>,
+    source_ids: &[String],
+) -> Result<GraphConcept> {
     let now = timestamp_unix_ms();
     let memoir_name = normalize_non_empty(memoir, DEFAULT_MEMOIR_NAME);
-    upsert_memoir(&conn, &memoir_name, None)?;
+    upsert_memoir(conn, &memoir_name, None)?;
     let labels_json = serde_json::to_string(labels)?;
     let source_ids_json = serde_json::to_string(source_ids)?;
     let has_confidence = confidence.is_some();
@@ -104,11 +130,15 @@ pub(crate) fn add_concept_with_metadata(
             !source_ids.is_empty(),
         ],
     )?;
-    read_concept_by_name(&conn, name)
+    read_concept_by_name(conn, name)
 }
 
 pub(crate) fn refine_concept(name: &str, description: &str) -> Result<GraphConcept> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| refine_concept_on(conn, name, description))
+}
+
+fn refine_concept_on(conn: &Connection, name: &str, description: &str) -> Result<GraphConcept> {
     let now = timestamp_unix_ms();
     conn.execute(
         "INSERT INTO concepts (
@@ -122,12 +152,16 @@ pub(crate) fn refine_concept(name: &str, description: &str) -> Result<GraphConce
             updated_at_unix_ms=excluded.updated_at_unix_ms",
         params![name, description, now, DEFAULT_MEMOIR_NAME],
     )?;
-    upsert_memoir(&conn, DEFAULT_MEMOIR_NAME, None)?;
-    read_concept_by_name(&conn, name)
+    upsert_memoir(conn, DEFAULT_MEMOIR_NAME, None)?;
+    read_concept_by_name(conn, name)
 }
 
 pub(crate) fn delete_concept(name: &str) -> Result<GraphDeleteReport> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| delete_concept_on(conn, name))
+}
+
+fn delete_concept_on(conn: &Connection, name: &str) -> Result<GraphDeleteReport> {
     let concept_id = conn
         .query_row(
             "SELECT id FROM concepts WHERE name = ?1",
@@ -159,7 +193,7 @@ pub(crate) fn search_concepts_filtered(
     label: Option<&str>,
     limit: usize,
 ) -> Result<Vec<GraphConcept>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     if let Some(match_query) = fts_match_query(query) {
         let mut stmt = conn.prepare(
             "SELECT c.id, c.name, c.description, c.memoir_name, c.labels, c.confidence,
@@ -190,17 +224,27 @@ pub(crate) fn search_concepts_filtered(
 }
 
 pub(crate) fn link_concepts(source: &str, target: &str, relation: &str) -> Result<GraphRelation> {
-    let source = add_concept(source, None)?;
-    let target = add_concept(target, None)?;
-    link_existing_concepts(&source, &target, relation)
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| link_concepts_on(conn, source, target, relation))
+}
+
+fn link_concepts_on(
+    conn: &Connection,
+    source: &str,
+    target: &str,
+    relation: &str,
+) -> Result<GraphRelation> {
+    let source = add_concept_with_metadata_on(conn, source, None, None, &[], None, &[])?;
+    let target = add_concept_with_metadata_on(conn, target, None, None, &[], None, &[])?;
+    link_existing_concepts(conn, &source, &target, relation)
 }
 
 fn link_existing_concepts(
+    conn: &Connection,
     source: &GraphConcept,
     target: &GraphConcept,
     relation: &str,
 ) -> Result<GraphRelation> {
-    let conn = open_memory_db()?;
     let now = timestamp_unix_ms();
     conn.execute(
         "INSERT INTO relations (source_concept_id, target_concept_id, relation, created_at_unix_ms)
@@ -235,7 +279,7 @@ pub(crate) fn export_graph(format: &str, limit: usize) -> Result<GraphExport> {
 }
 
 pub(crate) fn inspect_graph(limit: usize) -> Result<GraphInspect> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let concepts = read_concepts_for_memoir(&conn, "", limit.max(1))?;
     let relations = read_relations_for_memoir(&conn, "", limit.max(1))?;
     Ok(GraphInspect {
@@ -249,7 +293,7 @@ pub(crate) fn inspect_graph_concept(
     memoir: Option<&str>,
     depth: usize,
 ) -> Result<GraphConceptInspect> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let concept = read_concept_by_name(&conn, name)?;
     if let Some(memoir) = memoir.map(str::trim).filter(|value| !value.is_empty()) {
         if concept.memoir_name != memoir {
@@ -304,99 +348,119 @@ pub(crate) fn distill_memories_to_graph(
     memoir: Option<&str>,
     limit: usize,
 ) -> Result<GraphDistillReport> {
+    let mut store = LocalMemoryStore::open_default()?;
+    distill_memories_to_graph_with_store(&mut store, topic, memoir, limit)
+}
+
+fn distill_memories_to_graph_with_store(
+    store: &mut LocalMemoryStore,
+    topic: &str,
+    memoir: Option<&str>,
+    limit: usize,
+) -> Result<GraphDistillReport> {
     let topic = normalize_non_empty(Some(topic), "general");
     let memoir = normalize_non_empty(memoir, DEFAULT_MEMOIR_NAME);
-    create_graph_memoir(
-        Some(&memoir),
-        Some(&format!("Distilled memories for {topic}")),
+    let memories = list_memories_filtered_on(
+        store,
+        MemoryListQuery {
+            limit: limit.max(1),
+            topic: Some(&topic),
+            project: None,
+            all: true,
+            sort: "recent",
+        },
     )?;
-    let memories = list_memories_filtered(MemoryListQuery {
-        limit: limit.max(1),
-        topic: Some(&topic),
-        project: None,
-        all: true,
-        sort: "recent",
-    })?;
     if memories.is_empty() {
         anyhow::bail!("no memories found in topic: {topic}");
     }
-    let mut created_count = 0usize;
-    let mut refined_count = 0usize;
-    let mut concepts = Vec::new();
-    for memory in &memories {
-        let keywords = split_csv_field(memory.keywords.as_deref());
-        let concept_name = keywords
-            .first()
-            .cloned()
-            .unwrap_or_else(|| format!("{}-{}", topic, memory.id));
-        let existing = read_concept_by_name_optional(&open_memory_db()?, &concept_name)?;
-        let source_id = format!("memory:{}", memory.id);
-        let mut labels = vec![format!("topic:{topic}")];
-        labels.extend(keywords.iter().map(|keyword| format!("tag:{keyword}")));
-        labels.sort();
-        labels.dedup();
-        let description = match existing
-            .as_ref()
-            .and_then(|concept| concept.description.as_ref())
-        {
-            Some(existing_description) if !existing_description.contains(&memory.content) => {
-                format!("{existing_description}\n---\n{}", memory.content)
-            }
-            Some(existing_description) => existing_description.clone(),
-            None => memory.content.clone(),
-        };
-        let mut concept = add_concept_with_metadata(
-            &concept_name,
-            Some(&description),
+    let source_memory_count = memories.len();
+    let (created_count, refined_count, concepts) = store.transaction(|tx| {
+        create_graph_memoir_on(
+            tx,
             Some(&memoir),
-            &labels,
-            Some(memory.weight.clamp(0.0, 1.0)),
-            &[source_id],
+            Some(&format!("Distilled memories for {topic}")),
         )?;
-        if existing.is_some() {
-            concept = refine_concept(&concept_name, &description)?;
-            refined_count += 1;
-        } else {
-            created_count += 1;
-        }
-        concepts.push(concept.clone());
-        for related_name in keywords.iter().skip(1) {
-            if related_name == &concept_name {
-                continue;
-            }
-            let existing_related = read_concept_by_name_optional(&open_memory_db()?, related_name)?;
-            let related_description = format!(
-                "Related distilled keyword from memory {} in topic {topic}.",
-                memory.id
-            );
-            let mut related_labels = vec![
-                format!("topic:{topic}"),
-                "distilled-keyword".to_string(),
-                format!("tag:{related_name}"),
-            ];
-            related_labels.sort();
-            related_labels.dedup();
-            let related = add_concept_with_metadata(
-                related_name,
-                Some(&related_description),
+        let mut created_count = 0usize;
+        let mut refined_count = 0usize;
+        let mut concepts = Vec::new();
+        for memory in &memories {
+            let keywords = split_csv_field(memory.keywords.as_deref());
+            let concept_name = keywords
+                .first()
+                .cloned()
+                .unwrap_or_else(|| format!("{}-{}", topic, memory.id));
+            let existing = read_concept_by_name_optional(tx, &concept_name)?;
+            let source_id = format!("memory:{}", memory.id);
+            let mut labels = vec![format!("topic:{topic}")];
+            labels.extend(keywords.iter().map(|keyword| format!("tag:{keyword}")));
+            labels.sort();
+            labels.dedup();
+            let description = match existing
+                .as_ref()
+                .and_then(|concept| concept.description.as_ref())
+            {
+                Some(existing_description) if !existing_description.contains(&memory.content) => {
+                    format!("{existing_description}\n---\n{}", memory.content)
+                }
+                Some(existing_description) => existing_description.clone(),
+                None => memory.content.clone(),
+            };
+            let mut concept = add_concept_with_metadata_on(
+                tx,
+                &concept_name,
+                Some(&description),
                 Some(&memoir),
-                &related_labels,
-                Some((memory.weight * 0.8).clamp(0.0, 1.0)),
-                &[format!("memory:{}", memory.id)],
+                &labels,
+                Some(memory.weight.clamp(0.0, 1.0)),
+                &[source_id],
             )?;
-            if existing_related.is_some() {
+            if existing.is_some() {
+                concept = refine_concept_on(tx, &concept_name, &description)?;
                 refined_count += 1;
             } else {
                 created_count += 1;
             }
-            let _ = link_existing_concepts(&concept, &related, "mentions")?;
-            concepts.push(related);
+            concepts.push(concept.clone());
+            for related_name in keywords.iter().skip(1) {
+                if related_name == &concept_name {
+                    continue;
+                }
+                let existing_related = read_concept_by_name_optional(tx, related_name)?;
+                let related_description = format!(
+                    "Related distilled keyword from memory {} in topic {topic}.",
+                    memory.id
+                );
+                let mut related_labels = vec![
+                    format!("topic:{topic}"),
+                    "distilled-keyword".to_string(),
+                    format!("tag:{related_name}"),
+                ];
+                related_labels.sort();
+                related_labels.dedup();
+                let related = add_concept_with_metadata_on(
+                    tx,
+                    related_name,
+                    Some(&related_description),
+                    Some(&memoir),
+                    &related_labels,
+                    Some((memory.weight * 0.8).clamp(0.0, 1.0)),
+                    &[format!("memory:{}", memory.id)],
+                )?;
+                if existing_related.is_some() {
+                    refined_count += 1;
+                } else {
+                    created_count += 1;
+                }
+                let _ = link_existing_concepts(tx, &concept, &related, "mentions")?;
+                concepts.push(related);
+            }
         }
-    }
+        Ok((created_count, refined_count, concepts))
+    })?;
     Ok(GraphDistillReport {
         topic,
         memoir,
-        source_memory_count: memories.len(),
+        source_memory_count,
         created_count,
         refined_count,
         concepts,
@@ -404,7 +468,7 @@ pub(crate) fn distill_memories_to_graph(
 }
 
 pub(crate) fn graph_stats() -> Result<GraphStats> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let mut stmt = conn.prepare(
         "SELECT relation, COUNT(*)
          FROM relations
@@ -445,6 +509,17 @@ pub(crate) fn learn_project_graph(
     memoir: Option<&str>,
     limit: usize,
 ) -> Result<ProjectLearnReport> {
+    let mut store = LocalMemoryStore::open_default()?;
+    learn_project_graph_with_store(&mut store, root, name, memoir, limit)
+}
+
+fn learn_project_graph_with_store(
+    store: &mut LocalMemoryStore,
+    root: &Path,
+    name: Option<&str>,
+    memoir: Option<&str>,
+    limit: usize,
+) -> Result<ProjectLearnReport> {
     if !root.is_dir() {
         anyhow::bail!("project root not found: {}", root.display());
     }
@@ -461,69 +536,115 @@ pub(crate) fn learn_project_graph(
         .unwrap_or_else(|| "project".to_string());
     let memoir_name = normalize_non_empty(memoir, DEFAULT_MEMOIR_NAME);
     let project_description = project_identity(root, &project_name);
-    create_graph_memoir(
-        Some(&memoir_name),
-        Some(&format!("Learned project graph for {project_name}")),
-    )?;
-    let project = add_concept_with_metadata(
-        &project_name,
-        Some(&project_description),
-        Some(&memoir_name),
-        &[],
-        None,
-        &[],
-    )?;
-    let mut concepts = vec![project.clone()];
-    let mut relations = Vec::new();
+    let dependencies = collect_project_dependencies(root)
+        .into_iter()
+        .take(limit)
+        .collect::<Vec<_>>();
+    let modules = collect_project_modules(root)
+        .into_iter()
+        .take(limit)
+        .collect::<Vec<_>>();
+    let entrypoints = collect_project_entrypoints(root)
+        .into_iter()
+        .take(limit)
+        .collect::<Vec<_>>();
+    let configs = collect_project_configs(root)
+        .into_iter()
+        .take(limit)
+        .collect::<Vec<_>>();
 
-    for (name, description) in collect_project_dependencies(root).into_iter().take(limit) {
-        let concept = add_concept_with_metadata(
-            &name,
-            Some(&description),
+    let (concepts, relations) = store.transaction(|tx| {
+        create_graph_memoir_on(
+            tx,
+            Some(&memoir_name),
+            Some(&format!("Learned project graph for {project_name}")),
+        )?;
+        let project = add_concept_with_metadata_on(
+            tx,
+            &project_name,
+            Some(&project_description),
             Some(&memoir_name),
             &[],
             None,
             &[],
         )?;
-        relations.push(link_concepts(&project.name, &concept.name, "depends_on")?);
-        concepts.push(concept);
-    }
-    for (name, description) in collect_project_modules(root).into_iter().take(limit) {
-        let concept = add_concept_with_metadata(
-            &name,
-            Some(&description),
-            Some(&memoir_name),
-            &[],
-            None,
-            &[],
-        )?;
-        relations.push(link_concepts(&concept.name, &project.name, "part_of")?);
-        concepts.push(concept);
-    }
-    for (name, description) in collect_project_entrypoints(root).into_iter().take(limit) {
-        let concept = add_concept_with_metadata(
-            &name,
-            Some(&description),
-            Some(&memoir_name),
-            &[],
-            None,
-            &[],
-        )?;
-        relations.push(link_concepts(&concept.name, &project.name, "part_of")?);
-        concepts.push(concept);
-    }
-    for (name, description) in collect_project_configs(root).into_iter().take(limit) {
-        let concept = add_concept_with_metadata(
-            &name,
-            Some(&description),
-            Some(&memoir_name),
-            &[],
-            None,
-            &[],
-        )?;
-        relations.push(link_concepts(&concept.name, &project.name, "related_to")?);
-        concepts.push(concept);
-    }
+        let mut concepts = vec![project.clone()];
+        let mut relations = Vec::new();
+
+        for (name, description) in &dependencies {
+            let concept = add_concept_with_metadata_on(
+                tx,
+                name,
+                Some(description),
+                Some(&memoir_name),
+                &[],
+                None,
+                &[],
+            )?;
+            relations.push(link_concepts_on(
+                tx,
+                &project.name,
+                &concept.name,
+                "depends_on",
+            )?);
+            concepts.push(concept);
+        }
+        for (name, description) in &modules {
+            let concept = add_concept_with_metadata_on(
+                tx,
+                name,
+                Some(description),
+                Some(&memoir_name),
+                &[],
+                None,
+                &[],
+            )?;
+            relations.push(link_concepts_on(
+                tx,
+                &concept.name,
+                &project.name,
+                "part_of",
+            )?);
+            concepts.push(concept);
+        }
+        for (name, description) in &entrypoints {
+            let concept = add_concept_with_metadata_on(
+                tx,
+                name,
+                Some(description),
+                Some(&memoir_name),
+                &[],
+                None,
+                &[],
+            )?;
+            relations.push(link_concepts_on(
+                tx,
+                &concept.name,
+                &project.name,
+                "part_of",
+            )?);
+            concepts.push(concept);
+        }
+        for (name, description) in &configs {
+            let concept = add_concept_with_metadata_on(
+                tx,
+                name,
+                Some(description),
+                Some(&memoir_name),
+                &[],
+                None,
+                &[],
+            )?;
+            relations.push(link_concepts_on(
+                tx,
+                &concept.name,
+                &project.name,
+                "related_to",
+            )?);
+            concepts.push(concept);
+        }
+        Ok((concepts, relations))
+    })?;
 
     Ok(ProjectLearnReport {
         project_name,
@@ -714,4 +835,84 @@ fn parse_json_string_array(value: Option<&str>) -> Vec<String> {
     value
         .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory_store::store_memory_on;
+
+    #[test]
+    fn project_graph_batch_uses_one_connection_and_one_transaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"graph-fixture\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let mut store = LocalMemoryStore::open_path(temp.path().join("memory.db")).unwrap();
+
+        let report = learn_project_graph_with_store(
+            &mut store,
+            &project,
+            Some("graph-fixture"),
+            Some("project"),
+            20,
+        )
+        .unwrap();
+
+        assert_eq!(store.metrics().connections_opened, 1);
+        assert_eq!(store.metrics().transactions_committed, 1);
+        assert!(report.total_concepts >= 1);
+        assert_eq!(
+            table_count(&store, "concepts").unwrap(),
+            report.total_concepts as i64
+        );
+        assert_eq!(
+            table_count(&store, "relations").unwrap(),
+            report.link_count as i64
+        );
+    }
+
+    #[test]
+    fn graph_distillation_reuses_the_owned_store_connection() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = LocalMemoryStore::open_path(temp.path().join("memory.db")).unwrap();
+        store
+            .transaction(|tx| {
+                store_memory_on(
+                    tx,
+                    MemoryStoreInput {
+                        content: "The cache owner checkpoints immutable snapshots.",
+                        tags: Some("cache,ownership"),
+                        topic: Some("architecture"),
+                        importance: Some("high"),
+                        keywords: Some("cache-owner,checkpoint"),
+                        project: Some("packet28"),
+                        source: Some("test"),
+                        raw_excerpt: None,
+                    },
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let commits_before = store.metrics().transactions_committed;
+
+        let report = distill_memories_to_graph_with_store(
+            &mut store,
+            "architecture",
+            Some("architecture"),
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(store.metrics().connections_opened, 1);
+        assert_eq!(store.metrics().transactions_committed, commits_before + 1);
+        assert_eq!(report.source_memory_count, 1);
+        assert!(report.created_count >= 2);
+        assert!(table_count(&store, "relations").unwrap() >= 1);
+    }
 }

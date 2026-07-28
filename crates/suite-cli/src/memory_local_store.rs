@@ -1,13 +1,21 @@
 use anyhow::Result;
 use rusqlite::params;
 
-use crate::memory_db::{normalize_non_empty, open_memory_db, table_count, timestamp_unix_ms};
-use crate::memory_store::store_memory_with_metadata;
+use crate::memory_db::{
+    normalize_non_empty, table_count, timestamp_unix_ms, total_memory_connections_opened,
+    LocalMemoryStore,
+};
+use crate::memory_store::store_memory_on;
 use crate::memory_store_types::*;
 
 pub(crate) fn local_store_stats() -> Result<LocalStoreStats> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
+    let metrics = conn.metrics();
     Ok(LocalStoreStats {
+        schema_version: conn.schema_version()?,
+        process_connection_open_count: total_memory_connections_opened(),
+        connection_open_count: metrics.connections_opened,
+        migrations_applied_on_open: metrics.migrations_applied,
         memory_count: table_count(&conn, "memories")?,
         memory_embedding_count: table_count(&conn, "memory_embeddings")?,
         feedback_count: table_count(&conn, "feedback")?,
@@ -28,7 +36,7 @@ pub(crate) fn enqueue_pending_extraction(
     if raw_output.is_empty() {
         anyhow::bail!("pending extraction raw output cannot be empty");
     }
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let now = timestamp_unix_ms();
     let project = normalize_non_empty(input.project, "project");
     let tool_name = normalize_non_empty(input.tool_name, "unknown");
@@ -49,7 +57,14 @@ pub(crate) fn enqueue_pending_extraction(
 }
 
 pub(crate) fn list_pending_extractions(limit: usize) -> Result<Vec<PendingExtractionRecord>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
+    list_pending_extractions_on(&conn, limit)
+}
+
+fn list_pending_extractions_on(
+    conn: &rusqlite::Connection,
+    limit: usize,
+) -> Result<Vec<PendingExtractionRecord>> {
     let mut stmt = conn.prepare(
         "SELECT id, project, tool_name, raw_output, captured_at_unix_ms
          FROM pending_extractions
@@ -63,7 +78,14 @@ pub(crate) fn delete_pending_extractions(ids: &[i64]) -> Result<usize> {
     if ids.is_empty() {
         return Ok(0);
     }
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
+    delete_pending_extractions_on(&conn, ids)
+}
+
+fn delete_pending_extractions_on(conn: &rusqlite::Connection, ids: &[i64]) -> Result<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!("DELETE FROM pending_extractions WHERE id IN ({placeholders})");
     let params: Vec<&dyn rusqlite::ToSql> =
@@ -75,7 +97,16 @@ pub(crate) fn process_pending_extractions(
     limit: usize,
     dry_run: bool,
 ) -> Result<PendingExtractionProcessReport> {
-    let pending = list_pending_extractions(limit)?;
+    let mut store = LocalMemoryStore::open_default()?;
+    process_pending_extractions_with_store(&mut store, limit, dry_run)
+}
+
+fn process_pending_extractions_with_store(
+    store: &mut LocalMemoryStore,
+    limit: usize,
+    dry_run: bool,
+) -> Result<PendingExtractionProcessReport> {
+    let pending = list_pending_extractions_on(store, limit)?;
     let facts = pending
         .iter()
         .flat_map(|record| extract_durable_facts(&record.raw_output))
@@ -89,23 +120,29 @@ pub(crate) fn process_pending_extractions(
             facts,
         });
     }
-    for record in &pending {
-        let topic = format!("context-{}", record.project);
-        for fact in extract_durable_facts(&record.raw_output) {
-            store_memory_with_metadata(MemoryStoreInput {
-                content: &fact,
-                tags: Some("packet28,extracted"),
-                topic: Some(&topic),
-                importance: Some("medium"),
-                keywords: None,
-                project: Some(&record.project),
-                source: Some(&format!("pending-extraction:{}", record.tool_name)),
-                raw_excerpt: Some(&record.raw_output),
-            })?;
-        }
-    }
     let ids = pending.iter().map(|record| record.id).collect::<Vec<_>>();
-    let deleted_count = delete_pending_extractions(&ids)?;
+    let deleted_count = store.transaction(|tx| {
+        for record in &pending {
+            let topic = format!("context-{}", record.project);
+            let source = format!("pending-extraction:{}", record.tool_name);
+            for fact in extract_durable_facts(&record.raw_output) {
+                store_memory_on(
+                    tx,
+                    MemoryStoreInput {
+                        content: &fact,
+                        tags: Some("packet28,extracted"),
+                        topic: Some(&topic),
+                        importance: Some("medium"),
+                        keywords: None,
+                        project: Some(&record.project),
+                        source: Some(&source),
+                        raw_excerpt: Some(&record.raw_output),
+                    },
+                )?;
+            }
+        }
+        delete_pending_extractions_on(tx, &ids)
+    })?;
     Ok(PendingExtractionProcessReport {
         pending_count: pending.len(),
         extracted_count: facts.len(),
@@ -116,7 +153,7 @@ pub(crate) fn process_pending_extractions(
 }
 
 pub(crate) fn record_hook_event(input: HookEventInput<'_>) -> Result<HookEventRecord> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let now = timestamp_unix_ms();
     conn.execute(
         "INSERT INTO hook_events
@@ -146,7 +183,14 @@ pub(crate) fn record_hook_event(input: HookEventInput<'_>) -> Result<HookEventRe
 }
 
 pub(crate) fn list_hook_events(limit: usize) -> Result<Vec<HookEventRecord>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
+    list_hook_events_on(&conn, limit)
+}
+
+pub(super) fn list_hook_events_on(
+    conn: &rusqlite::Connection,
+    limit: usize,
+) -> Result<Vec<HookEventRecord>> {
     let mut stmt = conn.prepare(
         "SELECT id, runtime, event_kind, session_id, task_id, matcher, payload_json, created_at_unix_ms
          FROM hook_events
@@ -157,7 +201,7 @@ pub(crate) fn list_hook_events(limit: usize) -> Result<Vec<HookEventRecord>> {
 }
 
 pub(crate) fn hook_event_stats() -> Result<Vec<HookEventStats>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let mut stmt = conn.prepare(
         "SELECT runtime, event_kind, COUNT(*) AS event_count
          FROM hook_events
@@ -236,4 +280,42 @@ fn extract_durable_facts(raw_output: &str) -> Vec<String> {
         })
         .take(20)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_extraction_batch_rolls_back_memories_when_delete_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = LocalMemoryStore::open_path(temp.path().join("memory.db")).unwrap();
+        store
+            .execute(
+                "INSERT INTO pending_extractions
+                 (project, tool_name, raw_output, captured_at_unix_ms)
+                 VALUES ('packet28', 'test', '- Durable fact from a tool result', 1)",
+                [],
+            )
+            .unwrap();
+        store
+            .execute_batch(
+                "
+                CREATE TRIGGER fail_pending_delete
+                BEFORE DELETE ON pending_extractions
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced pending delete failure');
+                END;
+                ",
+            )
+            .unwrap();
+
+        let result = process_pending_extractions_with_store(&mut store, 10, false);
+
+        assert!(result.is_err());
+        assert_eq!(table_count(&store, "pending_extractions").unwrap(), 1);
+        assert_eq!(table_count(&store, "memories").unwrap(), 0);
+        assert_eq!(store.metrics().transactions_rolled_back, 1);
+        assert_eq!(store.metrics().connections_opened, 1);
+    }
 }

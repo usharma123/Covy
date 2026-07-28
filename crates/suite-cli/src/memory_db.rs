@@ -1,8 +1,110 @@
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
+
+pub(crate) const CURRENT_MEMORY_SCHEMA_VERSION: u32 = 2;
+
+static CONNECTIONS_OPENED: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LocalMemoryStoreMetrics {
+    pub(crate) connections_opened: u64,
+    pub(crate) migrations_applied: u32,
+    pub(crate) transactions_committed: u64,
+    pub(crate) transactions_rolled_back: u64,
+}
+
+/// Owns one initialized SQLite connection for a complete local-memory workflow.
+pub(crate) struct LocalMemoryStore {
+    conn: Connection,
+    metrics: LocalMemoryStoreMetrics,
+}
+
+impl LocalMemoryStore {
+    pub(crate) fn open_default() -> Result<Self> {
+        Self::open_path(packet28_db_path())
+    }
+
+    pub(crate) fn open_path(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create '{}'", parent.display()))?;
+            }
+        }
+        let mut conn = Connection::open(path)
+            .with_context(|| format!("failed to open '{}'", path.display()))?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.pragma_update(None, "foreign_keys", true)?;
+        let migrations_applied = migrate_schema(&mut conn)?;
+        CONNECTIONS_OPENED.fetch_add(1, Ordering::Relaxed);
+        Ok(Self {
+            conn,
+            metrics: LocalMemoryStoreMetrics {
+                connections_opened: 1,
+                migrations_applied,
+                ..LocalMemoryStoreMetrics::default()
+            },
+        })
+    }
+
+    pub(crate) fn metrics(&self) -> LocalMemoryStoreMetrics {
+        self.metrics
+    }
+
+    pub(crate) fn schema_version(&self) -> Result<u32> {
+        schema_version(&self.conn)
+    }
+
+    pub(crate) fn transaction<T>(
+        &mut self,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        match operation(&tx) {
+            Ok(value) => match tx.commit() {
+                Ok(()) => {
+                    self.metrics.transactions_committed =
+                        self.metrics.transactions_committed.saturating_add(1);
+                    Ok(value)
+                }
+                Err(error) => {
+                    self.metrics.transactions_rolled_back =
+                        self.metrics.transactions_rolled_back.saturating_add(1);
+                    Err(error.into())
+                }
+            },
+            Err(error) => {
+                self.metrics.transactions_rolled_back =
+                    self.metrics.transactions_rolled_back.saturating_add(1);
+                tx.rollback().with_context(|| {
+                    format!("failed to roll back local memory workflow after: {error:#}")
+                })?;
+                Err(error)
+            }
+        }
+    }
+}
+
+impl Deref for LocalMemoryStore {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.conn
+    }
+}
+
+pub(crate) fn total_memory_connections_opened() -> u64 {
+    CONNECTIONS_OPENED.load(Ordering::Relaxed)
+}
 
 pub(crate) fn table_count(conn: &Connection, table: &str) -> Result<i64> {
     let sql = format!("SELECT COUNT(*) FROM {table}");
@@ -18,19 +120,40 @@ pub(crate) fn expanded_filter_limit(limit: usize, has_filters: bool) -> usize {
     }
 }
 
-pub(crate) fn open_memory_db() -> Result<Connection> {
-    let path = packet28_db_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create '{}'", parent.display()))?;
-    }
-    let conn =
-        Connection::open(&path).with_context(|| format!("failed to open '{}'", path.display()))?;
-    initialize_schema(&conn)?;
-    Ok(conn)
+fn schema_version(conn: &Connection) -> Result<u32> {
+    let version = conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+    u32::try_from(version).context("SQLite user_version is outside the supported range")
 }
 
-fn initialize_schema(conn: &Connection) -> Result<()> {
+fn migrate_schema(conn: &mut Connection) -> Result<u32> {
+    let from_version = schema_version(conn)?;
+    if from_version > CURRENT_MEMORY_SCHEMA_VERSION {
+        anyhow::bail!(
+            "local memory schema version {from_version} is newer than supported version {CURRENT_MEMORY_SCHEMA_VERSION}"
+        );
+    }
+    if from_version == CURRENT_MEMORY_SCHEMA_VERSION {
+        return Ok(0);
+    }
+
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for version in (from_version + 1)..=CURRENT_MEMORY_SCHEMA_VERSION {
+        apply_migration(&tx, version)?;
+        tx.pragma_update(None, "user_version", version)?;
+    }
+    tx.commit()?;
+    Ok(CURRENT_MEMORY_SCHEMA_VERSION - from_version)
+}
+
+fn apply_migration(conn: &Connection, version: u32) -> Result<()> {
+    match version {
+        1 => initialize_legacy_schema(conn),
+        2 => add_query_indexes(conn),
+        _ => anyhow::bail!("missing local memory migration for schema version {version}"),
+    }
+}
+
+fn initialize_legacy_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS events (
@@ -371,6 +494,34 @@ fn initialize_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn add_query_indexes(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_memory_chunks_memory_id
+            ON memory_chunks(memory_id, chunk_index);
+        CREATE INDEX IF NOT EXISTS idx_memory_embeddings_memory_id
+            ON memory_embeddings(memory_id, model);
+        CREATE INDEX IF NOT EXISTS idx_memories_topic_project_updated
+            ON memories(topic, project, updated_at_unix_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_memories_weight_updated
+            ON memories(weight, updated_at_unix_ms);
+        CREATE INDEX IF NOT EXISTS idx_concepts_memoir_updated
+            ON concepts(memoir_name, updated_at_unix_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_relations_source
+            ON relations(source_concept_id);
+        CREATE INDEX IF NOT EXISTS idx_relations_target
+            ON relations(target_concept_id);
+        CREATE INDEX IF NOT EXISTS idx_feedback_topic_project_created
+            ON feedback(topic, project, created_at_unix_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_transcript_messages_session_created
+            ON transcript_messages(session_id, created_at_unix_ms, id);
+        CREATE INDEX IF NOT EXISTS idx_hook_events_runtime_kind_created
+            ON hook_events(runtime, event_kind, created_at_unix_ms DESC);
+        ",
+    )?;
+    Ok(())
+}
+
 pub(crate) fn fts_match_query(query: &str) -> Option<String> {
     let terms: Vec<String> = query
         .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
@@ -434,4 +585,253 @@ pub(crate) fn timestamp_unix_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn create_database_at_version(path: &Path, version: u32) {
+        let conn = Connection::open(path).unwrap();
+        for next in 1..=version {
+            apply_migration(&conn, next).unwrap();
+            conn.pragma_update(None, "user_version", next).unwrap();
+        }
+    }
+
+    fn assert_current_schema(store: &LocalMemoryStore) {
+        assert_eq!(
+            store.schema_version().unwrap(),
+            CURRENT_MEMORY_SCHEMA_VERSION
+        );
+        for table in [
+            "memories",
+            "memory_embeddings",
+            "concepts",
+            "relations",
+            "feedback",
+            "transcript_sessions",
+            "transcript_messages",
+            "hook_events",
+            "pending_extractions",
+        ] {
+            let exists = store
+                .query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM sqlite_master
+                        WHERE type IN ('table', 'view') AND name = ?1
+                     )",
+                    params![table],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap();
+            assert!(exists, "missing migrated table {table}");
+        }
+    }
+
+    #[test]
+    fn migrates_from_every_supported_schema_version() {
+        for from_version in 0..=CURRENT_MEMORY_SCHEMA_VERSION {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join(format!("memory-v{from_version}.db"));
+            create_database_at_version(&path, from_version);
+
+            let store = LocalMemoryStore::open_path(&path).unwrap();
+
+            assert_current_schema(&store);
+            assert_eq!(
+                store.metrics().migrations_applied,
+                CURRENT_MEMORY_SCHEMA_VERSION - from_version
+            );
+        }
+    }
+
+    #[test]
+    fn reopening_current_schema_is_idempotent_and_preserves_fts_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("memory.db");
+        let first = LocalMemoryStore::open_path(&path).unwrap();
+        assert_eq!(
+            first.metrics().migrations_applied,
+            CURRENT_MEMORY_SCHEMA_VERSION
+        );
+        first
+            .execute(
+                "INSERT INTO memories
+                 (content, topic, importance, weight, created_at_unix_ms, updated_at_unix_ms)
+                 VALUES ('durable fact', 'general', 'medium', 1.0, 1, 1)",
+                [],
+            )
+            .unwrap();
+        drop(first);
+
+        let second = LocalMemoryStore::open_path(&path).unwrap();
+
+        assert_eq!(second.metrics().migrations_applied, 0);
+        assert_eq!(
+            second
+                .query_row(
+                    "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH 'durable'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            second
+                .query_row(
+                    "SELECT COUNT(*) FROM memoirs WHERE name = 'default'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_migration_rolls_back_schema_and_user_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("broken.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE VIEW memories AS SELECT 1 AS id;")
+            .unwrap();
+        drop(conn);
+
+        let error = LocalMemoryStore::open_path(&path)
+            .err()
+            .expect("incompatible legacy schema must fail closed");
+        assert!(
+            error.to_string().contains("memories")
+                || error.to_string().contains("column")
+                || error.to_string().contains("table")
+        );
+
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), 0);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'events'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn workflow_transaction_reports_commit_and_rollback_without_partial_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("memory.db");
+        let mut store = LocalMemoryStore::open_path(&path).unwrap();
+
+        let failed: Result<()> = store.transaction(|tx| {
+            tx.execute(
+                "INSERT INTO events (kind, payload_json, created_at_unix_ms)
+                 VALUES ('rollback', '{}', 1)",
+                [],
+            )?;
+            anyhow::bail!("forced rollback")
+        });
+        assert!(failed.is_err());
+        assert_eq!(table_count(&store, "events").unwrap(), 0);
+        assert_eq!(store.metrics().transactions_rolled_back, 1);
+
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "INSERT INTO events (kind, payload_json, created_at_unix_ms)
+                     VALUES ('commit', '{}', 2)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(table_count(&store, "events").unwrap(), 1);
+        assert_eq!(store.metrics().transactions_committed, 1);
+    }
+
+    #[test]
+    fn newer_schema_version_fails_without_downgrading() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("future.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(
+            None,
+            "user_version",
+            CURRENT_MEMORY_SCHEMA_VERSION.saturating_add(1),
+        )
+        .unwrap();
+        drop(conn);
+
+        let error = LocalMemoryStore::open_path(&path)
+            .err()
+            .expect("future schema must fail closed");
+        assert!(error.to_string().contains("newer than supported"));
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            schema_version(&conn).unwrap(),
+            CURRENT_MEMORY_SCHEMA_VERSION + 1
+        );
+    }
+
+    #[test]
+    #[ignore = "controlled local SQLite ownership benchmark"]
+    fn benchmark_owned_connection_against_rebuild_per_operation() {
+        const ROWS: usize = 250;
+        const ITERATIONS: usize = 12;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("benchmark.db");
+        let mut store = LocalMemoryStore::open_path(&path).unwrap();
+        store
+            .transaction(|tx| {
+                let mut insert = tx.prepare_cached(
+                    "INSERT INTO memories
+                     (content, topic, importance, weight, created_at_unix_ms, updated_at_unix_ms)
+                     VALUES (?1, 'benchmark', 'medium', 1.0, ?2, ?2)",
+                )?;
+                for index in 0..ROWS {
+                    insert.execute(params![format!("benchmark memory {index}"), index as i64])?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        drop(store);
+
+        let rebuild_started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let conn = Connection::open(&path).unwrap();
+            for table in [
+                "memories_fts",
+                "feedback_fts",
+                "feedback_fts_all",
+                "concepts_fts",
+                "transcript_messages_fts",
+            ] {
+                rebuild_fts_table(&conn, table).unwrap();
+            }
+            std::hint::black_box(table_count(&conn, "memories").unwrap());
+        }
+        let rebuild_elapsed = rebuild_started.elapsed();
+
+        let owned_started = Instant::now();
+        let owned = LocalMemoryStore::open_path(&path).unwrap();
+        for _ in 0..ITERATIONS {
+            std::hint::black_box(table_count(&owned, "memories").unwrap());
+        }
+        let owned_elapsed = owned_started.elapsed();
+
+        println!(
+            "{{\"rows\":{ROWS},\"iterations\":{ITERATIONS},\"rebuild_connections\":{ITERATIONS},\"owned_connections\":{},\"rebuild_micros\":{},\"owned_micros\":{}}}",
+            owned.metrics().connections_opened,
+            rebuild_elapsed.as_micros(),
+            owned_elapsed.as_micros()
+        );
+        assert_eq!(owned.metrics().connections_opened, 1);
+        assert_eq!(owned.metrics().migrations_applied, 0);
+    }
 }
