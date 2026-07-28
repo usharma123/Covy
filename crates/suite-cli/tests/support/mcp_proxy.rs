@@ -1,11 +1,15 @@
+use crate::process_harness::{HarnessLimits, McpHarness, ProcessHarness};
 use assert_cmd::Command;
 use serde_json::{json, Value};
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
+
+const MCP_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const BUILD_TIMEOUT: Duration = Duration::from_secs(180);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn suite_cmd() -> Command {
     assert_cmd::cargo::cargo_bin_cmd!("Packet28")
@@ -18,11 +22,17 @@ fn mcp_cmd() -> std::process::Command {
 pub fn ensure_packet28d_built() {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
+        let mut command = std::process::Command::new("cargo");
+        command.args(["build", "-p", "packet28d", "--locked"]);
+        let output =
+            ProcessHarness::run(&mut command, &[], BUILD_TIMEOUT, HarnessLimits::default())
+                .unwrap_or_else(|error| panic!("failed to run packet28d build: {error}"));
+        assert!(
+            output.status.success(),
+            "failed to build packet28d\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     });
 }
 
@@ -52,79 +62,55 @@ enum Beta {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    let mut command = std::process::Command::new("git");
+    command.current_dir(root).args(args);
+    let output = ProcessHarness::run(&mut command, &[], COMMAND_TIMEOUT, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("git {args:?} failed to run: {error}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 pub fn init_repo(root: &Path) {
     git(root, &["init"]);
 }
 
-pub fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
-    let body = serde_json::to_vec(value).unwrap();
-    write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
-    stdin.write_all(&body).unwrap();
-    stdin.flush().unwrap();
+pub fn write_mcp_message(server: &mut McpHarness, value: &Value) {
+    server
+        .send_value(value)
+        .unwrap_or_else(|error| panic!("failed to write MCP message: {error}"));
 }
 
-pub fn read_mcp_message(stdout: &mut BufReader<ChildStdout>) -> Value {
-    let mut content_length = None::<usize>;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        stdout.read_line(&mut line).unwrap();
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = trimmed.split_once(':') {
-            if name.eq_ignore_ascii_case("content-length") {
-                content_length = Some(value.trim().parse::<usize>().unwrap());
-            }
-        }
-    }
-    let mut body = vec![0_u8; content_length.unwrap()];
-    stdout.read_exact(&mut body).unwrap();
-    serde_json::from_slice(&body).unwrap()
+pub fn read_mcp_message(server: &mut McpHarness) -> Value {
+    server
+        .receive(MCP_IO_TIMEOUT)
+        .unwrap_or_else(|error| panic!("failed to read MCP message: {error}"))
 }
 
-pub fn read_mcp_message_for_id(stdout: &mut BufReader<ChildStdout>, expected_id: u64) -> Value {
-    loop {
-        let value = read_mcp_message(stdout);
-        if value.get("id").and_then(Value::as_u64) == Some(expected_id) {
-            return value;
-        }
-    }
+pub fn read_mcp_message_for_id(server: &mut McpHarness, expected_id: u64) -> Value {
+    server
+        .recv_for_id(&json!(expected_id), MCP_IO_TIMEOUT)
+        .unwrap_or_else(|error| panic!("failed to read MCP response for id {expected_id}: {error}"))
 }
 
-pub fn start_mcp_proxy_server(
-    root: &Path,
-    config_path: &Path,
-    task_id: &str,
-) -> (Child, ChildStdin, BufReader<ChildStdout>) {
-    let mut child = mcp_cmd()
-        .current_dir(root)
-        .args([
-            "mcp",
-            "proxy",
-            "--root",
-            root.to_str().unwrap(),
-            "--upstream-config",
-            config_path.to_str().unwrap(),
-            "--task-id",
-            task_id,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdin = child.stdin.take().unwrap();
-    let stdout = BufReader::new(child.stdout.take().unwrap());
-    (child, stdin, stdout)
+pub fn start_mcp_proxy_server(root: &Path, config_path: &Path, task_id: &str) -> McpHarness {
+    let mut command = mcp_cmd();
+    command.current_dir(root).args([
+        "mcp",
+        "proxy",
+        "--root",
+        root.to_str().unwrap(),
+        "--upstream-config",
+        config_path.to_str().unwrap(),
+        "--task-id",
+        task_id,
+    ]);
+    McpHarness::spawn(&mut command, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("failed to start MCP proxy: {error}"))
 }
 
 pub fn start_mcp_proxy_server_with_tool(
@@ -132,35 +118,34 @@ pub fn start_mcp_proxy_server_with_tool(
     config_path: &Path,
     task_id: &str,
     tool_name: &str,
-) -> (Child, ChildStdin, BufReader<ChildStdout>, Value) {
+) -> (McpHarness, Value) {
     for _ in 0..3 {
-        let (mut child, mut stdin, mut stdout) = start_mcp_proxy_server(root, config_path, task_id);
-        initialize_mcp_session(&mut stdin, &mut stdout);
+        let mut server = start_mcp_proxy_server(root, config_path, task_id);
+        initialize_mcp_session(&mut server);
         write_mcp_message(
-            &mut stdin,
+            &mut server,
             &json!({
                 "jsonrpc":"2.0",
                 "id":2,
                 "method":"tools/list"
             }),
         );
-        let tools = read_mcp_message_for_id(&mut stdout, 2);
+        let tools = read_mcp_message_for_id(&mut server, 2);
         let has_tool = tools["result"]["tools"]
             .as_array()
             .is_some_and(|items| items.iter().any(|tool| tool["name"] == tool_name));
         if has_tool {
-            return (child, stdin, stdout, tools);
+            return (server, tools);
         }
-        let _ = child.kill();
-        let _ = child.wait();
+        drop(server);
         std::thread::sleep(Duration::from_millis(100));
     }
     panic!("proxy tool catalog never exposed required tool '{tool_name}'");
 }
 
-pub fn initialize_mcp_session(stdin: &mut ChildStdin, stdout: &mut BufReader<ChildStdout>) {
+pub fn initialize_mcp_session(server: &mut McpHarness) {
     write_mcp_message(
-        stdin,
+        server,
         &json!({
             "jsonrpc":"2.0",
             "id":1,
@@ -168,5 +153,17 @@ pub fn initialize_mcp_session(stdin: &mut ChildStdin, stdout: &mut BufReader<Chi
             "params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}
         }),
     );
-    let _ = read_mcp_message_for_id(stdout, 1);
+    let _ = read_mcp_message_for_id(server, 1);
+}
+
+pub fn close_mcp_stdin(server: &mut McpHarness) {
+    server
+        .close_stdin()
+        .unwrap_or_else(|error| panic!("failed to close MCP stdin: {error}"));
+}
+
+pub fn stop_mcp_server(mut server: McpHarness) {
+    server
+        .finish(MCP_SHUTDOWN_TIMEOUT)
+        .unwrap_or_else(|error| panic!("failed to stop MCP server: {error}"));
 }

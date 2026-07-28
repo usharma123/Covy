@@ -1,7 +1,12 @@
+use crate::process_harness::{HarnessLimits, ProcessHarness};
 use assert_cmd::Command;
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::time::Duration;
+
+const BUILD_TIMEOUT: Duration = Duration::from_secs(180);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn suite_cmd() -> Command {
     assert_cmd::cargo::cargo_bin_cmd!("Packet28")
@@ -10,11 +15,17 @@ pub fn suite_cmd() -> Command {
 pub fn ensure_packet28d_built() {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
+        let mut command = std::process::Command::new("cargo");
+        command.args(["build", "-p", "packet28d", "--locked"]);
+        let output =
+            ProcessHarness::run(&mut command, &[], BUILD_TIMEOUT, HarnessLimits::default())
+                .unwrap_or_else(|error| panic!("failed to run packet28d build: {error}"));
+        assert!(
+            output.status.success(),
+            "failed to build packet28d\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     });
 }
 
@@ -44,10 +55,15 @@ enum Beta {
 }
 
 pub fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    let mut command = std::process::Command::new("git");
+    command.current_dir(root).args(args);
+    let output = ProcessHarness::run(&mut command, &[], COMMAND_TIMEOUT, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("git {args:?} failed to run: {error}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

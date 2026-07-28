@@ -2,25 +2,30 @@
 mod mcp_proxy;
 #[path = "support/mcp_proxy_fake.rs"]
 mod mcp_proxy_fake;
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use mcp_proxy_fake::{
     write_colliding_tool_server, write_compact_read_server, write_concurrent_tool_server,
 };
+use process_harness::McpHarness;
 use serde_json::json;
 use std::fs;
-use std::io::BufReader;
-use std::process::ChildStdout;
 use tempfile::TempDir;
 
 use mcp_proxy::{
-    ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message,
-    read_mcp_message_for_id, start_mcp_proxy_server, start_mcp_proxy_server_with_tool, suite_cmd,
-    write_mcp_message, write_repo_fixture,
+    close_mcp_stdin, ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message,
+    read_mcp_message_for_id, start_mcp_proxy_server, start_mcp_proxy_server_with_tool,
+    stop_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
 };
 
-fn read_next_mcp_response(stdout: &mut BufReader<ChildStdout>) -> serde_json::Value {
+fn read_next_mcp_response(server: &mut McpHarness) -> serde_json::Value {
     loop {
-        let value = read_mcp_message(stdout);
+        let value = read_mcp_message(server);
         if value.get("id").is_some() {
             return value;
         }
@@ -59,20 +64,19 @@ fn test_mcp_proxy_cli_namespaces_colliding_tools() {
     )
     .unwrap();
 
-    let (mut child, mut stdin, mut stdout) =
-        start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-collision");
+    let mut server = start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-collision");
 
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    initialize_mcp_session(&mut server);
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":2,
             "method":"tools/list"
         }),
     );
-    let tools = read_mcp_message_for_id(&mut stdout, 2);
+    let tools = read_mcp_message_for_id(&mut server, 2);
     assert!(tools["result"]["tools"]
         .as_array()
         .unwrap()
@@ -85,7 +89,7 @@ fn test_mcp_proxy_cli_namespaces_colliding_tools() {
         .any(|tool| tool["name"] == "beta.shared.read"));
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":3,
@@ -96,7 +100,7 @@ fn test_mcp_proxy_cli_namespaces_colliding_tools() {
             }
         }),
     );
-    let response = read_mcp_message_for_id(&mut stdout, 3);
+    let response = read_mcp_message_for_id(&mut server, 3);
     assert_eq!(
         response["result"]["structuredContent"]["owner"]
             .as_str()
@@ -104,8 +108,7 @@ fn test_mcp_proxy_cli_namespaces_colliding_tools() {
         "beta"
     );
 
-    child.kill().unwrap();
-    child.wait().unwrap();
+    stop_mcp_server(server);
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
@@ -140,7 +143,7 @@ fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
     )
     .unwrap();
 
-    let (mut child, mut stdin, mut stdout, tools) = start_mcp_proxy_server_with_tool(
+    let (mut server, tools) = start_mcp_proxy_server_with_tool(
         dir.path(),
         &config_path,
         "task-proxy-compact",
@@ -153,7 +156,7 @@ fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
         .any(|tool| tool["name"] == "compact.read"));
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":2,
@@ -164,7 +167,7 @@ fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
             }
         }),
     );
-    let compact = read_mcp_message_for_id(&mut stdout, 2);
+    let compact = read_mcp_message_for_id(&mut server, 2);
     let compact_payload = &compact["result"]["structuredContent"];
     assert_eq!(compact_payload["response_mode"], "slim");
     assert_eq!(compact_payload["original_tool"], "compact.read");
@@ -172,7 +175,7 @@ fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
     let artifact_id = compact_payload["artifact_id"].as_str().unwrap().to_string();
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":3,
@@ -186,7 +189,7 @@ fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
             }
         }),
     );
-    let fetched = read_mcp_message_for_id(&mut stdout, 3);
+    let fetched = read_mcp_message_for_id(&mut server, 3);
     let fetched_payload = &fetched["result"]["structuredContent"];
     assert_eq!(fetched_payload["structuredContent"]["path"], "src/alpha.rs");
     assert!(fetched_payload["structuredContent"]["lines"]
@@ -195,8 +198,7 @@ fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
         .iter()
         .any(|line| line == "pub struct Alpha;"));
 
-    child.kill().unwrap();
-    child.wait().unwrap();
+    stop_mcp_server(server);
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
@@ -230,14 +232,14 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
     )
     .unwrap();
 
-    let (mut child, mut stdin, mut stdout, _) = start_mcp_proxy_server_with_tool(
+    let (mut server, _) = start_mcp_proxy_server_with_tool(
         dir.path(),
         &config_path,
         "task-proxy-concurrent",
         "concurrent.echo",
     );
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":"slow",
@@ -249,7 +251,7 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
         }),
     );
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":"fast",
@@ -261,15 +263,15 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
         }),
     );
 
-    let first = read_next_mcp_response(&mut stdout);
-    let second = read_next_mcp_response(&mut stdout);
+    let first = read_next_mcp_response(&mut server);
+    let second = read_next_mcp_response(&mut server);
     assert_eq!(first["id"], "fast");
     assert_eq!(first["result"]["structuredContent"]["value"], "fast");
     assert_eq!(second["id"], "slow");
     assert_eq!(second["result"]["structuredContent"]["value"], "slow");
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":"will-time-out",
@@ -280,7 +282,7 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
             }
         }),
     );
-    let timeout = read_next_mcp_response(&mut stdout);
+    let timeout = read_next_mcp_response(&mut server);
     assert_eq!(timeout["id"], "will-time-out");
     assert!(timeout["error"]["message"]
         .as_str()
@@ -288,7 +290,7 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
         .contains("500ms"));
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":"after-timeout",
@@ -299,7 +301,7 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
             }
         }),
     );
-    let after_timeout = read_next_mcp_response(&mut stdout);
+    let after_timeout = read_next_mcp_response(&mut server);
     assert_eq!(after_timeout["id"], "after-timeout");
     assert_eq!(
         after_timeout["result"]["structuredContent"]["value"],
@@ -308,7 +310,7 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
 
     std::thread::sleep(std::time::Duration::from_millis(350));
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":"after-late",
@@ -319,7 +321,7 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
             }
         }),
     );
-    let after_late = read_next_mcp_response(&mut stdout);
+    let after_late = read_next_mcp_response(&mut server);
     assert_eq!(after_late["id"], "after-late");
     assert_eq!(
         after_late["result"]["structuredContent"]["value"],
@@ -327,7 +329,7 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
     );
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":"half-close",
@@ -338,14 +340,14 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
             }
         }),
     );
-    drop(stdin);
-    let drained = read_next_mcp_response(&mut stdout);
+    close_mcp_stdin(&mut server);
+    let drained = read_next_mcp_response(&mut server);
     assert_eq!(drained["id"], "half-close");
     assert_eq!(
         drained["result"]["structuredContent"]["value"],
         "drained-before-shutdown"
     );
-    assert!(child.wait().unwrap().success());
+    stop_mcp_server(server);
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

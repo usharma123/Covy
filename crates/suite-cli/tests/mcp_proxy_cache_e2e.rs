@@ -1,5 +1,15 @@
+#[expect(
+    dead_code,
+    reason = "shared proxy support is exercised by the sibling proxy integration binary"
+)]
 #[path = "support/mcp_proxy.rs"]
 mod mcp_proxy;
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use serde_json::json;
 use std::fs;
@@ -7,7 +17,7 @@ use tempfile::TempDir;
 
 use mcp_proxy::{
     ensure_packet28d_built, init_repo, read_mcp_message_for_id, start_mcp_proxy_server_with_tool,
-    suite_cmd, write_mcp_message, write_repo_fixture,
+    stop_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
 };
 
 #[test]
@@ -97,7 +107,7 @@ while True:
     )
     .unwrap();
 
-    let (mut child, mut stdin, mut stdout, tools) = start_mcp_proxy_server_with_tool(
+    let (mut server, tools) = start_mcp_proxy_server_with_tool(
         dir.path(),
         &config_path,
         "task-proxy-timeout",
@@ -116,7 +126,7 @@ while True:
     assert!(catalog_refresh_count >= 1);
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":10,
@@ -127,7 +137,7 @@ while True:
             }
         }),
     );
-    let timeout = read_mcp_message_for_id(&mut stdout, 10);
+    let timeout = read_mcp_message_for_id(&mut server, 10);
     assert!(timeout["error"]["message"]
         .as_str()
         .unwrap()
@@ -145,8 +155,7 @@ while True:
         catalog_refresh_count
     );
 
-    child.kill().unwrap();
-    child.wait().unwrap();
+    stop_mcp_server(server);
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
