@@ -381,6 +381,8 @@ impl Kernel {
         let mut last_event_count = 0usize;
         let mut replans = Vec::<Value>::new();
 
+        ensure_sequence_active(observer, task_id.as_deref())?;
+
         if reactive.enabled {
             if let Some(task_id) = task_id.as_deref() {
                 let snapshot = load_agent_snapshot_for_task(self, task_id)?;
@@ -423,11 +425,13 @@ impl Kernel {
                         snapshot.event_count,
                         replans.last().unwrap_or(&Value::Null),
                     );
+                    ensure_sequence_active(observer, Some(task_id))?;
                 }
             }
         }
 
         while !remaining.is_empty() {
+            ensure_sequence_active(observer, task_id.as_deref())?;
             let schedule =
                 context_scheduler_core::schedule(context_scheduler_core::ScheduleRequest {
                     steps: remaining
@@ -475,6 +479,7 @@ impl Kernel {
             let original = remaining.remove(next_idx);
             let position = scheduled.len() + 1;
             observer.on_step_started(position, &original);
+            ensure_sequence_active(observer, task_id.as_deref())?;
             let estimate = kernel_step_estimate(&original);
             consumed_estimate = context_scheduler_core::StepEstimate {
                 tokens: consumed_estimate.tokens.saturating_add(estimate.tokens),
@@ -505,6 +510,7 @@ impl Kernel {
                     completed_success.insert(original.id.clone());
                     remove_satisfied_dependency(&mut remaining, &original.id);
                     observer.on_step_completed(position, &original, &response);
+                    ensure_sequence_active(observer, task_id.as_deref())?;
                     step_results.push(KernelStepResponse {
                         id: original.id.clone(),
                         target: original.target.clone(),
@@ -565,6 +571,7 @@ impl Kernel {
                 Err(err) => {
                     let failure = err.structured();
                     observer.on_step_failed(position, &original, &failure);
+                    ensure_sequence_active(observer, task_id.as_deref())?;
                     let failed_dependents = remove_failed_dependents(&mut remaining, &original.id);
                     step_results.push(KernelStepResponse {
                         id: original.id.clone(),
@@ -611,4 +618,16 @@ impl Kernel {
             }),
         })
     }
+}
+
+fn ensure_sequence_active(
+    observer: &dyn SequenceObserver,
+    task_id: Option<&str>,
+) -> Result<(), KernelError> {
+    if observer.should_cancel() {
+        return Err(KernelError::SequenceCancelled {
+            task_id: task_id.map(ToOwned::to_owned),
+        });
+    }
+    Ok(())
 }

@@ -22,6 +22,7 @@ pub(super) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
         kernel,
         runtime: DaemonRuntimeInfo::default(),
         tasks: TaskRegistry::default(),
+        task_generations: TaskGenerationRegistry::default(),
         agent_snapshots: BTreeMap::new(),
         watches: WatchRegistry::default(),
         watcher_handles: HashMap::new(),

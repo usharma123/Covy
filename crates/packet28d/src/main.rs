@@ -121,7 +121,8 @@ use crate::runtime_files::{
 };
 use crate::server::{handle_connection, handle_tcp_connection};
 use crate::state::{
-    CachedSourceFile, DaemonState, IndexCommand, InteractiveIndexRuntime, PendingWatchEvent,
+    CachedSourceFile, DaemonState, IndexCommand, InteractiveIndexRuntime, OwnedChildProcess,
+    PendingWatchEvent, TaskGenerationId, TaskGenerationRegistry, TaskGenerationToken,
     TaskSequenceObserver, WatchEventMsg,
 };
 use crate::watch::{
@@ -202,6 +203,7 @@ fn serve(root: PathBuf) -> Result<()> {
         kernel,
         runtime,
         tasks,
+        task_generations: TaskGenerationRegistry::default(),
         agent_snapshots: BTreeMap::new(),
         watches,
         watcher_handles: HashMap::new(),

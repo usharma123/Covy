@@ -63,6 +63,16 @@ pub fn normalize_sequence_request(
 }
 
 pub trait SequenceObserver {
+    /// Returns whether sequence execution should stop at the next cooperative
+    /// step boundary.
+    ///
+    /// Reducers are synchronous, so cancellation does not interrupt a reducer
+    /// that is already running. The kernel checks this hook before scheduling a
+    /// step and again after observer callbacks.
+    fn should_cancel(&self) -> bool {
+        false
+    }
+
     fn on_step_started(&mut self, _position: usize, _step: &KernelStepRequest) {}
 
     fn on_step_completed(
@@ -150,6 +160,9 @@ pub enum KernelError {
 
     #[error("policy violation for target '{target}': {detail}")]
     PolicyViolation { target: String, detail: String },
+
+    #[error("kernel sequence cancelled (task_id={task_id:?})")]
+    SequenceCancelled { task_id: Option<String> },
 }
 
 impl KernelError {
@@ -204,6 +217,11 @@ impl KernelError {
                 code: "policy_violation".to_string(),
                 message: self.to_string(),
                 target: Some(target.clone()),
+            },
+            KernelError::SequenceCancelled { .. } => KernelFailure {
+                code: "sequence_cancelled".to_string(),
+                message: self.to_string(),
+                target: None,
             },
         }
     }

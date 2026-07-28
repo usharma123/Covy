@@ -1,4 +1,247 @@
 use super::*;
+use std::os::unix::process::CommandExt;
+use std::process::Child;
+
+const CHILD_TERMINATION_GRACE: Duration = Duration::from_millis(250);
+const CHILD_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct ChildRegistration {
+    generation: TaskGenerationToken,
+    pid: u32,
+}
+
+impl Drop for ChildRegistration {
+    fn drop(&mut self) {
+        self.generation.complete_child(self.pid);
+    }
+}
+
+fn signal_process_group(process: OwnedChildProcess, signal: i32) -> Result<()> {
+    // SAFETY: `kill` is called with a process-group id created by
+    // `CommandExt::process_group(0)` and a valid POSIX signal constant.
+    let result = unsafe { libc::kill(-process.process_group, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    Err(error).with_context(|| {
+        format!(
+            "failed to signal process group {} for child {}",
+            process.process_group, process.pid
+        )
+    })
+}
+
+fn process_group_exists(process: OwnedChildProcess) -> Result<bool> {
+    // SAFETY: signal 0 performs a non-mutating existence probe for the owned
+    // process group.
+    let result = unsafe { libc::kill(-process.process_group, 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(false);
+    }
+    Err(error).with_context(|| {
+        format!(
+            "failed to probe process group {} for child {}",
+            process.process_group, process.pid
+        )
+    })
+}
+
+fn wait_for_process_group_exit(process: OwnedChildProcess, timeout: Duration) -> Result<bool> {
+    let started = Instant::now();
+    loop {
+        if !process_group_exists(process)? {
+            return Ok(true);
+        }
+        if started.elapsed() >= timeout {
+            return Ok(false);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn terminate_remaining_process_group(process: OwnedChildProcess) -> Result<()> {
+    if !process_group_exists(process)? {
+        return Ok(());
+    }
+    signal_process_group(process, libc::SIGTERM)?;
+    if wait_for_process_group_exit(process, CHILD_TERMINATION_GRACE)? {
+        return Ok(());
+    }
+    signal_process_group(process, libc::SIGKILL)?;
+    if wait_for_process_group_exit(process, CHILD_REAP_TIMEOUT)? {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "timed out waiting for delegated process group {} to exit",
+        process.process_group
+    )
+}
+
+fn terminate_and_reap_child(child: &mut Child, process: OwnedChildProcess) -> Result<()> {
+    let _ = signal_process_group(process, libc::SIGTERM);
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return terminate_remaining_process_group(process);
+        }
+        if started.elapsed() >= CHILD_TERMINATION_GRACE {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let _ = signal_process_group(process, libc::SIGKILL);
+    child.wait().with_context(|| {
+        format!(
+            "failed to reap delegated child process {} after cancellation",
+            process.pid
+        )
+    })?;
+    terminate_remaining_process_group(process)
+}
+
+pub(crate) fn terminate_generation_processes(generation: &TaskGenerationToken) -> Result<()> {
+    for process in generation.children() {
+        if let Err(error) = signal_process_group(process, libc::SIGTERM) {
+            daemon_log(&format!(
+                "failed to terminate task child pid={} error={error:#}",
+                process.pid
+            ));
+        }
+    }
+    if generation.wait_for_children(CHILD_TERMINATION_GRACE) {
+        return Ok(());
+    }
+
+    for process in generation.children() {
+        if let Err(error) = signal_process_group(process, libc::SIGKILL) {
+            daemon_log(&format!(
+                "failed to kill task child pid={} error={error:#}",
+                process.pid
+            ));
+        }
+    }
+    if generation.wait_for_children(CHILD_REAP_TIMEOUT) {
+        return Ok(());
+    }
+
+    let remaining = generation
+        .children()
+        .into_iter()
+        .map(|process| process.pid.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!("timed out reaping cancelled task child processes: {remaining}")
+}
+
+pub(crate) fn spawn_owned_child_waiter(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: String,
+    generation: TaskGenerationToken,
+    process: OwnedChildProcess,
+    child: Child,
+) -> Result<()> {
+    // Ownership invariant: the child is stored outside the closure until the
+    // waiter thread is successfully created. If thread creation fails, this
+    // function still owns the handle and synchronously terminates and reaps it.
+    let pid = child.id();
+    debug_assert_eq!(pid, process.pid);
+    let shared_child = Arc::new(Mutex::new(Some(child)));
+    let child_for_waiter = shared_child.clone();
+    let generation_for_waiter = generation.clone();
+    let spawn_result = thread::Builder::new()
+        .name(format!("packet28-child-waiter-{pid}"))
+        .spawn(move || {
+            let _registration = ChildRegistration {
+                generation: generation_for_waiter.clone(),
+                pid,
+            };
+            let Some(mut child) = child_for_waiter
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            else {
+                daemon_log(&format!(
+                    "delegated child waiter lost ownership of pid={pid}"
+                ));
+                return;
+            };
+            let wait_result = child.wait().and_then(|status| {
+                terminate_remaining_process_group(process)
+                    .map(|()| status)
+                    .map_err(|error| std::io::Error::other(error.to_string()))
+            });
+            let (exit_code, summary, completed_at_unix, error_text) = match wait_result {
+                Ok(status) => (
+                    status.code(),
+                    format!(
+                        "agent launch completed exit_code={}",
+                        status.code().unwrap_or(-1)
+                    ),
+                    now_unix(),
+                    None,
+                ),
+                Err(error) => (
+                    None,
+                    format!("agent launch failed: {error}"),
+                    now_unix(),
+                    Some(error.to_string()),
+                ),
+            };
+
+            if let Ok(mut guard) = state.lock().map_err(lock_err) {
+                if guard
+                    .task_generations
+                    .matches(&task_id, generation_for_waiter.id())
+                    && !generation_for_waiter.is_cancelled()
+                {
+                    if let Some(task) = guard.tasks.tasks.get_mut(&task_id) {
+                        if task.latest_agent_pid == Some(pid) {
+                            task.latest_agent_completed_at_unix = Some(completed_at_unix);
+                            task.latest_agent_exit_code = exit_code;
+                            if let Some(error) = error_text.clone() {
+                                task.last_error = Some(error);
+                            }
+                            let _ = persist_state(&guard);
+                        }
+                    }
+                }
+            }
+            let _ = emit_task_event_for_generation(
+                state,
+                &task_id,
+                generation_for_waiter.id(),
+                "task.agent_launch_completed",
+                json!({
+                    "summary": summary,
+                    "exit_code": exit_code,
+                    "completed_at_unix": completed_at_unix,
+                }),
+            );
+        });
+    if let Err(error) = spawn_result {
+        let cleanup_result = shared_child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .map(|mut child| terminate_and_reap_child(&mut child, process))
+            .unwrap_or(Ok(()));
+        generation.complete_child(pid);
+        cleanup_result?;
+        return Err(error).with_context(|| {
+            format!("failed to start delegated child waiter thread for pid {pid}")
+        });
+    }
+    Ok(())
+}
 
 pub(crate) fn task_await_handoff(
     state: Arc<Mutex<DaemonState>>,
@@ -204,8 +447,32 @@ pub(crate) fn task_launch_agent(
     state: Arc<Mutex<DaemonState>>,
     request: TaskLaunchAgentRequest,
 ) -> Result<TaskLaunchAgentResponse> {
-    let root = state.lock().map_err(lock_err)?.root.clone();
+    if request.task_id.trim().is_empty() {
+        anyhow::bail!("daemon task launch-agent requires task_id");
+    }
+    if request.command.is_empty() {
+        anyhow::bail!("daemon task launch-agent requires a delegated command after --");
+    }
+    let (root, generation, _launch_lease) = {
+        let mut guard = state.lock().map_err(lock_err)?;
+        ensure_task_record_mut(&mut guard.tasks, &request.task_id);
+        let generation = guard.task_generations.ensure(&request.task_id)?;
+        let launch_lease = generation.acquire_operation().ok_or_else(|| {
+            anyhow!(
+                "task '{}' was cancelled before delegated agent launch",
+                request.task_id
+            )
+        })?;
+        persist_state(&guard)?;
+        (guard.root.clone(), generation, launch_lease)
+    };
     let bootstrap = task_prepare_launch_bootstrap(state.clone(), &request)?;
+    if generation.is_cancelled() {
+        anyhow::bail!(
+            "task '{}' was cancelled while preparing delegated agent launch",
+            request.task_id
+        );
+    }
     fs::write(
         &bootstrap.bootstrap_path,
         serde_json::to_vec(&bootstrap.response)?,
@@ -247,7 +514,6 @@ pub(crate) fn task_launch_agent(
     let stderr_log = stdout_log
         .try_clone()
         .with_context(|| format!("failed to clone '{}'", log_path.display()))?;
-
     let mut child = Command::new(&request.command[0]);
     child
         .args(&request.command[1..])
@@ -307,14 +573,52 @@ pub(crate) fn task_launch_agent(
             "PACKET28_MCP_PROXY_COMMAND",
             proxy_command.unwrap_or_default(),
         )
-        .env("PACKET28_ROOT", &root);
+        .env("PACKET28_ROOT", &root)
+        .process_group(0);
     let mut child = child
         .spawn()
         .with_context(|| format!("failed to spawn delegated command '{}'", request.command[0]))?;
     let pid = child.id();
-    {
+    let process_group = match i32::try_from(pid) {
+        Ok(process_group) => process_group,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!(
+                "delegated child pid {pid} does not fit in a process-group id: {error}"
+            ));
+        }
+    };
+    let owned_process = OwnedChildProcess { pid, process_group };
+    if !generation.register_child(owned_process) {
+        terminate_and_reap_child(&mut child, owned_process)?;
+        anyhow::bail!(
+            "task '{}' was cancelled while launching delegated agent",
+            bootstrap.task_id
+        );
+    }
+    let ownership_result = (|| -> Result<()> {
         let mut guard = state.lock().map_err(lock_err)?;
-        let task = ensure_task_record_mut(&mut guard.tasks, &bootstrap.task_id);
+        if !guard
+            .task_generations
+            .matches(&bootstrap.task_id, generation.id())
+            || generation.is_cancelled()
+        {
+            anyhow::bail!(
+                "task '{}' generation changed while launching delegated agent",
+                bootstrap.task_id
+            );
+        }
+        let task = guard
+            .tasks
+            .tasks
+            .get_mut(&bootstrap.task_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "task '{}' disappeared while launching delegated agent",
+                    bootstrap.task_id
+                )
+            })?;
         task.latest_agent_pid = Some(pid);
         task.latest_agent_bootstrap_mode = Some(bootstrap.mode.to_string());
         task.latest_agent_log_path = Some(log_path.to_string_lossy().to_string());
@@ -325,51 +629,43 @@ pub(crate) fn task_launch_agent(
         task.latest_agent_handoff_artifact_id = bootstrap.handoff_artifact_id.clone();
         task.latest_agent_handoff_checkpoint_id = bootstrap.handoff_checkpoint_id.clone();
         persist_state(&guard)?;
+        Ok(())
+    })();
+    if let Err(error) = ownership_result {
+        let reap_result = terminate_and_reap_child(&mut child, owned_process);
+        generation.complete_child(pid);
+        reap_result?;
+        return Err(error);
     }
-    let task_id = bootstrap.task_id.clone();
-    let state_for_wait = state.clone();
-    thread::spawn(move || {
-        let wait_result = child.wait();
-        let (exit_code, summary, completed_at_unix, error_text) = match wait_result {
-            Ok(status) => (
-                status.code(),
-                format!(
-                    "agent launch completed exit_code={}",
-                    status.code().unwrap_or(-1)
-                ),
-                now_unix(),
-                None,
-            ),
-            Err(err) => (
-                None,
-                format!("agent launch failed: {err}"),
-                now_unix(),
-                Some(err.to_string()),
-            ),
-        };
-        if let Ok(mut guard) = state_for_wait.lock().map_err(lock_err) {
-            let task = ensure_task_record_mut(&mut guard.tasks, &task_id);
-            task.latest_agent_completed_at_unix = Some(completed_at_unix);
-            task.latest_agent_exit_code = exit_code;
-            if let Some(err) = error_text.clone() {
-                task.last_error = Some(err);
+    if let Err(error) = spawn_owned_child_waiter(
+        state.clone(),
+        bootstrap.task_id.clone(),
+        generation.clone(),
+        owned_process,
+        child,
+    ) {
+        if let Ok(mut guard) = state.lock().map_err(lock_err) {
+            if guard
+                .task_generations
+                .matches(&bootstrap.task_id, generation.id())
+                && !generation.is_cancelled()
+            {
+                if let Some(task) = guard.tasks.tasks.get_mut(&bootstrap.task_id) {
+                    if task.latest_agent_pid == Some(pid) {
+                        task.latest_agent_completed_at_unix = Some(now_unix());
+                        task.latest_agent_exit_code = None;
+                        task.last_error = Some(error.to_string());
+                        let _ = persist_state(&guard);
+                    }
+                }
             }
-            let _ = persist_state(&guard);
         }
-        let _ = emit_task_event(
-            state_for_wait,
-            &task_id,
-            "task.agent_launch_completed",
-            json!({
-                "summary": summary,
-                "exit_code": exit_code,
-                "completed_at_unix": completed_at_unix,
-            }),
-        );
-    });
-    let _ = emit_task_event(
+        return Err(error);
+    }
+    let _ = emit_task_event_for_generation(
         state.clone(),
         &bootstrap.task_id,
+        generation.id(),
         "task.agent_launch_started",
         json!({
             "summary": format!("spawned delegated agent pid={pid} mode={}", bootstrap.mode),

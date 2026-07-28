@@ -51,16 +51,36 @@ pub(crate) fn emit_task_event(
     data: Value,
 ) -> Result<()> {
     let mut guard = state.lock().map_err(lock_err)?;
-    let root = guard.root.clone();
-    let frame = {
-        let task = guard
-            .tasks
-            .tasks
-            .entry(task_id.to_string())
-            .or_insert_with(|| TaskRecord {
+    let _ = emit_task_event_locked(&mut guard, task_id, kind, data, true)?;
+    Ok(())
+}
+
+fn emit_task_event_locked(
+    state: &mut DaemonState,
+    task_id: &str,
+    kind: &str,
+    data: Value,
+    create_task: bool,
+) -> Result<bool> {
+    if !state.tasks.tasks.contains_key(task_id) {
+        if !create_task {
+            return Ok(false);
+        }
+        state.tasks.tasks.insert(
+            task_id.to_string(),
+            TaskRecord {
                 task_id: task_id.to_string(),
                 ..TaskRecord::default()
-            });
+            },
+        );
+    }
+    let root = state.root.clone();
+    let frame = {
+        let task = state
+            .tasks
+            .tasks
+            .get_mut(task_id)
+            .expect("task presence established before event append");
         task.last_event_seq = task.last_event_seq.saturating_add(1);
         let frame = DaemonEventFrame {
             seq: task.last_event_seq,
@@ -74,21 +94,49 @@ pub(crate) fn emit_task_event(
         append_task_event(&root, &frame)?;
         frame
     };
-    if let Some(subscribers) = guard.subscribers.get_mut(task_id) {
+    if let Some(subscribers) = state.subscribers.get_mut(task_id) {
         subscribers.retain(|subscriber| subscriber.send(frame.clone()).is_ok());
         if subscribers.is_empty() {
-            guard.subscribers.remove(task_id);
+            state.subscribers.remove(task_id);
         }
     }
-    persist_state(&guard)?;
-    Ok(())
+    persist_state(state)?;
+    Ok(true)
 }
 
-pub(crate) fn refresh_task_context_summary(
+pub(crate) fn emit_task_event_for_generation(
     state: Arc<Mutex<DaemonState>>,
     task_id: &str,
+    generation: TaskGenerationId,
+    kind: &str,
+    data: Value,
+) -> Result<bool> {
+    let mut guard = state.lock().map_err(lock_err)?;
+    let Some(current) = guard.task_generations.current(task_id) else {
+        return Ok(false);
+    };
+    if current.id() != generation || current.is_cancelled() {
+        return Ok(false);
+    }
+
+    emit_task_event_locked(&mut guard, task_id, kind, data, false)
+}
+
+pub(crate) fn refresh_task_context_summary_for_generation(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    generation: TaskGenerationId,
 ) -> Result<Option<Value>> {
-    let kernel = state.lock().map_err(lock_err)?.kernel.clone();
+    let kernel = {
+        let guard = state.lock().map_err(lock_err)?;
+        let Some(current) = guard.task_generations.current(task_id) else {
+            return Ok(None);
+        };
+        if current.id() != generation || current.is_cancelled() {
+            return Ok(None);
+        }
+        guard.kernel.clone()
+    };
     let response = match kernel.execute(KernelRequest {
         target: "contextq.manage".to_string(),
         reducer_input: json!({
@@ -120,6 +168,12 @@ pub(crate) fn refresh_task_context_summary(
         "changed_symbols_since_checkpoint": envelope.payload.changed_symbols_since_checkpoint.len(),
     });
     let mut guard = state.lock().map_err(lock_err)?;
+    let Some(current) = guard.task_generations.current(task_id) else {
+        return Ok(None);
+    };
+    if current.id() != generation || current.is_cancelled() {
+        return Ok(None);
+    }
     if let Some(task) = guard.tasks.tasks.get_mut(task_id) {
         task.last_context_refresh_at_unix = Some(now_unix());
         task.working_set_est_tokens = envelope.payload.budget.working_set_tokens;
@@ -192,6 +246,27 @@ pub(crate) fn set_context_reason(
     task.latest_context_reason = Some(reason.into());
     persist_state(&guard)?;
     Ok(())
+}
+
+pub(crate) fn set_context_reason_for_generation(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    generation: TaskGenerationId,
+    reason: impl Into<String>,
+) -> Result<bool> {
+    let mut guard = state.lock().map_err(lock_err)?;
+    let Some(current) = guard.task_generations.current(task_id) else {
+        return Ok(false);
+    };
+    if current.id() != generation || current.is_cancelled() {
+        return Ok(false);
+    }
+    let Some(task) = guard.tasks.tasks.get_mut(task_id) else {
+        return Ok(false);
+    };
+    task.latest_context_reason = Some(reason.into());
+    persist_state(&guard)?;
+    Ok(true)
 }
 
 pub(crate) fn current_context_version(

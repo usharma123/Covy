@@ -1485,6 +1485,7 @@ dependencies = [
  "diffy-core",
  "glob",
  "ignore",
+ "libc",
  "mapy-core",
  "notify",
  "packet28-binary-codec",

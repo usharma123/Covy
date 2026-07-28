@@ -1,5 +1,7 @@
 use super::*;
 
+const TASK_CANCELLATION_QUIESCE_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub(crate) fn register_task_and_watches(
     state: Arc<Mutex<DaemonState>>,
     watch_tx: Sender<WatchEventMsg>,
@@ -11,22 +13,24 @@ pub(crate) fn register_task_and_watches(
     };
     let spec = normalize_task_submit_spec(&root, spec)?;
 
-    let removed_watch_ids = {
+    let replaces_existing_task = {
         let guard = state.lock().map_err(lock_err)?;
-        guard
-            .tasks
-            .tasks
-            .get(&spec.task_id)
-            .map(|task| task.watch_ids.clone())
-            .unwrap_or_default()
+        guard.tasks.tasks.contains_key(&spec.task_id)
     };
-    for watch_id in removed_watch_ids {
-        let _ = remove_watch(state.clone(), &watch_id)?;
+    if replaces_existing_task {
+        let _ = cancel_task(state.clone(), &spec.task_id)?;
     }
 
     let mut registrations = Vec::new();
     {
         let mut guard = state.lock().map_err(lock_err)?;
+        if guard.tasks.tasks.contains_key(&spec.task_id) {
+            anyhow::bail!(
+                "task '{}' was concurrently replaced during registration",
+                spec.task_id
+            );
+        }
+        guard.task_generations.create(&spec.task_id)?;
         let watch_ids = spec
             .watches
             .iter()
@@ -71,6 +75,11 @@ pub(crate) fn register_task_and_watches(
             }
             let mut guard = state.lock().map_err(lock_err)?;
             guard.tasks.tasks.remove(&spec.task_id);
+            if let Some(generation) = guard.task_generations.current(&spec.task_id) {
+                guard
+                    .task_generations
+                    .remove_if_current(&spec.task_id, generation.id());
+            }
             guard.watches.watches.retain(|watch| {
                 !registrations
                     .iter()
@@ -103,13 +112,22 @@ pub(crate) fn run_sequence_for_task(
     task_id: &str,
 ) -> Result<context_kernel_core::KernelSequenceResponse> {
     loop {
-        let (kernel, sequence) = {
+        let (kernel, sequence, generation, _sequence_lease) = {
             let mut guard = state.lock().map_err(lock_err)?;
+            if !guard.tasks.tasks.contains_key(task_id) {
+                anyhow::bail!("unknown task '{task_id}'");
+            }
+            let generation = guard.task_generations.ensure(task_id)?;
+            let sequence_lease = generation.acquire_operation().ok_or_else(|| {
+                context_kernel_core::KernelError::SequenceCancelled {
+                    task_id: Some(task_id.to_string()),
+                }
+            })?;
             let task = guard
                 .tasks
                 .tasks
                 .get_mut(task_id)
-                .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
+                .expect("task existence checked before generation acquisition");
             let sequence = task
                 .sequence
                 .clone()
@@ -118,11 +136,12 @@ pub(crate) fn run_sequence_for_task(
             task.last_started_at_unix = Some(now_unix());
             task.last_error = None;
             persist_state(&guard)?;
-            (guard.kernel.clone(), sequence)
+            (guard.kernel.clone(), sequence, generation, sequence_lease)
         };
-        let _ = emit_task_event(
+        let _ = emit_task_event_for_generation(
             state.clone(),
             task_id,
+            generation.id(),
             "task_started",
             json!({"task_id": task_id, "step_count": sequence.steps.len()}),
         );
@@ -130,11 +149,20 @@ pub(crate) fn run_sequence_for_task(
         let mut observer = TaskSequenceObserver {
             state: state.clone(),
             task_id: task_id.to_string(),
+            generation: generation.clone(),
         };
         let result = kernel.execute_sequence_with_observer(sequence, &mut observer);
 
         let rerun = {
             let mut guard = state.lock().map_err(lock_err)?;
+            if !guard.task_generations.matches(task_id, generation.id())
+                || generation.is_cancelled()
+            {
+                return Err(context_kernel_core::KernelError::SequenceCancelled {
+                    task_id: Some(task_id.to_string()),
+                }
+                .into());
+            }
             let task = guard
                 .tasks
                 .tasks
@@ -160,78 +188,115 @@ pub(crate) fn run_sequence_for_task(
             rerun
         };
 
-        if let Ok(_response) = &result {
-            let mut summary =
-                refresh_task_context_summary(state.clone(), task_id)?.unwrap_or_else(|| json!({}));
-            let _ = set_context_reason(&state, task_id, "replan_applied");
-            if let Some(response) = refresh_broker_context_for_task(&state, task_id, None)? {
-                if let Some(object) = summary.as_object_mut() {
-                    object.insert(
-                        "changed_section_ids".to_string(),
-                        Value::Array(
-                            response
-                                .delta
-                                .changed_sections
-                                .iter()
-                                .map(|section| Value::String(section.id.clone()))
-                                .collect(),
-                        ),
-                    );
-                    object.insert(
-                        "removed_section_ids".to_string(),
-                        Value::Array(
-                            response
-                                .delta
-                                .removed_section_ids
-                                .iter()
-                                .map(|id| Value::String(id.clone()))
-                                .collect(),
-                        ),
-                    );
-                    object.insert(
-                        "reason".to_string(),
-                        Value::String("replan_applied".to_string()),
-                    );
-                    object.insert(
-                        "context_version".to_string(),
-                        Value::String(response.context_version.clone()),
-                    );
-                    object.insert(
-                        "brief_path".to_string(),
-                        Value::String(
-                            task_brief_markdown_path(
-                                &state.lock().map_err(lock_err)?.root.clone(),
-                                task_id,
-                            )
-                            .to_string_lossy()
-                            .to_string(),
-                        ),
-                    );
+        if result.is_ok() && !generation.is_cancelled() {
+            let mut summary = refresh_task_context_summary_for_generation(
+                state.clone(),
+                task_id,
+                generation.id(),
+            )?
+            .unwrap_or_else(|| json!({}));
+            if generation.is_cancelled() {
+                return Err(context_kernel_core::KernelError::SequenceCancelled {
+                    task_id: Some(task_id.to_string()),
+                }
+                .into());
+            }
+            let _ = set_context_reason_for_generation(
+                &state,
+                task_id,
+                generation.id(),
+                "replan_applied",
+            )?;
+            if !generation.is_cancelled() {
+                if let Some(response) = refresh_broker_context_for_task(&state, task_id, None)? {
+                    if let Some(object) = summary.as_object_mut() {
+                        object.insert(
+                            "changed_section_ids".to_string(),
+                            Value::Array(
+                                response
+                                    .delta
+                                    .changed_sections
+                                    .iter()
+                                    .map(|section| Value::String(section.id.clone()))
+                                    .collect(),
+                            ),
+                        );
+                        object.insert(
+                            "removed_section_ids".to_string(),
+                            Value::Array(
+                                response
+                                    .delta
+                                    .removed_section_ids
+                                    .iter()
+                                    .map(|id| Value::String(id.clone()))
+                                    .collect(),
+                            ),
+                        );
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("replan_applied".to_string()),
+                        );
+                        object.insert(
+                            "context_version".to_string(),
+                            Value::String(response.context_version.clone()),
+                        );
+                        object.insert(
+                            "brief_path".to_string(),
+                            Value::String(
+                                task_brief_markdown_path(
+                                    &state.lock().map_err(lock_err)?.root.clone(),
+                                    task_id,
+                                )
+                                .to_string_lossy()
+                                .to_string(),
+                            ),
+                        );
+                    }
                 }
             }
-            let _ = emit_task_event(state.clone(), task_id, "context_updated", summary);
+            let _ = emit_task_event_for_generation(
+                state.clone(),
+                task_id,
+                generation.id(),
+                "context_updated",
+                summary,
+            )?;
         }
 
         match result {
             Ok(_) if rerun => {
+                if generation.is_cancelled() {
+                    return Err(context_kernel_core::KernelError::SequenceCancelled {
+                        task_id: Some(task_id.to_string()),
+                    }
+                    .into());
+                }
                 continue;
             }
             Ok(response) => {
-                let _ = emit_task_event(
+                let emitted = emit_task_event_for_generation(
                     state.clone(),
                     task_id,
+                    generation.id(),
                     "task_completed",
                     json!({"task_id": task_id, "request_id": response.request_id}),
-                );
+                )?;
+                if !emitted {
+                    return Err(context_kernel_core::KernelError::SequenceCancelled {
+                        task_id: Some(task_id.to_string()),
+                    }
+                    .into());
+                }
                 return Ok(response);
             }
             Err(err) => {
-                let _ = emit_task_event(
+                let _ = emit_task_event_for_generation(
                     state.clone(),
                     task_id,
+                    generation.id(),
                     "task_failed",
                     json!({"task_id": task_id, "error": err.to_string()}),
-                );
+                )?;
                 return Err(err.into());
             }
         }
@@ -242,19 +307,42 @@ pub(crate) fn cancel_task(
     state: Arc<Mutex<DaemonState>>,
     task_id: &str,
 ) -> Result<(Option<TaskRecord>, Vec<String>)> {
-    let watch_ids = {
+    let (generation, watch_ids) = {
         let mut guard = state.lock().map_err(lock_err)?;
-        let Some(task) = guard.tasks.tasks.get_mut(task_id) else {
+        if !guard.tasks.tasks.contains_key(task_id) {
             return Ok((None, Vec::new()));
-        };
+        }
+        let generation = guard.task_generations.ensure(task_id)?;
+        generation.request_cancel();
+        let task = guard
+            .tasks
+            .tasks
+            .get_mut(task_id)
+            .expect("task existence checked before generation cancellation");
         task.lifecycle.request_cancel();
-        task.watch_ids.clone()
+        let watch_ids = task.watch_ids.clone();
+        persist_state(&guard)?;
+        (generation, watch_ids)
     };
     for watch_id in &watch_ids {
         let _ = remove_watch(state.clone(), watch_id)?;
     }
+    crate::launch::terminate_generation_processes(&generation)?;
+    if !generation.wait_until_idle(TASK_CANCELLATION_QUIESCE_TIMEOUT) {
+        anyhow::bail!(
+            "timed out waiting for cancelled task '{}' generation to become idle",
+            task_id
+        );
+    }
     let mut guard = state.lock().map_err(lock_err)?;
+    if !guard.task_generations.matches(task_id, generation.id()) {
+        return Ok((None, watch_ids));
+    }
     let removed = guard.tasks.tasks.remove(task_id);
+    guard.subscribers.remove(task_id);
+    guard
+        .task_generations
+        .remove_if_current(task_id, generation.id());
     persist_state(&guard)?;
     Ok((removed, watch_ids))
 }
@@ -303,15 +391,24 @@ pub(crate) fn install_watch(
     watch_tx: Sender<WatchEventMsg>,
     watch_id: String,
 ) -> Result<()> {
-    let spec = {
-        let guard = state.lock().map_err(lock_err)?;
-        guard
+    let (spec, generation) = {
+        let mut guard = state.lock().map_err(lock_err)?;
+        let spec = guard
             .watches
             .watches
             .iter()
             .find(|watch| watch.watch_id == watch_id)
             .map(|watch| watch.spec.clone())
-            .ok_or_else(|| anyhow!("unknown watch '{watch_id}'"))?
+            .ok_or_else(|| anyhow!("unknown watch '{watch_id}'"))?;
+        if !guard.tasks.tasks.contains_key(&spec.task_id) {
+            anyhow::bail!(
+                "watch '{}' belongs to unknown task '{}'",
+                watch_id,
+                spec.task_id
+            );
+        }
+        let generation = guard.task_generations.ensure(&spec.task_id)?.id();
+        (spec, generation)
     };
 
     let callback_watch_id = watch_id.clone();
@@ -320,6 +417,7 @@ pub(crate) fn install_watch(
             Ok(event) => {
                 let _ = watch_tx.send(WatchEventMsg {
                     watch_id: callback_watch_id.clone(),
+                    generation,
                     paths: event.paths,
                     error: None,
                 });
@@ -327,6 +425,7 @@ pub(crate) fn install_watch(
             Err(err) => {
                 let _ = watch_tx.send(WatchEventMsg {
                     watch_id: callback_watch_id.clone(),
+                    generation,
                     paths: Vec::new(),
                     error: Some(err.to_string()),
                 });
@@ -370,7 +469,7 @@ pub(crate) fn spawn_watch_processor(
     watch_rx: Receiver<WatchEventMsg>,
 ) {
     thread::spawn(move || {
-        let mut pending = HashMap::<String, PendingWatchEvent>::new();
+        let mut pending = HashMap::<(String, TaskGenerationId), PendingWatchEvent>::new();
         loop {
             flush_due_watch_events(state.clone(), &mut pending);
             let timeout = next_watch_timeout(&pending).unwrap_or(Duration::from_secs(60));
@@ -403,7 +502,7 @@ pub(crate) fn spawn_watch_processor(
 }
 
 fn process_watch_event(state: Arc<Mutex<DaemonState>>, message: WatchEventMsg) -> Result<()> {
-    let (task_id, error_message) = {
+    let (task_id, error_message, generation, _activity_lease) = {
         let guard = state.lock().map_err(lock_err)?;
         let Some(registration) = guard
             .watches
@@ -413,11 +512,24 @@ fn process_watch_event(state: Arc<Mutex<DaemonState>>, message: WatchEventMsg) -
         else {
             return Ok(());
         };
-        (registration.spec.task_id.clone(), message.error.clone())
+        let task_id = registration.spec.task_id.clone();
+        let Some(generation) = guard.task_generations.current(&task_id) else {
+            return Ok(());
+        };
+        if generation.id() != message.generation || generation.is_cancelled() {
+            return Ok(());
+        }
+        let Some(activity_lease) = generation.acquire_operation() else {
+            return Ok(());
+        };
+        (task_id, message.error.clone(), generation, activity_lease)
     };
 
     {
         let mut guard = state.lock().map_err(lock_err)?;
+        if !guard.task_generations.matches(&task_id, generation.id()) || generation.is_cancelled() {
+            return Ok(());
+        }
         if let Some(watch) = guard
             .watches
             .watches
@@ -431,9 +543,10 @@ fn process_watch_event(state: Arc<Mutex<DaemonState>>, message: WatchEventMsg) -
     }
 
     if let Some(error) = error_message {
-        let _ = emit_task_event(
+        let _ = emit_task_event_for_generation(
             state.clone(),
             &task_id,
+            generation.id(),
             "watch_error",
             json!({
                 "watch_id": message.watch_id,
@@ -443,9 +556,10 @@ fn process_watch_event(state: Arc<Mutex<DaemonState>>, message: WatchEventMsg) -
         return Ok(());
     }
 
-    let _ = emit_task_event(
+    let _ = emit_task_event_for_generation(
         state.clone(),
         &task_id,
+        generation.id(),
         "watch_triggered",
         json!({
             "watch_id": message.watch_id,
@@ -457,12 +571,19 @@ fn process_watch_event(state: Arc<Mutex<DaemonState>>, message: WatchEventMsg) -
         }),
     );
 
-    let _ = set_context_reason(&state, &task_id, "watch_triggered");
-    let _ = refresh_task_context_summary(state.clone(), &task_id)?;
+    let _ =
+        set_context_reason_for_generation(&state, &task_id, generation.id(), "watch_triggered")?;
+    let _ = refresh_task_context_summary_for_generation(state.clone(), &task_id, generation.id())?;
+    if generation.is_cancelled() {
+        return Ok(());
+    }
     let _ = refresh_broker_context_for_task(&state, &task_id, None)?;
 
     let should_start = {
         let mut guard = state.lock().map_err(lock_err)?;
+        if !guard.task_generations.matches(&task_id, generation.id()) || generation.is_cancelled() {
+            return Ok(());
+        }
         let should_start = guard
             .tasks
             .tasks
@@ -537,19 +658,19 @@ fn normalize_task_submit_spec(root: &Path, mut spec: TaskSubmitSpec) -> Result<T
 
 fn merge_watch_event(
     state: Arc<Mutex<DaemonState>>,
-    pending: &mut HashMap<String, PendingWatchEvent>,
+    pending: &mut HashMap<(String, TaskGenerationId), PendingWatchEvent>,
     message: WatchEventMsg,
 ) {
     let debounce_ms = watch_debounce_ms(&state, &message.watch_id).unwrap_or(250);
     let due_at = Instant::now() + Duration::from_millis(debounce_ms);
-    let entry = pending
-        .entry(message.watch_id.clone())
-        .or_insert_with(|| PendingWatchEvent {
-            watch_id: message.watch_id.clone(),
-            paths: Vec::new(),
-            error: None,
-            due_at,
-        });
+    let key = (message.watch_id.clone(), message.generation);
+    let entry = pending.entry(key).or_insert_with(|| PendingWatchEvent {
+        watch_id: message.watch_id.clone(),
+        generation: message.generation,
+        paths: Vec::new(),
+        error: None,
+        due_at,
+    });
     entry.due_at = due_at;
     if entry.error.is_none() {
         entry.error = message.error.clone();
@@ -563,18 +684,19 @@ fn merge_watch_event(
 
 fn flush_due_watch_events(
     state: Arc<Mutex<DaemonState>>,
-    pending: &mut HashMap<String, PendingWatchEvent>,
+    pending: &mut HashMap<(String, TaskGenerationId), PendingWatchEvent>,
 ) {
     let now = Instant::now();
     let ready_ids = pending
         .iter()
         .filter(|(_, item)| item.due_at <= now)
-        .map(|(watch_id, _)| watch_id.clone())
+        .map(|(key, _)| key.clone())
         .collect::<Vec<_>>();
-    for watch_id in ready_ids {
-        if let Some(item) = pending.remove(&watch_id) {
+    for key in ready_ids {
+        if let Some(item) = pending.remove(&key) {
             let message = WatchEventMsg {
                 watch_id: item.watch_id,
+                generation: item.generation,
                 paths: item.paths,
                 error: item.error,
             };
@@ -585,7 +707,9 @@ fn flush_due_watch_events(
     }
 }
 
-fn next_watch_timeout(pending: &HashMap<String, PendingWatchEvent>) -> Option<Duration> {
+fn next_watch_timeout(
+    pending: &HashMap<(String, TaskGenerationId), PendingWatchEvent>,
+) -> Option<Duration> {
     let now = Instant::now();
     pending
         .values()
