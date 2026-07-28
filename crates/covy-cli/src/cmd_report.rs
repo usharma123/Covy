@@ -44,7 +44,7 @@ pub struct ReportArgs {
 }
 
 pub fn run(args: ReportArgs, config_path: &str) -> Result<i32> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
 
     let format =
         if crate::cmd_common::resolve_json_output(args.json, args.format.as_deref(), "--format")? {

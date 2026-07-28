@@ -74,7 +74,7 @@ pub fn run(args: GithubCommentArgs, config_path: &str) -> Result<i32> {
         "warning: `covy github-comment` is deprecated; use `covy comment` + `covy annotate` (or `covy pr`).",
     );
 
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let base = args.base.as_deref().unwrap_or(&config.diff.base);
     let head = args.head.as_deref().unwrap_or(&config.diff.head);
 

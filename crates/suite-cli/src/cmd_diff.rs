@@ -105,7 +105,7 @@ pub fn run(args: AnalyzeArgs, config_path: &str) -> Result<i32> {
     let governed_context_config = args.context_config.clone();
     let governed_budget_tokens = args.context_budget_tokens;
     let governed_budget_bytes = args.context_budget_bytes;
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let cwd = std::env::current_dir()?;
     let machine_profile =
         crate::cmd_common::resolve_machine_profile(args.json, args.report.as_deref(), "--report")?;
@@ -380,7 +380,7 @@ pub fn run_remote(args: AnalyzeArgs, config_path: &str, daemon_root: &Path) -> R
     let governed_context_config = args.context_config.clone();
     let governed_budget_tokens = args.context_budget_tokens;
     let governed_budget_bytes = args.context_budget_bytes;
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let cwd = crate::cmd_common::caller_cwd()?;
     let base = args.base.as_deref().unwrap_or(&config.diff.base);
     let head = args.head.as_deref().unwrap_or(&config.diff.head);

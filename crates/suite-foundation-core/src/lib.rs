@@ -26,4 +26,4 @@ pub mod pathmap;
 pub mod repo_fingerprint;
 pub mod snapshot;
 
-pub use config::CovyConfig;
+pub use config::{ConfigLoadError, CovyConfig};

@@ -108,3 +108,30 @@ fn test_testy_shard_smoke() {
         .success()
         .stdout(predicate::str::contains("\"shards\""));
 }
+
+#[test]
+fn test_testy_shard_rejects_malformed_config() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("covy.toml");
+    let tests_file = dir.path().join("tests.txt");
+    std::fs::write(&config, "[shard\nalgorithm = \"lpt\"").unwrap();
+    std::fs::write(&tests_file, "com.foo.A\n").unwrap();
+
+    testy_cmd()
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "shard",
+            "plan",
+            "--shards",
+            "1",
+            "--tests-file",
+            tests_file.to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(
+            predicate::str::contains("failed to parse config at")
+                .and(predicate::str::contains(config.to_str().unwrap())),
+        );
+}

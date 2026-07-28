@@ -53,7 +53,7 @@ pub const SHARD_PLAN_SCHEMA_EXAMPLES: &str = r#"{
 }"#;
 
 pub fn run_shard_plan_command(args: ShardPlanArgs, config_path: &str) -> Result<ShardPlan> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let shard_count = args
         .shards
         .ok_or_else(|| anyhow::anyhow!("--shards is required"))?;
@@ -94,7 +94,7 @@ pub fn run_shard_update_command(
     args: ShardUpdateArgs,
     config_path: &str,
 ) -> Result<crate::pipeline_shard::ShardTimingSummary> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let timings_path = args
         .timings
         .as_deref()

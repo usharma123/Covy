@@ -121,7 +121,7 @@ impl CheckArgs {
 }
 
 pub fn run(args: CheckArgs, config_path: &str) -> Result<i32> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let machine_profile =
         crate::cmd_common::resolve_machine_profile(args.json, args.report.as_deref(), "--report")?;
     let report = if machine_profile.is_some() {

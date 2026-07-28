@@ -59,7 +59,7 @@ pub struct AnalyzeArgs {
 }
 
 pub fn run(args: AnalyzeArgs, config_path: &str) -> Result<i32> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let report = if resolve_json_output(args.json, args.report.as_deref(), "--report")? {
         "json".to_string()
     } else {

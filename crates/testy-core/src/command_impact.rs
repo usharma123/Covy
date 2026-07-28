@@ -60,7 +60,7 @@ pub fn run_legacy_impact(
     config_path: &str,
     adapters: &crate::pipeline::ImpactAdapters,
 ) -> Result<ImpactLegacyOutput> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let base = args
         .base
         .as_deref()
@@ -139,7 +139,7 @@ pub fn run_plan(
         );
     }
 
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let max_tests = args.max_tests.unwrap_or(config.impact.max_tests);
     let target_coverage = args
         .target_coverage

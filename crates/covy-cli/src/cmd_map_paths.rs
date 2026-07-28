@@ -39,7 +39,7 @@ pub fn run(args: MapPathsArgs, config_path: &str) -> Result<i32> {
         anyhow::bail!("Specify at least one of --learn or --explain");
     }
 
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let repo_root = std::env::current_dir()?;
     let repo_files = load_repo_paths(&repo_root)?;
 

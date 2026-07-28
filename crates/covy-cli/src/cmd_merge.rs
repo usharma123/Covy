@@ -36,7 +36,7 @@ pub fn run(args: MergeArgs, config_path: &str) -> Result<i32> {
         ("--out-coverage", "--output-coverage"),
         ("--out-issues", "--output-issues"),
     ]);
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let strict = args.strict.unwrap_or(config.merge.strict);
 
     let coverage_inputs = resolve_globs(&args.coverage)?;

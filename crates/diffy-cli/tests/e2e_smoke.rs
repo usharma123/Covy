@@ -39,3 +39,29 @@ fn test_diffy_analyze_smoke() {
         .success()
         .stdout(predicate::str::contains("\"passed\""));
 }
+
+#[test]
+fn test_diffy_analyze_rejects_malformed_config() {
+    let config = fixture("config/malformed.toml");
+
+    diffy_cmd()
+        .args([
+            "--config",
+            &config,
+            "analyze",
+            "--coverage",
+            &fixture("lcov/basic.info"),
+            "--no-issues-state",
+            "--base",
+            "HEAD",
+            "--head",
+            "HEAD",
+            "--json",
+        ])
+        .assert()
+        .code(2)
+        .stderr(
+            predicate::str::contains("failed to parse config at")
+                .and(predicate::str::contains(config)),
+        );
+}
