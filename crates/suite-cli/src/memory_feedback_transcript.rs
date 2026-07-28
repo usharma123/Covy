@@ -295,7 +295,7 @@ fn filter_feedback_records(
         .filter(|record| {
             project
                 .as_deref()
-                .map_or(true, |wanted| record.project.as_deref() == Some(wanted))
+                .is_none_or(|wanted| record.project.as_deref() == Some(wanted))
         })
         .take(limit.max(1))
         .collect()
@@ -336,7 +336,7 @@ fn filter_transcript_records(
         .filter(|record| {
             project
                 .as_deref()
-                .map_or(true, |wanted| record.project.as_deref() == Some(wanted))
+                .is_none_or(|wanted| record.project.as_deref() == Some(wanted))
         })
         .take(limit.max(1))
         .collect()

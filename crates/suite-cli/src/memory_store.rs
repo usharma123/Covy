@@ -904,7 +904,7 @@ fn filter_memory_records(
                 .unwrap_or(true)
         })
         .filter(|record| {
-            input.project.map_or(true, |project| {
+            input.project.is_none_or(|project| {
                 let wanted = normalize_non_empty(Some(project), "default");
                 record.project.as_deref() == Some(wanted.as_str())
             })

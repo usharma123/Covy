@@ -705,7 +705,7 @@ pub(crate) fn handle_packet28_validate_tool_outcome(
         .filter(|v| !v.is_empty());
     let record = records
         .iter()
-        .find(|record| command_filter.map_or(true, |needle| record.command.contains(needle)));
+        .find(|record| command_filter.is_none_or(|needle| record.command.contains(needle)));
     let Some(record) = record else {
         return Ok(json!({
             "task_id": args.task_id,

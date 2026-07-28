@@ -2412,7 +2412,7 @@ fn all_indexed_paths(
 }
 
 fn path_allowed(path: &str, requested_filter: Option<&BTreeSet<String>>) -> bool {
-    requested_filter.map_or(true, |filters| {
+    requested_filter.is_none_or(|filters| {
         filters
             .iter()
             .any(|filter| path == filter || path.starts_with(&format!("{filter}/")))
