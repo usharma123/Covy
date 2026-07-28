@@ -1405,13 +1405,13 @@ dependencies = [
 name = "packet28-daemon-core"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "blake3",
  "fs2",
  "packet28-daemon-protocol",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]

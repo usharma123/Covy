@@ -12,12 +12,12 @@ homepage.workspace = true
 workspace = true
 
 [dependencies]
-anyhow.workspace = true
 blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 packet28-daemon-protocol.workspace = true
 fs2 = "0.4"
+thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

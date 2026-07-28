@@ -1,14 +1,15 @@
-//! Hook integrity verification via SHA-256 hashing.
+//! Hook integrity verification via BLAKE3 hashing.
 //!
-//! When a hook script is installed, its SHA-256 hash is stored in a
-//! sidecar file (`.packet28-hook.sha256`). On subsequent runs, the
+//! When a hook script is installed, its BLAKE3 hash is stored in a
+//! hidden `.packet28-hash` sidecar file. On subsequent runs, the
 //! hash is re-computed and compared to detect tampering.
 
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::{DaemonCoreError, Result};
 
 /// Result of an integrity check on a hook file.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -26,10 +27,14 @@ pub enum IntegrityStatus {
     OrphanedHash,
 }
 
-/// Compute the SHA-256 hash of a file.
+/// Compute the BLAKE3 hash of a file.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] if `path` cannot be read.
 pub fn compute_hash(path: &Path) -> Result<String> {
     let contents =
-        fs::read(path).with_context(|| format!("failed to read '{}'", path.display()))?;
+        fs::read(path).map_err(|source| DaemonCoreError::io("failed to read", path, source))?;
     let hash = blake3::hash(&contents);
     Ok(hash.to_hex().to_string())
 }
@@ -47,15 +52,26 @@ fn hash_sidecar_path(hook_path: &Path) -> std::path::PathBuf {
 }
 
 /// Store the current hash of a hook file as its baseline.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] if the hook cannot be read or its sidecar
+/// cannot be written.
 pub fn store_hash(hook_path: &Path) -> Result<()> {
     let hash = compute_hash(hook_path)?;
     let sidecar = hash_sidecar_path(hook_path);
-    fs::write(&sidecar, &hash)
-        .with_context(|| format!("failed to write hash sidecar '{}'", sidecar.display()))?;
+    fs::write(&sidecar, &hash).map_err(|source| {
+        DaemonCoreError::io("failed to write hook hash sidecar", &sidecar, source)
+    })?;
     Ok(())
 }
 
 /// Verify a hook file against its stored baseline hash.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] if the installed hook or existing sidecar
+/// cannot be read.
 pub fn verify_hook(hook_path: &Path) -> Result<IntegrityStatus> {
     let sidecar = hash_sidecar_path(hook_path);
     let hook_exists = hook_path.exists();
@@ -67,8 +83,9 @@ pub fn verify_hook(hook_path: &Path) -> Result<IntegrityStatus> {
         (true, false) => Ok(IntegrityStatus::NoBaseline),
         (true, true) => {
             let current = compute_hash(hook_path)?;
-            let stored = fs::read_to_string(&sidecar)
-                .with_context(|| format!("failed to read '{}'", sidecar.display()))?;
+            let stored = fs::read_to_string(&sidecar).map_err(|source| {
+                DaemonCoreError::io("failed to read hook hash sidecar", &sidecar, source)
+            })?;
             if current.trim() == stored.trim() {
                 Ok(IntegrityStatus::Verified)
             } else {
@@ -79,15 +96,24 @@ pub fn verify_hook(hook_path: &Path) -> Result<IntegrityStatus> {
 }
 
 /// Verify all hook files in a directory.
+///
+/// A missing path or a path that is not a directory produces an empty result.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] if the directory cannot be enumerated or a
+/// hook or sidecar discovered within it cannot be read.
 pub fn verify_hooks_in_dir(dir: &Path) -> Result<Vec<(String, IntegrityStatus)>> {
     let mut results = Vec::new();
     if !dir.is_dir() {
         return Ok(results);
     }
     let entries = fs::read_dir(dir)
-        .with_context(|| format!("failed to read directory '{}'", dir.display()))?;
+        .map_err(|source| DaemonCoreError::io("failed to read directory", dir, source))?;
     for entry in entries {
-        let entry = entry?;
+        let entry = entry.map_err(|source| {
+            DaemonCoreError::io("failed to read directory entry from", dir, source)
+        })?;
         let path = entry.path();
         let name = path
             .file_name()
