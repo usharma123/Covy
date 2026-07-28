@@ -4,7 +4,6 @@ use std::fs;
 use std::io::{BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use packet28_daemon_core::{
@@ -13,15 +12,6 @@ use packet28_daemon_core::{
     DaemonRequest, DaemonResponse, InstructionFileResolveOutcome,
 };
 use sha2::{Digest, Sha256};
-
-type OpenFn = unsafe extern "C" fn(*const c_char, libc::c_int, libc::mode_t) -> libc::c_int;
-type OpenAtFn =
-    unsafe extern "C" fn(libc::c_int, *const c_char, libc::c_int, libc::mode_t) -> libc::c_int;
-
-static REAL_OPEN: OnceLock<OpenFn> = OnceLock::new();
-static REAL_OPEN64: OnceLock<Option<OpenFn>> = OnceLock::new();
-static REAL_OPENAT: OnceLock<OpenAtFn> = OnceLock::new();
-static REAL_OPENAT64: OnceLock<Option<OpenAtFn>> = OnceLock::new();
 
 thread_local! {
     static INTERCEPT_DEPTH: Cell<u32> = const { Cell::new(0) };
@@ -41,56 +31,105 @@ struct InterceptCandidate {
     absolute_path: PathBuf,
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn open(
-    path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    if let Some(fd) = maybe_virtualize(path, None) {
-        return fd;
-    }
-    call_real_open(real_open(), path, flags, mode)
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+compile_error!("the Linux preload shim supports only x86_64 and aarch64");
+
+#[cfg(not(test))]
+macro_rules! interpose_trampoline {
+    ($name:ident, $bridge:literal) => {
+        /// ELF-exported tail trampoline into a C variadic bridge.
+        ///
+        /// The naked body never reads, writes, or retypes argument registers;
+        /// C remains the sole owner of the variadic ABI.
+        ///
+        /// # Safety
+        ///
+        /// This symbol is for the dynamic loader, not Rust callers. It must be
+        /// invoked using the platform libc contract for the correspondingly
+        /// named variadic function.
+        #[doc(hidden)]
+        #[unsafe(naked)]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name() -> libc::c_int {
+            #[cfg(target_arch = "x86_64")]
+            core::arch::naked_asm!(concat!("jmp ", $bridge));
+            #[cfg(target_arch = "aarch64")]
+            core::arch::naked_asm!(concat!("b ", $bridge));
+        }
+    };
 }
 
+#[cfg(not(test))]
+interpose_trampoline!(open, "context_instruct_shim_linux_open");
+#[cfg(not(test))]
+interpose_trampoline!(open64, "context_instruct_shim_linux_open64");
+#[cfg(not(test))]
+interpose_trampoline!(openat, "context_instruct_shim_linux_openat");
+#[cfg(not(test))]
+interpose_trampoline!(openat64, "context_instruct_shim_linux_openat64");
+
+/// Attempt to virtualize a path intercepted by the Linux `open` or `open64`
+/// bridge.
+///
+/// Returns `1` and writes a replacement descriptor to `replacement_fd` when
+/// the path was virtualized. Returns `0` without modifying `replacement_fd`
+/// when the C bridge must call the real libc symbol.
+///
+/// # Safety
+///
+/// `path` must point to a valid NUL-terminated C string for the duration of
+/// this call. `replacement_fd` must be non-null, properly aligned, and valid
+/// for writing one `libc::c_int`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn open64(
+pub unsafe extern "C" fn context_instruct_shim_linux_try_open(
     path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
+    replacement_fd: *mut libc::c_int,
 ) -> libc::c_int {
-    if let Some(fd) = maybe_virtualize(path, None) {
-        return fd;
+    if replacement_fd.is_null() {
+        return 0;
     }
-    let real = real_open64().unwrap_or_else(real_open);
-    call_real_open(real, path, flags, mode)
+    let Some(fd) = maybe_virtualize(path, None) else {
+        return 0;
+    };
+    // SAFETY: The caller guarantees that `replacement_fd` is writable, and
+    // the null case was rejected above.
+    unsafe {
+        replacement_fd.write(fd);
+    }
+    1
 }
 
+/// Attempt to virtualize a path intercepted by the Linux `openat` or
+/// `openat64` bridge.
+///
+/// Returns `1` and writes a replacement descriptor to `replacement_fd` when
+/// the path was virtualized. Returns `0` without modifying `replacement_fd`
+/// when the C bridge must call the real libc symbol.
+///
+/// # Safety
+///
+/// `path` must point to a valid NUL-terminated C string for the duration of
+/// this call. `dirfd` must be `AT_FDCWD` or a descriptor suitable for
+/// resolving `path`. `replacement_fd` must be non-null, properly aligned, and
+/// valid for writing one `libc::c_int`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn openat(
+pub unsafe extern "C" fn context_instruct_shim_linux_try_openat(
     dirfd: libc::c_int,
     path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
+    replacement_fd: *mut libc::c_int,
 ) -> libc::c_int {
-    if let Some(fd) = maybe_virtualize(path, Some(dirfd)) {
-        return fd;
+    if replacement_fd.is_null() {
+        return 0;
     }
-    call_real_openat(real_openat(), dirfd, path, flags, mode)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn openat64(
-    dirfd: libc::c_int,
-    path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    if let Some(fd) = maybe_virtualize(path, Some(dirfd)) {
-        return fd;
+    let Some(fd) = maybe_virtualize(path, Some(dirfd)) else {
+        return 0;
+    };
+    // SAFETY: The caller guarantees that `replacement_fd` is writable, and
+    // the null case was rejected above.
+    unsafe {
+        replacement_fd.write(fd);
     }
-    let real = real_openat64().unwrap_or_else(real_openat);
-    call_real_openat(real, dirfd, path, flags, mode)
+    1
 }
 
 fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<libc::c_int> {
@@ -146,6 +185,8 @@ fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<l
 }
 
 fn detect_candidate(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<InterceptCandidate> {
+    // SAFETY: The fixed C callback contract requires a valid NUL-terminated
+    // path pointer for the duration of this call.
     let raw_path = unsafe { std::ffi::CStr::from_ptr(path) }.to_str().ok()?;
     let absolute_path = resolve_absolute_path(raw_path, dirfd)?;
     let file_name = absolute_path.file_name()?.to_str()?;
@@ -284,6 +325,8 @@ fn resolve_instruction_file(
 
 fn create_memfd(name: &str, content: &[u8]) -> Option<libc::c_int> {
     let cname = CString::new(name).ok()?;
+    // SAFETY: `cname` is a live NUL-terminated string, and the flags are valid
+    // for Linux `memfd_create(2)`.
     let fd = unsafe {
         libc::syscall(
             libc::SYS_memfd_create,
@@ -295,11 +338,13 @@ fn create_memfd(name: &str, content: &[u8]) -> Option<libc::c_int> {
         return None;
     }
     if !write_all_fd(fd, content) {
+        // SAFETY: `fd` was returned by `memfd_create` and remains owned here.
         unsafe {
             libc::close(fd);
         }
         return None;
     }
+    // SAFETY: `fd` is an open descriptor owned by this function.
     unsafe {
         libc::lseek(fd, 0, libc::SEEK_SET);
     }
@@ -308,6 +353,8 @@ fn create_memfd(name: &str, content: &[u8]) -> Option<libc::c_int> {
 
 fn write_all_fd(fd: libc::c_int, mut bytes: &[u8]) -> bool {
     while !bytes.is_empty() {
+        // SAFETY: `bytes` is valid for `bytes.len()` reads and `fd` is an open
+        // descriptor supplied by `create_memfd`.
         let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
         if written <= 0 {
             return false;
@@ -315,60 +362,6 @@ fn write_all_fd(fd: libc::c_int, mut bytes: &[u8]) -> bool {
         bytes = &bytes[written as usize..];
     }
     true
-}
-
-fn flags_require_mode(flags: libc::c_int) -> bool {
-    (flags & libc::O_CREAT) != 0 || (flags & libc::O_TMPFILE) != 0
-}
-
-unsafe fn call_real_open(
-    real: OpenFn,
-    path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    real(path, flags, mode)
-}
-
-unsafe fn call_real_openat(
-    real: OpenAtFn,
-    dirfd: libc::c_int,
-    path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    real(dirfd, path, flags, mode)
-}
-
-fn real_open() -> OpenFn {
-    *REAL_OPEN.get_or_init(|| unsafe { load_symbol(b"open\0") })
-}
-
-fn real_open64() -> Option<OpenFn> {
-    *REAL_OPEN64.get_or_init(|| unsafe { load_optional_symbol(b"open64\0") })
-}
-
-fn real_openat() -> OpenAtFn {
-    *REAL_OPENAT.get_or_init(|| unsafe { load_symbol(b"openat\0") })
-}
-
-fn real_openat64() -> Option<OpenAtFn> {
-    *REAL_OPENAT64.get_or_init(|| unsafe { load_optional_symbol(b"openat64\0") })
-}
-
-unsafe fn load_symbol<T: Copy>(symbol: &[u8]) -> T {
-    let ptr = libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast());
-    assert!(!ptr.is_null(), "missing required libc symbol");
-    std::mem::transmute_copy(&ptr)
-}
-
-unsafe fn load_optional_symbol<T: Copy>(symbol: &[u8]) -> Option<T> {
-    let ptr = libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast());
-    if ptr.is_null() {
-        None
-    } else {
-        Some(std::mem::transmute_copy(&ptr))
-    }
 }
 
 fn with_intercept_disabled<T>(f: impl FnOnce() -> T) -> T {
@@ -392,6 +385,8 @@ fn debug_log(message: &str) {
     let _guard = disable_intercept();
     let mut line = String::from(message);
     line.push('\n');
+    // SAFETY: `line` is live for the duration of the write and stderr is a
+    // process-owned descriptor. Logging is intentionally best-effort.
     let _ = unsafe { libc::write(libc::STDERR_FILENO, line.as_ptr().cast(), line.len()) };
 }
 

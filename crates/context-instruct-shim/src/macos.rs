@@ -16,10 +16,12 @@ use sha2::{Digest, Sha256};
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(not(test))]
 unsafe extern "C" {
     fn context_instruct_shim_macos_interpose_anchor();
 }
 
+#[cfg(not(test))]
 #[used]
 static FORCE_INTERPOSE_LINK: unsafe extern "C" fn() = context_instruct_shim_macos_interpose_anchor;
 
