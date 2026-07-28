@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "profile": "release",
+  "workloads": [
+    {
+      "name": "lcov_parse",
+      "input_bytes": 988952,
+      "logical_records": 50000,
+      "iterations": 10,
+      "allocation_calls": 120,
+      "reallocation_calls": 220,
+      "requested_bytes": 1001520,
+      "elapsed_ns": 21730459
+    },
+    {
+      "name": "diagnostics_path",
+      "input_bytes": 8388659,
+      "logical_records": 0,
+      "iterations": 10,
+      "allocation_calls": 10,
+      "reallocation_calls": 0,
+      "requested_bytes": 83886590,
+      "elapsed_ns": 12451959
+    },
+    {
+      "name": "diagnostics_single_buffer_reference",
+      "input_bytes": 8388659,
+      "logical_records": 0,
+      "iterations": 10,
+      "allocation_calls": 10,
+      "reallocation_calls": 0,
+      "requested_bytes": 83886590,
+      "elapsed_ns": 11217208
+    }
+  ]
+}

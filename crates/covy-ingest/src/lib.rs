@@ -144,7 +144,7 @@ pub fn detect_diagnostics_format(
 pub fn ingest_diagnostics_path(path: &Path) -> Result<DiagnosticsData, CovyError> {
     let content = std::fs::read(path)?;
     let format = detect_diagnostics_format(path, &content)?;
-    ingest_diagnostics_reader(std::io::Cursor::new(content), format)
+    parse_diagnostics(&content, format)
 }
 
 /// Ingest diagnostics data from a reader with a specified format.
@@ -154,6 +154,13 @@ pub fn ingest_diagnostics_reader<R: std::io::Read>(
 ) -> Result<DiagnosticsData, CovyError> {
     let mut content = Vec::new();
     reader.read_to_end(&mut content)?;
+    parse_diagnostics(&content, format)
+}
+
+fn parse_diagnostics(
+    content: &[u8],
+    format: DiagnosticsFormat,
+) -> Result<DiagnosticsData, CovyError> {
     if content.is_empty() {
         return Err(CovyError::EmptyInput {
             path: "(stdin)".into(),
@@ -161,6 +168,6 @@ pub fn ingest_diagnostics_reader<R: std::io::Read>(
     }
 
     match format {
-        DiagnosticsFormat::Sarif => sarif::parse_sarif(&content),
+        DiagnosticsFormat::Sarif => sarif::parse_sarif(content),
     }
 }

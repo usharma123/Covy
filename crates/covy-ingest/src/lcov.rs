@@ -61,36 +61,23 @@ fn parse_lcov(text: &str) -> Result<CoverageData, CovyError> {
             current_coverage = FileCoverage::new();
         } else if let Some(stripped) = line.strip_prefix("DA:") {
             // DA:line_number,execution_count[,checksum]
-            let parts: Vec<&str> = stripped.splitn(3, ',').collect();
-            if parts.len() >= 2 {
-                if let Ok(line_no) = parts[0].parse::<u32>() {
-                    let count: u64 = parts[1].parse().unwrap_or(0);
-                    current_coverage.lines_instrumented.insert(line_no);
-                    if count > 0 {
-                        current_coverage.lines_covered.insert(line_no);
-                    }
+            if let Some((line_no, count)) = parse_da_record(stripped) {
+                current_coverage.lines_instrumented.insert(line_no);
+                if count > 0 {
+                    current_coverage.lines_covered.insert(line_no);
                 }
             }
         } else if let Some(stripped) = line.strip_prefix("BRDA:") {
             // BRDA:line,block,branch,taken
-            let parts: Vec<&str> = stripped.splitn(4, ',').collect();
-            if parts.len() >= 4 {
-                if let (Ok(line_no), Ok(block)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
-                {
-                    let taken: u64 = parts[3].parse().unwrap_or(0);
-                    current_coverage.branches.insert((line_no, block), taken);
-                }
+            if let Some((line_no, block, taken)) = parse_brda_record(stripped) {
+                current_coverage.branches.insert((line_no, block), taken);
             }
         } else if line.starts_with("FN:") {
             // FN:line_number,function_name — just record it
         } else if let Some(stripped) = line.strip_prefix("FNDA:") {
             // FNDA:execution_count,function_name
-            let parts: Vec<&str> = stripped.splitn(2, ',').collect();
-            if parts.len() == 2 {
-                let count: u64 = parts[0].parse().unwrap_or(0);
-                current_coverage
-                    .functions
-                    .insert(parts[1].to_string(), count);
+            if let Some((name, count)) = parse_fnda_record(stripped) {
+                current_coverage.functions.insert(name.to_string(), count);
             }
         } else if line == "end_of_record" {
             if let Some(path) = current_file.take() {
@@ -106,6 +93,29 @@ fn parse_lcov(text: &str) -> Result<CoverageData, CovyError> {
     }
 
     Ok(result)
+}
+
+fn parse_da_record(record: &str) -> Option<(u32, u64)> {
+    let mut fields = record.splitn(3, ',');
+    let line = fields.next()?.parse::<u32>().ok()?;
+    let count = fields.next()?.parse::<u64>().unwrap_or(0);
+    Some((line, count))
+}
+
+fn parse_brda_record(record: &str) -> Option<(u32, u32, u64)> {
+    let mut fields = record.splitn(4, ',');
+    let line = fields.next()?.parse::<u32>().ok()?;
+    let block = fields.next()?.parse::<u32>().ok()?;
+    fields.next()?;
+    let taken = fields.next()?.parse::<u64>().unwrap_or(0);
+    Some((line, block, taken))
+}
+
+fn parse_fnda_record(record: &str) -> Option<(&str, u64)> {
+    let mut fields = record.splitn(2, ',');
+    let count = fields.next()?.parse::<u64>().unwrap_or(0);
+    let name = fields.next()?;
+    Some((name, count))
 }
 
 #[cfg(test)]
@@ -171,5 +181,112 @@ end_of_record
         let fc = &result.files["a.rs"];
         assert_eq!(fc.lines_covered.len(), 3); // 1, 2, 3 all covered via merge
         assert_eq!(fc.lines_instrumented.len(), 3);
+    }
+
+    fn reference_da_record(record: &str) -> Option<(u32, u64)> {
+        let fields: Vec<&str> = record.splitn(3, ',').collect();
+        if fields.len() < 2 {
+            return None;
+        }
+        let line = fields[0].parse::<u32>().ok()?;
+        let count = fields[1].parse::<u64>().unwrap_or(0);
+        Some((line, count))
+    }
+
+    fn reference_brda_record(record: &str) -> Option<(u32, u32, u64)> {
+        let fields: Vec<&str> = record.splitn(4, ',').collect();
+        if fields.len() < 4 {
+            return None;
+        }
+        let line = fields[0].parse::<u32>().ok()?;
+        let block = fields[1].parse::<u32>().ok()?;
+        let taken = fields[3].parse::<u64>().unwrap_or(0);
+        Some((line, block, taken))
+    }
+
+    fn reference_fnda_record(record: &str) -> Option<(&str, u64)> {
+        let fields: Vec<&str> = record.splitn(2, ',').collect();
+        if fields.len() != 2 {
+            return None;
+        }
+        let count = fields[0].parse::<u64>().unwrap_or(0);
+        Some((fields[1], count))
+    }
+
+    #[test]
+    fn record_field_parsers_match_legacy_semantics_at_boundaries() {
+        let numbers = ["", "0", "1", "4294967295", "4294967296", "-", " 1", "1 "];
+        let suffixes = ["", ",checksum", ",checksum,with,commas"];
+
+        for line in numbers {
+            assert_eq!(parse_da_record(line), reference_da_record(line));
+            for count in numbers {
+                for suffix in suffixes {
+                    let record = format!("{line},{count}{suffix}");
+                    assert_eq!(
+                        parse_da_record(&record),
+                        reference_da_record(&record),
+                        "DA parity failed for {record:?}"
+                    );
+                }
+            }
+        }
+
+        for line in numbers {
+            for block in numbers {
+                for branch in ["", "0", "1", "-"] {
+                    for taken in numbers {
+                        let record = format!("{line},{block},{branch},{taken}");
+                        assert_eq!(
+                            parse_brda_record(&record),
+                            reference_brda_record(&record),
+                            "BRDA parity failed for {record:?}"
+                        );
+                        let extra = format!("{record},extra");
+                        assert_eq!(
+                            parse_brda_record(&extra),
+                            reference_brda_record(&extra),
+                            "BRDA extra-field parity failed for {extra:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        for count in numbers {
+            for name in ["", "main", "name,with,commas"] {
+                let record = format!("{count},{name}");
+                assert_eq!(
+                    parse_fnda_record(&record),
+                    reference_fnda_record(&record),
+                    "FNDA parity failed for {record:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parse_lcov_preserves_malformed_record_boundaries() {
+        let lcov = r#"SF:edge.rs
+DA:1,1,checksum,with,commas
+DA:2,not-a-count
+DA:4294967296,1
+BRDA:3,4,0,-
+BRDA:4,5,0,7,extra
+FNDA:not-a-count,name,with,commas
+end_of_record
+"#;
+
+        let result = parse_lcov(lcov).unwrap();
+        let coverage = &result.files["edge.rs"];
+
+        assert_eq!(
+            coverage.lines_instrumented.iter().collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(coverage.lines_covered.iter().collect::<Vec<_>>(), vec![1]);
+        assert_eq!(coverage.branches.get(&(3, 4)), Some(&0));
+        assert_eq!(coverage.branches.get(&(4, 5)), Some(&0));
+        assert_eq!(coverage.functions.get("name,with,commas"), Some(&0));
     }
 }
