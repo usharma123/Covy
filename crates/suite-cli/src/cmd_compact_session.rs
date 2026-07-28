@@ -56,7 +56,7 @@ pub fn run_session(args: SessionArgs) -> Result<i32> {
         let state = load_task_state(&root, &task_id).ok();
         sessions.push(SessionItem {
             task_id: task_id.clone(),
-            running: task.running,
+            running: task.lifecycle.is_running(),
             latest_context_version: task.latest_context_version,
             latest_hook_command_kind: task.latest_hook_command_kind,
             latest_hook_handoff_reason: task.latest_hook_handoff_reason,

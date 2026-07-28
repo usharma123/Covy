@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use packet28_daemon_protocol::frame::{read_frame, write_frame};
-use packet28_daemon_protocol::index::{DaemonIndexStatusRequest, DaemonIndexStatusResponse};
+use packet28_daemon_protocol::index::{
+    DaemonIndexState, DaemonIndexStatusRequest, DaemonIndexStatusResponse,
+};
 use packet28_daemon_protocol::message::{
     DaemonRequest, DaemonResponse, DaemonRuntimeInfo, Packet28SearchGuardResponse,
     Packet28SearchRequest as DaemonPacket28SearchRequest,
@@ -1063,12 +1065,12 @@ fn wait_for_daemon_index_ready(root: &Path, timeout: Duration) -> Result<bool> {
     loop {
         let status = send_daemon_index_status(root)?;
         if status.ready
-            && status.manifest.status == "ready"
+            && status.manifest.status == DaemonIndexState::Ready
             && status.manifest.regex_status.as_deref() == Some("ready")
         {
             return Ok(true);
         }
-        if status.manifest.status == "corrupt"
+        if status.manifest.status == DaemonIndexState::Corrupt
             || status.manifest.regex_status.as_deref() == Some("corrupt")
         {
             return Err(anyhow!(

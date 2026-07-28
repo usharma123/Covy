@@ -6,7 +6,7 @@ pub(crate) fn default_index_manifest(root: &Path) -> DaemonIndexManifest {
         root: root.to_string_lossy().to_string(),
         generation: 0,
         include_tests: true,
-        status: "missing".to_string(),
+        status: DaemonIndexState::Missing,
         dirty_paths: Vec::new(),
         queued_paths: Vec::new(),
         total_files: 0,
@@ -59,7 +59,7 @@ pub(crate) fn load_index_snapshot_file(
     root: &Path,
     manifest: &DaemonIndexManifest,
 ) -> Option<Arc<mapy_core::RepoIndexSnapshot>> {
-    if manifest.status == "missing" || manifest.generation == 0 {
+    if manifest.status == DaemonIndexState::Missing || manifest.generation == 0 {
         return None;
     }
     let raw = fs::read(index_snapshot_path(root)).ok()?;

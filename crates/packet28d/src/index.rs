@@ -13,7 +13,7 @@ pub(crate) fn build_index_status(runtime: &InteractiveIndexRuntime) -> DaemonInd
         .is_some_and(|runtime| runtime.is_loaded() && runtime.manifest.status == "ready");
     let ready = runtime.snapshot.is_some()
         && regex_ready
-        && manifest.status == "ready"
+        && manifest.status == DaemonIndexState::Ready
         && manifest.dirty_paths.is_empty();
     DaemonIndexStatusResponse {
         manifest,
@@ -41,13 +41,17 @@ pub(crate) fn enqueue_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Res
     {
         let mut guard = state.lock().map_err(lock_err)?;
         let full_rebuild_already_in_flight = matches!(
-            guard.interactive_index.manifest.status.as_str(),
-            "queued" | "building"
+            guard.interactive_index.manifest.status,
+            DaemonIndexState::Queued | DaemonIndexState::Building
         ) && guard.interactive_index.snapshot.is_none();
         if full_rebuild_already_in_flight {
             return Ok(());
         }
-        guard.interactive_index.manifest.status = "queued".to_string();
+        guard
+            .interactive_index
+            .manifest
+            .status
+            .transition_to(DaemonIndexState::Queued)?;
         guard.interactive_index.manifest.total_files = 0;
         guard.interactive_index.manifest.indexed_files = 0;
         guard.interactive_index.manifest.regex_status = Some("queued".to_string());
@@ -87,8 +91,12 @@ pub(crate) fn enqueue_incremental_index_paths(
                 path.clone(),
             );
         }
-        if guard.interactive_index.manifest.status == "missing" {
-            guard.interactive_index.manifest.status = "queued".to_string();
+        if guard.interactive_index.manifest.status == DaemonIndexState::Missing {
+            guard
+                .interactive_index
+                .manifest
+                .status
+                .transition_to(DaemonIndexState::Queued)?;
         }
         save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)?;
     }
@@ -151,7 +159,11 @@ pub(crate) fn spawn_index_worker(state: Arc<Mutex<DaemonState>>, index_rx: Recei
 fn perform_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
     let root = {
         let mut guard = state.lock().map_err(lock_err)?;
-        guard.interactive_index.manifest.status = "building".to_string();
+        guard
+            .interactive_index
+            .manifest
+            .status
+            .transition_to(DaemonIndexState::Building)?;
         guard.interactive_index.manifest.total_files = 0;
         guard.interactive_index.manifest.indexed_files = 0;
         guard.interactive_index.manifest.regex_status = Some("queued".to_string());
@@ -190,7 +202,11 @@ fn perform_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
         .manifest
         .generation
         .saturating_add(1);
-    guard.interactive_index.manifest.status = "ready".to_string();
+    guard
+        .interactive_index
+        .manifest
+        .status
+        .transition_to(DaemonIndexState::Ready)?;
     guard.interactive_index.manifest.dirty_paths.clear();
     guard.interactive_index.manifest.queued_paths.clear();
     guard.interactive_index.manifest.total_files = snapshot.files.len();
@@ -220,7 +236,11 @@ fn perform_incremental_index_update(
             drop(guard);
             return perform_full_index_rebuild(state);
         }
-        guard.interactive_index.manifest.status = "building".to_string();
+        guard
+            .interactive_index
+            .manifest
+            .status
+            .transition_to(DaemonIndexState::Building)?;
         guard.interactive_index.manifest.last_build_started_at_unix = Some(now_unix());
         guard.interactive_index.manifest.regex_stale_reason = None;
         for path in paths {
@@ -257,7 +277,11 @@ fn perform_incremental_index_update(
         .manifest
         .generation
         .saturating_add(1);
-    guard.interactive_index.manifest.status = "ready".to_string();
+    guard
+        .interactive_index
+        .manifest
+        .status
+        .transition_to(DaemonIndexState::Ready)?;
     for path in &summary.changed_paths {
         guard
             .interactive_index
@@ -441,7 +465,11 @@ fn update_repo_build_progress(
     total_files: usize,
 ) -> Result<()> {
     let mut guard = state.lock().map_err(lock_err)?;
-    guard.interactive_index.manifest.status = "building".to_string();
+    guard
+        .interactive_index
+        .manifest
+        .status
+        .transition_to(DaemonIndexState::Building)?;
     guard.interactive_index.manifest.total_files = total_files;
     guard.interactive_index.manifest.indexed_files = indexed_files.min(total_files);
     save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)

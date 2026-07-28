@@ -242,7 +242,7 @@ pub(crate) fn run_task(args: TaskArgs) -> Result<i32> {
                         crate::cmd_common::emit_json(&serde_json::to_value(task)?, args.pretty)?;
                     } else if let Some(task) = task {
                         println!("task={}", task.task_id);
-                        println!("running={}", task.running);
+                        println!("running={}", task.lifecycle.is_running());
                         println!("watch_ids={}", task.watch_ids.join(","));
                     } else {
                         println!("task not found");

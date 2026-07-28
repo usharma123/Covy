@@ -54,7 +54,7 @@ use packet28_daemon_protocol::context_store::{
 use packet28_daemon_protocol::frame::{read_frame, write_frame};
 use packet28_daemon_protocol::index::{
     DaemonIndexClearResponse, DaemonIndexManifest, DaemonIndexRebuildRequest,
-    DaemonIndexRebuildResponse, DaemonIndexStatusResponse,
+    DaemonIndexRebuildResponse, DaemonIndexState, DaemonIndexStatusResponse,
 };
 use packet28_daemon_protocol::message::{
     DaemonEvent, DaemonEventFrame, DaemonRequest, DaemonResponse, DaemonRuntimeInfo, DaemonStatus,
@@ -232,7 +232,7 @@ fn serve(root: PathBuf) -> Result<()> {
                     .is_some_and(|runtime| {
                         !runtime.is_loaded() || runtime.manifest.status != "ready"
                     })
-                || guard.interactive_index.manifest.status != "ready"
+                || guard.interactive_index.manifest.status != DaemonIndexState::Ready
         };
         if should_queue {
             let _ = enqueue_full_index_rebuild(&state);

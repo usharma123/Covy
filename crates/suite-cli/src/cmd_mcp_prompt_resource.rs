@@ -199,7 +199,7 @@ pub(crate) fn select_current_task(tasks: &[TaskRecord]) -> Option<&TaskRecord> {
 
 fn task_recency_key(task: &TaskRecord) -> (u8, u64, u64, u64, u64, u64) {
     (
-        u8::from(task.running),
+        u8::from(task.lifecycle.is_running()),
         task.last_context_refresh_at_unix.unwrap_or(0),
         task.latest_brief_generated_at_unix.unwrap_or(0),
         task.last_completed_at_unix.unwrap_or(0),

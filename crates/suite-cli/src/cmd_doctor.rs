@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use packet28_daemon_protocol::index::DaemonIndexStatusRequest;
+use packet28_daemon_protocol::index::{DaemonIndexState, DaemonIndexStatusRequest};
 use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 use serde::Serialize;
 use serde_json::Value;
@@ -1000,7 +1000,7 @@ fn check_index(root: &Path) -> DoctorCheck {
             },
         ) {
             Ok(DaemonResponse::DaemonIndexStatus { response }) => {
-                let ok = response.ready && response.manifest.status == "ready";
+                let ok = response.ready && response.manifest.status == DaemonIndexState::Ready;
                 if ok || std::time::Instant::now() >= deadline {
                     return DoctorCheck {
                         name: "index",

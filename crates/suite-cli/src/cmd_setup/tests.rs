@@ -630,7 +630,7 @@ fn setup_index_status(
 ) -> DaemonIndexStatusResponse {
     DaemonIndexStatusResponse {
         manifest: DaemonIndexManifest {
-            status: status.to_string(),
+            status: status.parse().unwrap(),
             generation: 7,
             regex_generation: regex_status.map(|_| 7),
             regex_status: regex_status.map(str::to_string),

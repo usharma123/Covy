@@ -114,8 +114,7 @@ pub(crate) fn run_sequence_for_task(
                 .sequence
                 .clone()
                 .ok_or_else(|| anyhow!("task '{}' has no stored sequence", task_id))?;
-            task.running = true;
-            task.pending_replan = false;
+            task.lifecycle.start()?;
             task.last_started_at_unix = Some(now_unix());
             task.last_error = None;
             persist_state(&guard)?;
@@ -141,7 +140,6 @@ pub(crate) fn run_sequence_for_task(
                 .tasks
                 .get_mut(task_id)
                 .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
-            task.running = false;
             task.last_completed_at_unix = Some(now_unix());
             match &result {
                 Ok(response) => {
@@ -154,7 +152,7 @@ pub(crate) fn run_sequence_for_task(
                     daemon_log(&format!("task run failed task_id={} error={err}", task_id));
                 }
             }
-            let rerun = task.pending_replan && !task.cancel_requested;
+            let rerun = task.lifecycle.finish_run()?;
             if rerun {
                 task.last_replan_at_unix = Some(now_unix());
             }
@@ -249,7 +247,7 @@ pub(crate) fn cancel_task(
         let Some(task) = guard.tasks.tasks.get_mut(task_id) else {
             return Ok((None, Vec::new()));
         };
-        task.cancel_requested = true;
+        task.lifecycle.request_cancel();
         task.watch_ids.clone()
     };
     for watch_id in &watch_ids {
@@ -463,15 +461,22 @@ fn process_watch_event(state: Arc<Mutex<DaemonState>>, message: WatchEventMsg) -
     let _ = refresh_task_context_summary(state.clone(), &task_id)?;
     let _ = refresh_broker_context_for_task(&state, &task_id, None)?;
 
-    {
+    let should_start = {
         let mut guard = state.lock().map_err(lock_err)?;
-        if let Some(task) = guard.tasks.tasks.get_mut(&task_id) {
-            task.pending_replan = true;
-        }
+        let should_start = guard
+            .tasks
+            .tasks
+            .get_mut(&task_id)
+            .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?
+            .lifecycle
+            .request_replan()?;
         persist_state(&guard)?;
-    }
+        should_start
+    };
 
-    let _ = run_sequence_for_task(state, &task_id);
+    if should_start {
+        let _ = run_sequence_for_task(state, &task_id);
+    }
     Ok(())
 }
 
