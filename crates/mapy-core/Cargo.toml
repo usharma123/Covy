@@ -28,4 +28,5 @@ tree-sitter-go = "0.23"
 tree-sitter-cpp = "0.23"
 
 [dev-dependencies]
+packet28-search-core.workspace = true
 tempfile.workspace = true

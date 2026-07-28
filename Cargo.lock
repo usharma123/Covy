@@ -1257,6 +1257,7 @@ version = "0.2.63"
 dependencies = [
  "ignore",
  "packet28-binary-codec",
+ "packet28-search-core",
  "regex",
  "serde",
  "serde_json",
