@@ -298,7 +298,7 @@ impl PacketCache {
     }
 
     pub(crate) fn evict_reason(&mut self, reason: EvictionReason, count: usize) {
-        self.eviction_counters.add(reason, count);
+        add_evictions(&mut self.eviction_counters, reason, count);
     }
 
     pub(crate) fn rebuild_latest_request_index(&mut self) {

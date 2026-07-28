@@ -6,9 +6,13 @@ pub mod diff;
 pub mod envelope;
 pub mod error;
 pub mod gate;
+pub mod governance;
+pub mod kernel;
 pub mod machine;
+pub mod memory;
 pub mod merge;
 pub mod registry;
+pub mod search;
 pub mod shard;
 pub mod testmap;
 
