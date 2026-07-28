@@ -1,3 +1,5 @@
+#![warn(clippy::redundant_clone)]
+
 use super::*;
 use crate::broker_handoff::{
     compute_handoff_state, next_action_summary, slim_broker_response, write_broker_artifacts,
@@ -72,7 +74,7 @@ pub(crate) fn compute_broker_response(
         .unwrap_or_else(broker_default_budget_bytes);
     let (selected_sections, budget_pruned_evictions) = prune_sections_for_budget(
         action,
-        full_sections.clone(),
+        full_sections,
         budget_tokens,
         budget_bytes as u64,
         effective_limits.max_sections,
@@ -152,7 +154,7 @@ pub(crate) fn compute_broker_response(
         brief,
         supersedes_prior_context: true,
         supersession_mode: BrokerSupersessionMode::Replace,
-        superseded_before_version: version.clone(),
+        superseded_before_version: version,
         sections: sections.clone(),
         est_tokens,
         est_bytes,

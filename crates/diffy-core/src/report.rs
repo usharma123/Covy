@@ -1,3 +1,5 @@
+#![warn(clippy::needless_collect)]
+
 use colored::Colorize;
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 
@@ -195,15 +197,13 @@ pub fn render_json(
                     continue;
                 }
             }
-            let covered: Vec<u32> = fc.lines_covered.iter().collect();
-            let instrumented: Vec<u32> = fc.lines_instrumented.iter().collect();
             let missing: Vec<u32> = (&fc.lines_instrumented - &fc.lines_covered)
                 .iter()
                 .collect();
             files.push(serde_json::json!({
                 "path": path,
-                "lines_covered": covered.len(),
-                "lines_instrumented": instrumented.len(),
+                "lines_covered": fc.lines_covered.len(),
+                "lines_instrumented": fc.lines_instrumented.len(),
                 "coverage_pct": pct,
                 "missing_lines": missing,
             }));

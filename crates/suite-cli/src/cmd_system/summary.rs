@@ -1,15 +1,16 @@
+#![warn(clippy::needless_collect)]
+
 use super::json::filter_json_schema;
 use super::{analyze_logs, compact_for_log};
 
 pub(super) fn summarize_command_output(output: &str, command: &str, success: bool) -> String {
-    let lines = output.lines().collect::<Vec<_>>();
     let mut rendered = vec![
         format!(
             "{} Command: {}",
             if success { "[ok]" } else { "[FAIL]" },
             compact_for_log(command, 80)
         ),
-        format!("   {} lines of output", lines.len()),
+        format!("   {} lines of output", output.lines().count()),
         String::new(),
     ];
     match detect_summary_output_type(output, command) {
@@ -165,4 +166,15 @@ fn extract_labeled_number(value: &str, label: &str) -> Option<usize> {
                 None
             }
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_command_output;
+
+    #[test]
+    fn summary_counts_lines_without_materializing_them() {
+        let summary = summarize_command_output("alpha\nbeta\ngamma\n", "echo fixture", true);
+        assert_eq!(summary.lines().nth(1), Some("   3 lines of output"));
+    }
 }

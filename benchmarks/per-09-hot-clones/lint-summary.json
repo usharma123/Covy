@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "command": "cargo clippy --workspace --all-targets --all-features --locked -- -W clippy::redundant_clone -W clippy::needless_collect -W clippy::trivially_copy_pass_by_ref -W clippy::large_types_passed_by_value",
+  "diagnostics": {
+    "redundant_clone": 65,
+    "needless_collect": 5,
+    "trivially_copy_pass_by_ref": 4,
+    "large_types_passed_by_value": 0
+  },
+  "notes": [
+    "Counts include duplicate lib/test diagnostics.",
+    "The four copy-by-reference diagnostics concern one-byte WcMode values.",
+    "No current diagnostic supports the historical large-Copy-by-value claim."
+  ]
+}
