@@ -1,0 +1,33 @@
+{
+  "schema": "packet28.instruction_prefix_experiment_manifest.v1",
+  "experiment_id": "instruction-prefix-20260728",
+  "repetitions": 3,
+  "fixture_path": "instruction_prefix_fixture.md",
+  "source_path": "AGENTS.md",
+  "schema_version": 1,
+  "budget_tokens": 256,
+  "stable_config": {
+    "renderer_version": 1,
+    "max_sections": 4,
+    "max_lines_per_section": 6,
+    "max_focus_terms": 12,
+    "focus_terms": [
+      "authentication",
+      "cache",
+      "release"
+    ]
+  },
+  "modes": [
+    "passthrough",
+    "stable",
+    "adaptive"
+  ],
+  "scenarios": [
+    "cold_start",
+    "second_request",
+    "compaction",
+    "task_switch",
+    "snapshot_drift",
+    "fresh_worker_handoff"
+  ]
+}
