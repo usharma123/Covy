@@ -54,7 +54,7 @@ pub struct RunArgs {
 pub fn run(args: RunArgs) -> Result<i32> {
     let cwd = crate::cmd_common::caller_cwd()?;
     let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
-    let root = packet28_daemon_core::resolve_workspace_root(&root);
+    let root = packet28_daemon_protocol::paths::resolve_workspace_root(&root);
     if args.backend == RuntimeBackend::Auto {
         return run_reducer_aware(&root, &cwd, &args);
     }

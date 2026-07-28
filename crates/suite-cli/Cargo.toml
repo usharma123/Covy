@@ -32,6 +32,7 @@ suite-policy-core.workspace = true
 suite-foundation-core.workspace = true
 suite-packet-core.workspace = true
 packet28-daemon-core.workspace = true
+packet28-daemon-protocol.workspace = true
 packet28-reducer-core.workspace = true
 covy-ingest.workspace = true
 clap.workspace = true

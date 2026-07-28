@@ -18,7 +18,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-packet28-daemon-core.workspace = true
+packet28-daemon-protocol.workspace = true
 packet28-reducer-core.workspace = true
 packet28-search-core.workspace = true
 serde_json.workspace = true

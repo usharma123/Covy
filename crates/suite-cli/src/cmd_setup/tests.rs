@@ -1,5 +1,6 @@
 use super::*;
-use packet28_daemon_core::{DaemonIndexManifest, DaemonIndexStatusResponse};
+use packet28_daemon_protocol::hooks::HookRuntimeConfig;
+use packet28_daemon_protocol::index::{DaemonIndexManifest, DaemonIndexStatusResponse};
 use tempfile::tempdir;
 
 fn runtime(name: &'static str, slug: &'static str, detected: bool, has_mcp: bool) -> RuntimeInfo {
@@ -553,10 +554,10 @@ fn write_windsurf_hook_config_installs_packet28_hooks() {
 
 #[test]
 fn generated_relaunch_is_disabled_when_packet28_agent_is_missing() {
-    let mut config = packet28_daemon_core::HookRuntimeConfig {
+    let mut config = HookRuntimeConfig {
         relaunch_preference: RelaunchPreference::DaemonManaged,
         relaunch_command: generated_relaunch_command(),
-        ..packet28_daemon_core::HookRuntimeConfig::default()
+        ..HookRuntimeConfig::default()
     };
     let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
     assert!(changed);
@@ -567,10 +568,10 @@ fn generated_relaunch_is_disabled_when_packet28_agent_is_missing() {
 #[test]
 fn generated_relaunch_preserves_custom_commands() {
     let original = vec!["custom-agent-runner".to_string(), "--resume".to_string()];
-    let mut config = packet28_daemon_core::HookRuntimeConfig {
+    let mut config = HookRuntimeConfig {
         relaunch_preference: RelaunchPreference::DaemonManaged,
         relaunch_command: original.clone(),
-        ..packet28_daemon_core::HookRuntimeConfig::default()
+        ..HookRuntimeConfig::default()
     };
     let changed = apply_generated_relaunch_command(&mut config, Path::new("/tmp/repo"), None);
     assert!(!changed);
@@ -579,7 +580,7 @@ fn generated_relaunch_preserves_custom_commands() {
 
 #[test]
 fn generated_relaunch_launches_delegated_runtime_directly() {
-    let mut config = packet28_daemon_core::HookRuntimeConfig::default();
+    let mut config = HookRuntimeConfig::default();
     let changed = apply_generated_relaunch_command(
         &mut config,
         Path::new("/tmp/repo"),
@@ -598,7 +599,7 @@ fn generated_relaunch_launches_delegated_runtime_directly() {
 
 #[test]
 fn legacy_packet28_agent_relaunch_is_migrated_to_direct_runtime() {
-    let mut config = packet28_daemon_core::HookRuntimeConfig {
+    let mut config = HookRuntimeConfig {
         relaunch_preference: RelaunchPreference::DaemonManaged,
         relaunch_command: vec![
             "/usr/local/bin/packet28-agent".to_string(),
@@ -609,7 +610,7 @@ fn legacy_packet28_agent_relaunch_is_migrated_to_direct_runtime() {
             "claude".to_string(),
             "--continue".to_string(),
         ],
-        ..packet28_daemon_core::HookRuntimeConfig::default()
+        ..HookRuntimeConfig::default()
     };
 
     let changed = apply_generated_relaunch_command(

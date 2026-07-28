@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use packet28_daemon_core::{BrokerWriteOp, BrokerWriteStateRequest};
+use packet28_daemon_protocol::broker::{BrokerWriteOp, BrokerWriteStateRequest};
 use serde::Serialize;
 
 const HYPOTHESIS_PREFIX: &str = "hypothesis:";

@@ -1,6 +1,6 @@
 use super::support::*;
 use crate::instruction_files::{resolve_context, resolve_instruction_file};
-use packet28_daemon_core::{
+use packet28_daemon_protocol::message::{
     ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextSourceKind,
     InstructionFileResolveOutcome, InstructionFileResolveRequest,
 };

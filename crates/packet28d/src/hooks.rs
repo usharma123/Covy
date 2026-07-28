@@ -1,9 +1,9 @@
 use super::*;
-use packet28_daemon_core::{
-    hook_runtime_config_path, HookBoundaryKind, HookEventKind, HookIngestRequest,
-    HookIngestResponse, HookReducerCacheEntry, HookRuntimeConfig, RelaunchPreference,
-    ThresholdLevel,
+use packet28_daemon_protocol::hooks::{
+    HookBoundaryKind, HookEventKind, HookIngestRequest, HookIngestResponse, HookReducerCacheEntry,
+    HookRuntimeConfig, RelaunchPreference, ThresholdLevel,
 };
+use packet28_daemon_protocol::paths::hook_runtime_config_path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static HOOK_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -258,28 +258,28 @@ fn remote_state_cache_ttl_secs(family: &str, kind: &str) -> Option<u64> {
     }
 }
 
-fn lifecycle_kind(lifecycle: &packet28_daemon_core::HookLifecycleEvent) -> Option<&str> {
+fn lifecycle_kind(lifecycle: &packet28_daemon_protocol::hooks::HookLifecycleEvent) -> Option<&str> {
     lifecycle
         .canonical_command_kind
         .as_deref()
         .filter(|value| !value.trim().is_empty())
 }
 
-fn packet_family(packet: &packet28_daemon_core::HookReducerPacket) -> Option<&str> {
+fn packet_family(packet: &packet28_daemon_protocol::hooks::HookReducerPacket) -> Option<&str> {
     packet
         .reducer_family
         .as_deref()
         .filter(|value| !value.trim().is_empty())
 }
 
-fn packet_kind(packet: &packet28_daemon_core::HookReducerPacket) -> Option<&str> {
+fn packet_kind(packet: &packet28_daemon_protocol::hooks::HookReducerPacket) -> Option<&str> {
     packet
         .canonical_command_kind
         .as_deref()
         .filter(|value| !value.trim().is_empty())
 }
 
-fn packet_is_mutation(packet: &packet28_daemon_core::HookReducerPacket) -> bool {
+fn packet_is_mutation(packet: &packet28_daemon_protocol::hooks::HookReducerPacket) -> bool {
     packet.mutation.unwrap_or(false)
         || matches!(
             packet_kind(packet),
@@ -296,7 +296,7 @@ fn packet_touches_rust(paths: &[String]) -> bool {
 
 fn invalidate_epochs_for_packet(
     task: &mut TaskRecord,
-    packet: &packet28_daemon_core::HookReducerPacket,
+    packet: &packet28_daemon_protocol::hooks::HookReducerPacket,
 ) {
     if packet.failed {
         return;
@@ -339,7 +339,7 @@ fn invalidate_epochs_for_packet(
 
 fn cache_hit_for_packet(
     task: &TaskRecord,
-    packet: &packet28_daemon_core::HookReducerPacket,
+    packet: &packet28_daemon_protocol::hooks::HookReducerPacket,
 ) -> bool {
     if packet_is_mutation(packet) {
         return false;
@@ -376,7 +376,7 @@ fn cache_hit_for_packet(
 
 fn update_cache_for_packet(
     task: &mut TaskRecord,
-    packet: &packet28_daemon_core::HookReducerPacket,
+    packet: &packet28_daemon_protocol::hooks::HookReducerPacket,
     artifact_id: Option<String>,
 ) {
     if packet.cacheable != Some(true) {
@@ -419,7 +419,9 @@ fn update_cache_for_packet(
     );
 }
 
-fn packet_workspace_fingerprint(packet: &packet28_daemon_core::HookReducerPacket) -> Option<&str> {
+fn packet_workspace_fingerprint(
+    packet: &packet28_daemon_protocol::hooks::HookReducerPacket,
+) -> Option<&str> {
     packet
         .artifact
         .as_ref()
@@ -430,7 +432,7 @@ fn packet_workspace_fingerprint(packet: &packet28_daemon_core::HookReducerPacket
 
 fn apply_lifecycle_event(
     task: &mut TaskRecord,
-    lifecycle: &packet28_daemon_core::HookLifecycleEvent,
+    lifecycle: &packet28_daemon_protocol::hooks::HookLifecycleEvent,
 ) {
     task.latest_hook_progress_at_unix = Some(now_unix());
     if let Some(command_id) = lifecycle.command_id.as_ref() {

@@ -1,9 +1,11 @@
 use anyhow::{anyhow, Context, Result};
-use packet28_daemon_core::{
-    read_socket_message, DaemonEventFrame, DaemonIndexClearRequest, DaemonIndexRebuildRequest,
-    DaemonIndexStatusRequest, DaemonRequest, DaemonResponse, TaskAwaitHandoffRequest,
-    TaskLaunchAgentRequest, TaskSubmitSpec,
+use packet28_daemon_protocol::commands::TaskSubmitSpec;
+use packet28_daemon_protocol::frame::read_frame;
+use packet28_daemon_protocol::index::{
+    DaemonIndexClearRequest, DaemonIndexRebuildRequest, DaemonIndexStatusRequest,
 };
+use packet28_daemon_protocol::message::{DaemonEventFrame, DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::task::{TaskAwaitHandoffRequest, TaskLaunchAgentRequest};
 
 #[cfg(unix)]
 use std::io::BufReader;
@@ -381,11 +383,11 @@ pub(crate) fn run_task(args: TaskArgs) -> Result<i32> {
                     println!("task={} replayed={}", args.task_id, replayed);
                 }
                 loop {
-                    let frame: DaemonEventFrame = match read_socket_message(&mut reader) {
+                    let frame: DaemonEventFrame = match read_frame(&mut reader) {
                         Ok(frame) => frame,
                         Err(err) => {
                             if args.json {
-                                return Err(err);
+                                return Err(err.into());
                             }
                             println!("stream closed");
                             return Ok(0);

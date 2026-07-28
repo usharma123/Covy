@@ -1,8 +1,7 @@
 use assert_cmd::Command;
-use packet28_daemon_core::{
-    read_socket_message, ready_path, socket_path, write_socket_message, DaemonRequest,
-    DaemonResponse,
-};
+use packet28_daemon_protocol::frame::{read_frame, write_frame};
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::paths::{ready_path, socket_path};
 use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -89,8 +88,8 @@ pub fn stop_daemon(root: &Path) {
         let reader_stream = stream.try_clone().unwrap();
         let mut writer = std::io::BufWriter::new(stream);
         let mut reader = std::io::BufReader::new(reader_stream);
-        let _ = write_socket_message(&mut writer, &DaemonRequest::Stop);
-        let _ = read_socket_message::<_, DaemonResponse>(&mut reader);
+        let _ = write_frame(&mut writer, &DaemonRequest::Stop);
+        let _ = read_frame::<_, DaemonResponse>(&mut reader);
     }
 }
 

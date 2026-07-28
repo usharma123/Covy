@@ -14,11 +14,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use packet28_daemon_core::{
-    log_path, read_runtime_info, read_socket_message, ready_path, resolve_workspace_root,
-    socket_path, write_socket_message, DaemonIndexStatusRequest, DaemonIndexStatusResponse,
-    DaemonRequest, DaemonResponse, Packet28SearchGuardResponse,
+use packet28_daemon_protocol::frame::{read_frame, write_frame};
+use packet28_daemon_protocol::index::{DaemonIndexStatusRequest, DaemonIndexStatusResponse};
+use packet28_daemon_protocol::message::{
+    DaemonRequest, DaemonResponse, DaemonRuntimeInfo, Packet28SearchGuardResponse,
     Packet28SearchRequest as DaemonPacket28SearchRequest,
+};
+use packet28_daemon_protocol::paths::{
+    log_path, ready_path, resolve_workspace_root, runtime_path, socket_path,
 };
 use packet28_reducer_core::{parse_region_for_path, SearchRequest, SearchResult};
 use packet28_reducer_core::{SearchEngineStats, SearchGroup, SearchMatch};
@@ -974,7 +977,7 @@ fn send_daemon_search(
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(&mut stream);
     let mut reader = BufReader::new(reader_stream);
-    write_socket_message(
+    write_frame(
         &mut writer,
         &DaemonRequest::Packet28Search {
             request: DaemonPacket28SearchRequest {
@@ -983,7 +986,7 @@ fn send_daemon_search(
             },
         },
     )?;
-    match read_socket_message(&mut reader)? {
+    match read_frame(&mut reader)? {
         DaemonResponse::Packet28Search { response } => Ok(response),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
@@ -1007,7 +1010,7 @@ fn send_daemon_guard(root: &Path, request: SearchRequest) -> Result<Packet28Sear
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(&mut stream);
     let mut reader = BufReader::new(reader_stream);
-    write_socket_message(
+    write_frame(
         &mut writer,
         &DaemonRequest::Packet28SearchGuard {
             request: DaemonPacket28SearchRequest {
@@ -1016,7 +1019,7 @@ fn send_daemon_guard(root: &Path, request: SearchRequest) -> Result<Packet28Sear
             },
         },
     )?;
-    match read_socket_message(&mut reader)? {
+    match read_frame(&mut reader)? {
         DaemonResponse::Packet28SearchGuard { response } => Ok(response),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
@@ -1036,7 +1039,7 @@ fn send_daemon_index_status(root: &Path) -> Result<DaemonIndexStatusResponse> {
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(&mut stream);
     let mut reader = BufReader::new(reader_stream);
-    write_socket_message(
+    write_frame(
         &mut writer,
         &DaemonRequest::DaemonIndexStatus {
             request: DaemonIndexStatusRequest {
@@ -1044,7 +1047,7 @@ fn send_daemon_index_status(root: &Path) -> Result<DaemonIndexStatusResponse> {
             },
         },
     )?;
-    match read_socket_message(&mut reader)? {
+    match read_frame(&mut reader)? {
         DaemonResponse::DaemonIndexStatus { response } => Ok(response),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
@@ -1335,8 +1338,15 @@ fn send_request_existing_daemon(root: &Path, request: &DaemonRequest) -> Result<
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(reader_stream);
-    write_socket_message(&mut writer, request)?;
-    read_socket_message(&mut reader)
+    write_frame(&mut writer, request)?;
+    Ok(read_frame(&mut reader)?)
+}
+
+fn read_runtime_info(root: &Path) -> Result<DaemonRuntimeInfo> {
+    let path = runtime_path(root);
+    let raw = std::fs::read(&path)
+        .with_context(|| format!("failed to read runtime file '{}'", path.display()))?;
+    Ok(serde_json::from_slice(&raw)?)
 }
 
 #[cfg(unix)]

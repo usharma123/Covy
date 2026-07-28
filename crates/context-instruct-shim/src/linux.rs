@@ -6,10 +6,13 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use packet28_daemon_core::{
-    read_socket_message, resolve_workspace_root, socket_path, write_socket_message,
-    ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextSourceKind,
-    DaemonRequest, DaemonResponse, InstructionFileResolveOutcome,
+use packet28_daemon_protocol::{
+    frame::{read_frame, write_frame},
+    message::{
+        ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextResolveResponse,
+        ContextSourceKind, DaemonRequest, DaemonResponse, InstructionFileResolveOutcome,
+    },
+    paths::{resolve_workspace_root, socket_path},
 };
 use sha2::{Digest, Sha256};
 
@@ -238,7 +241,7 @@ fn resolve_instruction_file(
     relative_path: &str,
     content: &str,
     content_sha256: &str,
-) -> Option<packet28_daemon_core::ContextResolveResponse> {
+) -> Option<ContextResolveResponse> {
     let socket = socket_path(root);
     if !socket.exists() {
         debug_log(&format!(
@@ -269,48 +272,46 @@ fn resolve_instruction_file(
             backend_kind: ContextBackendKind::LinuxPreload,
         },
     };
-    write_socket_message(&mut writer, &request).ok()?;
-    match read_socket_message::<_, DaemonResponse>(&mut reader).ok()? {
+    write_frame(&mut writer, &request).ok()?;
+    match read_frame::<_, DaemonResponse>(&mut reader).ok()? {
         DaemonResponse::ContextResolve { response } => Some(response),
-        DaemonResponse::InstructionFileResolve { response } => {
-            Some(packet28_daemon_core::ContextResolveResponse {
-                source_kind: ContextSourceKind::InstructionFile,
-                source_path: Some(response.path.clone()),
-                outcome: match response.outcome {
-                    InstructionFileResolveOutcome::Rewrite {
-                        content,
-                        content_sha256,
-                        task_label,
-                        original_bytes,
-                        rewritten_bytes,
-                        cache_hit,
-                        matched_terms,
-                        section_titles,
-                    } => ContextResolveOutcome::Rewrite {
-                        content,
-                        content_sha256,
-                        task_label,
-                        original_bytes,
-                        rewritten_bytes,
-                        cache_hit,
-                        matched_terms,
-                        section_titles,
-                        schema_version: 1,
-                    },
-                    InstructionFileResolveOutcome::Passthrough {
-                        reason,
-                        content_sha256,
-                        task_label,
-                        original_bytes,
-                    } => ContextResolveOutcome::Passthrough {
-                        reason,
-                        content_sha256,
-                        task_label,
-                        original_bytes,
-                    },
+        DaemonResponse::InstructionFileResolve { response } => Some(ContextResolveResponse {
+            source_kind: ContextSourceKind::InstructionFile,
+            source_path: Some(response.path.clone()),
+            outcome: match response.outcome {
+                InstructionFileResolveOutcome::Rewrite {
+                    content,
+                    content_sha256,
+                    task_label,
+                    original_bytes,
+                    rewritten_bytes,
+                    cache_hit,
+                    matched_terms,
+                    section_titles,
+                } => ContextResolveOutcome::Rewrite {
+                    content,
+                    content_sha256,
+                    task_label,
+                    original_bytes,
+                    rewritten_bytes,
+                    cache_hit,
+                    matched_terms,
+                    section_titles,
+                    schema_version: 1,
                 },
-            })
-        }
+                InstructionFileResolveOutcome::Passthrough {
+                    reason,
+                    content_sha256,
+                    task_label,
+                    original_bytes,
+                } => ContextResolveOutcome::Passthrough {
+                    reason,
+                    content_sha256,
+                    task_label,
+                    original_bytes,
+                },
+            },
+        }),
         DaemonResponse::Error { message } => {
             debug_log(&format!(
                 "p28 passthrough path={} reason=daemon_error:{}",

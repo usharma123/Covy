@@ -1,15 +1,24 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use packet28_daemon_core::{
-    log_path, read_runtime_info, read_socket_message, ready_path, resolve_workspace_root,
-    socket_path, workspace_socket_path, write_socket_message, ContextRecallRequest,
-    ContextRecallResponse, ContextResolveRequest, ContextResolveResponse, ContextStoreGetRequest,
-    ContextStoreGetResponse, ContextStoreListRequest, ContextStoreListResponse,
-    ContextStorePruneDaemonRequest, ContextStorePruneResponse, ContextStoreStatsRequest,
-    ContextStoreStatsResponse, CoverCheckRequest, CoverCheckResponse, DaemonRequest,
-    DaemonResponse, PacketFetchRequest, PacketFetchResponse, TaskSubmitSpec, TestMapRequest,
-    TestMapResponse, TestShardRequest, TestShardResponse,
+use packet28_daemon_core::storage::read_runtime_info;
+use packet28_daemon_protocol::{
+    commands::{
+        CoverCheckRequest, CoverCheckResponse, PacketFetchRequest, PacketFetchResponse,
+        SequenceSubmitResponse, TaskSubmitSpec, TestMapRequest, TestMapResponse, TestShardRequest,
+        TestShardResponse,
+    },
+    context_store::{
+        ContextRecallRequest, ContextRecallResponse, ContextStoreGetRequest,
+        ContextStoreGetResponse, ContextStoreListRequest, ContextStoreListResponse,
+        ContextStorePruneDaemonRequest, ContextStorePruneResponse, ContextStoreStatsRequest,
+        ContextStoreStatsResponse,
+    },
+    frame::{read_frame, write_frame},
+    message::{
+        ContextResolveRequest, ContextResolveResponse, DaemonRequest, DaemonResponse, DaemonStatus,
+    },
+    paths::{log_path, ready_path, resolve_workspace_root, socket_path, workspace_socket_path},
 };
 
 #[cfg(unix)]
@@ -134,17 +143,14 @@ pub fn send_kernel_request(
     execute_kernel_request(root, request)
 }
 
-pub fn execute_sequence(
-    root: &Path,
-    spec: TaskSubmitSpec,
-) -> Result<packet28_daemon_core::SequenceSubmitResponse> {
+pub fn execute_sequence(root: &Path, spec: TaskSubmitSpec) -> Result<SequenceSubmitResponse> {
     ensure_daemon(root)?;
     match send_request(root, &DaemonRequest::ExecuteSequence { spec })? {
         DaemonResponse::ExecuteSequence {
             response,
             task,
             watches,
-        } => Ok(packet28_daemon_core::SequenceSubmitResponse {
+        } => Ok(SequenceSubmitResponse {
             task_id: task.task_id,
             watch_ids: watches.iter().map(|watch| watch.watch_id.clone()).collect(),
             response,
@@ -294,7 +300,7 @@ pub(crate) fn subscribe_task(
     let stream = connect_daemon_endpoint(&daemon_endpoint(root))?;
     let mut writer = BufWriter::new(stream.try_clone()?);
     let mut reader = BufReader::new(stream.try_clone()?);
-    write_socket_message(
+    write_frame(
         &mut writer,
         &DaemonRequest::TaskSubscribe {
             task_id: task_id.to_string(),
@@ -302,7 +308,7 @@ pub(crate) fn subscribe_task(
             after_seq,
         },
     )?;
-    match read_socket_message(&mut reader)? {
+    match read_frame(&mut reader)? {
         DaemonResponse::TaskSubscribeAck { replayed, .. } => Ok((stream, replayed)),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
         other => Err(anyhow!("unexpected daemon response: {other:?}")),
@@ -346,8 +352,8 @@ impl PersistentDaemonClient {
     }
 
     pub fn send_request(&mut self, request: &DaemonRequest) -> Result<DaemonResponse> {
-        write_socket_message(&mut self.writer, request)?;
-        read_socket_message(&mut self.reader)
+        write_frame(&mut self.writer, request)?;
+        Ok(read_frame(&mut self.reader)?)
     }
 
     pub fn root(&self) -> &Path {
@@ -461,12 +467,12 @@ fn send_request_existing_daemon(root: &Path, request: &DaemonRequest) -> Result<
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(reader_stream);
-    write_socket_message(&mut writer, request)?;
-    read_socket_message(&mut reader)
+    write_frame(&mut writer, request)?;
+    Ok(read_frame(&mut reader)?)
 }
 
 #[cfg(unix)]
-fn daemon_status_existing(root: &Path) -> Result<packet28_daemon_core::DaemonStatus> {
+fn daemon_status_existing(root: &Path) -> Result<DaemonStatus> {
     match send_request_existing_daemon(root, &DaemonRequest::Status) {
         Ok(DaemonResponse::Status { status }) => Ok(status),
         Ok(DaemonResponse::Error { message }) => Err(anyhow!(message)),

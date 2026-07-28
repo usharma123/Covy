@@ -5,11 +5,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use packet28_daemon_core::{
-    load_task_registry, now_unix, task_artifact_dir, ActiveTaskRecord, HookBoundaryKind,
-    HookEventKind, HookIngestRequest, HookLifecycleEvent, HookLifecycleKind, HookReducerCacheEntry,
-    HookReducerPacket, TaskRecord,
+use packet28_daemon_core::storage::{load_task_registry, now_unix};
+use packet28_daemon_protocol::hooks::{
+    ActiveTaskRecord, HookBoundaryKind, HookEventKind, HookIngestRequest, HookLifecycleEvent,
+    HookLifecycleKind, HookReducerCacheEntry, HookReducerPacket,
 };
+use packet28_daemon_protocol::paths::task_artifact_dir;
+use packet28_daemon_protocol::task::TaskRecord;
 use packet28_reducer_core::{
     classify_command, classify_command_argv, reduce_command_output, CommandReducerSpec,
 };

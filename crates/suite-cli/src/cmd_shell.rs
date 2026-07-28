@@ -34,7 +34,9 @@ pub fn run(_args: ShellArgs) -> Result<i32> {
 pub(crate) fn resolve_root(root: &str) -> Result<PathBuf> {
     let cwd = crate::cmd_common::caller_cwd()?;
     let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(root, &cwd));
-    Ok(packet28_daemon_core::resolve_workspace_root(&root))
+    Ok(packet28_daemon_protocol::paths::resolve_workspace_root(
+        &root,
+    ))
 }
 
 #[cfg(target_os = "linux")]

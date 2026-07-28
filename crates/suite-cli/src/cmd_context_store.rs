@@ -75,7 +75,7 @@ fn run_store_list_remote(args: StoreListArgs, daemon_root: &Path) -> Result<i32>
     let cwd = crate::cmd_common::caller_cwd()?;
     let response = crate::cmd_daemon::execute_context_store_list(
         daemon_root,
-        packet28_daemon_core::ContextStoreListRequest {
+        packet28_daemon_protocol::context_store::ContextStoreListRequest {
             root: crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd),
             target: args.target.clone(),
             query: args.query.clone(),
@@ -144,7 +144,7 @@ fn run_store_get_remote(args: StoreGetArgs, daemon_root: &Path) -> Result<i32> {
     let cwd = crate::cmd_common::caller_cwd()?;
     let response = crate::cmd_daemon::execute_context_store_get(
         daemon_root,
-        packet28_daemon_core::ContextStoreGetRequest {
+        packet28_daemon_protocol::context_store::ContextStoreGetRequest {
             root: crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd),
             key: args.key.clone(),
         },
@@ -216,7 +216,7 @@ fn run_store_prune_remote(args: StorePruneArgs, daemon_root: &Path) -> Result<i3
 
     let response = crate::cmd_daemon::execute_context_store_prune(
         daemon_root,
-        packet28_daemon_core::ContextStorePruneDaemonRequest {
+        packet28_daemon_protocol::context_store::ContextStorePruneDaemonRequest {
             root: crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd),
             all: args.all,
             ttl_secs: args.ttl_secs,
@@ -278,7 +278,7 @@ fn run_store_stats_remote(args: StoreStatsArgs, daemon_root: &Path) -> Result<i3
     let cwd = crate::cmd_common::caller_cwd()?;
     let response = crate::cmd_daemon::execute_context_store_stats(
         daemon_root,
-        packet28_daemon_core::ContextStoreStatsRequest {
+        packet28_daemon_protocol::context_store::ContextStoreStatsRequest {
             root: crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd),
         },
     )?;

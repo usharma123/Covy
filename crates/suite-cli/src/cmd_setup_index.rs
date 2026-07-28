@@ -3,9 +3,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use packet28_daemon_core::{
-    DaemonIndexStatusRequest, DaemonIndexStatusResponse, DaemonRequest, DaemonResponse,
-};
+use packet28_daemon_protocol::index::{DaemonIndexStatusRequest, DaemonIndexStatusResponse};
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 
 use crate::cmd_setup_render::{format_setup_badge, SetupBadgeStyle};
 

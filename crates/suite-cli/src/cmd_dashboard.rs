@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Args;
-use packet28_daemon_core::{load_task_registry, task_artifact_dir};
+use packet28_daemon_core::storage::load_task_registry;
+use packet28_daemon_protocol::paths::task_artifact_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use packet28_daemon_core::{DaemonIndexStatusRequest, DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::index::DaemonIndexStatusRequest;
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 use serde::Serialize;
 use serde_json::Value;
 

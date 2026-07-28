@@ -2,11 +2,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use blake3::Hasher;
-use packet28_daemon_core::{
+use packet28_daemon_protocol::broker::{
     BrokerGetContextRequest, BrokerGetContextResponse, BrokerPrepareHandoffRequest,
     BrokerPrepareHandoffResponse, BrokerTaskStatusRequest, BrokerTaskStatusResponse,
     BrokerValidatePlanRequest, BrokerValidatePlanResponse, BrokerWriteOp, BrokerWriteStateRequest,
-    BrokerWriteStateResponse, DaemonRequest, DaemonResponse, HookIngestRequest, HookIngestResponse,
+    BrokerWriteStateResponse,
+};
+use packet28_daemon_protocol::hooks::{HookIngestRequest, HookIngestResponse};
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::task::{
     TaskAwaitHandoffRequest, TaskAwaitHandoffResponse, TaskMarkHandoffConsumedRequest,
     TaskMarkHandoffConsumedResponse,
 };

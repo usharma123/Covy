@@ -430,7 +430,7 @@ pub(crate) fn packet28_search_via_session_with_force(
         root,
         session,
         &DaemonRequest::Packet28Search {
-            request: packet28_daemon_core::Packet28SearchRequest {
+            request: packet28_daemon_protocol::message::Packet28SearchRequest {
                 request,
                 force_indexed,
             },

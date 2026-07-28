@@ -1,6 +1,8 @@
 use super::*;
 use crate::broker_context::compute_broker_response;
-use packet28_daemon_core::{BrokerHandoffDescriptor, BrokerHandoffReadiness, BrokerHandoffStatus};
+use packet28_daemon_protocol::broker::{
+    BrokerHandoffDescriptor, BrokerHandoffReadiness, BrokerHandoffStatus,
+};
 
 pub(crate) fn next_action_summary(
     manage: Option<&suite_packet_core::ContextManagePayload>,

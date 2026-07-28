@@ -4,10 +4,15 @@ use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{CommandFactory, Parser};
-use packet28_daemon_core::{
-    task_brief_json_path, task_brief_markdown_path, task_state_json_path, BrokerGetContextResponse,
-    BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerSupersessionMode,
-    TaskAwaitHandoffRequest,
+use packet28_daemon_core::storage::now_unix;
+use packet28_daemon_protocol::{
+    broker::{
+        BrokerGetContextResponse, BrokerPrepareHandoffRequest, BrokerResponseMode,
+        BrokerSupersessionMode,
+    },
+    hooks::ActiveTaskRecord,
+    paths::{task_brief_json_path, task_brief_markdown_path, task_state_json_path},
+    task::TaskAwaitHandoffRequest,
 };
 
 const BOOTSTRAP_MODE_FRESH: &str = "fresh";
@@ -252,10 +257,10 @@ fn prepare_bootstrap(
         })?;
     crate::task_runtime::store_active_task(
         root,
-        &packet28_daemon_core::ActiveTaskRecord {
+        &ActiveTaskRecord {
             task_id: task_id.clone(),
             session_id: None,
-            updated_at_unix: packet28_daemon_core::now_unix(),
+            updated_at_unix: now_unix(),
         },
     )?;
     if cli.wait_for_handoff {
@@ -273,7 +278,7 @@ fn prepare_bootstrap(
 
 fn prepare_fresh_bootstrap(task_id: String, bootstrap_path: &std::path::Path) -> BootstrapContext {
     let response = BrokerGetContextResponse {
-        context_version: format!("fresh-{}", packet28_daemon_core::now_unix()),
+        context_version: format!("fresh-{}", now_unix()),
         response_mode: BrokerResponseMode::Full,
         artifact_id: None,
         latest_intention: None,
@@ -335,7 +340,7 @@ fn prepare_handoff_bootstrap(
         BrokerPrepareHandoffRequest {
             task_id: task_id.clone(),
             query,
-            response_mode: Some(packet28_daemon_core::BrokerResponseMode::Full),
+            response_mode: Some(BrokerResponseMode::Full),
             include_debug_memory: false,
         },
     )?;

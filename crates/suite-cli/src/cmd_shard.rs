@@ -83,7 +83,7 @@ pub fn run(args: ShardArgs, config_path: &str) -> Result<i32> {
 pub fn run_remote(args: ShardArgs, config_path: &str, daemon_root: &Path) -> Result<i32> {
     let response = crate::cmd_daemon::execute_test_shard(
         daemon_root,
-        packet28_daemon_core::TestShardRequest {
+        packet28_daemon_protocol::commands::TestShardRequest {
             shards: args.shards,
             tasks_json: args.tasks_json,
             tier: args.tier,

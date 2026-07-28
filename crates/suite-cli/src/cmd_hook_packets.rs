@@ -1,4 +1,4 @@
-use packet28_daemon_core::{HookEventKind, HookReducerPacket, HookRuntimeConfig};
+use packet28_daemon_protocol::hooks::{HookEventKind, HookReducerPacket, HookRuntimeConfig};
 use packet28_reducer_core::classify_command;
 use serde_json::{json, Value};
 

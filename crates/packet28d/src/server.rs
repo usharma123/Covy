@@ -1,6 +1,7 @@
 use super::*;
 use crate::instruction_files::resolve_context;
-use packet28_daemon_core::TaskMarkHandoffConsumedResponse;
+use packet28_daemon_protocol::frame::FrameError;
+use packet28_daemon_protocol::task::TaskMarkHandoffConsumedResponse;
 
 pub(crate) fn handle_connection(
     state: Arc<Mutex<DaemonState>>,
@@ -29,7 +30,7 @@ where
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = BufWriter::new(stream);
     loop {
-        let request = match read_socket_message(&mut reader) {
+        let request = match read_frame(&mut reader) {
             Ok(value) => value,
             Err(err) if is_benign_disconnect_error(&err) => return Ok(()),
             Err(err) => {
@@ -80,10 +81,10 @@ fn handle_task_subscribe(
         },
     )?;
     for frame in replay {
-        match write_socket_message(writer, &frame) {
+        match write_frame(writer, &frame) {
             Ok(()) => {}
             Err(err) if is_benign_disconnect_error(&err) => return Ok(()),
-            Err(err) => return Err(err),
+            Err(err) => return Err(err.into()),
         }
     }
 
@@ -98,10 +99,10 @@ fn handle_task_subscribe(
     }
 
     while let Ok(frame) = rx.recv() {
-        match write_socket_message(writer, &frame) {
+        match write_frame(writer, &frame) {
             Ok(()) => {}
             Err(err) if is_benign_disconnect_error(&err) => break,
-            Err(err) => return Err(err),
+            Err(err) => return Err(err.into()),
         }
     }
     Ok(())
@@ -130,10 +131,10 @@ fn write_socket_response(
     writer: &mut impl std::io::Write,
     response: &DaemonResponse,
 ) -> Result<()> {
-    match write_socket_message(writer, response) {
+    match write_frame(writer, response) {
         Ok(()) => Ok(()),
         Err(err) if is_benign_disconnect_error(&err) => Ok(()),
-        Err(err) => Err(err),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -153,17 +154,15 @@ impl TryCloneStream for std::net::TcpStream {
     }
 }
 
-fn is_benign_disconnect_error(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io_err| {
-                matches!(
-                    io_err.kind(),
-                    ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
-                )
-            })
-    })
+fn is_benign_disconnect_error(err: &FrameError) -> bool {
+    matches!(
+        err,
+        FrameError::Io(io_err)
+            if matches!(
+                io_err.kind(),
+                ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
+            )
+    )
 }
 
 fn handle_request(

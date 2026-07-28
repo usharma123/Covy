@@ -183,7 +183,9 @@ pub(crate) fn resolve_current_task_id(
     Ok(current)
 }
 
-pub(crate) fn daemon_status(root: &Path) -> Result<packet28_daemon_core::DaemonStatus> {
+pub(crate) fn daemon_status(
+    root: &Path,
+) -> Result<packet28_daemon_protocol::message::DaemonStatus> {
     match crate::cmd_daemon::send_request(root, &DaemonRequest::Status)? {
         DaemonResponse::Status { status } => Ok(status),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
@@ -351,7 +353,7 @@ fn materialize_task_artifacts(
             BrokerPrepareHandoffRequest {
                 task_id: task_id.to_string(),
                 query: None,
-                response_mode: Some(packet28_daemon_core::BrokerResponseMode::Full),
+                response_mode: Some(packet28_daemon_protocol::broker::BrokerResponseMode::Full),
                 include_debug_memory: false,
             },
         )?;

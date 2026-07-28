@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use packet28_daemon_core::{
-    hook_runtime_config_path, now_unix, ActiveTaskRecord, BrokerAction, BrokerGetContextRequest,
-    HookBoundaryKind, HookEventKind, HookIngestRequest, HookRuntimeConfig,
+use packet28_daemon_core::storage::now_unix;
+use packet28_daemon_protocol::broker::{BrokerAction, BrokerGetContextRequest};
+use packet28_daemon_protocol::hooks::{
+    ActiveTaskRecord, HookBoundaryKind, HookEventKind, HookIngestRequest, HookRuntimeConfig,
 };
+use packet28_daemon_protocol::paths::hook_runtime_config_path;
 #[cfg(test)]
 use packet28_reducer_core::classify_command;
 use serde_json::{json, Value};
@@ -660,7 +662,7 @@ fn hook_event_name(kind: HookEventKind) -> &'static str {
 fn render_hook_output(
     event_kind: HookEventKind,
     rewrite: Option<Value>,
-    response: &packet28_daemon_core::HookIngestResponse,
+    response: &packet28_daemon_protocol::hooks::HookIngestResponse,
     session_start_context: Option<String>,
     action_critic: &[String],
 ) -> Result<Option<String>> {

@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
 #[cfg(test)]
-use packet28_daemon_core::RelaunchPreference;
-use packet28_daemon_core::{DaemonIndexRebuildRequest, DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::hooks::RelaunchPreference;
+use packet28_daemon_protocol::index::DaemonIndexRebuildRequest;
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 use serde_json::{json, Value};
 use toml::value::Table as TomlTable;
 
@@ -223,7 +224,7 @@ pub fn run(args: SetupArgs) -> Result<i32> {
             println!(
                 "    {} Packet28 hook runtime → {}",
                 "✓".green().bold(),
-                packet28_daemon_core::hook_runtime_config_path(&root)
+                packet28_daemon_protocol::paths::hook_runtime_config_path(&root)
                     .display()
                     .to_string()
                     .dimmed()

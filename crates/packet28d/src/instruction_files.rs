@@ -1,9 +1,11 @@
 use super::*;
-use packet28_daemon_core::{
-    active_task_path, ActiveTaskRecord, ContextBackendKind, ContextResolveOutcome,
-    ContextResolveRequest, ContextResolveResponse, ContextSourceKind,
-    InstructionFileResolveOutcome, InstructionFileResolveRequest, InstructionFileResolveResponse,
+use packet28_daemon_protocol::hooks::ActiveTaskRecord;
+use packet28_daemon_protocol::message::{
+    ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextResolveResponse,
+    ContextSourceKind, InstructionFileResolveOutcome, InstructionFileResolveRequest,
+    InstructionFileResolveResponse,
 };
+use packet28_daemon_protocol::paths::active_task_path;
 
 pub(crate) fn resolve_context(
     state: Arc<Mutex<DaemonState>>,

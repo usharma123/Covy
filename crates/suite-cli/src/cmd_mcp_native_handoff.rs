@@ -1304,7 +1304,7 @@ fn is_repo_relative_path_reference(token: &str) -> bool {
 }
 
 fn latest_relevant_edit_at(
-    events: &[packet28_daemon_core::DaemonEventFrame],
+    events: &[packet28_daemon_protocol::message::DaemonEventFrame],
     changed_paths: &[String],
 ) -> Option<u64> {
     events
@@ -1315,7 +1315,7 @@ fn latest_relevant_edit_at(
 }
 
 fn latest_command_event_at(
-    events: &[packet28_daemon_core::DaemonEventFrame],
+    events: &[packet28_daemon_protocol::message::DaemonEventFrame],
     command_ref: &str,
 ) -> Option<u64> {
     events
@@ -1332,7 +1332,10 @@ fn latest_command_event_at(
         .max()
 }
 
-fn is_edit_event(frame: &packet28_daemon_core::DaemonEventFrame, changed_paths: &[String]) -> bool {
+fn is_edit_event(
+    frame: &packet28_daemon_protocol::message::DaemonEventFrame,
+    changed_paths: &[String],
+) -> bool {
     let kind = frame.event.kind.to_ascii_lowercase();
     if !kind.contains("edit") && !kind.contains("write") {
         return false;
@@ -1345,7 +1348,7 @@ fn is_edit_event(frame: &packet28_daemon_core::DaemonEventFrame, changed_paths: 
         .any(|path| changed_paths.iter().any(|changed| changed == path))
 }
 
-fn frame_event_paths(frame: &packet28_daemon_core::DaemonEventFrame) -> Vec<String> {
+fn frame_event_paths(frame: &packet28_daemon_protocol::message::DaemonEventFrame) -> Vec<String> {
     frame
         .event
         .data

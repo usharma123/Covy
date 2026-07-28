@@ -22,8 +22,11 @@ fn test_verify_handoffs_reports_ci_summary_and_threshold() {
             "cargo test -p suite-cli ci_handoff_test $PACKET28_CI_MISSING_ENV_12345",
         ),
     ] {
-        let path =
-            packet28_daemon_core::task_version_json_path(root.path(), task_id, context_version);
+        let path = packet28_daemon_protocol::paths::task_version_json_path(
+            root.path(),
+            task_id,
+            context_version,
+        );
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,

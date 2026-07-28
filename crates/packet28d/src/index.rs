@@ -335,9 +335,9 @@ pub(crate) fn daemon_index_clear(
 
 pub(crate) fn daemon_packet28_search(
     state: Arc<Mutex<DaemonState>>,
-    request: packet28_daemon_core::Packet28SearchRequest,
+    request: packet28_daemon_protocol::message::Packet28SearchRequest,
 ) -> Result<packet28_reducer_core::SearchResult> {
-    let packet28_daemon_core::Packet28SearchRequest {
+    let packet28_daemon_protocol::message::Packet28SearchRequest {
         request,
         force_indexed,
     } = request;
@@ -374,9 +374,9 @@ pub(crate) fn daemon_packet28_search(
 
 pub(crate) fn daemon_packet28_search_guard(
     state: Arc<Mutex<DaemonState>>,
-    request: packet28_daemon_core::Packet28SearchRequest,
-) -> Result<packet28_daemon_core::Packet28SearchGuardResponse> {
-    let packet28_daemon_core::Packet28SearchRequest {
+    request: packet28_daemon_protocol::message::Packet28SearchRequest,
+) -> Result<packet28_daemon_protocol::message::Packet28SearchGuardResponse> {
+    let packet28_daemon_protocol::message::Packet28SearchRequest {
         request,
         force_indexed,
     } = request;
@@ -398,7 +398,7 @@ pub(crate) fn daemon_packet28_search_guard(
         None if force_indexed => None,
         None => Some("regex search index is not ready".to_string()),
     };
-    Ok(packet28_daemon_core::Packet28SearchGuardResponse { fallback_reason })
+    Ok(packet28_daemon_protocol::message::Packet28SearchGuardResponse { fallback_reason })
 }
 
 fn apply_regex_manifest_status(

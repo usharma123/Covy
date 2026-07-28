@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
-use packet28_daemon_core::{
-    load_task_registry, task_state_json_path, BrokerGetContextResponse, BrokerWriteOp,
-    BrokerWriteStateRequest,
+use packet28_daemon_core::storage::load_task_registry;
+use packet28_daemon_protocol::broker::{
+    BrokerGetContextResponse, BrokerWriteOp, BrokerWriteStateRequest,
 };
+use packet28_daemon_protocol::paths::task_state_json_path;
 use serde::Serialize;
 use serde_json::{json, Value};
 

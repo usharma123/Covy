@@ -75,7 +75,7 @@ pub fn run_recall_remote(args: RecallArgs, daemon_root: &Path) -> Result<i32> {
     let since_default = current_unix().saturating_sub(86_400);
     let response = crate::cmd_daemon::execute_context_recall(
         daemon_root,
-        packet28_daemon_core::ContextRecallRequest {
+        packet28_daemon_protocol::context_store::ContextRecallRequest {
             query: args.query.clone(),
             root: resolved_root,
             limit: args.limit,

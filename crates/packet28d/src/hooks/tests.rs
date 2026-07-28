@@ -32,8 +32,8 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
     }))
 }
 
-fn packet(summary: &str) -> packet28_daemon_core::HookReducerPacket {
-    packet28_daemon_core::HookReducerPacket {
+fn packet(summary: &str) -> packet28_daemon_protocol::hooks::HookReducerPacket {
+    packet28_daemon_protocol::hooks::HookReducerPacket {
         packet_type: "packet28.hook.fs.v2".to_string(),
         tool_name: "Bash".to_string(),
         operation_kind: suite_packet_core::ToolOperationKind::Read,
@@ -101,7 +101,7 @@ fn duplicate_cached_packet_does_not_grow_hook_window() {
 #[test]
 fn mutation_packets_are_never_cache_hits_or_cache_entries() {
     let state = test_state();
-    let mutation = packet28_daemon_core::HookReducerPacket {
+    let mutation = packet28_daemon_protocol::hooks::HookReducerPacket {
         reducer_family: Some("infra".to_string()),
         canonical_command_kind: Some("kubectl_apply".to_string()),
         summary: "deployment.apps/api configured".to_string(),
@@ -141,7 +141,7 @@ fn mutation_packets_are_never_cache_hits_or_cache_entries() {
 #[test]
 fn infra_mutation_busts_cached_infra_reads() {
     let state = test_state();
-    let read = packet28_daemon_core::HookReducerPacket {
+    let read = packet28_daemon_protocol::hooks::HookReducerPacket {
         reducer_family: Some("infra".to_string()),
         canonical_command_kind: Some("docker_ps".to_string()),
         summary: "docker ps listed 1 container(s)".to_string(),
@@ -172,7 +172,7 @@ fn infra_mutation_busts_cached_infra_reads() {
     .unwrap();
     assert!(cached.cache_hit);
 
-    let mutation = packet28_daemon_core::HookReducerPacket {
+    let mutation = packet28_daemon_protocol::hooks::HookReducerPacket {
         reducer_family: Some("infra".to_string()),
         canonical_command_kind: Some("docker_run".to_string()),
         summary: "docker run completed".to_string(),
@@ -207,7 +207,7 @@ fn infra_mutation_busts_cached_infra_reads() {
 #[test]
 fn remote_state_cache_entries_expire() {
     let state = test_state();
-    let read = packet28_daemon_core::HookReducerPacket {
+    let read = packet28_daemon_protocol::hooks::HookReducerPacket {
         reducer_family: Some("infra".to_string()),
         canonical_command_kind: Some("aws_sts_get_caller_identity".to_string()),
         summary: "aws caller arn:aws:iam::123:user/demo".to_string(),
@@ -274,7 +274,7 @@ fn edit_invalidation_busts_fs_cache() {
         state.clone(),
         HookIngestRequest {
             task_id: "task-edit".to_string(),
-            reducer_packet: Some(packet28_daemon_core::HookReducerPacket {
+            reducer_packet: Some(packet28_daemon_protocol::hooks::HookReducerPacket {
                 packet_type: "packet28.hook.edit.v1".to_string(),
                 tool_name: "Edit".to_string(),
                 operation_kind: suite_packet_core::ToolOperationKind::Edit,
@@ -351,7 +351,7 @@ fn failed_edit_does_not_bust_fs_cache() {
         state.clone(),
         HookIngestRequest {
             task_id: "task-failed-edit".to_string(),
-            reducer_packet: Some(packet28_daemon_core::HookReducerPacket {
+            reducer_packet: Some(packet28_daemon_protocol::hooks::HookReducerPacket {
                 packet_type: "packet28.hook.edit.failure.v1".to_string(),
                 tool_name: "Edit".to_string(),
                 operation_kind: suite_packet_core::ToolOperationKind::Edit,
@@ -404,7 +404,7 @@ fn failed_edit_does_not_bust_fs_cache() {
 #[test]
 fn edit_invalidation_busts_git_cache() {
     let state = test_state();
-    let git_packet = packet28_daemon_core::HookReducerPacket {
+    let git_packet = packet28_daemon_protocol::hooks::HookReducerPacket {
         packet_type: "packet28.hook.git.v2".to_string(),
         tool_name: "Bash".to_string(),
         operation_kind: suite_packet_core::ToolOperationKind::Git,
@@ -465,7 +465,7 @@ fn edit_invalidation_busts_git_cache() {
         state.clone(),
         HookIngestRequest {
             task_id: "task-git-edit".to_string(),
-            reducer_packet: Some(packet28_daemon_core::HookReducerPacket {
+            reducer_packet: Some(packet28_daemon_protocol::hooks::HookReducerPacket {
                 packet_type: "packet28.hook.edit.v1".to_string(),
                 tool_name: "Edit".to_string(),
                 operation_kind: suite_packet_core::ToolOperationKind::Edit,
@@ -621,7 +621,7 @@ fn threshold_accumulation_triggers_exceeded_without_stop_boundary() {
         force_threshold_fraction: 0.9,
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     // Ingest packets totaling 80 tokens (above prepare=75 threshold).
@@ -699,7 +699,7 @@ fn threshold_level_returned_in_response() {
         force_threshold_fraction: 0.9,
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     // Under warn threshold.
@@ -796,7 +796,7 @@ fn relaunch_requested_when_daemon_managed_with_command() {
         relaunch_command: vec!["true".to_string()],
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     // Ingest enough to exceed threshold.
@@ -857,7 +857,7 @@ fn e2e_hook_threshold_handoff_cycle() {
         relaunch_command: vec!["true".to_string()],
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     let task_id = "task-e2e-cycle";
@@ -967,7 +967,7 @@ fn relaunch_not_requested_when_host_managed() {
         relaunch_command: vec!["true".to_string()],
         ..HookRuntimeConfig::default()
     };
-    let config_path = packet28_daemon_core::hook_runtime_config_path(&root);
+    let config_path = packet28_daemon_protocol::paths::hook_runtime_config_path(&root);
     std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
     let mut pkt = packet("big read");

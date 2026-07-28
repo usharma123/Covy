@@ -56,7 +56,7 @@ fn pretool_hook_output_surfaces_action_critic_without_rewrite() {
     let body = render_hook_output(
         HookEventKind::PreToolUse,
         None,
-        &packet28_daemon_core::HookIngestResponse::default(),
+        &packet28_daemon_protocol::hooks::HookIngestResponse::default(),
         None,
         &["destructive_command: inspect scope first".to_string()],
     )
@@ -132,7 +132,7 @@ fn pretool_hook_output_preserves_rewrite_with_action_critic() {
     let body = render_hook_output(
         HookEventKind::PreToolUse,
         Some(json!({"command": "Packet28 hook reducer-runner -- git status"})),
-        &packet28_daemon_core::HookIngestResponse::default(),
+        &packet28_daemon_protocol::hooks::HookIngestResponse::default(),
         None,
         &["broad_search: add focus_paths".to_string()],
     )

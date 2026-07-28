@@ -8,14 +8,19 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use packet28_daemon_core::{
-    load_task_events, load_task_events_from_offset, task_artifact_dir, task_brief_markdown_path,
-    task_event_log_len, task_state_json_path, task_version_json_path, BrokerAction,
-    BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
+use packet28_daemon_core::storage::{
+    load_task_events, load_task_events_from_offset, task_event_log_len,
+};
+use packet28_daemon_protocol::broker::{
+    BrokerAction, BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
     BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
     BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
-    DaemonRequest, DaemonResponse, TaskRecord,
 };
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::paths::{
+    task_artifact_dir, task_brief_markdown_path, task_state_json_path, task_version_json_path,
+};
+use packet28_daemon_protocol::task::TaskRecord;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 

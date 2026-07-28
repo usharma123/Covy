@@ -153,17 +153,18 @@ fn claude_http_hook_entry(matcher: &str, http_url: &str, http_token: &str) -> Va
 
 fn ensure_hook_http_settings_written(
     root: &Path,
-) -> Result<packet28_daemon_core::HookRuntimeConfig> {
-    let path = packet28_daemon_core::hook_runtime_config_path(root);
+) -> Result<packet28_daemon_protocol::hooks::HookRuntimeConfig> {
+    let path = packet28_daemon_protocol::paths::hook_runtime_config_path(root);
     let existed = path.exists();
     let mut config = if existed {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;
-        serde_json::from_str::<packet28_daemon_core::HookRuntimeConfig>(&content).with_context(
-            || format!("refusing to overwrite invalid JSON in '{}'", path.display()),
-        )?
+        serde_json::from_str::<packet28_daemon_protocol::hooks::HookRuntimeConfig>(&content)
+            .with_context(|| {
+                format!("refusing to overwrite invalid JSON in '{}'", path.display())
+            })?
     } else {
-        packet28_daemon_core::HookRuntimeConfig::default()
+        packet28_daemon_protocol::hooks::HookRuntimeConfig::default()
     };
     let changed = apply_generated_http_hook_settings(&mut config, root);
     if !existed || changed {
@@ -179,7 +180,7 @@ fn ensure_hook_http_settings_written(
 }
 
 fn apply_generated_http_hook_settings(
-    config: &mut packet28_daemon_core::HookRuntimeConfig,
+    config: &mut packet28_daemon_protocol::hooks::HookRuntimeConfig,
     root: &Path,
 ) -> bool {
     let mut changed = false;
@@ -218,7 +219,9 @@ fn generate_http_hook_token(root: &Path) -> String {
     blake3::hash(seed.as_bytes()).to_hex().to_string()
 }
 
-fn claude_http_hook_url(config: &packet28_daemon_core::HookRuntimeConfig) -> Option<String> {
+fn claude_http_hook_url(
+    config: &packet28_daemon_protocol::hooks::HookRuntimeConfig,
+) -> Option<String> {
     config
         .http_hook_port
         .map(|port| format!("http://127.0.0.1:{port}{PACKET28_CLAUDE_HTTP_HOOK_PATH}"))
@@ -533,16 +536,17 @@ pub(crate) fn write_hook_runtime_config(
     if !any_hooks_configured {
         return Ok(McpConfigStatus::Declined);
     }
-    let path = packet28_daemon_core::hook_runtime_config_path(root);
+    let path = packet28_daemon_protocol::paths::hook_runtime_config_path(root);
     let existed = path.exists();
     let mut config = if existed {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;
-        serde_json::from_str::<packet28_daemon_core::HookRuntimeConfig>(&content).with_context(
-            || format!("refusing to overwrite invalid JSON in '{}'", path.display()),
-        )?
+        serde_json::from_str::<packet28_daemon_protocol::hooks::HookRuntimeConfig>(&content)
+            .with_context(|| {
+                format!("refusing to overwrite invalid JSON in '{}'", path.display())
+            })?
     } else {
-        packet28_daemon_core::HookRuntimeConfig::default()
+        packet28_daemon_protocol::hooks::HookRuntimeConfig::default()
     };
     let mut changed = apply_generated_http_hook_settings(&mut config, root);
     changed |=

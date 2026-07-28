@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use packet28_daemon_core::{active_task_path, ActiveTaskRecord};
+use packet28_daemon_protocol::{hooks::ActiveTaskRecord, paths::active_task_path};
 
 pub fn load_active_task(root: &Path) -> Option<ActiveTaskRecord> {
     let path = active_task_path(root);

@@ -594,7 +594,7 @@ pub(crate) fn handle_packet28_action_critic(
     }
     let response = crate::broker_client::get_context(
         root,
-        packet28_daemon_core::BrokerGetContextRequest {
+        packet28_daemon_protocol::broker::BrokerGetContextRequest {
             task_id: args.task_id.clone(),
             action: Some(args.action),
             focus_paths: args.focus_paths,
@@ -606,7 +606,7 @@ pub(crate) fn handle_packet28_action_critic(
             default_max_items_per_section: Some(8),
             budget_tokens: args.budget_tokens,
             persist_artifacts: Some(false),
-            ..packet28_daemon_core::BrokerGetContextRequest::default()
+            ..packet28_daemon_protocol::broker::BrokerGetContextRequest::default()
         },
     )?;
     let section = response

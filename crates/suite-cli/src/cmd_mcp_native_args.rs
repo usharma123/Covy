@@ -1,4 +1,4 @@
-use packet28_daemon_core::{BrokerAction, BrokerPlanStep, BrokerResponseMode};
+use packet28_daemon_protocol::broker::{BrokerAction, BrokerPlanStep, BrokerResponseMode};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, Default)]

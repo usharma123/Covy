@@ -82,7 +82,7 @@ fn configure_hooks(
 fn hook_artifacts(environment: &RuntimeEnvironment<'_>) -> Vec<PathBuf> {
     vec![
         settings_path(environment.root()),
-        packet28_daemon_core::hook_runtime_config_path(environment.root()),
+        packet28_daemon_protocol::paths::hook_runtime_config_path(environment.root()),
     ]
 }
 

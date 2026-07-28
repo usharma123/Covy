@@ -23,14 +23,14 @@ use context_memory_core::{
 };
 use diffy_core::model::CoverageFormat;
 use notify::{Config, Event, PollWatcher, RecursiveMode, Watcher};
-use packet28_daemon_core::{
-    append_task_event, ensure_daemon_dir, index_dir, index_manifest_path, index_snapshot_path,
-    load_task_events, load_task_registry, load_watch_registry, log_path, now_unix,
-    read_socket_message, ready_path, remove_runtime_files, save_task_registry, save_watch_registry,
-    socket_path, task_artifact_dir, task_brief_json_path, task_brief_markdown_path,
-    task_event_log_path, task_state_json_path, task_version_json_path, workspace_socket_path,
-    write_runtime_info, write_socket_message, BrokerAction, BrokerDecision, BrokerDecomposeIntent,
-    BrokerDecomposeRequest, BrokerDecomposeResponse, BrokerDecomposedStep, BrokerDeltaResponse,
+use packet28_daemon_core::storage::{
+    append_task_event, ensure_daemon_dir, load_task_events, load_task_registry,
+    load_watch_registry, now_unix, remove_runtime_files, save_task_registry, save_watch_registry,
+    write_runtime_info,
+};
+use packet28_daemon_protocol::broker::{
+    BrokerAction, BrokerDecision, BrokerDecomposeIntent, BrokerDecomposeRequest,
+    BrokerDecomposeResponse, BrokerDecomposedStep, BrokerDeltaResponse,
     BrokerEstimateContextRequest, BrokerEstimateContextResponse, BrokerEvictionCandidate,
     BrokerGetContextRequest, BrokerGetContextResponse, BrokerPacketRef, BrokerPlanStep,
     BrokerPlanViolation, BrokerPrepareHandoffRequest, BrokerPrepareHandoffResponse, BrokerQuestion,
@@ -39,16 +39,32 @@ use packet28_daemon_core::{
     BrokerTaskStatusResponse, BrokerToolResultKind, BrokerValidatePlanRequest,
     BrokerValidatePlanResponse, BrokerVerbosity, BrokerWriteOp, BrokerWriteStateBatchRequest,
     BrokerWriteStateBatchResponse, BrokerWriteStateRequest, BrokerWriteStateResponse,
+};
+use packet28_daemon_protocol::commands::{
+    CoverCheckRequest, CoverCheckResponse, PacketFetchResponse, TaskSubmitSpec, TestMapRequest,
+    TestMapResponse, TestMapSummary, TestShardRequest, TestShardResponse, WatchKind, WatchSpec,
+};
+use packet28_daemon_protocol::context_store::{
     ContextRecallRequest, ContextRecallResponse, ContextStoreGetRequest, ContextStoreGetResponse,
     ContextStoreListRequest, ContextStoreListResponse, ContextStorePruneDaemonRequest,
     ContextStorePruneResponse, ContextStoreStatsRequest, ContextStoreStatsResponse,
-    CoverCheckRequest, CoverCheckResponse, DaemonEvent, DaemonEventFrame, DaemonIndexClearResponse,
-    DaemonIndexManifest, DaemonIndexRebuildRequest, DaemonIndexRebuildResponse,
-    DaemonIndexStatusResponse, DaemonRequest, DaemonResponse, DaemonRuntimeInfo, DaemonStatus,
-    PacketFetchResponse, TaskAwaitHandoffRequest, TaskAwaitHandoffResponse, TaskLaunchAgentRequest,
-    TaskLaunchAgentResponse, TaskRecord, TaskRegistry, TaskSubmitSpec, TestMapRequest,
-    TestMapResponse, TestMapSummary, TestShardRequest, TestShardResponse, WatchKind,
-    WatchRegistration, WatchRegistry, WatchSpec,
+};
+use packet28_daemon_protocol::frame::{read_frame, write_frame};
+use packet28_daemon_protocol::index::{
+    DaemonIndexClearResponse, DaemonIndexManifest, DaemonIndexRebuildRequest,
+    DaemonIndexRebuildResponse, DaemonIndexStatusResponse,
+};
+use packet28_daemon_protocol::message::{
+    DaemonEvent, DaemonEventFrame, DaemonRequest, DaemonResponse, DaemonRuntimeInfo, DaemonStatus,
+};
+use packet28_daemon_protocol::paths::{
+    index_dir, index_manifest_path, index_snapshot_path, log_path, ready_path, socket_path,
+    task_artifact_dir, task_brief_json_path, task_brief_markdown_path, task_event_log_path,
+    task_state_json_path, task_version_json_path, workspace_socket_path,
+};
+use packet28_daemon_protocol::task::{
+    TaskAwaitHandoffRequest, TaskAwaitHandoffResponse, TaskLaunchAgentRequest,
+    TaskLaunchAgentResponse, TaskRecord, TaskRegistry, WatchRegistration, WatchRegistry,
 };
 use serde_json::{json, Value};
 

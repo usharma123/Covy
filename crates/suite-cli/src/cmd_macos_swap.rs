@@ -28,8 +28,10 @@ use anyhow::Context;
 #[cfg(target_os = "macos")]
 use context_kernel_core::INSTRUCTION_SUMMARY_SCHEMA_VERSION;
 #[cfg(target_os = "macos")]
-use packet28_daemon_core::{
-    now_unix, ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextSourceKind,
+use packet28_daemon_core::storage::now_unix;
+#[cfg(target_os = "macos")]
+use packet28_daemon_protocol::message::{
+    ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextSourceKind,
 };
 #[cfg(target_os = "macos")]
 use serde::{Deserialize, Serialize};

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use packet28_daemon_core::load_task_registry;
+use packet28_daemon_core::storage::load_task_registry;
 use serde::Serialize;
 
 use super::{load_task_state, resolve_root, SessionArgs};

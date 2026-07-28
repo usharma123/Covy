@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::{Args, ValueEnum};
-use packet28_daemon_core::{resolve_workspace_root, BrokerWriteOp, BrokerWriteStateRequest};
+use packet28_daemon_protocol::broker::{BrokerWriteOp, BrokerWriteStateRequest};
+use packet28_daemon_protocol::paths::resolve_workspace_root;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
