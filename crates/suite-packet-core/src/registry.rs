@@ -1,27 +1,49 @@
+//! Stable packet identifiers and machine-readable schema snapshots.
+
 use serde::Serialize;
 use serde_json::{json, Value};
 
+/// Coverage quality-gate result packet.
 pub const PACKET_TYPE_COVER_CHECK: &str = "suite.cover.check.v1";
+/// Diff analysis result packet.
 pub const PACKET_TYPE_DIFF_ANALYZE: &str = "suite.diff.analyze.v1";
+/// Test-impact plan packet.
 pub const PACKET_TYPE_TEST_IMPACT: &str = "suite.test.impact.v1";
+/// Agent state event packet.
 pub const PACKET_TYPE_AGENT_STATE: &str = "suite.agent.state.v1";
+/// Derived agent state snapshot packet.
 pub const PACKET_TYPE_AGENT_SNAPSHOT: &str = "suite.agent.snapshot.v1";
+/// Cross-packet context correlation packet.
 pub const PACKET_TYPE_CONTEXT_CORRELATE: &str = "suite.context.correlate.v1";
+/// Task-scoped context management packet.
 pub const PACKET_TYPE_CONTEXT_MANAGE: &str = "suite.context.manage.v1";
+/// Stack-trace reduction packet.
 pub const PACKET_TYPE_STACK_SLICE: &str = "suite.stack.slice.v1";
+/// Build-diagnostic reduction packet.
 pub const PACKET_TYPE_BUILD_REDUCE: &str = "suite.build.reduce.v1";
+/// Repository map packet.
 pub const PACKET_TYPE_MAP_REPO: &str = "suite.map.repo.v1";
+/// Repository map query packet.
 pub const PACKET_TYPE_MAP_QUERY: &str = "suite.map.query.v1";
+/// Bounded command-proxy result packet.
 pub const PACKET_TYPE_PROXY_RUN: &str = "suite.proxy.run.v1";
+/// Assembled context packet.
 pub const PACKET_TYPE_CONTEXT_ASSEMBLE: &str = "suite.context.assemble.v1";
+/// Governance guard result packet.
 pub const PACKET_TYPE_GUARD_CHECK: &str = "suite.guard.check.v1";
 
+/// Reviewed payload and compatibility rules for one packet identifier.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct PacketTypeContract {
+    /// Stable versioned packet identifier.
     pub packet_type: &'static str,
+    /// Payload fields required by the current contract.
     pub required_payload_fields: &'static [&'static str],
+    /// Payload fields that callers may omit.
     pub optional_payload_fields: &'static [&'static str],
+    /// Rules that keep machine output bounded.
     pub boundedness_rules: &'static [&'static str],
+    /// Source- or wire-compatibility notes for current consumers.
     pub compatibility_notes: &'static [&'static str],
 }
 
@@ -201,16 +223,19 @@ static CONTRACTS: &[PacketTypeContract] = &[
     },
 ];
 
+/// Returns all registered packet contracts in stable catalog order.
 pub fn packet_contracts() -> &'static [PacketTypeContract] {
     CONTRACTS
 }
 
+/// Returns the contract registered for `packet_type`.
 pub fn packet_contract(packet_type: &str) -> Option<&'static PacketTypeContract> {
     CONTRACTS
         .iter()
         .find(|contract| contract.packet_type == packet_type)
 }
 
+/// Returns the reviewed JSON Schema snapshot for the common packet wrapper.
 pub fn wrapper_schema_snapshot() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -239,6 +264,7 @@ pub fn wrapper_schema_snapshot() -> Value {
     })
 }
 
+/// Returns a payload-aware JSON Schema snapshot for a registered packet type.
 pub fn packet_type_schema_snapshot(packet_type: &str) -> Option<Value> {
     let contract = packet_contract(packet_type)?;
     Some(json!({

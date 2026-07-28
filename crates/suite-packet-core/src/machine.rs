@@ -1,3 +1,5 @@
+//! Machine-readable packet wrappers and durable JSON artifacts.
+
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -7,15 +9,21 @@ use sha2::{Digest, Sha256};
 
 use crate::{CovyError, EnvelopeV1};
 
+/// Schema identifier used by [`PacketWrapperV1`].
 pub const MACHINE_SCHEMA_VERSION: &str = "suite.packet.v1";
+/// Repository-relative directory that stores packet artifacts.
 pub const ARTIFACT_DIR: &str = ".packet28/artifacts";
 
+/// Amount of packet detail requested by a machine-readable caller.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum JsonProfile {
+    /// Return the compact packet representation.
     #[default]
     Compact,
+    /// Return the complete packet representation.
     Full,
+    /// Persist the packet and return an artifact handle.
     Handle,
 }
 
@@ -45,6 +53,7 @@ impl FromStr for JsonProfile {
     }
 }
 
+/// Versioned machine-readable wrapper around a packet.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PacketWrapperV1<T> {
@@ -66,6 +75,7 @@ impl<T: Default> Default for PacketWrapperV1<T> {
 }
 
 impl<T> PacketWrapperV1<T> {
+    /// Wraps `packet` with the current machine schema and no cache-hit marker.
     pub fn new(packet_type: impl Into<String>, packet: T) -> Self {
         Self {
             schema_version: MACHINE_SCHEMA_VERSION.to_string(),
@@ -76,6 +86,7 @@ impl<T> PacketWrapperV1<T> {
     }
 }
 
+/// Stable handle and integrity metadata for a persisted packet artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct ArtifactHandle {
@@ -87,6 +98,7 @@ pub struct ArtifactHandle {
     pub created_at_unix: u64,
 }
 
+/// Wraps an envelope with the current machine schema.
 pub fn wrap_envelope<T>(
     packet_type: impl Into<String>,
     envelope: EnvelopeV1<T>,
@@ -94,14 +106,25 @@ pub fn wrap_envelope<T>(
     PacketWrapperV1::new(packet_type, envelope)
 }
 
+/// Returns the packet artifact directory below a repository or workspace root.
 pub fn artifact_store_root(root: &Path) -> PathBuf {
     root.join(ARTIFACT_DIR)
 }
 
+/// Returns the JSON artifact path for `handle_id`.
 pub fn artifact_path(root: &Path, handle_id: &str) -> PathBuf {
     artifact_store_root(root).join(format!("{handle_id}.json"))
 }
 
+/// Writes an envelope as a versioned packet artifact.
+///
+/// Parent directories are created as needed. The returned handle includes the
+/// SHA-256 of the exact serialized wrapper written to disk.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Parse`] when the wrapper cannot be serialized, or
+/// [`CovyError::Io`] when the artifact directory or file cannot be written.
 pub fn write_packet_artifact<T: Serialize + Clone>(
     root: &Path,
     packet_type: &str,
@@ -142,6 +165,12 @@ pub fn write_packet_artifact<T: Serialize + Clone>(
     })
 }
 
+/// Reads and parses a packet artifact selected by `handle_id`.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Io`] when the artifact cannot be read, or
+/// [`CovyError::Parse`] when its contents are not valid JSON.
 pub fn read_packet_artifact(root: &Path, handle_id: &str) -> Result<serde_json::Value, CovyError> {
     let path = artifact_path(root, handle_id);
     let raw = std::fs::read_to_string(&path).map_err(|source| CovyError::Io {
