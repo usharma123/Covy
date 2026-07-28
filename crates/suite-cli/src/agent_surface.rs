@@ -22,6 +22,13 @@ pub fn latest_handoff_path(root: &Path) -> PathBuf {
     root.join(LATEST_HANDOFF_RELATIVE_PATH)
 }
 
+pub(crate) fn contains_packet28_guidance(content: &str) -> bool {
+    content.contains("packet28.write_intention")
+        || content.contains("packet28.prepare_handoff")
+        || content.contains("Packet28 mcp serve")
+        || content.contains("hook claude")
+}
+
 pub fn mcp_command_example(root: Option<&str>) -> String {
     format!("Packet28 mcp serve{}", command_root_fragment(root),)
 }

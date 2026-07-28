@@ -4,7 +4,7 @@ use anyhow::Result;
 use colored::Colorize;
 
 use crate::cmd_setup::{SetupMode, SetupPlanChoice, SetupRuntimeScope};
-use crate::cmd_setup_runtime::{runtime_supports_hooks, runtime_supports_mcp, RuntimeInfo};
+use crate::cmd_setup_runtime::RuntimeInfo;
 
 const SETUP_BANNER_MIN_WIDTH: usize = 58;
 
@@ -274,12 +274,12 @@ fn build_setup_plan(selected_runtimes: &[&RuntimeInfo], fallback_only: bool) -> 
     let mcp_targets = selected_runtimes
         .iter()
         .copied()
-        .filter(|runtime| runtime_supports_mcp(runtime.kind))
+        .filter(|runtime| runtime.adapter.mcp.is_some())
         .collect::<Vec<_>>();
     let hook_targets = selected_runtimes
         .iter()
         .copied()
-        .filter(|runtime| runtime_supports_hooks(runtime.kind))
+        .filter(|runtime| runtime.adapter.hooks.is_some())
         .collect::<Vec<_>>();
 
     if fallback_only {
@@ -335,8 +335,8 @@ fn format_runtime_names(runtimes: &[&RuntimeInfo]) -> String {
 
 pub(crate) fn runtime_capability_summary(runtime: &RuntimeInfo) -> String {
     match (
-        runtime_supports_mcp(runtime.kind),
-        runtime_supports_hooks(runtime.kind),
+        runtime.adapter.mcp.is_some(),
+        runtime.adapter.hooks.is_some(),
     ) {
         (true, true) => "MCP + runtime hooks".to_string(),
         (true, false) => "MCP only".to_string(),

@@ -49,7 +49,7 @@ export const Packet28OpenCodePlugin: Plugin = async ({ $ }) => {
 "#
 }
 
-pub(super) fn write_opencode_plugin(path: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+pub(crate) fn write_opencode_plugin(path: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
     let content = opencode_plugin_content();
     if path.exists() {
         let existing = fs::read_to_string(path)
@@ -169,7 +169,7 @@ provides_hooks:
 "#
 }
 
-pub(super) fn write_hermes_plugin(home: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
+pub(crate) fn write_hermes_plugin(home: &Path, auto_yes: bool) -> Result<McpConfigStatus> {
     let plugin_dir = hermes::plugin_dir(home);
     let init_path = plugin_dir.join("__init__.py");
     let manifest_path = plugin_dir.join("plugin.yaml");
@@ -189,9 +189,6 @@ pub(super) fn write_hermes_plugin(home: &Path, auto_yes: bool) -> Result<McpConf
             return Ok(McpConfigStatus::Declined);
         }
     }
-    fs::create_dir_all(&plugin_dir)?;
-    fs::write(&init_path, hermes_plugin_init_content())?;
-    fs::write(&manifest_path, hermes_plugin_manifest_content())?;
     let existing = if config_path.exists() {
         fs::read_to_string(&config_path)
             .with_context(|| format!("failed to read '{}'", config_path.display()))?
@@ -200,6 +197,9 @@ pub(super) fn write_hermes_plugin(home: &Path, auto_yes: bool) -> Result<McpConf
     };
     let patched = patch_hermes_config(&existing)
         .with_context(|| format!("failed to patch '{}'", config_path.display()))?;
+    fs::create_dir_all(&plugin_dir)?;
+    fs::write(&init_path, hermes_plugin_init_content())?;
+    fs::write(&manifest_path, hermes_plugin_manifest_content())?;
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -226,7 +226,7 @@ fn hermes_plugin_is_configured(home: &Path) -> Result<bool> {
         && hermes_config_enables_packet28(&config).unwrap_or(false))
 }
 
-pub(super) fn patch_hermes_config(existing: &str) -> Result<String> {
+pub(crate) fn patch_hermes_config(existing: &str) -> Result<String> {
     let mut value = if existing.trim().is_empty() {
         serde_yaml::Value::Mapping(Default::default())
     } else {
@@ -254,7 +254,7 @@ pub(super) fn patch_hermes_config(existing: &str) -> Result<String> {
     Ok(serde_yaml::to_string(&value)?)
 }
 
-pub(super) fn hermes_config_enables_packet28(content: &str) -> Result<bool> {
+pub(crate) fn hermes_config_enables_packet28(content: &str) -> Result<bool> {
     let value = serde_yaml::from_str::<serde_yaml::Value>(content)?;
     Ok(value
         .get("plugins")

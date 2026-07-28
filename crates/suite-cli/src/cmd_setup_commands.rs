@@ -110,7 +110,7 @@ pub(super) fn guarded_packet28_hook_command(
     )
 }
 
-pub(super) fn resolve_packet28_mcp_command() -> String {
+pub(crate) fn resolve_packet28_mcp_command() -> String {
     let output = std::process::Command::new("which")
         .arg("packet28-mcp")
         .output();
