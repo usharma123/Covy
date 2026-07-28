@@ -28,6 +28,12 @@ CLI_PACKAGES = frozenset(
     }
 )
 
+# Async orchestration belongs at process boundaries. Keeping Tokio out of the
+# reusable core graph prevents synchronous repository scans, SQLite, and
+# serialization from being mislabeled as non-blocking merely because a runtime
+# happens to be available.
+TOKIO_RUNTIME_OWNERS = frozenset({"packet28d", "suite-cli"})
+
 
 @dataclass(frozen=True)
 class ArchitectureRule:
@@ -262,6 +268,20 @@ def check_architecture(metadata: dict[str, Any]) -> list[str]:
                 f"{rule.source} reaches forbidden normal dependency {forbidden}: "
                 f"{' -> '.join(path)}"
             )
+    if "tokio" in graph.names.values():
+        for package_id in sorted(
+            graph.workspace_members,
+            key=lambda candidate: graph.names[candidate],
+        ):
+            source = graph.names[package_id]
+            if source in TOKIO_RUNTIME_OWNERS:
+                continue
+            paths = graph.shortest_forbidden_paths(source, {"tokio"})
+            if path := paths.get("tokio"):
+                errors.append(
+                    f"{source} reaches async runtime outside an orchestration "
+                    f"boundary: {' -> '.join(path)}"
+                )
     return errors
 
 

@@ -224,6 +224,32 @@ class ArchitectureDependencyTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_tokio_is_restricted_to_process_orchestration_boundaries(self) -> None:
+        fixture = metadata(
+            {
+                "context-kernel-core": [("tokio", None)],
+                "packet28d": [("tokio", None)],
+                "suite-cli": [("tokio", None)],
+            },
+            additional_packages=("packet28d", "suite-cli", "tokio"),
+        )
+        fixture["workspace_members"].remove("tokio")
+
+        result = self.run_checker(fixture)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "context-kernel-core reaches async runtime outside an "
+            "orchestration boundary: context-kernel-core -> tokio",
+            result.stderr,
+        )
+        self.assertNotIn(
+            "packet28d reaches async runtime outside", result.stderr
+        )
+        self.assertNotIn(
+            "suite-cli reaches async runtime outside", result.stderr
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

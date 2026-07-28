@@ -69,6 +69,23 @@ runtime path has been benchmarked or revalidated.
 - `crates/packet28d` owns the server process. Broker context/handoff/search
   operations, hooks, indexing, launch, planning, runtime files, server
   transports, state, and watches are separate modules.
+- Tokio is confined to the `packet28d`/`suite-cli` process-orchestration
+  boundary. TCP and Unix listeners share one cancellation signal and owned
+  connection task set; framing has separate header, body, and write deadlines.
+  CPU-heavy parsing/serialization and synchronous kernel, repository, index,
+  SQLite, and filesystem work cross a bounded blocking executor, while their
+  existing Rayon data parallelism remains unchanged.
+- Daemon subscriber and watch ingress queues are bounded. A subscriber that
+  falls behind is disconnected after its queued frames drain and resumes from
+  its last sequence through `TaskSubscribe.after_seq`; watch overflow is
+  coalesced per watch generation and surfaced on the next `watch_triggered`
+  event as `queue_overflowed=true` before conservative replanning.
+- Runtime limits have nonzero defaults and can be tuned with
+  `PACKET28D_MAX_CONNECTIONS`, `PACKET28D_MAX_BLOCKING_OPERATIONS`,
+  `PACKET28D_SUBSCRIBER_QUEUE_CAPACITY`, `PACKET28D_WATCH_QUEUE_CAPACITY`,
+  `PACKET28D_BACKGROUND_QUEUE_CAPACITY`,
+  `PACKET28D_FRAME_HEADER_TIMEOUT_MS`, `PACKET28D_FRAME_BODY_TIMEOUT_MS`,
+  `PACKET28D_FRAME_WRITE_TIMEOUT_MS`, and `PACKET28D_SHUTDOWN_GRACE_MS`.
 - `cmd_daemon.rs` defines the CLI surface; `cmd_daemon_client.rs` and
   `cmd_daemon_commands.rs` own client transport/lifecycle and command handlers.
 - Large route-registry and hook unit suites are in
