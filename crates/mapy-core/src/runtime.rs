@@ -746,51 +746,62 @@ pub fn update_repo_index(
             continue;
         }
         changed.insert(relative_path.clone());
-        let full_path = root.join(&relative_path);
-        let should_remove = !full_path.exists()
-            || !is_source_file(&full_path)
-            || is_generated_or_vendor_path(&relative_path)
-            || (!include_tests && is_test_path(&relative_path));
-        if should_remove {
-            if snapshot.files.remove(&relative_path).is_some() {
-                removed_files += 1;
+        match index_repo_path(root, &relative_path, include_tests)? {
+            Some(entry) => {
+                snapshot.files.insert(relative_path, entry);
+                indexed_files += 1;
             }
-            continue;
+            None => {
+                if snapshot.files.remove(&relative_path).is_some() {
+                    removed_files += 1;
+                }
+            }
         }
-        let metadata = std::fs::metadata(&full_path).map_err(|source| {
-            CovyError::Other(format!(
-                "failed to read metadata for '{}': {source}",
-                full_path.display()
-            ))
-        })?;
-        let size = metadata.len();
-        let mtime_secs = metadata_mtime_secs(&metadata);
-        let content = std::fs::read_to_string(&full_path).map_err(|source| {
-            CovyError::Other(format!(
-                "failed to read '{}': {source}",
-                full_path.display()
-            ))
-        })?;
-        let (symbols, imports, token_lines) = extract_index_metadata(&relative_path, &content);
-        snapshot.files.insert(
-            relative_path.clone(),
-            RepoIndexFileEntry {
-                path: relative_path,
-                size,
-                mtime_secs,
-                is_test: is_test_path(raw_path),
-                symbols,
-                imports,
-                token_lines,
-            },
-        );
-        indexed_files += 1;
     }
     Ok(RepoIndexUpdateSummary {
         indexed_files,
         removed_files,
         changed_paths: changed.into_iter().collect(),
     })
+}
+
+pub(crate) fn index_repo_path(
+    root: &Path,
+    relative_path: &str,
+    include_tests: bool,
+) -> Result<Option<RepoIndexFileEntry>, CovyError> {
+    let full_path = root.join(relative_path);
+    let should_remove = !full_path.exists()
+        || !is_source_file(&full_path)
+        || is_generated_or_vendor_path(relative_path)
+        || (!include_tests && is_test_path(relative_path));
+    if should_remove {
+        return Ok(None);
+    }
+    let metadata = std::fs::metadata(&full_path).map_err(|source| {
+        CovyError::Other(format!(
+            "failed to read metadata for '{}': {source}",
+            full_path.display()
+        ))
+    })?;
+    let size = metadata.len();
+    let mtime_secs = metadata_mtime_secs(&metadata);
+    let content = std::fs::read_to_string(&full_path).map_err(|source| {
+        CovyError::Other(format!(
+            "failed to read '{}': {source}",
+            full_path.display()
+        ))
+    })?;
+    let (symbols, imports, token_lines) = extract_index_metadata(relative_path, &content);
+    Ok(Some(RepoIndexFileEntry {
+        path: relative_path.to_string(),
+        size,
+        mtime_secs,
+        is_test: is_test_path(relative_path),
+        symbols,
+        imports,
+        token_lines,
+    }))
 }
 
 fn repo_index_from_scans(files: Vec<FileScan>, include_tests: bool) -> RepoIndexSnapshot {
