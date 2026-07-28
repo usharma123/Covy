@@ -359,27 +359,42 @@ impl SwapSession {
 
         let child_pgid = i32::try_from(child_pid)
             .context("spawned child PID does not fit the platform process-group type")?;
-        let child_start_time_micros = process_start_time_micros(child_pid)?
-            .ok_or_else(|| anyhow!("spawned child exited before its identity could be recorded"))?;
         self.report.child_pgid = Some(child_pgid);
-        self.report.child_start_time_micros = Some(child_start_time_micros);
         self.relay
             .as_ref()
             .ok_or_else(|| anyhow!("signal relay was not armed before child launch"))?
             .set_child_process_group(child_pgid);
+        let child_start_time_micros = process_start_time_micros(child_pid)?
+            .ok_or_else(|| anyhow!("spawned child exited before its identity could be recorded"))?;
+        self.report.child_start_time_micros = Some(child_start_time_micros);
         self.report.state = SessionState::Active;
         Ok(())
     }
 
     fn wait_child(&mut self) -> Result<ExitStatus> {
-        let status = self
-            .child
-            .as_mut()
-            .ok_or_else(|| anyhow!("macOS swap child is not available to wait"))?
-            .wait()
-            .context("failed to wait for child process")?;
-        self.child.take();
-        Ok(status)
+        loop {
+            if self.seen_signal() != 0 {
+                let child = self
+                    .child
+                    .take()
+                    .ok_or_else(|| anyhow!("macOS swap child is not available to terminate"))?;
+                let child_pgid = self.report.child_pgid.unwrap_or_default();
+                let status = terminate_and_reap_child(child, child_pgid)?;
+                self.process_group_cleaned = true;
+                return Ok(status);
+            }
+            let status = self
+                .child
+                .as_mut()
+                .ok_or_else(|| anyhow!("macOS swap child is not available to wait"))?
+                .try_wait()
+                .context("failed to inspect child process while waiting")?;
+            if let Some(status) = status {
+                self.child.take();
+                return Ok(status);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn seen_signal(&self) -> i32 {
@@ -510,14 +525,13 @@ fn run_child_lifecycle(
 }
 
 #[cfg(target_os = "macos")]
-fn terminate_and_reap_child(mut child: Child, child_pgid: i32) -> Result<()> {
+fn terminate_and_reap_child(mut child: Child, child_pgid: i32) -> Result<ExitStatus> {
     let mut errors = Vec::new();
-    let mut child_reaped = match child.try_wait() {
-        Ok(Some(_)) => true,
-        Ok(None) => false,
+    let mut child_status = match child.try_wait() {
+        Ok(status) => status,
         Err(err) => {
             errors.push(format!("failed to inspect child before cleanup: {err}"));
-            false
+            None
         }
     };
     if let Err(err) = signal_process_group(child_pgid, SIGTERM) {
@@ -528,9 +542,9 @@ fn terminate_and_reap_child(mut child: Child, child_pgid: i32) -> Result<()> {
 
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
-        if !child_reaped {
+        if child_status.is_none() {
             match child.try_wait() {
-                Ok(Some(_)) => child_reaped = true,
+                Ok(Some(status)) => child_status = Some(status),
                 Ok(None) => {}
                 Err(err) => {
                     errors.push(format!("failed to inspect child during cleanup: {err}"));
@@ -539,7 +553,7 @@ fn terminate_and_reap_child(mut child: Child, child_pgid: i32) -> Result<()> {
             }
         }
         match process_group_is_running(child_pgid) {
-            Ok(false) if child_reaped => break,
+            Ok(false) if child_status.is_some() => break,
             Ok(_) => {}
             Err(err) => {
                 errors.push(format!("failed to inspect child process group: {err:#}"));
@@ -558,7 +572,7 @@ fn terminate_and_reap_child(mut child: Child, child_pgid: i32) -> Result<()> {
         Ok(false) => {}
         Err(err) => errors.push(format!("failed to inspect child process group: {err:#}")),
     }
-    if !child_reaped {
+    if child_status.is_none() {
         if let Err(err) = child.kill() {
             if err.raw_os_error() != Some(libc::ESRCH) {
                 errors.push(format!(
@@ -566,17 +580,20 @@ fn terminate_and_reap_child(mut child: Child, child_pgid: i32) -> Result<()> {
                 ));
             }
         }
-        if let Err(err) = child.wait() {
-            errors.push(format!(
-                "failed to reap child after process-group cleanup: {err}"
-            ));
+        match child.wait() {
+            Ok(status) => child_status = Some(status),
+            Err(err) => {
+                errors.push(format!(
+                    "failed to reap child after process-group cleanup: {err}"
+                ));
+            }
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
+    if !errors.is_empty() {
         Err(anyhow!(errors.join("; ")))
+    } else {
+        child_status.ok_or_else(|| anyhow!("child cleanup completed without a reaped exit status"))
     }
 }
 
@@ -2446,6 +2463,33 @@ mod tests {
         assert_child_lifecycle_failure_restores_with_hooks(&InjectSignalAt(
             LifecyclePoint::AfterActiveReport,
         ));
+    }
+
+    #[test]
+    fn wait_escalates_and_reaps_a_term_ignoring_child_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = test_report(dir.path(), "term-ignoring", SessionState::Staging);
+        let mut session =
+            SwapSession::new(session_report_path(dir.path(), "term-ignoring"), report);
+        session.arm_signal_relay(&NOOP_LIFECYCLE_HOOKS).unwrap();
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("trap '' TERM; /bin/sleep 30 & wait")
+            .process_group(0);
+        let child = command.spawn().unwrap();
+        session.adopt_child(child).unwrap();
+        let child_pgid = session.report.child_pgid.unwrap();
+        session.relay.as_ref().unwrap().record_signal(SIGTERM);
+
+        let started = Instant::now();
+        let status = session.wait_child().unwrap();
+
+        assert!(!status.success());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(session.process_group_cleaned);
+        assert!(!process_group_is_running(child_pgid).unwrap());
+        session.finish().unwrap();
     }
 
     #[test]
