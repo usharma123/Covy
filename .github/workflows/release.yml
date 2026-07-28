@@ -16,25 +16,23 @@ jobs:
   release-gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.93.1
+          components: rustfmt, clippy
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
-      - name: Build release gate dependencies
-        run: cargo build -p suite-cli -p packet28d -p packet28-reducer-core -p packet28-search-cli
-
-      - name: Run p28 search CLI tests
-        run: cargo test -p packet28-search-cli --tests
-
-      - name: Run reducer cache safety tests
+      - name: Install pinned cargo-deny
         run: |
-          cargo test -p suite-cli rust_workspace_fingerprint_changes_for_out_of_band_source_edit
-          cargo test -p suite-cli agent_status_reports_safe_cache_policy
-          cargo test -p suite-cli test_hook_runner_cli_reuses_cached_summary_without_rerunning_command --test hook_runner_e2e
-          cargo test -p suite-cli test_hook_runner_cli_busts_cache_after_out_of_band_file_edit --test hook_runner_e2e
+          scripts/install_cargo_deny.sh "$RUNNER_TEMP/cargo-deny-bin"
+          echo "$RUNNER_TEMP/cargo-deny-bin" >> "$GITHUB_PATH"
+
+      - name: Run tag-aware canonical gate
+        run: scripts/validate_full_gate.sh --release-tag "$GITHUB_REF_NAME"
 
       - name: Run hook benchmark suite
         env:
@@ -99,7 +97,7 @@ jobs:
 
       - name: Upload release gate artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-gate-benchmarks
           path: .packet28/benchmarks
@@ -132,11 +130,12 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: 1.93.1
           targets: ${{ matrix.target }}
 
       - name: Install musl tools (Linux x64)
@@ -145,14 +144,14 @@ jobs:
 
       - name: Install cross (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev 88f49ff79e777bef6d3564531636ee4d3cc2f8d2 --locked
 
       - name: Build release binaries
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            cross build --release --target ${{ matrix.target }} --bin Packet28 --bin packet28d --bin p28
+            cross build --release --locked --target ${{ matrix.target }} --bin Packet28 --bin packet28d --bin p28
           else
-            cargo build --release --target ${{ matrix.target }} --bin Packet28 --bin packet28d --bin p28
+            cargo build --release --locked --target ${{ matrix.target }} --bin Packet28 --bin packet28d --bin p28
           fi
 
       - name: Stage platform package
@@ -188,7 +187,7 @@ jobs:
           NODE
 
       - name: Upload platform package
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: pkg-${{ matrix.platform }}
           path: dist/@packet28/${{ matrix.platform }}
@@ -197,20 +196,54 @@ jobs:
     needs:
       - release-gates
       - build
-      - test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: 20
+          node-version: 20.20.2
           registry-url: https://registry.npmjs.org
 
       - name: Download all platform packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: dist/platforms
+
+      - name: Stage root package
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ROOT_DIR="dist/packet28"
+          cp -r npm/packet28/ "$ROOT_DIR/"
+          VERSION="$VERSION" PACKAGE_JSON="$ROOT_DIR/package.json" node <<'NODE'
+          const fs = require('fs');
+          const pkgPath = process.env.PACKAGE_JSON;
+          const version = process.env.VERSION;
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          pkg.version = version;
+          for (const name of ['@packet28/darwin-arm64', '@packet28/darwin-x64', '@packet28/linux-x64', '@packet28/linux-arm64']) {
+            if (pkg.optionalDependencies && pkg.optionalDependencies[name]) {
+              pkg.optionalDependencies[name] = version;
+            }
+          }
+          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+          NODE
+          chmod +x "$ROOT_DIR/bin/packet28.js" "$ROOT_DIR/bin/packet28-mcp.js" "$ROOT_DIR/bin/p28.js"
+
+      - name: Dry-run every npm package
+        run: |
+          set -euo pipefail
+          REGISTRY="https://registry.npmjs.org"
+          for package_dir in \
+            dist/platforms/pkg-darwin-arm64 \
+            dist/platforms/pkg-darwin-x64 \
+            dist/platforms/pkg-linux-x64 \
+            dist/platforms/pkg-linux-arm64 \
+            dist/packet28; do
+            (cd "$package_dir" && npm pack --dry-run --json)
+            (cd "$package_dir" && npm publish --dry-run --access public --registry="$REGISTRY")
+          done
 
       - name: Publish platform packages
         env:
@@ -246,24 +279,7 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           REGISTRY="https://registry.npmjs.org"
-
-          # Stage root package
           ROOT_DIR="dist/packet28"
-          cp -r npm/packet28/ "$ROOT_DIR/"
-          VERSION="$VERSION" PACKAGE_JSON="$ROOT_DIR/package.json" node <<'NODE'
-          const fs = require('fs');
-          const pkgPath = process.env.PACKAGE_JSON;
-          const version = process.env.VERSION;
-          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-          pkg.version = version;
-          for (const name of ['@packet28/darwin-arm64', '@packet28/darwin-x64', '@packet28/linux-x64', '@packet28/linux-arm64']) {
-            if (pkg.optionalDependencies && pkg.optionalDependencies[name]) {
-              pkg.optionalDependencies[name] = version;
-            }
-          }
-          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-          NODE
-          chmod +x "$ROOT_DIR/bin/packet28.js" "$ROOT_DIR/bin/packet28-mcp.js" "$ROOT_DIR/bin/p28.js"
 
           if npm view "packet28@${VERSION}" version --registry="$REGISTRY" >/dev/null 2>&1; then
             echo "packet28@${VERSION} already published, skipping"
@@ -289,13 +305,3 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "Packet28 ${GITHUB_REF_NAME}" \
             --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build all binaries first
-        run: cargo build --workspace
-      - name: Run tests
-        run: cargo test --workspace

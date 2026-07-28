@@ -31,7 +31,7 @@ This keeps Packet28 useful as both a context broker and a reducer layer: small i
 
 ## Architecture
 
-Packet28 is a Rust workspace of 25 crates organized into four layers:
+Packet28 is a Rust workspace of 30 crates organized into four layers:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -438,6 +438,7 @@ Operationally:
 | `Packet28` | `suite-cli` | Umbrella CLI for all domains |
 | `packet28-agent` | `suite-cli` | Wrapper that relaunches delegated agents from checkpointed handoff packets |
 | `packet28d` | `packet28d` | Local daemon for persistent state and file watching |
+| `p28` | `packet28-search-cli` | Indexed repository search CLI |
 | `covy` | `covy-cli` | Legacy coverage CLI: check, ingest, report, diff, testmap, impact, shard, merge |
 | `diffy` | `diffy-cli` | Diff-focused gate analysis |
 | `testy` | `testy-cli` | Test impact and sharding |
@@ -555,7 +556,7 @@ Coverage state from the legacy `covy` CLI lives under `.covy/state/`.
 Build from source:
 
 ```bash
-cargo build --release -p suite-cli -p packet28d
+cargo build --locked --release -p suite-cli -p packet28d
 ```
 
 Or install the npm wrapper binaries:
@@ -737,9 +738,31 @@ Optional governance via `context.yaml` for policy-constrained execution. The cur
 
 Repository-local MCP config example: `.mcp.json`.
 
+## Validation
+
+Use `scripts/validate_refactor_batch.sh` for fast, package-focused iteration.
+The canonical pre-commit and release gate is:
+
+```bash
+scripts/validate_full_gate.sh
+```
+
+It requires the checksum-pinned `cargo-deny` 0.20.2 binary that CI installs via
+`scripts/install_cargo_deny.sh`. Use `--list` to inspect the gate without
+executing it. CI also runs the declared minimum toolchain separately:
+
+```bash
+rustup run 1.88.0 scripts/validate_full_gate.sh --msrv
+```
+
+Release automation adds `--release-tag vX.Y.Z`, which rejects mismatches among
+the tag, Cargo version, npm manifests, platform dependency versions, and release
+notes before any package is published.
+
 ## Project Stats
 
-- ~83K lines of Rust across 247 source files
-- ~9K lines of Rust tests across 12 test files
-- 25 crates in the workspace
-- 6 binaries (Packet28, packet28-agent, packet28d, covy, diffy, testy)
+<!-- BEGIN GENERATED PROJECT STATS -->
+- 162,326 lines across 578 Rust files
+- 30 crates in the workspace
+- 8 Cargo binary targets (including one internal generator)
+<!-- END GENERATED PROJECT STATS -->
