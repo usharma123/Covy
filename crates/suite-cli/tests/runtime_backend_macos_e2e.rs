@@ -10,9 +10,16 @@ use runtime_backend::{
 #[cfg(target_os = "macos")]
 use serde_json::{json, Value};
 #[cfg(target_os = "macos")]
+use sha2::{Digest, Sha256};
+#[cfg(target_os = "macos")]
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+fn sha256(content: &str) -> String {
+    format!("{:x}", Sha256::digest(content.as_bytes()))
+}
 
 #[cfg(target_os = "macos")]
 #[test]
@@ -38,15 +45,15 @@ fn test_runtime_backend_macos_run_command_auto_backend_swaps_instruction_file_an
         .clone();
     let stdout = String::from_utf8_lossy(&output);
     assert!(stdout.contains("macos_swap|claude"));
+    let reports = swap_reports(&dir.path().join(".packet28/runtime/macos-swap"));
+    assert_eq!(reports.len(), 1);
+    let report: Value = serde_json::from_slice(&fs::read(&reports[0]).unwrap()).unwrap();
     assert!(stdout.contains("# [p28:virtual] sha256:"));
     assert_eq!(
         fs::read_to_string(dir.path().join("AGENTS.md")).unwrap(),
         original
     );
 
-    let reports = swap_reports(&dir.path().join(".packet28/runtime/macos-swap"));
-    assert_eq!(reports.len(), 1);
-    let report: Value = serde_json::from_slice(&fs::read(&reports[0]).unwrap()).unwrap();
     assert_eq!(
         report.get("state").and_then(Value::as_str),
         Some("restored")
@@ -92,7 +99,8 @@ fn test_runtime_backend_macos_run_command_recovers_stale_swap_session_before_lau
                 "path":"AGENTS.md",
                 "decision":"rewrite",
                 "reason":null,
-                "content_sha256":"abc",
+                "original_sha256":sha256(original),
+                "content_sha256":sha256(swapped),
                 "task_label":"default",
                 "original_bytes":swapped.len(),
                 "rewritten_bytes":swapped.len(),
@@ -150,6 +158,14 @@ fn test_runtime_backend_macos_run_command_restores_files_after_sigterm() {
 
     let report_dir = dir.path().join(".packet28/runtime/macos-swap");
     wait_for_active_swap_report(&report_dir, Duration::from_secs(10));
+    let active_reports = swap_reports(&report_dir);
+    assert_eq!(
+        active_reports.len(),
+        1,
+        "active swap report was not published"
+    );
+    let active: Value = serde_json::from_slice(&fs::read(&active_reports[0]).unwrap()).unwrap();
+    assert_eq!(active.get("state").and_then(Value::as_str), Some("active"));
 
     unsafe {
         libc::kill(child.id() as i32, libc::SIGTERM);
@@ -167,4 +183,68 @@ fn test_runtime_backend_macos_run_command_restores_files_after_sigterm() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn test_runtime_backend_macos_serializes_two_workspace_swaps() {
+    ensure_packet28d_built();
+    let dir = tempfile::tempdir().unwrap();
+    let original = large_agents_text(80);
+    let agents = dir.path().join("AGENTS.md");
+    fs::write(&agents, &original).unwrap();
+
+    let claude = dir.path().join("claude");
+    write_executable_script(
+        &claude,
+        "#!/bin/sh\nprintf ready > first-child-ready.txt\nwhile true; do sleep 1; done\n",
+    );
+
+    let mut first = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+        .current_dir(dir.path())
+        .args(["run", "--root", ".", "--", claude.to_str().unwrap()])
+        .spawn()
+        .unwrap();
+    let report_dir = dir.path().join(".packet28/runtime/macos-swap");
+    wait_for_active_swap_report(&report_dir, Duration::from_secs(10));
+    let reports = swap_reports(&report_dir);
+    assert_eq!(
+        reports.len(),
+        1,
+        "first swap did not publish an active report"
+    );
+    let report: Value = serde_json::from_slice(&fs::read(&reports[0]).unwrap()).unwrap();
+    assert_eq!(report.get("state").and_then(Value::as_str), Some("active"));
+
+    let second = suite_cmd()
+        .current_dir(dir.path())
+        .args([
+            "run",
+            "--root",
+            ".",
+            "--backend",
+            "macos-swap",
+            "--",
+            "/usr/bin/true",
+        ])
+        .output()
+        .unwrap();
+
+    // SAFETY: `first` is a live child process created by this test.
+    unsafe {
+        libc::kill(first.id() as i32, libc::SIGTERM);
+    }
+    let status = first.wait().unwrap();
+    assert!(!status.success());
+    assert_eq!(fs::read_to_string(&agents).unwrap(), original);
+    assert!(
+        !second.status.success(),
+        "overlapping macOS swap unexpectedly succeeded: {second:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&second.stderr)
+            .contains("another macOS swap session currently owns workspace"),
+        "unexpected overlapping-swap stderr: {:?}",
+        String::from_utf8_lossy(&second.stderr)
+    );
 }
