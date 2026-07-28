@@ -232,7 +232,12 @@ pub fn run_cli_local(cli: Cli) -> Result<i32> {
 pub fn display_error(err: &anyhow::Error) {
     use colored::Colorize;
 
-    if let Some(covy_err) = err.downcast_ref::<suite_packet_core::CovyError>() {
+    if let Some(diffy_err) = err.downcast_ref::<diffy_core::DiffyError>() {
+        eprintln!("{} {diffy_err}", "error:".red().bold());
+        if let Some(hint) = diffy_err.hint() {
+            eprintln!("  {} {hint}", "hint:".cyan().bold());
+        }
+    } else if let Some(covy_err) = err.downcast_ref::<suite_packet_core::CovyError>() {
         eprintln!("{} {covy_err}", "error:".red().bold());
         if let Some(hint) = covy_err.hint() {
             eprintln!("  {} {hint}", "hint:".cyan().bold());

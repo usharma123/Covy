@@ -61,16 +61,16 @@ pub(crate) fn run_cover_check(request: CoverCheckRequest) -> Result<CoverCheckRe
     let output = diffy_core::pipeline::run_analysis(
         pipeline_request,
         &diffy_core::pipeline::PipelineIngestAdapters {
-            ingest_coverage_auto: |path| covy_ingest::ingest_path(path).map_err(Into::into),
+            ingest_coverage_auto: covy_ingest::ingest_path,
             ingest_coverage_with_format: |path, format| {
-                covy_ingest::ingest_path_with_format(path, format).map_err(Into::into)
+                covy_ingest::ingest_path_with_format(path, format)
             },
             ingest_coverage_stdin: |_format| {
-                anyhow::bail!("stdin is not supported through packet28d")
+                Err(suite_packet_core::CovyError::Other(
+                    "stdin is not supported through packet28d".to_string(),
+                ))
             },
-            ingest_diagnostics: |path| {
-                covy_ingest::ingest_diagnostics_path(path).map_err(Into::into)
-            },
+            ingest_diagnostics: covy_ingest::ingest_diagnostics_path,
         },
     )?;
 

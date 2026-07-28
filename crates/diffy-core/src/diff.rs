@@ -3,13 +3,24 @@ use std::process::Command;
 
 use roaring::RoaringBitmap;
 
-use crate::error::CovyError;
+pub use crate::error::DiffyError;
+use crate::error::Result;
 use crate::model::{DiffStatus, FileDiff};
 
 const DIFF_CACHE_DIR: &str = ".covy/state/diff-cache";
 
-/// Parse git diff output to extract changed files and line numbers.
-pub fn git_diff(base: &str, head: &str) -> Result<Vec<FileDiff>, CovyError> {
+/// Compute changed files and line numbers between two Git references.
+///
+/// The on-disk diff cache is best-effort: cache read or write failures do not
+/// prevent a fresh Git diff from being returned.
+///
+/// # Errors
+///
+/// Returns [`DiffyError::GitNotFound`] when Git cannot be located,
+/// [`DiffyError::GitSpawn`] when Git cannot be started, or
+/// [`DiffyError::GitCommandFailed`] when reference resolution or diff execution
+/// exits unsuccessfully.
+pub fn git_diff(base: &str, head: &str) -> Result<Vec<FileDiff>> {
     let (base_hash, head_hash) = resolve_refs(base, head)?;
     let cache_path = diff_cache_path(&base_hash, &head_hash);
 
@@ -22,7 +33,7 @@ pub fn git_diff(base: &str, head: &str) -> Result<Vec<FileDiff>, CovyError> {
     parse_diff_output(&stdout)
 }
 
-fn run_git_diff(base: &str, head: &str) -> Result<String, CovyError> {
+fn run_git_diff(base: &str, head: &str) -> Result<String> {
     let output = Command::new("git")
         .args([
             "diff",
@@ -33,37 +44,35 @@ fn run_git_diff(base: &str, head: &str) -> Result<String, CovyError> {
             &format!("{base}..{head}"),
         ])
         .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                CovyError::GitNotFound
-            } else {
-                CovyError::Git(format!("Failed to run git diff: {e}"))
-            }
-        })?;
+        .map_err(|source| git_spawn_error("diff", source))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CovyError::Git(format!("git diff failed: {stderr}")));
+        return Err(DiffyError::GitCommandFailed {
+            operation: "diff",
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr)
+                .trim_end()
+                .to_string(),
+        });
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn resolve_refs(base: &str, head: &str) -> Result<(String, String), CovyError> {
+fn resolve_refs(base: &str, head: &str) -> Result<(String, String)> {
     let output = Command::new("git")
         .args(["rev-parse", base, head])
         .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                CovyError::GitNotFound
-            } else {
-                CovyError::Git(format!("Failed to run git rev-parse: {e}"))
-            }
-        })?;
+        .map_err(|source| git_spawn_error("rev-parse", source))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CovyError::Git(format!("git rev-parse failed: {stderr}")));
+        return Err(DiffyError::GitCommandFailed {
+            operation: "rev-parse",
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr)
+                .trim_end()
+                .to_string(),
+        });
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -72,12 +81,18 @@ fn resolve_refs(base: &str, head: &str) -> Result<(String, String), CovyError> {
     let head_hash = lines.next().unwrap_or_default().trim().to_string();
 
     if base_hash.is_empty() || head_hash.is_empty() {
-        return Err(CovyError::Git(
-            "git rev-parse returned empty ref hash".to_string(),
-        ));
+        return Err(DiffyError::EmptyGitRefHash);
     }
 
     Ok((base_hash, head_hash))
+}
+
+fn git_spawn_error(operation: &'static str, source: std::io::Error) -> DiffyError {
+    if source.kind() == std::io::ErrorKind::NotFound {
+        DiffyError::GitNotFound { operation, source }
+    } else {
+        DiffyError::GitSpawn { operation, source }
+    }
 }
 
 fn diff_cache_key(base_hash: &str, head_hash: &str) -> String {
@@ -98,7 +113,7 @@ fn load_cached_diff(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-fn save_cached_diff(path: &Path, content: &str) -> Result<(), CovyError> {
+fn save_cached_diff(path: &Path, content: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -107,7 +122,12 @@ fn save_cached_diff(path: &Path, content: &str) -> Result<(), CovyError> {
 }
 
 /// Parse the raw output of `git diff --unified=0`.
-pub fn parse_diff_output(diff_text: &str) -> Result<Vec<FileDiff>, CovyError> {
+///
+/// # Errors
+///
+/// The current tolerant parser does not reject malformed lines. The typed
+/// result leaves room for future validation without changing the API shape.
+pub fn parse_diff_output(diff_text: &str) -> Result<Vec<FileDiff>> {
     let mut diffs = Vec::new();
     let mut current_path: Option<String> = None;
     let mut current_old_path: Option<String> = None;
@@ -276,5 +296,22 @@ rename to new.rs
         let p = diff_cache_path("abc", "def");
         assert!(p.to_string_lossy().contains(".covy/state/diff-cache"));
         assert_eq!(p.extension().and_then(|e| e.to_str()), Some("diff"));
+    }
+
+    #[test]
+    fn git_spawn_not_found_maps_to_typed_variant() {
+        let error = git_spawn_error("diff", std::io::Error::from(std::io::ErrorKind::NotFound));
+
+        assert!(matches!(error, DiffyError::GitNotFound { .. }));
+    }
+
+    #[test]
+    fn git_spawn_other_failure_maps_to_typed_variant() {
+        let error = git_spawn_error(
+            "rev-parse",
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+
+        assert!(matches!(error, DiffyError::GitSpawn { .. }));
     }
 }

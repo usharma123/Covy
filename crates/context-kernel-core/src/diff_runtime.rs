@@ -1,4 +1,5 @@
 use super::*;
+use suite_packet_core::CovyError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffAnalyzeKernelInput {
@@ -106,25 +107,29 @@ pub(crate) fn default_diff_pipeline_ingest_adapters() -> diffy_core::pipeline::P
     }
 }
 
-fn ingest_coverage_auto(path: &Path) -> anyhow::Result<diffy_core::model::CoverageData> {
-    covy_ingest::ingest_path(path).map_err(Into::into)
+fn ingest_coverage_auto(
+    path: &Path,
+) -> std::result::Result<diffy_core::model::CoverageData, CovyError> {
+    covy_ingest::ingest_path(path)
 }
 
 fn ingest_coverage_with_format(
     path: &Path,
     format: diffy_core::model::CoverageFormat,
-) -> anyhow::Result<diffy_core::model::CoverageData> {
-    covy_ingest::ingest_path_with_format(path, format).map_err(Into::into)
+) -> std::result::Result<diffy_core::model::CoverageData, CovyError> {
+    covy_ingest::ingest_path_with_format(path, format)
 }
 
 fn ingest_coverage_stdin(
     format: diffy_core::model::CoverageFormat,
-) -> anyhow::Result<diffy_core::model::CoverageData> {
-    covy_ingest::ingest_reader(std::io::stdin().lock(), format).map_err(Into::into)
+) -> std::result::Result<diffy_core::model::CoverageData, CovyError> {
+    covy_ingest::ingest_reader(std::io::stdin().lock(), format)
 }
 
-fn ingest_diagnostics(path: &Path) -> anyhow::Result<diffy_core::diagnostics::DiagnosticsData> {
-    covy_ingest::ingest_diagnostics_path(path).map_err(Into::into)
+fn ingest_diagnostics(
+    path: &Path,
+) -> std::result::Result<diffy_core::diagnostics::DiagnosticsData, CovyError> {
+    covy_ingest::ingest_diagnostics_path(path)
 }
 
 pub fn build_diff_pipeline_request(

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use suite_packet_core::{CoverageData, CoverageFormat};
+use suite_packet_core::{CoverageData, CoverageFormat, CovyError};
 
 pub fn parse_daemon_env_flag(raw: Option<&str>) -> bool {
     raw.is_some_and(|value| {
@@ -68,18 +68,23 @@ pub fn repo_cache_fingerprint(repo_root: &Path, relevant_paths: &[PathBuf]) -> S
     suite_foundation_core::repo_fingerprint::cache_fingerprint(repo_root, relevant_paths)
 }
 
-fn ingest_coverage_auto(path: &Path) -> Result<CoverageData> {
-    suite_ingest::ingest_coverage_path(path, None).map_err(Into::into)
+fn ingest_coverage_auto(path: &Path) -> std::result::Result<CoverageData, CovyError> {
+    suite_ingest::ingest_coverage_path(path, None)
 }
 
-fn ingest_coverage_with_format(path: &Path, format: CoverageFormat) -> Result<CoverageData> {
-    suite_ingest::ingest_coverage_path(path, Some(format)).map_err(Into::into)
+fn ingest_coverage_with_format(
+    path: &Path,
+    format: CoverageFormat,
+) -> std::result::Result<CoverageData, CovyError> {
+    suite_ingest::ingest_coverage_path(path, Some(format))
 }
 
-fn ingest_coverage_stdin(format: CoverageFormat) -> Result<CoverageData> {
-    suite_ingest::ingest_coverage_stdin(format).map_err(Into::into)
+fn ingest_coverage_stdin(format: CoverageFormat) -> std::result::Result<CoverageData, CovyError> {
+    suite_ingest::ingest_coverage_stdin(format)
 }
 
-fn ingest_diagnostics(path: &Path) -> Result<suite_packet_core::diagnostics::DiagnosticsData> {
-    suite_ingest::ingest_diagnostics_path(path).map_err(Into::into)
+fn ingest_diagnostics(
+    path: &Path,
+) -> std::result::Result<suite_packet_core::diagnostics::DiagnosticsData, CovyError> {
+    suite_ingest::ingest_diagnostics_path(path)
 }

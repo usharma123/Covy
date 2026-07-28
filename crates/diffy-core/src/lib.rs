@@ -1,6 +1,12 @@
-pub mod error {
-    pub use suite_packet_core::error::*;
-}
+//! Diff-aware coverage and diagnostics analysis.
+//!
+//! The crate owns git diff parsing, coverage/diagnostics pipeline orchestration,
+//! quality-gate evaluation, and report rendering. Fallible diff and pipeline
+//! APIs return [`DiffyError`] so callers can inspect stable error variants while
+//! binaries remain free to add `anyhow` context at their presentation boundary.
+
+pub mod error;
+pub use error::DiffyError;
 
 pub mod diagnostics {
     pub use suite_packet_core::diagnostics::*;
