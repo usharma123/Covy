@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "packet28-per06-shared-scan"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+blake3 = "=1.8.3"
+ignore = "=0.4.25"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+tempfile = "=3.25.0"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+undocumented_unsafe_blocks = "deny"
