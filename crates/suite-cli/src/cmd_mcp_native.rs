@@ -12,6 +12,8 @@ mod artifacts;
 mod fff;
 #[path = "cmd_mcp_native_handoff.rs"]
 mod handoff;
+#[path = "cmd_mcp_native_lifecycle.rs"]
+mod lifecycle;
 #[path = "cmd_mcp_native_read.rs"]
 mod read;
 #[path = "cmd_mcp_native_search.rs"]
@@ -55,6 +57,10 @@ use search::{
     build_search_full_payload, build_search_request, build_search_response_payload,
     merge_search_results, search_backend_name, should_shadow_with_native, Packet28SearchExecution,
 };
+
+#[cfg(test)]
+pub(crate) use lifecycle::structural_snapshot;
+pub(crate) use lifecycle::{handle_tool_call, tool_descriptors};
 
 #[derive(Debug, Clone)]
 struct ToolRecommendation {

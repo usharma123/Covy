@@ -32,9 +32,6 @@ mod core_tools;
 mod fff;
 #[path = "cmd_mcp_memory_tools.rs"]
 mod memory_tools;
-#[path = "cmd_mcp_native_dispatch.rs"]
-mod native_dispatch;
-#[allow(dead_code)]
 #[path = "cmd_mcp_native.rs"]
 mod native_tools;
 #[path = "cmd_mcp_prompt_resource.rs"]
@@ -61,27 +58,12 @@ mod transport;
 use crate::cmd_mcp::config::McpProxyConfig;
 use crate::cmd_mcp::core_tools::handle_packet28_agent_status;
 use crate::cmd_mcp::fff::FffMcpClient;
-use crate::cmd_mcp::native_tools::{
-    handle_packet28_fetch_context, handle_packet28_fetch_raw_output,
-    handle_packet28_fetch_tool_result, handle_packet28_glob, handle_packet28_prepare_handoff,
-    handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
-    handle_packet28_validate_plan, Packet28ActionCriticArgs, Packet28FetchContextArgs,
-    Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs, Packet28GlobArgs,
-    Packet28HandoffCompressionArgs, Packet28HandoffDependencyLintArgs, Packet28HandoffDiffArgs,
-    Packet28HandoffEnvironmentLintArgs, Packet28HandoffFixPlanArgs, Packet28HandoffLintAllArgs,
-    Packet28HandoffLintRegressionArgs, Packet28HandoffLintTrendArgs, Packet28HandoffPathLintArgs,
-    Packet28HandoffRepairVerifyArgs, Packet28HandoffStaleCommandLintArgs,
-    Packet28HandoffTestLintArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
-    Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
-    Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
-    Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
-};
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
     resolve_current_task_id,
 };
 use crate::cmd_mcp::proxy::{load_proxy_config, serve_proxy_stdio};
-use crate::cmd_mcp::response::summarize_tool_payload;
+use crate::cmd_mcp::response::{shape_tool_response, summarize_tool_payload};
 pub(crate) use crate::cmd_mcp::smoke::smoke_test_agent_config;
 use crate::cmd_mcp::support::{
     broker_task_status_via_session, classify_error_message, extract_named_string, extract_paths,
@@ -500,11 +482,11 @@ fn handle_tool_call(
     let canonical_name = canonical_tool_name(requested_name);
     let name = canonical_name.as_str();
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-    let payload = if let Some(native_payload) =
-        native_dispatch::handle_native_tool_call(root, session, name, &arguments)?
+    if let Some(native_response) = native_tools::handle_tool_call(root, session, name, &arguments)?
     {
-        native_payload
-    } else if let Some(memory_payload) =
+        return Ok(native_response);
+    }
+    let payload = if let Some(memory_payload) =
         memory_tools::handle_memory_tool_call(root, name, &arguments)?
     {
         memory_payload
@@ -515,15 +497,8 @@ fn handle_tool_call(
     } else {
         return Err(anyhow!("unsupported tool '{name}'"));
     };
-    Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": summarize_tool_payload(name, &payload)
-            }
-        ],
-        "structuredContent": payload
-    }))
+    let summary = summarize_tool_payload(name, &payload);
+    Ok(shape_tool_response(payload, summary))
 }
 
 #[cfg(test)]

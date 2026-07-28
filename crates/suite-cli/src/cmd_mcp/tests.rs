@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn native_tool_lifecycle_matches_reviewed_structural_snapshot() {
+    let mut actual = native_tools::structural_snapshot();
+    let all_tools = tools_list_payload(McpToolset::All);
+    actual["all_tools_list_names"] = Value::Array(
+        all_tools["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool.get("name").cloned())
+            .collect(),
+    );
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/mcp/native_tool_lifecycle.json"
+    ))
+    .unwrap();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn tools_list_exposes_search_fast_without_task_id() {
     let root = tempfile::tempdir().unwrap();
     let session = Arc::new(Mutex::new(McpSessionState::default()));
