@@ -11,6 +11,13 @@ homepage.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+shared-repository-scan = [
+  "mapy-core/shared-repository-scan",
+  "packet28-search-core/shared-repository-scan",
+]
+
 [[bin]]
 name = "packet28d"
 path = "src/main.rs"

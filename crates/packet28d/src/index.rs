@@ -486,7 +486,63 @@ fn perform_full_index_rebuild_after_start(
         guard.root.clone()
     };
     after_start()?;
+    #[cfg(feature = "shared-repository-scan")]
+    let (repo_runtime, regex_runtime) = {
+        mark_regex_build_started(state)?;
+        let mut last_repo_progress = None::<(usize, std::time::Instant)>;
+        let mut last_regex_progress = None::<(usize, std::time::Instant)>;
+        let shared = match packet28d::shared_repository_scan::rebuild_full_indexes_with_shared_scan(
+            &root,
+            true,
+            || shutdown.is_some_and(crate::runtime::ShutdownSignal::is_requested),
+            |progress| match progress.engine {
+                packet28d::shared_repository_scan::SharedScanEngine::Map => {
+                    if should_persist_progress(
+                        progress.completed,
+                        progress.total,
+                        &mut last_repo_progress,
+                    ) {
+                        let _ =
+                            update_repo_build_progress(state, progress.completed, progress.total);
+                    }
+                }
+                packet28d::shared_repository_scan::SharedScanEngine::Regex => {
+                    if should_persist_progress(
+                        progress.completed,
+                        progress.total,
+                        &mut last_regex_progress,
+                    ) {
+                        let _ = update_regex_build_progress(
+                            state,
+                            "building",
+                            progress.completed,
+                            progress.total,
+                        );
+                    }
+                }
+            },
+        ) {
+            Ok(shared) => shared,
+            Err(packet28d::shared_repository_scan::SharedScanError::Cancelled) => {
+                return requeue_interrupted_index_build(state);
+            }
+            Err(error) => return Err(anyhow!("failed to build shared indexes: {error}")),
+        };
+        daemon_log(&format!(
+            "shared index scan walk_passes={} walked_entries={} metadata_calls={} reads={} bytes_read={} peak_buffer_bytes={} ignored_walk_errors={}",
+            shared.telemetry.walk_passes,
+            shared.telemetry.walked_entries,
+            shared.telemetry.content_metadata_calls,
+            shared.telemetry.successful_read_calls,
+            shared.telemetry.bytes_read,
+            shared.telemetry.peak_retained_content_bytes,
+            shared.telemetry.ignored_walk_errors,
+        ));
+        (shared.repo, shared.regex)
+    };
+    #[cfg(not(feature = "shared-repository-scan"))]
     let mut last_repo_progress = None::<(usize, std::time::Instant)>;
+    #[cfg(not(feature = "shared-repository-scan"))]
     let repo_runtime =
         mapy_core::rebuild_repo_index_runtime_with_progress(&root, true, |indexed, total| {
             if should_persist_progress(indexed, total, &mut last_repo_progress) {
@@ -494,16 +550,21 @@ fn perform_full_index_rebuild_after_start(
             }
         })
         .map_err(|err| anyhow!("failed to build repo index: {err}"))?;
+    #[cfg(not(feature = "shared-repository-scan"))]
     if shutdown.is_some_and(crate::runtime::ShutdownSignal::is_requested) {
         return requeue_interrupted_index_build(state);
     }
+    #[cfg(not(feature = "shared-repository-scan"))]
     update_repo_build_progress(
         state,
         repo_runtime.manifest.total_files,
         repo_runtime.manifest.total_files,
     )?;
+    #[cfg(not(feature = "shared-repository-scan"))]
     mark_regex_build_started(state)?;
+    #[cfg(not(feature = "shared-repository-scan"))]
     let mut last_regex_progress = None::<(usize, std::time::Instant)>;
+    #[cfg(not(feature = "shared-repository-scan"))]
     let regex_runtime =
         packet28_search_core::rebuild_full_index_with_progress(&root, true, |indexed, total| {
             if should_persist_progress(indexed, total, &mut last_regex_progress) {

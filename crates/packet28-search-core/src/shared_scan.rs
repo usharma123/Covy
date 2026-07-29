@@ -12,6 +12,9 @@ use std::sync::Arc;
 
 use super::*;
 
+/// Maximum file size consumed by the regex full-index builder.
+pub const MAX_SHARED_SCAN_CONTENT_BYTES: usize = MAX_INDEXED_FILE_BYTES;
+
 /// Content digests used to prove byte-for-byte base-layer parity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegexIndexContentDigests {

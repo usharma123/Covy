@@ -24,13 +24,22 @@ use crate::scan::{is_generated_or_vendor_path, is_source_file, is_test_path, Rep
 /// responsibility because they are properties of the walk rather than the
 /// file format.
 pub fn wants_path(relative_path: &str, include_tests: bool) -> bool {
-    if !is_normalized_repository_relative_path(relative_path) {
+    if !wants_traversal(relative_path) {
         return false;
     }
     let path = Path::new(relative_path);
-    is_source_file(path)
+    is_source_file(path) && (include_tests || !is_test_path(relative_path))
+}
+
+/// Returns whether the map scanner would traverse a repository-relative path.
+///
+/// A shared walker can use this predicate to preserve map-specific generated
+/// and vendor pruning while still traversing paths needed by another index.
+/// It is also the policy boundary for deciding whether a walker error would
+/// have been observable to the standalone map scan.
+pub fn wants_traversal(relative_path: &str) -> bool {
+    is_normalized_repository_relative_path(relative_path)
         && !is_generated_or_vendor_path(relative_path)
-        && (include_tests || !is_test_path(relative_path))
 }
 
 fn is_normalized_repository_relative_path(path: &str) -> bool {
@@ -261,5 +270,19 @@ mod tests {
         assert!(matches!(error, CovyError::PathMapping(_)));
         assert!(!wants_path("../outside.rs", true));
         assert!(!wants_path(r"src\\outside.rs", true));
+    }
+
+    #[test]
+    fn traversal_policy_exposes_generated_directory_pruning() {
+        assert!(wants_traversal("src"));
+        assert!(wants_traversal("vendor/src"));
+        // The standalone walk observes the top-level directory entry before
+        // pruning its children, so the shared policy preserves that boundary.
+        assert!(wants_traversal("target"));
+        assert!(!wants_traversal("target/debug/lib.rs"));
+        assert!(!wants_traversal("nested/build/generated.rs"));
+        assert!(!wants_traversal("scratch/.tmp-session/source.rs"));
+        assert!(!wants_traversal("../outside"));
+        assert!(!wants_traversal(r"src\\outside"));
     }
 }
