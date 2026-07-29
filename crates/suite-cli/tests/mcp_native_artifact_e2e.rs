@@ -11,7 +11,9 @@ use mcp_native::{
     ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message_for_id,
     start_mcp_server, stop_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
 };
+use packet28_daemon_protocol::paths::{task_artifact_dir, TaskStorageId};
 use serde_json::json;
+use std::fs;
 use tempfile::TempDir;
 
 #[test]
@@ -43,7 +45,10 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
     );
     let search = read_mcp_message_for_id(&mut server, 2);
     let search_payload = &search["result"]["structuredContent"];
-    assert_eq!(search_payload["response_mode"], "slim");
+    assert_eq!(
+        search_payload["response_mode"], "slim",
+        "unexpected search response: {search:#}"
+    );
     assert!(search_payload["artifact_id"].as_str().is_some());
     assert!(search_payload["match_count"].as_u64().unwrap() >= 1);
     assert_eq!(search_payload["search_strategy"], "hybrid");
@@ -192,4 +197,51 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
         .assert()
         .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_native_artifact_admission_failure_creates_no_evidence() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+    let task_id = "task-native-artifact-rejected";
+    let task_storage_id = TaskStorageId::try_from(task_id).unwrap();
+    let task_dir = task_artifact_dir(dir.path(), &task_storage_id);
+    fs::create_dir_all(&task_dir).unwrap();
+
+    let mut server = start_mcp_server(dir.path());
+    initialize_mcp_session(&mut server);
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28_search",
+                "arguments":{
+                    "task_id":task_id,
+                    "query":"Alpha",
+                    "response_mode":"slim"
+                }
+            }
+        }),
+    );
+    let response = read_mcp_message_for_id(&mut server, 2);
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(response["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("cannot adopt pre-existing managed entry")));
+    assert!(
+        fs::read_dir(task_dir).unwrap().next().is_none(),
+        "admission failure must not create tool evidence"
+    );
 }

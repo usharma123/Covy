@@ -341,6 +341,36 @@ fn write_native_tool_result(
     )
 }
 
+fn write_native_tool_started(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    record: NativeToolStartedRecord<'_>,
+) -> Result<()> {
+    write_auto_capture_state_batch_via_session(
+        root,
+        session,
+        vec![BrokerWriteStateRequest {
+            task_id: record.task_id.to_string(),
+            op: Some(BrokerWriteOp::ToolInvocationStarted),
+            invocation_id: Some(record.invocation_id.to_string()),
+            tool_name: Some(record.tool_name.to_string()),
+            operation_kind: Some(record.operation_kind),
+            request_summary: Some(record.request_summary),
+            sequence: Some(record.sequence),
+            ..BrokerWriteStateRequest::default()
+        }],
+    )
+}
+
+struct NativeToolStartedRecord<'a> {
+    task_id: &'a str,
+    invocation_id: &'a str,
+    sequence: u64,
+    tool_name: &'a str,
+    operation_kind: suite_packet_core::ToolOperationKind,
+    request_summary: String,
+}
+
 struct NativeToolResultRecord<'a> {
     task_id: &'a str,
     invocation_id: &'a str,
@@ -426,6 +456,18 @@ pub(crate) fn handle_packet28_search(
     }
     let (sequence, invocation_id) = next_task_invocation(session, task_id)?;
     let request_summary = search_request_summary(&args);
+    write_native_tool_started(
+        root,
+        session,
+        NativeToolStartedRecord {
+            task_id,
+            invocation_id: &invocation_id,
+            sequence,
+            tool_name: "packet28.search",
+            operation_kind: suite_packet_core::ToolOperationKind::Search,
+            request_summary: request_summary.clone(),
+        },
+    )?;
 
     let request = build_search_request(
         query,

@@ -14,6 +14,18 @@ pub(crate) fn handle_packet28_read_regions(
     validated_task_storage_id(task_id)?;
     let (sequence, invocation_id) = next_task_invocation(session, task_id)?;
     let request_summary = read_regions_request_summary(&args, &args.path);
+    write_native_tool_started(
+        root,
+        session,
+        NativeToolStartedRecord {
+            task_id,
+            invocation_id: &invocation_id,
+            sequence,
+            tool_name: "packet28.read_regions",
+            operation_kind: suite_packet_core::ToolOperationKind::Read,
+            request_summary: request_summary.clone(),
+        },
+    )?;
 
     let started_at = Instant::now();
     let read_result = match packet28_reducer_core::read_regions(
@@ -189,6 +201,18 @@ pub(crate) fn handle_packet28_glob(
     }
     let (sequence, invocation_id) = next_task_invocation(session, task_id)?;
     let request_summary = glob_request_summary(&args);
+    write_native_tool_started(
+        root,
+        session,
+        NativeToolStartedRecord {
+            task_id,
+            invocation_id: &invocation_id,
+            sequence,
+            tool_name: "packet28.glob",
+            operation_kind: suite_packet_core::ToolOperationKind::Search,
+            request_summary: request_summary.clone(),
+        },
+    )?;
     let started_at = Instant::now();
     let (resolved_paths, mut matches) = match collect_glob_matches(root, pattern, &args.paths) {
         Ok(result) => result,
