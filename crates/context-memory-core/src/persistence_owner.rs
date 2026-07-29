@@ -22,7 +22,7 @@ const CHECKPOINT_WAL_BYTES_THRESHOLD: u64 = 4 * 1024 * 1024;
 const PERSISTENCE_COORDINATION_FILE: &str = "packet-cache-v3.lock";
 const MAX_DIRTY_DELTAS: usize = 4_096;
 
-type CachePersistenceRegistry = HashMap<PathBuf, Weak<CachePersistenceOwner>>;
+type CachePersistenceRegistry = HashMap<PathBuf, Weak<RootPersistenceSlot>>;
 
 fn cache_persistence_registry() -> &'static Mutex<CachePersistenceRegistry> {
     static REGISTRY: OnceLock<Mutex<CachePersistenceRegistry>> = OnceLock::new();
@@ -41,18 +41,172 @@ fn persistence_root_key(root: &Path) -> PathBuf {
     })
 }
 
-fn registry_entry_matches(
-    registry: &CachePersistenceRegistry,
-    root_key: &Path,
+fn root_persistence_slot(root_key: &Path) -> Arc<RootPersistenceSlot> {
+    let mut registry = lock_recover(cache_persistence_registry());
+    if let Some(slot) = registry.get(root_key).and_then(Weak::upgrade) {
+        return slot;
+    }
+    let slot = Arc::new(RootPersistenceSlot {
+        root_key: root_key.to_path_buf(),
+        state: Mutex::new(RootPersistenceState {
+            next_generation: 0,
+            phase: RootPersistencePhase::Vacant,
+        }),
+        changed: Condvar::new(),
+    });
+    registry.insert(root_key.to_path_buf(), Arc::downgrade(&slot));
+    slot
+}
+
+struct RootPersistenceSlot {
+    root_key: PathBuf,
+    state: Mutex<RootPersistenceState>,
+    changed: Condvar,
+}
+
+struct RootPersistenceState {
+    next_generation: u64,
+    phase: RootPersistencePhase,
+}
+
+enum RootPersistencePhase {
+    Vacant,
+    Live {
+        generation: u64,
+        owner: Weak<CachePersistenceOwner>,
+    },
+    Closing {
+        generation: u64,
+    },
+}
+
+impl RootPersistenceSlot {
+    fn worker_finished(&self, generation: u64) {
+        let mut state = lock_recover(&self.state);
+        let is_current_worker = matches!(
+            state.phase,
+            RootPersistencePhase::Live {
+                generation: current,
+                ..
+            } | RootPersistencePhase::Closing {
+                generation: current,
+            } if current == generation
+        );
+        if is_current_worker {
+            state.phase = RootPersistencePhase::Vacant;
+            drop(state);
+            self.changed.notify_all();
+        }
+    }
+}
+
+impl Drop for RootPersistenceSlot {
+    fn drop(&mut self) {
+        let mut registry = lock_recover(cache_persistence_registry());
+        if registry
+            .get(&self.root_key)
+            .is_some_and(|registered| std::ptr::eq(registered.as_ptr(), self))
+        {
+            registry.remove(&self.root_key);
+        }
+    }
+}
+
+struct RootWorkerFence {
+    slot: Arc<RootPersistenceSlot>,
+    generation: u64,
+}
+
+impl Drop for RootWorkerFence {
+    fn drop(&mut self) {
+        self.slot.worker_finished(self.generation);
+    }
+}
+
+fn owner_matches(
+    phase: &RootPersistencePhase,
+    generation: u64,
     owner: &CachePersistenceOwner,
 ) -> bool {
-    registry
-        .get(root_key)
-        .is_some_and(|registered| std::ptr::eq(registered.as_ptr(), owner))
+    matches!(
+        phase,
+        RootPersistencePhase::Live {
+            generation: current,
+            owner: registered,
+        } if *current == generation && std::ptr::eq(registered.as_ptr(), owner)
+    )
+}
+
+fn wait_for_root_state<'a>(
+    slot: &RootPersistenceSlot,
+    state: std::sync::MutexGuard<'a, RootPersistenceState>,
+) -> std::sync::MutexGuard<'a, RootPersistenceState> {
+    #[cfg(test)]
+    signal_before_test_root_state_wait(&slot.root_key);
+    slot.changed
+        .wait(state)
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+type RootStateWaitTestHook = Option<(PathBuf, mpsc::Sender<()>)>;
+
+#[cfg(test)]
+fn root_state_wait_test_hook() -> &'static Mutex<RootStateWaitTestHook> {
+    static HOOK: OnceLock<Mutex<RootStateWaitTestHook>> = OnceLock::new();
+    HOOK.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn signal_before_test_root_state_wait(root_key: &Path) {
+    let mut hook = lock_recover(root_state_wait_test_hook());
+    if hook
+        .as_ref()
+        .is_some_and(|(expected, _)| expected == root_key)
+    {
+        if let Some((_, sender)) = hook.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
+fn live_owner(phase: &RootPersistencePhase) -> Option<Arc<CachePersistenceOwner>> {
+    match phase {
+        RootPersistencePhase::Live { owner, .. } => owner.upgrade(),
+        RootPersistencePhase::Vacant | RootPersistencePhase::Closing { .. } => None,
+    }
+}
+
+fn next_root_generation(state: &mut RootPersistenceState) -> u64 {
+    state.next_generation = state.next_generation.saturating_add(1);
+    state.next_generation
+}
+
+fn mark_root_live(
+    state: &mut RootPersistenceState,
+    generation: u64,
+    owner: &Arc<CachePersistenceOwner>,
+) {
+    state.phase = RootPersistencePhase::Live {
+        generation,
+        owner: Arc::downgrade(owner),
+    };
+}
+
+fn mark_root_closing(
+    state: &mut RootPersistenceState,
+    generation: u64,
+    owner: &CachePersistenceOwner,
+) {
+    if owner_matches(&state.phase, generation, owner) {
+        state.phase = RootPersistencePhase::Closing { generation };
+    }
 }
 
 struct RootPersistenceLock {
     file: File,
+    #[cfg(test)]
+    path: PathBuf,
 }
 
 struct LockedPersistenceRoot<'a> {
@@ -77,15 +231,40 @@ impl RootPersistenceLock {
             sync_directory(&cache_dir)
                 .map_err(|source| io_error("coordination lock open", source))?;
         }
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            #[cfg(test)]
+            path: lock_path,
+        })
     }
 
     fn lock(&mut self) -> Result<LockedPersistenceRoot<'_>, CachePersistenceError> {
+        #[cfg(test)]
+        signal_before_test_root_lock(&self.path);
         FileExt::lock_exclusive(&self.file)
             .map_err(|source| io_error("coordination lock acquire", source))?;
         Ok(LockedPersistenceRoot {
             file: &mut self.file,
         })
+    }
+}
+
+#[cfg(test)]
+type RootLockTestHook = Option<(PathBuf, mpsc::Sender<()>)>;
+
+#[cfg(test)]
+fn root_lock_test_hook() -> &'static Mutex<RootLockTestHook> {
+    static HOOK: OnceLock<Mutex<RootLockTestHook>> = OnceLock::new();
+    HOOK.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn signal_before_test_root_lock(path: &Path) {
+    let mut hook = lock_recover(root_lock_test_hook());
+    if hook.as_ref().is_some_and(|(expected, _)| expected == path) {
+        if let Some((_, sender)) = hook.take() {
+            let _ = sender.send(());
+        }
     }
 }
 
@@ -306,7 +485,8 @@ pub struct CacheMutationReservation {
 }
 
 struct CachePersistenceOwner {
-    root_key: PathBuf,
+    root_slot: Arc<RootPersistenceSlot>,
+    root_generation: u64,
     ttl_secs: u64,
     handle_count: AtomicUsize,
     memory: Arc<Mutex<PacketCache>>,
@@ -334,19 +514,28 @@ impl CachePersistence {
     /// Repeated opens for the same canonical root share one worker, dirty map,
     /// and immediately visible in-memory cache.
     pub fn open(config: PersistConfig) -> Result<Self, CachePersistenceError> {
+        std::fs::create_dir_all(&config.root_dir)
+            .map_err(|source| io_error("persistence root open", source))?;
         let root_key = persistence_root_key(&config.root_dir);
-        let mut registry = lock_recover(cache_persistence_registry());
-        if let Some(owner) = registry.get(&root_key).and_then(Weak::upgrade) {
-            if owner.ttl_secs != config.ttl_secs {
-                return Err(CachePersistenceError::ConfigurationConflict {
-                    existing_ttl_secs: owner.ttl_secs,
-                    requested_ttl_secs: config.ttl_secs,
-                });
+        let root_slot = root_persistence_slot(&root_key);
+        let mut root_state = lock_recover(&root_slot.state);
+        loop {
+            if let Some(owner) = live_owner(&root_state.phase) {
+                if owner.ttl_secs != config.ttl_secs {
+                    return Err(CachePersistenceError::ConfigurationConflict {
+                        existing_ttl_secs: owner.ttl_secs,
+                        requested_ttl_secs: config.ttl_secs,
+                    });
+                }
+                owner.handle_count.fetch_add(1, Ordering::AcqRel);
+                return Ok(Self { owner });
             }
-            owner.handle_count.fetch_add(1, Ordering::AcqRel);
-            return Ok(Self { owner });
+            if matches!(root_state.phase, RootPersistencePhase::Vacant) {
+                break;
+            }
+            root_state = wait_for_root_state(&root_slot, root_state);
         }
-        registry.remove(&root_key);
+        let root_generation = next_root_generation(&mut root_state);
 
         let mut root_lock = RootPersistenceLock::open(&config)?;
         let (cache, observed_generation) = {
@@ -373,9 +562,14 @@ impl CachePersistence {
         let worker_dirty = dirty.clone();
         let worker_pending_slots = pending_slots.clone();
         let worker_shutdown_completion = shutdown_completion.clone();
+        let worker_root_slot = root_slot.clone();
         let worker = thread::Builder::new()
             .name("packet28-cache-persistence".to_string())
             .spawn(move || {
+                let _root_worker_fence = RootWorkerFence {
+                    slot: worker_root_slot,
+                    generation: root_generation,
+                };
                 PersistenceWorker {
                     config,
                     cache,
@@ -398,7 +592,8 @@ impl CachePersistence {
             })?;
 
         let owner = Arc::new(CachePersistenceOwner {
-            root_key: root_key.clone(),
+            root_slot: root_slot.clone(),
+            root_generation,
             ttl_secs,
             handle_count: AtomicUsize::new(1),
             memory,
@@ -417,7 +612,9 @@ impl CachePersistence {
             next_revision: AtomicU64::new(0),
             shutdown_completion,
         });
-        registry.insert(root_key, Arc::downgrade(&owner));
+        mark_root_live(&mut root_state, root_generation, &owner);
+        drop(root_state);
+        owner.root_slot.changed.notify_all();
         Ok(Self { owner })
     }
 
@@ -641,19 +838,15 @@ impl CachePersistence {
         &self,
         timeout: Duration,
     ) -> Result<CachePersistenceMetrics, CachePersistenceError> {
-        let mut registry = lock_recover(cache_persistence_registry());
+        let mut root_state = lock_recover(&self.owner.root_slot.state);
         if self.owner.handle_count.load(Ordering::Acquire) > 1 {
-            drop(registry);
+            drop(root_state);
             return self.flush(timeout);
         }
-
-        let result = self.owner.shutdown_inner(timeout);
-        if self.owner.worker_is_none()
-            && registry_entry_matches(&registry, &self.owner.root_key, &self.owner)
-        {
-            registry.remove(&self.owner.root_key);
-        }
-        result
+        mark_root_closing(&mut root_state, self.owner.root_generation, &self.owner);
+        drop(root_state);
+        self.owner.root_slot.changed.notify_all();
+        self.owner.shutdown_inner(timeout)
     }
 
     fn wake_worker(&self) -> Result<(), CachePersistenceError> {
@@ -865,10 +1058,10 @@ impl Drop for CachePersistence {
 
 impl Drop for CachePersistenceOwner {
     fn drop(&mut self) {
-        let mut registry = lock_recover(cache_persistence_registry());
-        if registry_entry_matches(&registry, &self.root_key, self) {
-            registry.remove(&self.root_key);
-        }
+        let mut root_state = lock_recover(&self.root_slot.state);
+        mark_root_closing(&mut root_state, self.root_generation, self);
+        drop(root_state);
+        self.root_slot.changed.notify_all();
         self.shutdown_on_drop();
     }
 }
@@ -1230,28 +1423,39 @@ mod tests {
         dirty: Arc<Mutex<BTreeMap<String, PendingDelta>>>,
         shutdown_completion: ShutdownCompletion,
     ) -> CachePersistence {
-        CachePersistence {
-            owner: Arc::new(CachePersistenceOwner {
-                root_key: PathBuf::from("__packet28_test_persistence_owner__"),
-                ttl_secs: crate::DEFAULT_PERSIST_TTL_SECS,
-                handle_count: AtomicUsize::new(1),
-                memory: Arc::new(Mutex::new(PacketCache::new())),
-                lifecycle: Mutex::new(PersistenceLifecycle {
-                    sender: Some(sender),
-                    worker,
-                    shutdown_requested: false,
-                    shutdown_command_sent: false,
-                    active_reservations: 0,
-                }),
-                lifecycle_changed: Condvar::new(),
-                metrics,
-                last_error: Arc::new(Mutex::new(None)),
-                dirty,
-                pending_slots: Arc::new(AtomicUsize::new(0)),
-                next_revision: AtomicU64::new(0),
-                shutdown_completion,
+        let root_slot = Arc::new(RootPersistenceSlot {
+            root_key: PathBuf::from("__packet28_test_persistence_owner__"),
+            state: Mutex::new(RootPersistenceState {
+                next_generation: 1,
+                phase: RootPersistencePhase::Vacant,
             }),
-        }
+            changed: Condvar::new(),
+        });
+        let owner = Arc::new(CachePersistenceOwner {
+            root_slot: root_slot.clone(),
+            root_generation: 1,
+            ttl_secs: crate::DEFAULT_PERSIST_TTL_SECS,
+            handle_count: AtomicUsize::new(1),
+            memory: Arc::new(Mutex::new(PacketCache::new())),
+            lifecycle: Mutex::new(PersistenceLifecycle {
+                sender: Some(sender),
+                worker,
+                shutdown_requested: false,
+                shutdown_command_sent: false,
+                active_reservations: 0,
+            }),
+            lifecycle_changed: Condvar::new(),
+            metrics,
+            last_error: Arc::new(Mutex::new(None)),
+            dirty,
+            pending_slots: Arc::new(AtomicUsize::new(0)),
+            next_revision: AtomicU64::new(0),
+            shutdown_completion,
+        });
+        let mut root_state = lock_recover(&root_slot.state);
+        mark_root_live(&mut root_state, 1, &owner);
+        drop(root_state);
+        CachePersistence { owner }
     }
 
     #[test]
@@ -1757,6 +1961,103 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread::yield_now();
         }
+    }
+
+    #[test]
+    fn blocked_open_for_one_root_cannot_delay_another_root_shutdown() {
+        let first_dir = tempdir().unwrap();
+        let second_dir = tempdir().unwrap();
+        let first_owner =
+            CachePersistence::open(PersistConfig::new(first_dir.path().to_path_buf())).unwrap();
+        let second_config = PersistConfig::new(second_dir.path().to_path_buf());
+        let blocking_lock = RootPersistenceLock::open(&second_config).unwrap();
+        FileExt::lock_exclusive(&blocking_lock.file).unwrap();
+
+        let (before_lock_sender, before_lock_receiver) = mpsc::channel();
+        *lock_recover(root_lock_test_hook()) =
+            Some((blocking_lock.path.clone(), before_lock_sender));
+        let blocked_open = thread::spawn(move || {
+            let owner = CachePersistence::open(second_config)?;
+            owner.shutdown(Duration::from_secs(2))?;
+            Ok::<(), CachePersistenceError>(())
+        });
+        let reached_blocking_lock = before_lock_receiver.recv_timeout(Duration::from_secs(2));
+
+        let (shutdown_sender, shutdown_receiver) = mpsc::channel();
+        let shutdown = thread::spawn(move || {
+            let result = first_owner.shutdown(Duration::from_millis(250));
+            let _ = shutdown_sender.send(result);
+        });
+        let unrelated_shutdown = shutdown_receiver.recv_timeout(Duration::from_secs(1));
+
+        FileExt::unlock(&blocking_lock.file).unwrap();
+        let blocked_open_result = blocked_open.join().unwrap();
+        shutdown.join().unwrap();
+
+        assert!(
+            reached_blocking_lock.is_ok(),
+            "second root did not reach its intentionally blocked coordination lease"
+        );
+        let shutdown_result = unrelated_shutdown.expect(
+            "a root blocked in open held the process registry beyond another root's shutdown budget",
+        );
+        shutdown_result.unwrap();
+        blocked_open_result.unwrap();
+    }
+
+    #[test]
+    fn timed_out_shutdown_fences_same_root_until_worker_exits() {
+        let dir = tempdir().unwrap();
+        let other_dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let (entry, reservation) = {
+            let mut cache = lock_recover(&memory);
+            let reservation = owner.reserve_mutation(1).unwrap();
+            let entry = put_entry(&mut cache, 62_000, 8);
+            (entry, reservation)
+        };
+        assert!(matches!(
+            owner.shutdown(Duration::from_millis(10)),
+            Err(CachePersistenceError::Timeout {
+                operation: "shutdown",
+                ..
+            })
+        ));
+
+        let (reopened_sender, reopened_receiver) = mpsc::channel();
+        let (waiting_sender, waiting_receiver) = mpsc::channel();
+        *lock_recover(root_state_wait_test_hook()) =
+            Some((persistence_root_key(&config.root_dir), waiting_sender));
+        let same_root = thread::spawn(move || {
+            let reopened = CachePersistence::open(config)?;
+            let reservation = reopened.reserve_mutation(1)?;
+            drop(reservation);
+            let _ = reopened_sender.send(());
+            reopened.shutdown(Duration::from_secs(2))?;
+            Ok::<(), CachePersistenceError>(())
+        });
+        waiting_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("same-root open did not reach the closing lifecycle barrier");
+        assert!(matches!(
+            reopened_receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        let unrelated =
+            CachePersistence::open(PersistConfig::new(other_dir.path().to_path_buf())).unwrap();
+        unrelated.shutdown(Duration::from_secs(2)).unwrap();
+
+        owner
+            .record_update_reserved(&entry, Vec::new(), reservation)
+            .unwrap();
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        reopened_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("same-root open did not resume after the prior worker exited");
+        same_root.join().unwrap().unwrap();
     }
 
     #[test]
