@@ -895,16 +895,22 @@ fn encode_task_registry_preserving_existing(
         let known = serde_json::to_value(record).map_err(|source| {
             DaemonCoreError::json("failed to encode task record for", path, source)
         })?;
+        let serde_json::Value::Object(known) = known else {
+            return Err(DaemonCoreError::json(
+                "failed to encode task record for",
+                path,
+                <serde_json::Error as serde::ser::Error>::custom(
+                    "task record must serialize as a JSON object",
+                ),
+            ));
+        };
         let mut merged = existing_tasks
             .get(task_id)
             .and_then(serde_json::Value::as_object)
             .cloned()
             .unwrap_or_default();
-        let known = known
-            .as_object()
-            .expect("task records serialize as objects");
         for (field, value) in known {
-            merged.insert(field.clone(), value.clone());
+            merged.insert(field, value);
         }
         merged_tasks.insert(task_id.clone(), serde_json::Value::Object(merged));
     }
@@ -1294,17 +1300,13 @@ impl AuthorityJsonBudget {
         position: AuthorityJsonPosition,
         entries: usize,
     ) -> std::result::Result<(), E> {
-        let limit = match position {
-            AuthorityJsonPosition::RegistryTasks => self.limits.max_registry_records,
-            AuthorityJsonPosition::JournalRecordValues => 1,
-            AuthorityJsonPosition::JournalComponents => 2,
+        let (limit, resource) = match position {
+            AuthorityJsonPosition::RegistryTasks => {
+                (self.limits.max_registry_records, "task-registry records")
+            }
+            AuthorityJsonPosition::JournalRecordValues => (1, "journal record values"),
+            AuthorityJsonPosition::JournalComponents => (2, "journal components"),
             AuthorityJsonPosition::Root | AuthorityJsonPosition::Other => return Ok(()),
-        };
-        let resource = match position {
-            AuthorityJsonPosition::RegistryTasks => "task-registry records",
-            AuthorityJsonPosition::JournalRecordValues => "journal record values",
-            AuthorityJsonPosition::JournalComponents => "journal components",
-            AuthorityJsonPosition::Root | AuthorityJsonPosition::Other => unreachable!(),
         };
         if entries > limit {
             return self.reject(resource, entries, limit);

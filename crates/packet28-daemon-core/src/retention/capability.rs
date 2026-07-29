@@ -2014,9 +2014,7 @@ impl CapabilityDir {
         }
         let file_type = FileType::from_raw_mode(stat.st_mode);
         if file_type != FileType::Directory {
-            before_final_check
-                .take()
-                .expect("final deletion observer is available")()?;
+            run_final_deletion_observer(&mut before_final_check)?;
             self.unlink_tombstone_verified(name, expected, file_type)?;
             return Ok(RemovalProgress::Complete);
         }
@@ -2028,9 +2026,7 @@ impl CapabilityDir {
         for _ in 0..max_entries {
             let (entries, _) = tombstone.entries_page(1)?;
             let Some(entry_name) = entries.into_iter().next() else {
-                before_final_check
-                    .take()
-                    .expect("final deletion observer is available")()?;
+                run_final_deletion_observer(&mut before_final_check)?;
                 self.unlink_tombstone_verified(name, expected, file_type)?;
                 return Ok(RemovalProgress::Complete);
             };
@@ -2072,9 +2068,7 @@ impl CapabilityDir {
         if tombstone.has_entries()? {
             Ok(RemovalProgress::More)
         } else {
-            before_final_check
-                .take()
-                .expect("final deletion observer is available")()?;
+            run_final_deletion_observer(&mut before_final_check)?;
             self.unlink_tombstone_verified(name, expected, file_type)?;
             Ok(RemovalProgress::Complete)
         }
@@ -2558,6 +2552,15 @@ impl CapabilityDir {
             acl_policy,
         })
     }
+}
+
+fn run_final_deletion_observer(
+    observer: &mut Option<impl FnOnce() -> io::Result<()>>,
+) -> io::Result<()> {
+    let observer = observer
+        .take()
+        .ok_or_else(|| io::Error::other("final deletion observer was already consumed"))?;
+    observer()
 }
 
 #[cfg(target_vendor = "apple")]
@@ -5359,6 +5362,19 @@ mod tests {
         assert_eq!(
             directory.entries_bounded(1).unwrap_err().kind(),
             io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn final_deletion_observer_reuse_returns_an_error() {
+        let mut observer = Some(|| Ok(()));
+        run_final_deletion_observer(&mut observer).unwrap();
+
+        assert_eq!(
+            run_final_deletion_observer(&mut observer)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Other
         );
     }
 

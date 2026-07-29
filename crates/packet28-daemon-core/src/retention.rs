@@ -212,6 +212,15 @@ impl RetentionOptions {
     }
 }
 
+#[cfg(unix)]
+enum RetentionApplyState {
+    Armed {
+        lease: TaskStoreLease,
+        admission: TaskRetentionAdmission,
+    },
+    ReadOnly,
+}
+
 /// Current logical-size and entry-count observations for a Packet28 state tree.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskStoreMetrics {
@@ -676,7 +685,7 @@ fn retain_task_store_with_lease_observers(
         RetentionMode::DryRun
     };
     let mut recovery = TaskStoreRecoveryReport::default();
-    let (mut snapshot, mut plan, metrics_before, _task_store_lease) = if options.apply {
+    let (mut snapshot, mut plan, metrics_before, retention_apply_state) = if options.apply {
         // Applying retention performs no recursive or registry scan until the
         // exclusive lifecycle lease is held. This makes the one authoritative
         // snapshot, its metrics, and its plan describe the same store state.
@@ -770,65 +779,69 @@ fn retain_task_store_with_lease_observers(
         }
         let metrics_before = snapshot.metrics.clone();
         let plan = build_plan(&snapshot, options);
-        (snapshot, plan, metrics_before, Some((lease, instance_gate)))
+        (
+            snapshot,
+            plan,
+            metrics_before,
+            RetentionApplyState::Armed {
+                lease,
+                admission: instance_gate,
+            },
+        )
     } else {
         let snapshot = StoreSnapshot::load(root, observed_at_unix)?;
         let metrics_before = snapshot.metrics.clone();
         let plan = build_plan(&snapshot, options);
-        (snapshot, plan, metrics_before, None)
+        (
+            snapshot,
+            plan,
+            metrics_before,
+            RetentionApplyState::ReadOnly,
+        )
     };
 
+    #[cfg(unix)]
+    if let RetentionApplyState::Armed { lease, admission } = &retention_apply_state {
+        if !plan.items.is_empty() {
+            apply_plan(&mut snapshot, &mut plan, lease, admission)?;
+        }
+    }
+    #[cfg(not(unix))]
     if options.apply && !plan.items.is_empty() {
-        #[cfg(unix)]
-        apply_plan(
-            &mut snapshot,
-            &mut plan,
-            &_task_store_lease
-                .as_ref()
-                .expect("apply retains lifecycle and instance guards")
-                .0,
-            &_task_store_lease
-                .as_ref()
-                .expect("apply retains lifecycle and instance guards")
-                .1,
-        )?;
-        #[cfg(not(unix))]
         apply_plan(&mut snapshot, &mut plan)?;
     }
 
-    let (metrics_after, final_rescan_reliable) = if options.apply {
-        #[cfg(unix)]
-        let final_snapshot = load_post_apply_snapshot_with_lease(
-            &_task_store_lease
-                .as_ref()
-                .expect("apply retains lifecycle and instance guards")
-                .0,
-            observed_at_unix,
-        );
-        #[cfg(not(unix))]
-        let final_snapshot = load_post_apply_snapshot(&snapshot.workspace_root, observed_at_unix);
-        match final_snapshot {
-            Ok(final_snapshot) => {
-                extend_issues(&mut snapshot.issues, final_snapshot.issues);
-                (final_snapshot.metrics, true)
-            }
-            Err(error) => {
-                push_owned_issue(
-                    &mut snapshot.issues,
-                    TaskStoreIssue {
-                        kind: "post_apply_rescan_failed".to_string(),
-                        path: snapshot.state_root.display().to_string(),
-                        message: error.to_string(),
-                    },
-                );
-                // Preserve the last reliable metrics rather than discarding
-                // the already-completed per-action result. Consumers can gate
-                // these fields on `final_rescan_reliable`.
-                (snapshot.metrics.clone(), false)
-            }
+    #[cfg(unix)]
+    let final_snapshot = match &retention_apply_state {
+        RetentionApplyState::Armed { lease, .. } => {
+            Some(load_post_apply_snapshot_with_lease(lease, observed_at_unix))
         }
-    } else {
-        (metrics_before.clone(), true)
+        RetentionApplyState::ReadOnly => None,
+    };
+    #[cfg(not(unix))]
+    let final_snapshot = options
+        .apply
+        .then(|| load_post_apply_snapshot(&snapshot.workspace_root, observed_at_unix));
+    let (metrics_after, final_rescan_reliable) = match final_snapshot {
+        Some(Ok(final_snapshot)) => {
+            extend_issues(&mut snapshot.issues, final_snapshot.issues);
+            (final_snapshot.metrics, true)
+        }
+        Some(Err(error)) => {
+            push_owned_issue(
+                &mut snapshot.issues,
+                TaskStoreIssue {
+                    kind: "post_apply_rescan_failed".to_string(),
+                    path: snapshot.state_root.display().to_string(),
+                    message: error.to_string(),
+                },
+            );
+            // Preserve the last reliable metrics rather than discarding
+            // the already-completed per-action result. Consumers can gate
+            // these fields on `final_rescan_reliable`.
+            (snapshot.metrics.clone(), false)
+        }
+        None => (metrics_before.clone(), true),
     };
     let remaining_managed_logical_bytes = if options.apply {
         metrics_after.managed_task_logical_bytes
