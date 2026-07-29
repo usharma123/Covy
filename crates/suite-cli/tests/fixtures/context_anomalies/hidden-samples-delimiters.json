@@ -1,0 +1,6 @@
+[
+  {
+    "category": "fallback_provenance",
+    "signal": "recent_fallbacks=1 latest_reason=alpha=beta;next=retry\nsource=run-savings%done"
+  }
+]

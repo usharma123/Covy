@@ -17,6 +17,8 @@ fi
 git ls-files --error-unmatch -- Cargo.lock >/dev/null 2>&1 ||
   fail "Cargo.lock is not tracked"
 
+python3 scripts/check_cargo_publish_policy.py
+
 grep -Fqx 'rust-version = "1.88.0"' Cargo.toml ||
   fail 'workspace rust-version must be exactly "1.88.0"'
 grep -Fqx '[workspace.lints.rust]' Cargo.toml ||

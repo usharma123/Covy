@@ -41,4 +41,4 @@ release-check tag:
     scripts/validate_full_gate.sh --release-tag "{{tag}}"
 
 package:
-    cargo package --workspace --all-features --locked --allow-dirty
+    python3 scripts/package_cargo_workspace.py

@@ -1,0 +1,77 @@
+schema_version = 1
+registry = "crates-io"
+
+[metadata]
+license = "MIT"
+repository = "https://github.com/usharma123/Covy"
+homepage = "https://github.com/usharma123/Covy"
+generic_descriptions = ["Fast Rust CLI for coverage and diagnostics gating"]
+
+[publish]
+packages = []
+order = []
+
+[private]
+packages = [
+  "buildy-core",
+  "context-instruct-shim",
+  "context-kernel-core",
+  "context-memory-core",
+  "context-scheduler-core",
+  "contextq-core",
+  "covy-cli",
+  "covy-core",
+  "covy-ingest",
+  "diffy-cli",
+  "diffy-core",
+  "guardy-core",
+  "mapy-core",
+  "packet28-binary-codec",
+  "packet28-daemon-core",
+  "packet28-daemon-protocol",
+  "packet28-reducer-core",
+  "packet28-search-cli",
+  "packet28-search-core",
+  "packet28d",
+  "stacky-core",
+  "suite-cli",
+  "suite-foundation-core",
+  "suite-ingest",
+  "suite-packet-core",
+  "suite-policy-core",
+  "suite-proxy-core",
+  "testy-cli",
+  "testy-cli-common",
+  "testy-core",
+]
+
+[package_files]
+forbidden_components = [
+  ".git",
+  ".hg",
+  ".idea",
+  ".packet28",
+  ".svn",
+  ".vscode",
+  "node_modules",
+  "target",
+]
+forbidden_names = [
+  ".env",
+  ".netrc",
+  ".npmrc",
+  ".pypirc",
+  "credentials",
+  "credentials.json",
+  "id_ed25519",
+  "id_rsa",
+  "secrets.json",
+]
+forbidden_suffixes = [
+  ".jks",
+  ".key",
+  ".keystore",
+  ".p12",
+  ".pem",
+  ".pfx",
+]

@@ -169,7 +169,7 @@ fn context_anomaly_age_summary_distinguishes_old_recurring_hidden() {
 #[test]
 fn context_anomaly_tile_reads_checked_in_trend_fixture() {
     let root = tempfile::tempdir().unwrap();
-    let fixture = include_str!("../../../docs/context-anomalies/history.jsonl");
+    let fixture = include_str!("../tests/fixtures/context_anomalies/history.jsonl");
     let history_path = root
         .path()
         .join(".packet28")
@@ -425,11 +425,12 @@ fn context_hidden_sample_summary_escapes_pair_delimiters() {
 #[test]
 fn context_hidden_sample_summary_matches_delimiter_fixture() {
     let samples = serde_json::from_str::<Vec<ContextHiddenSample>>(include_str!(
-        "../../../docs/context-anomalies/hidden-samples-delimiters.json"
+        "../tests/fixtures/context_anomalies/hidden-samples-delimiters.json"
     ))
     .unwrap();
     let expected =
-        include_str!("../../../docs/context-anomalies/hidden-samples-delimiters.summary").trim();
+        include_str!("../tests/fixtures/context_anomalies/hidden-samples-delimiters.summary")
+            .trim();
 
     let summary = context_hidden_sample_summary(&samples);
 

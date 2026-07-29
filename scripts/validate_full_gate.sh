@@ -97,4 +97,4 @@ run_cmd env RUSTDOCFLAGS="-D warnings -D rustdoc::broken_intra_doc_links" \
   cargo doc --workspace --all-features --no-deps --locked
 run_cmd cargo deny --locked check
 run_cmd python3 scripts/verify_release_packages.py source
-run_cmd cargo package --workspace --all-features --locked --allow-dirty
+run_cmd python3 scripts/package_cargo_workspace.py
