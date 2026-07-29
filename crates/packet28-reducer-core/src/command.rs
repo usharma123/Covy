@@ -111,13 +111,14 @@ fn parse_family(value: &str) -> Result<CommandReducerFamily> {
     })
 }
 
-fn looks_like_env_assignment(arg: &str) -> bool {
-    arg.contains('=')
-        && !arg.starts_with('=')
+fn env_assignment_separator(arg: &str) -> Option<usize> {
+    let equals = arg.find('=')?;
+    (equals > 0
         && arg
             .chars()
             .next()
-            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_'))
+    .then_some(equals)
 }
 
 /// Consumes leading `KEY=VALUE` arguments and returns the remaining command.
@@ -129,20 +130,19 @@ pub fn consume_leading_env_assignments(
 ) -> (Vec<(String, String)>, Vec<String>) {
     let prefix_len = argv
         .iter()
-        .take_while(|arg| looks_like_env_assignment(arg))
+        .take_while(|arg| env_assignment_separator(arg).is_some())
         .count();
     let assignments = argv
         .drain(..prefix_len)
-        .map(|mut assignment| {
-            let equals = assignment
-                .find('=')
-                .expect("validated environment assignment must contain '='");
-            let mut value = assignment.split_off(equals);
-            value.remove(0);
+        .filter_map(|mut assignment| {
+            let equals = env_assignment_separator(&assignment)?;
+            let value = assignment.split_off(equals + 1);
+            assignment.truncate(equals);
             assignment.truncate(assignment.trim_end().len());
-            (assignment, value)
+            Some((assignment, value))
         })
-        .collect();
+        .collect::<Vec<_>>();
+    debug_assert_eq!(assignments.len(), prefix_len);
     (assignments, argv)
 }
 
@@ -372,6 +372,21 @@ mod tests {
         assert_eq!(command.as_ptr(), vector_pointer);
         assert_eq!(command.capacity(), vector_capacity);
         assert_eq!(command[0].as_ptr(), command_pointer);
+    }
+
+    #[test]
+    fn consuming_env_assignments_stops_at_the_first_malformed_assignment() {
+        let argv = vec![
+            "_VALID=1".to_string(),
+            "=missing-key".to_string(),
+            "LATER=2".to_string(),
+            "cargo".to_string(),
+        ];
+
+        let (assignments, command) = consume_leading_env_assignments(argv);
+
+        assert_eq!(assignments, [("_VALID".to_string(), "1".to_string())]);
+        assert_eq!(command, ["=missing-key", "LATER=2", "cargo"]);
     }
 
     #[test]
