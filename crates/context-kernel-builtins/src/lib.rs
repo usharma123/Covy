@@ -103,12 +103,40 @@ impl Kernel {
         }
     }
 
+    /// Creates an empty persistent kernel, failing when the persistence owner
+    /// cannot be opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::CachePersistence`] when the persistence owner
+    /// cannot be opened.
+    pub fn try_with_persistence(config: PersistConfig) -> Result<Self, KernelError> {
+        Ok(Self {
+            inner: KernelMechanism::try_with_persistence_and_services(config, builtin_services())?,
+        })
+    }
+
     /// Creates a persistent kernel with the complete version-one built-in
     /// catalog.
     pub fn with_v1_reducers_and_persistence(config: PersistConfig) -> Self {
         let mut kernel = Self::with_persistence(config);
         register_v1_reducers(&mut kernel);
         kernel
+    }
+
+    /// Creates a persistent kernel with the complete version-one built-in
+    /// catalog, failing when the persistence owner cannot be opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::CachePersistence`] when the persistence owner
+    /// cannot be opened.
+    pub fn try_with_v1_reducers_and_persistence(
+        config: PersistConfig,
+    ) -> Result<Self, KernelError> {
+        let mut kernel = Self::try_with_persistence(config)?;
+        register_v1_reducers(&mut kernel);
+        Ok(kernel)
     }
 
     pub fn flush_cache_persistence(

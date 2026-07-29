@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use context_kernel_core::{Kernel, PersistConfig};
+use context_kernel_core::{Kernel, KernelError, PersistConfig};
 
 /// A bounded, daemon-owned set of persistent kernels keyed by canonical root.
 ///
@@ -22,6 +22,7 @@ pub(crate) enum PersistentKernelRegistryError {
     InvalidRoot { root: PathBuf, source: io::Error },
     InvalidCapacity,
     CapacityExceeded { root: PathBuf, capacity: usize },
+    Persistence { root: PathBuf, source: KernelError },
     Poisoned,
 }
 
@@ -43,6 +44,11 @@ impl fmt::Display for PersistentKernelRegistryError {
                 "persistent kernel root capacity {capacity} reached; refusing root '{}'",
                 root.display()
             ),
+            Self::Persistence { root, source } => write!(
+                formatter,
+                "failed to open persistent kernel for '{}': {source}",
+                root.display()
+            ),
             Self::Poisoned => formatter.write_str("persistent kernel registry lock poisoned"),
         }
     }
@@ -52,6 +58,7 @@ impl Error for PersistentKernelRegistryError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidRoot { source, .. } => Some(source),
+            Self::Persistence { source, .. } => Some(source),
             Self::InvalidCapacity | Self::CapacityExceeded { .. } | Self::Poisoned => None,
         }
     }
@@ -90,9 +97,13 @@ impl PersistentKernelRegistry {
                 capacity: self.capacity,
             });
         }
-        let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
-            PersistConfig::new(root.clone()),
-        ));
+        let kernel = Arc::new(
+            Kernel::try_with_v1_reducers_and_persistence(PersistConfig::new(root.clone()))
+                .map_err(|source| PersistentKernelRegistryError::Persistence {
+                    root: root.clone(),
+                    source,
+                })?,
+        );
         kernels.insert(root, kernel.clone());
         Ok(kernel)
     }
@@ -295,6 +306,33 @@ mod tests {
             PersistentKernelRegistryError::CapacityExceeded { capacity: 2, .. }
         ));
         assert_eq!(registry.len(), 2);
+    }
+
+    #[test]
+    fn unopenable_secondary_root_fails_without_consuming_capacity() {
+        let primary_root = tempdir().unwrap();
+        let secondary_root = tempdir().unwrap();
+        let cache_dir = secondary_root.path().join(".packet28");
+        std::fs::create_dir(&cache_dir).unwrap();
+        std::fs::create_dir(cache_dir.join("packet-cache-v3.lock")).unwrap();
+        let primary = Arc::new(
+            Kernel::try_with_v1_reducers_and_persistence(PersistConfig::new(
+                primary_root.path().to_path_buf(),
+            ))
+            .unwrap(),
+        );
+        let registry = PersistentKernelRegistry::new(primary_root.path(), primary, 2).unwrap();
+
+        let error = match registry.get(secondary_root.path()) {
+            Ok(_) => panic!("unopenable secondary kernel unexpectedly opened"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            PersistentKernelRegistryError::Persistence { .. }
+        ));
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]

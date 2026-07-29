@@ -119,6 +119,10 @@ sequence response.
 persistence owner cannot open, execution remains available with an in-memory
 cache and the failure is visible through
 [`KernelMechanism::cache_runtime_metrics`].
+Long-lived services that require durable cache ownership should use
+[`KernelMechanism::try_with_persistence`] instead; it returns
+[`KernelError::CachePersistence`] and never constructs a memory-only kernel
+when the owner cannot open.
 
 ```rust
 use std::time::Duration;

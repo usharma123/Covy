@@ -116,6 +116,17 @@ impl KernelMechanism {
         Self::with_persistence_and_services(config, KernelServices::default())
     }
 
+    /// Creates a persistent kernel or returns the persistence-owner startup
+    /// failure without constructing an in-memory fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::CachePersistence`] when the persistence owner
+    /// cannot be opened.
+    pub fn try_with_persistence(config: PersistConfig) -> Result<Self, KernelError> {
+        Self::try_with_persistence_and_services(config, KernelServices::default())
+    }
+
     pub fn with_persistence_and_services(config: PersistConfig, services: KernelServices) -> Self {
         let persist_ttl_secs = config.ttl_secs;
         let fallback_config = config.clone();
@@ -138,6 +149,35 @@ impl KernelMechanism {
             cache_mutation_lock_nanos: AtomicU64::new(0),
             services,
         }
+    }
+
+    /// Creates a persistent kernel with custom services, failing if the
+    /// persistence owner cannot be opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::CachePersistence`] when the persistence owner
+    /// cannot be opened.
+    pub fn try_with_persistence_and_services(
+        config: PersistConfig,
+        services: KernelServices,
+    ) -> Result<Self, KernelError> {
+        let persist_ttl_secs = config.ttl_secs;
+        let persistence =
+            CachePersistence::open(config).map_err(|source| KernelError::CachePersistence {
+                detail: source.to_string(),
+            })?;
+        Ok(Self {
+            reducers: HashMap::new(),
+            next_request_id: AtomicU64::new(1),
+            memory: persistence.shared_cache(),
+            persistence: Some(persistence),
+            persist_ttl_secs: Some(persist_ttl_secs),
+            persistence_error: Mutex::new(None),
+            cache_mutation_lock_operations: AtomicU64::new(0),
+            cache_mutation_lock_nanos: AtomicU64::new(0),
+            services,
+        })
     }
 
     pub fn flush_cache_persistence(
@@ -852,6 +892,23 @@ fn ensure_sequence_active(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strict_persistence_constructor_rejects_an_unopenable_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let cache_dir = root.path().join(".packet28");
+        std::fs::create_dir(&cache_dir).unwrap();
+        std::fs::create_dir(cache_dir.join("packet-cache-v3.lock")).unwrap();
+
+        let error = match KernelMechanism::try_with_persistence(PersistConfig::new(
+            root.path().to_path_buf(),
+        )) {
+            Ok(_) => panic!("strict persistent kernel unexpectedly opened"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, KernelError::CachePersistence { .. }));
+    }
 
     #[test]
     fn missing_scheduled_step_is_a_typed_scheduler_failure() {

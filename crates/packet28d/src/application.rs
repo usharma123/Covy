@@ -92,9 +92,15 @@ pub fn serve(root: PathBuf) -> Result<()> {
         daemon_log_path.display()
     ));
 
-    let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
-        PersistConfig::new(root.clone()),
-    ));
+    let kernel = Arc::new(
+        Kernel::try_with_v1_reducers_and_persistence(PersistConfig::new(root.clone()))
+            .with_context(|| {
+                format!(
+                    "failed to open primary persistent kernel for '{}'",
+                    root.display()
+                )
+            })?,
+    );
     let kernel_registry = Arc::new(PersistentKernelRegistry::new(
         &root,
         kernel.clone(),

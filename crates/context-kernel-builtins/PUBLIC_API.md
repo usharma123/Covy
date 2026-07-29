@@ -71,6 +71,9 @@ contracts documented by `context-kernel-mechanism`.
 `with_persistence` and `with_v1_reducers_and_persistence` preserve the
 mechanism's in-memory fallback when persistence cannot open. Explicit bounded
 flush or shutdown remains the durability contract.
+Services that cannot safely run without persistence should use
+`try_with_persistence` or `try_with_v1_reducers_and_persistence`; these
+constructors fail instead of returning a memory-only kernel.
 
 ## Reviewed exclusions
 
