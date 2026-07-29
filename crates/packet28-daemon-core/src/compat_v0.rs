@@ -1,8 +1,9 @@
 //! Source-compatible v0 daemon-core root facade.
 //!
 //! New code should import wire contracts and endpoint helpers from their
-//! explicit `packet28-daemon-protocol` modules. This bridge remains enabled by
-//! default for the documented compatibility window.
+//! explicit `packet28-daemon-protocol` modules. This private adapter remains
+//! enabled through `0.2.x`; the explicit root allowlist may be removed in
+//! `0.3.0`.
 
 use std::io::{Read, Write};
 
@@ -10,17 +11,6 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::{DaemonCoreError, Result};
-
-pub use crate::storage::*;
-pub use packet28_daemon_protocol::broker::*;
-pub use packet28_daemon_protocol::commands::*;
-pub use packet28_daemon_protocol::context_store::*;
-pub use packet28_daemon_protocol::frame::MAX_SOCKET_MESSAGE_BYTES;
-pub use packet28_daemon_protocol::hooks::*;
-pub use packet28_daemon_protocol::index::*;
-pub use packet28_daemon_protocol::message::*;
-pub use packet28_daemon_protocol::paths::*;
-pub use packet28_daemon_protocol::task::*;
 
 /// Writes a legacy daemon-core socket message using the shared protocol codec.
 ///

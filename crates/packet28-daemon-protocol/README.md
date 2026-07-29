@@ -18,7 +18,8 @@ memory, reducer, search, or transport-loop implementations.
 ## Migrating from `packet28-daemon-core`
 
 Existing root imports continue to compile through daemon-core's unconditional
-compatibility facade, including for consumers that disable default features:
+compatibility facade through the `0.2.x` release line, including for consumers
+that disable default features:
 
 ```rust
 use packet28_daemon_core::{read_socket_message, DaemonRequest};
@@ -27,3 +28,7 @@ use packet28_daemon_core::{read_socket_message, DaemonRequest};
 Migrate clients to the protocol crate and its explicit modules. Runtime code
 that needs registry persistence should instead use
 `packet28_daemon_core::storage`.
+
+The daemon-core root facade is frozen: new protocol types are not added to it
+automatically. It may be removed in `0.3.0`, while the named protocol modules
+remain the supported interface.
