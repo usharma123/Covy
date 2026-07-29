@@ -2,8 +2,10 @@
 //!
 //! Public writers serialize on a repository-local lock and reject stale
 //! generation handles. Generation records bind every immutable artifact to a
-//! BLAKE3 digest, while best-effort pruning retains the current and explicitly
-//! recoverable previous generation under normal filesystem operation.
+//! BLAKE3 digest, and the atomically published manifest binds the canonical
+//! generation record to its own digest. Best-effort pruning retains the current
+//! and explicitly recoverable previous generation under normal filesystem
+//! operation.
 //!
 //! Publication is process-crash atomic on filesystems that provide atomic
 //! same-directory rename: artifacts are written to flushed temporary files and
@@ -52,6 +54,13 @@ pub struct RepoIndexRuntimeManifest {
     pub overlay_files: usize,
     /// Number of immutable overlay segments referenced by this generation.
     pub segment_count: usize,
+    /// Digest authenticating the canonical generation record selected by this manifest.
+    ///
+    /// Recorded generations without this field are rejected and rebuilt
+    /// because their artifact identities cannot be distinguished from a
+    /// structurally valid stale generation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation_record_digest: Option<String>,
     /// Lifecycle status (`missing`, `ready`, or `corrupt`).
     pub status: String,
     /// Newer corrupt generation skipped during recovery, when applicable.
@@ -339,18 +348,19 @@ fn publish_rebuilt_runtime(
     write_atomic(repo_index_dir(root).join(&base_file), &base_bytes)?;
     let base_digest = artifact_digest(&base_bytes);
 
-    let manifest = RepoIndexRuntimeManifest {
+    let mut manifest = RepoIndexRuntimeManifest {
         schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
         generation,
         include_tests,
         total_files: snapshot.files.len(),
         overlay_files: 0,
         segment_count: 0,
+        generation_record_digest: None,
         status: "ready".to_string(),
         recovered_from_generation: None,
         last_error: None,
     };
-    let record = RepoIndexGenerationRecord {
+    let mut record = RepoIndexGenerationRecord {
         schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
         generation,
         base_file,
@@ -359,6 +369,7 @@ fn publish_rebuilt_runtime(
         segment_digests: Vec::new(),
         manifest: manifest.clone(),
     };
+    bind_generation_record(&mut manifest, &mut record)?;
     persist_generation_record(root, &record)?;
     let runtime = load_generation(root, &manifest)?;
     publish_manifest(root, previous.as_ref(), &manifest)?;
@@ -382,18 +393,19 @@ pub(crate) fn prepare_repo_index_runtime_with_writer(
         .map_err(|error| cache_error(format!("failed to encode repository base: {error}")))?;
     write_atomic(repo_index_dir(root).join(&base_file), &base_bytes)?;
     let base_digest = artifact_digest(&base_bytes);
-    let manifest = RepoIndexRuntimeManifest {
+    let mut manifest = RepoIndexRuntimeManifest {
         schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
         generation,
         include_tests,
         total_files: snapshot.files.len(),
         overlay_files: 0,
         segment_count: 0,
+        generation_record_digest: None,
         status: "ready".to_string(),
         recovered_from_generation: None,
         last_error: None,
     };
-    let record = RepoIndexGenerationRecord {
+    let mut record = RepoIndexGenerationRecord {
         schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
         generation,
         base_file,
@@ -402,6 +414,7 @@ pub(crate) fn prepare_repo_index_runtime_with_writer(
         segment_digests: Vec::new(),
         manifest: manifest.clone(),
     };
+    bind_generation_record(&mut manifest, &mut record)?;
     persist_generation_record(root, &record)?;
     let runtime = load_generation(root, &manifest)?;
     Ok(PreparedRepoIndexRuntime {
@@ -546,18 +559,19 @@ pub fn update_repo_index_runtime(
         .values()
         .filter(|owner| owner.is_some())
         .count();
-    let manifest = RepoIndexRuntimeManifest {
+    let mut manifest = RepoIndexRuntimeManifest {
         schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
         generation,
         include_tests,
         total_files,
         overlay_files,
         segment_count: segments.len(),
+        generation_record_digest: None,
         status: "ready".to_string(),
         recovered_from_generation: None,
         last_error: None,
     };
-    let record = RepoIndexGenerationRecord {
+    let mut record = RepoIndexGenerationRecord {
         schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
         generation,
         base_file: loaded.base_file.clone(),
@@ -566,6 +580,7 @@ pub fn update_repo_index_runtime(
         segment_digests: segment_digests.clone(),
         manifest: manifest.clone(),
     };
+    bind_generation_record(&mut manifest, &mut record)?;
     persist_generation_record(root, &record)?;
 
     let runtime = RepoIndexRuntime {
@@ -679,6 +694,22 @@ fn load_generation(
     {
         return Err(cache_error(format!(
             "generation record '{}' does not match its published manifest or digest metadata",
+            record_path.display()
+        )));
+    }
+    let expected_record_digest = expected_manifest
+        .generation_record_digest
+        .as_deref()
+        .ok_or_else(|| {
+            cache_error(format!(
+                "published repository generation {} does not authenticate its generation record",
+                expected_manifest.generation
+            ))
+        })?;
+    let actual_record_digest = generation_record_digest(&record)?;
+    if actual_record_digest != expected_record_digest {
+        return Err(cache_error(format!(
+            "generation record '{}' failed digest validation (expected {expected_record_digest}, found {actual_record_digest})",
             record_path.display()
         )));
     }
@@ -1012,6 +1043,28 @@ fn persist_generation_record(
         repo_index_dir(root).join(generation_record_file_name(record.generation)),
         &encoded,
     )
+}
+
+fn bind_generation_record(
+    manifest: &mut RepoIndexRuntimeManifest,
+    record: &mut RepoIndexGenerationRecord,
+) -> Result<(), CovyError> {
+    manifest.generation_record_digest = None;
+    record.manifest = manifest.clone();
+    manifest.generation_record_digest = Some(generation_record_digest(record)?);
+    record.manifest = manifest.clone();
+    Ok(())
+}
+
+fn generation_record_digest(record: &RepoIndexGenerationRecord) -> Result<String, CovyError> {
+    let mut canonical = record.clone();
+    canonical.manifest.generation_record_digest = None;
+    let encoded = serde_json::to_vec(&canonical).map_err(|error| {
+        cache_error(format!(
+            "failed to encode canonical repository generation record: {error}"
+        ))
+    })?;
+    Ok(artifact_digest(&encoded))
 }
 
 fn publish_manifest(
@@ -1550,6 +1603,51 @@ mod tests {
         );
         assert_eq!(recovered.manifest.generation, first.manifest.generation);
         assert!(recovered.file("src/c.rs").is_none());
+    }
+
+    #[test]
+    fn retained_previous_base_cannot_be_substituted_for_the_current_generation() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(
+            root.join("src/a.rs"),
+            "pub fn replacement() -> usize { 1 }\n",
+        )
+        .expect("replace");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        assert_eq!(first.manifest.total_files, second.manifest.total_files);
+        let previous_record =
+            load_generation_record(root, first.manifest.generation).expect("previous record");
+        let mut current_record = current_record(root);
+        current_record.base_file = previous_record.base_file;
+        current_record.base_digest = previous_record.base_digest;
+        fs::write(
+            repo_index_dir(root).join(generation_record_file_name(current_record.generation)),
+            serde_json::to_vec_pretty(&current_record).expect("encode substituted record"),
+        )
+        .expect("substitute previous base");
+
+        let recovered = load_repo_index_runtime(root).expect("recover");
+
+        assert_eq!(
+            recovered.manifest.recovered_from_generation,
+            Some(second.manifest.generation)
+        );
+        assert_eq!(recovered.manifest.generation, first.manifest.generation);
+        assert!(recovered.file("src/a.rs").is_some_and(|entry| {
+            entry.symbols.iter().any(|symbol| symbol.name == "alpha")
+                && entry
+                    .symbols
+                    .iter()
+                    .all(|symbol| symbol.name != "replacement")
+        }));
+        assert!(recovered
+            .manifest
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("generation record")
+                && error.contains("failed digest validation")));
     }
 
     #[test]
