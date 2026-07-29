@@ -15,6 +15,12 @@ pub enum SearchError {
     /// An indexed operation was requested before a ready index was loaded.
     IndexNotLoaded,
 
+    /// A loaded generation could not authenticate the current workspace contents.
+    IndexNotReady {
+        /// Reason the workspace cannot safely use the indexed generation.
+        reason: String,
+    },
+
     /// A search request contained an empty or whitespace-only query.
     EmptyQuery,
 
@@ -108,6 +114,9 @@ impl fmt::Display for SearchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::IndexNotLoaded => formatter.write_str("regex index not loaded"),
+            Self::IndexNotReady { reason } => {
+                write!(formatter, "regex search index is not ready: {reason}")
+            }
             Self::EmptyQuery => formatter.write_str("search query cannot be empty"),
             Self::InvalidRegexSyntax { query, source } => write!(
                 formatter,
@@ -153,6 +162,7 @@ impl Error for SearchError {
             Self::Context { source, .. } => Some(source.as_ref()),
             Self::FailureProvenance { build, .. } => Some(build.as_ref()),
             Self::IndexNotLoaded
+            | Self::IndexNotReady { .. }
             | Self::EmptyQuery
             | Self::CorruptIndex { .. }
             | Self::ConcurrentWriter { .. }

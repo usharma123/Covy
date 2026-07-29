@@ -1512,9 +1512,16 @@ pub(crate) fn daemon_packet28_search(
         }
         return live_search_with_reason(&root, &request, reason);
     }
-    Ok(packet28_search_core::indexed_search(
-        &root, &runtime, &request,
-    )?)
+    match packet28_search_core::indexed_search(&root, &runtime, &request) {
+        Ok(result) => Ok(result),
+        Err(packet28_search_core::SearchError::IndexNotReady { reason }) => {
+            if force_indexed {
+                return Err(DaemonIndexSearchNotReady { reason }.into());
+            }
+            live_search_with_reason(&root, &request, reason)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(crate) fn daemon_packet28_search_guard(

@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
-use std::process::{Child, Command};
+use std::process::Child;
+use std::process::Command;
 use std::sync::Barrier;
 use std::time::{Duration, Instant};
 
@@ -56,6 +57,29 @@ impl IndexFixture {
         Self { state, root }
     }
 
+    fn git(files: &[(&str, &str)]) -> Self {
+        let state = daemon_test_state();
+        let root = daemon_test_root(&state);
+        for (path, contents) in files {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().expect("fixture parent")).expect("create parent");
+            fs::write(path, contents).expect("write fixture");
+        }
+        initialize_git_repository(&root);
+        {
+            let mut guard = state.lock().expect("state");
+            guard.interactive_index.manifest = default_index_manifest(&root);
+            guard
+                .interactive_index
+                .manifest
+                .status
+                .transition_to(DaemonIndexState::Queued)
+                .expect("queue rebuild");
+        }
+        perform_full_index_rebuild(&state, None, None).expect("full rebuild");
+        Self { state, root }
+    }
+
     fn repo_runtime(&self) -> mapy_core::RepoIndexRuntime {
         self.state
             .lock()
@@ -84,6 +108,31 @@ impl IndexFixture {
         perform_incremental_index_update(&self.state, &paths, None, None)
             .expect("incremental update");
     }
+}
+
+fn initialize_git_repository(root: &Path) {
+    fs::write(root.join(".gitignore"), ".packet28/\n").expect("write gitignore");
+    let run = |args: &[&str]| {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git command failed: {args:?}");
+    };
+    run(&["init", "--quiet"]);
+    run(&["add", "."]);
+    run(&[
+        "-c",
+        "user.name=Packet28 Tests",
+        "-c",
+        "user.email=packet28-tests@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "fixture",
+    ]);
 }
 
 impl Drop for IndexFixture {
@@ -1520,6 +1569,93 @@ fn queued_dirty_path_uses_live_search_and_forced_index_refuses_stale_results() {
             "search guard missed a symlink alias for a dirty path"
         );
     }
+}
+
+#[test]
+fn cached_daemon_runtime_detects_an_out_of_band_tracked_edit() {
+    let fixture = IndexFixture::git(&[
+        ("src/candidate.rs", "pub fn stable_candidate() {}\n"),
+        ("src/noncandidate.rs", "pub fn stable_noncandidate() {}\n"),
+    ]);
+    fs::write(
+        fixture.root.join("src/noncandidate.rs"),
+        "pub fn daemon_out_of_band_workspace_needle() {}\n",
+    )
+    .expect("write out-of-band source");
+    let request = packet28_reducer_core::SearchRequest {
+        query: "daemon_out_of_band_workspace_needle".to_string(),
+        fixed_string: true,
+        ..packet28_reducer_core::SearchRequest::default()
+    };
+
+    let live = daemon_packet28_search(
+        fixture.state.clone(),
+        packet28_daemon_protocol::message::Packet28SearchRequest {
+            request: request.clone(),
+            force_indexed: false,
+        },
+    )
+    .expect("out-of-band edit should use live search");
+    assert_eq!(live.paths, vec!["src/noncandidate.rs"]);
+    assert!(
+        live.engine
+            .as_ref()
+            .and_then(|engine| engine.fallback_reason.as_deref())
+            .is_some_and(|reason| reason.contains("workspace freshness")),
+        "fallback omitted workspace freshness provenance: {:?}",
+        live.engine
+    );
+
+    let forced = daemon_packet28_search(
+        fixture.state.clone(),
+        packet28_daemon_protocol::message::Packet28SearchRequest {
+            request,
+            force_indexed: true,
+        },
+    )
+    .expect_err("forced indexed search accepted an out-of-band edit");
+    assert!(forced.downcast_ref::<DaemonIndexSearchNotReady>().is_some());
+}
+
+#[test]
+fn restarted_daemon_rejects_an_index_after_an_out_of_band_rename() {
+    let fixture = IndexFixture::git(&[(
+        "src/original.rs",
+        "pub fn daemon_restart_workspace_needle() {}\n",
+    )]);
+    fs::rename(
+        fixture.root.join("src/original.rs"),
+        fixture.root.join("src/renamed.rs"),
+    )
+    .expect("rename source while daemon is stopped");
+    let restarted =
+        load_index_runtime_files(&fixture.root, load_index_manifest_file(&fixture.root));
+    fixture.state.lock().expect("state").interactive_index = restarted;
+    let request = packet28_reducer_core::SearchRequest {
+        query: "daemon_restart_workspace_needle".to_string(),
+        fixed_string: true,
+        ..packet28_reducer_core::SearchRequest::default()
+    };
+
+    let live = daemon_packet28_search(
+        fixture.state.clone(),
+        packet28_daemon_protocol::message::Packet28SearchRequest {
+            request: request.clone(),
+            force_indexed: false,
+        },
+    )
+    .expect("restarted daemon should use live search");
+    assert_eq!(live.paths, vec!["src/renamed.rs"]);
+
+    let forced = daemon_packet28_search(
+        fixture.state.clone(),
+        packet28_daemon_protocol::message::Packet28SearchRequest {
+            request,
+            force_indexed: true,
+        },
+    )
+    .expect_err("forced indexed search accepted the pre-rename generation");
+    assert!(forced.downcast_ref::<DaemonIndexSearchNotReady>().is_some());
 }
 
 #[test]

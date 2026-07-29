@@ -14,10 +14,10 @@ use crate::layer::{
     scan_documents_with_progress, validate_layer_file_names, write_atomic, IndexedDocument,
 };
 use crate::model::{
-    LayerFiles, LoadedIndex, LoadedOverlaySegment, OverlaySegmentRecord, OverlayState,
-    RegexGenerationRecord, RegexIndexManifest, RegexIndexRuntime, MANIFEST_FILE_NAME,
-    OVERLAY_COMPACTION_SEGMENTS, PREVIOUS_MANIFEST_FILE_NAME, REGEX_INDEX_SCHEMA_VERSION,
-    WRITER_LOCK_FILE_NAME,
+    git_workspace_snapshot, stable_clean_commit, workspace_freshness_reason, LayerFiles,
+    LoadedIndex, LoadedOverlaySegment, OverlaySegmentRecord, OverlayState, RegexGenerationRecord,
+    RegexIndexManifest, RegexIndexRuntime, MANIFEST_FILE_NAME, OVERLAY_COMPACTION_SEGMENTS,
+    PREVIOUS_MANIFEST_FILE_NAME, REGEX_INDEX_SCHEMA_VERSION, WRITER_LOCK_FILE_NAME,
 };
 use crate::paths::{
     generation_record_path, manifest_path, normalize_changed_paths, overlay_state_path,
@@ -87,24 +87,12 @@ pub(crate) fn load_runtime_from_manifest(
             loaded: None,
         });
     }
-    if let Some(expected) = manifest.base_commit.as_deref() {
-        if current_git_commit(root).as_deref() != Some(expected) {
-            let expected_commit = expected.to_string();
-            let current_commit =
-                current_git_commit(root).unwrap_or_else(|| "<unknown>".to_string());
-            mark_manifest_unloaded(
-                &mut manifest,
-                "stale",
-                format!(
-                    "regex index base commit changed (indexed={}, current={})",
-                    expected_commit, current_commit
-                ),
-            );
-            return Ok(RegexIndexRuntime {
-                manifest,
-                loaded: None,
-            });
-        }
+    if let Some(reason) = workspace_freshness_reason(root, &manifest) {
+        mark_manifest_unloaded(&mut manifest, "stale", reason);
+        return Ok(RegexIndexRuntime {
+            manifest,
+            loaded: None,
+        });
     }
     if generation_record_path(root, manifest.generation).exists() {
         let record = load_generation_record(root, manifest.generation)?;
@@ -148,6 +136,7 @@ where
 {
     let _writer = acquire_writer_lock(root)?;
     let started = now_unix();
+    let workspace_before = git_workspace_snapshot(root).ok();
     let previous = load_runtime(root)
         .ok()
         .filter(RegexIndexRuntime::is_loaded)
@@ -175,7 +164,13 @@ where
     manifest.indexed_files = docs.len();
     manifest.overlay_files = 0;
     manifest.overlay_segments = 0;
-    manifest.base_commit = current_git_commit(root);
+    let workspace_after = git_workspace_snapshot(root).ok();
+    manifest.base_commit = workspace_after
+        .as_ref()
+        .map(|workspace| workspace.commit.clone())
+        .or_else(|| current_git_commit(root));
+    manifest.workspace_clean_commit =
+        stable_clean_commit(workspace_before.as_ref(), workspace_after.as_ref());
     manifest.last_build_completed_at_unix = Some(now_unix());
     let record = RegexGenerationRecord {
         schema_version: REGEX_INDEX_SCHEMA_VERSION,
@@ -303,6 +298,7 @@ pub fn update_overlay_index(
     manifest.overlay_files = loaded_index.overlay_state.owners.len();
     manifest.overlay_segments = loaded_index.overlays.len();
     manifest.overlay_state_digest = Some(overlay_state_digest(&loaded_index.overlay_state)?);
+    manifest.workspace_clean_commit = None;
     manifest.stale_reason = None;
     manifest.last_error = None;
     manifest.last_build_completed_at_unix = Some(now_unix());

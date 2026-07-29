@@ -29,6 +29,7 @@ use packet28_reducer_core::{parse_region_for_path, SearchRequest, SearchResult};
 use packet28_reducer_core::{SearchEngineStats, SearchGroup, SearchMatch};
 use packet28_search_core::{
     guarded_fallback_reason, indexed_search, load_runtime, rebuild_full_index,
+    SearchError as IndexSearchError,
 };
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
@@ -432,7 +433,16 @@ fn execute_search_inproc(
                     Ok(select_fff_for_auto_fallback(root, request, engine, &result)
                         .unwrap_or(result))
                 }
-                None => Ok(indexed_search(root, &runtime, request)?),
+                None => match indexed_search(root, &runtime, request) {
+                    Ok(result) => Ok(result),
+                    Err(IndexSearchError::IndexNotReady { reason }) => {
+                        let mut result = packet28_reducer_core::search(root, request)?;
+                        annotate_fallback(&mut result, reason);
+                        Ok(select_fff_for_auto_fallback(root, request, engine, &result)
+                            .unwrap_or(result))
+                    }
+                    Err(error) => Err(error.into()),
+                },
             },
             Err(err) => {
                 let mut result = packet28_reducer_core::search(root, request)?;

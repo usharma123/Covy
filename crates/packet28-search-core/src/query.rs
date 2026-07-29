@@ -14,11 +14,11 @@ use regex_syntax::hir::{Hir, HirKind};
 
 use crate::error::{Result, SearchError};
 use crate::model::{
-    path_allowed, CompiledSearch, LayerKind, LiteralWindow, LoadedIndex, LoadedLayer,
-    PositionSummary, PostingEntry, QueryCache, RegexIndexRuntime, SearchPlan, SparseCandidate,
-    Verifier, MAX_GRAM_BYTES, MAX_INDEX_VERIFY_CANDIDATES, MAX_INDEX_VERIFY_DENOMINATOR,
-    MAX_INDEX_VERIFY_NUMERATOR, MAX_LITERAL_COVER, MIN_GRAM_BYTES, POSITION_BUCKET_COUNT,
-    SHORT_GRAM_BYTES,
+    path_allowed, workspace_freshness_reason, CompiledSearch, LayerKind, LiteralWindow,
+    LoadedIndex, LoadedLayer, PositionSummary, PostingEntry, QueryCache, RegexIndexRuntime,
+    SearchPlan, SparseCandidate, Verifier, MAX_GRAM_BYTES, MAX_INDEX_VERIFY_CANDIDATES,
+    MAX_INDEX_VERIFY_DENOMINATOR, MAX_INDEX_VERIFY_NUMERATOR, MAX_LITERAL_COVER, MIN_GRAM_BYTES,
+    POSITION_BUCKET_COUNT, SHORT_GRAM_BYTES,
 };
 use crate::paths::resolve_requested_paths;
 use crate::postings::{
@@ -46,6 +46,9 @@ pub fn guarded_fallback_reason(
             .clone()
             .or_else(|| runtime.manifest.last_error.clone())
             .unwrap_or_else(|| "regex search index is not ready".to_string());
+        return Ok(Some(reason));
+    }
+    if let Some(reason) = workspace_freshness_reason(root, &runtime.manifest) {
         return Ok(Some(reason));
     }
     let loaded = runtime.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
@@ -104,15 +107,37 @@ pub fn guarded_fallback_reason(
 /// # Errors
 ///
 /// Returns [`SearchError::IndexNotLoaded`] when `runtime` has no validated
-/// generation, [`SearchError::EmptyQuery`] for a blank query, typed regex errors
-/// for invalid expressions, [`SearchError::Io`] when a candidate cannot be read,
-/// or a typed corruption/conversion error for an invalid posting.
+/// generation, [`SearchError::IndexNotReady`] when workspace freshness cannot
+/// be authenticated, [`SearchError::EmptyQuery`] for a blank query, typed regex
+/// errors for invalid expressions, [`SearchError::Io`] when a candidate cannot
+/// be read, or a typed corruption/conversion error for an invalid posting.
 pub fn indexed_search(
     root: &Path,
     runtime: &RegexIndexRuntime,
     request: &SearchRequest,
 ) -> Result<SearchResult> {
-    let loaded = runtime.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
+    let loaded = match runtime.loaded.as_ref() {
+        Some(loaded) => loaded,
+        None => {
+            let Some(reason) = runtime
+                .manifest
+                .stale_reason
+                .clone()
+                .or_else(|| runtime.manifest.last_error.clone())
+            else {
+                return Err(SearchError::IndexNotLoaded);
+            };
+            return Err(SearchError::IndexNotReady { reason });
+        }
+    };
+    if runtime.manifest.status != "ready" {
+        return Err(SearchError::IndexNotReady {
+            reason: format!("regex index status is '{}'", runtime.manifest.status),
+        });
+    }
+    if let Some(reason) = workspace_freshness_reason(root, &runtime.manifest) {
+        return Err(SearchError::IndexNotReady { reason });
+    }
     let query = request.query.trim();
     if query.is_empty() {
         return Err(SearchError::EmptyQuery);

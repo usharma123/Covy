@@ -1,6 +1,8 @@
 //! Shared runtime and persisted-format model.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
@@ -65,6 +67,12 @@ pub struct RegexIndexManifest {
     pub overlay_state_digest: Option<String>,
     /// Git commit associated with the base layer, when available.
     pub base_commit: Option<String>,
+    /// Git commit whose clean working tree was observed before and after the full rebuild.
+    ///
+    /// A missing value on a Git-backed index means the persisted generation
+    /// cannot authenticate the current workspace contents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_clean_commit: Option<String>,
     /// Reason the index cannot currently serve queries.
     pub stale_reason: Option<String>,
     /// Unix timestamp at which the latest build started.
@@ -73,6 +81,89 @@ pub struct RegexIndexManifest {
     pub last_build_completed_at_unix: Option<u64>,
     /// Most recent build, validation, or loading failure.
     pub last_error: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct GitWorkspaceSnapshot {
+    pub(crate) commit: String,
+    clean: bool,
+}
+
+pub(crate) fn git_workspace_snapshot(
+    root: &Path,
+) -> std::result::Result<GitWorkspaceSnapshot, String> {
+    let output = Command::new("git")
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "--untracked-files=normal",
+            "--ignore-submodules=none",
+        ])
+        .output()
+        .map_err(|error| format!("failed to run git status: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git status failed: {}", stderr.trim()));
+    }
+    let status = String::from_utf8_lossy(&output.stdout);
+    let commit = status
+        .lines()
+        .find_map(|line| line.strip_prefix("# branch.oid "))
+        .filter(|value| *value != "(initial)")
+        .map(str::to_string)
+        .ok_or_else(|| "git status did not report a HEAD commit".to_string())?;
+    let clean = status.lines().all(|line| line.starts_with("# "));
+    Ok(GitWorkspaceSnapshot { commit, clean })
+}
+
+pub(crate) fn stable_clean_commit(
+    before: Option<&GitWorkspaceSnapshot>,
+    after: Option<&GitWorkspaceSnapshot>,
+) -> Option<String> {
+    match (before, after) {
+        (Some(before), Some(after))
+            if before.clean && after.clean && before.commit == after.commit =>
+        {
+            Some(after.commit.clone())
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn workspace_freshness_reason(
+    root: &Path,
+    manifest: &RegexIndexManifest,
+) -> Option<String> {
+    let expected_base = manifest.base_commit.as_deref()?;
+    let Some(expected_clean) = manifest.workspace_clean_commit.as_deref() else {
+        return Some(
+            "workspace freshness could not be authenticated; rebuild the regex index from a clean Git working tree"
+                .to_string(),
+        );
+    };
+    if expected_clean != expected_base {
+        return Some(format!(
+            "workspace freshness attestation does not match the indexed base commit (base={expected_base}, attested={expected_clean})"
+        ));
+    }
+    match git_workspace_snapshot(root) {
+        Ok(workspace) if workspace.commit != expected_clean => Some(format!(
+            "regex index base commit changed (indexed={expected_clean}, current={})",
+            workspace.commit
+        )),
+        Ok(workspace) if !workspace.clean => Some(
+            "workspace freshness could not be authenticated because the Git working tree has tracked, untracked, renamed, or deleted files"
+                .to_string(),
+        ),
+        Ok(_) => None,
+        Err(error) => Some(format!(
+            "workspace freshness could not be authenticated: {error}"
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

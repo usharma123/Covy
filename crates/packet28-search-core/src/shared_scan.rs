@@ -20,8 +20,9 @@ use crate::generation::{
 };
 use crate::layer::{build_layer, write_atomic, IndexedDocument};
 use crate::model::{
-    LayerFiles, LoadedIndex, OverlayState, RegexGenerationRecord, RegexIndexManifest,
-    RegexIndexRuntime, MAX_INDEXED_FILE_BYTES, REGEX_INDEX_SCHEMA_VERSION,
+    git_workspace_snapshot, stable_clean_commit, GitWorkspaceSnapshot, LayerFiles, LoadedIndex,
+    OverlayState, RegexGenerationRecord, RegexIndexManifest, RegexIndexRuntime,
+    MAX_INDEXED_FILE_BYTES, REGEX_INDEX_SCHEMA_VERSION,
 };
 use crate::paths::{manifest_path, previous_manifest_path};
 use crate::postings::build_indexed_grams;
@@ -105,6 +106,7 @@ pub struct RegexIndexScanSession {
     previous_previous_bytes: Option<Vec<u8>>,
     generation: u64,
     started_at_unix: u64,
+    workspace_before: Option<GitWorkspaceSnapshot>,
 }
 
 impl RegexIndexScanSession {
@@ -122,6 +124,7 @@ impl RegexIndexScanSession {
             return Err(SearchError::InvalidChangedPath { path: path.clone() });
         }
         let writer = acquire_writer_lock(root)?;
+        let workspace_before = git_workspace_snapshot(root).ok();
         let previous_current_bytes = read_optional_file(&manifest_path(root))?;
         let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
         let previous = load_runtime(root)
@@ -147,6 +150,7 @@ impl RegexIndexScanSession {
             previous_previous_bytes,
             generation,
             started_at_unix: now_unix(),
+            workspace_before,
         })
     }
 
@@ -215,7 +219,13 @@ impl RegexIndexScanSession {
         let base_layer = build_layer(&self.root, &self.docs, &mut base_files)?;
         manifest.total_files = self.docs.len();
         manifest.indexed_files = self.docs.len();
-        manifest.base_commit = current_git_commit(&self.root);
+        let workspace_after = git_workspace_snapshot(&self.root).ok();
+        manifest.base_commit = workspace_after
+            .as_ref()
+            .map(|workspace| workspace.commit.clone())
+            .or_else(|| current_git_commit(&self.root));
+        manifest.workspace_clean_commit =
+            stable_clean_commit(self.workspace_before.as_ref(), workspace_after.as_ref());
         manifest.last_build_completed_at_unix = Some(now_unix());
         let record = RegexGenerationRecord {
             schema_version: REGEX_INDEX_SCHEMA_VERSION,
