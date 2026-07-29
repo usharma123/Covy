@@ -11,8 +11,9 @@ use thiserror::Error;
 
 use context_memory_core::{
     basename_alias, normalize_context_path, CachePacket, CachePersistence, CachePersistenceMetrics,
-    DeltaReuseHooks, NoopDeltaReuseHooks, PacketCache, RecallHit, RecallMode, RecallOptions,
-    RecallScope,
+    ContextStoreEntryDetail, ContextStoreEntrySummary, ContextStoreListFilter, ContextStorePaging,
+    ContextStorePruneReport, ContextStorePruneRequest, ContextStoreStats, DeltaReuseHooks,
+    NoopDeltaReuseHooks, PacketCache, RecallHit, RecallMode, RecallOptions, RecallScope,
 };
 
 pub use context_memory_core::PersistConfig;

@@ -18,6 +18,8 @@ const REPEATS: usize = 3;
 struct PathMeasurement {
     median_write_lock_ns: u64,
     median_elapsed_us: u64,
+    median_payload_bytes: u64,
+    median_coordination_bytes: u64,
     median_published_bytes: u64,
 }
 
@@ -39,6 +41,8 @@ struct Observation {
     write_lock_ns: u64,
     elapsed_us: u64,
     published_bytes: u64,
+    payload_bytes: u64,
+    coordination_bytes: u64,
     parity_entries: usize,
 }
 
@@ -54,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owned = summarize(&owned);
     let parity_entries = FIXTURE_ENTRIES + MEASURED_WRITES;
     let result = ExperimentResult {
-        schema_version: 1,
+        schema_version: 2,
         fixture_entries: FIXTURE_ENTRIES,
         measured_writes: MEASURED_WRITES,
         payload_bytes: PAYLOAD_BYTES,
@@ -89,7 +93,7 @@ fn run_legacy_model() -> Result<Observation, Box<dyn std::error::Error>> {
 
     let started = Instant::now();
     let mut lock_samples = Vec::with_capacity(MEASURED_WRITES);
-    let mut published_bytes = 0u64;
+    let mut payload_bytes = 0u64;
     for offset in 0..MEASURED_WRITES {
         let lock_started = Instant::now();
         let mut cache = cache
@@ -97,8 +101,12 @@ fn run_legacy_model() -> Result<Observation, Box<dyn std::error::Error>> {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         put_entry(&mut cache, FIXTURE_ENTRIES + offset, PAYLOAD_BYTES);
         cache.save_to_disk(&config)?;
-        published_bytes = published_bytes
-            .saturating_add(std::fs::metadata(PacketCache::persist_file_path(dir.path()))?.len());
+        let primary_bytes = std::fs::metadata(PacketCache::persist_file_path(dir.path()))?.len();
+        let backup_bytes =
+            std::fs::metadata(dir.path().join(".packet28/packet-cache-v3.backup.bin"))?.len();
+        payload_bytes = payload_bytes
+            .saturating_add(primary_bytes)
+            .saturating_add(backup_bytes);
         drop(cache);
         lock_samples.push(elapsed_nanos(lock_started));
     }
@@ -107,7 +115,9 @@ fn run_legacy_model() -> Result<Observation, Box<dyn std::error::Error>> {
     Ok(Observation {
         write_lock_ns: median(&mut lock_samples),
         elapsed_us: elapsed_micros(started),
-        published_bytes,
+        published_bytes: payload_bytes,
+        payload_bytes,
+        coordination_bytes: 0,
         parity_entries,
     })
 }
@@ -115,23 +125,24 @@ fn run_legacy_model() -> Result<Observation, Box<dyn std::error::Error>> {
 fn run_owned_delta_path() -> Result<Observation, Box<dyn std::error::Error>> {
     let dir = tempdir()?;
     let config = PersistConfig::new(dir.path().to_path_buf());
-    let initial = seed_cache();
-    initial.save_to_disk(&config)?;
-    let cache = Arc::new(Mutex::new(initial.clone()));
-    let mut owner = CachePersistence::start(config.clone(), initial)?;
+    seed_cache().save_to_disk(&config)?;
+    let owner = CachePersistence::open(config.clone())?;
+    let cache = owner.shared_cache();
 
     let started = Instant::now();
     let mut lock_samples = Vec::with_capacity(MEASURED_WRITES);
     for offset in 0..MEASURED_WRITES {
         let lock_started = Instant::now();
-        let entry = {
+        let (entry, reservation) = {
             let mut cache = cache
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            put_entry(&mut cache, FIXTURE_ENTRIES + offset, PAYLOAD_BYTES)
+            let reservation = owner.reserve_mutation(1)?;
+            let entry = put_entry(&mut cache, FIXTURE_ENTRIES + offset, PAYLOAD_BYTES);
+            (entry, reservation)
         };
         lock_samples.push(elapsed_nanos(lock_started));
-        owner.record_update(&entry, Vec::new())?;
+        owner.record_update_reserved(&entry, Vec::new(), reservation)?;
     }
     let metrics = owner.flush(Duration::from_secs(30))?;
     let elapsed_us = elapsed_micros(started);
@@ -141,7 +152,9 @@ fn run_owned_delta_path() -> Result<Observation, Box<dyn std::error::Error>> {
     Ok(Observation {
         write_lock_ns: median(&mut lock_samples),
         elapsed_us,
-        published_bytes: metrics.wal_bytes,
+        published_bytes: metrics.wal_bytes.saturating_add(metrics.coordination_bytes),
+        payload_bytes: metrics.wal_bytes,
+        coordination_bytes: metrics.coordination_bytes,
         parity_entries,
     })
 }
@@ -194,9 +207,19 @@ fn summarize(observations: &[Observation]) -> PathMeasurement {
         .iter()
         .map(|observation| observation.published_bytes)
         .collect::<Vec<_>>();
+    let mut payload_bytes = observations
+        .iter()
+        .map(|observation| observation.payload_bytes)
+        .collect::<Vec<_>>();
+    let mut coordination_bytes = observations
+        .iter()
+        .map(|observation| observation.coordination_bytes)
+        .collect::<Vec<_>>();
     PathMeasurement {
         median_write_lock_ns: median(&mut locks),
         median_elapsed_us: median(&mut elapsed),
+        median_payload_bytes: median(&mut payload_bytes),
+        median_coordination_bytes: median(&mut coordination_bytes),
         median_published_bytes: median(&mut bytes),
     }
 }

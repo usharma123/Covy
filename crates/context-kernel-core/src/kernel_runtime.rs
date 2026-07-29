@@ -90,17 +90,20 @@ impl Kernel {
     }
 
     pub fn with_persistence(config: PersistConfig) -> Self {
-        let cache = PacketCache::load_from_disk(&config);
         let persist_ttl_secs = config.ttl_secs;
-        let (persistence, persistence_error) = match CachePersistence::start(config, cache.clone())
-        {
-            Ok(persistence) => (Some(persistence), None),
-            Err(error) => (None, Some(error.to_string())),
+        let fallback_config = config.clone();
+        let (memory, persistence, persistence_error) = match CachePersistence::open(config) {
+            Ok(persistence) => (persistence.shared_cache(), Some(persistence), None),
+            Err(error) => (
+                Arc::new(Mutex::new(PacketCache::load_from_disk(&fallback_config))),
+                None,
+                Some(error.to_string()),
+            ),
         };
         Self {
             reducers: HashMap::new(),
             next_request_id: AtomicU64::new(1),
-            memory: Arc::new(Mutex::new(cache)),
+            memory,
             persistence,
             persist_ttl_secs: Some(persist_ttl_secs),
             persistence_error: Mutex::new(persistence_error),
@@ -135,6 +138,107 @@ impl Kernel {
             .map_err(|source| KernelError::CachePersistence {
                 detail: source.to_string(),
             })
+    }
+
+    /// Flushes, checkpoints, and joins the root persistence owner within a
+    /// caller-supplied lifecycle bound.
+    pub fn shutdown_cache_persistence(
+        &self,
+        timeout: Duration,
+    ) -> Result<CachePersistenceMetrics, KernelError> {
+        let Some(persistence) = self.persistence.as_ref() else {
+            return Err(self.persistence_unavailable_error()?);
+        };
+        persistence
+            .shutdown(timeout)
+            .map_err(|source| KernelError::CachePersistence {
+                detail: source.to_string(),
+            })
+    }
+
+    pub fn context_store_list(
+        &self,
+        filter: &ContextStoreListFilter,
+        paging: &ContextStorePaging,
+    ) -> Result<Vec<ContextStoreEntrySummary>, KernelError> {
+        let cache = self.lock_memory()?;
+        Ok(cache.list_entries(filter, paging))
+    }
+
+    pub fn context_store_get(
+        &self,
+        cache_key: &str,
+    ) -> Result<Option<ContextStoreEntryDetail>, KernelError> {
+        let cache = self.lock_memory()?;
+        Ok(cache.get_entry(cache_key))
+    }
+
+    pub fn context_store_stats(&self) -> Result<ContextStoreStats, KernelError> {
+        let cache = self.lock_memory()?;
+        Ok(cache.stats())
+    }
+
+    pub fn context_store_recall(
+        &self,
+        query: &str,
+        options: &RecallOptions,
+    ) -> Result<Vec<RecallHit>, KernelError> {
+        let cache = self.lock_memory()?;
+        Ok(cache.recall(query, options))
+    }
+
+    /// Applies a prune to the live root cache and orders its tombstones with
+    /// concurrent cache writes using the revision reserved under the same
+    /// memory lock.
+    pub fn context_store_prune(
+        &self,
+        request: ContextStorePruneRequest,
+        timeout: Duration,
+    ) -> Result<ContextStorePruneReport, KernelError> {
+        let Some(persistence) = self.persistence.as_ref() else {
+            return Err(self.persistence_unavailable_error()?);
+        };
+        let (report, removed_cache_keys, reservation) = {
+            let mut cache = self.lock_memory()?;
+            let removed_cache_keys = cache.prune_candidate_keys(&request);
+            let reservation = persistence
+                .reserve_mutation(removed_cache_keys.len())
+                .map_err(|source| KernelError::CachePersistence {
+                    detail: source.to_string(),
+                })?;
+            let report = cache.prune(request);
+            debug_assert_eq!(report.removed, removed_cache_keys.len());
+            (report, removed_cache_keys, reservation)
+        };
+        persistence
+            .record_removals_reserved(removed_cache_keys, reservation)
+            .map_err(|source| KernelError::CachePersistence {
+                detail: source.to_string(),
+            })?;
+        persistence
+            .flush(timeout)
+            .map_err(|source| KernelError::CachePersistence {
+                detail: source.to_string(),
+            })?;
+        Ok(report)
+    }
+
+    fn lock_memory(&self) -> Result<std::sync::MutexGuard<'_, PacketCache>, KernelError> {
+        self.memory.lock().map_err(|source| KernelError::CacheLock {
+            detail: source.to_string(),
+        })
+    }
+
+    fn persistence_unavailable_error(&self) -> Result<KernelError, KernelError> {
+        let detail = self
+            .persistence_error
+            .lock()
+            .map_err(|source| KernelError::CacheLock {
+                detail: source.to_string(),
+            })?
+            .clone()
+            .unwrap_or_else(|| "persistence is not configured".to_string());
+        Ok(KernelError::CachePersistence { detail })
     }
 
     pub fn cache_runtime_metrics(&self) -> CacheRuntimeMetrics {
@@ -388,7 +492,7 @@ impl Kernel {
                 .collect();
 
             let metadata = response.metadata.clone();
-            let (entry, removed_cache_keys, stats, lock_nanos) = {
+            let (entry, removed_cache_keys, reservation, stats, lock_nanos) = {
                 let mut cache = self
                     .memory
                     .lock()
@@ -396,26 +500,46 @@ impl Kernel {
                         detail: source.to_string(),
                     })?;
                 let lock_started = Instant::now();
+                let mut expected_removed_cache_keys = self
+                    .persist_ttl_secs
+                    .map(|ttl_secs| cache.expired_entry_keys(ttl_secs))
+                    .unwrap_or_default();
+                expected_removed_cache_keys
+                    .retain(|cache_key| cache_key != &cache_lookup.cache_key);
+                let reservation = self
+                    .persistence
+                    .as_ref()
+                    .map(|persistence| {
+                        persistence
+                            .reserve_mutation(expected_removed_cache_keys.len().saturating_add(1))
+                    })
+                    .transpose()
+                    .map_err(|source| KernelError::CachePersistence {
+                        detail: source.to_string(),
+                    })?;
                 let entry = cache.put_with_hooks(&target, &cache_lookup, packets, metadata, hooks);
                 let removed_cache_keys = self
                     .persist_ttl_secs
                     .map(|ttl_secs| cache.evict_expired_entries(ttl_secs))
                     .unwrap_or_default();
+                debug_assert_eq!(removed_cache_keys, expected_removed_cache_keys);
                 let stats = cache.stats();
                 let lock_nanos = lock_started
                     .elapsed()
                     .as_nanos()
                     .try_into()
                     .unwrap_or(u64::MAX);
-                (entry, removed_cache_keys, stats, lock_nanos)
+                (entry, removed_cache_keys, reservation, stats, lock_nanos)
             };
             self.cache_mutation_lock_operations
                 .fetch_add(1, Ordering::Relaxed);
             self.cache_mutation_lock_nanos
                 .fetch_add(lock_nanos, Ordering::Relaxed);
 
-            if let Some(persistence) = &self.persistence {
-                if let Err(error) = persistence.record_update(&entry, removed_cache_keys) {
+            if let (Some(persistence), Some(reservation)) = (&self.persistence, reservation) {
+                if let Err(error) =
+                    persistence.record_update_reserved(&entry, removed_cache_keys, reservation)
+                {
                     if let Ok(mut last_error) = self.persistence_error.lock() {
                         *last_error = Some(error.to_string());
                     }

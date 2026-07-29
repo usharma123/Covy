@@ -7,6 +7,10 @@ const PERSIST_WAL_VERSION: u32 = 1;
 const PERSIST_WAL_MAGIC: &[u8; 8] = b"P28CWAL1";
 const PERSIST_WAL_HEADER_LEN: usize = 8 + 8 + 32;
 const MAX_PERSIST_WAL_RECORD_BYTES: usize = 64 * 1024 * 1024;
+const PERSIST_CHECKPOINT_MAGIC: &[u8; 8] = b"P28CCP31";
+const PERSIST_CHECKPOINT_HEADER_LEN: usize = 8 + 8 + 32;
+const MAX_PERSIST_CHECKPOINT_BYTES: usize = 512 * 1024 * 1024;
+const PERSIST_CACHE_BACKUP_FILE_V3: &str = "packet-cache-v3.backup.bin";
 
 #[derive(
     Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
@@ -55,24 +59,24 @@ pub(crate) struct PersistEnvelopeV3 {
     Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
 )]
 pub(crate) struct PersistPacketCacheEntry {
-    cache_key: String,
-    target: String,
-    input_hash: String,
-    created_at_unix: u64,
-    packets: Vec<PersistCachePacket>,
-    metadata_json: String,
-    delta_reuse: DeltaReuse,
+    pub(crate) cache_key: String,
+    pub(crate) target: String,
+    pub(crate) input_hash: String,
+    pub(crate) created_at_unix: u64,
+    pub(crate) packets: Vec<PersistCachePacket>,
+    pub(crate) metadata_json: String,
+    pub(crate) delta_reuse: DeltaReuse,
 }
 
 #[derive(
     Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
 )]
 pub(crate) struct PersistCachePacket {
-    packet_id: Option<String>,
-    body_json: String,
-    token_usage: Option<u64>,
-    runtime_ms: Option<u64>,
-    metadata_json: String,
+    pub(crate) packet_id: Option<String>,
+    pub(crate) body_json: String,
+    pub(crate) token_usage: Option<u64>,
+    pub(crate) runtime_ms: Option<u64>,
+    pub(crate) metadata_json: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +117,7 @@ pub(crate) struct WalReplay {
     pub(crate) highest_sequence: u64,
     pub(crate) valid_bytes: u64,
     pub(crate) recovered_corruption: bool,
+    pub(crate) baseline_mismatch: bool,
 }
 
 impl PersistPacketCacheEntry {
@@ -186,21 +191,27 @@ impl PacketCache {
             ..Self::new()
         };
 
-        if v3_cache.try_load_v3(config).is_some() {
+        let loaded_v3 = v3_cache.try_load_v3(config).is_some();
+        let wal_is_nonempty = fs::metadata(persist_cache_wal_path_v3(&config.root_dir))
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false);
+        if loaded_v3 {
             cache = v3_cache;
-        } else if v2_cache.try_load_v2(config).is_some() {
+        } else if !wal_is_nonempty && v2_cache.try_load_v2(config).is_some() {
             merge_eviction_counters(&mut v2_cache.eviction_counters, &v3_cache.eviction_counters);
             cache = v2_cache;
-        } else {
+        } else if !wal_is_nonempty {
             merge_eviction_counters(&mut cache.eviction_counters, &v3_cache.eviction_counters);
             merge_eviction_counters(&mut cache.eviction_counters, &v2_cache.eviction_counters);
             let _ = cache.try_load_v1(config);
+        } else {
+            merge_eviction_counters(&mut cache.eviction_counters, &v3_cache.eviction_counters);
         }
 
         match replay_wal(&mut cache, config) {
             Ok(replay) => {
                 cache.persisted_sequence = replay.highest_sequence;
-                if replay.recovered_corruption {
+                if replay.recovered_corruption || replay.baseline_mismatch {
                     cache.evict_reason(EvictionReason::CorruptLoadRecovery, 1);
                 }
             }
@@ -220,6 +231,17 @@ impl PacketCache {
     }
 
     pub(crate) fn write_checkpoint(&self, config: &PersistConfig) -> Result<u64, io::Error> {
+        self.write_checkpoint_inner(config, || Ok(()))
+    }
+
+    fn write_checkpoint_inner<F>(
+        &self,
+        config: &PersistConfig,
+        after_backup: F,
+    ) -> Result<u64, io::Error>
+    where
+        F: FnOnce() -> Result<(), io::Error>,
+    {
         let path = persist_cache_path_v3(&config.root_dir);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -253,15 +275,31 @@ impl PacketCache {
             task_index: filter_ref_index_for_live_keys(&self.task_index, &live_keys),
         };
 
-        let encoded = wincode::serialize(&envelope).map_err(|source| {
+        validate_v3_envelope(&envelope)?;
+        let payload = wincode::serialize(&envelope).map_err(|source| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("failed to serialize cache envelope: {source}"),
             )
         })?;
+        let encoded = encode_checkpoint_frame(&payload)?;
 
+        write_atomically(&persist_cache_backup_path_v3(&config.root_dir), &encoded)?;
+        after_backup()?;
         write_atomically(&path, &encoded)?;
         Ok(encoded.len() as u64)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn write_checkpoint_failing_after_backup(
+        &self,
+        config: &PersistConfig,
+    ) -> Result<u64, io::Error> {
+        self.write_checkpoint_inner(config, || {
+            Err(io::Error::other(
+                "injected crash after durable backup and before primary replace",
+            ))
+        })
     }
 
     pub fn persist_file_path(root: &Path) -> PathBuf {
@@ -303,18 +341,29 @@ impl PacketCache {
     }
 
     pub(crate) fn try_load_v3(&mut self, config: &PersistConfig) -> Option<()> {
-        let raw = fs::read(persist_cache_path_v3(&config.root_dir)).ok()?;
-        let envelope = match wincode::deserialize::<PersistEnvelopeV3>(&raw) {
-            Ok(envelope) => envelope,
-            Err(_) => {
-                self.evict_reason(EvictionReason::CorruptLoadRecovery, 1);
-                return None;
+        for path in [
+            persist_cache_path_v3(&config.root_dir),
+            persist_cache_backup_path_v3(&config.root_dir),
+        ] {
+            match read_v3_envelope(&path) {
+                Ok(Some(envelope)) => {
+                    self.load_v3_envelope(envelope);
+                    self.has_v3_checkpoint_baseline = true;
+                    return Some(());
+                }
+                Ok(None) => {}
+                Err(CheckpointLoadError::VersionMismatch) => {
+                    self.evict_reason(EvictionReason::VersionMismatch, 1);
+                }
+                Err(CheckpointLoadError::Corrupt) => {
+                    self.evict_reason(EvictionReason::CorruptLoadRecovery, 1);
+                }
             }
-        };
-        if envelope.version != PERSIST_CACHE_VERSION {
-            self.evict_reason(EvictionReason::VersionMismatch, 1);
-            return None;
         }
+        None
+    }
+
+    fn load_v3_envelope(&mut self, envelope: PersistEnvelopeV3) {
         self.load_envelope_state(
             envelope.entries,
             envelope.recall_docs,
@@ -327,7 +376,6 @@ impl PacketCache {
             envelope.task_index,
         );
         self.persisted_sequence = envelope.applied_wal_sequence;
-        Some(())
     }
 
     pub(crate) fn try_load_v2(&mut self, config: &PersistConfig) -> Option<()> {
@@ -430,6 +478,297 @@ fn merge_eviction_counters(target: &mut EvictionCounters, source: &EvictionCount
         .saturating_add(source.corrupt_load_recovery);
 }
 
+#[derive(Debug)]
+enum CheckpointLoadError {
+    VersionMismatch,
+    Corrupt,
+}
+
+fn invalid_checkpoint(detail: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, detail.into())
+}
+
+pub(crate) fn encode_checkpoint_frame(payload: &[u8]) -> Result<Vec<u8>, io::Error> {
+    if payload.len() > MAX_PERSIST_CHECKPOINT_BYTES {
+        return Err(invalid_checkpoint(format!(
+            "cache checkpoint is {} bytes; maximum is {MAX_PERSIST_CHECKPOINT_BYTES}",
+            payload.len()
+        )));
+    }
+    let mut frame = Vec::with_capacity(PERSIST_CHECKPOINT_HEADER_LEN + payload.len());
+    frame.extend_from_slice(PERSIST_CHECKPOINT_MAGIC);
+    frame.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    frame.extend_from_slice(blake3::hash(payload).as_bytes());
+    frame.extend_from_slice(payload);
+    Ok(frame)
+}
+
+fn decode_checkpoint_payload(raw: &[u8]) -> Result<&[u8], CheckpointLoadError> {
+    if !raw.starts_with(PERSIST_CHECKPOINT_MAGIC) {
+        // Cache state is disposable. Unframed V3 files cannot authenticate
+        // structurally decodable payload changes, so they are rejected and
+        // never trusted as a migration baseline.
+        return Err(CheckpointLoadError::Corrupt);
+    }
+    if raw.len() < PERSIST_CHECKPOINT_HEADER_LEN {
+        return Err(CheckpointLoadError::Corrupt);
+    }
+    let length_start = PERSIST_CHECKPOINT_MAGIC.len();
+    let length_end = length_start + std::mem::size_of::<u64>();
+    let mut length_bytes = [0u8; std::mem::size_of::<u64>()];
+    length_bytes.copy_from_slice(&raw[length_start..length_end]);
+    let payload_len = usize::try_from(u64::from_le_bytes(length_bytes))
+        .ok()
+        .filter(|length| *length <= MAX_PERSIST_CHECKPOINT_BYTES)
+        .ok_or(CheckpointLoadError::Corrupt)?;
+    let frame_len = PERSIST_CHECKPOINT_HEADER_LEN
+        .checked_add(payload_len)
+        .ok_or(CheckpointLoadError::Corrupt)?;
+    if raw.len() != frame_len {
+        return Err(CheckpointLoadError::Corrupt);
+    }
+    let checksum_start = length_end;
+    let checksum_end = checksum_start + 32;
+    let payload = &raw[PERSIST_CHECKPOINT_HEADER_LEN..];
+    if blake3::hash(payload).as_bytes() != &raw[checksum_start..checksum_end] {
+        return Err(CheckpointLoadError::Corrupt);
+    }
+    Ok(payload)
+}
+
+fn read_v3_envelope(path: &Path) -> Result<Option<PersistEnvelopeV3>, CheckpointLoadError> {
+    let raw = match fs::read(path) {
+        Ok(raw) => raw,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(CheckpointLoadError::Corrupt),
+    };
+    let envelope = decode_checkpoint_envelope_v3(&raw).map_err(|_| CheckpointLoadError::Corrupt)?;
+    if envelope.version != PERSIST_CACHE_VERSION {
+        return Err(CheckpointLoadError::VersionMismatch);
+    }
+    Ok(Some(envelope))
+}
+
+pub(crate) fn decode_checkpoint_envelope_v3(raw: &[u8]) -> Result<PersistEnvelopeV3, io::Error> {
+    let payload = decode_checkpoint_payload(raw)
+        .map_err(|_| invalid_checkpoint("cache checkpoint frame is corrupt"))?;
+    let envelope = wincode::deserialize::<PersistEnvelopeV3>(payload)
+        .map_err(|source| invalid_checkpoint(format!("cache checkpoint is corrupt: {source}")))?;
+    validate_v3_envelope(&envelope)?;
+    Ok(envelope)
+}
+
+fn validate_v3_envelope(envelope: &PersistEnvelopeV3) -> Result<(), io::Error> {
+    let mut entries = HashMap::new();
+    for entry in &envelope.entries {
+        if entry.cache_key.trim().is_empty() {
+            return Err(invalid_checkpoint("cache checkpoint contains an empty key"));
+        }
+        if entries.insert(entry.cache_key.as_str(), entry).is_some() {
+            return Err(invalid_checkpoint(format!(
+                "cache checkpoint contains duplicate key {}",
+                entry.cache_key
+            )));
+        }
+        serde_json::from_str::<Value>(&entry.metadata_json).map_err(|source| {
+            invalid_checkpoint(format!(
+                "cache checkpoint entry {} has invalid metadata JSON: {source}",
+                entry.cache_key
+            ))
+        })?;
+        for packet in &entry.packets {
+            serde_json::from_str::<Value>(&packet.body_json).map_err(|source| {
+                invalid_checkpoint(format!(
+                    "cache checkpoint entry {} has invalid packet body JSON: {source}",
+                    entry.cache_key
+                ))
+            })?;
+            serde_json::from_str::<Value>(&packet.metadata_json).map_err(|source| {
+                invalid_checkpoint(format!(
+                    "cache checkpoint entry {} has invalid packet metadata JSON: {source}",
+                    entry.cache_key
+                ))
+            })?;
+        }
+    }
+
+    let indexes_are_empty = envelope.recall_docs.is_empty()
+        && envelope.recall_postings.is_empty()
+        && envelope.file_ref_index.is_empty()
+        && envelope.basename_alias_index.is_empty()
+        && envelope.symbol_index.is_empty()
+        && envelope.test_index.is_empty()
+        && envelope.task_index.is_empty();
+    if indexes_are_empty {
+        if !entries.is_empty() {
+            return Err(invalid_checkpoint(
+                "cache checkpoint with live entries is missing recall indexes",
+            ));
+        }
+        if envelope.recall_avg_doc_length != 0.0 {
+            return Err(invalid_checkpoint(
+                "cache checkpoint has an average document length without recall indexes",
+            ));
+        }
+        return Ok(());
+    }
+
+    let mut docs = HashMap::new();
+    for doc in &envelope.recall_docs {
+        let Some(entry) = entries.get(doc.cache_key.as_str()) else {
+            return Err(invalid_checkpoint(format!(
+                "recall document {} does not reference a live entry",
+                doc.cache_key
+            )));
+        };
+        if docs.insert(doc.cache_key.as_str(), doc).is_some() {
+            return Err(invalid_checkpoint(format!(
+                "cache checkpoint contains duplicate recall document {}",
+                doc.cache_key
+            )));
+        }
+        if doc.target != entry.target || doc.created_at_unix != entry.created_at_unix {
+            return Err(invalid_checkpoint(format!(
+                "recall document {} disagrees with its cache entry",
+                doc.cache_key
+            )));
+        }
+        let computed_length = doc.terms.values().try_fold(0usize, |total, count| {
+            if *count == 0 {
+                None
+            } else {
+                total.checked_add(*count)
+            }
+        });
+        if computed_length != Some(doc.doc_length)
+            || doc.terms.keys().any(|term| term.trim().is_empty())
+        {
+            return Err(invalid_checkpoint(format!(
+                "recall document {} has invalid term frequencies",
+                doc.cache_key
+            )));
+        }
+    }
+    if docs.len() != entries.len() {
+        return Err(invalid_checkpoint(
+            "cache checkpoint recall documents do not cover all live entries",
+        ));
+    }
+
+    validate_recall_postings(&envelope.recall_postings, &docs)?;
+    validate_ref_index(&envelope.file_ref_index, &docs, |doc| &doc.paths)?;
+    validate_ref_index(&envelope.symbol_index, &docs, |doc| &doc.symbols)?;
+    validate_ref_index(&envelope.test_index, &docs, |doc| &doc.tests)?;
+    validate_ref_index(&envelope.task_index, &docs, |doc| &doc.task_ids)?;
+    validate_basename_alias_index(&envelope.basename_alias_index, &envelope.file_ref_index)?;
+
+    if !envelope.recall_avg_doc_length.is_finite()
+        || envelope.recall_avg_doc_length.is_sign_negative()
+    {
+        return Err(invalid_checkpoint(
+            "cache checkpoint has an invalid average document length",
+        ));
+    }
+    let expected_average = envelope
+        .recall_docs
+        .iter()
+        .map(|doc| doc.doc_length)
+        .sum::<usize>() as f64
+        / envelope.recall_docs.len() as f64;
+    if (envelope.recall_avg_doc_length - expected_average).abs() > f64::EPSILON {
+        return Err(invalid_checkpoint(
+            "cache checkpoint average document length does not match recall documents",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_recall_postings(
+    actual: &HashMap<String, Vec<(String, usize)>>,
+    docs: &HashMap<&str, &RecallDocument>,
+) -> Result<(), io::Error> {
+    let mut expected = HashMap::<String, BTreeSet<(String, usize)>>::new();
+    for doc in docs.values() {
+        for (term, count) in &doc.terms {
+            expected
+                .entry(term.clone())
+                .or_default()
+                .insert((doc.cache_key.clone(), *count));
+        }
+    }
+    let mut normalized = HashMap::<String, BTreeSet<(String, usize)>>::new();
+    for (term, postings) in actual {
+        if term.trim().is_empty() || postings.is_empty() {
+            return Err(invalid_checkpoint(
+                "cache checkpoint has an empty recall posting",
+            ));
+        }
+        let values = normalized.entry(term.clone()).or_default();
+        for (cache_key, count) in postings {
+            if *count == 0
+                || !docs.contains_key(cache_key.as_str())
+                || !values.insert((cache_key.clone(), *count))
+            {
+                return Err(invalid_checkpoint(format!(
+                    "cache checkpoint has an invalid recall posting for {term}"
+                )));
+            }
+        }
+    }
+    if normalized != expected {
+        return Err(invalid_checkpoint(
+            "cache checkpoint recall postings disagree with recall documents",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ref_index<F>(
+    actual: &HashMap<String, BTreeSet<String>>,
+    docs: &HashMap<&str, &RecallDocument>,
+    values: F,
+) -> Result<(), io::Error>
+where
+    F: Fn(&RecallDocument) -> &[String],
+{
+    let mut expected = HashMap::<String, BTreeSet<String>>::new();
+    for doc in docs.values() {
+        for value in values(doc) {
+            expected
+                .entry(value.clone())
+                .or_default()
+                .insert(doc.cache_key.clone());
+        }
+    }
+    if actual != &expected {
+        return Err(invalid_checkpoint(
+            "cache checkpoint reference index disagrees with recall documents",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_basename_alias_index(
+    actual: &HashMap<String, BTreeSet<String>>,
+    file_ref_index: &HashMap<String, BTreeSet<String>>,
+) -> Result<(), io::Error> {
+    let mut expected = HashMap::<String, BTreeSet<String>>::new();
+    for canonical in file_ref_index.keys() {
+        if let Some(basename) = basename_alias(canonical) {
+            expected
+                .entry(basename)
+                .or_default()
+                .insert(canonical.clone());
+        }
+    }
+    if actual != &expected {
+        return Err(invalid_checkpoint(
+            "cache checkpoint basename aliases disagree with file references",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn persist_cache_path_v1(root: &Path) -> PathBuf {
     root.join(PERSIST_CACHE_DIR).join(PERSIST_CACHE_FILE_V1)
 }
@@ -440,6 +779,11 @@ pub(crate) fn persist_cache_path_v2(root: &Path) -> PathBuf {
 
 pub(crate) fn persist_cache_path_v3(root: &Path) -> PathBuf {
     root.join(PERSIST_CACHE_DIR).join(PERSIST_CACHE_FILE_V3)
+}
+
+pub(crate) fn persist_cache_backup_path_v3(root: &Path) -> PathBuf {
+    root.join(PERSIST_CACHE_DIR)
+        .join(PERSIST_CACHE_BACKUP_FILE_V3)
 }
 
 pub(crate) fn persist_cache_wal_path_v3(root: &Path) -> PathBuf {
@@ -455,6 +799,7 @@ pub(crate) fn append_wal_record(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    let created = !path.exists();
     let payload = serde_json::to_vec(&PersistWalRecord {
         version: PERSIST_WAL_VERSION,
         sequence,
@@ -485,6 +830,9 @@ pub(crate) fn append_wal_record(
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(&frame)?;
     file.sync_data()?;
+    if created {
+        sync_parent_dir(&persist_cache_wal_path_v3(&config.root_dir))?;
+    }
     Ok(frame.len() as u64)
 }
 
@@ -509,6 +857,7 @@ pub(crate) fn replay_wal(
     let mut offset = 0usize;
     let mut highest_sequence = cache.persisted_sequence;
     let mut recovered_corruption = false;
+    let mut baseline_mismatch = false;
     while offset < raw.len() {
         let Some(header_end) = offset.checked_add(PERSIST_WAL_HEADER_LEN) else {
             recovered_corruption = true;
@@ -560,7 +909,7 @@ pub(crate) fn replay_wal(
 
         if record.sequence > highest_sequence {
             if record.sequence != highest_sequence.saturating_add(1) {
-                recovered_corruption = true;
+                baseline_mismatch = true;
                 break;
             }
             highest_sequence = record.sequence;
@@ -573,6 +922,7 @@ pub(crate) fn replay_wal(
         highest_sequence,
         valid_bytes: offset as u64,
         recovered_corruption,
+        baseline_mismatch,
     })
 }
 
@@ -656,20 +1006,58 @@ pub(crate) fn filter_basename_alias_index_for_live_keys(
 }
 
 pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), io::Error> {
+    write_atomically_with(path, bytes, |source, destination| {
+        fs::rename(source, destination)
+    })
+}
+
+fn write_atomically_with<F>(path: &Path, bytes: &[u8], replace: F) -> Result<(), io::Error>
+where
+    F: FnOnce(&Path, &Path) -> Result<(), io::Error>,
+{
     let temp_path = path.with_extension("tmp");
-    let mut temp_file = File::create(&temp_path)?;
+    let mut temp_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&temp_path)?;
     temp_file.write_all(bytes)?;
     temp_file.sync_all()?;
     drop(temp_file);
+    replace(&temp_path, path)?;
+    sync_parent_dir(path)
+}
 
-    match fs::rename(&temp_path, path) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            let mut destination = File::create(path)?;
-            destination.write_all(bytes)?;
-            destination.sync_all()?;
-            let _ = fs::remove_file(&temp_path);
-            Ok(())
-        }
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> Result<(), io::Error> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> Result<(), io::Error> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn failed_atomic_replace_never_truncates_existing_destination() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("checkpoint.bin");
+        fs::write(&path, b"durable-old-checkpoint").unwrap();
+
+        let error = write_atomically_with(&path, b"new-checkpoint", |_source, _destination| {
+            Err(io::Error::other("injected atomic replace failure"))
+        })
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(fs::read(path).unwrap(), b"durable-old-checkpoint");
     }
 }

@@ -22,6 +22,7 @@ pub struct PacketCache {
     pub(crate) test_index: HashMap<String, BTreeSet<String>>,
     pub(crate) task_index: HashMap<String, BTreeSet<String>>,
     pub(crate) persisted_sequence: u64,
+    pub(crate) has_v3_checkpoint_baseline: bool,
 }
 
 impl PacketCache {
@@ -38,6 +39,18 @@ impl PacketCache {
             |entry, now| is_expired(entry.created_at_unix, ttl_secs, now),
             EvictionReason::ExpiredTtl,
         )
+    }
+
+    pub fn expired_entry_keys(&self, ttl_secs: u64) -> Vec<String> {
+        let now = now_unix();
+        let mut keys = self
+            .entries_by_hash
+            .iter()
+            .filter(|(_, entry)| is_expired(entry.created_at_unix, ttl_secs, now))
+            .map(|(cache_key, _)| cache_key.clone())
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
     }
 
     pub fn len(&self) -> usize {
@@ -258,6 +271,15 @@ impl PacketCache {
             remaining: self.entries_by_hash.len(),
             reasons: self.eviction_counters.clone(),
         }
+    }
+
+    pub fn prune_candidate_keys(&self, request: &ContextStorePruneRequest) -> Vec<String> {
+        if request.all {
+            let mut keys = self.entries_by_hash.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            return keys;
+        }
+        self.expired_entry_keys(request.ttl_secs.unwrap_or(DEFAULT_PERSIST_TTL_SECS))
     }
 
     pub fn stats(&self) -> ContextStoreStats {
@@ -602,7 +624,7 @@ mod tests {
         cache.save_to_disk(&config).unwrap();
         let cache_path = persist_cache_path_v3(dir.path());
         let raw = fs::read(cache_path).unwrap();
-        let envelope: PersistEnvelopeV3 = wincode::deserialize(&raw).unwrap();
+        let envelope = decode_checkpoint_envelope_v3(&raw).unwrap();
         assert_eq!(envelope.version, PERSIST_CACHE_VERSION);
         assert_eq!(envelope.entries.len(), 1);
         assert!(!envelope.recall_docs.is_empty());
@@ -612,6 +634,198 @@ mod tests {
         assert!(loaded
             .get_by_request("demo.reducer", &request_hash)
             .is_some());
+    }
+
+    #[test]
+    fn corrupt_primary_uses_matching_backup_then_replays_newer_wal() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let first_lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"checkpoint"}),
+            &mut hooks,
+        );
+        let first = cache.put_with_hooks(
+            "demo.reducer",
+            &first_lookup,
+            vec![CachePacket {
+                body: serde_json::json!({"summary":"checkpoint entry"}),
+                ..CachePacket::default()
+            }],
+            serde_json::json!({"valid":true}),
+            &mut hooks,
+        );
+        cache.save_to_disk(&config).unwrap();
+
+        let primary_path = persist_cache_path_v3(dir.path());
+        let raw = fs::read(&primary_path).unwrap();
+        let mut envelope = decode_checkpoint_envelope_v3(&raw).unwrap();
+        envelope.entries[0].metadata_json = "{".to_string();
+        let payload = wincode::serialize(&envelope).unwrap();
+        fs::write(&primary_path, encode_checkpoint_frame(&payload).unwrap()).unwrap();
+
+        let second_lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"wal"}),
+            &mut hooks,
+        );
+        let second = cache.put_with_hooks(
+            "demo.reducer",
+            &second_lookup,
+            vec![CachePacket {
+                body: serde_json::json!({"summary":"newer WAL entry"}),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+            &mut hooks,
+        );
+        append_wal_record(&config, 1, &[PersistDelta::upsert(&second)]).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+
+        assert!(loaded.get(&first.cache_key).is_some());
+        assert!(loaded.get(&second.cache_key).is_some());
+        assert_eq!(loaded.persisted_sequence, 1);
+        assert_eq!(loaded.stats().evictions.corrupt_load_recovery, 1);
+    }
+
+    #[test]
+    fn framed_checkpoint_rejects_live_entries_with_erased_indexes() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"indexes"}),
+            &mut hooks,
+        );
+        cache.put_with_hooks(
+            "demo.reducer",
+            &lookup,
+            vec![CachePacket {
+                body: serde_json::json!({"summary":"must remain recallable"}),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+            &mut hooks,
+        );
+        cache.save_to_disk(&config).unwrap();
+
+        let primary_path = persist_cache_path_v3(dir.path());
+        let raw = fs::read(&primary_path).unwrap();
+        let mut envelope = decode_checkpoint_envelope_v3(&raw).unwrap();
+        envelope.recall_docs.clear();
+        envelope.recall_postings.clear();
+        envelope.recall_avg_doc_length = 0.0;
+        envelope.file_ref_index.clear();
+        envelope.basename_alias_index.clear();
+        envelope.symbol_index.clear();
+        envelope.test_index.clear();
+        envelope.task_index.clear();
+        let payload = wincode::serialize(&envelope).unwrap();
+        fs::write(&primary_path, encode_checkpoint_frame(&payload).unwrap()).unwrap();
+        fs::remove_file(persist_cache_backup_path_v3(dir.path())).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+
+        assert!(loaded.is_empty());
+        assert_eq!(loaded.stats().evictions.corrupt_load_recovery, 1);
+    }
+
+    #[test]
+    fn unauthenticated_unframed_v3_is_rejected() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"legacy-v3"}),
+            &mut hooks,
+        );
+        cache.put_with_hooks(
+            "demo.reducer",
+            &lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+            &mut hooks,
+        );
+        cache.save_to_disk(&config).unwrap();
+        let primary_path = persist_cache_path_v3(dir.path());
+        let envelope = decode_checkpoint_envelope_v3(&fs::read(&primary_path).unwrap()).unwrap();
+        fs::write(&primary_path, wincode::serialize(&envelope).unwrap()).unwrap();
+        fs::remove_file(persist_cache_backup_path_v3(dir.path())).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+
+        assert!(loaded.is_empty());
+        assert_eq!(loaded.stats().evictions.corrupt_load_recovery, 1);
+    }
+
+    #[test]
+    fn corrupt_v3_with_gapped_wal_never_uses_legacy_baseline_or_truncates() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut legacy = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let old_lookup = legacy.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"old-v2"}),
+            &mut hooks,
+        );
+        legacy.put_with_hooks(
+            "demo.reducer",
+            &old_lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+            &mut hooks,
+        );
+        let v2 = PersistEnvelopeV2 {
+            version: 2,
+            entries: legacy.collect_live_entries(config.ttl_secs),
+            ..PersistEnvelopeV2::default()
+        };
+        let v2_path = persist_cache_path_v2(dir.path());
+        fs::create_dir_all(v2_path.parent().unwrap()).unwrap();
+        fs::write(v2_path, wincode::serialize(&v2).unwrap()).unwrap();
+        fs::write(persist_cache_path_v3(dir.path()), b"corrupt-primary").unwrap();
+        fs::write(persist_cache_backup_path_v3(dir.path()), b"corrupt-backup").unwrap();
+
+        let mut current = PacketCache::new();
+        let new_lookup = current.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"new-wal"}),
+            &mut hooks,
+        );
+        let new_entry = current.put_with_hooks(
+            "demo.reducer",
+            &new_lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+            &mut hooks,
+        );
+        append_wal_record(&config, 7, &[PersistDelta::upsert(&new_entry)]).unwrap();
+        let wal_path = persist_cache_wal_path_v3(dir.path());
+        let wal_before = fs::read(&wal_path).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+        let open_error = match CachePersistence::open(config) {
+            Ok(_) => panic!("gapped WAL must not open a persistence owner"),
+            Err(error) => error,
+        };
+
+        assert!(loaded.is_empty());
+        assert!(matches!(
+            open_error,
+            CachePersistenceError::Io {
+                operation: "WAL recovery",
+                ..
+            }
+        ));
+        assert_eq!(fs::read(wal_path).unwrap(), wal_before);
     }
 
     #[test]

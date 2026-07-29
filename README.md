@@ -196,11 +196,24 @@ The kernel supports two execution modes:
 
 #### Memory and Recall (`context-memory-core`)
 
-Packets are checkpointed in `.packet28/packet-cache-v3.bin` using the versioned
-Packet28 binary codec, with
-checksummed dirty-entry deltas durably staged in
-`.packet28/packet-cache-v3.wal` between debounced checkpoints. The cache
-maintains six indexes:
+Packets are checkpointed in `.packet28/packet-cache-v3.bin` using a
+length-delimited, BLAKE3-authenticated frame around the versioned Packet28
+binary codec. A matching `.packet28/packet-cache-v3.backup.bin` baseline is
+made durable before the primary checkpoint and WAL reset. Checksummed
+dirty-entry deltas are staged in `.packet28/packet-cache-v3.wal` between
+debounced checkpoints, while `.packet28/packet-cache-v3.lock` serializes
+cross-process WAL sequence and checkpoint changes.
+
+Unauthenticated legacy raw V3 checkpoint payloads are deliberately rejected:
+cache state is disposable, and accepting a structurally decodable but
+unverified payload would make silent result corruption possible. V1/V2
+migration remains available only when no current V3 WAL exists. A corrupt or
+gapped WAL without an authenticated V3 baseline is reported and left
+untouched for recovery rather than truncated. Long-lived callers should invoke
+the kernel's bounded cache-persistence shutdown API; dropping an owner is
+non-blocking and does not wait indefinitely on filesystem coordination.
+
+The cache maintains six indexes:
 
 | Index | Key | Value | Used For |
 | --- | --- | --- | --- |
@@ -363,7 +376,9 @@ Daemon persistence:
 - `.packet28/daemon/task-registry-v1.json` — Task state
 - `.packet28/daemon/tasks/<id>/events.jsonl` — Per-task event log
 - `.packet28/packet-cache-v3.bin` — Persistent packet-cache checkpoint with indexes
+- `.packet28/packet-cache-v3.backup.bin` — Authenticated checkpoint recovery baseline
 - `.packet28/packet-cache-v3.wal` — Checksummed dirty-entry deltas between checkpoints
+- `.packet28/packet-cache-v3.lock` — Cross-process sequence/checkpoint coordination
 
 The `--via-daemon` flag on any Packet28 command routes execution through the daemon instead of running locally. The daemon auto-starts if not running.
 
@@ -540,7 +555,9 @@ All persistent state lives under `.packet28/` at the workspace root:
 ```
 .packet28/
 ├── packet-cache-v3.bin          Packet-cache checkpoint with BM25 + ref indexes
+├── packet-cache-v3.backup.bin   Authenticated checkpoint recovery baseline
 ├── packet-cache-v3.wal          Checksummed dirty-entry deltas
+├── packet-cache-v3.lock         Cross-process sequence/checkpoint coordination
 ├── artifacts/                   Full packet artifacts for --json=handle
 ├── agent/
 │   └── latest-bootstrap.json    Last handoff bootstrap from packet28-agent

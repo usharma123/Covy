@@ -119,6 +119,9 @@ fn persistent_kernel_reuses_cache_across_instances() {
             .and_then(Value::as_bool),
         Some(false)
     );
+    first_kernel
+        .shutdown_cache_persistence(Duration::from_secs(2))
+        .unwrap();
     drop(first_kernel);
 
     let second_calls = Arc::new(AtomicU64::new(0));
@@ -225,8 +228,7 @@ fn persistent_kernel_reports_background_filesystem_failure_on_flush() {
     let root = dir.path().join("root");
     std::fs::create_dir(&root).unwrap();
     let mut kernel = Kernel::with_persistence(PersistConfig::new(root.clone()));
-    std::fs::remove_dir(&root).unwrap();
-    std::fs::write(&root, b"file").unwrap();
+    std::fs::create_dir(root.join(".packet28/packet-cache-v3.wal")).unwrap();
     kernel.register_reducer("count.reducer", |_ctx, _packets| {
         Ok(ReducerResult {
             output_packets: vec![KernelPacket::from_value(json!({"ok": true}), None)],
@@ -247,6 +249,187 @@ fn persistent_kernel_reports_background_filesystem_failure_on_flush() {
 
     assert!(matches!(error, KernelError::CachePersistence { .. }));
     assert!(kernel.cache_runtime_metrics().persistence_error.is_some());
+}
+
+#[test]
+fn persistent_kernel_facade_reads_completed_execute_without_flush() {
+    let dir = tempdir().unwrap();
+    let config = PersistConfig::new(dir.path().to_path_buf());
+    let mut writer = Kernel::with_persistence(config.clone());
+    writer.register_reducer("immediate.reducer", |_ctx, _packets| {
+        Ok(ReducerResult {
+            output_packets: vec![KernelPacket::from_value(
+                json!({
+                    "summary":"immediate visibility marker",
+                    "files":[{"path":"src/immediate.rs"}]
+                }),
+                None,
+            )],
+            metadata: Value::Null,
+        })
+    });
+    let observer = Kernel::with_persistence(config);
+
+    writer
+        .execute(KernelRequest {
+            target: "immediate.reducer".to_string(),
+            reducer_input: json!({"task":"read-after-write"}),
+            ..KernelRequest::default()
+        })
+        .unwrap();
+
+    let listed = observer
+        .context_store_list(
+            &ContextStoreListFilter::default(),
+            &ContextStorePaging::default(),
+        )
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(observer
+        .context_store_get(&listed[0].cache_key)
+        .unwrap()
+        .is_some());
+    assert_eq!(observer.context_store_stats().unwrap().entries, 1);
+    assert_eq!(
+        observer
+            .context_store_recall("immediate visibility", &RecallOptions::default())
+            .unwrap()
+            .len(),
+        1
+    );
+
+    drop(observer);
+    writer
+        .shutdown_cache_persistence(Duration::from_secs(2))
+        .unwrap();
+}
+
+#[test]
+fn persistent_kernel_prune_orders_pending_tombstone_before_restart() {
+    let dir = tempdir().unwrap();
+    let config = PersistConfig::new(dir.path().to_path_buf());
+    let mut kernel = Kernel::with_persistence(config.clone());
+    kernel.register_reducer("prune.reducer", |_ctx, _packets| {
+        Ok(ReducerResult {
+            output_packets: vec![KernelPacket::from_value(
+                json!({"summary":"pending prune marker"}),
+                None,
+            )],
+            metadata: Value::Null,
+        })
+    });
+    kernel
+        .execute(KernelRequest {
+            target: "prune.reducer".to_string(),
+            reducer_input: json!({"task":"pending-prune"}),
+            ..KernelRequest::default()
+        })
+        .unwrap();
+
+    let report = kernel
+        .context_store_prune(
+            ContextStorePruneRequest {
+                all: true,
+                ttl_secs: None,
+            },
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert_eq!(report.removed, 1);
+    assert_eq!(kernel.context_store_stats().unwrap().entries, 0);
+    kernel
+        .shutdown_cache_persistence(Duration::from_secs(2))
+        .unwrap();
+    drop(kernel);
+
+    let reopened = Kernel::with_persistence(config);
+    assert_eq!(reopened.context_store_stats().unwrap().entries, 0);
+    reopened
+        .shutdown_cache_persistence(Duration::from_secs(2))
+        .unwrap();
+}
+
+#[test]
+fn persistent_kernel_upsert_after_prune_survives_restart() {
+    let dir = tempdir().unwrap();
+    let config = PersistConfig::new(dir.path().to_path_buf());
+    let calls = Arc::new(AtomicU64::new(0));
+    let calls_ref = calls.clone();
+    let mut kernel = Kernel::with_persistence(config.clone());
+    kernel.register_reducer("prune-upsert.reducer", move |_ctx, _packets| {
+        let call = calls_ref.fetch_add(1, Ordering::Relaxed) + 1;
+        Ok(ReducerResult {
+            output_packets: vec![KernelPacket::from_value(
+                json!({"summary":format!("call {call}")}),
+                None,
+            )],
+            metadata: Value::Null,
+        })
+    });
+    let request = KernelRequest {
+        target: "prune-upsert.reducer".to_string(),
+        reducer_input: json!({"task":"prune-then-upsert"}),
+        ..KernelRequest::default()
+    };
+    kernel.execute(request.clone()).unwrap();
+    kernel
+        .context_store_prune(
+            ContextStorePruneRequest {
+                all: true,
+                ttl_secs: None,
+            },
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    kernel.execute(request).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    kernel
+        .shutdown_cache_persistence(Duration::from_secs(2))
+        .unwrap();
+    drop(kernel);
+
+    let reopened = Kernel::with_persistence(config);
+    assert_eq!(reopened.context_store_stats().unwrap().entries, 1);
+    reopened
+        .shutdown_cache_persistence(Duration::from_secs(2))
+        .unwrap();
+}
+
+#[test]
+fn over_capacity_prune_fails_before_mutating_live_cache() {
+    let dir = tempdir().unwrap();
+    let config = PersistConfig::new(dir.path().to_path_buf());
+    let mut cache = PacketCache::new();
+    let mut hooks = NoopDeltaReuseHooks;
+    for id in 0..4_097 {
+        let target = format!("over-capacity.reducer.{id}");
+        let lookup = cache.lookup_with_hooks(&target, &json!({"id":id}), &mut hooks);
+        cache.put_with_hooks(
+            &target,
+            &lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+            &mut hooks,
+        );
+    }
+    cache.save_to_disk(&config).unwrap();
+    let kernel = Kernel::with_persistence(config);
+
+    let error = kernel
+        .context_store_prune(
+            ContextStorePruneRequest {
+                all: true,
+                ttl_secs: None,
+            },
+            Duration::from_secs(2),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, KernelError::CachePersistence { .. }));
+    assert_eq!(kernel.context_store_stats().unwrap().entries, 4_097);
+    kernel
+        .shutdown_cache_persistence(Duration::from_secs(2))
+        .unwrap();
 }
 
 #[test]

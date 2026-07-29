@@ -22,7 +22,9 @@ pub(crate) use normalize::*;
 pub use normalize::{basename_alias, normalize_context_path};
 #[cfg(test)]
 pub(crate) use persist::*;
-pub use persistence_owner::{CachePersistence, CachePersistenceError, CachePersistenceMetrics};
+pub use persistence_owner::{
+    CacheMutationReservation, CachePersistence, CachePersistenceError, CachePersistenceMetrics,
+};
 pub(crate) use recall_document::*;
 pub use types::*;
 
