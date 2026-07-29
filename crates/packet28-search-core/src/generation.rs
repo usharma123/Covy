@@ -1,0 +1,866 @@
+//! Generation publication, recovery, retention, and writer serialization.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions};
+use std::path::Path;
+use std::process::Command;
+use std::sync::Arc;
+
+use fs2::FileExt;
+
+use crate::error::{Result, SearchError};
+use crate::layer::{
+    artifact_digest, build_layer, index_document, load_layer, populate_layer_digests,
+    scan_documents_with_progress, validate_layer_file_names, write_atomic, IndexedDocument,
+};
+use crate::model::{
+    LayerFiles, LoadedIndex, LoadedOverlaySegment, OverlaySegmentRecord, OverlayState,
+    RegexGenerationRecord, RegexIndexManifest, RegexIndexRuntime, MANIFEST_FILE_NAME,
+    OVERLAY_COMPACTION_SEGMENTS, PREVIOUS_MANIFEST_FILE_NAME, REGEX_INDEX_SCHEMA_VERSION,
+    WRITER_LOCK_FILE_NAME,
+};
+use crate::paths::{
+    generation_record_path, manifest_path, normalize_changed_paths, overlay_state_path,
+    previous_manifest_path, regex_index_dir,
+};
+use crate::query::all_indexed_paths;
+use crate::support::{ensure_valid_index, now_unix, ResultContext};
+use crate::weights::WEIGHT_TABLE_VERSION;
+
+/// Loads and validates the index beneath `root`.
+///
+/// Stale or corrupt artifacts are represented as an unloaded runtime whose
+/// manifest records the reason. The `Result` shape is retained for source
+/// compatibility and future load failures that cannot be represented as index
+/// state. If the current generation is corrupt, only the explicitly retained
+/// previous manifest may be recovered; unreferenced artifacts are never
+/// promoted.
+///
+/// # Errors
+///
+/// The current loader converts artifact validation failures into an unloaded
+/// [`RegexIndexRuntime`]; it does not otherwise return an error.
+pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
+    let manifest = match load_manifest_strict(root) {
+        Ok(manifest) => manifest,
+        Err(error) => return recover_previous_runtime(root, None, error),
+    };
+    if manifest.schema_version == 0 {
+        return Ok(RegexIndexRuntime {
+            manifest,
+            loaded: None,
+        });
+    }
+    match load_runtime_from_manifest(root, manifest.clone()) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => recover_previous_runtime(root, Some(manifest), error),
+    }
+}
+
+pub(crate) fn load_runtime_from_manifest(
+    root: &Path,
+    mut manifest: RegexIndexManifest,
+) -> Result<RegexIndexRuntime> {
+    if manifest.schema_version != REGEX_INDEX_SCHEMA_VERSION
+        || manifest.weight_table_version != WEIGHT_TABLE_VERSION
+    {
+        let found_schema = manifest.schema_version;
+        let found_weight = manifest.weight_table_version;
+        mark_manifest_unloaded(
+            &mut manifest,
+            "stale",
+            format!(
+                "regex index weight/schema mismatch (found schema={}, weight={}, expected schema={}, weight={})",
+                found_schema,
+                found_weight,
+                REGEX_INDEX_SCHEMA_VERSION,
+                WEIGHT_TABLE_VERSION
+            ),
+        );
+        return Ok(RegexIndexRuntime {
+            manifest,
+            loaded: None,
+        });
+    }
+    if manifest.status != "ready" {
+        return Ok(RegexIndexRuntime {
+            manifest,
+            loaded: None,
+        });
+    }
+    if let Some(expected) = manifest.base_commit.as_deref() {
+        if current_git_commit(root).as_deref() != Some(expected) {
+            let expected_commit = expected.to_string();
+            let current_commit =
+                current_git_commit(root).unwrap_or_else(|| "<unknown>".to_string());
+            mark_manifest_unloaded(
+                &mut manifest,
+                "stale",
+                format!(
+                    "regex index base commit changed (indexed={}, current={})",
+                    expected_commit, current_commit
+                ),
+            );
+            return Ok(RegexIndexRuntime {
+                manifest,
+                loaded: None,
+            });
+        }
+    }
+    if generation_record_path(root, manifest.generation).exists() {
+        let record = load_generation_record(root, manifest.generation)?;
+        return load_recorded_generation(root, manifest, record);
+    }
+    load_legacy_generation(root, manifest)
+}
+
+/// Rebuilds and manifest-last publishes every searchable file beneath `root`.
+///
+/// A repository-local exclusive writer lock covers the complete build and
+/// publication. Artifact digests are validated whenever the generation is
+/// loaded. After publication, best-effort pruning retains the current and
+/// previous generation.
+///
+/// # Errors
+///
+/// Returns [`SearchError::Io`], [`SearchError::BinaryEncode`],
+/// [`SearchError::BinaryDecode`], or [`SearchError::Json`] (possibly wrapped in
+/// [`SearchError::Context`]) when discovery, index construction, validation, or
+/// publication fails. [`SearchError::FailureProvenance`] reports the rarer case
+/// where both the build and recording its failure fail.
+pub fn rebuild_full_index(root: &Path, include_tests: bool) -> Result<RegexIndexRuntime> {
+    rebuild_full_index_with_progress(root, include_tests, |_, _| {})
+}
+
+/// Rebuilds the full index and reports `(indexed_files, total_files)` progress.
+///
+/// The callback is invoked before scanning and after each discovered file.
+///
+/// # Errors
+///
+/// Returns the same typed failures as [`rebuild_full_index`].
+pub fn rebuild_full_index_with_progress<F>(
+    root: &Path,
+    include_tests: bool,
+    mut on_progress: F,
+) -> Result<RegexIndexRuntime>
+where
+    F: FnMut(usize, usize),
+{
+    let _writer = acquire_writer_lock(root)?;
+    let started = now_unix();
+    let previous = load_runtime(root)
+        .ok()
+        .filter(RegexIndexRuntime::is_loaded)
+        .map(|runtime| durable_manifest(&runtime.manifest));
+    let generation = load_manifest(root)
+        .generation
+        .max(previous.as_ref().map_or(0, |manifest| manifest.generation))
+        .saturating_add(1);
+    let overlay_state = OverlayState::default();
+    let mut manifest = RegexIndexManifest {
+        schema_version: REGEX_INDEX_SCHEMA_VERSION,
+        weight_table_version: WEIGHT_TABLE_VERSION,
+        generation,
+        include_tests,
+        status: "ready".to_string(),
+        last_build_started_at_unix: Some(started),
+        overlay_state_digest: Some(overlay_state_digest(&overlay_state)?),
+        ..RegexIndexManifest::default()
+    };
+
+    let docs = scan_documents_with_progress(root, &mut on_progress)?;
+    let mut base_files = LayerFiles::base(generation);
+    let base_layer = build_layer(root, &docs, &mut base_files)?;
+    manifest.total_files = docs.len();
+    manifest.indexed_files = docs.len();
+    manifest.overlay_files = 0;
+    manifest.overlay_segments = 0;
+    manifest.base_commit = current_git_commit(root);
+    manifest.last_build_completed_at_unix = Some(now_unix());
+    let record = RegexGenerationRecord {
+        schema_version: REGEX_INDEX_SCHEMA_VERSION,
+        generation,
+        manifest: manifest.clone(),
+        base: base_files.clone(),
+        segments: Vec::new(),
+        overlay_state: overlay_state.clone(),
+    };
+    validate_generation_record(&record)?;
+    save_generation_record(root, &record)?;
+    let runtime = RegexIndexRuntime {
+        manifest: manifest.clone(),
+        loaded: Some(Arc::new(LoadedIndex {
+            base: Arc::new(base_layer),
+            base_files,
+            overlays: Vec::new(),
+            overlay_state,
+        })),
+    };
+    publish_manifest(root, previous.as_ref(), &manifest)?;
+    let _ = prune_generation_artifacts(root, &record, previous.as_ref());
+    Ok(runtime)
+}
+
+/// Appends one immutable overlay segment for `changed_paths`.
+///
+/// A missing current runtime or an empty change set intentionally triggers a
+/// full rebuild to preserve the historical behavior. Each non-empty update
+/// indexes only the supplied paths, retains the validated base `Arc`, and
+/// publishes its generation record before atomically renaming the manifest.
+/// Eight segments trigger compaction of live overlay documents; the base is
+/// still retained. A repository-local writer lock serializes publishers, and a
+/// stale `current` handle returns [`SearchError::ConcurrentWriter`].
+///
+/// # Errors
+///
+/// Returns [`SearchError::IndexNotLoaded`] when a supplied runtime has no
+/// validated layers. Filesystem, codec, JSON, corruption, and failure-provenance
+/// errors use the corresponding [`SearchError`] variants.
+pub fn update_overlay_index(
+    root: &Path,
+    current: Option<&RegexIndexRuntime>,
+    changed_paths: &[String],
+) -> Result<RegexIndexRuntime> {
+    let Some(current) = current else {
+        return rebuild_full_index(root, true);
+    };
+    if changed_paths.is_empty() {
+        return rebuild_full_index(root, true);
+    }
+    let loaded = current.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
+    let normalized = normalize_changed_paths(root, changed_paths)?;
+    let _writer = acquire_writer_lock(root)?;
+    let published = load_manifest_strict(root)?;
+    if published.generation != current.manifest.generation {
+        return Err(SearchError::ConcurrentWriter {
+            expected: current.manifest.generation,
+            actual: published.generation,
+        });
+    }
+    let generation = published.generation.saturating_add(1);
+    let mut overlay_state = loaded.overlay_state.clone();
+    let mut overlay_docs = Vec::<IndexedDocument>::new();
+    for path in normalized {
+        overlay_state.shadowed_paths.insert(path.clone());
+        let full_path = root.join(&path);
+        let indexed = if full_path.exists() {
+            index_document(root, &full_path)?
+        } else {
+            None
+        };
+        if let Some(mut indexed) = indexed {
+            indexed.doc_id = overlay_docs.len() as u32;
+            overlay_state.deleted_paths.remove(&path);
+            overlay_state.owners.insert(path, generation);
+            overlay_docs.push(indexed);
+        } else {
+            overlay_state.deleted_paths.insert(path.clone());
+            overlay_state.owners.remove(&path);
+        }
+    }
+    overlay_docs.sort_by(|left, right| left.path.cmp(&right.path));
+    for (idx, doc) in overlay_docs.iter_mut().enumerate() {
+        doc.doc_id = idx as u32;
+    }
+    let started = now_unix();
+    let mut overlays = loaded.overlays.clone();
+    if !overlay_docs.is_empty() {
+        let mut files = LayerFiles::overlay(generation, false);
+        let layer = build_layer(root, &overlay_docs, &mut files)?;
+        overlays.push(LoadedOverlaySegment {
+            generation,
+            layer: Arc::new(layer),
+            files,
+        });
+    }
+    if overlays.len() >= OVERLAY_COMPACTION_SEGMENTS {
+        let mut compacted_docs = collect_live_overlay_documents(root, &mut overlay_state)?;
+        for (idx, doc) in compacted_docs.iter_mut().enumerate() {
+            doc.doc_id = idx as u32;
+            overlay_state.owners.insert(doc.path.clone(), generation);
+        }
+        let mut files = LayerFiles::overlay(generation, true);
+        let layer = build_layer(root, &compacted_docs, &mut files)?;
+        overlays = vec![LoadedOverlaySegment {
+            generation,
+            layer: Arc::new(layer),
+            files,
+        }];
+    }
+    let loaded_index = LoadedIndex {
+        base: Arc::clone(&loaded.base),
+        base_files: loaded.base_files.clone(),
+        overlays,
+        overlay_state,
+    };
+    validate_loaded_overlay_state(&loaded_index)?;
+
+    let mut manifest = durable_manifest(&current.manifest);
+    manifest.generation = generation;
+    manifest.status = "ready".to_string();
+    manifest.last_build_started_at_unix = Some(started);
+    manifest.total_files = all_indexed_paths(&loaded_index, None).len();
+    manifest.overlay_files = loaded_index.overlay_state.owners.len();
+    manifest.overlay_segments = loaded_index.overlays.len();
+    manifest.overlay_state_digest = Some(overlay_state_digest(&loaded_index.overlay_state)?);
+    manifest.stale_reason = None;
+    manifest.last_error = None;
+    manifest.last_build_completed_at_unix = Some(now_unix());
+    let record = generation_record_from_loaded(&manifest, &loaded_index);
+    validate_generation_record(&record)?;
+    save_generation_record(root, &record)?;
+    publish_manifest(root, Some(&current.manifest), &manifest)?;
+    let _ = prune_generation_artifacts(root, &record, Some(&current.manifest));
+
+    Ok(RegexIndexRuntime {
+        manifest,
+        loaded: Some(Arc::new(loaded_index)),
+    })
+}
+
+/// Removes the persisted regex index beneath `root`.
+///
+/// # Errors
+///
+/// Returns [`SearchError::Context`] with a nested [`SearchError::Io`] when the
+/// index directory cannot be removed.
+pub fn clear_index(root: &Path) -> Result<()> {
+    let _writer = acquire_writer_lock(root)?;
+    let path = regex_index_dir(root);
+    if path.exists() {
+        fs::remove_dir_all(&path)
+            .with_context(|| format!("failed to remove regex index dir '{}'", path.display()))?;
+    }
+    Ok(())
+}
+pub(crate) fn mark_manifest_unloaded(
+    manifest: &mut RegexIndexManifest,
+    status: &str,
+    reason: String,
+) {
+    manifest.status = status.to_string();
+    manifest.stale_reason = Some(reason.clone());
+    manifest.last_error = Some(reason);
+}
+pub(crate) struct GenerationWriterLock(File);
+
+impl Drop for GenerationWriterLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+pub(crate) fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock> {
+    let parent = root.join(".packet28").join("index");
+    fs::create_dir_all(&parent)?;
+    let path = parent.join(WRITER_LOCK_FILE_NAME);
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("failed to open regex writer lock '{}'", path.display()))?;
+    FileExt::lock_exclusive(&file)
+        .with_context(|| format!("failed to acquire regex writer lock '{}'", path.display()))?;
+    Ok(GenerationWriterLock(file))
+}
+
+pub(crate) fn load_manifest(root: &Path) -> RegexIndexManifest {
+    load_manifest_strict(root).unwrap_or_default()
+}
+
+pub(crate) fn load_manifest_strict(root: &Path) -> Result<RegexIndexManifest> {
+    let path = manifest_path(root);
+    if !path.exists() {
+        return Ok(RegexIndexManifest::default());
+    }
+    load_manifest_file(&path)
+}
+
+pub(crate) fn load_manifest_file(path: &Path) -> Result<RegexIndexManifest> {
+    let raw = fs::read(path)
+        .with_context(|| format!("failed to read regex manifest '{}'", path.display()))?;
+    serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to decode regex manifest '{}'", path.display()))
+}
+
+pub(crate) fn save_manifest(root: &Path, manifest: &RegexIndexManifest) -> Result<()> {
+    fs::create_dir_all(regex_index_dir(root))?;
+    write_atomic(manifest_path(root), &serde_json::to_vec_pretty(manifest)?)
+}
+
+pub(crate) fn publish_manifest(
+    root: &Path,
+    previous: Option<&RegexIndexManifest>,
+    current: &RegexIndexManifest,
+) -> Result<()> {
+    if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
+        write_atomic(
+            previous_manifest_path(root),
+            &serde_json::to_vec_pretty(&durable_manifest(previous))?,
+        )?;
+    }
+    save_manifest(root, current)
+}
+
+pub(crate) fn durable_manifest(manifest: &RegexIndexManifest) -> RegexIndexManifest {
+    let mut durable = manifest.clone();
+    if durable.status == "ready" {
+        durable.stale_reason = None;
+        durable.last_error = None;
+    }
+    durable
+}
+
+pub(crate) fn load_overlay_state(root: &Path) -> OverlayState {
+    let Ok(raw) = fs::read(overlay_state_path(root)) else {
+        return OverlayState::default();
+    };
+    serde_json::from_slice(&raw).unwrap_or_default()
+}
+
+pub(crate) fn generation_record_from_loaded(
+    manifest: &RegexIndexManifest,
+    loaded: &LoadedIndex,
+) -> RegexGenerationRecord {
+    RegexGenerationRecord {
+        schema_version: REGEX_INDEX_SCHEMA_VERSION,
+        generation: manifest.generation,
+        manifest: durable_manifest(manifest),
+        base: loaded.base_files.clone(),
+        segments: loaded
+            .overlays
+            .iter()
+            .map(|segment| OverlaySegmentRecord {
+                generation: segment.generation,
+                files: segment.files.clone(),
+            })
+            .collect(),
+        overlay_state: loaded.overlay_state.clone(),
+    }
+}
+
+pub(crate) fn save_generation_record(root: &Path, record: &RegexGenerationRecord) -> Result<()> {
+    fs::create_dir_all(regex_index_dir(root))?;
+    write_atomic(
+        generation_record_path(root, record.generation),
+        &serde_json::to_vec_pretty(record)?,
+    )
+}
+
+pub(crate) fn load_generation_record(
+    root: &Path,
+    generation: u64,
+) -> Result<RegexGenerationRecord> {
+    let path = generation_record_path(root, generation);
+    let raw = fs::read(&path).with_context(|| {
+        format!(
+            "failed to read regex generation record '{}'",
+            path.display()
+        )
+    })?;
+    serde_json::from_slice(&raw).with_context(|| {
+        format!(
+            "failed to decode regex generation record '{}'",
+            path.display()
+        )
+    })
+}
+
+pub(crate) fn prune_generation_artifacts(
+    root: &Path,
+    current: &RegexGenerationRecord,
+    previous: Option<&RegexIndexManifest>,
+) -> Result<()> {
+    let mut retained = BTreeSet::from([
+        MANIFEST_FILE_NAME.to_string(),
+        PREVIOUS_MANIFEST_FILE_NAME.to_string(),
+        format!("generation-{:020}.json", current.generation),
+    ]);
+    retain_layer_files(&mut retained, &current.base);
+    for segment in &current.segments {
+        retain_layer_files(&mut retained, &segment.files);
+    }
+    if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
+        let record = load_generation_record(root, previous.generation)?;
+        retained.insert(format!("generation-{:020}.json", record.generation));
+        retain_layer_files(&mut retained, &record.base);
+        for segment in &record.segments {
+            retain_layer_files(&mut retained, &segment.files);
+        }
+    }
+    let directory = regex_index_dir(root);
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if is_managed_generation_artifact(&name) && !retained.contains(&name) {
+            fs::remove_file(entry.path()).with_context(|| {
+                format!(
+                    "failed to prune regex index artifact '{}'",
+                    entry.path().display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn retain_layer_files(retained: &mut BTreeSet<String>, files: &LayerFiles) {
+    retained.insert(files.lookup.clone());
+    retained.insert(files.postings.clone());
+    retained.insert(files.docs.clone());
+}
+
+pub(crate) fn is_managed_generation_artifact(name: &str) -> bool {
+    (name.starts_with("generation-") && name.ends_with(".json"))
+        || (name.starts_with("base-") && name.ends_with(".dat"))
+        || (name.starts_with("overlay-") && name.ends_with(".dat"))
+        || (name.starts_with('.') && name.ends_with(".tmp"))
+}
+
+pub(crate) fn validate_generation_record(record: &RegexGenerationRecord) -> Result<()> {
+    ensure_valid_index!(
+        record.schema_version == REGEX_INDEX_SCHEMA_VERSION
+            && record.generation > 0
+            && record.manifest.schema_version == REGEX_INDEX_SCHEMA_VERSION
+            && record.manifest.weight_table_version == WEIGHT_TABLE_VERSION
+            && record.manifest.generation == record.generation
+            && record.manifest.status == "ready",
+        "regex generation {} has inconsistent schema, weight, manifest, or status",
+        record.generation
+    );
+    ensure_valid_index!(
+        record.manifest.overlay_segments == record.segments.len(),
+        "regex generation {} declares {} overlay segments but references {}",
+        record.generation,
+        record.manifest.overlay_segments,
+        record.segments.len()
+    );
+    validate_layer_file_names(&record.base)?;
+    ensure_valid_index!(
+        record.base.has_digests(),
+        "regex generation {} base is missing artifact digests",
+        record.generation
+    );
+    let mut artifact_names = BTreeSet::from([
+        record.base.lookup.as_str(),
+        record.base.postings.as_str(),
+        record.base.docs.as_str(),
+    ]);
+    let mut segment_generations = BTreeSet::new();
+    let mut previous_generation = None;
+    for segment in &record.segments {
+        validate_layer_file_names(&segment.files)?;
+        ensure_valid_index!(
+            segment.files.has_digests(),
+            "regex generation {} overlay segment {} is missing artifact digests",
+            record.generation,
+            segment.generation
+        );
+        ensure_valid_index!(
+            segment.generation > 0
+                && segment.generation <= record.generation
+                && previous_generation.is_none_or(|previous| segment.generation > previous)
+                && segment_generations.insert(segment.generation),
+            "regex generation {} has duplicate, non-increasing, or future overlay generation {}",
+            record.generation,
+            segment.generation
+        );
+        for name in [
+            segment.files.lookup.as_str(),
+            segment.files.postings.as_str(),
+            segment.files.docs.as_str(),
+        ] {
+            ensure_valid_index!(
+                artifact_names.insert(name),
+                "regex generation {} references duplicate artifact '{name}'",
+                record.generation
+            );
+        }
+        previous_generation = Some(segment.generation);
+    }
+    ensure_valid_index!(
+        record
+            .overlay_state
+            .owners
+            .keys()
+            .all(|path| record.overlay_state.shadowed_paths.contains(path)),
+        "regex generation {} has an overlay owner that is not shadowed",
+        record.generation
+    );
+    ensure_valid_index!(
+        record.overlay_state.deleted_paths.iter().all(|path| record
+            .overlay_state
+            .shadowed_paths
+            .contains(path)
+            && !record.overlay_state.owners.contains_key(path)),
+        "regex generation {} has inconsistent tombstones",
+        record.generation
+    );
+    ensure_valid_index!(
+        record
+            .overlay_state
+            .owners
+            .values()
+            .all(|owner| segment_generations.contains(owner)),
+        "regex generation {} has an owner for a missing segment",
+        record.generation
+    );
+    ensure_valid_index!(
+        record.manifest.overlay_files == record.overlay_state.owners.len(),
+        "regex generation {} declares {} overlay files but owns {}",
+        record.generation,
+        record.manifest.overlay_files,
+        record.overlay_state.owners.len()
+    );
+    if let Some(expected) = record.manifest.overlay_state_digest.as_deref() {
+        let actual = overlay_state_digest(&record.overlay_state)?;
+        ensure_valid_index!(
+            actual == expected,
+            "regex generation {} overlay state failed digest validation (expected {expected}, found {actual})",
+            record.generation
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn load_recorded_generation(
+    root: &Path,
+    manifest: RegexIndexManifest,
+    record: RegexGenerationRecord,
+) -> Result<RegexIndexRuntime> {
+    validate_generation_record(&record)?;
+    ensure_valid_index!(
+        record.manifest == durable_manifest(&manifest),
+        "regex generation {} record does not match its published manifest",
+        manifest.generation
+    );
+    let base = load_layer(root, &record.base)
+        .context("failed to load base regex index layer for published generation")?;
+    let mut overlays = Vec::with_capacity(record.segments.len());
+    for segment in &record.segments {
+        let layer = load_layer(root, &segment.files).with_context(|| {
+            format!(
+                "failed to load regex overlay segment generation {}",
+                segment.generation
+            )
+        })?;
+        overlays.push(LoadedOverlaySegment {
+            generation: segment.generation,
+            layer: Arc::new(layer),
+            files: segment.files.clone(),
+        });
+    }
+    let loaded = LoadedIndex {
+        base: Arc::new(base),
+        base_files: record.base,
+        overlays,
+        overlay_state: record.overlay_state,
+    };
+    validate_loaded_overlay_state(&loaded)?;
+    validate_manifest_counts(&manifest, &loaded)?;
+    Ok(RegexIndexRuntime {
+        manifest,
+        loaded: Some(Arc::new(loaded)),
+    })
+}
+
+pub(crate) fn load_legacy_generation(
+    root: &Path,
+    mut manifest: RegexIndexManifest,
+) -> Result<RegexIndexRuntime> {
+    let mut base_files = LayerFiles::legacy_base();
+    let base = load_layer(root, &base_files).context("failed to load base regex index layer")?;
+    populate_layer_digests(root, &mut base_files)?;
+    let mut overlay_files = LayerFiles::legacy_overlay();
+    let overlay =
+        load_layer(root, &overlay_files).context("failed to load overlay regex index layer")?;
+    populate_layer_digests(root, &mut overlay_files)?;
+    let mut overlay_state = load_overlay_state(root);
+    let mut overlays = Vec::new();
+    if !overlay.docs.is_empty() {
+        for doc in &overlay.docs {
+            overlay_state.shadowed_paths.insert(doc.path.clone());
+            if !overlay_state.deleted_paths.contains(&doc.path) {
+                overlay_state
+                    .owners
+                    .insert(doc.path.clone(), manifest.generation);
+            }
+        }
+        overlays.push(LoadedOverlaySegment {
+            generation: manifest.generation,
+            layer: Arc::new(overlay),
+            files: overlay_files,
+        });
+    }
+    manifest.overlay_files = overlay_state.owners.len();
+    manifest.overlay_segments = overlays.len();
+    let loaded = LoadedIndex {
+        base: Arc::new(base),
+        base_files,
+        overlays,
+        overlay_state,
+    };
+    validate_loaded_overlay_state(&loaded)?;
+    Ok(RegexIndexRuntime {
+        manifest,
+        loaded: Some(Arc::new(loaded)),
+    })
+}
+
+pub(crate) fn validate_loaded_overlay_state(loaded: &LoadedIndex) -> Result<()> {
+    let mut newest_document_owner = BTreeMap::<&str, u64>::new();
+    for segment in &loaded.overlays {
+        for document in &segment.layer.docs {
+            newest_document_owner.insert(&document.path, segment.generation);
+        }
+    }
+    for (path, owner) in &loaded.overlay_state.owners {
+        ensure_valid_index!(
+            loaded.overlay_state.shadowed_paths.contains(path)
+                && !loaded.overlay_state.deleted_paths.contains(path),
+            "regex overlay owner for '{path}' conflicts with shadow/tombstone state"
+        );
+        let owner_segment = loaded
+            .overlays
+            .iter()
+            .find(|segment| segment.generation == *owner);
+        ensure_valid_index!(
+            owner_segment
+                .and_then(|segment| segment.layer.doc_ids_by_path.get(path))
+                .is_some(),
+            "regex overlay owner generation {owner} has no document for '{path}'"
+        );
+        ensure_valid_index!(
+            newest_document_owner.get(path.as_str()).copied() == Some(*owner),
+            "regex overlay owner generation {owner} is not the newest document for '{path}'"
+        );
+    }
+    for path in &loaded.overlay_state.deleted_paths {
+        ensure_valid_index!(
+            loaded.overlay_state.shadowed_paths.contains(path)
+                && !loaded.overlay_state.owners.contains_key(path),
+            "regex overlay tombstone for '{path}' conflicts with owner/shadow state"
+        );
+    }
+    for segment in &loaded.overlays {
+        for doc in &segment.layer.docs {
+            ensure_valid_index!(
+                loaded.overlay_state.shadowed_paths.contains(&doc.path),
+                "regex overlay segment {} contains unshadowed document '{}'",
+                segment.generation,
+                doc.path
+            );
+        }
+    }
+    for (path, owner) in newest_document_owner {
+        if loaded.overlay_state.deleted_paths.contains(path) {
+            continue;
+        }
+        ensure_valid_index!(
+            loaded.overlay_state.owners.get(path).copied() == Some(owner),
+            "regex overlay newest document generation {owner} has no matching owner for '{path}'"
+        );
+    }
+    ensure_valid_index!(
+        loaded.overlay_state.shadowed_paths.iter().all(|path| loaded
+            .overlay_state
+            .owners
+            .contains_key(path)
+            || loaded.overlay_state.deleted_paths.contains(path)),
+        "regex overlay shadow state contains a path without an owner or tombstone"
+    );
+    Ok(())
+}
+
+pub(crate) fn overlay_state_digest(state: &OverlayState) -> Result<String> {
+    Ok(artifact_digest(&serde_json::to_vec(state)?))
+}
+
+pub(crate) fn validate_manifest_counts(
+    manifest: &RegexIndexManifest,
+    loaded: &LoadedIndex,
+) -> Result<()> {
+    let actual_files = all_indexed_paths(loaded, None).len();
+    ensure_valid_index!(
+        manifest.overlay_files == loaded.overlay_state.owners.len()
+            && manifest.overlay_segments == loaded.overlays.len()
+            && manifest.total_files == actual_files,
+        "regex generation {} manifest counts do not match loaded layers (files {}/{}, overlays {}/{}, segments {}/{})",
+        manifest.generation,
+        manifest.total_files,
+        actual_files,
+        manifest.overlay_files,
+        loaded.overlay_state.owners.len(),
+        manifest.overlay_segments,
+        loaded.overlays.len()
+    );
+    Ok(())
+}
+
+pub(crate) fn recover_previous_runtime(
+    root: &Path,
+    failed_manifest: Option<RegexIndexManifest>,
+    error: SearchError,
+) -> Result<RegexIndexRuntime> {
+    let failed_generation = failed_manifest
+        .as_ref()
+        .map_or(0, |manifest| manifest.generation);
+    if let Ok(previous) = load_manifest_file(&previous_manifest_path(root)) {
+        if let Ok(mut runtime) = load_runtime_from_manifest(root, previous) {
+            let reason = format!(
+                "recovered generation {} after rejecting generation {}: {error:#}",
+                runtime.manifest.generation, failed_generation
+            );
+            runtime.manifest.stale_reason = Some(reason.clone());
+            runtime.manifest.last_error = Some(reason);
+            return Ok(runtime);
+        }
+    }
+    let mut manifest = failed_manifest.unwrap_or_default();
+    mark_manifest_unloaded(&mut manifest, "corrupt", format!("{error:#}"));
+    Ok(RegexIndexRuntime {
+        manifest,
+        loaded: None,
+    })
+}
+
+pub(crate) fn collect_live_overlay_documents(
+    root: &Path,
+    overlay_state: &mut OverlayState,
+) -> Result<Vec<IndexedDocument>> {
+    let paths = overlay_state.owners.keys().cloned().collect::<Vec<_>>();
+    let mut docs = Vec::with_capacity(paths.len());
+    let mut newly_deleted = Vec::new();
+    for path in paths {
+        match index_document(root, &root.join(&path))? {
+            Some(document) => docs.push(document),
+            None => newly_deleted.push(path),
+        }
+    }
+    for path in newly_deleted {
+        overlay_state.owners.remove(&path);
+        overlay_state.deleted_paths.insert(path);
+    }
+    docs.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(docs)
+}
+
+pub(crate) fn current_git_commit(root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}

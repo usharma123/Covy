@@ -10,7 +10,24 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use super::*;
+use crate::error::{Result, SearchError};
+use crate::generation::{
+    acquire_writer_lock, current_git_commit, durable_manifest, load_manifest, overlay_state_digest,
+    prune_generation_artifacts, publish_manifest, save_generation_record,
+    validate_generation_record, GenerationWriterLock,
+};
+use crate::layer::{build_layer, write_atomic, IndexedDocument};
+use crate::load_runtime;
+use crate::model::{
+    LayerFiles, LoadedIndex, OverlayState, RegexGenerationRecord, RegexIndexManifest,
+    RegexIndexRuntime, MAX_INDEXED_FILE_BYTES, REGEX_INDEX_SCHEMA_VERSION,
+};
+use crate::paths::{manifest_path, previous_manifest_path};
+use crate::postings::build_indexed_grams;
+#[cfg(test)]
+use crate::rebuild_full_index;
+use crate::support::{mtime_secs, now_unix, ResultContext};
+use crate::weights::WEIGHT_TABLE_VERSION;
 
 /// Maximum file size consumed by the regex full-index builder.
 pub const MAX_SHARED_SCAN_CONTENT_BYTES: usize = MAX_INDEXED_FILE_BYTES;
