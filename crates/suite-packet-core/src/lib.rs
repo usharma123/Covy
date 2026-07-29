@@ -42,6 +42,7 @@
 //! ```compile_fail
 //! use suite_packet_core::KernelRequest;
 //! ```
+#![doc = include_str!("../PUBLIC_API.md")]
 
 extern crate packet28_binary_codec as wincode;
 

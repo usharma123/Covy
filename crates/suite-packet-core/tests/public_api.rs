@@ -1,5 +1,56 @@
+use std::collections::BTreeSet;
+
 use serde_json::{json, Value};
 use suite_packet_core as packet;
+
+const OPERATIONAL_DOCTEST_FAMILIES: &[&str] =
+    &["envelope-hash", "machine-artifact", "schema-registry"];
+const OPERATIONAL_MODULES: &[&str] = &["envelope", "machine", "registry"];
+const INTENTIONALLY_EXCLUDED_MODULES: &[(&str, &str)] = &[
+    ("agent", "serde and agent packet fixtures"),
+    ("context", "correlation and context-management fixtures"),
+    ("coverage", "coverage and diff packet fixtures"),
+    (
+        "diagnostics",
+        "data contract without an operational entrypoint",
+    ),
+    ("error", "error taxonomy exercised by fallible entrypoints"),
+    ("gate", "coverage and test-impact fixtures"),
+    ("governance", "governance packet fixtures"),
+    (
+        "instruction",
+        "telemetry data contract outside the packet registry",
+    ),
+    (
+        "kernel",
+        "implementation-free wire request and response DTOs",
+    ),
+    ("memory", "implementation-free memory wire DTOs"),
+    (
+        "merge",
+        "summary data contract without an operational entrypoint",
+    ),
+    ("search", "implementation-free search wire DTOs"),
+    ("shard", "task and shard DTOs with separate schema versions"),
+    ("testmap", "test-map persistence and index DTOs"),
+];
+const COMPATIBILITY_ONLY_MODULES: &[(&str, &str)] =
+    &[("diff", "legacy namespace for coverage diff types")];
+const ROOT_COMPATIBILITY_EXPORTS: &[&str] = &[
+    "agent::{AgentDecision,AgentIntention,AgentQuestion,AgentSnapshotPayload,AgentStateEventData,AgentStateEventKind,AgentStateEventPayload,SearchQuerySummary,ToolFailureSummary,ToolInvocationSummary,ToolKindSuccess,ToolOperationKind,ToolPathSummary}",
+    "context::{ContextCorrelationFinding,ContextCorrelationPayload,ContextManageBudgetSummary,ContextManagePacketRef,ContextManagePayload,ContextManageRecommendedAction,CorrelationEvidenceRef,MemoryKind,MemorySourceTier}",
+    "coverage::{CoverageData,CoverageFormat,DiffStatus,FileCoverage,FileDiff,IssueGateCounts,QualityGateResult,RepoSnapshot}",
+    "diagnostics::{DiagnosticsData,DiagnosticsFormat,Issue,Severity}",
+    "envelope::{canonical_hash_json,envelope_json_bytes,estimate_tokens_from_bytes,BudgetCost,EnvelopeV1,FileRef,Provenance,RiskLevel,SymbolRef}",
+    "error::CovyError",
+    "gate::{ImpactPlan,ImpactResult,PlannedTest,UncoveredBlock}",
+    "instruction::{instruction_snapshot_sha256,InstructionCacheMetricsV1,InstructionCacheTelemetryV1,InstructionExperimentScenario,InstructionMeasurement,InstructionRenderMode,InstructionStableConfig,INSTRUCTION_CACHE_TELEMETRY_SCHEMA_V1,INSTRUCTION_RENDERER_VERSION}",
+    "machine::{artifact_path,artifact_store_root,read_packet_artifact,wrap_envelope,write_packet_artifact,ArtifactHandle,JsonProfile,PacketWrapperV1,ARTIFACT_DIR,MACHINE_SCHEMA_VERSION}",
+    "merge::MergeSummary",
+    "registry::{packet_contract,packet_contracts,packet_type_schema_snapshot,wrapper_schema_snapshot,PacketTypeContract,PACKET_TYPE_AGENT_SNAPSHOT,PACKET_TYPE_AGENT_STATE,PACKET_TYPE_BUILD_REDUCE,PACKET_TYPE_CONTEXT_ASSEMBLE,PACKET_TYPE_CONTEXT_CORRELATE,PACKET_TYPE_CONTEXT_MANAGE,PACKET_TYPE_COVER_CHECK,PACKET_TYPE_DIFF_ANALYZE,PACKET_TYPE_GUARD_CHECK,PACKET_TYPE_MAP_QUERY,PACKET_TYPE_MAP_REPO,PACKET_TYPE_PROXY_RUN,PACKET_TYPE_STACK_SLICE,PACKET_TYPE_TEST_IMPACT}",
+    "shard::{PlannedShard,PlannedTask,Shard,ShardPlan,Task,TaskSet,UniversalShardPlan,SHARD_PLAN_SCHEMA_VERSION,TASK_SCHEMA_VERSION}",
+    "testmap::{SparseFileCoverage,SparseTestCoverageRow,TestMapIndex,TestMapMetadata,TestTimingHistory}",
+];
 
 fn assert_public_type<T>() {}
 
@@ -148,12 +199,101 @@ fn compatibility_root_exports_remain_available() {
 #[test]
 fn compatibility_root_uses_explicit_allowlists() {
     let source = include_str!("../src/lib.rs");
-    assert!(
-        source.split("pub use ").skip(1).all(|tail| !tail
-            .split(';')
-            .next()
-            .unwrap_or(tail)
-            .contains('*')),
-        "root glob re-exports can leak new implementation details without review"
+    let actual = root_reexports(source);
+    let expected = ROOT_COMPATIBILITY_EXPORTS
+        .iter()
+        .map(|export| (*export).to_string())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        actual, expected,
+        "root compatibility exports changed without updating the reviewed inventory"
     );
+}
+
+#[test]
+fn every_public_module_has_a_reviewed_classification() {
+    let source = include_str!("../src/lib.rs");
+    let actual = source
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("pub mod ")
+                .and_then(|tail| tail.strip_suffix(';'))
+                .map(ToOwned::to_owned)
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = OPERATIONAL_MODULES
+        .iter()
+        .copied()
+        .chain(
+            INTENTIONALLY_EXCLUDED_MODULES
+                .iter()
+                .map(|(module, _)| *module),
+        )
+        .chain(COMPATIBILITY_ONLY_MODULES.iter().map(|(module, _)| *module))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+
+    for (module, reason) in INTENTIONALLY_EXCLUDED_MODULES
+        .iter()
+        .chain(COMPATIBILITY_ONLY_MODULES)
+    {
+        assert!(
+            !reason.trim().is_empty(),
+            "excluded module '{module}' needs a review reason"
+        );
+    }
+    assert_eq!(
+        actual, expected,
+        "classify every public module as operational, data-contract, or compatibility-only"
+    );
+}
+
+#[test]
+fn every_supported_operational_family_has_one_doctest_marker() {
+    let docs = include_str!("../PUBLIC_API.md");
+
+    for family in OPERATIONAL_DOCTEST_FAMILIES {
+        let marker = format!("<!-- public-surface:{family} -->");
+        assert_eq!(
+            docs.match_indices(&marker).count(),
+            1,
+            "operational family '{family}' must have exactly one reviewed doctest section"
+        );
+    }
+}
+
+fn root_reexports(source: &str) -> BTreeSet<String> {
+    let mut exports = BTreeSet::new();
+    let mut current = None::<String>;
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(statement) = current.as_mut() {
+            statement.push_str(trimmed);
+            if trimmed.ends_with(';') {
+                let completed = current.take().expect("active public use statement");
+                exports.insert(normalize_export(&completed));
+            }
+        } else if let Some(tail) = trimmed.strip_prefix("pub use ") {
+            if tail.ends_with(';') {
+                exports.insert(normalize_export(tail));
+            } else {
+                current = Some(tail.to_string());
+            }
+        }
+    }
+
+    assert!(current.is_none(), "unterminated root public use statement");
+    exports
+}
+
+fn normalize_export(statement: &str) -> String {
+    let normalized = statement
+        .trim_end_matches(';')
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    normalized.replace(",}", "}")
 }

@@ -1,0 +1,74 @@
+{
+  "schema_version": "suite.packet.v1",
+  "packet_type": "suite.map.query.v1",
+  "packet": {
+    "version": "1",
+    "tool": "mapy",
+    "kind": "repo_query",
+    "hash": "hash-full-example",
+    "summary": "2 repository symbol matches",
+    "files": [
+      {
+        "path": "src/lib.rs",
+        "relevance": 1.0,
+        "source": "mapy.query"
+      },
+      {
+        "path": "src/query.rs",
+        "relevance": 0.88,
+        "source": "mapy.query"
+      }
+    ],
+    "symbols": [
+      {
+        "name": "PacketQuery",
+        "file": "src/lib.rs",
+        "kind": "struct",
+        "relevance": 1.0,
+        "source": "mapy.query"
+      },
+      {
+        "name": "run_query",
+        "file": "src/query.rs",
+        "kind": "function",
+        "relevance": 0.88,
+        "source": "mapy.query"
+      }
+    ],
+    "confidence": 1.0,
+    "budget_cost": {
+      "est_tokens": 148,
+      "est_bytes": 592,
+      "runtime_ms": 5,
+      "tool_calls": 1,
+      "payload_est_tokens": 52,
+      "payload_est_bytes": 208
+    },
+    "provenance": {
+      "inputs": ["query:PacketQuery", "repo:."],
+      "generated_at_unix": 1700000000
+    },
+    "payload": {
+      "query": "PacketQuery",
+      "matches": [
+        {
+          "file_idx": 0,
+          "symbol_idx": 0,
+          "line": 12,
+          "score": 1.0
+        },
+        {
+          "file_idx": 1,
+          "symbol_idx": 1,
+          "line": 47,
+          "score": 0.88
+        }
+      ],
+      "truncation": {
+        "files_dropped": 0,
+        "symbols_dropped": 0,
+        "edges_dropped": 0
+      }
+    }
+  }
+}

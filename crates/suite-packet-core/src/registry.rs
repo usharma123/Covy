@@ -309,7 +309,10 @@ fn payload_property_hints(contract: &PacketTypeContract) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
+
+    const FULL_VALUE_FIXTURE_EXCLUSIONS: &[(&str, &str)] = &[];
 
     #[test]
     fn registry_contains_all_phase_one_packet_types() {
@@ -381,11 +384,100 @@ mod tests {
     }
 
     #[test]
-    fn schema_artifacts_exist_for_all_packet_types_and_profiles() {
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
+    fn every_registered_family_has_a_full_value_fixture_or_reviewed_exclusion() {
+        let workspace_root = workspace_root();
+        let registered = packet_contracts()
+            .iter()
+            .map(|contract| contract.packet_type)
+            .collect::<BTreeSet<_>>();
+        let mut exclusions = BTreeSet::new();
+        for (packet_type, reason) in FULL_VALUE_FIXTURE_EXCLUSIONS {
+            assert!(
+                registered.contains(packet_type),
+                "full-value fixture exclusion is not registered: {packet_type}"
+            );
+            assert!(
+                !reason.trim().is_empty(),
+                "full-value fixture exclusion has no reason: {packet_type}"
+            );
+            assert!(
+                exclusions.insert(*packet_type),
+                "duplicate full-value fixture exclusion: {packet_type}"
+            );
+        }
+
+        for contract in packet_contracts() {
+            if exclusions.contains(contract.packet_type) {
+                continue;
+            }
+            let relative_path = format!("schemas/snapshots/{}/full.json", contract.packet_type);
+            let fixture: Value = serde_json::from_str(
+                &std::fs::read_to_string(workspace_root.join(&relative_path)).unwrap(),
+            )
             .unwrap();
+            assert_eq!(
+                fixture.get("schema_version").and_then(Value::as_str),
+                Some("suite.packet.v1")
+            );
+            assert_eq!(
+                fixture.get("packet_type").and_then(Value::as_str),
+                Some(contract.packet_type)
+            );
+
+            let packet = fixture
+                .get("packet")
+                .and_then(Value::as_object)
+                .expect("full-value fixture packet object");
+            for field in [
+                "version",
+                "tool",
+                "kind",
+                "hash",
+                "summary",
+                "budget_cost",
+                "provenance",
+                "payload",
+            ] {
+                assert!(
+                    packet.contains_key(field),
+                    "{} full-value fixture is missing packet.{field}",
+                    contract.packet_type
+                );
+            }
+
+            let payload = packet
+                .get("payload")
+                .and_then(Value::as_object)
+                .expect("full-value fixture payload object");
+            for field in contract.required_payload_fields {
+                assert!(
+                    payload.contains_key(*field),
+                    "{} full-value fixture is missing required payload field '{field}'",
+                    contract.packet_type
+                );
+            }
+        }
+
+        let observed_snapshot_families =
+            std::fs::read_dir(workspace_root.join("schemas/snapshots"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .collect::<BTreeSet<_>>();
+        let expected_snapshot_families = registered
+            .iter()
+            .map(|packet_type| (*packet_type).to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            observed_snapshot_families, expected_snapshot_families,
+            "snapshot directories must map one-to-one to registered packet families"
+        );
+    }
+
+    #[test]
+    fn schema_artifacts_exist_for_all_packet_types_and_profiles() {
+        let workspace_root = workspace_root();
 
         let wrapper_path =
             workspace_root.join("schemas/packet-wrapper/suite.packet.v1.schema.json");
@@ -400,23 +492,10 @@ mod tests {
             Some("suite.packet.v1")
         );
 
-        let expected_packet_types = [
-            PACKET_TYPE_COVER_CHECK,
-            PACKET_TYPE_DIFF_ANALYZE,
-            PACKET_TYPE_TEST_IMPACT,
-            PACKET_TYPE_AGENT_STATE,
-            PACKET_TYPE_AGENT_SNAPSHOT,
-            PACKET_TYPE_CONTEXT_CORRELATE,
-            PACKET_TYPE_CONTEXT_MANAGE,
-            PACKET_TYPE_STACK_SLICE,
-            PACKET_TYPE_BUILD_REDUCE,
-            PACKET_TYPE_MAP_REPO,
-            PACKET_TYPE_PROXY_RUN,
-            PACKET_TYPE_CONTEXT_ASSEMBLE,
-            PACKET_TYPE_GUARD_CHECK,
-        ];
-
-        for packet_type in expected_packet_types {
+        for packet_type in packet_contracts()
+            .iter()
+            .map(|contract| contract.packet_type)
+        {
             let schema_path =
                 workspace_root.join(format!("schemas/packet-types/{packet_type}.schema.json"));
             let schema: Value =
@@ -445,5 +524,12 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
     }
 }
