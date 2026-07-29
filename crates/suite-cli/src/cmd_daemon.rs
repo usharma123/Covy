@@ -18,6 +18,7 @@ pub(crate) use crate::cmd_daemon_client::{
 pub(crate) use crate::cmd_daemon_commands::{
     run_index, run_start, run_status, run_stop, run_task, run_watch,
 };
+use crate::cmd_daemon_storage::run_storage;
 
 #[derive(Args)]
 pub struct DaemonArgs {
@@ -33,6 +34,8 @@ pub enum DaemonCommands {
     Task(TaskArgs),
     Watch(WatchArgs),
     Index(IndexArgs),
+    /// Inspect or retain workspace-local daemon task storage.
+    Storage(StorageArgs),
 }
 
 #[derive(Args)]
@@ -45,6 +48,49 @@ pub struct StatusRootArgs {
 pub struct JsonRootArgs {
     #[arg(long, default_value = ".")]
     pub root: String,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct StorageArgs {
+    #[command(subcommand)]
+    pub command: StorageCommands,
+}
+
+#[derive(Subcommand)]
+pub enum StorageCommands {
+    /// Report current task-store metrics without modifying state.
+    Inspect(StorageInspectArgs),
+    /// Plan bounded retention, or apply it with `--apply`.
+    Cleanup(StorageCleanupArgs),
+}
+
+#[derive(Args)]
+pub struct StorageInspectArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+#[derive(Args)]
+pub struct StorageCleanupArgs {
+    #[arg(long, default_value = ".")]
+    pub root: String,
+    /// Maximum task age in seconds; the exact boundary is retained.
+    #[arg(long)]
+    pub max_age_seconds: Option<u64>,
+    /// Maximum managed logical bytes; the exact boundary is retained.
+    #[arg(long)]
+    pub max_bytes: Option<u64>,
+    /// Apply the plan. Without this flag, cleanup is a dry run.
+    #[arg(long)]
+    pub apply: bool,
     #[arg(long)]
     pub json: bool,
     #[arg(long)]
@@ -232,12 +278,16 @@ pub fn run(args: DaemonArgs) -> Result<i32> {
         DaemonCommands::Task(args) => run_task(args),
         DaemonCommands::Watch(args) => run_watch(args),
         DaemonCommands::Index(args) => run_index(args),
+        DaemonCommands::Storage(args) => run_storage(args),
     }
 }
 
 #[cfg(not(unix))]
-pub fn run(_args: DaemonArgs) -> Result<i32> {
-    daemon_not_supported()
+pub fn run(args: DaemonArgs) -> Result<i32> {
+    match args.command {
+        DaemonCommands::Storage(args) => run_storage(args),
+        _ => daemon_not_supported(),
+    }
 }
 
 #[cfg(unix)]

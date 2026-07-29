@@ -63,6 +63,46 @@ pub enum DaemonCoreError {
         #[source]
         source: FrameError,
     },
+
+    /// A retention request did not specify a usable bound.
+    #[error("invalid task-retention policy: {message}")]
+    InvalidRetentionPolicy {
+        /// Explanation of the rejected policy.
+        message: &'static str,
+    },
+
+    /// The Packet28 state root was not a real directory contained by the workspace.
+    #[error(
+        "unsafe Packet28 state root {} for workspace {}: {reason}",
+        state_root.display(),
+        workspace_root.display()
+    )]
+    UnsafeStateRoot {
+        /// Canonical workspace root.
+        workspace_root: PathBuf,
+        /// State path that failed validation.
+        state_root: PathBuf,
+        /// Failed containment or file-type invariant.
+        reason: &'static str,
+    },
+
+    /// Cleanup was requested while the daemon may still own task state.
+    #[error("task retention cannot apply while daemon owns task storage at {}", path.display())]
+    RetentionBlockedByDaemon {
+        /// Lifecycle lock or readiness marker requiring the daemon to stop.
+        path: PathBuf,
+    },
+
+    /// A candidate changed after inspection and was not removed.
+    #[error("task-retention candidate changed during cleanup: {}", path.display())]
+    RetentionCandidateChanged {
+        /// Candidate path whose identity changed.
+        path: PathBuf,
+    },
+
+    /// Applying retention is unsupported on this platform.
+    #[error("task-retention deletion is unsupported on this platform; use dry-run inspection")]
+    RetentionApplyUnsupported,
 }
 
 impl DaemonCoreError {
@@ -99,6 +139,21 @@ impl DaemonCoreError {
             }
             Self::Frame { .. } => {
                 "Verify that the peer uses the same Packet28 daemon protocol version."
+            }
+            Self::InvalidRetentionPolicy { .. } => {
+                "Specify --max-age-seconds, --max-bytes, or both."
+            }
+            Self::UnsafeStateRoot { .. } => {
+                "Replace symlinked or non-directory Packet28 state with a real workspace-local directory."
+            }
+            Self::RetentionBlockedByDaemon { .. } => {
+                "Stop packet28d before applying task retention."
+            }
+            Self::RetentionCandidateChanged { .. } => {
+                "Re-run the dry-run inspection before retrying cleanup."
+            }
+            Self::RetentionApplyUnsupported => {
+                "Run retention in dry-run mode and remove data manually on this platform."
             }
         }
     }

@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "observed_at_unix": 1000,
+  "workspace_root": "/fixture/workspace",
+  "state_root": "/fixture/workspace/.packet28",
+  "mode": "apply",
+  "metrics_before": {
+    "state_logical_bytes": 120,
+    "state_allocated_bytes": 160,
+    "allocated_bytes_supported": true,
+    "state_files": 4,
+    "state_directories": 3,
+    "state_symlinks": 0,
+    "task_registry_file_bytes": 20,
+    "task_registry_allocated_bytes": 24,
+    "task_registry_records": 2,
+    "task_registry_reliable": true,
+    "task_artifact_logical_bytes": 70,
+    "task_artifact_allocated_bytes": 80,
+    "task_artifact_files": 2,
+    "task_artifact_directories": 2,
+    "task_event_logical_bytes": 30,
+    "task_event_allocated_bytes": 32,
+    "task_event_files": 1,
+    "managed_task_logical_bytes": 110,
+    "managed_task_allocated_bytes": 136,
+    "active_tasks": 1,
+    "oldest_task_timestamp_unix": 800,
+    "newest_task_timestamp_unix": 990
+  },
+  "metrics_after": {
+    "state_logical_bytes": 75,
+    "state_allocated_bytes": 128,
+    "allocated_bytes_supported": true,
+    "state_files": 2,
+    "state_directories": 3,
+    "state_symlinks": 0,
+    "task_registry_file_bytes": 15,
+    "task_registry_allocated_bytes": 16,
+    "task_registry_records": 1,
+    "task_registry_reliable": true,
+    "task_artifact_logical_bytes": 40,
+    "task_artifact_allocated_bytes": 48,
+    "task_artifact_files": 1,
+    "task_artifact_directories": 2,
+    "task_event_logical_bytes": 20,
+    "task_event_allocated_bytes": 24,
+    "task_event_files": 0,
+    "managed_task_logical_bytes": 65,
+    "managed_task_allocated_bytes": 88,
+    "active_tasks": 1,
+    "oldest_task_timestamp_unix": 800,
+    "newest_task_timestamp_unix": 990
+  },
+  "retention": {
+    "max_age_seconds": 100,
+    "max_bytes": 80,
+    "protected_tasks": 1,
+    "protected_logical_bytes": 65,
+    "planned_tasks": 1,
+    "planned_logical_bytes": 45,
+    "removed_tasks": 1,
+    "removed_logical_bytes": 45,
+    "skipped_tasks": 0,
+    "remaining_managed_logical_bytes": 65,
+    "remaining_over_limit_bytes": 0
+  },
+  "actions": [
+    {
+      "storage_key": "task-old",
+      "task_ids": [
+        "task/old"
+      ],
+      "logical_bytes": 45,
+      "latest_timestamp_unix": 800,
+      "reasons": [
+        "age_limit",
+        "size_limit"
+      ],
+      "outcome": "removed"
+    }
+  ],
+  "issues": [
+    {
+      "kind": "state_entry",
+      "path": "/fixture/workspace/.packet28/unknown",
+      "message": "unsupported special file"
+    }
+  ]
+}

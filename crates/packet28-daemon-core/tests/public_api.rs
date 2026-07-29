@@ -2,6 +2,9 @@ use std::error::Error as _;
 use std::io::{self, Cursor};
 
 use packet28_daemon_core::integrity::compute_hash;
+use packet28_daemon_core::retention::{
+    inspect_task_store, RetentionMode, TASK_STORE_REPORT_SCHEMA_VERSION,
+};
 use packet28_daemon_core::trust::{load_trust_store, save_trust_store, TrustStore};
 use packet28_daemon_core::{
     read_socket_message, DaemonCoreError, DaemonRequest, Result as DaemonCoreResult,
@@ -102,4 +105,29 @@ fn compatibility_frame_failure_preserves_protocol_source() {
         .and_then(|source| source.downcast_ref::<FrameError>());
 
     assert!(matches!(source, Some(FrameError::Empty)));
+}
+
+#[test]
+fn public_task_store_inspection_is_timestamped_and_non_mutating() -> DaemonCoreResult<()> {
+    let directory = tempfile::tempdir().expect("temporary directory should be created");
+
+    let report = inspect_task_store(directory.path(), 123)?;
+
+    assert_eq!(
+        (
+            report.schema_version,
+            report.observed_at_unix,
+            report.mode,
+            report.metrics_before.task_registry_records,
+            directory.path().join(".packet28").exists(),
+        ),
+        (
+            TASK_STORE_REPORT_SCHEMA_VERSION,
+            123,
+            RetentionMode::Inspect,
+            0,
+            false,
+        )
+    );
+    Ok(())
 }

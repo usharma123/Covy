@@ -1,5 +1,6 @@
 //! Durable daemon runtime metadata, registries, and append-only task events.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -183,6 +184,43 @@ pub fn save_task_registry(root: &Path, registry: &TaskRegistry) -> Result<()> {
     })?;
     with_registry_lock(root, &path, RegistryLockMode::Exclusive, || {
         write_atomically(&path, &bytes)
+    })
+}
+
+pub(crate) fn remove_task_registry_records_if_unchanged(
+    root: &Path,
+    expected_records: &BTreeMap<String, Vec<u8>>,
+) -> Result<bool> {
+    if expected_records.is_empty() {
+        return Ok(true);
+    }
+
+    let path = task_registry_path(root);
+    with_registry_lock(root, &path, RegistryLockMode::Exclusive, || {
+        let raw = fs::read(&path)
+            .map_err(|source| DaemonCoreError::io("failed to read task registry", &path, source))?;
+        let mut registry: TaskRegistry = serde_json::from_slice(&raw).map_err(|source| {
+            DaemonCoreError::json("failed to decode task registry from", &path, source)
+        })?;
+        for (task_id, expected) in expected_records {
+            let Some(current) = registry.tasks.get(task_id) else {
+                return Ok(false);
+            };
+            let current = serde_json::to_vec(current).map_err(|source| {
+                DaemonCoreError::json("failed to verify task registry record in", &path, source)
+            })?;
+            if &current != expected {
+                return Ok(false);
+            }
+        }
+        for task_id in expected_records.keys() {
+            registry.tasks.remove(task_id);
+        }
+        let bytes = serde_json::to_vec_pretty(&registry).map_err(|source| {
+            DaemonCoreError::json("failed to encode task registry for", &path, source)
+        })?;
+        write_atomically(&path, &bytes)?;
+        Ok(true)
     })
 }
 
@@ -411,6 +449,7 @@ fn atomic_temp_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use packet28_daemon_protocol::message::DaemonEvent;
+    use packet28_daemon_protocol::task::{TaskLifecycle, TaskRecord};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -567,5 +606,30 @@ mod tests {
         FileExt::unlock(&lock_file).unwrap();
         rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn conditional_registry_removal_preserves_a_changed_record() {
+        let dir = tempdir().unwrap();
+        let original = TaskRecord {
+            task_id: "task".to_string(),
+            lifecycle: TaskLifecycle::Idle,
+            last_completed_at_unix: Some(10),
+            ..TaskRecord::default()
+        };
+        let expected =
+            BTreeMap::from([("task".to_string(), serde_json::to_vec(&original).unwrap())]);
+        let mut changed = original;
+        changed.lifecycle = TaskLifecycle::Running;
+        let registry = TaskRegistry {
+            tasks: BTreeMap::from([("task".to_string(), changed)]),
+        };
+        save_task_registry(dir.path(), &registry).unwrap();
+
+        assert!(!remove_task_registry_records_if_unchanged(dir.path(), &expected).unwrap());
+        assert!(load_task_registry(dir.path())
+            .unwrap()
+            .tasks
+            .contains_key("task"));
     }
 }
