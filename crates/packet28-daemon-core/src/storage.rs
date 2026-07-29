@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use fs2::FileExt;
 use packet28_daemon_protocol::hooks::ActiveTaskRecord;
-use packet28_daemon_protocol::message::{DaemonEventFrame, DaemonRuntimeInfo};
+use packet28_daemon_protocol::message::{DaemonEvent, DaemonEventFrame, DaemonRuntimeInfo};
 use packet28_daemon_protocol::paths::{
     active_task_path, agent_runtime_dir, daemon_dir, pid_path, ready_path, runtime_path,
     socket_path, task_artifacts_dir, task_event_log_path, task_events_dir, task_registry_path,
@@ -30,6 +30,17 @@ use crate::capability::{
 };
 use crate::task_store_lease::acquire_task_store_writer_lease;
 use crate::{DaemonCoreError, Result};
+
+mod event_tail;
+
+pub use event_tail::{
+    append_next_task_event, task_event_log_tail_sequence, MAX_TASK_EVENT_TAIL_SCAN_BYTES,
+};
+#[cfg(all(test, unix))]
+use event_tail::{
+    append_next_task_event_admitted_with_observers,
+    task_event_log_tail_sequence_admitted_with_observer,
+};
 
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Maximum supported encoded size of the task registry.
@@ -1783,21 +1794,7 @@ pub fn append_task_event_for(
     frame: &DaemonEventFrame,
 ) -> Result<()> {
     let path = task_event_log_path(root, task_id);
-    if frame.task_id != task_id.as_str() {
-        return Err(DaemonCoreError::InvalidTaskEventFrame {
-            path,
-            message: format!(
-                "event frame identifier {:?} does not match admitted identifier {:?}",
-                frame.task_id,
-                task_id.as_str()
-            ),
-        });
-    }
-    let mut bytes = serde_json::to_vec(frame).map_err(|source| {
-        DaemonCoreError::json("failed to encode task event for", &path, source)
-    })?;
-    validate_task_event_frame_bytes(&path, &bytes)?;
-    bytes.push(b'\n');
+    let bytes = encode_task_event_frame(root, task_id, frame)?;
 
     let _writer_lease = acquire_task_store_writer_lease(root)?;
     let file_name = event_log_file_name(task_id);
@@ -1833,6 +1830,30 @@ pub fn append_task_event_for(
             append_locked_task_event(file, &path, &bytes)
         }
     })
+}
+
+fn encode_task_event_frame(
+    root: &Path,
+    task_id: &TaskStorageId,
+    frame: &DaemonEventFrame,
+) -> Result<Vec<u8>> {
+    let path = task_event_log_path(root, task_id);
+    if frame.task_id != task_id.as_str() {
+        return Err(DaemonCoreError::InvalidTaskEventFrame {
+            path,
+            message: format!(
+                "event frame identifier {:?} does not match admitted identifier {:?}",
+                frame.task_id,
+                task_id.as_str()
+            ),
+        });
+    }
+    let mut bytes = serde_json::to_vec(frame).map_err(|source| {
+        DaemonCoreError::json("failed to encode task event for", &path, source)
+    })?;
+    validate_task_event_frame_bytes(&path, &bytes)?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 /// Loads all complete, valid event frames for one task.
@@ -2771,6 +2792,14 @@ impl<'a> AnchoredFileLock<'a> {
         )
     }
 
+    fn file(&self) -> &fs::File {
+        &self.file
+    }
+
+    fn file_mut(&mut self) -> &mut fs::File {
+        &mut self.file
+    }
+
     pub(crate) fn finish(mut self) -> std::result::Result<(), AnchoredFileLockFinishError> {
         let attachment = self.validate_attachment();
         let unlock = FileExt::unlock(&self.file);
@@ -2958,6 +2987,20 @@ mod tests {
         task_event_log_path(root, &task_storage_id(task_id))
     }
 
+    #[cfg(unix)]
+    fn replace_locked_path(path: &Path, detached: &Path) -> std::io::Result<()> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        fs::rename(path, detached)?;
+        let replacement = fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
+        replacement.sync_all()
+    }
+
     fn admit_task(root: &Path, task_id: &str) {
         save_task_registry(root, &registry_for_tasks(&[task_id])).unwrap();
     }
@@ -2988,6 +3031,14 @@ mod tests {
                 occurred_at_unix: seq,
                 data: serde_json::json!({}),
             },
+        }
+    }
+
+    fn test_daemon_event(value: u64) -> DaemonEvent {
+        DaemonEvent {
+            kind: "test".to_string(),
+            occurred_at_unix: value,
+            data: serde_json::json!({"value": value}),
         }
     }
 
@@ -3612,6 +3663,375 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].seq, 1);
         assert_eq!(loaded[1].event.kind, "task_completed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn event_tail_and_locked_next_append_establish_sequence_authority() {
+        let root = tempdir().unwrap();
+        admit_task(root.path(), "sequence-owner");
+
+        assert_eq!(
+            task_event_log_tail_sequence(root.path(), "sequence-owner").unwrap(),
+            None
+        );
+        assert!(!task_event_path(root.path(), "sequence-owner").exists());
+
+        let first =
+            append_next_task_event(root.path(), "sequence-owner", &test_daemon_event(10)).unwrap();
+        let second =
+            append_next_task_event(root.path(), "sequence-owner", &test_daemon_event(20)).unwrap();
+
+        assert_eq!(first.seq, 1);
+        assert_eq!(second.seq, 2);
+        assert_eq!(first.task_id, "sequence-owner");
+        assert_eq!(
+            task_event_log_tail_sequence(root.path(), "sequence-owner").unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            load_task_events(root.path(), "sequence-owner")
+                .unwrap()
+                .into_iter()
+                .map(|frame| frame.seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authoritative_event_tail_rejects_invalid_complete_history_without_mutation() {
+        let mut cases = vec![
+            (
+                "zero-sequence",
+                serde_json::to_vec(&task_event_frame("zero-sequence", 0)).unwrap(),
+            ),
+            (
+                "first-not-one",
+                serde_json::to_vec(&task_event_frame("first-not-one", 2)).unwrap(),
+            ),
+            ("malformed-tail", b"{not-json}".to_vec()),
+            (
+                "cross-task",
+                serde_json::to_vec(&task_event_frame("other-task", 1)).unwrap(),
+            ),
+        ];
+        let mut duplicate = serde_json::to_vec(&task_event_frame("duplicate-tail", 1)).unwrap();
+        duplicate.push(b'\n');
+        duplicate.extend(serde_json::to_vec(&task_event_frame("duplicate-tail", 1)).unwrap());
+        cases.push(("duplicate-tail", duplicate));
+        let mut gap = serde_json::to_vec(&task_event_frame("gap-tail", 1)).unwrap();
+        gap.push(b'\n');
+        gap.extend(serde_json::to_vec(&task_event_frame("gap-tail", 3)).unwrap());
+        cases.push(("gap-tail", gap));
+
+        for (task_id, mut bytes) in cases {
+            let root = tempdir().unwrap();
+            admit_task(root.path(), task_id);
+            let path = task_event_path(root.path(), task_id);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            bytes.push(b'\n');
+            fs::write(&path, &bytes).unwrap();
+
+            let error = task_event_log_tail_sequence(root.path(), task_id).unwrap_err();
+            assert!(
+                matches!(error, DaemonCoreError::InvalidTaskEventFrame { .. }),
+                "{task_id}: {error:?}"
+            );
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+
+            let error =
+                append_next_task_event(root.path(), task_id, &test_daemon_event(4)).unwrap_err();
+            assert!(
+                matches!(error, DaemonCoreError::InvalidTaskEventFrame { .. }),
+                "{task_id}: {error:?}"
+            );
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exhausted_event_sequence_is_rejected_without_mutation() {
+        let root = tempdir().unwrap();
+        let task_id = "exhausted-tail";
+        admit_task(root.path(), task_id);
+        let path = task_event_path(root.path(), task_id);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut bytes = vec![b'\n'; MAX_TASK_EVENT_TAIL_SCAN_BYTES + 1];
+        bytes.extend(serde_json::to_vec(&task_event_frame(task_id, u64::MAX - 1)).unwrap());
+        bytes.push(b'\n');
+        bytes.extend(serde_json::to_vec(&task_event_frame(task_id, u64::MAX)).unwrap());
+        bytes.push(b'\n');
+        fs::write(&path, &bytes).unwrap();
+
+        assert_eq!(
+            task_event_log_tail_sequence(root.path(), task_id).unwrap(),
+            Some(u64::MAX)
+        );
+        let error =
+            append_next_task_event(root.path(), task_id, &test_daemon_event(1)).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::InvalidTaskEventFrame { ref message, .. }
+                if message.contains("exhausted")
+        ));
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn next_event_append_recovers_every_partial_frame_truncation_boundary() {
+        let task_id = "partial-property";
+        let partial = serde_json::to_vec(&task_event_frame(task_id, 2)).unwrap();
+
+        for cut in 0..=partial.len() {
+            let root = tempdir().unwrap();
+            admit_task(root.path(), task_id);
+            let first =
+                append_next_task_event(root.path(), task_id, &test_daemon_event(1)).unwrap();
+            let path = task_event_path(root.path(), task_id);
+            let complete_prefix = fs::read(&path).unwrap();
+            let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(&partial[..cut]).unwrap();
+            file.sync_all().unwrap();
+
+            assert_eq!(
+                task_event_log_tail_sequence(root.path(), task_id).unwrap(),
+                Some(1),
+                "cut={cut}"
+            );
+            let recovered =
+                append_next_task_event(root.path(), task_id, &test_daemon_event(2)).unwrap();
+
+            assert_eq!(first.seq, 1, "cut={cut}");
+            assert_eq!(recovered.seq, 2, "cut={cut}");
+            let mut expected = complete_prefix;
+            expected.extend(serde_json::to_vec(&recovered).unwrap());
+            expected.push(b'\n');
+            assert_eq!(fs::read(&path).unwrap(), expected, "cut={cut}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oversized_partial_event_tail_is_rejected_without_mutation() {
+        let root = tempdir().unwrap();
+        let task_id = "oversized-partial";
+        admit_task(root.path(), task_id);
+        append_next_task_event(root.path(), task_id, &test_daemon_event(1)).unwrap();
+        let path = task_event_path(root.path(), task_id);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(&vec![b'x'; MAX_TASK_EVENT_LINE_BYTES + 1])
+            .unwrap();
+        file.sync_all().unwrap();
+        let before = fs::read(&path).unwrap();
+
+        let error = task_event_log_tail_sequence(root.path(), task_id).unwrap_err();
+        assert!(matches!(
+            error,
+            DaemonCoreError::AuthorityJsonLimitExceeded {
+                resource: "crash-partial tail bytes",
+                ..
+            }
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+
+        let error =
+            append_next_task_event(root.path(), task_id, &test_daemon_event(2)).unwrap_err();
+        assert!(matches!(
+            error,
+            DaemonCoreError::AuthorityJsonLimitExceeded {
+                resource: "crash-partial tail bytes",
+                ..
+            }
+        ));
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn event_tail_discards_result_when_file_binding_changes_after_read() {
+        let root = tempdir().unwrap();
+        let task_id = task_storage_id("tail-replaced");
+        admit_task(root.path(), task_id.as_str());
+        append_next_task_event(root.path(), task_id.as_str(), &test_daemon_event(1)).unwrap();
+        let path = task_event_path(root.path(), task_id.as_str());
+        let detached = root.path().join("detached-event-tail");
+        let lease = acquire_task_store_writer_lease(root.path()).unwrap();
+
+        let error = with_registered_task_storage_id(root.path(), &task_id, || {
+            task_event_log_tail_sequence_admitted_with_observer(
+                root.path(),
+                &task_id,
+                &lease,
+                || {
+                    replace_locked_path(&path, &detached).map_err(|source| {
+                        DaemonCoreError::io(
+                            "failed to inject event-tail replacement",
+                            &path,
+                            source,
+                        )
+                    })
+                },
+            )
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::Io { .. }), "{error:?}");
+        assert!(detached.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn next_event_append_revalidates_binding_before_and_after_durable_bytes() {
+        for replace_after_sync in [false, true] {
+            let root = tempdir().unwrap();
+            let task_id = task_storage_id(if replace_after_sync {
+                "append-replaced-after"
+            } else {
+                "append-replaced-before"
+            });
+            admit_task(root.path(), task_id.as_str());
+            append_next_task_event(root.path(), task_id.as_str(), &test_daemon_event(1)).unwrap();
+            let path = task_event_path(root.path(), task_id.as_str());
+            let detached = root.path().join("detached-event-append");
+            let before = fs::read(&path).unwrap();
+            let lease = acquire_task_store_writer_lease(root.path()).unwrap();
+
+            let error = with_registered_task_storage_id(root.path(), &task_id, || {
+                append_next_task_event_admitted_with_observers(
+                    root.path(),
+                    &task_id,
+                    &lease,
+                    &test_daemon_event(2),
+                    || {
+                        if replace_after_sync {
+                            return Ok(());
+                        }
+                        replace_locked_path(&path, &detached).map_err(|source| {
+                            DaemonCoreError::io(
+                                "failed to inject pre-append replacement",
+                                &path,
+                                source,
+                            )
+                        })
+                    },
+                    || {
+                        if !replace_after_sync {
+                            return Ok(());
+                        }
+                        replace_locked_path(&path, &detached).map_err(|source| {
+                            DaemonCoreError::io(
+                                "failed to inject post-append replacement",
+                                &path,
+                                source,
+                            )
+                        })
+                    },
+                )
+            })
+            .unwrap_err();
+
+            if replace_after_sync {
+                assert!(matches!(
+                    error,
+                    DaemonCoreError::StorageMutationAuthorityLost { .. }
+                ));
+                assert!(fs::read(&detached).unwrap().len() > before.len());
+            } else {
+                assert!(!matches!(
+                    error,
+                    DaemonCoreError::StorageMutationAuthorityLost { .. }
+                ));
+                assert_eq!(fs::read(&detached).unwrap(), before);
+            }
+            assert_eq!(fs::read(path).unwrap(), b"");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn append_next_task_event_process_child() {
+        let Some(root) = std::env::var_os("PACKET28_APPEND_NEXT_EVENT_CHILD_ROOT") else {
+            return;
+        };
+        append_next_task_event(Path::new(&root), "process-next", &test_daemon_event(1)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cross_process_next_event_allocation_is_unique_and_contiguous() {
+        let root = tempdir().unwrap();
+        admit_task(root.path(), "process-next");
+        let executable = std::env::current_exe().unwrap();
+        let mut children = Vec::new();
+        for _ in 0..8 {
+            children.push(
+                Command::new(&executable)
+                    .arg("--exact")
+                    .arg("storage::tests::append_next_task_event_process_child")
+                    .env("PACKET28_APPEND_NEXT_EVENT_CHILD_ROOT", root.path())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap(),
+            );
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let all_finished = children.iter_mut().all(|child| {
+                child
+                    .try_wait()
+                    .expect("failed to poll next-event child")
+                    .is_some()
+            });
+            if all_finished {
+                break;
+            }
+            if Instant::now() >= deadline {
+                for child in &mut children {
+                    if child
+                        .try_wait()
+                        .expect("failed to poll timed-out next-event child")
+                        .is_none()
+                    {
+                        let _ = child.kill();
+                    }
+                }
+                for child in &mut children {
+                    let _ = child.wait();
+                }
+                panic!("next-event children exceeded 20-second shared deadline");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        for child in children {
+            let output = child
+                .wait_with_output()
+                .expect("failed to reap next-event child");
+            assert!(
+                output.status.success(),
+                "next-event child failed: {}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        assert_eq!(
+            load_task_events(root.path(), "process-next")
+                .unwrap()
+                .into_iter()
+                .map(|frame| frame.seq)
+                .collect::<Vec<_>>(),
+            (1..=8).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            task_event_log_tail_sequence(root.path(), "process-next").unwrap(),
+            Some(8)
+        );
     }
 
     #[test]
