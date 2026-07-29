@@ -190,6 +190,38 @@ fn test_mcp_native_stdio_accepts_newline_json() {
     let after_error = read_mcp_message_newline(&mut server);
     assert!(after_error["result"]["tools"].as_array().is_some());
 
+    write_mcp_message_newline(
+        &mut server,
+        &json!([
+            {
+                "jsonrpc":"2.0",
+                "id":6,
+                "method":"tools/list"
+            },
+            {
+                "jsonrpc":"2.0",
+                "method":"notifications/initialized"
+            },
+            {
+                "jsonrpc":"2.0",
+                "id":7,
+                "method":"definitely/unknown"
+            }
+        ]),
+    );
+    let batch = read_mcp_message_newline(&mut server);
+    let batch = batch.as_array().expect("batch response");
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch[0]["id"], 6);
+    assert!(batch[0]["result"]["tools"].is_array());
+    assert_eq!(batch[1]["id"], 7);
+    assert_eq!(batch[1]["error"]["code"], -32601);
+
+    write_mcp_message_newline(&mut server, &json!([]));
+    let empty_batch = read_mcp_message_newline(&mut server);
+    assert_eq!(empty_batch["id"], Value::Null);
+    assert_eq!(empty_batch["error"]["code"], -32600);
+
     server
         .finish(MCP_SHUTDOWN_TIMEOUT)
         .unwrap_or_else(|error| panic!("failed to stop newline MCP server: {error}"));

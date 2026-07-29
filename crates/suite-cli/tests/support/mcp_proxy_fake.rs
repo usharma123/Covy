@@ -164,3 +164,82 @@ while True:
     )
     .unwrap();
 }
+
+pub fn write_bidirectional_server(path: &Path) {
+    fs::write(
+        path,
+        r#"import json, sys
+
+def read_message():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, value = line.decode("utf-8").split(":", 1)
+        headers[name.lower().strip()] = value.strip()
+    length = int(headers.get("content-length", "0"))
+    return json.loads(sys.stdin.buffer.read(length))
+
+def write_message(value):
+    body = json.dumps(value).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+requested_roots = False
+while True:
+    message = read_message()
+    if message is None:
+        break
+    method = message.get("method")
+    msg_id = message.get("id")
+    if method == "initialize":
+        write_message({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "serverInfo": {"name": "bidirectional", "version": "1"}
+            }
+        })
+    elif method == "notifications/initialized" and not requested_roots:
+        requested_roots = True
+        write_message({
+            "jsonrpc": "2.0",
+            "id": "server-roots-1",
+            "method": "roots/list",
+            "params": {}
+        })
+    elif method is None and msg_id == "server-roots-1":
+        roots = message.get("result", {}).get("roots", [])
+        write_message({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {
+                "level": "info",
+                "data": {"root_count": len(roots)}
+            }
+        })
+    elif msg_id is not None:
+        if method == "tools/list":
+            result = {"tools": []}
+        elif method == "resources/list":
+            result = {"resources": []}
+        elif method == "resources/templates/list":
+            result = {"resourceTemplates": []}
+        else:
+            write_message({
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "error": {"code": -32601, "message": "unknown method"}
+            })
+            continue
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": result})
+"#,
+    )
+    .unwrap();
+}

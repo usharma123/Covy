@@ -10,7 +10,8 @@ mod mcp_proxy_fake;
 mod process_harness;
 
 use mcp_proxy_fake::{
-    write_colliding_tool_server, write_compact_read_server, write_concurrent_tool_server,
+    write_bidirectional_server, write_colliding_tool_server, write_compact_read_server,
+    write_concurrent_tool_server,
 };
 use process_harness::McpHarness;
 use serde_json::json;
@@ -41,6 +42,117 @@ fn read_next_mcp_response(server: &mut McpHarness) -> serde_json::Value {
             return value;
         }
     }
+}
+
+fn read_until(
+    server: &mut McpHarness,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + MCP_RESPONSE_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "timed out waiting for matching MCP message after {MCP_RESPONSE_TIMEOUT:?}"
+        );
+        let value = server
+            .receive(remaining)
+            .unwrap_or_else(|error| panic!("failed to read MCP message: {error}"));
+        if predicate(&value) {
+            return value;
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_routes_server_requests_and_json_rpc_batches() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script_path = dir.path().join("bidirectional_mcp.py");
+    write_bidirectional_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "bidirectional": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()]
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut server = start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-bidirectional");
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{
+                "protocolVersion":"2025-03-26",
+                "capabilities":{"roots":{}},
+                "clientInfo":{"name":"bidirectional-test","version":"1"}
+            }
+        }),
+    );
+    let initialized = read_mcp_message_for_id(&mut server, 1);
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-03-26");
+
+    write_mcp_message(
+        &mut server,
+        &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+    );
+    let roots_request = read_until(&mut server, |message| message["method"] == "roots/list");
+    let proxy_request_id = roots_request["id"].clone();
+    assert!(proxy_request_id
+        .as_str()
+        .is_some_and(|id| id.starts_with("packet28-upstream:bidirectional:")));
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":proxy_request_id,
+            "result":{"roots":[{"uri":"file:///tmp/repo","name":"repo"}]}
+        }),
+    );
+    let acknowledgement = read_until(&mut server, |message| {
+        message["method"] == "notifications/message" && message["params"]["data"]["root_count"] == 1
+    });
+    assert_eq!(acknowledgement["params"]["upstream"], "bidirectional");
+
+    write_mcp_message(
+        &mut server,
+        &json!([
+            {"jsonrpc":"2.0","id":2,"method":"tools/list"},
+            {"jsonrpc":"2.0","method":"notifications/initialized"},
+            {"jsonrpc":"2.0","id":3,"method":"prompts/list"}
+        ]),
+    );
+    let batch = read_until(&mut server, serde_json::Value::is_array);
+    let batch = batch.as_array().unwrap();
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch[0]["id"], 2);
+    assert!(batch[0]["result"]["tools"].is_array());
+    assert_eq!(batch[1]["id"], 3);
+    assert!(batch[1]["result"]["prompts"].is_array());
+
+    write_mcp_message(&mut server, &json!([]));
+    let empty_batch = read_until(&mut server, |message| message["error"]["code"] == -32600);
+    assert_eq!(empty_batch["id"], serde_json::Value::Null);
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
 }
 #[test]
 #[cfg(unix)]

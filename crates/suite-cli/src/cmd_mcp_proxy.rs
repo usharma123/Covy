@@ -122,58 +122,49 @@ async fn serve_proxy_stdio_async(
         if let Ok(mut guard) = session.lock() {
             guard.framing = Some(framing);
         }
-        let Some(method) = request.get("method").and_then(Value::as_str) else {
-            if let Some(id) = request.get("id").cloned() {
-                if let Err(error) = output
-                    .send(mcp_error_response(id, -32600, "missing method"), framing)
-                    .await
-                {
+        if request.is_array() {
+            let response =
+                dispatch_proxy_payload(&root, &session, &upstreams, &catalog, request).await;
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    serve_result = Err(error);
+                    break;
+                }
+            };
+            if let Some(response) = response {
+                if let Err(error) = output.send(response, framing).await {
                     serve_result = Err(error);
                     break;
                 }
             }
             continue;
-        };
-        let params = request.get("params").cloned().unwrap_or(Value::Null);
-        let id = request.get("id").cloned();
-
-        if id.is_none() {
-            let _ = handle_proxy_notification(&root, &session, &upstreams, method, params).await;
-            continue;
         }
-        let id = id.unwrap_or(Value::Null);
 
-        // Initialization is the only ordering barrier in an MCP session. Keep it
-        // ahead of pipelined requests while allowing normal calls to run concurrently.
-        if method == "initialize" {
-            let response = match handle_proxy_method(
-                &root,
-                &session,
-                &upstreams,
-                &catalog,
-                method,
-                params,
-                id.clone(),
-            )
-            .await
-            {
-                Ok(value) => value,
-                Err(error) => json!({
-                    "jsonrpc":"2.0",
-                    "id": id,
-                    "error": {
-                        "code": -32000,
-                        "message": error.to_string()
-                    }
-                }),
+        let method = request.get("method").and_then(Value::as_str);
+        let process_inline =
+            method.is_none() || request.get("id").is_none() || method == Some("initialize");
+        if process_inline {
+            let response =
+                dispatch_proxy_message(&root, &session, &upstreams, &catalog, request).await;
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    serve_result = Err(error);
+                    break;
+                }
             };
-            if let Err(error) = output.send(response, framing).await {
-                serve_result = Err(error);
-                break;
+            if let Some(response) = response {
+                if let Err(error) = output.send(response, framing).await {
+                    serve_result = Err(error);
+                    break;
+                }
             }
             continue;
         }
 
+        // Initialization above remains the ordering barrier. Normal client
+        // requests continue concurrently, bounded by the shared inflight limit.
         let permit = match inflight.clone().acquire_owned().await {
             Ok(permit) => permit,
             Err(_) => {
@@ -186,31 +177,14 @@ async fn serve_proxy_stdio_async(
         let upstreams = upstreams.clone();
         let catalog = catalog.clone();
         let output = output.clone();
-        let method = method.to_string();
         requests.spawn(async move {
             let _permit = permit;
-            let response = match handle_proxy_method(
-                &root,
-                &session,
-                &upstreams,
-                &catalog,
-                &method,
-                params,
-                id.clone(),
-            )
-            .await
+            if let Some(response) =
+                dispatch_proxy_message(&root, &session, &upstreams, &catalog, request).await?
             {
-                Ok(value) => value,
-                Err(err) => json!({
-                    "jsonrpc":"2.0",
-                    "id": id,
-                    "error": {
-                        "code": -32000,
-                        "message": err.to_string()
-                    }
-                }),
-            };
-            output.send(response, framing).await
+                output.send(response, framing).await?;
+            }
+            Ok(())
         });
     }
 
@@ -266,6 +240,89 @@ async fn serve_proxy_stdio_async(
         }
     }
     serve_result
+}
+
+async fn dispatch_proxy_payload(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    upstreams: &Arc<UpstreamPool>,
+    catalog: &ProxyCatalog,
+    payload: Value,
+) -> Result<Option<Value>> {
+    let Value::Array(requests) = payload else {
+        return dispatch_proxy_message(root, session, upstreams, catalog, payload).await;
+    };
+    if requests.is_empty() {
+        return Ok(Some(mcp_error_response(
+            Value::Null,
+            -32600,
+            "empty JSON-RPC batch",
+        )));
+    }
+    let mut responses = Vec::new();
+    for request in requests {
+        if let Some(response) =
+            dispatch_proxy_message(root, session, upstreams, catalog, request).await?
+        {
+            responses.push(response);
+        }
+    }
+    Ok((!responses.is_empty()).then_some(Value::Array(responses)))
+}
+
+async fn dispatch_proxy_message(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    upstreams: &Arc<UpstreamPool>,
+    catalog: &ProxyCatalog,
+    request: Value,
+) -> Result<Option<Value>> {
+    let Some(object) = request.as_object() else {
+        return Ok(Some(mcp_error_response(
+            Value::Null,
+            -32600,
+            "JSON-RPC request must be an object",
+        )));
+    };
+    let id = object.get("id").cloned();
+    let Some(method) = object.get("method").and_then(Value::as_str) else {
+        if id.is_some() && upstreams.forward_client_response(&request).await? {
+            return Ok(None);
+        }
+        return Ok(Some(mcp_error_response(
+            id.unwrap_or(Value::Null),
+            -32600,
+            "missing method",
+        )));
+    };
+    let params = object.get("params").cloned().unwrap_or(Value::Null);
+    let Some(id) = id else {
+        let _ = handle_proxy_notification(root, session, upstreams, method, params).await;
+        return Ok(None);
+    };
+    Ok(Some(
+        match handle_proxy_method(
+            root,
+            session,
+            upstreams,
+            catalog,
+            method,
+            params,
+            id.clone(),
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => json!({
+                "jsonrpc":"2.0",
+                "id": id,
+                "error": {
+                    "code": -32000,
+                    "message": error.to_string()
+                }
+            }),
+        },
+    ))
 }
 
 fn proxy_writer_error(

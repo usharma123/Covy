@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::process::ExitStatus;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -86,6 +86,15 @@ impl UpstreamPool {
             client.shutdown().await;
         }
     }
+
+    pub(crate) async fn forward_client_response(&self, response: &Value) -> Result<bool> {
+        for client in self.clients.values() {
+            if client.forward_client_response(response).await? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 impl Drop for UpstreamPool {
@@ -100,6 +109,8 @@ pub(crate) struct UpstreamClient {
     pub(crate) name: String,
     stdin: AsyncMutex<ChildStdin>,
     pending: Mutex<HashMap<String, oneshot::Sender<PendingReply>>>,
+    reverse_pending: Mutex<HashMap<String, Value>>,
+    next_reverse_id: AtomicU64,
     inflight: Arc<Semaphore>,
     pub(crate) request_timeout: Duration,
     pub(crate) command_preview: String,
@@ -174,6 +185,61 @@ impl UpstreamClient {
         timeout_at(deadline, write)
             .await
             .map_err(|_| self.timeout_error())?
+    }
+
+    fn namespace_server_request(&self, mut request: Value) -> Result<Value> {
+        let original_id = request
+            .get("id")
+            .cloned()
+            .ok_or_else(|| anyhow!("upstream server request is missing id"))?;
+        let sequence = self.next_reverse_id.fetch_add(1, Ordering::Relaxed);
+        let proxy_id = Value::String(format!(
+            "packet28-upstream:{}:{}",
+            self.name,
+            sequence.saturating_add(1)
+        ));
+        let key = request_key(&proxy_id)?;
+        self.reverse_pending
+            .lock()
+            .map_err(|_| {
+                anyhow!(
+                    "failed to lock upstream '{}' reverse request map",
+                    self.name
+                )
+            })?
+            .insert(key, original_id);
+        request
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("upstream server request must be an object"))?
+            .insert("id".to_string(), proxy_id);
+        Ok(request)
+    }
+
+    async fn forward_client_response(&self, response: &Value) -> Result<bool> {
+        let Some(proxy_id) = response.get("id") else {
+            return Ok(false);
+        };
+        let key = request_key(proxy_id)?;
+        let original_id = self
+            .reverse_pending
+            .lock()
+            .map_err(|_| {
+                anyhow!(
+                    "failed to lock upstream '{}' reverse request map",
+                    self.name
+                )
+            })?
+            .remove(&key);
+        let Some(original_id) = original_id else {
+            return Ok(false);
+        };
+        let mut forwarded = response.clone();
+        forwarded
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("downstream MCP response must be an object"))?
+            .insert("id".to_string(), original_id);
+        self.send_message(&forwarded).await?;
+        Ok(true)
     }
 
     fn timeout_error(&self) -> anyhow::Error {
@@ -310,6 +376,8 @@ async fn spawn_upstream_client(
         name: name.to_string(),
         stdin: AsyncMutex::new(stdin),
         pending: Mutex::new(HashMap::new()),
+        reverse_pending: Mutex::new(HashMap::new()),
+        next_reverse_id: AtomicU64::new(0),
         inflight: Arc::new(Semaphore::new(MAX_UPSTREAM_INFLIGHT)),
         request_timeout: timeout,
         command_preview,
@@ -349,7 +417,10 @@ async fn read_upstream(
                 return;
             }
         };
-        if let Some(id) = message.get("id") {
+        if message.get("method").is_none() {
+            let Some(id) = message.get("id") else {
+                continue;
+            };
             if let Ok(key) = request_key(id) {
                 let sender = client
                     .pending
@@ -368,16 +439,31 @@ async fn read_upstream(
             .ok()
             .and_then(|guard| guard.framing)
             .unwrap_or(McpMessageFraming::ContentLength);
-        let mut notification = message;
-        if let Some(params) = notification
-            .get_mut("params")
-            .and_then(Value::as_object_mut)
-        {
-            params
-                .entry("upstream".to_string())
-                .or_insert_with(|| Value::String(client.name.clone()));
-        }
-        if output.send(notification, framing).await.is_err() {
+        let forwarded = if message.get("id").is_some() {
+            match client.namespace_server_request(message) {
+                Ok(request) => request,
+                Err(error) => {
+                    client.set_exit_reason(format!(
+                        "invalid server request from upstream '{}': {error}",
+                        client.name
+                    ));
+                    client.request_shutdown();
+                    return;
+                }
+            }
+        } else {
+            let mut notification = message;
+            if let Some(params) = notification
+                .get_mut("params")
+                .and_then(Value::as_object_mut)
+            {
+                params
+                    .entry("upstream".to_string())
+                    .or_insert_with(|| Value::String(client.name.clone()));
+            }
+            notification
+        };
+        if output.send(forwarded, framing).await.is_err() {
             break;
         }
     }

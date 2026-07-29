@@ -302,44 +302,78 @@ async fn serve_stdio_async(root: PathBuf, toolset: McpToolset) -> Result<()> {
         if let Ok(mut guard) = session.lock() {
             guard.framing = Some(framing);
         }
-        let params = request.get("params").cloned().unwrap_or(Value::Null);
-        let id = request.get("id").cloned();
-        let Some(method) = request.get("method").and_then(Value::as_str) else {
-            if let Some(id) = id {
-                let response = mcp_error_response(id, -32600, "missing method");
-                let mut guard = writer.lock().await;
-                write_message_async(&mut *guard, &response, framing).await?;
-            }
-            continue;
-        };
-
-        if id.is_none() {
-            let _ = handle_notification(&root, &session, method, params);
-            continue;
+        if let Some(response) = dispatch_local_payload(&root, &session, request).await? {
+            let mut guard = writer.lock().await;
+            write_message_async(&mut *guard, &response, framing).await?;
         }
-
-        let method_root = root.clone();
-        let method_session = session.clone();
-        let method = method.to_string();
-        let result = tokio::task::spawn_blocking(move || {
-            handle_method(&method_root, &method_session, &method, params)
-        })
-        .await
-        .context("local MCP method worker failed")?;
-        let response = match result {
-            Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-            Err(err) => mcp_error_response(
-                id.unwrap_or(Value::Null),
-                mcp_error_code(&err),
-                &err.to_string(),
-            ),
-        };
-        let mut guard = writer.lock().await;
-        write_message_async(&mut *guard, &response, framing).await?;
     }
 
     notification_task.shutdown().await?;
     Ok(())
+}
+
+async fn dispatch_local_payload(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    payload: Value,
+) -> Result<Option<Value>> {
+    match payload {
+        Value::Array(requests) if requests.is_empty() => Ok(Some(mcp_error_response(
+            Value::Null,
+            -32600,
+            "empty JSON-RPC batch",
+        ))),
+        Value::Array(requests) => {
+            let mut responses = Vec::new();
+            for request in requests {
+                if let Some(response) = dispatch_local_message(root, session, request).await? {
+                    responses.push(response);
+                }
+            }
+            Ok((!responses.is_empty()).then_some(Value::Array(responses)))
+        }
+        request => dispatch_local_message(root, session, request).await,
+    }
+}
+
+async fn dispatch_local_message(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    request: Value,
+) -> Result<Option<Value>> {
+    let Some(object) = request.as_object() else {
+        return Ok(Some(mcp_error_response(
+            Value::Null,
+            -32600,
+            "JSON-RPC request must be an object",
+        )));
+    };
+    let id = object.get("id").cloned();
+    let Some(method) = object.get("method").and_then(Value::as_str) else {
+        return Ok(Some(mcp_error_response(
+            id.unwrap_or(Value::Null),
+            -32600,
+            "missing method",
+        )));
+    };
+    let params = object.get("params").cloned().unwrap_or(Value::Null);
+    let Some(id) = id else {
+        let _ = handle_notification(root, session, method, params);
+        return Ok(None);
+    };
+
+    let method_root = root.to_path_buf();
+    let method_session = session.clone();
+    let method = method.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        handle_method(&method_root, &method_session, &method, params)
+    })
+    .await
+    .context("local MCP method worker failed")?;
+    Ok(Some(match result {
+        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+        Err(error) => mcp_error_response(id, mcp_error_code(&error), &error.to_string()),
+    }))
 }
 
 fn handle_notification(

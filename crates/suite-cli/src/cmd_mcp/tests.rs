@@ -1,5 +1,61 @@
 use super::*;
 
+#[tokio::test]
+async fn local_server_dispatches_mixed_json_rpc_batches() {
+    let root = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(McpSessionState::default()));
+    let response = dispatch_local_payload(
+        root.path(),
+        &session,
+        json!([
+            {"jsonrpc":"2.0","id":1,"method":"tools/list"},
+            {"jsonrpc":"2.0","method":"notifications/initialized"},
+            {"jsonrpc":"2.0","id":"missing","method":"unsupported/test"}
+        ]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let responses = response.as_array().unwrap();
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["id"], 1);
+    assert!(responses[0]["result"]["tools"].is_array());
+    assert_eq!(responses[1]["id"], "missing");
+    assert_eq!(responses[1]["error"]["code"], -32601);
+    assert!(session.lock().unwrap().initialized);
+}
+
+#[tokio::test]
+async fn local_server_rejects_empty_and_invalid_batches() {
+    let root = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(McpSessionState::default()));
+
+    for payload in [json!([]), json!([17])] {
+        let response = dispatch_local_payload(root.path(), &session, payload)
+            .await
+            .unwrap()
+            .unwrap();
+        let error = response
+            .as_array()
+            .and_then(|responses| responses.first())
+            .unwrap_or(&response);
+        assert_eq!(error["id"], Value::Null);
+        assert_eq!(error["error"]["code"], -32600);
+    }
+
+    assert!(dispatch_local_payload(
+        root.path(),
+        &session,
+        json!([
+            {"jsonrpc":"2.0","method":"notifications/initialized"}
+        ]),
+    )
+    .await
+    .unwrap()
+    .is_none());
+}
+
 fn task_version_json_path(root: &Path, task_id: &str, context_version: &str) -> PathBuf {
     validated_task_version_json_path(root, task_id, context_version).unwrap()
 }
