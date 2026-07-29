@@ -16,11 +16,31 @@ REQUIRED_PACKAGES = (
     "context-instruct-shim",
     "packet28-daemon-core",
     "suite-packet-core",
+    "context-kernel-builtins",
     "context-kernel-core",
+    "context-kernel-mechanism",
     "context-memory-core",
     "packet28-reducer-core",
     "packet28-search-core",
     "packet28-search-cli",
+)
+KERNEL_BUILTIN_TARGETS = (
+    "agenty.state.snapshot",
+    "agenty.state.write",
+    "buildy.reduce",
+    "contextq.assemble",
+    "contextq.correlate",
+    "contextq.manage",
+    "diffy.analyze",
+    "governed.assemble",
+    "guardy.check",
+    "mapy.query",
+    "mapy.repo",
+    "packet28.broker_memory.write",
+    "packet28.instruction.summarize",
+    "proxy.run",
+    "stacky.slice",
+    "testy.impact",
 )
 
 
@@ -45,7 +65,16 @@ def metadata(
     edges: dict[str, Iterable[tuple[str, str | None]]],
     *,
     additional_packages: Iterable[str] = (),
+    include_builtin_mechanism_edge: bool = True,
 ) -> dict[str, object]:
+    edges = {source: list(dependencies) for source, dependencies in edges.items()}
+    edges.setdefault("context-kernel-core", []).append(
+        ("context-kernel-builtins", None)
+    )
+    if include_builtin_mechanism_edge:
+        edges.setdefault("context-kernel-builtins", []).append(
+            ("context-kernel-mechanism", None)
+        )
     package_names = set(REQUIRED_PACKAGES)
     package_names.update(additional_packages)
     for source, dependencies in edges.items():
@@ -73,15 +102,33 @@ def metadata(
     }
 
 
+def write_kernel_sources(root: Path, mechanism_source: str) -> None:
+    mechanism = root / "crates" / "context-kernel-mechanism" / "src"
+    builtins = root / "crates" / "context-kernel-builtins" / "src"
+    mechanism.mkdir(parents=True)
+    builtins.mkdir(parents=True)
+    (mechanism / "lib.rs").write_text(mechanism_source, encoding="utf-8")
+    (builtins / "kernel_registry.rs").write_text(
+        "\n".join(
+            f'kernel.register_reducer("{target}");'
+            for target in KERNEL_BUILTIN_TARGETS
+        ),
+        encoding="utf-8",
+    )
+
+
 class ArchitectureDependencyTests(unittest.TestCase):
     def run_checker(
-        self, fixture: dict[str, object]
+        self, fixture: dict[str, object], *, source_root: Path | None = None
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "metadata.json"
             path.write_text(json.dumps(fixture), encoding="utf-8")
+            command = [sys.executable, str(SCRIPT), "--metadata", str(path)]
+            if source_root is not None:
+                command.extend(["--source-root", str(source_root)])
             return subprocess.run(
-                [sys.executable, str(SCRIPT), "--metadata", str(path)],
+                command,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -221,6 +268,137 @@ class ArchitectureDependencyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "packet28-daemon-core -> adapter-bridge -> packet28-search-core",
+            result.stderr,
+        )
+
+    def test_kernel_mechanism_must_not_reach_concrete_builtins_transitively(
+        self,
+    ) -> None:
+        fixture = metadata(
+            {
+                "context-kernel-mechanism": [("adapter-bridge", None)],
+                "adapter-bridge": [("guardy-core", None)],
+            },
+            additional_packages=("adapter-bridge", "guardy-core"),
+        )
+
+        result = self.run_checker(fixture)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "context-kernel-mechanism -> adapter-bridge -> guardy-core",
+            result.stderr,
+        )
+
+    def test_kernel_mechanism_must_not_depend_on_concrete_builtins_directly(
+        self,
+    ) -> None:
+        fixture = metadata(
+            {"context-kernel-mechanism": [("guardy-core", None)]},
+            additional_packages=("guardy-core",),
+        )
+
+        result = self.run_checker(fixture)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "context-kernel-mechanism -> guardy-core",
+            result.stderr,
+        )
+
+    def test_kernel_core_must_remain_a_single_edge_compatibility_facade(
+        self,
+    ) -> None:
+        fixture = metadata(
+            {
+                "context-kernel-core": [
+                    ("context-kernel-mechanism", None),
+                ],
+            }
+        )
+
+        result = self.run_checker(fixture)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "context-kernel-core compatibility facade must have exactly one "
+            "normal dependency",
+            result.stderr,
+        )
+
+    def test_kernel_builtins_must_depend_directly_on_mechanism(self) -> None:
+        fixture = metadata({}, include_builtin_mechanism_edge=False)
+
+        result = self.run_checker(fixture)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "context-kernel-builtins must depend directly on "
+            "context-kernel-mechanism",
+            result.stderr,
+        )
+
+    def test_kernel_mechanism_source_rejects_builtin_target_literals(
+        self,
+    ) -> None:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(
+                root,
+                'const TARGET: &str = "guardy.check";\n',
+            )
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "context-kernel-mechanism source contains concrete built-in "
+            "literal 'guardy.check'",
+            result.stderr,
+        )
+
+    def test_kernel_mechanism_source_rejects_concrete_crate_identifiers(
+        self,
+    ) -> None:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "use guardy_core::ContextConfig;\n")
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "context-kernel-mechanism source contains concrete built-in "
+            "literal 'guardy_core'",
+            result.stderr,
+        )
+
+    def test_kernel_registry_must_own_each_target_exactly_once(self) -> None:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "")
+            registry = (
+                root
+                / "crates"
+                / "context-kernel-builtins"
+                / "src"
+                / "kernel_registry.rs"
+            )
+            registry.write_text(
+                registry.read_text(encoding="utf-8")
+                + '\nconst DUPLICATE: &str = "guardy.check";\n',
+                encoding="utf-8",
+            )
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "context-kernel-builtins registry must own exactly one "
+            "registration literal for 'guardy.check'",
             result.stderr,
         )
 

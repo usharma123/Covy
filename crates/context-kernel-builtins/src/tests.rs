@@ -34,6 +34,24 @@ fn v1_registry_contains_the_exact_supported_catalog() {
     assert_eq!(Kernel::with_v1_reducers().reducer_names(), expected);
 }
 
+#[test]
+fn every_v1_target_routes_to_its_adapter() {
+    let kernel = Kernel::with_v1_reducers();
+
+    for target in kernel.reducer_names() {
+        let result = kernel.execute(KernelRequest {
+            target: target.clone(),
+            policy_context: json!({"disable_cache": true}),
+            reducer_input: Value::String("routing-probe".to_string()),
+            ..KernelRequest::default()
+        });
+        assert!(
+            !matches!(result, Err(KernelError::UnknownTarget { .. })),
+            "registered target {target} did not route to an adapter"
+        );
+    }
+}
+
 fn fixture(rel: &str) -> String {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

@@ -34,7 +34,9 @@ grep -Fqx 'undocumented-unsafe-blocks = "deny"' Cargo.toml ||
 
 internal_dependencies=(
   buildy-core
+  context-kernel-builtins
   context-kernel-core
+  context-kernel-mechanism
   context-memory-core
   context-scheduler-core
   contextq-core

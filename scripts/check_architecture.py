@@ -34,6 +34,48 @@ CLI_PACKAGES = frozenset(
 # happens to be available.
 TOKIO_RUNTIME_OWNERS = frozenset({"packet28d", "suite-cli"})
 
+KERNEL_BUILTIN_TARGETS = (
+    "agenty.state.snapshot",
+    "agenty.state.write",
+    "buildy.reduce",
+    "contextq.assemble",
+    "contextq.correlate",
+    "contextq.manage",
+    "diffy.analyze",
+    "governed.assemble",
+    "guardy.check",
+    "mapy.query",
+    "mapy.repo",
+    "packet28.broker_memory.write",
+    "packet28.instruction.summarize",
+    "proxy.run",
+    "stacky.slice",
+    "testy.impact",
+)
+
+KERNEL_CONCRETE_PACKAGES = frozenset(
+    {
+        "buildy-core",
+        "context-kernel-builtins",
+        "context-kernel-core",
+        "contextq-core",
+        "covy-ingest",
+        "diffy-core",
+        "guardy-core",
+        "mapy-core",
+        "stacky-core",
+        "suite-foundation-core",
+        "suite-policy-core",
+        "suite-proxy-core",
+        "testy-cli-common",
+        "testy-core",
+    }
+)
+
+KERNEL_CONCRETE_SOURCE_NAMES = tuple(
+    package.replace("-", "_") for package in sorted(KERNEL_CONCRETE_PACKAGES)
+)
+
 
 @dataclass(frozen=True)
 class ArchitectureRule:
@@ -78,6 +120,14 @@ BASE_RULES = (
     ArchitectureRule(
         source="suite-packet-core",
         forbidden=frozenset({"packet28-daemon-protocol"}),
+    ),
+    ArchitectureRule(
+        source="context-kernel-mechanism",
+        forbidden=KERNEL_CONCRETE_PACKAGES,
+    ),
+    ArchitectureRule(
+        source="context-kernel-builtins",
+        forbidden=frozenset({"context-kernel-core"}),
     ),
 )
 
@@ -203,6 +253,10 @@ class CargoMetadataGraph:
                 result.add(self.names[package_id])
         return result
 
+    def direct_dependency_names(self, source_name: str) -> set[str]:
+        source = self.workspace_package_id(source_name)
+        return {self.names[dependency] for dependency in self.edges[source]}
+
     def shortest_forbidden_paths(
         self, source_name: str, forbidden_names: set[str] | frozenset[str]
     ) -> dict[str, list[str]]:
@@ -258,7 +312,52 @@ def architecture_rules(graph: CargoMetadataGraph) -> tuple[ArchitectureRule, ...
     )
 
 
-def check_architecture(metadata: dict[str, Any]) -> list[str]:
+def check_kernel_source_boundaries(root: Path) -> list[str]:
+    errors: list[str] = []
+    mechanism_src = root / "crates" / "context-kernel-mechanism" / "src"
+    registry = (
+        root
+        / "crates"
+        / "context-kernel-builtins"
+        / "src"
+        / "kernel_registry.rs"
+    )
+    if not mechanism_src.is_dir():
+        return ["context-kernel-mechanism source directory is missing"]
+    if not registry.is_file():
+        return ["context-kernel-builtins registry source is missing"]
+
+    forbidden_literals = (*KERNEL_BUILTIN_TARGETS, *KERNEL_CONCRETE_SOURCE_NAMES)
+    for path in sorted(mechanism_src.rglob("*.rs")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as error:
+            errors.append(f"cannot read {path.relative_to(root)}: {error}")
+            continue
+        for literal in forbidden_literals:
+            if literal in source:
+                errors.append(
+                    "context-kernel-mechanism source contains concrete built-in "
+                    f"literal {literal!r}: {path.relative_to(root)}"
+                )
+
+    try:
+        registry_source = registry.read_text(encoding="utf-8")
+    except OSError as error:
+        errors.append(f"cannot read {registry.relative_to(root)}: {error}")
+        return errors
+    for target in KERNEL_BUILTIN_TARGETS:
+        if registry_source.count(f'"{target}"') != 1:
+            errors.append(
+                "context-kernel-builtins registry must own exactly one "
+                f"registration literal for {target!r}"
+            )
+    return errors
+
+
+def check_architecture(
+    metadata: dict[str, Any], source_root: Path | None = None
+) -> list[str]:
     graph = CargoMetadataGraph(metadata)
     errors: list[str] = []
     for rule in architecture_rules(graph):
@@ -282,6 +381,23 @@ def check_architecture(metadata: dict[str, Any]) -> list[str]:
                     f"{source} reaches async runtime outside an orchestration "
                     f"boundary: {' -> '.join(path)}"
                 )
+    core_dependencies = graph.direct_dependency_names("context-kernel-core")
+    if core_dependencies != {"context-kernel-builtins"}:
+        errors.append(
+            "context-kernel-core compatibility facade must have exactly one "
+            "normal dependency, context-kernel-builtins; found "
+            f"{', '.join(sorted(core_dependencies)) or '<none>'}"
+        )
+    builtins_dependencies = graph.direct_dependency_names(
+        "context-kernel-builtins"
+    )
+    if "context-kernel-mechanism" not in builtins_dependencies:
+        errors.append(
+            "context-kernel-builtins must depend directly on "
+            "context-kernel-mechanism"
+        )
+    if source_root is not None:
+        errors.extend(check_kernel_source_boundaries(source_root))
     return errors
 
 
@@ -335,13 +451,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "'cargo metadata --locked --format-version 1'"
         ),
     )
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        default=ROOT,
+        metavar="PATH",
+        help="repository root used for source-boundary checks",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        errors = check_architecture(read_metadata(args.metadata))
+        errors = check_architecture(read_metadata(args.metadata), args.source_root)
     except MetadataError as error:
         print(f"architecture dependency invariant failed: {error}", file=sys.stderr)
         return 1
