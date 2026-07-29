@@ -5,6 +5,69 @@ import unittest
 from scripts import verify_ci_policy
 
 
+class ReproducibleCargoPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.build_path = verify_ci_policy.WORKFLOW_DIR / "build.yml"
+        cls.build = cls.build_path.read_text(encoding="utf-8")
+
+    def test_repository_msrv_toolchain_explicitly_installs_clippy(self) -> None:
+        self.assertEqual(
+            verify_ci_policy.msrv_clippy_component_errors(
+                self.build_path, self.build
+            ),
+            [],
+        )
+
+    def test_rejects_msrv_toolchain_without_clippy(self) -> None:
+        unsafe = self.build.replace("          components: clippy\n", "", 1)
+
+        errors = verify_ci_policy.msrv_clippy_component_errors(
+            self.build_path, unsafe
+        )
+
+        self.assertTrue(
+            any(
+                error.endswith("MSRV toolchain does not install clippy")
+                for error in errors
+            )
+        )
+
+    def test_benchmark_cargo_graph_commands_are_locked_and_scanned(self) -> None:
+        self.assertTrue(
+            set(verify_ci_policy.BENCHMARK_LOCKED_COMMAND_FILES).issubset(
+                verify_ci_policy.LOCKED_COMMAND_FILES
+            )
+        )
+        for path in verify_ci_policy.BENCHMARK_LOCKED_COMMAND_FILES:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    verify_ci_policy.locked_command_errors(
+                        path, path.read_text(encoding="utf-8")
+                    ),
+                    [],
+                )
+
+    def test_rejects_unlocked_benchmark_build_and_run_commands(self) -> None:
+        cases = {
+            "benchmarks/run.sh": "cargo build --release -p covy-cli",
+            "benchmarks/run_agent_search_bench.sh": (
+                "cargo build -q -p suite-cli --bin Packet28"
+            ),
+            "benchmarks/per-03-incremental-index/README.md": (
+                "cargo run --offline --release -p mapy-core"
+            ),
+        }
+        for relative_path, command in cases.items():
+            path = verify_ci_policy.ROOT / relative_path
+            with self.subTest(path=relative_path):
+                errors = verify_ci_policy.locked_command_errors(path, command)
+                self.assertEqual(len(errors), 1)
+                self.assertIn(
+                    "Cargo graph command lacks --locked", errors[0]
+                )
+
+
 class AutofixSecurityPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

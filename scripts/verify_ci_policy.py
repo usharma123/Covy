@@ -21,12 +21,27 @@ CARGO_GRAPH_COMMAND = re.compile(
     cargo\s+(?:build|check|clippy|test|doc|package)\b
     """
 )
+BENCHMARK_CARGO_RUN_COMMAND = re.compile(
+    r"""(?x)
+    (?:
+        ^ | :\s+ | run_cmd\s+ | &&\s+ | \|\|\s+ |
+        ["']\s* | :-\s* | ^-\s+
+    )
+    cargo\s+run\b
+    """
+)
 WORKFLOW_FILES = sorted(
     [*WORKFLOW_DIR.glob("*.yml"), *WORKFLOW_DIR.glob("*.yaml")]
 )
 ACTION_FILES = [
     *WORKFLOW_FILES,
     ROOT / "scripts" / "ci" / "github-actions.yml",
+]
+
+BENCHMARK_LOCKED_COMMAND_FILES = [
+    ROOT / "benchmarks" / "per-03-incremental-index" / "README.md",
+    ROOT / "benchmarks" / "run.sh",
+    ROOT / "benchmarks" / "run_agent_search_bench.sh",
 ]
 
 LOCKED_COMMAND_FILES = [
@@ -41,6 +56,7 @@ LOCKED_COMMAND_FILES = [
     ROOT / "scripts" / "test_token_usage.py",
     ROOT / "npm" / "build-npm.sh",
     ROOT / "README.md",
+    *BENCHMARK_LOCKED_COMMAND_FILES,
 ]
 
 CROSS_REVISION = "88f49ff79e777bef6d3564531636ee4d3cc2f8d2"
@@ -126,7 +142,8 @@ def verify_action_references(errors: list[str]) -> None:
 def verify_rust_toolchains(errors: list[str]) -> None:
     msrv_count = 0
     for path in ACTION_FILES:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
         for index, line in enumerate(lines):
             if "uses: dtolnay/rust-toolchain@" not in line:
                 continue
@@ -148,10 +165,66 @@ def verify_rust_toolchains(errors: list[str]) -> None:
                 errors.append(
                     f"{relative(path)}:{index + 1}: unreviewed Rust toolchain {toolchain}"
                 )
+        errors.extend(msrv_clippy_component_errors(path, text))
     if msrv_count != 1:
         errors.append(
             f"expected exactly one {MSRV_RUST} MSRV action, found {msrv_count}"
         )
+
+
+def msrv_clippy_component_errors(path: Path, text: str) -> list[str]:
+    """Return MSRV Rust actions that do not explicitly install Clippy."""
+
+    errors: list[str] = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if "uses: dtolnay/rust-toolchain@" not in line:
+            continue
+        nearby = "\n".join(lines[index + 1 : index + 7])
+        toolchain = re.search(
+            r"^\s*toolchain:\s*(\S+)\s*$", nearby, re.MULTILINE
+        )
+        if toolchain is None or toolchain.group(1) != MSRV_RUST:
+            continue
+        components = re.search(
+            r"^\s*components:\s*(.+?)\s*$", nearby, re.MULTILINE
+        )
+        installed = (
+            {
+                component.strip()
+                for component in components.group(1).split(",")
+            }
+            if components is not None
+            else set()
+        )
+        if "clippy" not in installed:
+            errors.append(
+                f"{relative(path)}:{index + 1}: MSRV toolchain does not install clippy"
+            )
+    return errors
+
+
+def locked_command_errors(path: Path, text: str) -> list[str]:
+    """Return unlocked Cargo graph commands from one policy-scanned file."""
+
+    errors: list[str] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("echo "):
+            continue
+        cargo_graph_command = CARGO_GRAPH_COMMAND.search(stripped) or (
+            path in BENCHMARK_LOCKED_COMMAND_FILES
+            and BENCHMARK_CARGO_RUN_COMMAND.search(stripped)
+        )
+        if cargo_graph_command and "--locked" not in line:
+            errors.append(
+                f"{relative(path)}:{line_number}: Cargo graph command lacks --locked"
+            )
+        if re.search(r"\bcross\s+build\b", line) and "--locked" not in line:
+            errors.append(
+                f"{relative(path)}:{line_number}: cross build lacks --locked"
+            )
+    return errors
 
 
 def verify_locked_commands(errors: list[str]) -> None:
@@ -159,20 +232,9 @@ def verify_locked_commands(errors: list[str]) -> None:
         if not path.exists():
             errors.append(f"required CI/gate file is missing: {relative(path)}")
             continue
-        for line_number, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            stripped = line.strip()
-            if stripped.startswith("echo "):
-                continue
-            if CARGO_GRAPH_COMMAND.search(stripped) and "--locked" not in line:
-                errors.append(
-                    f"{relative(path)}:{line_number}: Cargo graph command lacks --locked"
-                )
-            if re.search(r"\bcross\s+build\b", line) and "--locked" not in line:
-                errors.append(
-                    f"{relative(path)}:{line_number}: cross build lacks --locked"
-                )
+        errors.extend(
+            locked_command_errors(path, path.read_text(encoding="utf-8"))
+        )
 
 
 def autofix_security_errors(text: str) -> list[str]:

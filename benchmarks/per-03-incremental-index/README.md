@@ -23,7 +23,7 @@ intentionally amortized over eight segment publications.
 
 ```text
 CARGO_TARGET_DIR=/tmp/packet28-per03-bench-target \
-  cargo run --offline --release -p mapy-core \
+  cargo run --offline --release --locked -p mapy-core \
   --example per03_incremental_index
 ```
 
