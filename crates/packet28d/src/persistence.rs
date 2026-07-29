@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -44,6 +45,7 @@ struct PendingSnapshot {
 struct PendingState {
     next_revision: u64,
     durable_revision: u64,
+    durable_task_ids: BTreeSet<String>,
     snapshot: Option<PendingSnapshot>,
     last_error: Option<String>,
     unsurfaced_error: Option<String>,
@@ -94,6 +96,7 @@ struct PersistenceState {
     debounce: Duration,
     pending: Mutex<PendingState>,
     metrics: Mutex<PersistenceMetrics>,
+    admission_lane: Mutex<()>,
     event_lane: Mutex<()>,
     accepting: std::sync::atomic::AtomicBool,
     backend: Arc<dyn PersistenceBackend>,
@@ -137,11 +140,13 @@ impl PersistenceOwner {
         root: PathBuf,
         task_store_lease: TaskStoreLease,
         debounce: Duration,
+        durable_tasks: &TaskRegistry,
     ) -> Result<(Self, PersistenceHandle)> {
         Self::start_with_backend(
             root,
             Some(task_store_lease),
             debounce,
+            durable_tasks.tasks.keys().cloned().collect(),
             Arc::new(FilesystemBackend),
         )
     }
@@ -151,21 +156,32 @@ impl PersistenceOwner {
         root: PathBuf,
         debounce: Duration,
     ) -> Result<(Self, PersistenceHandle)> {
-        Self::start_with_backend(root, None, debounce, Arc::new(FilesystemBackend))
+        Self::start_with_backend(
+            root,
+            None,
+            debounce,
+            BTreeSet::new(),
+            Arc::new(FilesystemBackend),
+        )
     }
 
     fn start_with_backend(
         root: PathBuf,
         task_store_lease: Option<TaskStoreLease>,
         debounce: Duration,
+        durable_task_ids: BTreeSet<String>,
         backend: Arc<dyn PersistenceBackend>,
     ) -> Result<(Self, PersistenceHandle)> {
         let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let state = Arc::new(PersistenceState {
             root,
             debounce,
-            pending: Mutex::new(PendingState::default()),
+            pending: Mutex::new(PendingState {
+                durable_task_ids,
+                ..PendingState::default()
+            }),
             metrics: Mutex::new(PersistenceMetrics::default()),
+            admission_lane: Mutex::new(()),
             event_lane: Mutex::new(()),
             accepting: std::sync::atomic::AtomicBool::new(true),
             backend,
@@ -326,6 +342,26 @@ impl PersistenceHandle {
 
     pub(crate) fn event_guard(&self) -> MutexGuard<'_, ()> {
         lock_unpoisoned(&self.state.event_lane)
+    }
+
+    pub(crate) fn task_is_durably_admitted(&self, task_id: &str) -> bool {
+        lock_unpoisoned(&self.state.pending)
+            .durable_task_ids
+            .contains(task_id)
+    }
+
+    pub(crate) fn ensure_task_admitted(&self, task_id: &str, revision: u64) -> Result<()> {
+        let _admission_guard = lock_unpoisoned(&self.state.admission_lane);
+        if self.task_is_durably_admitted(task_id) {
+            return Ok(());
+        }
+        self.barrier(revision)?;
+        if !self.task_is_durably_admitted(task_id) {
+            anyhow::bail!(
+                "daemon persistence revision {revision} did not durably admit task '{task_id}'"
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn metrics(&self) -> PersistenceMetrics {
@@ -525,6 +561,7 @@ fn persist_pending(
                 {
                     let mut pending = lock_unpoisoned(&state.pending);
                     pending.durable_revision = pending.durable_revision.max(snapshot.revision);
+                    pending.durable_task_ids = snapshot.tasks.tasks.keys().cloned().collect();
                     pending.last_error = None;
                 }
                 let mut metrics = lock_unpoisoned(&state.metrics);
@@ -615,7 +652,13 @@ mod tests {
     fn owner(root: &Path, debounce: Duration) -> (PersistenceOwner, PersistenceHandle) {
         ensure_daemon_dir(root).unwrap();
         let lease = acquire_daemon_task_store_lease(root).unwrap();
-        PersistenceOwner::start(root.to_path_buf(), lease, debounce).unwrap()
+        PersistenceOwner::start(
+            root.to_path_buf(),
+            lease,
+            debounce,
+            &TaskRegistry::default(),
+        )
+        .unwrap()
     }
 
     fn task_registry(task_id: &str, marker: &str) -> Arc<TaskRegistry> {
@@ -672,6 +715,30 @@ mod tests {
         assert_eq!(metrics.max_pending_snapshots, 1);
         assert!(metrics.snapshots_coalesced > 0);
         assert!(metrics.checkpoints_written < metrics.snapshots_submitted);
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn task_admission_fence_waits_once_for_the_exact_checkpoint_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, handle) = owner(root.path(), Duration::from_secs(1));
+        let revision = handle
+            .checkpoint_async(
+                task_registry("artifact-owner", "admitted"),
+                Arc::new(WatchRegistry::default()),
+            )
+            .unwrap();
+
+        handle
+            .ensure_task_admitted("artifact-owner", revision)
+            .unwrap();
+        let after_first_fence = handle.metrics();
+        assert!(handle.task_is_durably_admitted("artifact-owner"));
+        handle
+            .ensure_task_admitted("artifact-owner", revision)
+            .unwrap();
+        assert_eq!(handle.metrics(), after_first_fence);
+        assert_eq!(after_first_fence.checkpoints_written, 1);
         owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 
@@ -750,6 +817,7 @@ mod tests {
             root.path().to_path_buf(),
             Some(lease),
             Duration::ZERO,
+            BTreeSet::new(),
             backend,
         )
         .unwrap();
@@ -816,6 +884,7 @@ mod tests {
             root.path().to_path_buf(),
             Some(lease),
             Duration::ZERO,
+            BTreeSet::new(),
             backend,
         )
         .unwrap();

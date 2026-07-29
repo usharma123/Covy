@@ -891,6 +891,101 @@ mod tests {
         }
     }
 
+    fn fresh_hook_artifact_packet() -> packet28_daemon_protocol::hooks::HookReducerPacket {
+        packet28_daemon_protocol::hooks::HookReducerPacket {
+            packet_type: "packet28.hook.fs.v2".to_string(),
+            tool_name: "Read".to_string(),
+            operation_kind: suite_packet_core::ToolOperationKind::Read,
+            summary: "fresh task artifact".to_string(),
+            cacheable: Some(false),
+            mutation: Some(false),
+            artifact: Some(json!({"source": "fresh-task-admission-regression"})),
+            ..packet28_daemon_protocol::hooks::HookReducerPacket::default()
+        }
+    }
+
+    #[test]
+    fn fresh_hook_artifact_request_admits_registry_before_namespace_and_end_flush() {
+        let state = crate::tests::support::daemon_test_state_with_persistence_debounce(
+            Duration::from_secs(1),
+        );
+        let root = crate::tests::support::daemon_test_root(&state);
+        let task_id = "fresh-hook-artifact";
+        let (watch_tx, _watch_rx) = WatchIngress::new(1);
+
+        let response = handle_request_and_flush(
+            state.clone(),
+            watch_tx,
+            DaemonRequest::HookIngest {
+                request: packet28_daemon_protocol::hooks::HookIngestRequest {
+                    task_id: task_id.to_string(),
+                    event_kind: packet28_daemon_protocol::hooks::HookEventKind::PostToolUse,
+                    reducer_packet: Some(fresh_hook_artifact_packet()),
+                    ..packet28_daemon_protocol::hooks::HookIngestRequest::default()
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            response,
+            DaemonResponse::HookIngest {
+                response: packet28_daemon_protocol::hooks::HookIngestResponse {
+                    accepted: true,
+                    ..
+                }
+            }
+        ));
+
+        let registry = packet28_daemon_core::storage::load_task_registry(&root).unwrap();
+        assert!(registry.tasks.contains_key(task_id));
+        let storage_id = task_storage_id(task_id).unwrap();
+        let hook_artifacts = task_artifact_dir(&root, &storage_id).join("hook-artifacts");
+        assert_eq!(std::fs::read_dir(hook_artifacts).unwrap().count(), 1);
+        crate::tests::support::shutdown_test_persistence(&state);
+    }
+
+    #[test]
+    fn fresh_broker_artifact_request_admits_registry_before_namespace_and_end_flush() {
+        let state = crate::tests::support::daemon_test_state_with_persistence_debounce(
+            Duration::from_secs(1),
+        );
+        let root = crate::tests::support::daemon_test_root(&state);
+        let task_id = "fresh-broker-artifact";
+        let (watch_tx, _watch_rx) = WatchIngress::new(1);
+
+        let response = handle_request_and_flush(
+            state.clone(),
+            watch_tx,
+            DaemonRequest::BrokerGetContext {
+                request: BrokerGetContextRequest {
+                    task_id: task_id.to_string(),
+                    action: Some(BrokerAction::Inspect),
+                    max_sections: Some(1),
+                    persist_artifacts: Some(true),
+                    ..BrokerGetContextRequest::default()
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            response,
+            DaemonResponse::BrokerGetContext {
+                response: BrokerGetContextResponse {
+                    artifact_id: Some(_),
+                    ..
+                }
+            }
+        ));
+
+        let registry = packet28_daemon_core::storage::load_task_registry(&root).unwrap();
+        assert!(registry.tasks.contains_key(task_id));
+        let storage_id = task_storage_id(task_id).unwrap();
+        assert!(task_brief_markdown_path(&root, &storage_id).is_file());
+        assert!(task_brief_json_path(&root, &storage_id).is_file());
+        assert!(task_state_json_path(&root, &storage_id).is_file());
+        crate::tests::support::shutdown_test_persistence(&state);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn stalled_frame_header_hits_its_owned_deadline() {
         let (mut client, mut server) = tokio::io::duplex(64);

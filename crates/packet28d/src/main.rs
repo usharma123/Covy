@@ -225,6 +225,7 @@ fn serve(root: PathBuf) -> Result<()> {
         root.clone(),
         task_store_lease.clone(),
         Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
+        &tasks,
     )?;
     if reconcile_task_event_high_waters(&mut tasks, &event_tails)? {
         persistence.checkpoint(Arc::new(tasks.clone()), Arc::new(watches.clone()))?;
@@ -886,6 +887,25 @@ fn mark_state_dirty(state: &DaemonState) -> Result<u64> {
 fn flush_persistence(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
     let persistence = state.lock().map_err(lock_err)?.persistence.clone();
     persistence.flush().map(|_| ())
+}
+
+fn fence_task_namespace_admission(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<()> {
+    let admission = {
+        let guard = state.lock().map_err(lock_err)?;
+        if !guard.tasks.tasks.contains_key(task_id) {
+            anyhow::bail!("task '{task_id}' must exist before writing its managed namespace");
+        }
+        if guard.persistence.task_is_durably_admitted(task_id) {
+            None
+        } else {
+            let revision = mark_state_dirty(&guard)?;
+            Some((guard.persistence.clone(), revision))
+        }
+    };
+    if let Some((persistence, revision)) = admission {
+        persistence.ensure_task_admitted(task_id, revision)?;
+    }
+    Ok(())
 }
 
 fn reconcile_task_event_high_waters(

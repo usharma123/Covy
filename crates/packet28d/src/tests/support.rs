@@ -4,6 +4,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
+    daemon_test_state_with_persistence_debounce(Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS))
+}
+
+pub(crate) fn daemon_test_state_with_persistence_debounce(
+    persistence_debounce: Duration,
+) -> Arc<Mutex<DaemonState>> {
     let root = std::env::temp_dir().join(format!(
         "packet28-broker-test-{}-{}-{}",
         now_unix_millis(),
@@ -22,11 +28,8 @@ pub(crate) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
     thread::spawn(move || index_rx.discard_until_shutdown());
     let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
     thread::spawn(move || while background_rx.blocking_recv().is_some() {});
-    let (persistence_owner, persistence) = PersistenceOwner::start_unleased(
-        root.clone(),
-        Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
-    )
-    .unwrap();
+    let (persistence_owner, persistence) =
+        PersistenceOwner::start_unleased(root.clone(), persistence_debounce).unwrap();
     Arc::new(Mutex::new(DaemonState {
         root,
         kernel,

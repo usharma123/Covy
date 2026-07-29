@@ -33,7 +33,7 @@ Environment:
 - Darwin 24.6.0 arm64
 - rustc 1.93.0 (254b59607 2026-01-19)
 - cargo 1.93.0
-- implementation base `a6599e56a8cccbda8fe2b4eb45293707f8713fc5`
+- implementation base `14e1f4eadea91961c46a5fecb62e5cbc96778040`
 
 The result artifact records checksums for every measured product and benchmark
 source. Those file identities, rather than the pre-implementation base commit,
@@ -68,10 +68,10 @@ startup reconciliation, torn-tail, lease, and failure-path tests.
 
 | Path | Median event state-lock hold | Median elapsed, 32 events | Published bytes | Full checkpoints |
 | --- | ---: | ---: | ---: | ---: |
-| Full checkpoint under lock | 67,221,542 ns | 2,157,329 µs | 59,150,656 | 32 |
-| Owned/coalesced after lock | 125,292 ns | 471,700 µs | 1,852,233 | 1 |
+| Full checkpoint under lock | 69,370,084 ns | 2,229,331 µs | 59,150,656 | 32 |
+| Owned/coalesced after lock | 129,166 ns | 525,906 µs | 1,852,233 | 1 |
 
 - Median daemon-state lock-hold reduction: **99.814%**
 - Published-byte reduction: **96.869%**
-- Wall-clock improvement on the capture host: **4.57×**
+- Wall-clock improvement on the capture host: **4.24×**
 - Recovered events on both paths: **33**

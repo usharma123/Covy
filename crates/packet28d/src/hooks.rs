@@ -472,11 +472,12 @@ pub(crate) fn hook_ingest(
 
     let mut cache_hit = false;
     if let Some(packet) = request.reducer_packet.as_ref() {
-        let artifact_id = packet
-            .artifact
-            .as_ref()
-            .map(|artifact| store_hook_artifact(&root, task_id, "hook", artifact))
-            .transpose()?;
+        let artifact_id = if let Some(artifact) = packet.artifact.as_ref() {
+            fence_task_namespace_admission(&state, task_id)?;
+            Some(store_hook_artifact(&root, task_id, "hook", artifact)?)
+        } else {
+            None
+        };
         {
             let mut guard = state.lock().map_err(lock_err)?;
             let task = ensure_task_record_mut(&mut guard.tasks, task_id);

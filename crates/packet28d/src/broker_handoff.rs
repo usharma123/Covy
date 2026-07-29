@@ -496,6 +496,7 @@ pub(crate) fn write_broker_artifacts(
     since_version: Option<&str>,
     response: &BrokerGetContextResponse,
 ) -> Result<String> {
+    fence_task_namespace_admission(state, task_id)?;
     let root = state.lock().map_err(lock_err)?.root.clone();
     let storage_id = task_storage_id(task_id)?;
     let context_version = context_version_storage_id(&response.context_version)?;
