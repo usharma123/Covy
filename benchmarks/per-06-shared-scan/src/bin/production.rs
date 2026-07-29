@@ -193,6 +193,7 @@ struct HostEvidence {
     uname: Option<String>,
     cpu_model: Option<String>,
     memory_bytes: Option<u64>,
+    available_parallelism: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -1215,17 +1216,55 @@ fn command_output_at(directory: &Path, program: &str, arguments: &[&str]) -> Opt
 }
 
 fn collect_host_evidence() -> HostEvidence {
+    let mac_hardware = command_output(
+        "system_profiler",
+        &["SPHardwareDataType", "-detailLevel", "mini"],
+    );
     HostEvidence {
         uname: command_output("uname", &["-a"]),
-        cpu_model: command_output("sysctl", &["-n", "machdep.cpu.brand_string"])
+        cpu_model: mac_hardware
+            .as_deref()
+            .and_then(|profile| hardware_field(profile, "Chip"))
+            .or_else(|| command_output("sysctl", &["-n", "machdep.cpu.brand_string"]))
             .filter(|value| !value.is_empty())
             .or_else(|| command_output("sysctl", &["-n", "hw.model"]))
             .filter(|value| !value.is_empty())
             .or_else(linux_cpu_model),
-        memory_bytes: command_output("sysctl", &["-n", "hw.memsize"])
-            .and_then(|value| value.parse().ok())
+        memory_bytes: mac_hardware
+            .as_deref()
+            .and_then(|profile| hardware_field(profile, "Memory"))
+            .and_then(|value| parse_memory_bytes(&value))
+            .or_else(|| {
+                command_output("sysctl", &["-n", "hw.memsize"]).and_then(|value| value.parse().ok())
+            })
             .or_else(linux_memory_bytes),
+        available_parallelism: std::thread::available_parallelism()
+            .ok()
+            .map(std::num::NonZero::get),
     }
+}
+
+fn hardware_field(profile: &str, field: &str) -> Option<String> {
+    profile.lines().find_map(|line| {
+        let (key, value) = line.trim().split_once(':')?;
+        (key == field).then(|| value.trim().to_string())
+    })
+}
+
+fn parse_memory_bytes(value: &str) -> Option<u64> {
+    let mut components = value.split_whitespace();
+    let amount = components.next()?.parse::<u64>().ok()?;
+    let multiplier = match components.next()?.to_ascii_uppercase().as_str() {
+        "B" => 1,
+        "KB" => 1_000,
+        "KIB" => 1_024,
+        "MB" => 1_000_000,
+        "MIB" => 1_048_576,
+        "GB" => 1_000_000_000,
+        "GIB" => 1_073_741_824,
+        _ => return None,
+    };
+    amount.checked_mul(multiplier)
 }
 
 fn linux_cpu_model() -> Option<String> {
@@ -1309,5 +1348,32 @@ mod tests {
         assert!(!output.map_snapshot.is_empty());
         assert!(!output.regex.documents.is_empty());
         assert!(!output.query_results.is_empty());
+    }
+
+    #[test]
+    fn mac_hardware_profile_fields_are_parsed_without_sysctl() {
+        let profile = "Hardware:\n\n    Hardware Overview:\n\n      Chip: Apple M4 Pro\n      Memory: 24 GB\n";
+
+        assert_eq!(
+            hardware_field(profile, "Chip").as_deref(),
+            Some("Apple M4 Pro")
+        );
+        assert_eq!(
+            hardware_field(profile, "Memory")
+                .as_deref()
+                .and_then(parse_memory_bytes),
+            Some(24_000_000_000)
+        );
+        assert_eq!(parse_memory_bytes("32 GiB"), Some(34_359_738_368));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_host_evidence_is_populated() {
+        let host = collect_host_evidence();
+
+        assert!(host.cpu_model.is_some());
+        assert!(host.memory_bytes.is_some());
+        assert!(host.available_parallelism.is_some());
     }
 }
