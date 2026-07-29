@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -24,9 +25,10 @@ fn daemon_startup_waits_for_exclusive_task_store_maintenance() {
         Command::new(env!("CARGO_BIN_EXE_packet28d"))
             .args(["serve", "--root"])
             .arg(workspace.path())
+            .env("PACKET28D_MAX_CONNECTIONS", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("spawn packet28d"),
     );
@@ -46,23 +48,32 @@ fn daemon_startup_waits_for_exclusive_task_store_maintenance() {
     );
 
     drop(retention_lease);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !ready_path(workspace.path()).exists() && Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = daemon.0.try_wait().expect("probe released daemon") {
+            break status;
+        }
         assert!(
-            daemon.0.try_wait().expect("probe daemon").is_none(),
-            "daemon exited after the retention lease was released"
+            Instant::now() < deadline,
+            "daemon did not cross the task-store lease boundary after release"
         );
         thread::sleep(Duration::from_millis(20));
-    }
+    };
+    let mut stderr = String::new();
+    daemon
+        .0
+        .stderr
+        .take()
+        .expect("captured daemon stderr")
+        .read_to_string(&mut stderr)
+        .expect("read daemon stderr");
     assert!(
-        ready_path(workspace.path()).exists(),
-        "daemon did not publish readiness after the retention lease was released"
+        !status.success()
+            && stderr.contains("PACKET28D_MAX_CONNECTIONS must be greater than zero"),
+        "daemon did not reach the post-lease configuration sentinel: status={status}, stderr={stderr:?}"
     );
-
-    daemon.0.kill().expect("terminate daemon");
-    let status = daemon.0.wait().expect("reap daemon");
     assert!(
-        !status.success(),
-        "forced daemon termination unexpectedly succeeded"
+        !runtime_path(workspace.path()).exists() && !ready_path(workspace.path()).exists(),
+        "failed post-lease configuration must not publish runtime or readiness"
     );
 }
