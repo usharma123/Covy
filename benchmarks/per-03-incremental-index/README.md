@@ -32,7 +32,9 @@ Environment:
 - Darwin 24.6.0 arm64
 - rustc 1.93.1 (01f6ddf75 2026-02-11)
 - cargo 1.93.1 (083ac5135 2025-12-15)
-- implementation commits `948aae6` (mapy) and `832e40f` (regex)
+- implementation commits `948aae6` (mapy), `832e40f` (regex),
+  `bd9fe24` (writer ownership, integrity, and retention), and `b474315`
+  (daemon adoption)
 
 The example creates and removes isolated repositories under the system temporary
 directory. Each reported duration is the median of five updates. The summary
@@ -62,18 +64,18 @@ value is the complete encoded snapshot size.
 
 | Path | Median update (µs) | Published bytes | Time reduction | Byte reduction |
 | --- | ---: | ---: | ---: | ---: |
-| Mapy whole snapshot | 5,743 | 3,490,797 | baseline | baseline |
-| Mapy incremental generation | 1,615 | 4,483 | 71.88% | 99.87% |
-| Regex full-overlay work-model | 301,148 | 223,752 | baseline | baseline |
-| Regex incremental segment | 7,004 | 25,442 | 97.67% | 88.63% |
+| Mapy whole snapshot | 9,062 | 3,490,797 | baseline | baseline |
+| Mapy incremental generation | 3,145 | 5,027 | 65.29% | 99.86% |
+| Regex full-overlay work-model | 261,103 | 225,693 | baseline | baseline |
+| Regex incremental segment | 7,712 | 27,383 | 97.05% | 87.87% |
 
 The three run medians were:
 
 ```text
-mapy whole snapshot:       5514, 5743, 7112 µs
-mapy incremental:          1498, 1615, 3839 µs
-regex full-overlay model:  349695, 260960, 301148 µs
-regex incremental:         48298, 6690, 7004 µs
+mapy whole snapshot:       9062, 9512, 6315 µs
+mapy incremental:          3245, 3145, 2383 µs
+regex full-overlay model:  255386, 425949, 261103 µs
+regex incremental:         5979, 9163, 7712 µs
 ```
 
 The slowest observed incremental update remained faster than the fastest
@@ -86,13 +88,49 @@ the immutable base generation.
 
 | Path | Median compaction (µs) | Published bytes |
 | --- | ---: | ---: |
-| Mapy | 3,903 | 331,777 |
-| Regex | 271,418 | 239,891 |
+| Mapy | 10,848 | 328,522 |
+| Regex | 307,572 | 222,954 |
 
-Mapy compaction observations were 3,903, 2,861, and 11,667 µs. Regex
-observations were 370,097, 270,148, and 271,418 µs. The regex compaction cost is
+Mapy compaction observations were 10,848, 25,525, and 5,705 µs. Regex
+observations were 301,916, 348,383, and 307,572 µs. The regex compaction cost is
 approximately one former full-overlay update, but occurs once per eight segment
 publications; ordinary updates retain the measured incremental behavior.
+
+## Daemon adoption
+
+The packet28d regression benchmark exercises the production orchestration path:
+a 256-file full build followed by five one-file updates through
+`perform_incremental_index_update`. It asserts shared base ownership, records
+all changed files beneath `.packet28/index`, and fails if the legacy aggregate
+snapshot is written.
+
+```text
+CARGO_TARGET_DIR=/tmp/packet28-per03-daemon-final \
+  cargo test --offline --locked -p packet28d \
+  index::tests::daemon_incremental_publication_benchmark -- --nocapture
+```
+
+This is a debug-profile integration measurement, so elapsed time is diagnostic;
+the artifact-size invariant is the decision evidence.
+
+| Path | Median update (µs) | Published bytes | Reference bytes | Byte reduction |
+| --- | ---: | ---: | ---: | ---: |
+| Daemon incremental publication | 29,767 | 27,048 | 1,410,270 initial generation | 98.08% |
+
+The three benchmark invocations reported 29,536, 44,033, and 29,767 µs. All
+three published 27,048 bytes for the measured update and reported
+`legacy_snapshot_written=false`.
+
+## Integrity and ownership validation
+
+The final measurements include BLAKE3 artifact digests, a repository-local
+exclusive writer lock, generation compare-and-swap, and current-plus-previous
+artifact retention. Regression tests cover stale concurrent writers,
+structurally valid byte mutation, traversal attempts, bounded retention,
+restart recovery, deletion tombstones, retained readers, and daemon clear.
+These checks deliberately preserve the evidence boundary: pruning is
+best-effort after publication, and the persistence protocol does not claim
+power-loss durability.
 
 ## Interpretation
 
