@@ -373,28 +373,13 @@ name = "context-kernel-core"
 version = "0.2.63"
 dependencies = [
  "anyhow",
- "buildy-core",
+ "context-kernel-builtins",
  "context-memory-core",
- "context-scheduler-core",
- "contextq-core",
- "covy-ingest",
- "diffy-core",
- "glob",
- "guardy-core",
- "mapy-core",
- "roaring",
  "serde",
  "serde_json",
  "sha2",
- "stacky-core",
- "suite-foundation-core",
  "suite-packet-core",
- "suite-policy-core",
- "suite-proxy-core",
  "tempfile",
- "testy-cli-common",
- "testy-core",
- "thiserror",
 ]
 
 [[package]]

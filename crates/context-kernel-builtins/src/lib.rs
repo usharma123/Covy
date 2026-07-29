@@ -8,13 +8,17 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use context_memory_core::{
-    basename_alias, normalize_context_path, PacketCache, RecallMode, RecallOptions, RecallScope,
+    basename_alias, normalize_context_path, CachePersistenceMetrics, ContextStoreEntryDetail,
+    ContextStoreEntrySummary, ContextStoreListFilter, ContextStorePaging, ContextStorePruneReport,
+    ContextStorePruneRequest, ContextStoreStats, DeltaReuseHooks, PacketCache, RecallHit,
+    RecallMode, RecallOptions, RecallScope,
 };
 
 pub use context_kernel_mechanism::*;
@@ -82,6 +86,100 @@ impl Kernel {
         let mut kernel = Self::with_persistence(config);
         register_v1_reducers(&mut kernel);
         kernel
+    }
+
+    pub fn flush_cache_persistence(
+        &self,
+        timeout: Duration,
+    ) -> Result<CachePersistenceMetrics, KernelError> {
+        self.inner.flush_cache_persistence(timeout)
+    }
+
+    pub fn shutdown_cache_persistence(
+        &self,
+        timeout: Duration,
+    ) -> Result<CachePersistenceMetrics, KernelError> {
+        self.inner.shutdown_cache_persistence(timeout)
+    }
+
+    pub fn context_store_list(
+        &self,
+        filter: &ContextStoreListFilter,
+        paging: &ContextStorePaging,
+    ) -> Result<Vec<ContextStoreEntrySummary>, KernelError> {
+        self.inner.context_store_list(filter, paging)
+    }
+
+    pub fn context_store_get(
+        &self,
+        cache_key: &str,
+    ) -> Result<Option<ContextStoreEntryDetail>, KernelError> {
+        self.inner.context_store_get(cache_key)
+    }
+
+    pub fn context_store_stats(&self) -> Result<ContextStoreStats, KernelError> {
+        self.inner.context_store_stats()
+    }
+
+    pub fn context_store_recall(
+        &self,
+        query: &str,
+        options: &RecallOptions,
+    ) -> Result<Vec<RecallHit>, KernelError> {
+        self.inner.context_store_recall(query, options)
+    }
+
+    pub fn context_store_prune(
+        &self,
+        request: ContextStorePruneRequest,
+        timeout: Duration,
+    ) -> Result<ContextStorePruneReport, KernelError> {
+        self.inner.context_store_prune(request, timeout)
+    }
+
+    pub fn cache_runtime_metrics(&self) -> CacheRuntimeMetrics {
+        self.inner.cache_runtime_metrics()
+    }
+
+    pub fn register_reducer<F>(&mut self, target: impl Into<String>, reducer: F)
+    where
+        F: Fn(&mut ExecutionContext, &[KernelPacket]) -> Result<ReducerResult, KernelError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.inner.register_reducer(target, reducer);
+    }
+
+    pub fn reducer_names(&self) -> Vec<String> {
+        self.inner.reducer_names()
+    }
+
+    pub fn execute(&self, request: KernelRequest) -> Result<KernelResponse, KernelError> {
+        self.inner.execute(request)
+    }
+
+    pub fn execute_with_hooks(
+        &self,
+        request: KernelRequest,
+        hooks: &mut dyn DeltaReuseHooks,
+    ) -> Result<KernelResponse, KernelError> {
+        self.inner.execute_with_hooks(request, hooks)
+    }
+
+    pub fn execute_sequence(
+        &self,
+        request: KernelSequenceRequest,
+    ) -> Result<KernelSequenceResponse, KernelError> {
+        self.inner.execute_sequence(request)
+    }
+
+    pub fn execute_sequence_with_observer(
+        &self,
+        request: KernelSequenceRequest,
+        observer: &mut dyn SequenceObserver,
+    ) -> Result<KernelSequenceResponse, KernelError> {
+        self.inner.execute_sequence_with_observer(request, observer)
     }
 }
 

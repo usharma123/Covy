@@ -13,28 +13,13 @@ homepage.workspace = true
 workspace = true
 
 [dependencies]
-suite-packet-core.workspace = true
-suite-foundation-core.workspace = true
-guardy-core.workspace = true
-suite-policy-core.workspace = true
-contextq-core.workspace = true
-context-memory-core.workspace = true
-context-scheduler-core.workspace = true
-stacky-core.workspace = true
-buildy-core.workspace = true
-suite-proxy-core.workspace = true
-mapy-core.workspace = true
-diffy-core.workspace = true
-testy-core.workspace = true
-testy-cli-common.workspace = true
-covy-ingest.workspace = true
-roaring.workspace = true
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-glob.workspace = true
-sha2.workspace = true
+context-kernel-builtins.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
+context-memory-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+suite-packet-core.workspace = true
 tempfile.workspace = true
