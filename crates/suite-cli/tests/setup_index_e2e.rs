@@ -6,28 +6,11 @@ mod setup_index;
 use predicates::prelude::*;
 use serde_json::{json, Value};
 use setup_index::write_repo_fixture;
-use std::io::BufReader;
-use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use support::mcp::{
-    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id,
-    write_mcp_message,
+    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id, spawn_mcp,
+    stop_mcp_server, write_mcp_message,
 };
 use tempfile::TempDir;
-
-#[cfg(unix)]
-fn start_mcp_server(root: &Path) -> (Child, ChildStdin, BufReader<ChildStdout>) {
-    let mut child = packet28_process()
-        .current_dir(root)
-        .args(["mcp", "serve", "--root", root.to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdin = child.stdin.take().unwrap();
-    let stdout = BufReader::new(child.stdout.take().unwrap());
-    (child, stdin, stdout)
-}
 
 #[test]
 #[cfg(unix)]
@@ -87,10 +70,17 @@ fn test_setup_index_builds_regex_index_and_search_uses_indexed_backend() {
         Some("ready")
     );
 
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(root.path());
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    let mut command = packet28_process();
+    command.current_dir(root.path()).args([
+        "mcp",
+        "serve",
+        "--root",
+        root.path().to_str().unwrap(),
+    ]);
+    let mut server = spawn_mcp(&mut command);
+    initialize_mcp_session(&mut server);
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":2,
@@ -106,7 +96,7 @@ fn test_setup_index_builds_regex_index_and_search_uses_indexed_backend() {
             }
         }),
     );
-    let search = read_mcp_message_for_id(&mut stdout, 2);
+    let search = read_mcp_message_for_id(&mut server, 2);
     assert_eq!(
         search["result"]["structuredContent"]["engine"]["engine"].as_str(),
         Some("indexed_regex")
@@ -118,8 +108,7 @@ fn test_setup_index_builds_regex_index_and_search_uses_indexed_backend() {
             >= 1
     );
 
-    let _ = child.kill();
-    let _ = child.wait();
+    stop_mcp_server(server);
     packet28_cmd()
         .current_dir(root.path())
         .env("HOME", home.path())

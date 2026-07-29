@@ -3,9 +3,10 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::io::{self, BufReader, Read, Write};
+use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,53 @@ const DEFAULT_MCP_QUEUE_CAPACITY: usize = 64;
 const DEFAULT_CLEANUP_GRACE: Duration = Duration::from_millis(100);
 const DEFAULT_TERMINATION_GRACE: Duration = Duration::from_millis(500);
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const WORKSPACE_BUILD_TIMEOUT: Duration = Duration::from_secs(180);
+const LOCAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Builds the daemon binary once per integration-test process with the locked graph.
+pub fn ensure_packet28d_built() {
+    static BUILT: OnceLock<()> = OnceLock::new();
+    BUILT.get_or_init(|| build_workspace_package("packet28d"));
+}
+
+/// Builds one workspace package with a bounded deadline and the locked graph.
+pub fn build_workspace_package(package: &str) {
+    let mut command = Command::new("cargo");
+    command.args(["build", "-p", package, "--locked"]);
+    let output = ProcessHarness::run(
+        &mut command,
+        &[],
+        WORKSPACE_BUILD_TIMEOUT,
+        HarnessLimits::default(),
+    )
+    .unwrap_or_else(|error| panic!("failed to run {package} build: {error}"));
+    assert!(
+        output.status.success(),
+        "failed to build {package}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Runs a Git fixture command through the bounded process owner.
+pub fn run_git(root: &Path, args: &[&str]) {
+    let mut command = Command::new("git");
+    command.current_dir(root).args(args);
+    let output = ProcessHarness::run(
+        &mut command,
+        &[],
+        LOCAL_COMMAND_TIMEOUT,
+        HarnessLimits::default(),
+    )
+    .unwrap_or_else(|error| panic!("git {args:?} failed to run: {error}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 /// Resource and deadline limits applied by the integration process harness.
 #[derive(Clone, Copy, Debug)]
@@ -314,10 +362,106 @@ impl ReaderPump {
     }
 }
 
+struct WriteRequest {
+    bytes: Vec<u8>,
+    completed: SyncSender<io::Result<()>>,
+}
+
+struct WriterPump {
+    requests: Option<SyncSender<WriteRequest>>,
+    handle: Option<JoinHandle<()>>,
+    done: Receiver<()>,
+}
+
+enum WriteFailure {
+    Io(io::Error),
+    Timeout,
+}
+
+impl WriterPump {
+    fn spawn(mut stdin: ChildStdin) -> io::Result<Self> {
+        let (request_sender, requests) = mpsc::sync_channel::<WriteRequest>(1);
+        let (done_sender, done) = mpsc::sync_channel(1);
+        let handle = thread::Builder::new()
+            .name("packet28-test-stdin-writer".to_owned())
+            .spawn(move || {
+                while let Ok(request) = requests.recv() {
+                    let result = stdin.write_all(&request.bytes).and_then(|()| stdin.flush());
+                    let failed = result.is_err();
+                    let _ = request.completed.try_send(result);
+                    if failed {
+                        break;
+                    }
+                }
+                let _ = done_sender.try_send(());
+            })?;
+        Ok(Self {
+            requests: Some(request_sender),
+            handle: Some(handle),
+            done,
+        })
+    }
+
+    fn write_until(&self, bytes: &[u8], deadline: Option<Instant>) -> Result<(), WriteFailure> {
+        let requests = self.requests.as_ref().ok_or_else(|| {
+            WriteFailure::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "child stdin is closed",
+            ))
+        })?;
+        let (completed_sender, completed) = mpsc::sync_channel(1);
+        requests
+            .try_send(WriteRequest {
+                bytes: bytes.to_vec(),
+                completed: completed_sender,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WriteFailure::Io(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "child stdin writer already has a pending request",
+                )),
+                TrySendError::Disconnected(_) => WriteFailure::Io(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "child stdin writer stopped",
+                )),
+            })?;
+        let Some(remaining) = remaining_until(deadline) else {
+            return Err(WriteFailure::Timeout);
+        };
+        match completed.recv_timeout(remaining) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(source)) => Err(WriteFailure::Io(source)),
+            Err(RecvTimeoutError::Timeout) => Err(WriteFailure::Timeout),
+            Err(RecvTimeoutError::Disconnected) => Err(WriteFailure::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "child stdin writer stopped before reporting completion",
+            ))),
+        }
+    }
+
+    fn close(&mut self) {
+        let _ = self.requests.take();
+    }
+
+    fn finish_bounded(&mut self, timeout: Duration) {
+        self.close();
+        let finished = match self.done.recv_timeout(timeout) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => true,
+            Err(RecvTimeoutError::Timeout) => false,
+        };
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        if finished {
+            let _ = handle.join();
+        }
+    }
+}
+
 struct ManagedProcess {
     command: String,
     child: Option<Child>,
-    stdin: Option<ChildStdin>,
+    stdin_writer: Option<WriterPump>,
     stderr: BoundedCapture,
     stderr_pump: Option<ReaderPump>,
     pid: u32,
@@ -376,11 +520,23 @@ impl ManagedProcess {
                     });
                 }
             };
+        let stdin_writer = match WriterPump::spawn(stdin) {
+            Ok(writer) => writer,
+            Err(source) => {
+                cleanup_spawn_failure(&mut child, pid);
+                let mut stderr_pump = stderr_pump;
+                stderr_pump.finish_bounded(reader_join_timeout(limits));
+                return Err(HarnessError::Io {
+                    operation: "spawn stdin writer",
+                    source,
+                });
+            }
+        };
         Ok((
             Self {
                 command: command_display,
                 child: Some(child),
-                stdin: Some(stdin),
+                stdin_writer: Some(stdin_writer),
                 stderr: stderr_capture,
                 stderr_pump: Some(stderr_pump),
                 pid,
@@ -391,23 +547,24 @@ impl ManagedProcess {
         ))
     }
 
-    fn write_all(&mut self, bytes: &[u8]) -> Result<(), HarnessError> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| HarnessError::Io {
-            operation: "write child stdin",
-            source: io::Error::new(io::ErrorKind::BrokenPipe, "child stdin is closed"),
+    fn write_all_until(
+        &mut self,
+        bytes: &[u8],
+        deadline: Option<Instant>,
+    ) -> Result<(), WriteFailure> {
+        let writer = self.stdin_writer.as_ref().ok_or_else(|| {
+            WriteFailure::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "child stdin is closed",
+            ))
         })?;
-        stdin.write_all(bytes).map_err(|source| HarnessError::Io {
-            operation: "write child stdin",
-            source,
-        })?;
-        stdin.flush().map_err(|source| HarnessError::Io {
-            operation: "flush child stdin",
-            source,
-        })
+        writer.write_until(bytes, deadline)
     }
 
     fn close_stdin(&mut self) {
-        let _ = self.stdin.take();
+        if let Some(writer) = self.stdin_writer.as_mut() {
+            writer.close();
+        }
     }
 
     fn observe_status(&mut self) -> io::Result<Option<ExitStatus>> {
@@ -487,6 +644,7 @@ impl ManagedProcess {
                 self.status = Some(status);
             }
         }
+        self.finish_stdin_writer();
     }
 
     fn diagnostics(&mut self, stdout: &BoundedCapture) -> ProcessDiagnostics {
@@ -503,6 +661,12 @@ impl ManagedProcess {
     fn finish_stderr_pump(&mut self) {
         if let Some(mut pump) = self.stderr_pump.take() {
             pump.finish_bounded(reader_join_timeout(self.limits));
+        }
+    }
+
+    fn finish_stdin_writer(&mut self) {
+        if let Some(mut writer) = self.stdin_writer.take() {
+            writer.finish_bounded(reader_join_timeout(self.limits));
         }
     }
 }
@@ -657,12 +821,14 @@ impl ProcessHarness {
         limits: HarnessLimits,
     ) -> Result<ProcessOutput, HarnessError> {
         let mut harness = Self::spawn(command, limits)?;
-        harness.write_all(input)?;
-        harness.finish(timeout)
+        let deadline = checked_deadline(timeout);
+        harness.write_all_until(input, deadline, timeout)?;
+        harness.finish_until(deadline, timeout)
     }
 
-    pub fn write_all(&mut self, bytes: &[u8]) -> Result<(), HarnessError> {
-        self.process.write_all(bytes)
+    pub fn write_all(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), HarnessError> {
+        let deadline = checked_deadline(timeout);
+        self.write_all_until(bytes, deadline, timeout)
     }
 
     pub fn close_stdin(&mut self) -> Result<(), HarnessError> {
@@ -671,7 +837,17 @@ impl ProcessHarness {
     }
 
     pub fn wait(&mut self, timeout: Duration) -> Result<ProcessOutput, HarnessError> {
-        let status = match self.process.wait_until(timeout) {
+        let deadline = checked_deadline(timeout);
+        self.wait_until(deadline, timeout)
+    }
+
+    fn wait_until(
+        &mut self,
+        deadline: Option<Instant>,
+        timeout: Duration,
+    ) -> Result<ProcessOutput, HarnessError> {
+        let remaining = remaining_until(deadline).unwrap_or(Duration::ZERO);
+        let status = match self.process.wait_until(remaining) {
             Ok(Some(_)) => match self.process.complete_successful_wait() {
                 Ok(status) => status,
                 Err(source) => {
@@ -714,8 +890,8 @@ impl ProcessHarness {
     }
 
     pub fn finish(&mut self, timeout: Duration) -> Result<ProcessOutput, HarnessError> {
-        self.close_stdin()?;
-        self.wait(timeout)
+        let deadline = checked_deadline(timeout);
+        self.finish_until(deadline, timeout)
     }
 
     pub fn diagnostics(&mut self) -> ProcessDiagnostics {
@@ -730,7 +906,45 @@ impl ProcessHarness {
         if let Some(mut pump) = self.stdout_pump.take() {
             pump.finish_bounded(reader_join_timeout(self.process.limits));
         }
+        self.process.finish_stdin_writer();
         self.process.finish_stderr_pump();
+    }
+
+    fn write_all_until(
+        &mut self,
+        bytes: &[u8],
+        deadline: Option<Instant>,
+        timeout: Duration,
+    ) -> Result<(), HarnessError> {
+        match self.process.write_all_until(bytes, deadline) {
+            Ok(()) => Ok(()),
+            Err(WriteFailure::Io(source)) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                Err(HarnessError::Io {
+                    operation: "write child stdin",
+                    source,
+                })
+            }
+            Err(WriteFailure::Timeout) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                Err(HarnessError::Timeout {
+                    operation: "write child stdin",
+                    timeout,
+                    diagnostics: Box::new(self.process.diagnostics(&self.stdout)),
+                })
+            }
+        }
+    }
+
+    fn finish_until(
+        &mut self,
+        deadline: Option<Instant>,
+        timeout: Duration,
+    ) -> Result<ProcessOutput, HarnessError> {
+        self.close_stdin()?;
+        self.wait_until(deadline, timeout)
     }
 }
 
@@ -743,7 +957,13 @@ impl Drop for ProcessHarness {
 
 type McpEvent = Result<Value, String>;
 
-/// RAII owner for a Content-Length-framed MCP child process.
+#[derive(Clone, Copy)]
+enum McpFraming {
+    ContentLength,
+    NewlineJson,
+}
+
+/// RAII owner for a bounded MCP stdio child process.
 pub struct McpHarness {
     process: ManagedProcess,
     stdout: BoundedCapture,
@@ -753,10 +973,26 @@ pub struct McpHarness {
     mailbox: VecDeque<Value>,
     limits: HarnessLimits,
     next_id: u64,
+    framing: McpFraming,
 }
 
 impl McpHarness {
     pub fn spawn(command: &mut Command, limits: HarnessLimits) -> Result<Self, HarnessError> {
+        Self::spawn_with_framing(command, limits, McpFraming::ContentLength)
+    }
+
+    pub fn spawn_newline_json(
+        command: &mut Command,
+        limits: HarnessLimits,
+    ) -> Result<Self, HarnessError> {
+        Self::spawn_with_framing(command, limits, McpFraming::NewlineJson)
+    }
+
+    fn spawn_with_framing(
+        command: &mut Command,
+        limits: HarnessLimits,
+        framing: McpFraming,
+    ) -> Result<Self, HarnessError> {
         let (mut process, stdout) = ManagedProcess::spawn(command, limits)?;
         let stdout_capture = BoundedCapture::new(limits.capture_bytes);
         let (sender, events) = mpsc::sync_channel(limits.mcp_queue_capacity.max(1));
@@ -767,6 +1003,7 @@ impl McpHarness {
             sender,
             Arc::clone(&reader_failure),
             limits,
+            framing,
         ) {
             Ok(reader) => reader,
             Err(source) => {
@@ -787,10 +1024,21 @@ impl McpHarness {
             mailbox: VecDeque::new(),
             limits,
             next_id: 1,
+            framing,
         })
     }
 
-    pub fn send_value(&mut self, value: &Value) -> Result<(), HarnessError> {
+    pub fn send_value(&mut self, value: &Value, timeout: Duration) -> Result<(), HarnessError> {
+        let deadline = checked_deadline(timeout);
+        self.send_value_until(value, deadline, timeout)
+    }
+
+    fn send_value_until(
+        &mut self,
+        value: &Value,
+        deadline: Option<Instant>,
+        timeout: Duration,
+    ) -> Result<(), HarnessError> {
         let body = serde_json::to_vec(value)
             .map_err(|error| self.mcp_error(format!("serialize MCP message: {error}")))?;
         if body.len() > self.limits.mcp_message_bytes {
@@ -800,13 +1048,24 @@ impl McpHarness {
                 self.limits.mcp_message_bytes
             )));
         }
-        let mut framed = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
-        framed.extend_from_slice(&body);
-        self.raw_send(&framed)
+        let framed = match self.framing {
+            McpFraming::ContentLength => {
+                let mut framed = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+                framed.extend_from_slice(&body);
+                framed
+            }
+            McpFraming::NewlineJson => {
+                let mut framed = body;
+                framed.push(b'\n');
+                framed
+            }
+        };
+        self.raw_send_until(&framed, deadline, timeout)
     }
 
-    pub fn raw_send(&mut self, bytes: &[u8]) -> Result<(), HarnessError> {
-        self.process.write_all(bytes)
+    pub fn raw_send(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), HarnessError> {
+        let deadline = checked_deadline(timeout);
+        self.raw_send_until(bytes, deadline, timeout)
     }
 
     pub fn receive(&mut self, timeout: Duration) -> Result<Value, HarnessError> {
@@ -821,6 +1080,16 @@ impl McpHarness {
         expected_id: &Value,
         timeout: Duration,
     ) -> Result<Value, HarnessError> {
+        let deadline = checked_deadline(timeout);
+        self.recv_for_id_until(expected_id, deadline, timeout)
+    }
+
+    fn recv_for_id_until(
+        &mut self,
+        expected_id: &Value,
+        deadline: Option<Instant>,
+        timeout: Duration,
+    ) -> Result<Value, HarnessError> {
         if let Some(index) = self
             .mailbox
             .iter()
@@ -832,10 +1101,8 @@ impl McpHarness {
                 .expect("mailbox index came from position"));
         }
 
-        let deadline = checked_deadline(timeout);
         loop {
-            let remaining = remaining_until(deadline).unwrap_or(Duration::ZERO);
-            let message = self.receive_direct(remaining)?;
+            let message = self.receive_direct_until(deadline, timeout)?;
             if message.get("id") == Some(expected_id) {
                 return Ok(message);
             }
@@ -859,13 +1126,18 @@ impl McpHarness {
         if let Some(id_number) = id.as_u64() {
             self.next_id = self.next_id.max(id_number.saturating_add(1));
         }
-        self.send_value(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        }))?;
-        self.recv_for_id(&id, timeout)
+        let deadline = checked_deadline(timeout);
+        self.send_value_until(
+            &json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params,
+            }),
+            deadline,
+            timeout,
+        )?;
+        self.recv_for_id_until(&id, deadline, timeout)
     }
 
     pub fn request(
@@ -879,12 +1151,20 @@ impl McpHarness {
         self.request_with_id(id, method, params, timeout)
     }
 
-    pub fn notify(&mut self, method: &str, params: Value) -> Result<(), HarnessError> {
-        self.send_value(&json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        }))
+    pub fn notify(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<(), HarnessError> {
+        self.send_value(
+            &json!({
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params,
+            }),
+            timeout,
+        )
     }
 
     pub fn close_stdin(&mut self) -> Result<(), HarnessError> {
@@ -949,20 +1229,34 @@ impl McpHarness {
     }
 
     fn receive_direct(&mut self, timeout: Duration) -> Result<Value, HarnessError> {
+        let deadline = checked_deadline(timeout);
+        self.receive_direct_until(deadline, timeout)
+    }
+
+    fn receive_direct_until(
+        &mut self,
+        deadline: Option<Instant>,
+        timeout: Duration,
+    ) -> Result<Value, HarnessError> {
         let event = {
             let Some(events) = self.events.as_ref() else {
                 return Err(self.mcp_error("MCP reader is closed"));
             };
-            events.recv_timeout(timeout)
+            let remaining = remaining_until(deadline).unwrap_or(Duration::ZERO);
+            events.recv_timeout(remaining)
         };
         match event {
             Ok(Ok(message)) => Ok(message),
             Ok(Err(message)) => Err(self.mcp_error(message)),
-            Err(RecvTimeoutError::Timeout) => Err(HarnessError::Timeout {
-                operation: "receive MCP message",
-                timeout,
-                diagnostics: Box::new(self.process.diagnostics(&self.stdout)),
-            }),
+            Err(RecvTimeoutError::Timeout) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                Err(HarnessError::Timeout {
+                    operation: "receive MCP message",
+                    timeout,
+                    diagnostics: Box::new(self.process.diagnostics(&self.stdout)),
+                })
+            }
             Err(RecvTimeoutError::Disconnected) => {
                 let message = self
                     .reader_failure
@@ -986,7 +1280,36 @@ impl McpHarness {
         if let Some(mut reader) = self.reader.take() {
             reader.finish_bounded(reader_join_timeout(self.limits));
         }
+        self.process.finish_stdin_writer();
         self.process.finish_stderr_pump();
+    }
+
+    fn raw_send_until(
+        &mut self,
+        bytes: &[u8],
+        deadline: Option<Instant>,
+        timeout: Duration,
+    ) -> Result<(), HarnessError> {
+        match self.process.write_all_until(bytes, deadline) {
+            Ok(()) => Ok(()),
+            Err(WriteFailure::Io(source)) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                Err(HarnessError::Io {
+                    operation: "write MCP stdin",
+                    source,
+                })
+            }
+            Err(WriteFailure::Timeout) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                Err(HarnessError::Timeout {
+                    operation: "write MCP stdin",
+                    timeout,
+                    diagnostics: Box::new(self.process.diagnostics(&self.stdout)),
+                })
+            }
+        }
     }
 }
 
@@ -1004,6 +1327,7 @@ fn spawn_mcp_reader(
     sender: SyncSender<McpEvent>,
     reader_failure: Arc<Mutex<Option<String>>>,
     limits: HarnessLimits,
+    framing: McpFraming,
 ) -> io::Result<ReaderPump> {
     ReaderPump::spawn("packet28-test-mcp-reader", move || {
         let reader = CapturingReader {
@@ -1012,11 +1336,17 @@ fn spawn_mcp_reader(
         };
         let mut reader = BufReader::new(reader);
         loop {
-            match read_mcp_message(
-                &mut reader,
-                limits.mcp_header_bytes,
-                limits.mcp_message_bytes,
-            ) {
+            let message = match framing {
+                McpFraming::ContentLength => read_mcp_message(
+                    &mut reader,
+                    limits.mcp_header_bytes,
+                    limits.mcp_message_bytes,
+                ),
+                McpFraming::NewlineJson => {
+                    read_newline_json_message(&mut reader, limits.mcp_message_bytes)
+                }
+            };
+            match message {
                 Ok(Some(message)) => match sender.try_send(Ok(message)) {
                     Ok(()) => {}
                     Err(TrySendError::Full(_)) => {
@@ -1043,6 +1373,40 @@ fn spawn_mcp_reader(
             }
         }
     })
+}
+
+fn read_newline_json_message<R: Read>(
+    reader: &mut R,
+    message_limit: usize,
+) -> Result<Option<Value>, String> {
+    let mut body = Vec::with_capacity(message_limit.min(1024));
+    loop {
+        let mut byte = [0_u8; 1];
+        match reader.read(&mut byte) {
+            Ok(0) if body.is_empty() => return Ok(None),
+            Ok(0) => return Err("newline MCP stdout ended in the middle of a message".to_owned()),
+            Ok(_) if byte[0] == b'\n' => {
+                if body.last() == Some(&b'\r') {
+                    let _ = body.pop();
+                }
+                if body.is_empty() {
+                    continue;
+                }
+                return serde_json::from_slice(&body)
+                    .map(Some)
+                    .map_err(|error| format!("decode newline MCP JSON body: {error}"));
+            }
+            Ok(_) => {
+                if body.len() >= message_limit {
+                    return Err(format!(
+                        "newline MCP message exceeds the {message_limit} byte limit"
+                    ));
+                }
+                body.push(byte[0]);
+            }
+            Err(error) => return Err(format!("read newline MCP message: {error}")),
+        }
+    }
 }
 
 fn set_reader_failure(reader_failure: &Arc<Mutex<Option<String>>>, message: String) {

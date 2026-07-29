@@ -1,23 +1,28 @@
-use crate::mcp_io::{initialize_mcp_session, read_mcp_message_for_id, write_mcp_message};
-use serde_json::{json, Value};
-use std::io::{BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::time::Duration;
+
+use serde_json::{json, Value};
+
+use crate::process_harness::{HarnessLimits, McpHarness, ProcessHarness};
+
+const MCP_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn seed_checkpointed_handoff_task(dir: &Path, task_id: &str, intention_text: &str) {
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(dir);
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    let mut server = start_mcp_server(dir);
+    initialize_mcp_session(&mut server);
     let _ = write_intention_via_mcp(
-        &mut stdin,
-        &mut stdout,
+        &mut server,
         2,
         task_id,
         intention_text,
         "investigating",
         &["src/alpha.rs"],
     );
-    let _ = child.kill();
-    let _ = child.wait();
+    server
+        .finish(MCP_SHUTDOWN_TIMEOUT)
+        .unwrap_or_else(|error| panic!("failed to stop MCP server: {error}"));
     let (status, _) = run_claude_hook(
         dir,
         &json!({
@@ -29,35 +34,43 @@ pub fn seed_checkpointed_handoff_task(dir: &Path, task_id: &str, intention_text:
     assert_eq!(status, 0);
 }
 
-fn start_mcp_server(root: &Path) -> (Child, ChildStdin, BufReader<ChildStdout>) {
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+fn start_mcp_server(root: &Path) -> McpHarness {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command
         .current_dir(root)
-        .args(["mcp", "serve", "--root", root.to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdin = child.stdin.take().unwrap();
-    let stdout = BufReader::new(child.stdout.take().unwrap());
-    (child, stdin, stdout)
+        .args(["mcp", "serve", "--root", root.to_str().unwrap()]);
+    McpHarness::spawn(&mut command, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("failed to start MCP server: {error}"))
+}
+
+fn initialize_mcp_session(server: &mut McpHarness) {
+    server
+        .request_with_id(
+            json!(1),
+            "initialize",
+            json!({
+                "protocolVersion":"2024-11-05",
+                "capabilities":{},
+                "clientInfo":{"name":"test","version":"1"}
+            }),
+            MCP_IO_TIMEOUT,
+        )
+        .unwrap_or_else(|error| panic!("failed to initialize MCP server: {error}"));
 }
 
 fn write_intention_via_mcp(
-    stdin: &mut ChildStdin,
-    stdout: &mut BufReader<ChildStdout>,
+    server: &mut McpHarness,
     id: u64,
     task_id: &str,
     text: &str,
     step_id: &str,
     paths: &[&str],
 ) -> Value {
-    write_mcp_message(
-        stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":id,
-            "method":"tools/call",
-            "params":{
+    server
+        .request_with_id(
+            json!(id),
+            "tools/call",
+            json!({
                 "name":"packet28.write_intention",
                 "arguments":{
                     "task_id":task_id,
@@ -65,28 +78,25 @@ fn write_intention_via_mcp(
                     "step_id":step_id,
                     "paths":paths,
                 }
-            }
-        }),
-    );
-    read_mcp_message_for_id(stdout, id)
+            }),
+            MCP_IO_TIMEOUT,
+        )
+        .unwrap_or_else(|error| panic!("failed to write intention through MCP: {error}"))
 }
 
 fn run_claude_hook(root: &Path, payload: &Value) -> (i32, String) {
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command
         .current_dir(root)
-        .args(["hook", "claude", "--root", root.to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(serde_json::to_string(payload).unwrap().as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+        .args(["hook", "claude", "--root", root.to_str().unwrap()]);
+    let input = serde_json::to_vec(payload).unwrap();
+    let output = ProcessHarness::run(
+        &mut command,
+        &input,
+        COMMAND_TIMEOUT,
+        HarnessLimits::default(),
+    )
+    .unwrap_or_else(|error| panic!("Claude hook process failed: {error}"));
     (
         output.status.code().unwrap_or(1),
         String::from_utf8_lossy(&output.stdout).to_string(),

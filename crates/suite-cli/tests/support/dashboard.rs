@@ -19,11 +19,7 @@ pub fn context_anomaly_history_fixture() -> PathBuf {
 }
 
 pub fn seed_dashboard_product_state(root: &Path, home: &Path) {
-    std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(root)
-        .status()
-        .unwrap();
+    crate::process_harness::run_git(root, &["init"]);
     fs::write(root.join("tracked.txt"), "changed\n").unwrap();
 
     suite_cmd()

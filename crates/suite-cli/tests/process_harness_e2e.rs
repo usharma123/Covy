@@ -98,9 +98,23 @@ time.sleep(30)
     );
     let limits = test_limits().with_capture_bytes(CAPTURE_LIMIT);
 
-    let started = Instant::now();
     let mut harness = ProcessHarness::spawn(&mut command, limits).unwrap();
     let pid = harness.pid();
+    let capture_deadline = Instant::now() + TEST_TIMEOUT;
+    loop {
+        let diagnostics = harness.diagnostics();
+        if diagnostics.stdout.total_bytes > u64::try_from(STDOUT_TAIL.len()).unwrap()
+            && diagnostics.stderr.total_bytes > u64::try_from(STDERR_TAIL.len()).unwrap()
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < capture_deadline,
+            "child did not emit diagnostics before timeout"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let started = Instant::now();
     let error = match harness.wait(FAST_TIMEOUT) {
         Ok(_) => panic!("long-running command unexpectedly completed"),
         Err(error) => error,
@@ -132,6 +146,174 @@ time.sleep(30)
             && waited == -1
             && wait_error == Some(libc::ECHILD),
         "unexpected timeout diagnostics after {:?}: {rendered}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn process_stdin_write_timeout_kills_group_and_reaps_non_reader() {
+    let mut command = python(
+        r#"
+import time
+time.sleep(30)
+"#,
+    );
+    let mut harness = ProcessHarness::spawn(&mut command, test_limits()).unwrap();
+    let pid = harness.pid();
+    let payload = vec![b'x'; 2 * 1024 * 1024];
+
+    let started = Instant::now();
+    let error = match harness.write_all(&payload, FAST_TIMEOUT) {
+        Ok(()) => panic!("large write to a non-reading child unexpectedly completed"),
+        Err(error) => error,
+    };
+    wait_for_process_absence(pid, TEST_TIMEOUT);
+    let diagnostics = error
+        .diagnostics()
+        .expect("write timeout should include process diagnostics");
+    let mut wait_status = 0;
+    // SAFETY: `pid` was this test's direct child. ECHILD proves the timed
+    // write killed and reaped it before returning the timeout.
+    let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut wait_status, libc::WNOHANG) };
+    let wait_error = io::Error::last_os_error().raw_os_error();
+
+    assert!(
+        started.elapsed() < TEST_TIMEOUT
+            && error.to_string().contains("write child stdin timed out")
+            && diagnostics.pid == pid
+            && diagnostics.status.is_some()
+            && waited == -1
+            && wait_error == Some(libc::ECHILD),
+        "unexpected blocked-write result after {:?}: {error}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn mcp_raw_send_timeout_kills_group_and_reaps_non_reader() {
+    let mut command = python(
+        r#"
+import time
+time.sleep(30)
+"#,
+    );
+    let mut harness = McpHarness::spawn(&mut command, test_limits()).unwrap();
+    let pid = harness.pid();
+    let payload = vec![b'x'; 2 * 1024 * 1024];
+
+    let started = Instant::now();
+    let error = match harness.raw_send(&payload, FAST_TIMEOUT) {
+        Ok(()) => panic!("large raw MCP write to a non-reading child unexpectedly completed"),
+        Err(error) => error,
+    };
+    wait_for_process_absence(pid, TEST_TIMEOUT);
+    let diagnostics = error
+        .diagnostics()
+        .expect("raw MCP write timeout should include process diagnostics");
+    let mut wait_status = 0;
+    // SAFETY: `pid` was this test's direct child. ECHILD proves the timed
+    // write killed and reaped it before returning the timeout.
+    let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut wait_status, libc::WNOHANG) };
+    let wait_error = io::Error::last_os_error().raw_os_error();
+
+    assert!(
+        started.elapsed() < TEST_TIMEOUT
+            && error.to_string().contains("write MCP stdin timed out")
+            && diagnostics.pid == pid
+            && diagnostics.status.is_some()
+            && waited == -1
+            && wait_error == Some(libc::ECHILD),
+        "unexpected blocked raw-send result after {:?}: {error}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn mcp_request_deadline_includes_blocked_write_and_reaps_non_reader() {
+    let mut command = python(
+        r#"
+import time
+time.sleep(30)
+"#,
+    );
+    let limits = test_limits().with_mcp_message_bytes(4 * 1024 * 1024);
+    let mut harness = McpHarness::spawn(&mut command, limits).unwrap();
+    let pid = harness.pid();
+
+    let started = Instant::now();
+    let error = match harness.request(
+        "blocked",
+        json!({"payload": "x".repeat(2 * 1024 * 1024)}),
+        FAST_TIMEOUT,
+    ) {
+        Ok(value) => panic!("request to a non-reading child unexpectedly returned {value}"),
+        Err(error) => error,
+    };
+    wait_for_process_absence(pid, TEST_TIMEOUT);
+    let diagnostics = error
+        .diagnostics()
+        .expect("request write timeout should include process diagnostics");
+    let mut wait_status = 0;
+    // SAFETY: `pid` was this test's direct child. ECHILD proves the request
+    // deadline killed and reaped it while its stdin write was blocked.
+    let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut wait_status, libc::WNOHANG) };
+    let wait_error = io::Error::last_os_error().raw_os_error();
+
+    assert!(
+        started.elapsed() < TEST_TIMEOUT
+            && error.to_string().contains("write MCP stdin timed out")
+            && diagnostics.pid == pid
+            && diagnostics.status.is_some()
+            && waited == -1
+            && wait_error == Some(libc::ECHILD),
+        "unexpected blocked request result after {:?}: {error}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn mcp_request_response_timeout_kills_group_and_reaps_silent_reader() {
+    let mut command = python(
+        r#"
+import sys, time
+
+headers = {}
+while True:
+    line = sys.stdin.buffer.readline()
+    if line in (b"\r\n", b"\n"):
+        break
+    name, value = line.decode("utf-8").split(":", 1)
+    headers[name.lower().strip()] = value.strip()
+sys.stdin.buffer.read(int(headers["content-length"]))
+time.sleep(30)
+"#,
+    );
+    let mut harness = McpHarness::spawn(&mut command, test_limits()).unwrap();
+    let pid = harness.pid();
+
+    let started = Instant::now();
+    let error = match harness.request("silent", json!({}), FAST_TIMEOUT) {
+        Ok(value) => panic!("silent child unexpectedly returned {value}"),
+        Err(error) => error,
+    };
+    wait_for_process_absence(pid, TEST_TIMEOUT);
+    let diagnostics = error
+        .diagnostics()
+        .expect("response timeout should include process diagnostics");
+    let mut wait_status = 0;
+    // SAFETY: `pid` was this test's direct child. ECHILD proves the response
+    // deadline killed and reaped the silent reader before returning.
+    let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut wait_status, libc::WNOHANG) };
+    let wait_error = io::Error::last_os_error().raw_os_error();
+
+    assert!(
+        started.elapsed() < TEST_TIMEOUT
+            && error.to_string().contains("receive MCP message timed out")
+            && diagnostics.pid == pid
+            && diagnostics.status.is_some()
+            && waited == -1
+            && wait_error == Some(libc::ECHILD),
+        "unexpected silent-reader result after {:?}: {error}",
         started.elapsed()
     );
 }
@@ -282,18 +464,24 @@ sys.stdin.buffer.read()
     let numeric_id = json!(17);
 
     harness
-        .send_value(&json!({
-            "jsonrpc": "2.0",
-            "id": string_id,
-            "method": "echo"
-        }))
+        .send_value(
+            &json!({
+                "jsonrpc": "2.0",
+                "id": string_id,
+                "method": "echo"
+            }),
+            TEST_TIMEOUT,
+        )
         .unwrap();
     harness
-        .send_value(&json!({
-            "jsonrpc": "2.0",
-            "id": numeric_id,
-            "method": "echo"
-        }))
+        .send_value(
+            &json!({
+                "jsonrpc": "2.0",
+                "id": numeric_id,
+                "method": "echo"
+            }),
+            TEST_TIMEOUT,
+        )
         .unwrap();
 
     let numeric = harness.recv_for_id(&numeric_id, TEST_TIMEOUT).unwrap();
@@ -351,7 +539,9 @@ sys.stdout.buffer.flush()
         "method": "drain"
     });
 
-    harness.raw_send(&content_length_frame(&request)).unwrap();
+    harness
+        .raw_send(&content_length_frame(&request), TEST_TIMEOUT)
+        .unwrap();
     harness.close_stdin().unwrap();
     let response = harness.receive(TEST_TIMEOUT).unwrap();
     let output = harness.finish(TEST_TIMEOUT).unwrap();

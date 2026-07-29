@@ -15,17 +15,28 @@ use mcp_proxy_fake::{
 use process_harness::McpHarness;
 use serde_json::json;
 use std::fs;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 use mcp_proxy::{
-    close_mcp_stdin, ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message,
+    close_mcp_stdin, ensure_packet28d_built, init_repo, initialize_mcp_session,
     read_mcp_message_for_id, start_mcp_proxy_server, start_mcp_proxy_server_with_tool,
     stop_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
 };
 
+const MCP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn read_next_mcp_response(server: &mut McpHarness) -> serde_json::Value {
+    let deadline = Instant::now() + MCP_RESPONSE_TIMEOUT;
     loop {
-        let value = read_mcp_message(server);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "timed out waiting for an MCP response after {MCP_RESPONSE_TIMEOUT:?}"
+        );
+        let value = server
+            .receive(remaining)
+            .unwrap_or_else(|error| panic!("failed to read MCP response: {error}"));
         if value.get("id").is_some() {
             return value;
         }

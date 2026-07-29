@@ -1,5 +1,11 @@
 #[path = "support/gain.rs"]
 mod gain;
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use gain::{init_git_status_fixture, record_git_status_run, suite_cmd};
 use predicates::prelude::*;

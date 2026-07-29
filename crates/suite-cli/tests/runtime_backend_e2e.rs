@@ -1,3 +1,10 @@
+#[expect(
+    dead_code,
+    reason = "platform-specific tests exercise a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 #[cfg(target_os = "linux")]
@@ -9,11 +16,7 @@ fn suite_cmd() -> Command {
 
 #[cfg(target_os = "linux")]
 fn ensure_packet28d_built() {
-    let status = std::process::Command::new("cargo")
-        .args(["build", "-p", "packet28d"])
-        .status()
-        .unwrap();
-    assert!(status.success(), "failed to build packet28d");
+    process_harness::ensure_packet28d_built();
 }
 
 #[cfg(target_os = "linux")]
@@ -58,11 +61,7 @@ fn test_runtime_backend_cli_run_command_auto_backend_reports_missing_platform_ba
 fn test_runtime_backend_cli_shell_command_injects_ld_preload_for_explicit_commands() {
     ensure_packet28d_built();
     let dir = tempfile::tempdir().unwrap();
-    let status = std::process::Command::new("cargo")
-        .args(["build", "-p", "context-instruct-shim"])
-        .status()
-        .unwrap();
-    assert!(status.success(), "failed to build context-instruct-shim");
+    process_harness::build_workspace_package("context-instruct-shim");
 
     let output = suite_cmd()
         .current_dir(dir.path())
@@ -96,11 +95,7 @@ fn test_runtime_backend_cli_run_command_linux_preload_sets_backend_and_agent_fam
     )
     .unwrap();
     make_executable(&claude);
-    let status = std::process::Command::new("cargo")
-        .args(["build", "-p", "context-instruct-shim"])
-        .status()
-        .unwrap();
-    assert!(status.success(), "failed to build context-instruct-shim");
+    process_harness::build_workspace_package("context-instruct-shim");
 
     let output = suite_cmd()
         .current_dir(dir.path())

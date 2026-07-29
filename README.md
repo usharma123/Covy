@@ -755,7 +755,10 @@ scripts/validate_full_gate.sh
 
 It requires the checksum-pinned `cargo-deny` 0.20.2 binary that CI installs via
 `scripts/install_cargo_deny.sh`. Use `--list` to inspect the gate without
-executing it. CI also runs the declared minimum toolchain separately:
+executing it. The bounded process/MCP fixture boundary and its mechanically
+checked exceptions are documented in
+[`docs/integration-test-harness.md`](docs/integration-test-harness.md). CI also
+runs the declared minimum toolchain separately:
 
 ```bash
 rustup run 1.88.0 scripts/validate_full_gate.sh --msrv

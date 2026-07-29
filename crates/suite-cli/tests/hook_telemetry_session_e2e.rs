@@ -1,5 +1,11 @@
 #[path = "support/hook_telemetry.rs"]
 mod hook_telemetry;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use hook_telemetry::{run_hook_raw_with_env, suite_cmd};
 use serde_json::{json, Value};
@@ -9,12 +15,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    process_harness::run_git(root, args);
 }
 
 fn init_repo(root: &Path) {

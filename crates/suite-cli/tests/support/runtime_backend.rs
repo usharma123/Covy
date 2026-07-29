@@ -1,6 +1,5 @@
 use assert_cmd::Command;
 use std::path::Path;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub fn suite_cmd() -> Command {
@@ -8,14 +7,7 @@ pub fn suite_cmd() -> Command {
 }
 
 pub fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
-    });
+    crate::process_harness::ensure_packet28d_built();
 }
 
 #[cfg(unix)]

@@ -1,15 +1,12 @@
-use crate::process_harness::{HarnessLimits, McpHarness, ProcessHarness};
+use crate::process_harness::{HarnessLimits, McpHarness};
 use assert_cmd::Command;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 const MCP_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-const BUILD_TIMEOUT: Duration = Duration::from_secs(180);
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn suite_cmd() -> Command {
     assert_cmd::cargo::cargo_bin_cmd!("Packet28")
@@ -20,20 +17,7 @@ fn mcp_cmd() -> std::process::Command {
 }
 
 pub fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let mut command = std::process::Command::new("cargo");
-        command.args(["build", "-p", "packet28d", "--locked"]);
-        let output =
-            ProcessHarness::run(&mut command, &[], BUILD_TIMEOUT, HarnessLimits::default())
-                .unwrap_or_else(|error| panic!("failed to run packet28d build: {error}"));
-        assert!(
-            output.status.success(),
-            "failed to build packet28d\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    });
+    crate::process_harness::ensure_packet28d_built();
 }
 
 pub fn write_repo_fixture(root: &Path) {
@@ -62,17 +46,7 @@ enum Beta {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let mut command = std::process::Command::new("git");
-    command.current_dir(root).args(args);
-    let output = ProcessHarness::run(&mut command, &[], COMMAND_TIMEOUT, HarnessLimits::default())
-        .unwrap_or_else(|error| panic!("git {args:?} failed to run: {error}"));
-    assert!(
-        output.status.success(),
-        "git {args:?} failed with {}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    crate::process_harness::run_git(root, args);
 }
 
 pub fn init_repo(root: &Path) {
@@ -81,14 +55,8 @@ pub fn init_repo(root: &Path) {
 
 pub fn write_mcp_message(server: &mut McpHarness, value: &Value) {
     server
-        .send_value(value)
+        .send_value(value, MCP_IO_TIMEOUT)
         .unwrap_or_else(|error| panic!("failed to write MCP message: {error}"));
-}
-
-pub fn read_mcp_message(server: &mut McpHarness) -> Value {
-    server
-        .receive(MCP_IO_TIMEOUT)
-        .unwrap_or_else(|error| panic!("failed to read MCP message: {error}"))
 }
 
 pub fn read_mcp_message_for_id(server: &mut McpHarness, expected_id: u64) -> Value {

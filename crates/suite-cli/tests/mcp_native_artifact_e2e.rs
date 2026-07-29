@@ -1,9 +1,15 @@
 #[path = "support/mcp_native.rs"]
 mod mcp_native;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use mcp_native::{
     ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message_for_id,
-    start_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
+    start_mcp_server, stop_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -16,11 +22,11 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
     init_repo(dir.path());
     write_repo_fixture(dir.path());
 
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(dir.path());
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    let mut server = start_mcp_server(dir.path());
+    initialize_mcp_session(&mut server);
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":2,
@@ -35,7 +41,7 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
             }
         }),
     );
-    let search = read_mcp_message_for_id(&mut stdout, 2);
+    let search = read_mcp_message_for_id(&mut server, 2);
     let search_payload = &search["result"]["structuredContent"];
     assert_eq!(search_payload["response_mode"], "slim");
     assert!(search_payload["artifact_id"].as_str().is_some());
@@ -58,7 +64,7 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
     let search_artifact = search_payload["artifact_id"].as_str().unwrap().to_string();
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":3,
@@ -72,7 +78,7 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
             }
         }),
     );
-    let search_full = read_mcp_message_for_id(&mut stdout, 3);
+    let search_full = read_mcp_message_for_id(&mut server, 3);
     let search_full_payload = &search_full["result"]["structuredContent"];
     assert_eq!(search_full_payload["response_mode"], "full");
     assert_eq!(search_full_payload["query"], "Alpha");
@@ -86,7 +92,7 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
     assert!(search_full_payload["hybrid"].is_object());
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":4,
@@ -103,14 +109,14 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
             }
         }),
     );
-    let read_regions = read_mcp_message_for_id(&mut stdout, 4);
+    let read_regions = read_mcp_message_for_id(&mut server, 4);
     let read_payload = &read_regions["result"]["structuredContent"];
     assert_eq!(read_payload["response_mode"], "slim");
     assert!(read_payload["artifact_id"].as_str().is_some());
     let read_artifact = read_payload["artifact_id"].as_str().unwrap().to_string();
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":5,
@@ -124,7 +130,7 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
             }
         }),
     );
-    let read_full = read_mcp_message_for_id(&mut stdout, 5);
+    let read_full = read_mcp_message_for_id(&mut server, 5);
     let read_full_payload = &read_full["result"]["structuredContent"];
     assert_eq!(read_full_payload["response_mode"], "full");
     assert_eq!(read_full_payload["path"], "src/alpha.rs");
@@ -134,7 +140,7 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
         .is_some_and(|content| content.contains("2: use crate::beta::Beta;")));
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":6,
@@ -149,14 +155,14 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
             }
         }),
     );
-    let glob = read_mcp_message_for_id(&mut stdout, 6);
+    let glob = read_mcp_message_for_id(&mut server, 6);
     let glob_payload = &glob["result"]["structuredContent"];
     assert_eq!(glob_payload["response_mode"], "slim");
     assert!(glob_payload["artifact_id"].as_str().is_some());
     let glob_artifact = glob_payload["artifact_id"].as_str().unwrap().to_string();
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":7,
@@ -170,7 +176,7 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
             }
         }),
     );
-    let glob_full = read_mcp_message_for_id(&mut stdout, 7);
+    let glob_full = read_mcp_message_for_id(&mut server, 7);
     let glob_full_payload = &glob_full["result"]["structuredContent"];
     assert_eq!(glob_full_payload["response_mode"], "full");
     assert_eq!(glob_full_payload["pattern"], "src/*.rs");
@@ -180,8 +186,7 @@ fn test_mcp_native_artifact_tools_return_slim_results_and_fetch_full_artifacts()
         .iter()
         .any(|path| path == "src/alpha.rs"));
 
-    child.kill().unwrap();
-    child.wait().unwrap();
+    stop_mcp_server(server);
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

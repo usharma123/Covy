@@ -1,3 +1,9 @@
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 #[path = "support/run_raw_artifact.rs"]
 mod run_raw_artifact;
 #[path = "support/run_raw_artifact_families.rs"]

@@ -1,23 +1,21 @@
 mod support;
 
 use serde_json::json;
-use std::io::{BufReader, Write};
-use std::process::{ChildStdin, ChildStdout, Stdio};
 use support::mcp::{
-    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id,
-    write_mcp_message,
+    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id, spawn_mcp,
+    stop_mcp_server, write_mcp_message,
 };
+use support::process_harness::McpHarness;
 use tempfile::TempDir;
 
 fn call_graph_tool(
-    stdin: &mut ChildStdin,
-    stdout: &mut BufReader<ChildStdout>,
+    server: &mut McpHarness,
     id: u64,
     name: &str,
     arguments: serde_json::Value,
 ) -> serde_json::Value {
     write_mcp_message(
-        stdin,
+        server,
         &json!({
             "jsonrpc":"2.0",
             "id":id,
@@ -25,41 +23,36 @@ fn call_graph_tool(
             "params":{"name":name, "arguments":arguments}
         }),
     );
-    read_mcp_message_for_id(stdout, id)
+    read_mcp_message_for_id(server, id)
 }
 
-fn seed_graph(stdin: &mut ChildStdin, stdout: &mut BufReader<ChildStdout>) {
+fn seed_graph(server: &mut McpHarness) {
     call_graph_tool(
-        stdin,
-        stdout,
+        server,
         2,
         "packet28.graph_create",
         json!({"name":"McpMemoir", "description":"MCP graph container"}),
     );
     call_graph_tool(
-        stdin,
-        stdout,
+        server,
         3,
         "packet28.graph_add_concept",
         json!({"name":"Packet28", "description":"local context runtime", "memoir":"McpMemoir"}),
     );
     call_graph_tool(
-        stdin,
-        stdout,
+        server,
         4,
         "packet28.graph_refine",
         json!({"name":"Packet28", "description":"local context runtime with reducers"}),
     );
     call_graph_tool(
-        stdin,
-        stdout,
+        server,
         5,
         "packet28.graph_add_concept",
         json!({"name":"Reducers", "memoir":"McpMemoir"}),
     );
     call_graph_tool(
-        stdin,
-        stdout,
+        server,
         6,
         "packet28.graph_link",
         json!({"source":"Packet28", "target":"Reducers", "relation":"uses"}),
@@ -70,22 +63,17 @@ fn seed_graph(stdin: &mut ChildStdin, stdout: &mut BufReader<ChildStdout>) {
 fn test_mcp_graph_inspect_tools_round_trip() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    let mut child = packet28_process()
+    let mut command = packet28_process();
+    command
         .current_dir(root.path())
         .env("HOME", home.path())
-        .args(["mcp", "serve", "--root", root.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    initialize_mcp_session(&mut stdin, &mut stdout);
-    seed_graph(&mut stdin, &mut stdout);
+        .args(["mcp", "serve", "--root", root.path().to_str().unwrap()]);
+    let mut server = spawn_mcp(&mut command);
+    initialize_mcp_session(&mut server);
+    seed_graph(&mut server);
 
     let graph_show = call_graph_tool(
-        &mut stdin,
-        &mut stdout,
+        &mut server,
         7,
         "packet28.graph_show",
         json!({"name":"McpMemoir", "limit": 5}),
@@ -100,8 +88,7 @@ fn test_mcp_graph_inspect_tools_round_trip() {
     );
 
     let graph = call_graph_tool(
-        &mut stdin,
-        &mut stdout,
+        &mut server,
         8,
         "packet28.graph_inspect",
         json!({"limit": 5}),
@@ -109,8 +96,7 @@ fn test_mcp_graph_inspect_tools_round_trip() {
     assert!(graph["result"]["structuredContent"]["concepts"].is_array());
 
     let graph_concept_inspect = call_graph_tool(
-        &mut stdin,
-        &mut stdout,
+        &mut server,
         9,
         "packet28.graph_inspect_concept",
         json!({"name":"Packet28", "memoir":"McpMemoir", "depth": 1}),
@@ -127,9 +113,7 @@ fn test_mcp_graph_inspect_tools_round_trip() {
             .any(|concept| concept["name"] == "Reducers")
     );
 
-    let _ = stdin.flush();
-    let _ = child.kill();
-    let _ = child.wait();
+    stop_mcp_server(server);
     packet28_cmd()
         .current_dir(root.path())
         .env("HOME", home.path())

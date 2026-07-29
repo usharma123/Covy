@@ -1,33 +1,32 @@
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
+
 use assert_cmd::Command;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::time::Duration;
 use tempfile::TempDir;
+
+use process_harness::{HarnessLimits, ProcessHarness};
+
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn suite_cmd() -> Command {
     assert_cmd::cargo::cargo_bin_cmd!("Packet28")
 }
 
 fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
-    });
+    process_harness::ensure_packet28d_built();
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    process_harness::run_git(root, args);
 }
 
 fn init_repo(root: &Path) {
@@ -89,7 +88,8 @@ fn test_hook_runner_cli_reuses_cached_summary_without_rerunning_command() {
         "cat",
         "sample.txt",
     ]);
-    let first = first.output().unwrap();
+    let first = ProcessHarness::run(&mut first, &[], COMMAND_TIMEOUT, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("first reducer-runner invocation failed: {error}"));
     assert!(first.status.success());
 
     let mut second = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
@@ -112,7 +112,8 @@ fn test_hook_runner_cli_reuses_cached_summary_without_rerunning_command() {
         "cat",
         "sample.txt",
     ]);
-    let second = second.output().unwrap();
+    let second = ProcessHarness::run(&mut second, &[], COMMAND_TIMEOUT, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("second reducer-runner invocation failed: {error}"));
     assert!(second.status.success());
     assert_eq!(first.stdout, second.stdout);
     assert_eq!(fs::read_to_string(&counter_path).unwrap().trim(), "1");
@@ -158,7 +159,8 @@ fn test_hook_runner_cli_busts_cache_after_out_of_band_file_edit() {
         .current_dir(dir.path())
         .env("PATH", &path_env)
         .args(runner_args);
-    let first = first.output().unwrap();
+    let first = ProcessHarness::run(&mut first, &[], COMMAND_TIMEOUT, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("first reducer-runner invocation failed: {error}"));
     assert!(first.status.success());
 
     fs::write(dir.path().join("sample.txt"), "Alpha\nBeta\nGamma\n").unwrap();
@@ -168,7 +170,8 @@ fn test_hook_runner_cli_busts_cache_after_out_of_band_file_edit() {
         .current_dir(dir.path())
         .env("PATH", &path_env)
         .args(runner_args);
-    let second = second.output().unwrap();
+    let second = ProcessHarness::run(&mut second, &[], COMMAND_TIMEOUT, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("second reducer-runner invocation failed: {error}"));
     assert!(second.status.success());
     assert_ne!(first.stdout, second.stdout);
     assert_eq!(fs::read_to_string(&counter_path).unwrap().trim(), "2");

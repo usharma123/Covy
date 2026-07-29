@@ -1,74 +1,30 @@
 #[path = "support/hypothesis.rs"]
 mod hypothesis;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use hypothesis::{ensure_packet28d_built, init_repo, suite_cmd, write_repo_fixture};
+use process_harness::{HarnessLimits, McpHarness};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command as ProcessCommand, Stdio};
+use std::time::Duration;
 use tempfile::TempDir;
 
-fn write_mcp_message(stdin: &mut ChildStdin, value: &Value) {
-    let body = serde_json::to_vec(value).unwrap();
-    write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
-    stdin.write_all(&body).unwrap();
-    stdin.flush().unwrap();
-}
+const MCP_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-fn read_mcp_message(stdout: &mut BufReader<ChildStdout>) -> Value {
-    let mut content_length = None::<usize>;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        stdout.read_line(&mut line).unwrap();
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = trimmed.split_once(':') {
-            if name.eq_ignore_ascii_case("content-length") {
-                content_length = Some(value.trim().parse::<usize>().unwrap());
-            }
-        }
-    }
-    let mut body = vec![0_u8; content_length.unwrap()];
-    stdout.read_exact(&mut body).unwrap();
-    serde_json::from_slice(&body).unwrap()
-}
-
-fn read_mcp_message_for_id(stdout: &mut BufReader<ChildStdout>, expected_id: u64) -> Value {
-    loop {
-        let value = read_mcp_message(stdout);
-        if value.get("id").and_then(Value::as_u64) == Some(expected_id) {
-            return value;
-        }
-    }
-}
-
-fn start_mcp_server(root: &Path) -> (Child, ChildStdin, BufReader<ChildStdout>) {
-    let mut child = ProcessCommand::new(env!("CARGO_BIN_EXE_Packet28"))
-        .current_dir(root)
-        .args(["mcp", "serve", "--root", root.to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdin = child.stdin.take().unwrap();
-    let stdout = BufReader::new(child.stdout.take().unwrap());
-    (child, stdin, stdout)
-}
-
-fn initialize_mcp_session(stdin: &mut ChildStdin, stdout: &mut BufReader<ChildStdout>) {
-    write_mcp_message(
-        stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":1,
-            "method":"initialize",
-            "params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1"}}
-        }),
-    );
-    let _ = read_mcp_message_for_id(stdout, 1);
+fn call_tool(server: &mut McpHarness, id: u64, name: &str, arguments: Value) -> Value {
+    server
+        .request_with_id(
+            json!(id),
+            "tools/call",
+            json!({"name": name, "arguments": arguments}),
+            MCP_IO_TIMEOUT,
+        )
+        .unwrap_or_else(|error| panic!("MCP tool {name} failed: {error}"))
 }
 
 #[test]
@@ -80,49 +36,54 @@ fn test_hypothesis_mcp_tools_track_active_assumptions() {
     write_repo_fixture(root.path());
     let task_id = "task-mcp-hypothesis";
 
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(root.path());
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command.current_dir(root.path()).args([
+        "mcp",
+        "serve",
+        "--root",
+        root.path().to_str().unwrap(),
+    ]);
+    let mut server = McpHarness::spawn(&mut command, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("failed to start MCP server: {error}"));
+    server
+        .request_with_id(
+            json!(1),
+            "initialize",
+            json!({
+                "protocolVersion":"2024-11-05",
+                "capabilities":{},
+                "clientInfo":{"name":"test","version":"1"}
+            }),
+            MCP_IO_TIMEOUT,
+        )
+        .unwrap_or_else(|error| panic!("failed to initialize MCP server: {error}"));
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":2,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.hypothesis_add",
-                "arguments":{
+    let added = call_tool(
+        &mut server,
+        2,
+        "packet28.hypothesis_add",
+        json!({
                     "task_id":task_id,
                     "id":"auth-cache",
                     "text":"Auth cache invalidation is the regression source",
                     "paths":["src/auth.rs"],
                     "symbols":["AuthCache"],
                     "artifact_id":"artifact-auth-cache"
-                }
-            }
         }),
     );
-    let added = read_mcp_message_for_id(&mut stdout, 2);
     let added_payload = &added["result"]["structuredContent"];
     assert_eq!(added_payload["id"], "auth-cache");
     assert_eq!(added_payload["status"], "active");
     assert_eq!(added_payload["decision_id"], "hypothesis:auth-cache");
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":3,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.hypothesis_list",
-                "arguments":{
+    let listed = call_tool(
+        &mut server,
+        3,
+        "packet28.hypothesis_list",
+        json!({
                     "task_id":task_id
-                }
-            }
         }),
     );
-    let listed = read_mcp_message_for_id(&mut stdout, 3);
     let listed_payload = listed["result"]["structuredContent"].as_array().unwrap();
     assert_eq!(listed_payload.len(), 1);
     assert_eq!(listed_payload[0]["id"], "auth-cache");
@@ -137,50 +98,37 @@ fn test_hypothesis_mcp_tools_track_active_assumptions() {
         "artifact-auth-cache"
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":4,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.hypothesis_resolve",
-                "arguments":{
+    let rejected = call_tool(
+        &mut server,
+        4,
+        "packet28.hypothesis_resolve",
+        json!({
                     "task_id":task_id,
                     "id":"auth-cache",
                     "status":"rejected"
-                }
-            }
         }),
     );
-    let rejected = read_mcp_message_for_id(&mut stdout, 4);
     assert_eq!(
         rejected["result"]["structuredContent"]["status"],
         "rejected"
     );
 
-    write_mcp_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":5,
-            "method":"tools/call",
-            "params":{
-                "name":"packet28.hypothesis_list",
-                "arguments":{
+    let listed_after_reject = call_tool(
+        &mut server,
+        5,
+        "packet28.hypothesis_list",
+        json!({
                     "task_id":task_id
-                }
-            }
         }),
     );
-    let listed_after_reject = read_mcp_message_for_id(&mut stdout, 5);
     assert!(listed_after_reject["result"]["structuredContent"]
         .as_array()
         .unwrap()
         .is_empty());
 
-    child.kill().unwrap();
-    child.wait().unwrap();
+    server
+        .finish(MCP_SHUTDOWN_TIMEOUT)
+        .unwrap_or_else(|error| panic!("failed to stop MCP server: {error}"));
 
     suite_cmd()
         .args(["daemon", "stop", "--root", root.path().to_str().unwrap()])

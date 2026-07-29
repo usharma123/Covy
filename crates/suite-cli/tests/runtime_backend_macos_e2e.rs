@@ -1,7 +1,16 @@
 #[cfg(target_os = "macos")]
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
+#[cfg(target_os = "macos")]
 #[path = "support/runtime_backend.rs"]
 mod runtime_backend;
 
+#[cfg(target_os = "macos")]
+use process_harness::{HarnessLimits, ProcessHarness};
 #[cfg(target_os = "macos")]
 use runtime_backend::{
     ensure_packet28d_built, large_agents_text, suite_cmd, swap_reports,
@@ -15,6 +24,9 @@ use sha2::{Digest, Sha256};
 use std::fs;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+const PROCESS_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[cfg(target_os = "macos")]
 fn sha256(content: &str) -> String {
@@ -158,11 +170,12 @@ fn test_runtime_backend_macos_run_command_restores_files_after_sigterm() {
         "#!/bin/sh\nprintf '%s' \"$PACKET28_RUNTIME_BACKEND\" > child-backend.txt\nwhile true; do sleep 1; done\n",
     );
 
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command
         .current_dir(dir.path())
-        .args(["run", "--root", ".", "--", claude.to_str().unwrap()])
-        .spawn()
-        .unwrap();
+        .args(["run", "--root", ".", "--", claude.to_str().unwrap()]);
+    let mut child = ProcessHarness::spawn(&mut command, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("failed to start macOS runtime child: {error}"));
 
     let report_dir = dir.path().join(".packet28/runtime/macos-swap");
     wait_for_active_swap_report(&report_dir, Duration::from_secs(10));
@@ -175,13 +188,15 @@ fn test_runtime_backend_macos_run_command_restores_files_after_sigterm() {
     let active: Value = serde_json::from_slice(&fs::read(&active_reports[0]).unwrap()).unwrap();
     assert_eq!(active.get("state").and_then(Value::as_str), Some("active"));
 
-    // SAFETY: `child.id()` identifies the live child spawned above; `kill(2)`
+    // SAFETY: `child.pid()` identifies the live child spawned above; `kill(2)`
     // accepts that PID and does not retain any Rust-owned memory.
     unsafe {
-        libc::kill(child.id() as i32, libc::SIGTERM);
+        libc::kill(child.pid() as i32, libc::SIGTERM);
     }
-    let status = child.wait().unwrap();
-    assert!(!status.success());
+    let output = child
+        .wait(PROCESS_TIMEOUT)
+        .unwrap_or_else(|error| panic!("failed to reap macOS runtime child: {error}"));
+    assert!(!output.status.success());
     let restore_start = std::time::Instant::now();
     loop {
         if fs::read_to_string(&agents).ok().as_deref() == Some(original.as_str()) {
@@ -210,11 +225,16 @@ fn test_runtime_backend_macos_serializes_two_workspace_swaps() {
         "#!/bin/sh\nprintf ready > first-child-ready.txt\nwhile true; do sleep 1; done\n",
     );
 
-    let mut first = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"))
-        .current_dir(dir.path())
-        .args(["run", "--root", ".", "--", claude.to_str().unwrap()])
-        .spawn()
-        .unwrap();
+    let mut first_command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    first_command.current_dir(dir.path()).args([
+        "run",
+        "--root",
+        ".",
+        "--",
+        claude.to_str().unwrap(),
+    ]);
+    let mut first = ProcessHarness::spawn(&mut first_command, HarnessLimits::default())
+        .unwrap_or_else(|error| panic!("failed to start first macOS runtime child: {error}"));
     let report_dir = dir.path().join(".packet28/runtime/macos-swap");
     wait_for_active_swap_report(&report_dir, Duration::from_secs(10));
     let reports = swap_reports(&report_dir);
@@ -226,26 +246,33 @@ fn test_runtime_backend_macos_serializes_two_workspace_swaps() {
     let report: Value = serde_json::from_slice(&fs::read(&reports[0]).unwrap()).unwrap();
     assert_eq!(report.get("state").and_then(Value::as_str), Some("active"));
 
-    let second = suite_cmd()
-        .current_dir(dir.path())
-        .args([
-            "run",
-            "--root",
-            ".",
-            "--backend",
-            "macos-swap",
-            "--",
-            "/usr/bin/true",
-        ])
-        .output()
-        .unwrap();
+    let mut second_command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    second_command.current_dir(dir.path()).args([
+        "run",
+        "--root",
+        ".",
+        "--backend",
+        "macos-swap",
+        "--",
+        "/usr/bin/true",
+    ]);
+    let second = ProcessHarness::run(
+        &mut second_command,
+        &[],
+        PROCESS_TIMEOUT,
+        HarnessLimits::default(),
+    )
+    .unwrap_or_else(|error| panic!("overlapping macOS runtime command did not finish: {error}"));
 
-    // SAFETY: `first` is a live child process created by this test.
+    // SAFETY: `first.pid()` identifies the live child owned by the harness;
+    // `kill(2)` accepts that PID and retains no Rust-owned memory.
     unsafe {
-        libc::kill(first.id() as i32, libc::SIGTERM);
+        libc::kill(first.pid() as i32, libc::SIGTERM);
     }
-    let status = first.wait().unwrap();
-    assert!(!status.success());
+    let output = first
+        .wait(PROCESS_TIMEOUT)
+        .unwrap_or_else(|error| panic!("failed to reap first macOS runtime child: {error}"));
+    assert!(!output.status.success());
     assert_eq!(fs::read_to_string(&agents).unwrap(), original);
     assert!(
         !second.status.success(),
