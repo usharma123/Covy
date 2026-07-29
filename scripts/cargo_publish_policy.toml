@@ -15,6 +15,7 @@ order = []
 packages = [
   "buildy-core",
   "context-instruct-shim",
+  "context-kernel-builtins",
   "context-kernel-core",
   "context-kernel-mechanism",
   "context-memory-core",

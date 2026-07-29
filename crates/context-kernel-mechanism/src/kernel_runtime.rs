@@ -46,6 +46,29 @@ impl ExecutionContext {
             })?;
         Ok(cache.recall(query, options))
     }
+
+    /// Returns cache entries related to the supplied task and packet
+    /// references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::CacheLock`] when the shared cache lock is
+    /// poisoned.
+    pub fn cache_related_entries(
+        &self,
+        task_id: Option<&str>,
+        canonical_paths: &[String],
+        symbols: &[String],
+        tests: &[String],
+    ) -> Result<Vec<RelatedEntryMatch>, KernelError> {
+        let cache = self
+            .memory
+            .lock()
+            .map_err(|source| KernelError::CacheLock {
+                detail: source.to_string(),
+            })?;
+        Ok(cache.related_entries(task_id, canonical_paths, symbols, tests))
+    }
 }
 
 type ReducerFn = dyn Fn(&mut ExecutionContext, &[KernelPacket]) -> Result<ReducerResult, KernelError>
@@ -824,4 +847,28 @@ fn ensure_sequence_active(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_scheduled_step_is_a_typed_scheduler_failure() {
+        let mut remaining = vec![KernelStepRequest {
+            id: "known".to_string(),
+            target: "custom.reducer".to_string(),
+            ..KernelStepRequest::default()
+        }];
+
+        let error = take_scheduled_step(&mut remaining, "missing").unwrap_err();
+
+        assert_eq!(remaining.len(), 1);
+        assert!(matches!(
+            error,
+            KernelError::SchedulerFailed { detail }
+                if detail
+                    == "scheduler selected step `missing` that is absent from the remaining plan"
+        ));
+    }
 }

@@ -19,7 +19,7 @@ use context_memory_core::{
     CachePacket, CachePersistence, CachePersistenceMetrics, ContextStoreEntryDetail,
     ContextStoreEntrySummary, ContextStoreListFilter, ContextStorePaging, ContextStorePruneReport,
     ContextStorePruneRequest, ContextStoreStats, DeltaReuseHooks, NoopDeltaReuseHooks, PacketCache,
-    RecallHit, RecallOptions,
+    RecallHit, RecallOptions, RelatedEntryMatch,
 };
 
 pub use context_memory_core::PersistConfig;
