@@ -56,6 +56,8 @@ const DEFAULT_BUDGET_TOKENS: u64 = 512;
 const TARGET_FILES: [&str; 3] = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md"];
 #[cfg(target_os = "macos")]
 static JOURNAL_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+static RECOVERY_QUARANTINE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -184,6 +186,8 @@ enum LifecyclePoint {
     Signal,
     Wait,
     Restore(usize),
+    BeforeTempQuarantine,
+    AfterTempQuarantine,
 }
 
 #[cfg(target_os = "macos")]
@@ -1069,7 +1073,7 @@ fn restore_staged_files_with_hooks(
     for (restore_index, entry) in staged.iter().rev().enumerate() {
         if let Err(err) = hooks
             .check(LifecyclePoint::Restore(restore_index))
-            .and_then(|()| restore_staged_file(entry))
+            .and_then(|()| restore_staged_file_with_hooks(entry, hooks))
         {
             errors.push(format!("{}: {err:#}", entry.original_path.display()));
         }
@@ -1081,8 +1085,13 @@ fn restore_staged_files_with_hooks(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", test))]
 fn restore_staged_file(entry: &StagedRewrite) -> Result<()> {
+    restore_staged_file_with_hooks(entry, &NOOP_LIFECYCLE_HOOKS)
+}
+
+#[cfg(target_os = "macos")]
+fn restore_staged_file_with_hooks(entry: &StagedRewrite, hooks: &dyn LifecycleHooks) -> Result<()> {
     if entry.original_sha256.is_empty() {
         return Err(manual_repair_error(
             &entry.original_path,
@@ -1203,16 +1212,162 @@ fn restore_staged_file(entry: &StagedRewrite) -> Result<()> {
         ));
     }
 
-    if entry.temp_path.exists() {
-        fs::remove_file(&entry.temp_path).with_context(|| {
-            format!(
-                "failed to remove rewritten temp file '{}'",
-                entry.temp_path.display()
-            )
-        })?;
-        sync_parent_directory(&entry.temp_path)?;
+    remove_authenticated_temp_artifact(entry, hooks)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn remove_authenticated_temp_artifact(
+    entry: &StagedRewrite,
+    hooks: &dyn LifecycleHooks,
+) -> Result<()> {
+    let Some(initial_identity) = path_identity(&entry.temp_path)? else {
+        return Ok(());
+    };
+    let initial_metadata = fs::symlink_metadata(&entry.temp_path).with_context(|| {
+        format!(
+            "failed to inspect rewritten temp artifact '{}'",
+            entry.temp_path.display()
+        )
+    })?;
+    let initial_sha256 = path_sha256(&entry.temp_path)?.ok_or_else(|| {
+        manual_repair_error(
+            &entry.original_path,
+            &entry.backup_path,
+            &entry.temp_path,
+            "temp artifact disappeared during authenticated cleanup",
+        )
+    })?;
+    let is_known_digest = |digest: &str| {
+        digest == entry.original_sha256
+            || (!entry.rewritten_sha256.is_empty() && digest == entry.rewritten_sha256)
+    };
+    if !initial_metadata.file_type().is_file() || !is_known_digest(&initial_sha256) {
+        return Err(manual_repair_error(
+            &entry.original_path,
+            &entry.backup_path,
+            &entry.temp_path,
+            "temp artifact contains unknown content; refusing to remove it",
+        ));
+    }
+
+    hooks.check(LifecyclePoint::BeforeTempQuarantine)?;
+    let quarantine_path = quarantine_temp_artifact(&entry.temp_path)?;
+    hooks.check(LifecyclePoint::AfterTempQuarantine)?;
+
+    let quarantined_identity = path_identity(&quarantine_path)?;
+    let quarantined_metadata = fs::symlink_metadata(&quarantine_path).with_context(|| {
+        format!(
+            "failed to inspect quarantined temp artifact '{}'",
+            quarantine_path.display()
+        )
+    })?;
+    let quarantined_sha256 = path_sha256(&quarantine_path)?;
+    if quarantined_identity != Some(initial_identity)
+        || !quarantined_metadata.file_type().is_file()
+        || quarantined_sha256
+            .as_deref()
+            .is_none_or(|digest| !is_known_digest(digest))
+    {
+        return Err(preserve_quarantined_temp_artifact(
+            entry,
+            &quarantine_path,
+            "temp artifact changed before atomic quarantine; refusing to remove it",
+        ));
+    }
+
+    // The unique quarantine name structurally separates this authenticated
+    // inode from a concurrent recreation of the well-known temp path. Re-read
+    // identity and content there before unlinking as a final corruption check.
+    if path_identity(&quarantine_path)? != Some(initial_identity)
+        || path_sha256(&quarantine_path)?
+            .as_deref()
+            .is_none_or(|digest| !is_known_digest(digest))
+    {
+        return Err(preserve_quarantined_temp_artifact(
+            entry,
+            &quarantine_path,
+            "quarantined temp artifact changed during authenticated cleanup",
+        ));
+    }
+
+    fs::remove_file(&quarantine_path).with_context(|| {
+        format!(
+            "failed to remove authenticated rewritten temp artifact '{}'",
+            quarantine_path.display()
+        )
+    })?;
+    sync_parent_directory(&quarantine_path)?;
+
+    if path_identity(&entry.temp_path)?.is_some() {
+        return Err(manual_repair_error(
+            &entry.original_path,
+            &entry.backup_path,
+            &entry.temp_path,
+            "temp path was recreated during authenticated cleanup; preserved the concurrent artifact",
+        ));
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn quarantine_temp_artifact(temp_path: &Path) -> Result<PathBuf> {
+    let file_name = temp_path
+        .file_name()
+        .ok_or_else(|| anyhow!("temp artifact '{}' has no file name", temp_path.display()))?
+        .to_string_lossy();
+    for _ in 0..64 {
+        let sequence = RECOVERY_QUARANTINE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let quarantine_path = temp_path.with_file_name(format!(
+            ".{file_name}.p28-quarantine.{}.{sequence}",
+            std::process::id()
+        ));
+        match rename_path_exclusive(temp_path, &quarantine_path) {
+            Ok(()) => return Ok(quarantine_path),
+            Err(err) if error_has_raw_os_error(&err, libc::EEXIST) => {}
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "failed to atomically quarantine temp artifact '{}'",
+                        temp_path.display()
+                    )
+                });
+            }
+        }
+    }
+    Err(anyhow!(
+        "failed to allocate a unique quarantine path for temp artifact '{}'",
+        temp_path.display()
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn preserve_quarantined_temp_artifact(
+    entry: &StagedRewrite,
+    quarantine_path: &Path,
+    reason: &str,
+) -> anyhow::Error {
+    match rename_path_exclusive(quarantine_path, &entry.temp_path) {
+        Ok(()) => manual_repair_error(
+            &entry.original_path,
+            &entry.backup_path,
+            &entry.temp_path,
+            &format!(
+                "{reason}; restored the unknown artifact to '{}'",
+                entry.temp_path.display()
+            ),
+        ),
+        Err(restore_error) => manual_repair_error(
+            &entry.original_path,
+            &entry.backup_path,
+            quarantine_path,
+            &format!(
+                "{reason}; preserved it at '{}' because '{}' could not be restored: {restore_error:#}",
+                quarantine_path.display(),
+                entry.temp_path.display()
+            ),
+        ),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1608,13 +1763,28 @@ fn canonicalized_parent_path(path: &Path) -> Result<PathBuf> {
 fn terminate_orphaned_process_group(pgid: i32, expected_start_time_micros: u64) -> Result<()> {
     let pid = u32::try_from(pgid)
         .context("recorded child process group is not a positive process identifier")?;
-    if process_start_time_micros(pid)? != Some(expected_start_time_micros) {
-        return Ok(());
-    }
     if !process_group_is_running(pgid)? {
         return Ok(());
     }
-    signal_process_group(pgid, SIGTERM)?;
+    if let Some(actual_start_time_micros) = process_start_time_micros(pid)? {
+        if actual_start_time_micros != expected_start_time_micros {
+            return Err(anyhow!(
+                "recorded child process group {pgid} is still live but its leader identity was reused; refusing to signal it"
+            ));
+        }
+    }
+    match signal_process_group(pgid, SIGTERM) {
+        Ok(()) => {}
+        Err(err)
+            if error_has_raw_os_error(&err, libc::EPERM)
+                && recorded_process_is_gone_or_zombie(pid, expected_start_time_micros)? =>
+        {
+            // Darwin can reject a group signal when no signalable member
+            // remains and the authenticated group contains only zombies.
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    }
     let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
         if !process_group_is_running(pgid)? {
@@ -1623,21 +1793,43 @@ fn terminate_orphaned_process_group(pgid: i32, expected_start_time_micros: u64) 
         thread::sleep(Duration::from_millis(10));
     }
 
-    if process_start_time_micros(pid)? != Some(expected_start_time_micros) {
-        return Ok(());
+    if let Some(actual_start_time_micros) = process_start_time_micros(pid)? {
+        if actual_start_time_micros != expected_start_time_micros {
+            return Err(anyhow!(
+                "recorded child process group {pgid} changed leader identity during cleanup; refusing to signal it"
+            ));
+        }
     }
     match signal_process_group(pgid, libc::SIGKILL) {
-        Ok(()) => Ok(()),
+        Ok(()) => {}
         Err(err)
             if error_has_raw_os_error(&err, libc::EPERM)
-                && process_is_zombie(pid, expected_start_time_micros)? =>
+                && recorded_process_is_gone_or_zombie(pid, expected_start_time_micros)? =>
         {
             // Darwin can report EPERM when a process group contains only an
             // unreaped zombie. There is no running process left to signal,
             // and a recovery process cannot reap a child it did not spawn.
-            Ok(())
+            return Ok(());
         }
-        Err(err) => Err(err),
+        Err(err) => return Err(err),
+    }
+
+    let kill_deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < kill_deadline {
+        if !process_group_is_running(pgid)? {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if recorded_process_is_gone_or_zombie(pid, expected_start_time_micros)? {
+        // SIGKILL was delivered to the complete authenticated group above.
+        // Any remaining group liveness is an unreaped zombie that this
+        // recovery process cannot reap.
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "recorded child process group {pgid} remained live after SIGKILL"
+        ))
     }
 }
 
@@ -1674,9 +1866,9 @@ fn process_start_time_micros(pid: u32) -> Result<Option<u64>> {
 }
 
 #[cfg(target_os = "macos")]
-fn process_is_zombie(pid: u32, expected_start_time_micros: u64) -> Result<bool> {
+fn recorded_process_is_gone_or_zombie(pid: u32, expected_start_time_micros: u64) -> Result<bool> {
     let Some(info) = process_bsd_info(pid)? else {
-        return Ok(false);
+        return Ok(true);
     };
     let start_time_micros = info
         .pbi_start_tvsec
@@ -1980,6 +2172,26 @@ mod tests {
         }
     }
 
+    struct ReplaceTempAt {
+        point: LifecyclePoint,
+        temp_path: PathBuf,
+        replacement: &'static [u8],
+    }
+
+    impl LifecycleHooks for ReplaceTempAt {
+        fn check(&self, point: LifecyclePoint) -> Result<()> {
+            if point == self.point {
+                let file_name = self.temp_path.file_name().unwrap().to_string_lossy();
+                let replacement_path = self
+                    .temp_path
+                    .with_file_name(format!(".{file_name}.concurrent-replacement"));
+                fs::write(&replacement_path, self.replacement)?;
+                fs::rename(replacement_path, &self.temp_path)?;
+            }
+            Ok(())
+        }
+    }
+
     struct FailOnceJournalStore {
         fail_at: usize,
         writes: AtomicUsize,
@@ -2049,6 +2261,29 @@ mod tests {
             if let Some(child) = self.0.take() {
                 let child_pgid = i32::try_from(child.id()).unwrap_or_default();
                 let _ = terminate_and_reap_child(child, child_pgid);
+            }
+        }
+    }
+
+    struct TestProcessGroupGuard {
+        pgid: i32,
+        armed: bool,
+    }
+
+    impl TestProcessGroupGuard {
+        fn new(pgid: i32) -> Self {
+            Self { pgid, armed: true }
+        }
+
+        fn disarm(&mut self) {
+            self.armed = false;
+        }
+    }
+
+    impl Drop for TestProcessGroupGuard {
+        fn drop(&mut self) {
+            if self.armed {
+                let _ = signal_process_group(self.pgid, libc::SIGKILL);
             }
         }
     }
@@ -2633,6 +2868,46 @@ mod tests {
     }
 
     #[test]
+    fn restore_preserves_a_temp_path_replaced_before_atomic_quarantine() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = installed_rewrite(dir.path(), "AGENTS.md", "temp-race");
+        fs::write(&staged.temp_path, REWRITTEN).unwrap();
+        let concurrent_content = b"concurrent user content\n";
+        let hooks = ReplaceTempAt {
+            point: LifecyclePoint::BeforeTempQuarantine,
+            temp_path: staged.temp_path.clone(),
+            replacement: concurrent_content,
+        };
+
+        let error = restore_staged_file_with_hooks(&staged, &hooks).unwrap_err();
+
+        assert!(error.to_string().contains("temp artifact changed"));
+        assert_eq!(fs::read(&staged.original_path).unwrap(), ORIGINAL);
+        assert_eq!(fs::read(&staged.temp_path).unwrap(), concurrent_content);
+        assert!(!staged.backup_path.exists());
+    }
+
+    #[test]
+    fn restore_preserves_a_temp_path_recreated_after_atomic_quarantine() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = installed_rewrite(dir.path(), "AGENTS.md", "temp-post-move-race");
+        fs::write(&staged.temp_path, REWRITTEN).unwrap();
+        let concurrent_content = b"concurrent post-move content\n";
+        let hooks = ReplaceTempAt {
+            point: LifecyclePoint::AfterTempQuarantine,
+            temp_path: staged.temp_path.clone(),
+            replacement: concurrent_content,
+        };
+
+        let error = restore_staged_file_with_hooks(&staged, &hooks).unwrap_err();
+
+        assert!(error.to_string().contains("temp path was recreated"));
+        assert_eq!(fs::read(&staged.original_path).unwrap(), ORIGINAL);
+        assert_eq!(fs::read(&staged.temp_path).unwrap(), concurrent_content);
+        assert!(!staged.backup_path.exists());
+    }
+
+    #[test]
     fn missing_original_is_restored_from_authenticated_backup() {
         let dir = tempfile::tempdir().unwrap();
         let staged = installed_rewrite(dir.path(), "AGENTS.md", "missing-original");
@@ -2779,9 +3054,17 @@ mod tests {
         );
 
         fs::write(&staged.backup_path, ORIGINAL).unwrap();
-        recover_stale_sessions(root).unwrap();
+        let error = recover_stale_sessions(root).unwrap_err();
+        assert!(error.to_string().contains("temp artifact contains unknown"));
         assert_eq!(fs::read(&original).unwrap(), ORIGINAL);
-        assert!(!temp.exists());
+        assert_eq!(fs::read(&temp).unwrap(), b"recovery evidence");
+        assert_eq!(
+            read_report(&report_path).state,
+            SessionState::RecoveryFailed
+        );
+
+        fs::remove_file(&temp).unwrap();
+        recover_stale_sessions(root).unwrap();
         assert_eq!(read_report(&report_path).state, SessionState::Restored);
     }
 
@@ -2901,7 +3184,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_recovery_does_not_signal_a_reused_process_group_identity() {
+    fn stale_recovery_fails_closed_for_a_reused_process_group_identity() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let mut command = Command::new("/bin/sleep");
@@ -2920,12 +3203,66 @@ mod tests {
         let report_path = session_report_path(root, "pid-reuse");
         write_session_report(&report_path, &report).unwrap();
 
-        recover_stale_sessions(root).unwrap();
+        let error = recover_stale_sessions(root).unwrap_err();
 
+        assert!(error.to_string().contains("leader identity was reused"));
         assert!(process_is_running(child_pid));
         assert!(process_group_is_running(child_pgid).unwrap());
-        assert_eq!(read_report(&report_path).state, SessionState::Restored);
+        assert_eq!(
+            read_report(&report_path).state,
+            SessionState::RecoveryFailed
+        );
         drop(child);
+    }
+
+    #[test]
+    fn stale_recovery_kills_descendants_after_the_group_leader_exits() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let descendant_pid_file = root.join("leader-exited-descendant.pid");
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("trap '' TERM; /bin/sleep 30 & echo $! > \"$P28_DESCENDANT_PID\"; exit 0")
+            .env("P28_DESCENDANT_PID", &descendant_pid_file)
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let child_pid = child.id();
+        let child_pgid = i32::try_from(child_pid).unwrap();
+        let child_start_time_micros = process_start_time_micros(child_pid).unwrap().unwrap();
+        let mut process_group_guard = TestProcessGroupGuard::new(child_pgid);
+        assert!(wait_until(Duration::from_secs(2), || {
+            descendant_pid_file
+                .metadata()
+                .map(|metadata| metadata.len() > 0)
+                .unwrap_or(false)
+        }));
+        let descendant_pid = fs::read_to_string(&descendant_pid_file)
+            .unwrap()
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(process_start_time_micros(child_pid).unwrap(), None);
+        assert!(process_is_running(descendant_pid));
+        assert!(process_group_is_running(child_pgid).unwrap());
+
+        let mut report = test_report(root, "leader-exited", SessionState::Active);
+        report.owner_pid = u32::MAX;
+        report.pid = child_pid;
+        report.child_pgid = Some(child_pgid);
+        report.child_start_time_micros = Some(child_start_time_micros);
+        let report_path = session_report_path(root, "leader-exited");
+        write_session_report(&report_path, &report).unwrap();
+
+        recover_stale_sessions(root).unwrap();
+
+        assert!(wait_until(Duration::from_secs(2), || {
+            !process_is_running(descendant_pid)
+        }));
+        assert!(!process_group_is_running(child_pgid).unwrap());
+        assert_eq!(read_report(&report_path).state, SessionState::Restored);
+        process_group_guard.disarm();
     }
 
     #[test]

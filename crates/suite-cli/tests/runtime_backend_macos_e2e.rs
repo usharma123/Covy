@@ -89,7 +89,7 @@ fn test_runtime_backend_macos_run_command_recovers_stale_swap_session_before_lau
     let backup = dir.path().join("AGENTS.md.p28-backup.demo");
     let temp = dir.path().join("AGENTS.md.p28-rewrite.demo.tmp");
     fs::write(&backup, original).unwrap();
-    fs::write(&temp, "temp").unwrap();
+    fs::write(&temp, swapped).unwrap();
     let report_dir = dir.path().join(".packet28/runtime/macos-swap");
     fs::create_dir_all(&report_dir).unwrap();
     fs::write(
