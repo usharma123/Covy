@@ -1,5 +1,3 @@
-extern crate packet28_binary_codec as wincode;
-
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
@@ -119,8 +117,8 @@ use crate::launch::task_launch_agent;
 use crate::planning::*;
 use crate::runtime::{BlockingPool, DaemonRuntimeConfig, ShutdownSignal, StateChangeSignal};
 use crate::runtime_files::{
-    clear_index_files, default_index_manifest, load_index_manifest_file, load_index_snapshot_file,
-    save_index_manifest_file, save_index_snapshot_file,
+    clear_index_files, default_index_manifest, load_index_manifest_file, load_index_runtime_files,
+    save_index_manifest_file,
 };
 use crate::server::handle_connection;
 use crate::state::{
@@ -200,8 +198,7 @@ fn serve(root: PathBuf) -> Result<()> {
     let tasks = load_task_registry(&root)?;
     let watches = load_watch_registry(&root)?;
     let manifest = load_index_manifest_file(&root);
-    let snapshot = load_index_snapshot_file(&root, &manifest);
-    let regex_runtime = packet28_search_core::load_runtime(&root).unwrap_or_default();
+    let interactive_index = load_index_runtime_files(&root, manifest);
     let (index_tx, index_rx) = mpsc::channel();
     let (background_tx, background_rx) =
         tokio::sync::mpsc::channel(config.background_queue_capacity);
@@ -217,11 +214,7 @@ fn serve(root: PathBuf) -> Result<()> {
         watcher_handles: HashMap::new(),
         subscribers: HashMap::new(),
         source_file_cache: BTreeMap::new(),
-        interactive_index: InteractiveIndexRuntime {
-            manifest,
-            snapshot,
-            regex_runtime: Some(regex_runtime),
-        },
+        interactive_index,
         index_tx,
         background_tx,
         shutdown: shutdown.clone(),
@@ -234,16 +227,7 @@ fn serve(root: PathBuf) -> Result<()> {
     {
         let should_queue = {
             let guard = state.lock().map_err(lock_err)?;
-            guard.interactive_index.snapshot.is_none()
-                || guard.interactive_index.regex_runtime.is_none()
-                || guard
-                    .interactive_index
-                    .regex_runtime
-                    .as_ref()
-                    .is_some_and(|runtime| {
-                        !runtime.is_loaded() || runtime.manifest.status != "ready"
-                    })
-                || guard.interactive_index.manifest.status != DaemonIndexState::Ready
+            guard.interactive_index.needs_rebuild()
         };
         if should_queue {
             let _ = enqueue_full_index_rebuild(&state);

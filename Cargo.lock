@@ -1493,7 +1493,6 @@ dependencies = [
  "libc",
  "mapy-core",
  "notify",
- "packet28-binary-codec",
  "packet28-daemon-core",
  "packet28-daemon-protocol",
  "packet28-reducer-core",

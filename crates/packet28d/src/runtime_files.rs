@@ -55,38 +55,33 @@ pub(crate) fn save_index_manifest_file(root: &Path, manifest: &DaemonIndexManife
     Ok(())
 }
 
-pub(crate) fn load_index_snapshot_file(
+pub(crate) fn load_index_runtime_files(
     root: &Path,
-    manifest: &DaemonIndexManifest,
-) -> Option<Arc<mapy_core::RepoIndexSnapshot>> {
-    if manifest.status == DaemonIndexState::Missing || manifest.generation == 0 {
-        return None;
+    manifest: DaemonIndexManifest,
+) -> InteractiveIndexRuntime {
+    let repo_runtime = mapy_core::load_repo_index_runtime(root).unwrap_or_else(|error| {
+        let mut runtime = mapy_core::RepoIndexRuntime::default();
+        runtime.manifest.status = "corrupt".to_string();
+        runtime.manifest.last_error = Some(error.to_string());
+        runtime
+    });
+    let regex_runtime = packet28_search_core::load_runtime(root).unwrap_or_else(|error| {
+        let mut runtime = packet28_search_core::RegexIndexRuntime::default();
+        runtime.manifest.status = "corrupt".to_string();
+        runtime.manifest.stale_reason = Some(error.to_string());
+        runtime.manifest.last_error = Some(error.to_string());
+        runtime
+    });
+    InteractiveIndexRuntime {
+        manifest,
+        repo_runtime: Some(repo_runtime),
+        regex_runtime: Some(regex_runtime),
     }
-    let raw = fs::read(index_snapshot_path(root)).ok()?;
-    let snapshot = wincode::deserialize::<mapy_core::RepoIndexSnapshot>(&raw).ok()?;
-    if snapshot.version == 0 {
-        return None;
-    }
-    Some(Arc::new(snapshot))
-}
-
-pub(crate) fn save_index_snapshot_file(
-    root: &Path,
-    snapshot: &mapy_core::RepoIndexSnapshot,
-) -> Result<()> {
-    fs::create_dir_all(index_dir(root))
-        .with_context(|| format!("failed to create index dir '{}'", index_dir(root).display()))?;
-    let encoded = wincode::serialize(snapshot)?;
-    fs::write(index_snapshot_path(root), encoded).with_context(|| {
-        format!(
-            "failed to write index snapshot '{}'",
-            index_snapshot_path(root).display()
-        )
-    })?;
-    Ok(())
 }
 
 pub(crate) fn clear_index_files(root: &Path) -> Result<()> {
+    mapy_core::clear_repo_index_runtime(root)
+        .map_err(|error| anyhow!("failed to clear repository index runtime: {error}"))?;
     for path in [index_manifest_path(root), index_snapshot_path(root)] {
         if path.exists() {
             fs::remove_file(&path)

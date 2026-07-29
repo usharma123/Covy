@@ -29,8 +29,34 @@ pub(crate) struct CachedSourceFile {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct InteractiveIndexRuntime {
     pub(crate) manifest: DaemonIndexManifest,
-    pub(crate) snapshot: Option<Arc<mapy_core::RepoIndexSnapshot>>,
+    pub(crate) repo_runtime: Option<mapy_core::RepoIndexRuntime>,
     pub(crate) regex_runtime: Option<packet28_search_core::RegexIndexRuntime>,
+}
+
+impl InteractiveIndexRuntime {
+    pub(crate) fn repo_is_current(&self) -> bool {
+        self.repo_runtime.as_ref().is_some_and(|runtime| {
+            runtime.is_loaded()
+                && runtime.manifest.status == "ready"
+                && runtime.manifest.recovered_from_generation.is_none()
+                && runtime.manifest.last_error.is_none()
+        })
+    }
+
+    pub(crate) fn regex_is_current(&self) -> bool {
+        self.regex_runtime.as_ref().is_some_and(|runtime| {
+            runtime.is_loaded()
+                && runtime.manifest.status == "ready"
+                && runtime.manifest.stale_reason.is_none()
+                && runtime.manifest.last_error.is_none()
+        })
+    }
+
+    pub(crate) fn needs_rebuild(&self) -> bool {
+        !self.repo_is_current()
+            || !self.regex_is_current()
+            || self.manifest.status != DaemonIndexState::Ready
+    }
 }
 
 pub(crate) enum IndexCommand {

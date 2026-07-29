@@ -7,12 +7,8 @@ pub(crate) fn build_index_status(runtime: &InteractiveIndexRuntime) -> DaemonInd
     }
     let dirty_file_count = runtime.manifest.dirty_paths.len();
     let queued_file_count = runtime.manifest.queued_paths.len();
-    let regex_ready = runtime
-        .regex_runtime
-        .as_ref()
-        .is_some_and(|runtime| runtime.is_loaded() && runtime.manifest.status == "ready");
-    let ready = runtime.snapshot.is_some()
-        && regex_ready
+    let ready = runtime.repo_is_current()
+        && runtime.regex_is_current()
         && manifest.status == DaemonIndexState::Ready
         && manifest.dirty_paths.is_empty();
     DaemonIndexStatusResponse {
@@ -43,7 +39,7 @@ pub(crate) fn enqueue_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Res
         let full_rebuild_already_in_flight = matches!(
             guard.interactive_index.manifest.status,
             DaemonIndexState::Queued | DaemonIndexState::Building
-        ) && guard.interactive_index.snapshot.is_none();
+        ) && guard.interactive_index.repo_runtime.is_none();
         if full_rebuild_already_in_flight {
             return Ok(());
         }
@@ -175,14 +171,18 @@ fn perform_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
         guard.root.clone()
     };
     let mut last_repo_progress = None::<(usize, std::time::Instant)>;
-    let snapshot = mapy_core::build_repo_index_with_progress(&root, true, |indexed, total| {
-        if should_persist_progress(indexed, total, &mut last_repo_progress) {
-            let _ = update_repo_build_progress(state, indexed, total);
-        }
-    })
-    .map_err(|err| anyhow!("failed to build repo index: {err}"))?;
-    update_repo_build_progress(state, snapshot.files.len(), snapshot.files.len())?;
-    save_index_snapshot_file(&root, &snapshot)?;
+    let repo_runtime =
+        mapy_core::rebuild_repo_index_runtime_with_progress(&root, true, |indexed, total| {
+            if should_persist_progress(indexed, total, &mut last_repo_progress) {
+                let _ = update_repo_build_progress(state, indexed, total);
+            }
+        })
+        .map_err(|err| anyhow!("failed to build repo index: {err}"))?;
+    update_repo_build_progress(
+        state,
+        repo_runtime.manifest.total_files,
+        repo_runtime.manifest.total_files,
+    )?;
     mark_regex_build_started(state)?;
     let mut last_regex_progress = None::<(usize, std::time::Instant)>;
     let regex_runtime =
@@ -193,7 +193,7 @@ fn perform_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
         })
         .map_err(|err| anyhow!("failed to build regex search index: {err}"))?;
     let mut guard = state.lock().map_err(lock_err)?;
-    guard.interactive_index.snapshot = Some(Arc::new(snapshot.clone()));
+    guard.interactive_index.repo_runtime = Some(repo_runtime.clone());
     guard.interactive_index.regex_runtime = Some(regex_runtime.clone());
     guard.interactive_index.manifest.generation = guard
         .interactive_index
@@ -207,8 +207,8 @@ fn perform_full_index_rebuild(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
         .transition_to(DaemonIndexState::Ready)?;
     guard.interactive_index.manifest.dirty_paths.clear();
     guard.interactive_index.manifest.queued_paths.clear();
-    guard.interactive_index.manifest.total_files = snapshot.files.len();
-    guard.interactive_index.manifest.indexed_files = snapshot.files.len();
+    guard.interactive_index.manifest.total_files = repo_runtime.manifest.total_files;
+    guard.interactive_index.manifest.indexed_files = repo_runtime.manifest.total_files;
     apply_regex_manifest_status(&mut guard.interactive_index.manifest, &regex_runtime);
     guard
         .interactive_index
@@ -226,10 +226,9 @@ fn perform_incremental_index_update(
     if paths.is_empty() {
         return Ok(());
     }
-    let (root, snapshot_opt, regex_runtime_opt) = {
+    let (root, repo_runtime_opt, regex_runtime_opt) = {
         let mut guard = state.lock().map_err(lock_err)?;
-        if guard.interactive_index.snapshot.is_none()
-            || guard.interactive_index.regex_runtime.is_none()
+        if !guard.interactive_index.repo_is_current() || !guard.interactive_index.regex_is_current()
         {
             drop(guard);
             return perform_full_index_rebuild(state);
@@ -250,25 +249,21 @@ fn perform_incremental_index_update(
         save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)?;
         (
             guard.root.clone(),
-            guard.interactive_index.snapshot.clone(),
+            guard.interactive_index.repo_runtime.clone(),
             guard.interactive_index.regex_runtime.clone(),
         )
     };
-    let (Some(snapshot_arc), Some(regex_runtime)) = (snapshot_opt, regex_runtime_opt) else {
+    let (Some(repo_runtime), Some(regex_runtime)) = (repo_runtime_opt, regex_runtime_opt) else {
         return perform_full_index_rebuild(state);
     };
-    if !regex_runtime.is_loaded() || regex_runtime.manifest.status != "ready" {
-        return perform_full_index_rebuild(state);
-    }
-    let mut snapshot = (*snapshot_arc).clone();
-    let summary = mapy_core::update_repo_index(&root, &mut snapshot, paths, true)
-        .map_err(|err| anyhow!("failed to update repo index: {err}"))?;
-    save_index_snapshot_file(&root, &snapshot)?;
+    let (repo_runtime, summary) =
+        mapy_core::update_repo_index_runtime(&root, &repo_runtime, paths, true)
+            .map_err(|err| anyhow!("failed to update repo index: {err}"))?;
     let regex_runtime =
         packet28_search_core::update_overlay_index(&root, Some(&regex_runtime), paths)
             .map_err(|err| anyhow!("failed to update regex search overlay: {err}"))?;
     let mut guard = state.lock().map_err(lock_err)?;
-    guard.interactive_index.snapshot = Some(Arc::new(snapshot.clone()));
+    guard.interactive_index.repo_runtime = Some(repo_runtime.clone());
     guard.interactive_index.regex_runtime = Some(regex_runtime.clone());
     guard.interactive_index.manifest.generation = guard
         .interactive_index
@@ -292,8 +287,8 @@ fn perform_incremental_index_update(
             .queued_paths
             .retain(|candidate| candidate != path);
     }
-    guard.interactive_index.manifest.total_files = snapshot.files.len();
-    guard.interactive_index.manifest.indexed_files = snapshot.files.len();
+    guard.interactive_index.manifest.total_files = repo_runtime.manifest.total_files;
+    guard.interactive_index.manifest.indexed_files = repo_runtime.manifest.total_files;
     apply_regex_manifest_status(&mut guard.interactive_index.manifest, &regex_runtime);
     guard
         .interactive_index
@@ -310,7 +305,7 @@ fn perform_index_clear(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
     packet28_search_core::clear_index(&guard.root)?;
     guard.interactive_index = InteractiveIndexRuntime {
         manifest: default_index_manifest(&guard.root),
-        snapshot: None,
+        repo_runtime: None,
         regex_runtime: None,
     };
     save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)?;
@@ -495,3 +490,7 @@ fn update_regex_build_progress(
     guard.interactive_index.manifest.regex_indexed_files = indexed_files.min(total_files);
     save_index_manifest_file(&guard.root, &guard.interactive_index.manifest)
 }
+
+#[cfg(test)]
+#[path = "index_tests.rs"]
+mod tests;

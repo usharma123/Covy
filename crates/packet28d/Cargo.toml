@@ -36,7 +36,6 @@ serde_json.workspace = true
 suite-packet-core.workspace = true
 testy-core.workspace = true
 blake3.workspace = true
-packet28-binary-codec.workspace = true
 tokio = { workspace = true, features = ["net"] }
 libc = "0.2"
 
