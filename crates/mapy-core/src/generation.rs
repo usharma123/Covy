@@ -139,6 +139,118 @@ impl RepoIndexRuntime {
     }
 }
 
+/// A feature-gated, validated repository generation awaiting manifest publication.
+///
+/// The handle owns the repository writer lock. Dropping it before
+/// [`Self::commit`] leaves the published manifest unchanged; dropping it after
+/// [`Self::publish`] performs a best-effort rollback to the exact manifest
+/// bytes observed before preparation.
+#[cfg(feature = "shared-repository-scan")]
+pub struct PreparedRepoIndexRuntime {
+    root: PathBuf,
+    _writer: GenerationWriterLock,
+    previous: Option<RepoIndexRuntimeManifest>,
+    previous_current_bytes: Option<Vec<u8>>,
+    previous_previous_bytes: Option<Vec<u8>>,
+    record: RepoIndexGenerationRecord,
+    runtime: RepoIndexRuntime,
+    published: bool,
+    committed: bool,
+}
+
+#[cfg(feature = "shared-repository-scan")]
+impl PreparedRepoIndexRuntime {
+    /// Publishes this validated generation while retaining rollback ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CovyError::Cache`] if this handle was already published or
+    /// the manifest cannot be atomically replaced.
+    pub fn publish(&mut self) -> Result<(), CovyError> {
+        self.publish_with(publish_manifest)
+    }
+
+    pub(crate) fn publish_with<F>(&mut self, publish: F) -> Result<(), CovyError>
+    where
+        F: FnOnce(
+            &Path,
+            Option<&RepoIndexRuntimeManifest>,
+            &RepoIndexRuntimeManifest,
+        ) -> Result<(), CovyError>,
+    {
+        if self.published {
+            return Err(cache_error(
+                "prepared repository generation was already published",
+            ));
+        }
+        self.published = true;
+        match publish(
+            &self.root,
+            self.previous.as_ref(),
+            &self.runtime.manifest,
+        ) {
+            Ok(()) => Ok(()),
+            Err(publication) => match self.rollback() {
+                Ok(()) => Err(publication),
+                Err(rollback) => Err(cache_error(format!(
+                    "repository generation publication failed ({publication}); restoring the pre-publication manifests also failed ({rollback})"
+                ))),
+            },
+        }
+    }
+
+    /// Restores both repository manifest files to their pre-publication bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CovyError::Cache`] if either manifest cannot be restored.
+    pub fn rollback(&mut self) -> Result<(), CovyError> {
+        if !self.published {
+            return Ok(());
+        }
+        restore_optional_file(
+            previous_manifest_path(&self.root),
+            self.previous_previous_bytes.as_deref(),
+        )?;
+        restore_optional_file(
+            manifest_path(&self.root),
+            self.previous_current_bytes.as_deref(),
+        )?;
+        self.published = false;
+        Ok(())
+    }
+
+    /// Finalizes a successfully paired publication and releases its writer lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CovyError::Cache`] if [`Self::publish`] has not succeeded.
+    pub fn commit(mut self) -> Result<RepoIndexRuntime, CovyError> {
+        if !self.published {
+            return Err(cache_error(
+                "prepared repository generation must be published before commit",
+            ));
+        }
+        let _ = prune_generation_artifacts(&self.root, &self.record, self.previous.as_ref());
+        self.committed = true;
+        Ok(self.runtime.clone())
+    }
+
+    /// Returns metadata for the validated generation without publishing it.
+    pub fn manifest(&self) -> &RepoIndexRuntimeManifest {
+        &self.runtime.manifest
+    }
+}
+
+#[cfg(feature = "shared-repository-scan")]
+impl Drop for PreparedRepoIndexRuntime {
+    fn drop(&mut self) {
+        if self.published && !self.committed {
+            let _ = self.rollback();
+        }
+    }
+}
+
 #[derive(Debug)]
 struct RepoIndexGeneration {
     base: Arc<RepoIndexSnapshot>,
@@ -252,6 +364,57 @@ fn publish_rebuilt_runtime(
     publish_manifest(root, previous.as_ref(), &manifest)?;
     let _ = prune_generation_artifacts(root, &record, previous.as_ref());
     Ok(runtime)
+}
+
+#[cfg(feature = "shared-repository-scan")]
+pub(crate) fn prepare_repo_index_runtime_with_writer(
+    root: &Path,
+    include_tests: bool,
+    snapshot: RepoIndexSnapshot,
+    writer: GenerationWriterLock,
+) -> Result<PreparedRepoIndexRuntime, CovyError> {
+    let previous_current_bytes = read_optional_file(&manifest_path(root))?;
+    let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
+    let previous = load_published_manifest(root).ok();
+    let generation = next_generation(previous.as_ref(), None);
+    let base_file = base_file_name(generation);
+    let base_bytes = wincode::serialize(&snapshot)
+        .map_err(|error| cache_error(format!("failed to encode repository base: {error}")))?;
+    write_atomic(repo_index_dir(root).join(&base_file), &base_bytes)?;
+    let base_digest = artifact_digest(&base_bytes);
+    let manifest = RepoIndexRuntimeManifest {
+        schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+        generation,
+        include_tests,
+        total_files: snapshot.files.len(),
+        overlay_files: 0,
+        segment_count: 0,
+        status: "ready".to_string(),
+        recovered_from_generation: None,
+        last_error: None,
+    };
+    let record = RepoIndexGenerationRecord {
+        schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+        generation,
+        base_file,
+        base_digest,
+        segment_files: Vec::new(),
+        segment_digests: Vec::new(),
+        manifest: manifest.clone(),
+    };
+    persist_generation_record(root, &record)?;
+    let runtime = load_generation(root, &manifest)?;
+    Ok(PreparedRepoIndexRuntime {
+        root: root.to_path_buf(),
+        _writer: writer,
+        previous,
+        previous_current_bytes,
+        previous_previous_bytes,
+        record,
+        runtime,
+        published: false,
+        committed: false,
+    })
 }
 
 /// Removes every persisted repository-index generation.
@@ -913,7 +1076,7 @@ fn next_generation(
         .saturating_add(1)
 }
 
-struct GenerationWriterLock(File);
+pub(crate) struct GenerationWriterLock(File);
 
 impl Drop for GenerationWriterLock {
     fn drop(&mut self) {
@@ -921,7 +1084,7 @@ impl Drop for GenerationWriterLock {
     }
 }
 
-fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock, CovyError> {
+pub(crate) fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock, CovyError> {
     let parent = root.join(".packet28").join("index");
     fs::create_dir_all(&parent).map_err(|error| {
         cache_error(format!(
@@ -949,6 +1112,33 @@ fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock, CovyError> {
         ))
     })?;
     Ok(GenerationWriterLock(file))
+}
+
+#[cfg(feature = "shared-repository-scan")]
+fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, CovyError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(cache_error(format!(
+            "failed to preserve index manifest '{}': {error}",
+            path.display()
+        ))),
+    }
+}
+
+#[cfg(feature = "shared-repository-scan")]
+fn restore_optional_file(path: PathBuf, bytes: Option<&[u8]>) -> Result<(), CovyError> {
+    match bytes {
+        Some(bytes) => write_atomic(path, bytes),
+        None => match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(cache_error(format!(
+                "failed to remove rolled-back manifest '{}': {error}",
+                path.display()
+            ))),
+        },
+    }
 }
 
 fn artifact_digest(bytes: &[u8]) -> String {

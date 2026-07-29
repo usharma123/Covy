@@ -34,6 +34,8 @@
 extern crate packet28_binary_codec as wincode;
 
 mod error;
+#[cfg(feature = "shared-repository-scan")]
+pub mod shared_scan;
 mod weights;
 
 use std::cmp::Reverse;

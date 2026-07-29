@@ -833,7 +833,10 @@ pub(crate) fn index_repo_path(
     }))
 }
 
-fn repo_index_from_scans(files: Vec<FileScan>, include_tests: bool) -> RepoIndexSnapshot {
+pub(crate) fn repo_index_from_scans(
+    files: Vec<FileScan>,
+    include_tests: bool,
+) -> RepoIndexSnapshot {
     let mut entries = BTreeMap::new();
     for file in files {
         let path = file.path.clone();

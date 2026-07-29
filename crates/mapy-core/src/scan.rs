@@ -8,6 +8,97 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ignore::WalkBuilder;
 use suite_packet_core::CovyError;
 
+pub(crate) struct RepoScanAccumulator {
+    root: PathBuf,
+    cache: RepoScanCache,
+    cache_dirty: bool,
+    seen: BTreeSet<String>,
+    out: Vec<FileScan>,
+}
+
+impl RepoScanAccumulator {
+    pub(crate) fn new(root: &Path, source_paths: &[String]) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            cache: load_scan_cache(root),
+            cache_dirty: false,
+            seen: source_paths.iter().cloned().collect(),
+            out: Vec::new(),
+        }
+    }
+
+    pub(crate) fn ingest(&mut self, rel: &str, metadata: &Metadata, bytes: &[u8]) {
+        let size = metadata.len();
+        let mtime_secs = metadata_mtime_secs(metadata);
+        let mtime_unix_nanos = metadata_mtime_unix_nanos(metadata);
+        let Ok(content) = std::str::from_utf8(bytes) else {
+            self.cache_dirty |= self.cache.files.remove(rel).is_some();
+            return;
+        };
+        let content_fingerprint = content_fingerprint(content);
+
+        if let Some(entry) = self.cache.files.get_mut(rel) {
+            if entry.size == size && entry.content_fingerprint == content_fingerprint {
+                if entry.mtime_secs != mtime_secs || entry.mtime_unix_nanos != mtime_unix_nanos {
+                    entry.mtime_secs = mtime_secs;
+                    entry.mtime_unix_nanos = mtime_unix_nanos;
+                    self.cache_dirty = true;
+                }
+                self.out.push(FileScan {
+                    path: rel.to_string(),
+                    size,
+                    symbols: entry.symbols.clone(),
+                    symbol_defs: entry.symbol_defs.clone(),
+                    imports: entry.imports.clone(),
+                    token_lines: entry.token_lines.clone(),
+                    mtime_secs,
+                });
+                return;
+            }
+        }
+
+        let (symbol_defs, imports, token_lines) = extract_index_metadata(rel, content);
+        let symbols = symbol_defs
+            .iter()
+            .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
+            .collect::<Vec<_>>();
+        self.cache.files.insert(
+            rel.to_string(),
+            CacheEntry {
+                size,
+                mtime_secs,
+                mtime_unix_nanos,
+                content_fingerprint,
+                symbols: symbols.clone(),
+                symbol_defs: symbol_defs.clone(),
+                imports: imports.clone(),
+                token_lines: token_lines.clone(),
+            },
+        );
+        self.cache_dirty = true;
+        self.out.push(FileScan {
+            path: rel.to_string(),
+            size,
+            symbols,
+            symbol_defs,
+            imports,
+            token_lines,
+            mtime_secs,
+        });
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<FileScan> {
+        let original_cache_len = self.cache.files.len();
+        self.cache.files.retain(|path, _| self.seen.contains(path));
+        self.cache_dirty |= self.cache.files.len() != original_cache_len;
+        if self.cache_dirty {
+            write_scan_cache(&self.root, &self.cache);
+        }
+        self.out.sort_by(|left, right| left.path.cmp(&right.path));
+        self.out
+    }
+}
+
 pub(crate) fn scan_repo(root: &Path, include_tests: bool) -> Result<Vec<FileScan>, CovyError> {
     scan_repo_with_progress(root, include_tests, |_, _| {})
 }
@@ -20,11 +111,8 @@ pub(crate) fn scan_repo_with_progress<F>(
 where
     F: FnMut(usize, usize),
 {
-    let mut out = Vec::new();
-    let mut cache = load_scan_cache(root);
-    let mut cache_dirty = false;
     let source_paths = discover_source_paths(root, include_tests)?;
-    let seen = source_paths.iter().cloned().collect::<BTreeSet<_>>();
+    let mut accumulator = RepoScanAccumulator::new(root, &source_paths);
     let total_files = source_paths.len();
     on_progress(0, total_files);
 
@@ -38,9 +126,6 @@ where
                 continue;
             }
         };
-        let size = metadata.len();
-        let mtime_secs = metadata_mtime_secs(&metadata);
-        let mtime_unix_nanos = metadata_mtime_unix_nanos(&metadata);
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -48,82 +133,10 @@ where
                 continue;
             }
         };
-        let content = match String::from_utf8(bytes) {
-            Ok(content) => content,
-            Err(_) => {
-                cache_dirty |= cache.files.remove(rel).is_some();
-                on_progress(idx + 1, total_files);
-                continue;
-            }
-        };
-        let content_fingerprint = content_fingerprint(&content);
-
-        let mut cached_scan = None;
-        if let Some(entry) = cache.files.get_mut(rel) {
-            if entry.size == size && entry.content_fingerprint == content_fingerprint {
-                if entry.mtime_secs != mtime_secs || entry.mtime_unix_nanos != mtime_unix_nanos {
-                    entry.mtime_secs = mtime_secs;
-                    entry.mtime_unix_nanos = mtime_unix_nanos;
-                    cache_dirty = true;
-                }
-                cached_scan = Some(FileScan {
-                    path: rel.clone(),
-                    size,
-                    symbols: entry.symbols.clone(),
-                    symbol_defs: entry.symbol_defs.clone(),
-                    imports: entry.imports.clone(),
-                    token_lines: entry.token_lines.clone(),
-                    mtime_secs,
-                });
-            }
-        }
-        if let Some(scan) = cached_scan {
-            out.push(scan);
-            on_progress(idx + 1, total_files);
-            continue;
-        }
-
-        let (symbol_defs, imports, token_lines) = extract_index_metadata(rel, &content);
-        let symbols = symbol_defs
-            .iter()
-            .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
-            .collect::<Vec<_>>();
-        cache.files.insert(
-            rel.clone(),
-            CacheEntry {
-                size,
-                mtime_secs,
-                mtime_unix_nanos,
-                content_fingerprint,
-                symbols: symbols.clone(),
-                symbol_defs: symbol_defs.clone(),
-                imports: imports.clone(),
-                token_lines: token_lines.clone(),
-            },
-        );
-        cache_dirty = true;
-
-        out.push(FileScan {
-            path: rel.clone(),
-            size,
-            symbols,
-            symbol_defs,
-            imports,
-            token_lines,
-            mtime_secs,
-        });
+        accumulator.ingest(rel, &metadata, &bytes);
         on_progress(idx + 1, total_files);
     }
-
-    let original_cache_len = cache.files.len();
-    cache.files.retain(|path, _| seen.contains(path));
-    cache_dirty |= cache.files.len() != original_cache_len;
-    if cache_dirty {
-        write_scan_cache(root, &cache);
-    }
-
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
+    Ok(accumulator.finish())
 }
 
 fn discover_source_paths(root: &Path, include_tests: bool) -> Result<Vec<String>, CovyError> {

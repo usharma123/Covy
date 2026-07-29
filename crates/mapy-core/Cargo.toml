@@ -11,6 +11,10 @@ homepage.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+shared-repository-scan = []
+
 [dependencies]
 blake3.workspace = true
 fs2 = "0.4"

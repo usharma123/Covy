@@ -4,6 +4,8 @@ mod ast;
 mod generation;
 mod runtime;
 mod scan;
+#[cfg(feature = "shared-repository-scan")]
+pub mod shared_scan;
 #[cfg(test)]
 mod tests;
 mod types;
