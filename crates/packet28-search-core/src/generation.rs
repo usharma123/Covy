@@ -23,7 +23,6 @@ use crate::paths::{
     generation_record_path, manifest_path, normalize_changed_paths, overlay_state_path,
     previous_manifest_path, regex_index_dir,
 };
-use crate::query::all_indexed_paths;
 use crate::support::{ensure_valid_index, now_unix, ResultContext};
 use crate::weights::WEIGHT_TABLE_VERSION;
 
@@ -300,7 +299,7 @@ pub fn update_overlay_index(
     manifest.generation = generation;
     manifest.status = "ready".to_string();
     manifest.last_build_started_at_unix = Some(started);
-    manifest.total_files = all_indexed_paths(&loaded_index, None).len();
+    manifest.total_files = loaded_index.all_indexed_paths(None).len();
     manifest.overlay_files = loaded_index.overlay_state.owners.len();
     manifest.overlay_segments = loaded_index.overlays.len();
     manifest.overlay_state_digest = Some(overlay_state_digest(&loaded_index.overlay_state)?);
@@ -785,7 +784,7 @@ pub(crate) fn validate_manifest_counts(
     manifest: &RegexIndexManifest,
     loaded: &LoadedIndex,
 ) -> Result<()> {
-    let actual_files = all_indexed_paths(loaded, None).len();
+    let actual_files = loaded.all_indexed_paths(None).len();
     ensure_valid_index!(
         manifest.overlay_files == loaded.overlay_state.owners.len()
             && manifest.overlay_segments == loaded.overlays.len()

@@ -1348,7 +1348,7 @@ fn literal_candidate_planning_caches_selected_hashes() {
     let root = dir.path();
     let runtime = build_fixture_index(root);
     let loaded = runtime.loaded.as_ref().expect("loaded index");
-    let all_paths = all_indexed_paths(loaded.as_ref(), None);
+    let all_paths = loaded.all_indexed_paths(None);
     let mut cache = QueryCache::default();
     let mut engine = SearchEngineStats::default();
     let literal = b"alpha_service".to_vec();

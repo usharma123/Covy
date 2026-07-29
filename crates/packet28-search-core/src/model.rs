@@ -126,6 +126,47 @@ pub(crate) struct LoadedIndex {
     pub(crate) overlay_state: OverlayState,
 }
 
+impl LoadedIndex {
+    pub(super) fn all_indexed_paths(
+        &self,
+        requested_filter: Option<&BTreeSet<String>>,
+    ) -> BTreeSet<String> {
+        let mut paths = BTreeSet::new();
+        for doc in &self.base.docs {
+            if self.overlay_state.shadowed_paths.contains(&doc.path) {
+                continue;
+            }
+            if path_allowed(&doc.path, requested_filter) {
+                paths.insert(doc.path.clone());
+            }
+        }
+        for segment in &self.overlays {
+            for doc in &segment.layer.docs {
+                if !self.overlay_doc_is_active(segment.generation, &doc.path) {
+                    continue;
+                }
+                if path_allowed(&doc.path, requested_filter) {
+                    paths.insert(doc.path.clone());
+                }
+            }
+        }
+        paths
+    }
+
+    pub(super) fn overlay_doc_is_active(&self, generation: u64, path: &str) -> bool {
+        !self.overlay_state.deleted_paths.contains(path)
+            && self.overlay_state.owners.get(path) == Some(&generation)
+    }
+}
+
+pub(super) fn path_allowed(path: &str, requested_filter: Option<&BTreeSet<String>>) -> bool {
+    requested_filter.is_none_or(|filters| {
+        filters
+            .iter()
+            .any(|filter| path == filter || path.starts_with(&format!("{filter}/")))
+    })
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedOverlaySegment {
     pub(crate) generation: u64,

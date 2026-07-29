@@ -14,9 +14,9 @@ use regex_syntax::hir::{Hir, HirKind};
 
 use crate::error::{Result, SearchError};
 use crate::model::{
-    CompiledSearch, LayerKind, LiteralWindow, LoadedIndex, LoadedLayer, PositionSummary,
-    PostingEntry, QueryCache, RegexIndexRuntime, SearchPlan, SparseCandidate, Verifier,
-    MAX_GRAM_BYTES, MAX_INDEX_VERIFY_CANDIDATES, MAX_INDEX_VERIFY_DENOMINATOR,
+    path_allowed, CompiledSearch, LayerKind, LiteralWindow, LoadedIndex, LoadedLayer,
+    PositionSummary, PostingEntry, QueryCache, RegexIndexRuntime, SearchPlan, SparseCandidate,
+    Verifier, MAX_GRAM_BYTES, MAX_INDEX_VERIFY_CANDIDATES, MAX_INDEX_VERIFY_DENOMINATOR,
     MAX_INDEX_VERIFY_NUMERATOR, MAX_LITERAL_COVER, MIN_GRAM_BYTES, POSITION_BUCKET_COUNT,
     SHORT_GRAM_BYTES,
 };
@@ -60,7 +60,7 @@ pub fn guarded_fallback_reason(
     }
     let (resolved_paths, _) = resolve_requested_paths(root, &request.requested_paths);
     let requested_filter = requested_filter_set(&resolved_paths);
-    let all_paths = all_indexed_paths(loaded.as_ref(), requested_filter.as_ref());
+    let all_paths = loaded.all_indexed_paths(requested_filter.as_ref());
     let mut engine = SearchEngineStats {
         engine: "indexed_regex".to_string(),
         index_generation: Some(runtime.manifest.generation),
@@ -140,7 +140,7 @@ pub fn indexed_search(
     };
     let mut cache = QueryCache::default();
 
-    let all_paths = all_indexed_paths(loaded.as_ref(), requested_filter.as_ref());
+    let all_paths = loaded.all_indexed_paths(requested_filter.as_ref());
     if let Some(reason) = compiled
         .must_fallback_reason
         .clone()
@@ -383,7 +383,7 @@ pub(crate) fn assess_plan_strength(
                     None => return None,
                 }
             }
-            let total_paths = all_indexed_paths(loaded, None).len().max(1);
+            let total_paths = loaded.all_indexed_paths(None).len().max(1);
             let estimated_candidates = estimate_plan_cardinality(loaded, plan, None, total_paths);
             if saw_strong || estimated_candidates.saturating_mul(2) <= total_paths {
                 return Some(PlanStrength::Strong);
@@ -417,7 +417,7 @@ pub(crate) fn literal_strength_with_siblings(
     literal: &[u8],
     sibling_literal_count: usize,
 ) -> PlanStrength {
-    let total_paths = all_indexed_paths(loaded, None).len().max(1);
+    let total_paths = loaded.all_indexed_paths(None).len().max(1);
     let min_docs = select_covering_candidates(loaded, literal)
         .into_iter()
         .map(|candidate| {
@@ -787,7 +787,7 @@ pub(crate) fn estimate_hash_cardinality(
             if let Some(entries) = lookup_doc_ids_quiet(&segment.layer, hash) {
                 for entry in entries {
                     if let Some(doc) = segment.layer.docs.get(entry.doc_id as usize) {
-                        if !overlay_doc_is_active(loaded, segment.generation, &doc.path) {
+                        if !loaded.overlay_doc_is_active(segment.generation, &doc.path) {
                             continue;
                         }
                         if filter.contains(&doc.path) {
@@ -883,7 +883,7 @@ pub(crate) fn paths_for_hash(
         )? {
             for entry in entries {
                 if let Some(doc) = segment.layer.docs.get(entry.doc_id as usize) {
-                    if !overlay_doc_is_active(loaded, segment.generation, &doc.path) {
+                    if !loaded.overlay_doc_is_active(segment.generation, &doc.path) {
                         continue;
                     }
                     if path_allowed(&doc.path, requested_filter) {
@@ -1277,48 +1277,9 @@ pub(crate) fn requested_filter_set(paths: &[String]) -> Option<BTreeSet<String>>
     (!paths.is_empty()).then(|| paths.iter().cloned().collect())
 }
 
-pub(crate) fn all_indexed_paths(
-    loaded: &LoadedIndex,
-    requested_filter: Option<&BTreeSet<String>>,
-) -> BTreeSet<String> {
-    let mut paths = BTreeSet::new();
-    for doc in &loaded.base.docs {
-        if loaded.overlay_state.shadowed_paths.contains(&doc.path) {
-            continue;
-        }
-        if path_allowed(&doc.path, requested_filter) {
-            paths.insert(doc.path.clone());
-        }
-    }
-    for segment in &loaded.overlays {
-        for doc in &segment.layer.docs {
-            if !overlay_doc_is_active(loaded, segment.generation, &doc.path) {
-                continue;
-            }
-            if path_allowed(&doc.path, requested_filter) {
-                paths.insert(doc.path.clone());
-            }
-        }
-    }
-    paths
-}
-
-pub(crate) fn overlay_doc_is_active(loaded: &LoadedIndex, generation: u64, path: &str) -> bool {
-    !loaded.overlay_state.deleted_paths.contains(path)
-        && loaded.overlay_state.owners.get(path) == Some(&generation)
-}
-
 pub(crate) fn overlay_posting_count(loaded: &LoadedIndex, hash: u64) -> u32 {
     loaded.overlays.iter().fold(0u32, |count, segment| {
         count.saturating_add(lookup_posting_count(&segment.layer, hash).unwrap_or(0))
-    })
-}
-
-pub(crate) fn path_allowed(path: &str, requested_filter: Option<&BTreeSet<String>>) -> bool {
-    requested_filter.is_none_or(|filters| {
-        filters
-            .iter()
-            .any(|filter| path == filter || path.starts_with(&format!("{filter}/")))
     })
 }
 pub(crate) fn render_compact_preview(total_match_count: usize, groups: &[SearchGroup]) -> String {
