@@ -86,11 +86,19 @@ fn delete_pending_extractions_on(conn: &rusqlite::Connection, ids: &[i64]) -> Re
     if ids.is_empty() {
         return Ok(0);
     }
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!("DELETE FROM pending_extractions WHERE id IN ({placeholders})");
-    let params: Vec<&dyn rusqlite::ToSql> =
-        ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
-    conn.execute(&sql, params.as_slice()).map_err(Into::into)
+    let mut sql = String::with_capacity(
+        "DELETE FROM pending_extractions WHERE id IN ()".len() + ids.len() * 2,
+    );
+    sql.push_str("DELETE FROM pending_extractions WHERE id IN (");
+    for index in 0..ids.len() {
+        if index > 0 {
+            sql.push(',');
+        }
+        sql.push('?');
+    }
+    sql.push(')');
+    conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))
+        .map_err(Into::into)
 }
 
 pub(crate) fn process_pending_extractions(
@@ -285,6 +293,36 @@ fn extract_durable_facts(raw_output: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_extraction_delete_streams_homogeneous_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalMemoryStore::open_path(temp.path().join("memory.db")).unwrap();
+        for id in 1..=3 {
+            store
+                .execute(
+                    "INSERT INTO pending_extractions
+                     (id, project, tool_name, raw_output, captured_at_unix_ms)
+                     VALUES (?1, 'packet28', 'test', 'durable tool result', ?1)",
+                    params![id],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(delete_pending_extractions_on(&store, &[]).unwrap(), 0);
+        assert_eq!(table_count(&store, "pending_extractions").unwrap(), 3);
+        assert_eq!(
+            delete_pending_extractions_on(&store, &[1, 3, 99]).unwrap(),
+            2
+        );
+        assert_eq!(table_count(&store, "pending_extractions").unwrap(), 1);
+        let remaining_id = store
+            .query_row("SELECT id FROM pending_extractions", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!(remaining_id, 2);
+    }
 
     #[test]
     fn pending_extraction_batch_rolls_back_memories_when_delete_fails() {
