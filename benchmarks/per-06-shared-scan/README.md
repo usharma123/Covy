@@ -80,6 +80,8 @@ one-pass ownership, and reduced reads/bytes.
 
 ## Recorded release results
 
+### Bounded prototype
+
 The complete nine raw iterations, output digests, method metadata, toolchain,
 host, and source identity are preserved in `result.json`.
 
@@ -100,12 +102,44 @@ stable. The shared prototype retained at most one content buffer; its largest
 buffer was 16,384 bytes in the small fixture and 2,621,440 bytes in the large
 fixture, matching a currently required map-only oversize source file.
 
+### Feature-gated production coordinator
+
+`production-result.json` preserves the six balanced release pairs from a clean
+checkout of `c65a5dcbfdeaa79a115f7e8361aada7bbba1d97a`. The run used Rust
+1.93.0 on an Apple M4 Pro host with 24 GB of memory and 14 available hardware
+threads. Before measurement, the literal default entry points matched the
+instrumented two-pass counterfactual. Map snapshots, regex
+documents/postings/lookup artifacts, query results, fixture-policy oracles,
+and repository-input counters then remained stable and equal where required
+for every measured pair.
+
+| Metric | Small separate | Small shared | Change | Large separate | Large shared | Change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Walk passes | 2 | 1 | -1 | 2 | 1 | -1 |
+| Walker entries | 836 | 415 | -421 | 198 | 96 | -102 |
+| Classification metadata queries | 836 | 2 | -834 | 198 | 2 | -196 |
+| Content metadata calls | 734 | 408 | -326 | 148 | 89 | -59 |
+| Successful reads | 734 | 408 | -326 | 140 | 85 | -55 |
+| Bytes read | 3,612,932 | 2,134,171 | -1,478,761 | 71,827,716 | 53,739,675 | -18,088,041 |
+| Peak retained content buffer | 8,192 B | 8,192 B | 0 | 2,621,440 B | 2,621,440 B | 0 |
+| Raw-arm median elapsed | 844,991,854 ns | 829,551,416 ns | secondary | 11,662,904,750 ns | 11,735,124,396 ns | secondary |
+| Median paired elapsed delta | — | — | -0.88% | — | — | +0.94% |
+
+The production coordinator therefore removes one repository walk and
+deterministically reduces successful repository reads and input bytes without
+increasing the largest live raw-content buffer. The paired timing result is
+mixed: the small-file fixture favored sharing slightly, while the large-file
+fixture slightly favored the separate counterfactual. These are
+recently-written-cache, machine-local observations and are not treated as a
+cold-I/O or default-enablement result.
+
 ## Evidence boundary and decision
 
 Accepted: the experiment justifies a non-default, feature-gated production
-parity implementation. The conclusion rests on identical modeled-consumer
-digests plus deterministic reductions on both fixture shapes, not on warm-cache
-latency alone.
+parity implementation, and the production harness verifies that implementation
+against the literal default builders on controlled fixtures. The conclusion
+rests on exact output and policy parity plus deterministic repository-input
+reductions on both fixture shapes, not on warm-cache latency alone.
 
 The smallest sound production seam is:
 
@@ -117,10 +151,10 @@ The smallest sound production seam is:
 5. incremental changed-path updates remain direct because they do not perform
    duplicate repository walks.
 
-The experiment does not by itself justify enabling that path by default. A
-feature-gated integration must first prove exact production map snapshots,
-regex generation documents/postings, ignore and malformed-input behavior,
-progress totals, corruption recovery, and generation publication parity. It
-must then run an end-to-end release index benchmark; the BLAKE3 consumers here
-are intentionally not substitutes for tree-sitter parsing or regex gram
-construction.
+The evidence does not justify enabling the path by default. Keep
+`shared-repository-scan` non-default until the same production parity harness
+passes on Linux and opt-in daemon field telemetry demonstrates a stable
+latency/resource benefit on real repositories. The checked-in result covers
+one macOS filesystem/host, controlled fixture policies, production tree-sitter
+and regex construction, publication, and recently written roots; it does not
+claim parity for every filesystem or a physical-kernel-I/O speedup.
