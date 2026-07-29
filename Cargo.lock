@@ -371,6 +371,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "context-kernel-mechanism"
+version = "0.2.63"
+dependencies = [
+ "context-memory-core",
+ "context-scheduler-core",
+ "serde",
+ "serde_json",
+ "suite-packet-core",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "context-memory-core"
 version = "0.2.63"
 dependencies = [

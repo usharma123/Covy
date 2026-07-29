@@ -16,6 +16,7 @@ packages = [
   "buildy-core",
   "context-instruct-shim",
   "context-kernel-core",
+  "context-kernel-mechanism",
   "context-memory-core",
   "context-scheduler-core",
   "contextq-core",
