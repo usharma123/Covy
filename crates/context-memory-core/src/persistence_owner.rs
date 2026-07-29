@@ -20,6 +20,8 @@ const PERSISTENCE_DEBOUNCE: Duration = Duration::from_millis(20);
 const CHECKPOINT_DELTA_THRESHOLD: u64 = 256;
 const CHECKPOINT_WAL_BYTES_THRESHOLD: u64 = 4 * 1024 * 1024;
 const PERSISTENCE_COORDINATION_FILE: &str = "packet-cache-v3.lock";
+const LEGACY_COORDINATION_STATE_LEN: usize = std::mem::size_of::<u64>();
+const COORDINATION_STATE_LEN: usize = std::mem::size_of::<u64>() * 2;
 const MAX_DIRTY_DELTAS: usize = 4_096;
 
 type CachePersistenceRegistry = HashMap<PathBuf, Weak<RootPersistenceSlot>>;
@@ -297,6 +299,12 @@ struct LockedPersistenceRoot<'a> {
     file: &'a mut File,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PersistenceCoordinationState {
+    generation: u64,
+    ttl_secs: Option<u64>,
+}
+
 impl RootPersistenceLock {
     fn open(config: &PersistConfig) -> Result<Self, CachePersistenceError> {
         let cache_dir = config.root_dir.join(crate::PERSIST_CACHE_DIR);
@@ -353,28 +361,85 @@ fn signal_before_test_root_lock(path: &Path) {
 }
 
 impl LockedPersistenceRoot<'_> {
-    fn generation(&mut self) -> Result<u64, CachePersistenceError> {
+    fn read_state(&mut self) -> Result<PersistenceCoordinationState, CachePersistenceError> {
         let length = self
             .file
             .seek(SeekFrom::End(0))
             .map_err(|source| io_error("coordination generation read", source))?;
         if length == 0 {
-            return Ok(0);
-        }
-        if length != std::mem::size_of::<u64>() as u64 {
-            return Err(CachePersistenceError::Io {
-                operation: "coordination generation read",
-                detail: format!("expected 8-byte generation marker, found {length} bytes"),
+            return Ok(PersistenceCoordinationState {
+                generation: 0,
+                ttl_secs: None,
             });
         }
+        let encoded_len = if length == LEGACY_COORDINATION_STATE_LEN as u64 {
+            LEGACY_COORDINATION_STATE_LEN
+        } else if length == COORDINATION_STATE_LEN as u64 {
+            COORDINATION_STATE_LEN
+        } else {
+            return Err(CachePersistenceError::Io {
+                operation: "coordination generation read",
+                detail: format!(
+                    "expected {LEGACY_COORDINATION_STATE_LEN}-byte legacy or \
+                     {COORDINATION_STATE_LEN}-byte policy marker, found {length} bytes"
+                ),
+            });
+        };
         self.file
             .seek(SeekFrom::Start(0))
             .map_err(|source| io_error("coordination generation read", source))?;
-        let mut encoded = [0u8; std::mem::size_of::<u64>()];
+        let mut encoded = [0u8; COORDINATION_STATE_LEN];
         self.file
-            .read_exact(&mut encoded)
+            .read_exact(&mut encoded[..encoded_len])
             .map_err(|source| io_error("coordination generation read", source))?;
-        Ok(u64::from_le_bytes(encoded))
+        let mut generation_bytes = [0u8; std::mem::size_of::<u64>()];
+        generation_bytes.copy_from_slice(&encoded[..LEGACY_COORDINATION_STATE_LEN]);
+        let ttl_secs = if encoded_len == COORDINATION_STATE_LEN {
+            let mut ttl_bytes = [0u8; std::mem::size_of::<u64>()];
+            ttl_bytes.copy_from_slice(&encoded[LEGACY_COORDINATION_STATE_LEN..]);
+            Some(u64::from_le_bytes(ttl_bytes))
+        } else {
+            None
+        };
+        Ok(PersistenceCoordinationState {
+            generation: u64::from_le_bytes(generation_bytes),
+            ttl_secs,
+        })
+    }
+
+    fn write_state(&mut self, generation: u64, ttl_secs: u64) -> Result<(), CachePersistenceError> {
+        self.file
+            .seek(SeekFrom::Start(0))
+            .map_err(|source| io_error("coordination state write", source))?;
+        self.file
+            .write_all(&generation.to_le_bytes())
+            .and_then(|()| self.file.write_all(&ttl_secs.to_le_bytes()))
+            .map_err(|source| io_error("coordination state write", source))?;
+        self.file
+            .set_len(COORDINATION_STATE_LEN as u64)
+            .map_err(|source| io_error("coordination state write", source))?;
+        self.file
+            .sync_data()
+            .map_err(|source| io_error("coordination state write", source))
+    }
+
+    fn bind_ttl(&mut self, requested_ttl_secs: u64) -> Result<u64, CachePersistenceError> {
+        let state = self.read_state()?;
+        if let Some(existing_ttl_secs) = state.ttl_secs {
+            if existing_ttl_secs != requested_ttl_secs {
+                return Err(CachePersistenceError::ConfigurationConflict {
+                    existing_ttl_secs,
+                    requested_ttl_secs,
+                });
+            }
+        } else {
+            self.write_state(state.generation, requested_ttl_secs)?;
+        }
+        Ok(state.generation)
+    }
+
+    fn generation(&mut self) -> Result<u64, CachePersistenceError> {
+        Ok(self.read_state()?.generation)
     }
 
     fn advance_generation(&mut self, current: u64) -> Result<u64, CachePersistenceError> {
@@ -384,18 +449,14 @@ impl LockedPersistenceRoot<'_> {
                 operation: "coordination generation write",
                 detail: "generation counter exhausted".to_string(),
             })?;
-        self.file
-            .seek(SeekFrom::Start(0))
-            .map_err(|source| io_error("coordination generation write", source))?;
-        self.file
-            .write_all(&next.to_le_bytes())
-            .map_err(|source| io_error("coordination generation write", source))?;
-        self.file
-            .set_len(std::mem::size_of::<u64>() as u64)
-            .map_err(|source| io_error("coordination generation write", source))?;
-        self.file
-            .sync_data()
-            .map_err(|source| io_error("coordination generation write", source))?;
+        let ttl_secs = self
+            .read_state()?
+            .ttl_secs
+            .ok_or_else(|| CachePersistenceError::Io {
+                operation: "coordination generation write",
+                detail: "root TTL policy is not bound".to_string(),
+            })?;
+        self.write_state(next, ttl_secs)?;
         Ok(next)
     }
 }
@@ -423,7 +484,7 @@ pub enum CachePersistenceError {
     #[error("failed to start cache persistence worker: {detail}")]
     Start { detail: String },
 
-    /// A live owner already uses the root with a different retention policy.
+    /// The persistence root already uses a different retention policy.
     #[error(
         "cache persistence root already uses ttl {existing_ttl_secs}s; \
          requested ttl was {requested_ttl_secs}s"
@@ -626,8 +687,8 @@ impl CachePersistence {
         let mut root_lock = RootPersistenceLock::open(&config)?;
         let (cache, observed_generation) = {
             let mut locked_root = root_lock.lock()?;
+            let current = locked_root.bind_ttl(config.ttl_secs)?;
             let mut cache = PacketCache::load_from_disk(&config);
-            let current = locked_root.generation()?;
             let repaired_wal = repair_torn_wal_tail(&config, &cache)?;
             let promoted_legacy = promote_legacy_checkpoint(&config, &mut cache)?;
             let observed_generation = if repaired_wal || promoted_legacy {
@@ -1264,7 +1325,7 @@ impl PersistenceWorker {
             let next_generation = locked_root.advance_generation(durable_generation)?;
             self.metrics
                 .coordination_bytes
-                .fetch_add(std::mem::size_of::<u64>() as u64, Ordering::Relaxed);
+                .fetch_add(COORDINATION_STATE_LEN as u64, Ordering::Relaxed);
             let sequence = self.cache.persisted_sequence.saturating_add(1);
             let wal_bytes = append_wal_record(&self.config, sequence, &deltas)
                 .map_err(|source| io_error("WAL append", source))?;
@@ -1348,7 +1409,7 @@ impl PersistenceWorker {
         let next_generation = locked_root.advance_generation(durable_generation)?;
         self.metrics
             .coordination_bytes
-            .fetch_add(std::mem::size_of::<u64>() as u64, Ordering::Relaxed);
+            .fetch_add(COORDINATION_STATE_LEN as u64, Ordering::Relaxed);
         let checkpoint_bytes = self
             .cache
             .write_checkpoint(&self.config)
@@ -1630,6 +1691,87 @@ mod tests {
             2,
             "persistence_owner::tests::v2_baseline_survives_process_exit_after_first_wal_flush",
         );
+    }
+
+    #[test]
+    fn legacy_generation_marker_binds_ttl_without_resetting_generation() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let cache_dir = root.join(crate::PERSIST_CACHE_DIR);
+        fs::create_dir_all(&cache_dir).unwrap();
+        let lock_path = cache_dir.join(PERSISTENCE_COORDINATION_FILE);
+        fs::write(&lock_path, 42_u64.to_le_bytes()).unwrap();
+        let config = PersistConfig::new(root).with_ttl_secs(7_200);
+
+        let owner = CachePersistence::open(config).unwrap();
+        let encoded = fs::read(lock_path).unwrap();
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+
+        let mut generation = [0_u8; std::mem::size_of::<u64>()];
+        generation.copy_from_slice(&encoded[..LEGACY_COORDINATION_STATE_LEN]);
+        let mut ttl_secs = [0_u8; std::mem::size_of::<u64>()];
+        ttl_secs.copy_from_slice(&encoded[LEGACY_COORDINATION_STATE_LEN..]);
+        assert_eq!(
+            (
+                encoded.len(),
+                u64::from_le_bytes(generation),
+                u64::from_le_bytes(ttl_secs),
+            ),
+            (COORDINATION_STATE_LEN, 42, 7_200)
+        );
+    }
+
+    #[test]
+    fn mismatched_ttl_is_rejected_across_processes_without_expiring_entries() {
+        const CHILD_ROOT: &str = "PACKET28_TTL_POLICY_CHILD_ROOT";
+        if let Ok(root) = std::env::var(CHILD_ROOT) {
+            let config = PersistConfig::new(PathBuf::from(root)).with_ttl_secs(1);
+            let error = match CachePersistence::open(config) {
+                Ok(_) => panic!("mismatched TTL unexpectedly opened"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error,
+                CachePersistenceError::ConfigurationConflict {
+                    existing_ttl_secs: 0,
+                    requested_ttl_secs: 1,
+                }
+            );
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let config = PersistConfig::new(root.clone()).with_ttl_secs(0);
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let (entry, reservation) = {
+            let mut cache = lock_recover(&memory);
+            let reservation = owner.reserve_mutation(1).unwrap();
+            let entry = put_entry(&mut cache, 82_000, 32);
+            (entry, reservation)
+        };
+        owner
+            .record_update_reserved(&entry, Vec::new(), reservation)
+            .unwrap();
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+        let checkpoint_path = persist_cache_path_v3(&root);
+        let checkpoint_before = fs::read(&checkpoint_path).unwrap();
+
+        let test_name = "persistence_owner::tests::\
+            mismatched_ttl_is_rejected_across_processes_without_expiring_entries";
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env(CHILD_ROOT, &root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let loaded = PacketCache::load_from_disk(&config);
+        assert_eq!(fs::read(checkpoint_path).unwrap(), checkpoint_before);
+        assert!(loaded.get(&entry.cache_key).is_some());
     }
 
     fn test_persistence_handle(

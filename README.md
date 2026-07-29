@@ -202,7 +202,9 @@ binary codec. A matching `.packet28/packet-cache-v3.backup.bin` baseline is
 made durable before the primary checkpoint and WAL reset. Checksummed
 dirty-entry deltas are staged in `.packet28/packet-cache-v3.wal` between
 debounced checkpoints, while `.packet28/packet-cache-v3.lock` serializes
-cross-process WAL sequence and checkpoint changes.
+cross-process WAL sequence and checkpoint changes. The lock state also binds
+the root's TTL policy so another process cannot checkpoint the same cache with
+a different retention window.
 
 Unauthenticated legacy raw V3 checkpoint payloads are deliberately rejected:
 cache state is disposable, and accepting a structurally decodable but
