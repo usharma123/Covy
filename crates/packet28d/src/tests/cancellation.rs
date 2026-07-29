@@ -1,5 +1,6 @@
 use super::support::{daemon_test_root, daemon_test_state, insert_admitted_task_record};
 use super::*;
+use packet28_daemon_core::storage::load_task_registry;
 use std::os::unix::process::CommandExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -32,8 +33,9 @@ fn wait_until_cancelled(generation: &TaskGenerationToken) {
 }
 
 #[test]
-fn cancel_before_start_is_idempotent_and_stale_events_do_not_resurrect_task() {
+fn cancel_before_start_persists_terminal_history_and_rejects_stale_events() {
     let state = daemon_test_state();
+    let root = daemon_test_root(&state);
     let generation = insert_task_generation(&state, "task-cancel-before-start");
     let (subscriber, mut receiver) = tokio::sync::mpsc::channel(1);
     state.lock().unwrap().subscribers.insert(
@@ -44,14 +46,16 @@ fn cancel_before_start_is_idempotent_and_stale_events_do_not_resurrect_task() {
         }],
     );
 
-    let (removed, watch_ids) = cancel_task(state.clone(), "task-cancel-before-start").unwrap();
-    assert!(removed.is_some());
+    let (terminal, watch_ids) = cancel_task(state.clone(), "task-cancel-before-start").unwrap();
+    let terminal = terminal.unwrap();
+    assert_eq!(terminal.lifecycle, TaskLifecycle::Cancelled);
+    assert_eq!(terminal.last_event_seq, 1);
     assert!(watch_ids.is_empty());
     assert!(generation.is_cancelled());
 
-    let (removed_again, watch_ids_again) =
+    let (terminal_again, watch_ids_again) =
         cancel_task(state.clone(), "task-cancel-before-start").unwrap();
-    assert!(removed_again.is_none());
+    assert_eq!(terminal_again.unwrap().lifecycle, TaskLifecycle::Cancelled);
     assert!(watch_ids_again.is_empty());
     assert!(!emit_task_event_for_generation(
         state.clone(),
@@ -61,16 +65,35 @@ fn cancel_before_start_is_idempotent_and_stale_events_do_not_resurrect_task() {
         json!({"stale": true}),
     )
     .unwrap());
-    assert!(!state
-        .lock()
-        .unwrap()
-        .tasks
-        .tasks
-        .contains_key("task-cancel-before-start"));
+    assert_eq!(
+        state.lock().unwrap().tasks.tasks["task-cancel-before-start"].lifecycle,
+        TaskLifecycle::Cancelled
+    );
+    let cancellation = receiver.try_recv().unwrap();
+    assert_eq!(cancellation.seq, 1);
+    assert_eq!(cancellation.event.kind, "task_cancelled");
     assert!(matches!(
         receiver.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
     ));
+    flush_persistence(&state).unwrap();
+    let persisted = load_task_registry(&root).unwrap();
+    assert_eq!(
+        persisted.tasks["task-cancel-before-start"].lifecycle,
+        TaskLifecycle::Cancelled
+    );
+    let events = load_task_events(&root, "task-cancel-before-start").unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event.kind, "task_cancelled");
+
+    let error = run_sequence_for_task(state.clone(), "task-cancel-before-start").unwrap_err();
+    assert!(error.to_string().contains("cannot start task work"));
+    assert!(state
+        .lock()
+        .unwrap()
+        .task_generations
+        .current("task-cancel-before-start")
+        .is_none());
 }
 
 #[test]
@@ -94,10 +117,35 @@ fn cancel_waits_for_inflight_completion_and_same_id_reuse_rejects_old_generation
     )
     .unwrap());
     drop(sequence_lease);
-    let (removed, _) = cancel_thread.join().unwrap().unwrap();
-    assert!(removed.is_some());
+    let (terminal, _) = cancel_thread.join().unwrap().unwrap();
+    assert_eq!(terminal.unwrap().lifecycle, TaskLifecycle::Cancelled);
 
-    let new_generation = insert_task_generation(&state, "task-generation-race");
+    let (watch_tx, _watch_rx) = WatchIngress::new(4);
+    let (replacement, registrations) = register_task_and_watches(
+        state.clone(),
+        watch_tx,
+        TaskSubmitSpec {
+            task_id: "task-generation-race".to_string(),
+            sequence: context_kernel_core::KernelSequenceRequest {
+                steps: vec![KernelStepRequest {
+                    id: "replacement".to_string(),
+                    target: "replacement.noop".to_string(),
+                    ..KernelStepRequest::default()
+                }],
+                ..context_kernel_core::KernelSequenceRequest::default()
+            },
+            ..TaskSubmitSpec::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(replacement.lifecycle, TaskLifecycle::Idle);
+    assert!(registrations.is_empty());
+    let new_generation = state
+        .lock()
+        .unwrap()
+        .task_generations
+        .current("task-generation-race")
+        .unwrap();
     assert_ne!(old_generation.id(), new_generation.id());
     assert!(!emit_task_event_for_generation(
         state.clone(),
@@ -117,7 +165,7 @@ fn cancel_waits_for_inflight_completion_and_same_id_reuse_rejects_old_generation
     .unwrap());
     let guard = state.lock().unwrap();
     let task = guard.tasks.tasks.get("task-generation-race").unwrap();
-    assert_eq!(task.last_event_seq, 1);
+    assert_eq!(task.last_event_seq, 2);
 }
 
 #[test]
@@ -182,8 +230,8 @@ fn cancel_between_steps_stops_the_next_reducer_and_suppresses_completion() {
 
     let run_error = run_thread.join().unwrap().unwrap_err();
     assert!(run_error.to_string().contains("cancelled"));
-    let (removed, _) = cancel_thread.join().unwrap().unwrap();
-    assert!(removed.is_some());
+    let (terminal, _) = cancel_thread.join().unwrap().unwrap();
+    assert_eq!(terminal.unwrap().lifecycle, TaskLifecycle::Cancelled);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(load_task_events(&root, "task-between-steps")
         .unwrap()
@@ -244,18 +292,16 @@ fn cancel_terminates_process_group_and_waits_for_child_reap() {
     }
 
     let cancel_started = Instant::now();
-    let (removed, _) = cancel_task(state.clone(), "task-child-cancel").unwrap();
-    assert!(removed.is_some());
+    let (terminal, _) = cancel_task(state.clone(), "task-child-cancel").unwrap();
+    assert_eq!(terminal.unwrap().lifecycle, TaskLifecycle::Cancelled);
     assert!(
         cancel_started.elapsed() < Duration::from_secs(10),
         "child cancellation exceeded the bounded reap window"
     );
-    assert!(!state
-        .lock()
-        .unwrap()
-        .tasks
-        .tasks
-        .contains_key("task-child-cancel"));
+    assert_eq!(
+        state.lock().unwrap().tasks.tasks["task-child-cancel"].lifecycle,
+        TaskLifecycle::Cancelled
+    );
     assert!(load_task_events(&root, "task-child-cancel")
         .unwrap()
         .iter()

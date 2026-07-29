@@ -76,6 +76,8 @@ use packet28_daemon_protocol::paths::{
 };
 #[cfg(test)]
 use packet28_daemon_protocol::paths::{ready_path, task_event_log_path, task_version_json_path};
+#[cfg(test)]
+use packet28_daemon_protocol::task::TaskLifecycle;
 use packet28_daemon_protocol::task::{
     TaskAwaitHandoffRequest, TaskAwaitHandoffResponse, TaskLaunchAgentRequest,
     TaskLaunchAgentResponse, TaskRecord, TaskRegistry, WatchRegistration, WatchRegistry,

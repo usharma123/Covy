@@ -2,12 +2,15 @@
 
 use super::*;
 
-/// Runtime task state represented on the legacy wire as three boolean fields.
+/// Runtime task state represented on the wire as compatible boolean fields.
 ///
 /// The enum prevents callers from constructing contradictory combinations such
 /// as a task that is both cancelled and pending a replan. Serialization keeps
 /// the original `running`, `cancel_requested`, and `pending_replan` fields so
-/// existing task registries and clients remain compatible.
+/// existing task registries and clients remain compatible. The additive
+/// `cancelled` field is emitted only for the terminal state and distinguishes
+/// it from an in-progress cancellation; older readers continue to observe
+/// `cancel_requested = true`, while existing states keep their exact shape.
 ///
 /// # Examples
 ///
@@ -52,6 +55,8 @@ pub enum TaskLifecycle {
         /// Whether sequence work was active when cancellation began.
         was_running: bool,
     },
+    /// Cancellation completed after all owned work and children quiesced.
+    Cancelled,
 }
 
 impl TaskLifecycle {
@@ -66,6 +71,11 @@ impl TaskLifecycle {
     /// Returns whether cancellation has been requested.
     pub const fn is_cancelling(self) -> bool {
         matches!(self, Self::Cancelling { .. })
+    }
+
+    /// Returns whether cancellation completed and the record is terminal.
+    pub const fn is_cancelled(self) -> bool {
+        matches!(self, Self::Cancelled)
     }
 
     /// Returns whether another sequence run is pending.
@@ -109,7 +119,7 @@ impl TaskLifecycle {
                 false
             }
             Self::ReplanPending | Self::RunningReplanPending => false,
-            Self::Cancelling { .. } => {
+            Self::Cancelling { .. } | Self::Cancelled => {
                 return Err(TaskLifecycleTransitionError {
                     from: *self,
                     action: TaskLifecycleAction::RequestReplan,
@@ -145,7 +155,7 @@ impl TaskLifecycle {
     ///
     /// Returns `true` only for the first cancellation request.
     pub fn request_cancel(&mut self) -> bool {
-        if self.is_cancelling() {
+        if self.is_cancelling() || self.is_cancelled() {
             return false;
         }
         *self = Self::Cancelling {
@@ -154,15 +164,38 @@ impl TaskLifecycle {
         true
     }
 
+    /// Completes cancellation after all owned work has quiesced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskLifecycleTransitionError`] unless cancellation is in
+    /// progress.
+    pub fn complete_cancel(&mut self) -> Result<(), TaskLifecycleTransitionError> {
+        match *self {
+            Self::Cancelling { .. } => {
+                *self = Self::Cancelled;
+                Ok(())
+            }
+            from => Err(TaskLifecycleTransitionError {
+                from,
+                action: TaskLifecycleAction::CompleteCancel,
+            }),
+        }
+    }
+
     const fn legacy_flags(self) -> TaskLifecycleWire {
         TaskLifecycleWire {
             running: self.is_running(),
-            cancel_requested: self.is_cancelling(),
+            cancel_requested: self.is_cancelling() || self.is_cancelled(),
             pending_replan: self.has_pending_replan(),
+            cancelled: self.is_cancelled(),
         }
     }
 
     const fn from_legacy_flags(flags: TaskLifecycleWire) -> Self {
+        if flags.cancelled {
+            return Self::Cancelled;
+        }
         match (flags.running, flags.cancel_requested, flags.pending_replan) {
             (running, true, _) => Self::Cancelling {
                 was_running: running,
@@ -183,10 +216,13 @@ impl Serialize for TaskLifecycle {
         use serde::ser::SerializeMap;
 
         let flags = self.legacy_flags();
-        let mut map = serializer.serialize_map(Some(3))?;
+        let mut map = serializer.serialize_map(Some(if flags.cancelled { 4 } else { 3 }))?;
         map.serialize_entry("running", &flags.running)?;
         map.serialize_entry("cancel_requested", &flags.cancel_requested)?;
         map.serialize_entry("pending_replan", &flags.pending_replan)?;
+        if flags.cancelled {
+            map.serialize_entry("cancelled", &true)?;
+        }
         map.end()
     }
 }
@@ -206,6 +242,7 @@ struct TaskLifecycleWire {
     running: bool,
     cancel_requested: bool,
     pending_replan: bool,
+    cancelled: bool,
 }
 
 /// Task lifecycle operation rejected by the current runtime state.
@@ -227,6 +264,8 @@ pub enum TaskLifecycleAction {
     RequestReplan,
     /// Complete the active sequence generation.
     FinishRun,
+    /// Complete a cancellation after owned work quiesces.
+    CompleteCancel,
 }
 
 impl std::fmt::Display for TaskLifecycleAction {
@@ -235,6 +274,7 @@ impl std::fmt::Display for TaskLifecycleAction {
             Self::Start => "start task work",
             Self::RequestReplan => "request a task replan",
             Self::FinishRun => "finish task work",
+            Self::CompleteCancel => "complete task cancellation",
         })
     }
 }
@@ -399,6 +439,7 @@ mod tests {
                 TaskLifecycle::Cancelling { was_running: false },
                 Err(TaskLifecycle::Cancelling { was_running: false }),
             ),
+            (TaskLifecycle::Cancelled, Err(TaskLifecycle::Cancelled)),
         ] {
             let mut lifecycle = initial;
             let result = lifecycle.start();
@@ -447,16 +488,20 @@ mod tests {
     }
 
     #[test]
-    fn request_replan_rejects_cancelling_task() {
-        let mut lifecycle = TaskLifecycle::Cancelling { was_running: true };
-
-        assert_eq!(
-            lifecycle.request_replan().unwrap_err(),
-            TaskLifecycleTransitionError {
-                from: TaskLifecycle::Cancelling { was_running: true },
-                action: TaskLifecycleAction::RequestReplan,
-            }
-        );
+    fn request_replan_rejects_cancelling_and_cancelled_tasks() {
+        for initial in [
+            TaskLifecycle::Cancelling { was_running: true },
+            TaskLifecycle::Cancelled,
+        ] {
+            let mut lifecycle = initial;
+            assert_eq!(
+                lifecycle.request_replan().unwrap_err(),
+                TaskLifecycleTransitionError {
+                    from: initial,
+                    action: TaskLifecycleAction::RequestReplan,
+                }
+            );
+        }
     }
 
     #[test]
@@ -482,6 +527,7 @@ mod tests {
             TaskLifecycle::ReplanPending,
             TaskLifecycle::Cancelling { was_running: false },
             TaskLifecycle::Cancelling { was_running: true },
+            TaskLifecycle::Cancelled,
         ] {
             let mut lifecycle = initial;
             assert_eq!(
@@ -504,6 +550,44 @@ mod tests {
     }
 
     #[test]
+    fn complete_cancel_accepts_only_the_quiescing_transition() {
+        for initial in [
+            TaskLifecycle::Cancelling { was_running: false },
+            TaskLifecycle::Cancelling { was_running: true },
+        ] {
+            let mut lifecycle = initial;
+            lifecycle.complete_cancel().unwrap();
+            assert_eq!(lifecycle, TaskLifecycle::Cancelled);
+        }
+
+        for initial in [
+            TaskLifecycle::Idle,
+            TaskLifecycle::ReplanPending,
+            TaskLifecycle::Running,
+            TaskLifecycle::RunningReplanPending,
+            TaskLifecycle::Cancelled,
+        ] {
+            let mut lifecycle = initial;
+            assert_eq!(
+                lifecycle.complete_cancel().unwrap_err(),
+                TaskLifecycleTransitionError {
+                    from: initial,
+                    action: TaskLifecycleAction::CompleteCancel,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_cancel_is_idempotent() {
+        let mut lifecycle = TaskLifecycle::Cancelled;
+
+        assert!(!lifecycle.request_cancel());
+        assert!(lifecycle.is_cancelled());
+        assert!(!lifecycle.is_cancelling());
+    }
+
+    #[test]
     fn task_record_preserves_legacy_lifecycle_wire_fields() {
         let legacy = serde_json::json!({
             "task_id": "task-1",
@@ -518,6 +602,7 @@ mod tests {
         assert_eq!(encoded["running"], serde_json::json!(true));
         assert_eq!(encoded["cancel_requested"], serde_json::json!(false));
         assert_eq!(encoded["pending_replan"], serde_json::json!(true));
+        assert!(encoded.get("cancelled").is_none());
         assert!(encoded.get("lifecycle").is_none());
     }
 
@@ -530,6 +615,7 @@ mod tests {
             TaskLifecycle::RunningReplanPending,
             TaskLifecycle::Cancelling { was_running: false },
             TaskLifecycle::Cancelling { was_running: true },
+            TaskLifecycle::Cancelled,
         ] {
             let record = TaskRecord {
                 task_id: "task-1".to_string(),
@@ -557,5 +643,24 @@ mod tests {
             TaskLifecycle::Cancelling { was_running: false }
         );
         assert!(!record.lifecycle.has_pending_replan());
+    }
+
+    #[test]
+    fn additive_cancelled_flag_wins_over_legacy_transition_flags() {
+        let record: TaskRecord = serde_json::from_value(serde_json::json!({
+            "task_id": "task-1",
+            "running": true,
+            "cancel_requested": false,
+            "pending_replan": true,
+            "cancelled": true
+        }))
+        .unwrap();
+
+        assert_eq!(record.lifecycle, TaskLifecycle::Cancelled);
+        let encoded = serde_json::to_value(record).unwrap();
+        assert_eq!(encoded["running"], serde_json::json!(false));
+        assert_eq!(encoded["cancel_requested"], serde_json::json!(true));
+        assert_eq!(encoded["pending_replan"], serde_json::json!(false));
+        assert_eq!(encoded["cancelled"], serde_json::json!(true));
     }
 }

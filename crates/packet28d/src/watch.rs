@@ -1,7 +1,8 @@
 use super::*;
 use crate::broker::{
-    emit_task_event_for_generation, refresh_broker_context_for_task,
-    refresh_task_context_summary_for_generation, set_context_reason_for_generation,
+    complete_task_cancellation_for_generation, emit_task_event_for_generation,
+    refresh_broker_context_for_task, refresh_task_context_summary_for_generation,
+    set_context_reason_for_generation,
 };
 use std::collections::HashSet;
 
@@ -195,11 +196,14 @@ pub(crate) fn register_task_and_watches(
     let mut registrations = Vec::new();
     {
         let mut guard = state.lock().map_err(lock_err)?;
-        if guard.tasks.tasks.contains_key(&spec.task_id) {
-            anyhow::bail!(
-                "task '{}' was concurrently replaced during registration",
-                spec.task_id
-            );
+        if let Some(existing) = guard.tasks.tasks.get(&spec.task_id) {
+            if !existing.lifecycle.is_cancelled() {
+                anyhow::bail!(
+                    "task '{}' was concurrently replaced during registration",
+                    spec.task_id
+                );
+            }
+            guard.tasks.tasks.remove(&spec.task_id);
         }
         guard.task_generations.create(&spec.task_id)?;
         let watch_ids = spec
@@ -285,9 +289,20 @@ pub(crate) fn run_sequence_for_task(
     loop {
         let (kernel, sequence, generation, _sequence_lease) = {
             let mut guard = state.lock().map_err(lock_err)?;
-            if !guard.tasks.tasks.contains_key(task_id) {
-                anyhow::bail!("unknown task '{task_id}'");
-            }
+            let (sequence, running_lifecycle) = {
+                let task = guard
+                    .tasks
+                    .tasks
+                    .get(task_id)
+                    .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
+                let mut running_lifecycle = task.lifecycle;
+                running_lifecycle.start()?;
+                let sequence = task
+                    .sequence
+                    .clone()
+                    .ok_or_else(|| anyhow!("task '{}' has no stored sequence", task_id))?;
+                (sequence, running_lifecycle)
+            };
             let generation = guard.task_generations.ensure(task_id)?;
             let sequence_lease = generation.acquire_operation().ok_or_else(|| {
                 context_kernel_core::KernelError::SequenceCancelled {
@@ -299,11 +314,7 @@ pub(crate) fn run_sequence_for_task(
                 .tasks
                 .get_mut(task_id)
                 .ok_or_else(|| anyhow!("task '{task_id}' disappeared before sequence start"))?;
-            let sequence = task
-                .sequence
-                .clone()
-                .ok_or_else(|| anyhow!("task '{}' has no stored sequence", task_id))?;
-            task.lifecycle.start()?;
+            task.lifecycle = running_lifecycle;
             task.last_started_at_unix = Some(now_unix());
             task.last_error = None;
             persist_state(&guard)?;
@@ -476,8 +487,11 @@ pub(crate) fn cancel_task(
 ) -> Result<(Option<TaskRecord>, Vec<String>)> {
     let (generation, watch_ids) = {
         let mut guard = state.lock().map_err(lock_err)?;
-        if !guard.tasks.tasks.contains_key(task_id) {
+        let Some(existing) = guard.tasks.tasks.get(task_id) else {
             return Ok((None, Vec::new()));
+        };
+        if existing.lifecycle.is_cancelled() {
+            return Ok((Some(existing.clone()), Vec::new()));
         }
         let generation = guard.task_generations.ensure(task_id)?;
         generation.request_cancel();
@@ -501,17 +515,9 @@ pub(crate) fn cancel_task(
             task_id
         );
     }
-    let mut guard = state.lock().map_err(lock_err)?;
-    if !guard.task_generations.matches(task_id, generation.id()) {
-        return Ok((None, watch_ids));
-    }
-    let removed = guard.tasks.tasks.remove(task_id);
-    guard.subscribers.remove(task_id);
-    guard
-        .task_generations
-        .remove_if_current(task_id, generation.id());
-    persist_state(&guard)?;
-    Ok((removed, watch_ids))
+    let terminal =
+        complete_task_cancellation_for_generation(state, task_id, generation.id(), &watch_ids)?;
+    Ok((terminal, watch_ids))
 }
 
 pub(crate) fn remove_watch(

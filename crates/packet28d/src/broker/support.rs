@@ -168,7 +168,20 @@ fn emit_task_event_ordered(
     }
     task.last_event_seq = frame.seq;
     persist_state(&guard)?;
-    if let Some(subscribers) = guard.subscribers.get_mut(task_id) {
+    publish_task_event_to_subscribers(&mut guard, task_id, &frame);
+    guard.changes.notify();
+    let publication_lock_hold = lock_acquired.elapsed();
+    drop(guard);
+    persistence.record_event_state_lock_hold(publication_lock_hold);
+    Ok(true)
+}
+
+fn publish_task_event_to_subscribers(
+    state: &mut DaemonState,
+    task_id: &str,
+    frame: &packet28_daemon_protocol::message::DaemonEventFrame,
+) {
+    if let Some(subscribers) = state.subscribers.get_mut(task_id) {
         subscribers.retain(
             |subscriber| match subscriber.sender.try_send(frame.clone()) {
                 Ok(()) => true,
@@ -185,14 +198,96 @@ fn emit_task_event_ordered(
             },
         );
         if subscribers.is_empty() {
-            guard.subscribers.remove(task_id);
+            state.subscribers.remove(task_id);
         }
     }
+}
+
+pub(crate) fn complete_task_cancellation_for_generation(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    generation: TaskGenerationId,
+    removed_watch_ids: &[String],
+) -> Result<Option<TaskRecord>> {
+    let persistence = state.lock().map_err(lock_err)?.persistence.clone();
+    let _event_guard = persistence.event_guard();
+    let (required_revision, prepare_lock_hold) = {
+        let guard = state.lock().map_err(lock_err)?;
+        let lock_acquired = Instant::now();
+        let Some(task) = guard.tasks.tasks.get(task_id) else {
+            return Ok(None);
+        };
+        if task.lifecycle.is_cancelled() {
+            return Ok(Some(task.clone()));
+        }
+        let Some(current) = guard.task_generations.current(task_id) else {
+            anyhow::bail!("task '{task_id}' lost its generation before cancellation completed");
+        };
+        if current.id() != generation || !current.is_cancelled() {
+            anyhow::bail!("task '{task_id}' generation changed before cancellation completed");
+        }
+        if !task.lifecycle.is_cancelling() {
+            anyhow::bail!(
+                "task '{task_id}' lifecycle is {:?}, not cancelling",
+                task.lifecycle
+            );
+        }
+        let required_revision = (task.last_event_seq == 0)
+            .then(|| mark_state_dirty(&guard))
+            .transpose()?;
+        (required_revision, lock_acquired.elapsed())
+    };
+    persistence.record_event_state_lock_hold(prepare_lock_hold);
+
+    let frame = persistence.append_event(
+        task_id,
+        DaemonEvent {
+            kind: "task_cancelled".to_string(),
+            occurred_at_unix: now_unix(),
+            data: json!({
+                "task_id": task_id,
+                "removed_watch_ids": removed_watch_ids,
+            }),
+        },
+        required_revision,
+    )?;
+
+    let mut guard = state.lock().map_err(lock_err)?;
+    let lock_acquired = Instant::now();
+    let current = guard.task_generations.current(task_id).ok_or_else(|| {
+        anyhow!("task '{task_id}' lost its generation after cancellation was recorded")
+    })?;
+    if current.id() != generation || !current.is_cancelled() {
+        anyhow::bail!("task '{task_id}' generation changed after cancellation was recorded");
+    }
+    let task =
+        guard.tasks.tasks.get_mut(task_id).ok_or_else(|| {
+            anyhow!("task '{task_id}' disappeared after cancellation was recorded")
+        })?;
+    if task.last_event_seq > frame.seq {
+        anyhow::bail!(
+            "task '{}' in-memory high-water {} is ahead of cancellation event sequence {}",
+            task_id,
+            task.last_event_seq,
+            frame.seq
+        );
+    }
+    task.last_event_seq = frame.seq;
+    task.last_completed_at_unix = Some(frame.event.occurred_at_unix);
+    task.lifecycle.complete_cancel()?;
+    let terminal_task = task.clone();
+    let checkpoint_result = persist_state(&guard);
+    publish_task_event_to_subscribers(&mut guard, task_id, &frame);
+    guard.subscribers.remove(task_id);
+    guard
+        .task_generations
+        .remove_if_current(task_id, generation);
     guard.changes.notify();
     let publication_lock_hold = lock_acquired.elapsed();
     drop(guard);
     persistence.record_event_state_lock_hold(publication_lock_hold);
-    Ok(true)
+    checkpoint_result?;
+    Ok(Some(terminal_task))
 }
 
 pub(crate) fn emit_task_event_for_generation(

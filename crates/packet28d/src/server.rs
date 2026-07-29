@@ -689,10 +689,10 @@ fn handle_request(
             Ok(DaemonResponse::TaskLaunchAgent { response })
         }
         DaemonRequest::TaskCancel { task_id } => {
-            let removed = cancel_task(state.clone(), &task_id)?;
+            let cancellation = cancel_task(state.clone(), &task_id)?;
             Ok(DaemonResponse::TaskCancel {
-                task: removed.0,
-                removed_watch_ids: removed.1,
+                task: cancellation.0,
+                removed_watch_ids: cancellation.1,
             })
         }
         DaemonRequest::TaskSubscribe { .. } => {
@@ -1131,15 +1131,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn task_cancel_uses_reserved_control_lane_when_data_is_saturated() {
         let state = crate::tests::support::daemon_test_state();
+        crate::tests::support::insert_admitted_task_record(
+            &state,
+            TaskRecord {
+                task_id: "task-control-cancel".to_string(),
+                ..TaskRecord::default()
+            },
+        );
+        flush_persistence(&state).unwrap();
         {
             let mut guard = state.lock().unwrap();
-            guard.tasks.tasks.insert(
-                "task-control-cancel".to_string(),
-                TaskRecord {
-                    task_id: "task-control-cancel".to_string(),
-                    ..TaskRecord::default()
-                },
-            );
             guard
                 .task_generations
                 .create("task-control-cancel")

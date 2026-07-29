@@ -18,9 +18,10 @@ pub(crate) use ops::{broker_task_status, broker_write_state, broker_write_state_
 pub(crate) use render::load_task_record;
 pub(crate) use snapshot::insert_sorted_unique;
 pub(crate) use support::{
-    build_status, emit_task_event_for_generation, ensure_task_record_mut, kernel_for_context_root,
-    kernel_for_request, load_agent_snapshot_for_task, now_unix_millis,
-    refresh_task_context_summary_for_generation, set_context_reason_for_generation,
+    build_status, complete_task_cancellation_for_generation, emit_task_event_for_generation,
+    ensure_task_record_mut, kernel_for_context_root, kernel_for_request,
+    load_agent_snapshot_for_task, now_unix_millis, refresh_task_context_summary_for_generation,
+    set_context_reason_for_generation,
 };
 
 #[cfg(test)]
