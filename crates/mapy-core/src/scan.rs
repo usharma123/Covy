@@ -174,11 +174,10 @@ fn discover_source_paths(root: &Path, include_tests: bool) -> Result<Vec<String>
             continue;
         }
 
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        let Some(rel) = normalized_utf8_repository_path(relative) else {
+            continue;
+        };
         if !include_tests && is_test_path(&rel) {
             continue;
         }
@@ -267,6 +266,10 @@ pub(crate) fn content_fingerprint(content: &str) -> String {
 
 pub(crate) fn is_source_file(path: &Path) -> bool {
     detect_source_language(&path.to_string_lossy()).is_some()
+}
+
+pub(crate) fn normalized_utf8_repository_path(path: &Path) -> Option<String> {
+    path.to_str().map(|path| path.replace('\\', "/"))
 }
 
 pub(crate) fn is_generated_or_vendor_path(path: &str) -> bool {
@@ -433,4 +436,67 @@ pub(crate) fn extract_token_lines(
         }
     }
     lines_by_token
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn utf8_repository_path_normalization_is_lossless_or_rejected() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let mut invalid_name = b"collision_".to_vec();
+        invalid_name.push(0xff);
+        invalid_name.extend_from_slice(b".rs");
+        let invalid = Path::new("src").join(OsString::from_vec(invalid_name));
+
+        assert_eq!(normalized_utf8_repository_path(&invalid), None);
+        assert_eq!(
+            normalized_utf8_repository_path(Path::new("src/collision_\u{fffd}.rs")).as_deref(),
+            Some("src/collision_\u{fffd}.rs")
+        );
+    }
+
+    // APFS rejects creation of the invalid-byte fixture with EPERM, while
+    // Linux filesystems preserve the byte name. The pure Unix test above still
+    // verifies the macOS eligibility boundary.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scan_skips_non_utf8_paths_even_when_the_lossy_name_exists() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        let mut invalid_name = b"collision_".to_vec();
+        invalid_name.push(0xff);
+        invalid_name.extend_from_slice(b".rs");
+        std::fs::write(
+            root.join("src").join(OsString::from_vec(invalid_name)),
+            "pub fn non_utf8_filename_symbol() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/collision_\u{fffd}.rs"),
+            "pub fn utf8_replacement_filename_symbol() {}\n",
+        )
+        .unwrap();
+
+        let scans = scan_repo(root, true).unwrap();
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].path, "src/collision_\u{fffd}.rs");
+        assert!(scans[0]
+            .symbols
+            .iter()
+            .any(|(_, name)| name == "utf8_replacement_filename_symbol"));
+        assert!(scans[0]
+            .symbols
+            .iter()
+            .all(|(_, name)| name != "non_utf8_filename_symbol"));
+    }
 }

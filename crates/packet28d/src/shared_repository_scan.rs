@@ -556,7 +556,7 @@ fn plan_entry(
             (entry.path().is_file(), entry.path().is_dir())
         }
     };
-    let map = is_file && mapy_core::shared_scan::wants_path(&relative, include_tests);
+    let map = is_file && map_wants_path(relative_path, &relative, include_tests);
     let regex = !is_dir && packet28_search_core::shared_scan::wants_path(&relative);
     (map || regex).then(|| PlannedPath {
         path: entry.into_path(),
@@ -564,6 +564,11 @@ fn plan_entry(
         map,
         regex,
     })
+}
+
+fn map_wants_path(relative_path: &Path, normalized: &str, include_tests: bool) -> bool {
+    relative_path.to_str().is_some()
+        && mapy_core::shared_scan::wants_path(normalized, include_tests)
 }
 
 fn map_would_observe_walk_error(error: &WalkError, root: &Path) -> bool {
@@ -602,11 +607,33 @@ mod tests {
     use super::*;
     use packet28_reducer_core::SearchRequest;
 
+    #[cfg(unix)]
+    #[test]
+    fn map_eligibility_rejects_lossy_non_utf8_names() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let mut invalid_name = b"collision_".to_vec();
+        invalid_name.push(0xff);
+        invalid_name.extend_from_slice(b".rs");
+        let invalid = Path::new("src").join(OsString::from_vec(invalid_name));
+        let invalid_normalized = invalid.to_string_lossy().replace('\\', "/");
+
+        assert!(!map_wants_path(&invalid, &invalid_normalized, true));
+        assert!(map_wants_path(
+            Path::new("src/collision_\u{fffd}.rs"),
+            "src/collision_\u{fffd}.rs",
+            true
+        ));
+    }
+
     fn write_fixture(root: &Path) {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("tests")).unwrap();
         fs::create_dir_all(root.join("build")).unwrap();
         fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/HEAD"), b"ref: refs/heads/test\n").unwrap();
         fs::write(
             root.join("src/lib.rs"),
             b"pub fn shared_visible_symbol() -> usize { 7 }\n",
@@ -630,6 +657,25 @@ mod tests {
             vec![b'x'; packet28_search_core::shared_scan::MAX_SHARED_SCAN_CONTENT_BYTES + 1],
         )
         .unwrap();
+        #[cfg(target_os = "linux")]
+        {
+            use std::ffi::OsString;
+            use std::os::unix::ffi::OsStringExt as _;
+
+            let mut invalid_name = b"collision_".to_vec();
+            invalid_name.push(0xff);
+            invalid_name.extend_from_slice(b".rs");
+            fs::write(
+                root.join("src").join(OsString::from_vec(invalid_name)),
+                b"pub fn non_utf8_filename_symbol() {}\n",
+            )
+            .unwrap();
+            fs::write(
+                root.join("src/collision_\u{fffd}.rs"),
+                b"pub fn utf8_replacement_filename_symbol() {}\n",
+            )
+            .unwrap();
+        }
         #[cfg(unix)]
         std::os::unix::fs::symlink("lib.rs", root.join("src/lib-link.rs")).unwrap();
     }
@@ -672,6 +718,31 @@ mod tests {
             shared.regex.shared_scan_content_digests(),
             expected_regex.shared_scan_content_digests()
         );
+        #[cfg(target_os = "linux")]
+        {
+            let snapshot = shared.repo.materialize_snapshot().unwrap();
+            let collision_file = snapshot
+                .files
+                .get("src/collision_\u{fffd}.rs")
+                .expect("UTF-8 replacement-character path should remain indexed");
+            assert!(collision_file
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "utf8_replacement_filename_symbol"));
+            assert!(collision_file
+                .symbols
+                .iter()
+                .all(|symbol| symbol.name != "non_utf8_filename_symbol"));
+            let regex_paths = shared.regex.shared_scan_document_paths().unwrap();
+            assert_eq!(
+                regex_paths
+                    .iter()
+                    .filter(|path| path.as_str() == "src/collision_\u{fffd}.rs")
+                    .count(),
+                2,
+                "regex parity must retain both standalone lossy-key documents"
+            );
+        }
         assert_eq!(shared.telemetry.walk_passes, 1);
         assert!(shared.telemetry.successful_read_calls > 0);
         assert_eq!(shared.telemetry.peak_retained_content_files, 1);
@@ -698,6 +769,8 @@ mod tests {
             "regex_only_generated_symbol",
             "shared documentation needle",
             "HiddenShared",
+            "utf8_replacement_filename_symbol",
+            "non_utf8_filename_symbol",
         ] {
             let request = SearchRequest {
                 query: query.to_string(),
@@ -714,6 +787,49 @@ mod tests {
                 packet28_search_core::indexed_search(shared_dir.path(), &shared.regex, &request)
                     .unwrap();
             assert_eq!(actual, expected, "query parity failed for {query}");
+        }
+
+        let ignored = packet28_search_core::indexed_search(
+            shared_dir.path(),
+            &shared.regex,
+            &SearchRequest {
+                query: "ignored_symbol".to_string(),
+                fixed_string: true,
+                ..SearchRequest::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ignored.returned_match_count, 0,
+            "an active .gitignore must exclude ignored.rs"
+        );
+        #[cfg(target_os = "linux")]
+        {
+            let replacement = packet28_search_core::indexed_search(
+                shared_dir.path(),
+                &shared.regex,
+                &SearchRequest {
+                    query: "utf8_replacement_filename_symbol".to_string(),
+                    fixed_string: true,
+                    ..SearchRequest::default()
+                },
+            )
+            .unwrap();
+            assert!(replacement.returned_match_count > 0);
+            let non_utf8 = packet28_search_core::indexed_search(
+                shared_dir.path(),
+                &shared.regex,
+                &SearchRequest {
+                    query: "non_utf8_filename_symbol".to_string(),
+                    fixed_string: true,
+                    ..SearchRequest::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                non_utf8.returned_match_count, 0,
+                "lossy verification must retain standalone regex result behavior"
+            );
         }
     }
 
