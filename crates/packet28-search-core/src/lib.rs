@@ -7,6 +7,17 @@
 //! publication point, so readers retain their `Arc`-owned generation while a
 //! writer prepares the next one. Legacy schema-v3 aggregate overlays remain
 //! readable and migrate to segmented generation records on their next update.
+//! Public writers serialize on a repository-local lock and reject stale
+//! generation handles rather than silently overwriting a newer publication.
+//! Every generation record carries BLAKE3 digests for its artifacts, and
+//! best-effort pruning retains only the current and explicitly recoverable
+//! previous generation under normal filesystem operation.
+//!
+//! Publication is process-crash atomic on filesystems that provide atomic
+//! same-directory rename: artifacts are written to flushed temporary files and
+//! the manifest is renamed last. The implementation does not call `fsync` on
+//! files or parent directories and therefore does not claim power-loss
+//! durability.
 //! Fallible operations return [`SearchError`], allowing callers to distinguish
 //! unavailable indexes, invalid queries, corruption, and typed dependency
 //! failures without parsing an `anyhow` report.
@@ -28,14 +39,15 @@ mod weights;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
 use ignore::WalkBuilder;
 use memmap2::Mmap;
 use packet28_reducer_core::{
@@ -54,6 +66,7 @@ const REGEX_INDEX_SCHEMA_VERSION: u32 = 3;
 const REGEX_DIR_NAME: &str = "regex-v1";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
 const PREVIOUS_MANIFEST_FILE_NAME: &str = "manifest.previous.json";
+const WRITER_LOCK_FILE_NAME: &str = ".regex-v1.writer.lock";
 const BASE_LOOKUP_FILE_NAME: &str = "base.lookup.dat";
 const BASE_POSTINGS_FILE_NAME: &str = "base.postings.dat";
 const BASE_DOCS_FILE_NAME: &str = "docs.dat";
@@ -355,6 +368,12 @@ struct LayerFiles {
     lookup: String,
     postings: String,
     docs: String,
+    #[serde(default)]
+    lookup_digest: String,
+    #[serde(default)]
+    postings_digest: String,
+    #[serde(default)]
+    docs_digest: String,
 }
 
 impl LayerFiles {
@@ -363,6 +382,9 @@ impl LayerFiles {
             lookup: BASE_LOOKUP_FILE_NAME.to_string(),
             postings: BASE_POSTINGS_FILE_NAME.to_string(),
             docs: BASE_DOCS_FILE_NAME.to_string(),
+            lookup_digest: String::new(),
+            postings_digest: String::new(),
+            docs_digest: String::new(),
         }
     }
 
@@ -371,6 +393,9 @@ impl LayerFiles {
             lookup: OVERLAY_LOOKUP_FILE_NAME.to_string(),
             postings: OVERLAY_POSTINGS_FILE_NAME.to_string(),
             docs: OVERLAY_DOCS_FILE_NAME.to_string(),
+            lookup_digest: String::new(),
+            postings_digest: String::new(),
+            docs_digest: String::new(),
         }
     }
 
@@ -379,6 +404,9 @@ impl LayerFiles {
             lookup: format!("base-{generation:020}.lookup.dat"),
             postings: format!("base-{generation:020}.postings.dat"),
             docs: format!("base-{generation:020}.docs.dat"),
+            lookup_digest: String::new(),
+            postings_digest: String::new(),
+            docs_digest: String::new(),
         }
     }
 
@@ -388,7 +416,16 @@ impl LayerFiles {
             lookup: format!("overlay-{generation:020}{suffix}.lookup.dat"),
             postings: format!("overlay-{generation:020}{suffix}.postings.dat"),
             docs: format!("overlay-{generation:020}{suffix}.docs.dat"),
+            lookup_digest: String::new(),
+            postings_digest: String::new(),
+            docs_digest: String::new(),
         }
+    }
+
+    fn has_digests(&self) -> bool {
+        !self.lookup_digest.is_empty()
+            && !self.postings_digest.is_empty()
+            && !self.docs_digest.is_empty()
     }
 }
 
@@ -518,7 +555,12 @@ fn load_runtime_from_manifest(
     load_legacy_generation(root, manifest)
 }
 
-/// Rebuilds and atomically publishes every searchable file beneath `root`.
+/// Rebuilds and manifest-last publishes every searchable file beneath `root`.
+///
+/// A repository-local exclusive writer lock covers the complete build and
+/// publication. Artifact digests are validated whenever the generation is
+/// loaded. After publication, best-effort pruning retains the current and
+/// previous generation.
 ///
 /// # Errors
 ///
@@ -546,6 +588,7 @@ pub fn rebuild_full_index_with_progress<F>(
 where
     F: FnMut(usize, usize),
 {
+    let _writer = acquire_writer_lock(root)?;
     let started = now_unix();
     let previous = load_runtime(root)
         .ok()
@@ -566,8 +609,8 @@ where
     };
 
     let docs = scan_documents_with_progress(root, &mut on_progress)?;
-    let base_files = LayerFiles::base(generation);
-    let base_layer = build_layer(root, &docs, &base_files)?;
+    let mut base_files = LayerFiles::base(generation);
+    let base_layer = build_layer(root, &docs, &mut base_files)?;
     manifest.total_files = docs.len();
     manifest.indexed_files = docs.len();
     manifest.overlay_files = 0;
@@ -594,6 +637,7 @@ where
         })),
     };
     publish_manifest(root, previous.as_ref(), &manifest)?;
+    let _ = prune_generation_artifacts(root, &record, previous.as_ref());
     Ok(runtime)
 }
 
@@ -602,9 +646,10 @@ where
 /// A missing current runtime or an empty change set intentionally triggers a
 /// full rebuild to preserve the historical behavior. Each non-empty update
 /// indexes only the supplied paths, retains the validated base `Arc`, and
-/// publishes its generation record before atomically switching the manifest.
+/// publishes its generation record before atomically renaming the manifest.
 /// Eight segments trigger compaction of live overlay documents; the base is
-/// still retained.
+/// still retained. A repository-local writer lock serializes publishers, and a
+/// stale `current` handle returns [`SearchError::ConcurrentWriter`].
 ///
 /// # Errors
 ///
@@ -616,17 +661,24 @@ pub fn update_overlay_index(
     current: Option<&RegexIndexRuntime>,
     changed_paths: &[String],
 ) -> Result<RegexIndexRuntime> {
-    if current.is_none() || changed_paths.is_empty() {
+    let Some(current) = current else {
+        return rebuild_full_index(root, true);
+    };
+    if changed_paths.is_empty() {
         return rebuild_full_index(root, true);
     }
-    let current = current.expect("checked above");
     let loaded = current.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
-    let generation = load_manifest(root)
-        .generation
-        .max(current.manifest.generation)
-        .saturating_add(1);
+    let normalized = normalize_changed_paths(root, changed_paths)?;
+    let _writer = acquire_writer_lock(root)?;
+    let published = load_manifest_strict(root)?;
+    if published.generation != current.manifest.generation {
+        return Err(SearchError::ConcurrentWriter {
+            expected: current.manifest.generation,
+            actual: published.generation,
+        });
+    }
+    let generation = published.generation.saturating_add(1);
     let mut overlay_state = loaded.overlay_state.clone();
-    let normalized = normalize_paths(root, changed_paths);
     let mut overlay_docs = Vec::<IndexedDocument>::new();
     for path in normalized {
         overlay_state.shadowed_paths.insert(path.clone());
@@ -653,8 +705,8 @@ pub fn update_overlay_index(
     let started = now_unix();
     let mut overlays = loaded.overlays.clone();
     if !overlay_docs.is_empty() {
-        let files = LayerFiles::overlay(generation, false);
-        let layer = build_layer(root, &overlay_docs, &files)?;
+        let mut files = LayerFiles::overlay(generation, false);
+        let layer = build_layer(root, &overlay_docs, &mut files)?;
         overlays.push(LoadedOverlaySegment {
             generation,
             layer: Arc::new(layer),
@@ -667,8 +719,8 @@ pub fn update_overlay_index(
             doc.doc_id = idx as u32;
             overlay_state.owners.insert(doc.path.clone(), generation);
         }
-        let files = LayerFiles::overlay(generation, true);
-        let layer = build_layer(root, &compacted_docs, &files)?;
+        let mut files = LayerFiles::overlay(generation, true);
+        let layer = build_layer(root, &compacted_docs, &mut files)?;
         overlays = vec![LoadedOverlaySegment {
             generation,
             layer: Arc::new(layer),
@@ -697,6 +749,7 @@ pub fn update_overlay_index(
     validate_generation_record(&record)?;
     save_generation_record(root, &record)?;
     publish_manifest(root, Some(&current.manifest), &manifest)?;
+    let _ = prune_generation_artifacts(root, &record, Some(&current.manifest));
 
     Ok(RegexIndexRuntime {
         manifest,
@@ -711,6 +764,7 @@ pub fn update_overlay_index(
 /// Returns [`SearchError::Context`] with a nested [`SearchError::Io`] when the
 /// index directory cannot be removed.
 pub fn clear_index(root: &Path) -> Result<()> {
+    let _writer = acquire_writer_lock(root)?;
     let path = regex_index_dir(root);
     if path.exists() {
         fs::remove_dir_all(&path)
@@ -1808,7 +1862,11 @@ fn index_document(root: &Path, path: &Path) -> Result<Option<IndexedDocument>> {
     }))
 }
 
-fn build_layer(root: &Path, docs: &[IndexedDocument], files: &LayerFiles) -> Result<LoadedLayer> {
+fn build_layer(
+    root: &Path,
+    docs: &[IndexedDocument],
+    files: &mut LayerFiles,
+) -> Result<LoadedLayer> {
     fs::create_dir_all(regex_index_dir(root))?;
     let segment_files = write_segment_files(root, &files.lookup, docs)?;
     let (rows, postings) = merge_and_cleanup_segment_files(segment_files)?;
@@ -1829,12 +1887,13 @@ fn build_layer(root: &Path, docs: &[IndexedDocument], files: &LayerFiles) -> Res
             fingerprint: doc.fingerprint.clone(),
         })
         .collect::<Vec<_>>();
+    let docs_bytes = wincode::serialize(&serialized_docs)?;
+    files.lookup_digest = artifact_digest(&lookup);
+    files.postings_digest = artifact_digest(&postings);
+    files.docs_digest = artifact_digest(&docs_bytes);
     write_atomic(regex_index_dir(root).join(&files.lookup), &lookup)?;
     write_atomic(regex_index_dir(root).join(&files.postings), &postings)?;
-    write_atomic(
-        regex_index_dir(root).join(&files.docs),
-        &wincode::serialize(&serialized_docs)?,
-    )?;
+    write_atomic(regex_index_dir(root).join(&files.docs), &docs_bytes)?;
     load_layer(root, files)
 }
 
@@ -1971,10 +2030,14 @@ fn read_segment_pair(reader: &mut impl Read) -> Result<Option<(u64, u32, Positio
             Err(error) => return Err(error).context("failed while reading segment record"),
         }
     }
+    let [hash_0, hash_1, hash_2, hash_3, hash_4, hash_5, hash_6, hash_7, doc_0, doc_1, doc_2, doc_3, position_0, position_1] =
+        record;
     Ok(Some((
-        u64::from_le_bytes(record[0..8].try_into().expect("segment hash width")),
-        u32::from_le_bytes(record[8..12].try_into().expect("segment doc id width")),
-        PositionSummary::decode([record[12], record[13]]),
+        u64::from_le_bytes([
+            hash_0, hash_1, hash_2, hash_3, hash_4, hash_5, hash_6, hash_7,
+        ]),
+        u32::from_le_bytes([doc_0, doc_1, doc_2, doc_3]),
+        PositionSummary::decode([position_0, position_1]),
     )))
 }
 
@@ -2034,6 +2097,19 @@ fn load_layer(root: &Path, files: &LayerFiles) -> Result<LoadedLayer> {
         .with_context(|| format!("failed to map lookup file '{}'", lookup_path.display()))?;
     let postings = mmap_optional(&postings_path)
         .with_context(|| format!("failed to map postings file '{}'", postings_path.display()))?;
+    if files.has_digests() {
+        verify_artifact_digest(&docs_path, &raw, &files.docs_digest)?;
+        verify_artifact_digest(
+            &lookup_path,
+            lookup.as_deref().unwrap_or(&[]),
+            &files.lookup_digest,
+        )?;
+        verify_artifact_digest(
+            &postings_path,
+            postings.as_deref().unwrap_or(&[]),
+            &files.postings_digest,
+        )?;
+    }
     validate_layer_files(
         &docs,
         lookup.as_deref().unwrap_or(&[]),
@@ -2103,11 +2179,37 @@ fn validate_layer_file_names(files: &LayerFiles) -> Result<()> {
     Ok(())
 }
 
+fn artifact_digest(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
+fn verify_artifact_digest(path: &Path, bytes: &[u8], expected: &str) -> Result<()> {
+    let actual = artifact_digest(bytes);
+    ensure_valid_index!(
+        actual == expected,
+        "regex index artifact '{}' failed digest validation (expected {expected}, found {actual})",
+        path.display()
+    );
+    Ok(())
+}
+
+fn populate_layer_digests(root: &Path, files: &mut LayerFiles) -> Result<()> {
+    let directory = regex_index_dir(root);
+    files.lookup_digest = artifact_digest(&fs::read(directory.join(&files.lookup))?);
+    files.postings_digest = artifact_digest(&fs::read(directory.join(&files.postings))?);
+    files.docs_digest = artifact_digest(&fs::read(directory.join(&files.docs))?);
+    Ok(())
+}
+
 fn mmap_optional(path: &Path) -> Result<Option<Mmap>> {
     if !path.exists() || fs::metadata(path)?.len() == 0 {
         return Ok(None);
     }
     let file = File::open(path)?;
+    // SAFETY: published generation files are immutable and are replaced only
+    // by new generation-specific paths. `Mmap` owns the OS mapping after this
+    // local file handle closes, and validation occurs before the layer is
+    // exposed to readers.
     let map = unsafe { Mmap::map(&file)? };
     Ok(Some(map))
 }
@@ -2149,13 +2251,11 @@ fn validate_layer_files(
     let mut previous_hash = None;
     let mut expected_offset = 0u64;
     for (row_index, row) in lookup.chunks_exact(LOOKUP_ROW_BYTES).enumerate() {
-        let hash = u64::from_le_bytes(row[0..8].try_into().expect("lookup hash width"));
+        let hash = u64::from_le_bytes(read_fixed_width::<8>(row, 0, "lookup hash")?);
         let meta = LookupPostingMeta {
-            offset: u64::from_le_bytes(row[8..16].try_into().expect("lookup offset width")),
-            len: u32::from_le_bytes(row[16..20].try_into().expect("lookup length width")),
-            doc_count: u32::from_le_bytes(
-                row[20..24].try_into().expect("lookup document count width"),
-            ),
+            offset: u64::from_le_bytes(read_fixed_width::<8>(row, 8, "lookup offset")?),
+            len: u32::from_le_bytes(read_fixed_width::<4>(row, 16, "lookup length")?),
+            doc_count: u32::from_le_bytes(read_fixed_width::<4>(row, 20, "lookup document count")?),
         };
         if let Some(previous) = previous_hash {
             ensure_valid_index!(
@@ -2258,7 +2358,8 @@ fn decode_postings(bytes: &[u8]) -> Result<Vec<PostingEntry>> {
     if bytes.len() < 4 {
         return Err(SearchError::corrupt("invalid posting block"));
     }
-    let count = u32::from_le_bytes(bytes[0..4].try_into().expect("length checked")) as usize;
+    let count =
+        u32::from_le_bytes(read_fixed_width::<4>(bytes, 0, "posting document count")?) as usize;
     let minimum_len = count
         .checked_mul(3)
         .and_then(|len| len.checked_add(4))
@@ -2820,7 +2921,28 @@ fn lookup_posting_entry(
 
 fn hash_bytes(bytes: &[u8]) -> u64 {
     let digest = blake3::hash(bytes);
-    u64::from_le_bytes(digest.as_bytes()[0..8].try_into().expect("slice length"))
+    let bytes = digest.as_bytes();
+    u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ])
+}
+
+fn read_fixed_width<const WIDTH: usize>(
+    bytes: &[u8],
+    offset: usize,
+    field: &str,
+) -> Result<[u8; WIDTH]> {
+    let end = offset
+        .checked_add(WIDTH)
+        .ok_or_else(|| SearchError::corrupt(format!("{field} offset overflow")))?;
+    let raw = bytes.get(offset..end).ok_or_else(|| {
+        SearchError::corrupt(format!(
+            "{field} requires {WIDTH} bytes at offset {offset}, but input has {} bytes",
+            bytes.len()
+        ))
+    })?;
+    raw.try_into()
+        .map_err(|_| SearchError::corrupt(format!("{field} has an invalid encoded width")))
 }
 
 fn regex_index_dir(root: &Path) -> PathBuf {
@@ -2841,6 +2963,30 @@ fn previous_manifest_path(root: &Path) -> PathBuf {
 
 fn generation_record_path(root: &Path, generation: u64) -> PathBuf {
     regex_index_dir(root).join(format!("generation-{generation:020}.json"))
+}
+
+struct GenerationWriterLock(File);
+
+impl Drop for GenerationWriterLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock> {
+    let parent = root.join(".packet28").join("index");
+    fs::create_dir_all(&parent)?;
+    let path = parent.join(WRITER_LOCK_FILE_NAME);
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("failed to open regex writer lock '{}'", path.display()))?;
+    FileExt::lock_exclusive(&file)
+        .with_context(|| format!("failed to acquire regex writer lock '{}'", path.display()))?;
+    Ok(GenerationWriterLock(file))
 }
 
 fn load_manifest(root: &Path) -> RegexIndexManifest {
@@ -2942,6 +3088,59 @@ fn load_generation_record(root: &Path, generation: u64) -> Result<RegexGeneratio
     })
 }
 
+fn prune_generation_artifacts(
+    root: &Path,
+    current: &RegexGenerationRecord,
+    previous: Option<&RegexIndexManifest>,
+) -> Result<()> {
+    let mut retained = BTreeSet::from([
+        MANIFEST_FILE_NAME.to_string(),
+        PREVIOUS_MANIFEST_FILE_NAME.to_string(),
+        format!("generation-{:020}.json", current.generation),
+    ]);
+    retain_layer_files(&mut retained, &current.base);
+    for segment in &current.segments {
+        retain_layer_files(&mut retained, &segment.files);
+    }
+    if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
+        let record = load_generation_record(root, previous.generation)?;
+        retained.insert(format!("generation-{:020}.json", record.generation));
+        retain_layer_files(&mut retained, &record.base);
+        for segment in &record.segments {
+            retain_layer_files(&mut retained, &segment.files);
+        }
+    }
+    let directory = regex_index_dir(root);
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if is_managed_generation_artifact(&name) && !retained.contains(&name) {
+            fs::remove_file(entry.path()).with_context(|| {
+                format!(
+                    "failed to prune regex index artifact '{}'",
+                    entry.path().display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn retain_layer_files(retained: &mut BTreeSet<String>, files: &LayerFiles) {
+    retained.insert(files.lookup.clone());
+    retained.insert(files.postings.clone());
+    retained.insert(files.docs.clone());
+}
+
+fn is_managed_generation_artifact(name: &str) -> bool {
+    (name.starts_with("generation-") && name.ends_with(".json"))
+        || (name.starts_with("base-") && name.ends_with(".dat"))
+        || (name.starts_with("overlay-") && name.ends_with(".dat"))
+        || (name.starts_with('.') && name.ends_with(".tmp"))
+}
+
 fn validate_generation_record(record: &RegexGenerationRecord) -> Result<()> {
     ensure_valid_index!(
         record.schema_version == REGEX_INDEX_SCHEMA_VERSION
@@ -2961,6 +3160,11 @@ fn validate_generation_record(record: &RegexGenerationRecord) -> Result<()> {
         record.segments.len()
     );
     validate_layer_file_names(&record.base)?;
+    ensure_valid_index!(
+        record.base.has_digests(),
+        "regex generation {} base is missing artifact digests",
+        record.generation
+    );
     let mut artifact_names = BTreeSet::from([
         record.base.lookup.as_str(),
         record.base.postings.as_str(),
@@ -2970,6 +3174,12 @@ fn validate_generation_record(record: &RegexGenerationRecord) -> Result<()> {
     let mut previous_generation = None;
     for segment in &record.segments {
         validate_layer_file_names(&segment.files)?;
+        ensure_valid_index!(
+            segment.files.has_digests(),
+            "regex generation {} overlay segment {} is missing artifact digests",
+            record.generation,
+            segment.generation
+        );
         ensure_valid_index!(
             segment.generation > 0
                 && segment.generation <= record.generation
@@ -3074,11 +3284,13 @@ fn load_legacy_generation(
     root: &Path,
     mut manifest: RegexIndexManifest,
 ) -> Result<RegexIndexRuntime> {
-    let base_files = LayerFiles::legacy_base();
+    let mut base_files = LayerFiles::legacy_base();
     let base = load_layer(root, &base_files).context("failed to load base regex index layer")?;
-    let overlay_files = LayerFiles::legacy_overlay();
+    populate_layer_digests(root, &mut base_files)?;
+    let mut overlay_files = LayerFiles::legacy_overlay();
     let overlay =
         load_layer(root, &overlay_files).context("failed to load overlay regex index layer")?;
+    populate_layer_digests(root, &mut overlay_files)?;
     let mut overlay_state = load_overlay_state(root);
     let mut overlays = Vec::new();
     if !overlay.docs.is_empty() {
@@ -3279,14 +3491,59 @@ fn path_allowed(path: &str, requested_filter: Option<&BTreeSet<String>>) -> bool
     })
 }
 
-fn normalize_paths(root: &Path, paths: &[String]) -> Vec<String> {
-    paths
-        .iter()
-        .map(|path| normalize_capture_path(root, path))
-        .filter(|path| !path.is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+fn normalize_changed_paths(root: &Path, paths: &[String]) -> Result<Vec<String>> {
+    let canonical_root = fs::canonicalize(root)?;
+    let mut normalized = BTreeSet::new();
+    for raw in paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains('\n') {
+            return Err(SearchError::InvalidChangedPath { path: raw.clone() });
+        }
+        let input = Path::new(trimmed);
+        let relative = if input.is_absolute() {
+            if let Ok(stripped) = input.strip_prefix(root) {
+                stripped.to_path_buf()
+            } else if input.exists() {
+                fs::canonicalize(input)
+                    .ok()
+                    .and_then(|path| {
+                        path.strip_prefix(&canonical_root)
+                            .ok()
+                            .map(Path::to_path_buf)
+                    })
+                    .ok_or_else(|| SearchError::InvalidChangedPath { path: raw.clone() })?
+            } else {
+                return Err(SearchError::InvalidChangedPath { path: raw.clone() });
+            }
+        } else {
+            input.to_path_buf()
+        };
+        let mut safe = PathBuf::new();
+        for component in relative.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(part) => safe.push(part),
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(SearchError::InvalidChangedPath { path: raw.clone() });
+                }
+            }
+        }
+        if safe.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate = root.join(&safe);
+        if candidate.exists() {
+            let canonical_candidate = fs::canonicalize(&candidate)?;
+            if !canonical_candidate.starts_with(&canonical_root) {
+                return Err(SearchError::InvalidChangedPath { path: raw.clone() });
+            }
+        }
+        normalized.insert(safe.to_string_lossy().replace('\\', "/"));
+    }
+    Ok(normalized.into_iter().collect())
 }
 
 fn normalize_capture_path(root: &Path, text: &str) -> String {
@@ -3487,6 +3744,16 @@ mod tests {
         current_generation_record(root).base
     }
 
+    fn refresh_current_base_digests(root: &Path) {
+        let mut record = current_generation_record(root);
+        populate_layer_digests(root, &mut record.base).expect("refresh digests");
+        write_atomic(
+            generation_record_path(root, record.generation),
+            &serde_json::to_vec_pretty(&record).expect("record"),
+        )
+        .expect("rewrite record");
+    }
+
     fn corrupt_first_lookup_range(root: &Path, offset: u64, len: u32) {
         let path = regex_index_dir(root).join(current_base_files(root).lookup);
         let mut lookup = fs::read(&path).unwrap();
@@ -3494,6 +3761,7 @@ mod tests {
         lookup[8..16].copy_from_slice(&offset.to_le_bytes());
         lookup[16..20].copy_from_slice(&len.to_le_bytes());
         fs::write(path, lookup).unwrap();
+        refresh_current_base_digests(root);
     }
 
     #[test]
@@ -3942,6 +4210,138 @@ mod tests {
     }
 
     #[test]
+    fn changed_paths_cannot_escape_the_repository_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("workspace");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Inside;\n").unwrap();
+        fs::write(dir.path().join("outside.rs"), "pub struct Outside;\n").unwrap();
+        let runtime = rebuild_full_index(&root, true).unwrap();
+
+        let error = update_overlay_index(&root, Some(&runtime), &[String::from("../outside.rs")])
+            .unwrap_err();
+
+        assert!(matches!(error, SearchError::InvalidChangedPath { .. }));
+        assert_eq!(
+            load_runtime(&root).unwrap().manifest.generation,
+            runtime.manifest.generation
+        );
+    }
+
+    #[test]
+    fn concurrent_writers_return_an_explicit_generation_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
+        let base = rebuild_full_index(root, true).unwrap();
+        fs::write(root.join("src/charlie.rs"), "pub struct Charlie;\n").unwrap();
+        fs::write(root.join("src/delta.rs"), "pub struct Delta;\n").unwrap();
+        let barrier = Arc::new(Barrier::new(3));
+
+        let results = std::thread::scope(|scope| {
+            let handles = ["src/charlie.rs", "src/delta.rs"].map(|path| {
+                let runtime = base.clone();
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    update_overlay_index(root, Some(&runtime), &[path.to_string()])
+                })
+            });
+            barrier.wait();
+            handles.map(|handle| handle.join().unwrap())
+        });
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert!(results.iter().any(|result| matches!(
+            result,
+            Err(SearchError::ConcurrentWriter { expected, actual })
+                if *expected == base.manifest.generation
+                    && *actual == base.manifest.generation + 1
+        )));
+        let loaded = load_runtime(root).unwrap();
+        assert!(loaded.is_loaded());
+        assert_eq!(loaded.manifest.generation, base.manifest.generation + 1);
+        let owners = &loaded.loaded.as_ref().unwrap().overlay_state.owners;
+        assert_eq!(
+            usize::from(owners.contains_key("src/charlie.rs"))
+                + usize::from(owners.contains_key("src/delta.rs")),
+            1
+        );
+    }
+
+    #[test]
+    fn structurally_valid_docs_mutation_recovers_previous_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let base = build_fixture_index(root);
+        fs::write(root.join("src/lib.rs"), "pub struct Replacement;\n").unwrap();
+        let updated =
+            update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+        let files = current_generation_record(root).segments[0].files.clone();
+        let docs_path = regex_index_dir(root).join(&files.docs);
+        let raw = fs::read(&docs_path).unwrap();
+        let mut docs = wincode::deserialize::<Vec<DocRecord>>(&raw).unwrap();
+        docs[0].fingerprint.push('0');
+        fs::write(&docs_path, wincode::serialize(&docs).unwrap()).unwrap();
+
+        let recovered = load_runtime(root).unwrap();
+
+        assert_eq!(recovered.manifest.generation, base.manifest.generation);
+        assert_ne!(recovered.manifest.generation, updated.manifest.generation);
+        assert!(recovered
+            .manifest
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("digest validation")));
+    }
+
+    #[test]
+    fn retention_keeps_only_current_and_previous_full_generations() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
+        let first = rebuild_full_index(root, true).unwrap();
+        fs::write(root.join("src/second.rs"), "pub struct Second;\n").unwrap();
+        let second = rebuild_full_index(root, true).unwrap();
+        drop(first);
+        fs::write(root.join("src/third.rs"), "pub struct Third;\n").unwrap();
+        let third = rebuild_full_index(root, true).unwrap();
+        let names = fs::read_dir(regex_index_dir(root))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.starts_with("generation-"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.starts_with("base-"))
+                .count(),
+            6
+        );
+        assert!(!names.contains(&format!(
+            "generation-{:020}.json",
+            second.manifest.generation - 1
+        )));
+        assert!(names.contains(&format!(
+            "generation-{:020}.json",
+            second.manifest.generation
+        )));
+        assert!(names.contains(&format!(
+            "generation-{:020}.json",
+            third.manifest.generation
+        )));
+    }
+
+    #[test]
     fn regex_search_builds_and_plan_for_concat_literals() {
         let (plan, fallback) = build_search_plan(
             &SearchRequest {
@@ -4121,6 +4521,7 @@ mod tests {
 
         for trailing in 1..LOOKUP_ROW_BYTES {
             fs::write(&lookup_path, &original[..complete_prefix_len + trailing]).unwrap();
+            refresh_current_base_digests(root);
             let runtime = load_runtime(root).unwrap();
             let reason = runtime.manifest.stale_reason.as_deref().unwrap_or_default();
 
@@ -4155,6 +4556,7 @@ mod tests {
 
         for prefix_len in 0..len {
             fs::write(&postings_path, &postings[..offset + prefix_len]).unwrap();
+            refresh_current_base_digests(root);
             let runtime = load_runtime(root).unwrap();
 
             assert!(

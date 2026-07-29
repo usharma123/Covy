@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 use regex::Regex;
@@ -770,7 +770,36 @@ pub(crate) fn index_repo_path(
     relative_path: &str,
     include_tests: bool,
 ) -> Result<Option<RepoIndexFileEntry>, CovyError> {
+    if Path::new(relative_path).components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(CovyError::PathMapping(format!(
+            "changed path '{relative_path}' must resolve beneath the repository root"
+        )));
+    }
     let full_path = root.join(relative_path);
+    if full_path.exists() {
+        let canonical_root = std::fs::canonicalize(root).map_err(|source| {
+            CovyError::PathMapping(format!(
+                "cannot resolve repository root '{}': {source}",
+                root.display()
+            ))
+        })?;
+        let canonical_path = std::fs::canonicalize(&full_path).map_err(|source| {
+            CovyError::PathMapping(format!(
+                "cannot resolve changed path '{}': {source}",
+                full_path.display()
+            ))
+        })?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(CovyError::PathMapping(format!(
+                "changed path '{relative_path}' must resolve beneath the repository root"
+            )));
+        }
+    }
     let should_remove = !full_path.exists()
         || !is_source_file(&full_path)
         || is_generated_or_vendor_path(relative_path)

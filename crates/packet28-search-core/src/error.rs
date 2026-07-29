@@ -73,6 +73,20 @@ pub enum SearchError {
         message: String,
     },
 
+    /// A writer tried to publish from a generation that is no longer current.
+    ConcurrentWriter {
+        /// Generation owned by the caller.
+        expected: u64,
+        /// Generation currently published on disk.
+        actual: u64,
+    },
+
+    /// An incremental update path did not resolve beneath the repository root.
+    InvalidChangedPath {
+        /// Rejected caller-supplied path.
+        path: String,
+    },
+
     /// Additional operation or path context for another typed search failure.
     Context {
         /// Operation and, when available, affected artifact.
@@ -109,6 +123,14 @@ impl fmt::Display for SearchError {
             Self::BinaryEncode { source } => source.fmt(formatter),
             Self::IntegerConversion { source } => source.fmt(formatter),
             Self::CorruptIndex { message } => formatter.write_str(message),
+            Self::ConcurrentWriter { expected, actual } => write!(
+                formatter,
+                "regex index generation conflict: caller has {expected}, published generation is {actual}"
+            ),
+            Self::InvalidChangedPath { path } => write!(
+                formatter,
+                "changed path '{path}' must resolve beneath the repository root"
+            ),
             Self::Context { context, source } => write!(formatter, "{context}: {source}"),
             Self::FailureProvenance { build, persistence } => write!(
                 formatter,
@@ -130,7 +152,11 @@ impl Error for SearchError {
             Self::IntegerConversion { source } => Some(source),
             Self::Context { source, .. } => Some(source.as_ref()),
             Self::FailureProvenance { build, .. } => Some(build.as_ref()),
-            Self::IndexNotLoaded | Self::EmptyQuery | Self::CorruptIndex { .. } => None,
+            Self::IndexNotLoaded
+            | Self::EmptyQuery
+            | Self::CorruptIndex { .. }
+            | Self::ConcurrentWriter { .. }
+            | Self::InvalidChangedPath { .. } => None,
         }
     }
 }
