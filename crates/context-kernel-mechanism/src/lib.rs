@@ -4,6 +4,7 @@
 //! Composition crates provide [`ExecutionPolicy`] and [`ReactivePlanner`]
 //! implementations, then register reducer functions on [`KernelMechanism`].
 //! This crate deliberately contains no built-in target catalog.
+#![doc = include_str!("../PUBLIC_API.md")]
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -32,11 +33,21 @@ mod reactive_runtime;
 mod services;
 
 pub(crate) use governance_runtime::*;
-pub use kernel_registry::*;
-pub use kernel_runtime::*;
-pub use kernel_types::*;
+pub use kernel_registry::load_packet_file;
+pub use kernel_runtime::{ExecutionContext, KernelMechanism};
+pub use kernel_types::{
+    normalize_sequence_request, BudgetMetric, BudgetStage, BudgetUsage, CacheRuntimeMetrics,
+    ExecutionBudget, GovernanceAudit, KernelAudit, KernelError, KernelFailure, KernelPacket,
+    KernelRequest, KernelResponse, KernelSequenceRequest, KernelSequenceResponse,
+    KernelStepReactiveConfig, KernelStepRequest, KernelStepResponse, NoopSequenceObserver,
+    ReactiveReplanMode, ReactiveSequenceConfig, ReducerExecutionAudit, ReducerResult,
+    SequenceObserver,
+};
 pub(crate) use reactive_runtime::*;
-pub use services::*;
+pub use services::{
+    ExecutionPolicy, ExecutionPolicyRun, KernelPlanMutation, KernelServices, ReactivePlan,
+    ReactivePlanRequest, ReactivePlanner,
+};
 
 fn estimate_tokens(bytes: usize) -> u64 {
     (bytes as u64).div_ceil(4)

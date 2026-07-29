@@ -3,6 +3,7 @@
 //! Existing `0.2` callers keep using this crate and its root API unchanged.
 //! New custom compositions can depend on `context-kernel-mechanism`; the
 //! supported Packet28 catalog is owned by `context-kernel-builtins`.
+#![doc = include_str!("../PUBLIC_API.md")]
 
 pub use context_kernel_builtins::{
     build_diff_analyze_envelope, build_diff_pipeline_request, build_test_impact_envelope, execute,

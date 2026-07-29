@@ -3,6 +3,7 @@
 //! Applications that need the supported Packet28 tool families should use
 //! [`Kernel::with_v1_reducers`]. Applications defining a different catalog can
 //! use [`context_kernel_mechanism::KernelMechanism`] directly.
+#![doc = include_str!("../PUBLIC_API.md")]
 
 use std::collections::{BTreeSet, HashMap};
 use std::ops::{Deref, DerefMut};
@@ -21,7 +22,16 @@ use context_memory_core::{
     RecallMode, RecallOptions, RecallScope,
 };
 
-pub use context_kernel_mechanism::*;
+pub use context_kernel_mechanism::{
+    load_packet_file, normalize_sequence_request, BudgetMetric, BudgetStage, BudgetUsage,
+    CacheRuntimeMetrics, ExecutionBudget, ExecutionContext, ExecutionPolicy, ExecutionPolicyRun,
+    GovernanceAudit, KernelAudit, KernelError, KernelFailure, KernelMechanism, KernelPacket,
+    KernelPlanMutation, KernelRequest, KernelResponse, KernelSequenceRequest,
+    KernelSequenceResponse, KernelServices, KernelStepReactiveConfig, KernelStepRequest,
+    KernelStepResponse, NoopSequenceObserver, PersistConfig, ReactivePlan, ReactivePlanRequest,
+    ReactivePlanner, ReactiveReplanMode, ReactiveSequenceConfig, ReducerExecutionAudit,
+    ReducerResult, SequenceObserver,
+};
 
 mod agenty_runtime;
 mod broker_memory_runtime;
@@ -38,10 +48,23 @@ pub(crate) use agenty_runtime::*;
 pub(crate) use broker_memory_runtime::*;
 pub(crate) use contextq_runtime::*;
 pub(crate) use correlation_runtime::*;
-pub use diff_runtime::*;
+pub(crate) use diff_runtime::default_diff_pipeline_ingest_adapters;
+pub use diff_runtime::{
+    build_diff_analyze_envelope, build_diff_pipeline_request, build_test_impact_envelope,
+    DiffAnalyzeKernelInput, DiffAnalyzeKernelOutput, ImpactKernelInput, ImpactKernelOutput,
+    SerializableFileDiff,
+};
 pub(crate) use governance_runtime::*;
-pub use instruction_runtime::*;
-pub use kernel_registry::*;
+pub(crate) use instruction_runtime::{
+    instruction_request_cacheable, instruction_stable_cache_input,
+    run_packet28_instruction_summarize,
+};
+pub use instruction_runtime::{
+    render_instruction, InstructionSummaryPayload, InstructionSummaryRequest,
+    RenderedInstructionSummary, DEFAULT_INSTRUCTION_SUMMARY_BUDGET_TOKENS,
+    INSTRUCTION_SUMMARY_SCHEMA_VERSION,
+};
+pub use kernel_registry::{execute, execute_sequence, register_v1_reducers};
 pub(crate) use reactive_runtime::*;
 pub(crate) use tool_reducers_runtime::*;
 
