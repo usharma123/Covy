@@ -85,6 +85,8 @@ mod launch;
 mod planning;
 mod runtime;
 mod runtime_files;
+#[cfg(unix)]
+mod runtime_files_unix;
 mod server;
 mod state;
 mod watch;
@@ -109,14 +111,14 @@ use crate::hooks::hook_ingest;
 use crate::index::{
     build_index_status, daemon_index_clear, daemon_index_rebuild, daemon_index_status,
     daemon_packet28_search, enqueue_full_index_rebuild, enqueue_incremental_index_paths,
-    run_index_worker, IndexIngress, IndexWorkReceiver,
+    enqueue_initial_index_work, run_index_worker, IndexIngress, IndexWorkReceiver,
 };
 use crate::instruction_files::resolve_instruction_file;
 use crate::launch::task_launch_agent;
 use crate::planning::*;
 use crate::runtime::{BlockingPool, DaemonRuntimeConfig, ShutdownSignal, StateChangeSignal};
 use crate::runtime_files::{
-    clear_index_files, default_index_manifest, load_index_manifest_file, load_index_runtime_files,
+    default_index_manifest, load_index_manifest_file, load_index_runtime_files,
     save_index_manifest_file,
 };
 use crate::server::handle_connection;
@@ -223,15 +225,7 @@ fn serve(root: PathBuf) -> Result<()> {
 
     let (watch_tx, watch_rx) = WatchIngress::new(config.watch_queue_capacity);
     restore_watchers(&state, &watch_tx)?;
-    {
-        let should_queue = {
-            let guard = state.lock().map_err(lock_err)?;
-            guard.interactive_index.needs_rebuild()
-        };
-        if should_queue {
-            enqueue_full_index_rebuild(&state)?;
-        }
-    }
+    enqueue_initial_index_work(&state)?;
     mark_ready(&state)?;
 
     let blocking_pool = BlockingPool::new(config.max_blocking_operations);

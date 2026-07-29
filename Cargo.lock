@@ -1489,6 +1489,7 @@ dependencies = [
  "context-memory-core",
  "covy-ingest",
  "diffy-core",
+ "fs2",
  "glob",
  "ignore",
  "libc",

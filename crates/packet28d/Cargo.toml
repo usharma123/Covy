@@ -45,6 +45,7 @@ testy-core.workspace = true
 blake3.workspace = true
 tokio = { workspace = true, features = ["net"] }
 libc = "0.2"
+fs2 = "0.4"
 
 [dev-dependencies]
 tempfile.workspace = true
