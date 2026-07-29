@@ -77,23 +77,42 @@ enum RootPersistencePhase {
     },
     Closing {
         generation: u64,
+        owner: Weak<CachePersistenceOwner>,
+    },
+    Faulted {
+        generation: u64,
+        owner: Weak<CachePersistenceOwner>,
     },
 }
 
 impl RootPersistenceSlot {
     fn worker_finished(&self, generation: u64) {
         let mut state = lock_recover(&self.state);
-        let is_current_worker = matches!(
-            state.phase,
+        let next_phase = match &state.phase {
             RootPersistencePhase::Live {
                 generation: current,
-                ..
-            } | RootPersistencePhase::Closing {
+                owner,
+            }
+            | RootPersistencePhase::Closing {
                 generation: current,
-            } if current == generation
-        );
-        if is_current_worker {
-            state.phase = RootPersistencePhase::Vacant;
+                owner,
+            } if *current == generation => {
+                if owner.strong_count() == 0 {
+                    Some(RootPersistencePhase::Vacant)
+                } else {
+                    Some(RootPersistencePhase::Faulted {
+                        generation,
+                        owner: owner.clone(),
+                    })
+                }
+            }
+            RootPersistencePhase::Vacant
+            | RootPersistencePhase::Live { .. }
+            | RootPersistencePhase::Closing { .. }
+            | RootPersistencePhase::Faulted { .. } => None,
+        };
+        if let Some(next_phase) = next_phase {
+            state.phase = next_phase;
             drop(state);
             self.changed.notify_all();
         }
@@ -121,20 +140,6 @@ impl Drop for RootWorkerFence {
     fn drop(&mut self) {
         self.slot.worker_finished(self.generation);
     }
-}
-
-fn owner_matches(
-    phase: &RootPersistencePhase,
-    generation: u64,
-    owner: &CachePersistenceOwner,
-) -> bool {
-    matches!(
-        phase,
-        RootPersistencePhase::Live {
-            generation: current,
-            owner: registered,
-        } if *current == generation && std::ptr::eq(registered.as_ptr(), owner)
-    )
 }
 
 fn wait_for_root_state<'a>(
@@ -173,13 +178,22 @@ fn signal_before_test_root_state_wait(root_key: &Path) {
 fn live_owner(phase: &RootPersistencePhase) -> Option<Arc<CachePersistenceOwner>> {
     match phase {
         RootPersistencePhase::Live { owner, .. } => owner.upgrade(),
-        RootPersistencePhase::Vacant | RootPersistencePhase::Closing { .. } => None,
+        RootPersistencePhase::Vacant
+        | RootPersistencePhase::Closing { .. }
+        | RootPersistencePhase::Faulted { .. } => None,
     }
 }
 
-fn next_root_generation(state: &mut RootPersistenceState) -> u64 {
-    state.next_generation = state.next_generation.saturating_add(1);
-    state.next_generation
+fn next_root_generation(state: &mut RootPersistenceState) -> Result<u64, CachePersistenceError> {
+    let generation =
+        state
+            .next_generation
+            .checked_add(1)
+            .ok_or_else(|| CachePersistenceError::Start {
+                detail: "root persistence worker generation exhausted".to_string(),
+            })?;
+    state.next_generation = generation;
+    Ok(generation)
 }
 
 fn mark_root_live(
@@ -193,14 +207,84 @@ fn mark_root_live(
     };
 }
 
-fn mark_root_closing(
+fn begin_root_shutdown(
     state: &mut RootPersistenceState,
     generation: u64,
     owner: &CachePersistenceOwner,
 ) {
-    if owner_matches(&state.phase, generation, owner) {
-        state.phase = RootPersistencePhase::Closing { generation };
+    let registered = match &state.phase {
+        RootPersistencePhase::Live {
+            generation: current,
+            owner: registered,
+        } if *current == generation && std::ptr::eq(registered.as_ptr(), owner) => {
+            Some(registered.clone())
+        }
+        RootPersistencePhase::Vacant
+        | RootPersistencePhase::Live { .. }
+        | RootPersistencePhase::Closing { .. }
+        | RootPersistencePhase::Faulted { .. } => None,
+    };
+    if let Some(registered) = registered {
+        state.phase = RootPersistencePhase::Closing {
+            generation,
+            owner: registered,
+        };
     }
+}
+
+fn release_root_owner(
+    state: &mut RootPersistenceState,
+    generation: u64,
+    owner: &CachePersistenceOwner,
+) -> bool {
+    let next_phase = match &state.phase {
+        RootPersistencePhase::Live {
+            generation: current,
+            owner: registered,
+        } if *current == generation && std::ptr::eq(registered.as_ptr(), owner) => {
+            Some(RootPersistencePhase::Closing {
+                generation,
+                owner: registered.clone(),
+            })
+        }
+        RootPersistencePhase::Faulted {
+            generation: current,
+            owner: registered,
+        } if *current == generation && std::ptr::eq(registered.as_ptr(), owner) => {
+            Some(RootPersistencePhase::Vacant)
+        }
+        RootPersistencePhase::Vacant
+        | RootPersistencePhase::Live { .. }
+        | RootPersistencePhase::Closing { .. }
+        | RootPersistencePhase::Faulted { .. } => None,
+    };
+    if let Some(next_phase) = next_phase {
+        state.phase = next_phase;
+        return true;
+    }
+    false
+}
+
+fn complete_root_shutdown(
+    state: &mut RootPersistenceState,
+    generation: u64,
+    owner: &CachePersistenceOwner,
+) -> bool {
+    let matches_closed_owner = matches!(
+        &state.phase,
+        RootPersistencePhase::Closing {
+            generation: current,
+            owner: registered,
+        } | RootPersistencePhase::Faulted {
+            generation: current,
+            owner: registered,
+        } if *current == generation && std::ptr::eq(registered.as_ptr(), owner)
+    );
+    if matches_closed_owner {
+        state.phase = RootPersistencePhase::Vacant;
+        return true;
+    }
+    false
 }
 
 struct RootPersistenceLock {
@@ -464,6 +548,8 @@ enum PersistenceCommand {
     Wake,
     Flush(CommandReply),
     Shutdown,
+    #[cfg(test)]
+    ExitWithoutShutdown,
 }
 
 /// Single-owner, bounded persistence pipeline for a [`PacketCache`].
@@ -535,7 +621,7 @@ impl CachePersistence {
             }
             root_state = wait_for_root_state(&root_slot, root_state);
         }
-        let root_generation = next_root_generation(&mut root_state);
+        let root_generation = next_root_generation(&mut root_state)?;
 
         let mut root_lock = RootPersistenceLock::open(&config)?;
         let (cache, observed_generation) = {
@@ -843,10 +929,20 @@ impl CachePersistence {
             drop(root_state);
             return self.flush(timeout);
         }
-        mark_root_closing(&mut root_state, self.owner.root_generation, &self.owner);
+        begin_root_shutdown(&mut root_state, self.owner.root_generation, &self.owner);
         drop(root_state);
         self.owner.root_slot.changed.notify_all();
-        self.owner.shutdown_inner(timeout)
+        let result = self.owner.shutdown_inner(timeout);
+        if result.is_ok() {
+            let mut root_state = lock_recover(&self.owner.root_slot.state);
+            let state_changed =
+                complete_root_shutdown(&mut root_state, self.owner.root_generation, &self.owner);
+            drop(root_state);
+            if state_changed {
+                self.owner.root_slot.changed.notify_all();
+            }
+        }
+        result
     }
 
     fn wake_worker(&self) -> Result<(), CachePersistenceError> {
@@ -1059,9 +1155,11 @@ impl Drop for CachePersistence {
 impl Drop for CachePersistenceOwner {
     fn drop(&mut self) {
         let mut root_state = lock_recover(&self.root_slot.state);
-        mark_root_closing(&mut root_state, self.root_generation, self);
+        let state_changed = release_root_owner(&mut root_state, self.root_generation, self);
         drop(root_state);
-        self.root_slot.changed.notify_all();
+        if state_changed {
+            self.root_slot.changed.notify_all();
+        }
         self.shutdown_on_drop();
     }
 }
@@ -1111,6 +1209,8 @@ impl PersistenceWorker {
                     complete_shutdown(&self.shutdown_completion, result);
                     break;
                 }
+                #[cfg(test)]
+                Ok(PersistenceCommand::ExitWithoutShutdown) => break,
                 Err(RecvTimeoutError::Timeout) => {
                     if let Err(error) = self.flush_dirty() {
                         self.record_error(error);
@@ -2058,6 +2158,81 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("same-root open did not resume after the prior worker exited");
         same_root.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn unexpected_worker_exit_fences_reopen_until_stale_owner_is_released() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let stale_reservation = owner.reserve_mutation(1).unwrap();
+        owner
+            .owner
+            .sender()
+            .unwrap()
+            .send(PersistenceCommand::ExitWithoutShutdown)
+            .unwrap();
+        let worker_exit_deadline = Instant::now() + Duration::from_secs(2);
+        while !owner.owner.worker_is_finished() {
+            assert!(
+                Instant::now() < worker_exit_deadline,
+                "injected persistence worker exit did not complete"
+            );
+            thread::yield_now();
+        }
+        assert!(matches!(
+            owner.reserve_mutation(1),
+            Err(CachePersistenceError::WorkerUnavailable)
+        ));
+
+        let (reopened_sender, reopened_receiver) = mpsc::channel();
+        let (waiting_sender, waiting_receiver) = mpsc::channel();
+        *lock_recover(root_state_wait_test_hook()) =
+            Some((persistence_root_key(&config.root_dir), waiting_sender));
+        let same_root = thread::spawn(move || {
+            let reopened = CachePersistence::open(config)?;
+            let reservation = reopened.reserve_mutation(1)?;
+            drop(reservation);
+            let _ = reopened_sender.send(());
+            reopened.shutdown(Duration::from_secs(2))?;
+            Ok::<(), CachePersistenceError>(())
+        });
+        waiting_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("same-root open did not reach the faulted-owner barrier");
+        assert!(matches!(
+            reopened_receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        drop(owner);
+        assert!(matches!(
+            reopened_receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        drop(stale_reservation);
+
+        reopened_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("same-root open did not resume after the stale owner was released");
+        same_root.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn root_worker_generation_exhaustion_is_reported() {
+        let mut state = RootPersistenceState {
+            next_generation: u64::MAX,
+            phase: RootPersistencePhase::Vacant,
+        };
+
+        let error = next_root_generation(&mut state).unwrap_err();
+
+        assert!(matches!(
+            error,
+            CachePersistenceError::Start { detail }
+                if detail == "root persistence worker generation exhausted"
+        ));
+        assert_eq!(state.next_generation, u64::MAX);
     }
 
     #[test]
