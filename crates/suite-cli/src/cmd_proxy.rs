@@ -1,9 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
 use packet28_daemon_protocol::broker::{BrokerWriteOp, BrokerWriteStateRequest};
 use packet28_daemon_protocol::paths::resolve_workspace_root;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const PROXY_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq)]
 pub enum PacketDetailArg {
@@ -206,6 +209,16 @@ pub fn run(args: RunArgs) -> Result<i32> {
     } else {
         None
     };
+    if args.cache {
+        kernel
+            .shutdown_cache_persistence(PROXY_PERSISTENCE_TIMEOUT)
+            .with_context(|| {
+                format!(
+                    "failed to durably finish proxy run under '{}'",
+                    persist_root.display()
+                )
+            })?;
+    }
 
     handle_kernel_response(
         &args,
