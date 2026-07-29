@@ -309,7 +309,7 @@ pub(crate) fn compute_handoff_state(
         .map(normalize_timestamp_millis);
     let latest_hook_boundary_kind = task.and_then(|task| task.latest_hook_boundary_kind.as_deref());
     let threshold_exceeded = task.is_some_and(|task| task.hook_threshold_exceeded);
-    if snapshot.latest_checkpoint_id.is_none() {
+    let Some(checkpoint_id) = snapshot.latest_checkpoint_id.as_ref() else {
         if snapshot.latest_intention.is_none() {
             return (
                 false,
@@ -335,8 +335,7 @@ pub(crate) fn compute_handoff_state(
             false,
             "Hook boundary or threshold required before preparing a handoff.".to_string(),
         );
-    }
-    let checkpoint_id = snapshot.latest_checkpoint_id.as_ref().unwrap();
+    };
     let latest_handoff_checkpoint_id = latest_ready_handoff
         .as_ref()
         .and_then(|handoff| handoff.checkpoint_id.as_ref())

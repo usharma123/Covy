@@ -942,10 +942,9 @@ pub(crate) fn build_broker_sections(
         }
     }
 
-    if manage.is_some_and(|manage| {
-        !manage.working_set.is_empty() || !manage.recommended_packets.is_empty()
-    }) {
-        let manage = manage.expect("manage checked above");
+    if let Some(manage) = manage
+        .filter(|manage| !manage.working_set.is_empty() || !manage.recommended_packets.is_empty())
+    {
         let packets = if !manage.working_set.is_empty() {
             &manage.working_set
         } else {
@@ -985,8 +984,7 @@ pub(crate) fn build_broker_sections(
         }
     }
 
-    if manage.is_some_and(|manage| !manage.recommended_actions.is_empty()) {
-        let manage = manage.expect("manage checked above");
+    if let Some(manage) = manage.filter(|manage| !manage.recommended_actions.is_empty()) {
         let title = match request
             .tool_result_kind
             .unwrap_or(BrokerToolResultKind::Generic)

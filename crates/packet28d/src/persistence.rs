@@ -229,7 +229,10 @@ impl PersistenceOwner {
                     anyhow!("daemon persistence worker stopped before shutdown acknowledgement")
                 }
             })?;
-        let worker = self.worker.take().expect("persistence worker is present");
+        let worker = self
+            .worker
+            .take()
+            .ok_or_else(|| anyhow!("daemon persistence worker handle is unavailable"))?;
         worker
             .join()
             .map_err(|_| anyhow!("daemon persistence worker panicked during shutdown"))?;
@@ -426,8 +429,8 @@ fn run_worker(
                 }
             },
         };
-        if matches!(command, PersistenceCommand::Wake) {
-            match command_after_debounce(&receiver, state.debounce) {
+        match command {
+            PersistenceCommand::Wake => match command_after_debounce(&receiver, state.debounce) {
                 DebounceOutcome::Command(command) => next = Some(command),
                 DebounceOutcome::Elapsed => {
                     let _ = persist_pending(&state, None, false);
@@ -436,11 +439,7 @@ fn run_worker(
                     let _ = persist_pending(&state, None, false);
                     return;
                 }
-            }
-            continue;
-        }
-        match command {
-            PersistenceCommand::Wake => unreachable!("wake commands are handled above"),
+            },
             PersistenceCommand::Barrier {
                 target_revision,
                 reply,
@@ -832,6 +831,20 @@ mod tests {
         assert_eq!(metrics.checkpoints_written, 1);
         assert_eq!(metrics.failures, 1);
         owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn shutdown_reports_a_missing_worker_handle_without_panicking() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut owner, _handle) = owner(root.path(), Duration::ZERO);
+        let worker = owner.worker.take().unwrap();
+
+        let error = owner.shutdown(Duration::from_secs(5)).unwrap_err();
+        worker.join().unwrap();
+
+        assert!(error
+            .to_string()
+            .contains("persistence worker handle is unavailable"));
     }
 
     struct BlockingBackend {
