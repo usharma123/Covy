@@ -95,6 +95,46 @@ class AutofixSecurityPolicyTests(unittest.TestCase):
             errors,
         )
 
+    def test_rejects_manual_arbitrary_ref_or_unvalidated_run(self) -> None:
+        unsafe_ref = self.workflow.replace(
+            "      run_id:\n",
+            "      ref:\n"
+            '        description: "Untrusted repair ref"\n'
+            "        required: true\n"
+            "      run_id:\n",
+            1,
+        ).replace(
+            "ref: ${{ steps.resolve.outputs.target_ref }}",
+            "ref: ${{ inputs.ref }}",
+            1,
+        )
+        self.assertIn(
+            "manual autofix may not accept an arbitrary repair ref",
+            verify_ci_policy.autofix_security_errors(unsafe_ref),
+        )
+
+        unsafe_metadata = self.workflow.replace(
+            '            python3 "$TRUSTED_RUN_VALIDATOR" \\\n',
+            "            printf '%s' '{\"target_ref\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}' \\\n",
+            1,
+        )
+        self.assertIn(
+            "manual run metadata is not validated before checkout",
+            verify_ci_policy.autofix_security_errors(unsafe_metadata),
+        )
+
+    def test_rejects_target_outside_default_branch_history(self) -> None:
+        unsafe = self.workflow.replace(
+            "          git -C trusted-control merge-base --is-ancestor \\\n"
+            '            "$target_ref" "origin/$DEFAULT_BRANCH"\n',
+            "",
+            1,
+        )
+        self.assertIn(
+            "validated run commit is not constrained to default-branch history",
+            verify_ci_policy.autofix_security_errors(unsafe),
+        )
+
     def test_rejects_candidate_supplied_driver(self) -> None:
         unsafe = self.workflow.replace(
             "TRUSTED_AUTOFIX: "

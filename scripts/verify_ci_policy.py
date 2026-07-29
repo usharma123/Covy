@@ -252,6 +252,19 @@ def autofix_security_errors(text: str) -> list[str]:
             "TRUSTED_AUTOFIX: "
             "${{ github.workspace }}/trusted-control/scripts/ci/codex_autofix.sh"
         ),
+        "trusted run validator is not selected explicitly": (
+            "TRUSTED_RUN_VALIDATOR: "
+            "${{ github.workspace }}/trusted-control/scripts/ci/validate_autofix_run.py"
+        ),
+        "manual run metadata is not validated before checkout": (
+            'python3 "$TRUSTED_RUN_VALIDATOR"'
+        ),
+        "repair target is not derived from validated run metadata": (
+            "ref: ${{ steps.resolve.outputs.target_ref }}"
+        ),
+        "validated run commit is not constrained to default-branch history": (
+            "git -C trusted-control merge-base --is-ancestor"
+        ),
         "repair target root is not bound explicitly": (
             "CODEX_AUTOFIX_ROOT: ${{ env.TARGET_ROOT }}"
         ),
@@ -273,6 +286,8 @@ def autofix_security_errors(text: str) -> list[str]:
         errors.append("every autofix checkout must discard persisted credentials")
     if text.count("OPENAI_API_KEY:") != 1:
         errors.append("OpenAI credentials must be scoped to exactly one execution step")
+    if "inputs.ref" in text:
+        errors.append("manual autofix may not accept an arbitrary repair ref")
     if re.search(r"^\s*run:\s*scripts/ci/codex_autofix\.sh\s*$", text, re.MULTILINE):
         errors.append("candidate checkout may not supply the executed autofix driver")
     if "git push --force" in text:
@@ -310,6 +325,24 @@ def verify_autofix_security(errors: list[str]) -> None:
     errors.extend(
         f"codex-autofix.yml: {error}" for error in autofix_security_errors(autofix)
     )
+    driver = (ROOT / "scripts" / "ci" / "codex_autofix.sh").read_text(
+        encoding="utf-8"
+    )
+    for fragment, message in (
+        (
+            "shell_environment_policy.ignore_default_excludes=false",
+            "Codex subprocesses do not retain the default secret filter",
+        ),
+        (
+            'shell_environment_policy.exclude=["OPENAI_API_KEY","GITHUB_TOKEN",'
+            '"GH_TOKEN","ACTIONS_ID_TOKEN_REQUEST_TOKEN"]',
+            "Codex subprocesses do not explicitly exclude CI credentials",
+        ),
+    ):
+        if fragment not in driver:
+            errors.append(f"codex_autofix.sh: {message}")
+    if "CODEX_CMD" in driver:
+        errors.append("codex_autofix.sh: arbitrary command override is forbidden")
 
 
 def release_permission_errors(text: str) -> list[str]:

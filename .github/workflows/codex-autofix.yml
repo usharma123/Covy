@@ -18,10 +18,6 @@ on:
       run_id:
         description: "Failed GitHub Actions run id to inspect"
         required: true
-      ref:
-        description: "Trusted git ref to repair"
-        required: false
-        default: main
 
 # Candidate code is inspected with a read-only token. A separate job applies the
 # generated patch without executing it and owns the narrowly scoped write token.
@@ -48,12 +44,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has_diff: ${{ steps.patch.outputs.has_diff }}
+      run_url: ${{ steps.resolve.outputs.run_url }}
+      target_ref: ${{ steps.resolve.outputs.target_ref }}
     env:
       RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
-      RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, inputs.run_id) }}
-      TARGET_REF: ${{ github.event.workflow_run.head_sha || inputs.ref }}
       TARGET_ROOT: ${{ github.workspace }}/target
       TRUSTED_AUTOFIX: ${{ github.workspace }}/trusted-control/scripts/ci/codex_autofix.sh
+      TRUSTED_RUN_VALIDATOR: ${{ github.workspace }}/trusted-control/scripts/ci/validate_autofix_run.py
       CODEX_AUTOFIX_VERIFY: cargo test --locked --workspace --all-targets
     steps:
       - name: Check out trusted control plane
@@ -61,12 +58,41 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           path: trusted-control
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Resolve trusted failed run
+        id: resolve
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_METADATA: ${{ runner.temp }}/codex-autofix-run.json
+        run: |
+          case "$RUN_ID" in
+            ""|*[!0-9]*)
+              echo "run_id must contain only decimal digits" >&2
+              exit 1
+              ;;
+          esac
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" > "$RUN_METADATA"
+          resolution="$(
+            python3 "$TRUSTED_RUN_VALIDATOR" \
+              --metadata "$RUN_METADATA" \
+              --repository "$GITHUB_REPOSITORY" \
+              --default-branch "$DEFAULT_BRANCH"
+          )"
+          target_ref="$(jq -r '.target_ref' <<<"$resolution")"
+          run_url="$(jq -r '.run_url' <<<"$resolution")"
+          git -C trusted-control fetch --no-tags origin "$target_ref"
+          git -C trusted-control merge-base --is-ancestor \
+            "$target_ref" "origin/$DEFAULT_BRANCH"
+          echo "target_ref=$target_ref" >> "$GITHUB_OUTPUT"
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
 
       - name: Check out repair target without credentials
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ env.TARGET_REF }}
+          ref: ${{ steps.resolve.outputs.target_ref }}
           path: target
           fetch-depth: 0
           persist-credentials: false
@@ -77,7 +103,7 @@ jobs:
           CODEX_AUTOFIX_ROOT: ${{ env.TARGET_ROOT }}
           CODEX_AUTOFIX_DRY_RUN: "1"
           CI_FAILURE_LOG: ${{ env.TARGET_ROOT }}/.packet28/ci-autofix/failure.log
-          CI_RUN_URL: ${{ env.RUN_URL }}
+          CI_RUN_URL: ${{ steps.resolve.outputs.run_url }}
         run: |
           bash -n "$TRUSTED_AUTOFIX"
           mkdir -p .packet28/ci-autofix
@@ -108,7 +134,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p .packet28/ci-autofix
-          gh run view "$RUN_ID" --log > .packet28/ci-autofix/failure.log
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log \
+            > .packet28/ci-autofix/failure.log
           test -s .packet28/ci-autofix/failure.log
 
       - name: Run trusted Codex autofix driver
@@ -116,7 +143,7 @@ jobs:
         env:
           CODEX_AUTOFIX_ROOT: ${{ env.TARGET_ROOT }}
           CI_FAILURE_LOG: ${{ env.TARGET_ROOT }}/.packet28/ci-autofix/failure.log
-          CI_RUN_URL: ${{ env.RUN_URL }}
+          CI_RUN_URL: ${{ steps.resolve.outputs.run_url }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "$OPENAI_API_KEY" ]; then
@@ -166,8 +193,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
-      RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, inputs.run_id) }}
-      TARGET_REF: ${{ github.event.workflow_run.head_sha || inputs.ref }}
+      RUN_URL: ${{ needs.autofix.outputs.run_url }}
+      TARGET_REF: ${{ needs.autofix.outputs.target_ref }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - name: Check out verified repair base
