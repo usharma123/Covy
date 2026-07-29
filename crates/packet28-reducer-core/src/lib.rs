@@ -19,7 +19,9 @@ pub mod tee;
 mod tests;
 mod types;
 
-pub use command::{classify_command, classify_command_argv, reduce_command_output};
+pub use command::{
+    classify_command, classify_command_argv, consume_leading_env_assignments, reduce_command_output,
+};
 pub use git::compact_diff_public;
 pub use read::read_regions;
 pub use search::{
