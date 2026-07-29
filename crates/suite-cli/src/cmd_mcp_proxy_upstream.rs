@@ -21,7 +21,7 @@ use super::McpSessionState;
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 30_000;
 const MAX_UPSTREAM_INFLIGHT: usize = 32;
-const MAX_PROXY_OUTPUT_MESSAGES: usize = 64;
+pub(super) const MAX_PROXY_OUTPUT_MESSAGES: usize = 64;
 
 type PendingReply = std::result::Result<Value, String>;
 
@@ -31,7 +31,7 @@ pub(crate) struct ProxyOutput {
 }
 
 pub(crate) struct OutboundMessage {
-    value: Value,
+    pub(super) value: Value,
     framing: McpMessageFraming,
 }
 

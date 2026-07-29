@@ -5,8 +5,7 @@ use crate::cmd_mcp::proxy_catalog::{
     ProxyCatalog,
 };
 use crate::cmd_mcp::proxy_upstream::{
-    proxy_output_channel, spawn_upstream_clients, write_proxy_output, ProxyOutput, UpstreamClient,
-    UpstreamPool,
+    proxy_output_channel, spawn_upstream_clients, write_proxy_output, UpstreamClient, UpstreamPool,
 };
 
 const MAX_PROXY_INFLIGHT: usize = 64;
@@ -68,8 +67,22 @@ async fn serve_proxy_stdio_async(
                 return Err(error);
             }
         };
-    let notification_thread =
-        start_proxy_notification_thread(root.clone(), output.clone(), session.clone());
+    let notification_output = output.clone();
+    let mut notification_task = start_notification_task(
+        root.clone(),
+        session.clone(),
+        MCP_NOTIFICATION_POLL_INTERVAL,
+        move |notification, framing| {
+            let output = notification_output.clone();
+            async move {
+                Ok(if output.try_send(notification, framing)? {
+                    NotificationDelivery::Delivered
+                } else {
+                    NotificationDelivery::Backpressured
+                })
+            }
+        },
+    );
     let catalog = Arc::new(ProxyCatalog::default());
     let inflight = Arc::new(tokio::sync::Semaphore::new(MAX_PROXY_INFLIGHT));
     let mut requests = tokio::task::JoinSet::new();
@@ -201,9 +214,7 @@ async fn serve_proxy_stdio_async(
         });
     }
 
-    if let Ok(mut guard) = session.lock() {
-        guard.shutdown = true;
-    }
+    notification_task.request_shutdown();
     let mut drain_error = None;
     let drained = tokio::time::timeout(PROXY_SHUTDOWN_GRACE, async {
         while let Some(joined) = requests.join_next().await {
@@ -237,7 +248,11 @@ async fn serve_proxy_stdio_async(
             ));
         }
     }
-    let _ = tokio::task::spawn_blocking(move || notification_thread.join()).await;
+    if let Err(error) = notification_task.join().await {
+        if serve_result.is_ok() {
+            serve_result = Err(error);
+        }
+    }
     drop(upstreams);
     drop(output);
     if let Some(writer) = writer {
@@ -267,105 +282,6 @@ fn flatten_proxy_task(
     joined: std::result::Result<Result<()>, tokio::task::JoinError>,
 ) -> Result<()> {
     joined.map_err(|error| anyhow!("MCP proxy request task failed: {error}"))?
-}
-
-fn start_proxy_notification_thread(
-    root: PathBuf,
-    output: ProxyOutput,
-    session: Arc<Mutex<McpSessionState>>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || loop {
-        let (initialized, shutdown, tracked_tasks, tracked_task_offsets, framing) =
-            match session.lock() {
-                Ok(guard) => (
-                    guard.initialized,
-                    guard.shutdown,
-                    guard.tracked_tasks.clone(),
-                    guard.tracked_task_offsets.clone(),
-                    guard.framing,
-                ),
-                Err(_) => return,
-            };
-        if shutdown {
-            return;
-        }
-        if !initialized || framing.is_none() {
-            thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
-            continue;
-        }
-        let framing = framing.unwrap_or(McpMessageFraming::ContentLength);
-
-        for (task_id, last_seen_seq) in tracked_tasks {
-            let previous_offset = tracked_task_offsets.get(&task_id).copied().unwrap_or(0);
-            let read = match load_task_events_from_offset(&root, &task_id, previous_offset) {
-                Ok(read) => read,
-                Err(_) => continue,
-            };
-            let mut newest_delivered_seq = last_seen_seq;
-            let mut backpressured = false;
-            for frame in read
-                .events
-                .into_iter()
-                .filter(|frame| frame.seq > last_seen_seq)
-            {
-                if frame.event.kind != "context_updated" {
-                    newest_delivered_seq = newest_delivered_seq.max(frame.seq);
-                    continue;
-                }
-                let mut params = match frame.event.data {
-                    Value::Object(map) => map,
-                    other => {
-                        let mut map = Map::new();
-                        map.insert("data".to_string(), other);
-                        map
-                    }
-                };
-                params.insert("task_id".to_string(), Value::String(task_id.clone()));
-                params.insert(
-                    "context_version".to_string(),
-                    params
-                        .get("context_version")
-                        .cloned()
-                        .unwrap_or(Value::Null),
-                );
-                params.insert("event_seq".to_string(), Value::Number(frame.seq.into()));
-                let notification = json!({
-                    "jsonrpc":"2.0",
-                    "method":"notifications/packet28.context_updated",
-                    "params": Value::Object(params),
-                });
-                match output.try_send(notification, framing) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        backpressured = true;
-                        break;
-                    }
-                    Err(_) => {
-                        if let Ok(mut guard) = session.lock() {
-                            guard.shutdown = true;
-                        }
-                        return;
-                    }
-                }
-                newest_delivered_seq = newest_delivered_seq.max(frame.seq);
-            }
-            if newest_delivered_seq > last_seen_seq
-                || (!backpressured && read.next_offset != previous_offset)
-            {
-                if let Ok(mut guard) = session.lock() {
-                    if let Some(current) = guard.tracked_tasks.get_mut(&task_id) {
-                        *current = newest_delivered_seq;
-                    }
-                    if !backpressured {
-                        guard
-                            .tracked_task_offsets
-                            .insert(task_id.clone(), read.next_offset);
-                    }
-                }
-            }
-        }
-        thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
-    })
 }
 
 async fn handle_proxy_notification(

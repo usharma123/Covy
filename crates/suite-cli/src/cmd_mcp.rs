@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -37,6 +36,8 @@ mod fff;
 mod memory_tools;
 #[path = "cmd_mcp_native.rs"]
 mod native_tools;
+#[path = "cmd_mcp_notifications.rs"]
+mod notifications;
 #[path = "cmd_mcp_prompt_resource.rs"]
 mod prompt_resource;
 #[path = "cmd_mcp_proxy.rs"]
@@ -61,6 +62,7 @@ mod transport;
 use crate::cmd_mcp::config::McpProxyConfig;
 use crate::cmd_mcp::core_tools::handle_packet28_agent_status;
 use crate::cmd_mcp::fff::FffMcpClient;
+use crate::cmd_mcp::notifications::{start_notification_task, NotificationDelivery};
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
     resolve_current_task_id,
@@ -74,7 +76,7 @@ use crate::cmd_mcp::support::{
     store_tool_artifact, summarize_json_value, track_task,
 };
 use crate::cmd_mcp::tool_catalog::{canonical_tool_name, tools_list_payload};
-use crate::cmd_mcp::transport::{read_message, write_message, McpMessageFraming};
+use crate::cmd_mcp::transport::{read_message_async, write_message_async, McpMessageFraming};
 
 const MCP_PROTOCOL_VERSION_2024_11_05: &str = "2024-11-05";
 const MCP_PROTOCOL_VERSION_2025_03_26: &str = "2025-03-26";
@@ -198,7 +200,6 @@ pub struct McpSmokeTestArgs {
 #[derive(Default)]
 struct McpSessionState {
     initialized: bool,
-    shutdown: bool,
     toolset: McpToolset,
     tracked_tasks: BTreeMap<String, u64>,
     tracked_task_offsets: BTreeMap<String, u64>,
@@ -264,17 +265,38 @@ fn run_smoke_test(args: McpSmokeTestArgs) -> Result<i32> {
 }
 
 fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
-    let stdin = io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-    let writer = Arc::new(Mutex::new(io::stdout()));
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("packet28-mcp")
+        .build()
+        .context("failed to start MCP runtime")?
+        .block_on(serve_stdio_async(root, toolset))
+}
+
+async fn serve_stdio_async(root: PathBuf, toolset: McpToolset) -> Result<()> {
+    let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
+    let writer = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
     let session = Arc::new(Mutex::new(McpSessionState {
         toolset,
         ..McpSessionState::default()
     }));
-    start_notification_thread(root.clone(), writer.clone(), session.clone());
+    let notification_writer = writer.clone();
+    let notification_task = start_notification_task(
+        root.clone(),
+        session.clone(),
+        MCP_NOTIFICATION_POLL_INTERVAL,
+        move |notification, framing| {
+            let writer = notification_writer.clone();
+            async move {
+                let mut guard = writer.lock().await;
+                write_message_async(&mut *guard, &notification, framing).await?;
+                Ok(NotificationDelivery::Delivered)
+            }
+        },
+    );
 
     loop {
-        let Some((request, framing)) = read_message(&mut reader)? else {
+        let Some((request, framing)) = read_message_async(&mut reader).await? else {
             break;
         };
         if let Ok(mut guard) = session.lock() {
@@ -285,10 +307,8 @@ fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
         let Some(method) = request.get("method").and_then(Value::as_str) else {
             if let Some(id) = id {
                 let response = mcp_error_response(id, -32600, "missing method");
-                let mut guard = writer
-                    .lock()
-                    .map_err(|_| anyhow!("failed to lock MCP stdout"))?;
-                write_message(&mut *guard, &response, framing)?;
+                let mut guard = writer.lock().await;
+                write_message_async(&mut *guard, &response, framing).await?;
             }
             continue;
         };
@@ -298,7 +318,15 @@ fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
             continue;
         }
 
-        let response = match handle_method(&root, &session, method, params) {
+        let method_root = root.clone();
+        let method_session = session.clone();
+        let method = method.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            handle_method(&method_root, &method_session, &method, params)
+        })
+        .await
+        .context("local MCP method worker failed")?;
+        let response = match result {
             Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
             Err(err) => mcp_error_response(
                 id.unwrap_or(Value::Null),
@@ -306,108 +334,12 @@ fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
                 &err.to_string(),
             ),
         };
-        let mut guard = writer
-            .lock()
-            .map_err(|_| anyhow!("failed to lock MCP stdout"))?;
-        write_message(&mut *guard, &response, framing)?;
+        let mut guard = writer.lock().await;
+        write_message_async(&mut *guard, &response, framing).await?;
     }
 
-    if let Ok(mut guard) = session.lock() {
-        guard.shutdown = true;
-    }
+    notification_task.shutdown().await?;
     Ok(())
-}
-
-fn start_notification_thread(
-    root: PathBuf,
-    writer: Arc<Mutex<io::Stdout>>,
-    session: Arc<Mutex<McpSessionState>>,
-) {
-    thread::spawn(move || loop {
-        let (initialized, shutdown, tracked_tasks, tracked_task_offsets, framing) =
-            match session.lock() {
-                Ok(guard) => (
-                    guard.initialized,
-                    guard.shutdown,
-                    guard.tracked_tasks.clone(),
-                    guard.tracked_task_offsets.clone(),
-                    guard.framing,
-                ),
-                Err(_) => return,
-            };
-        if shutdown {
-            return;
-        }
-        if !initialized || framing.is_none() {
-            thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
-            continue;
-        }
-        let framing = framing.unwrap_or(McpMessageFraming::ContentLength);
-
-        for (task_id, last_seen_seq) in tracked_tasks {
-            let previous_offset = tracked_task_offsets.get(&task_id).copied().unwrap_or(0);
-            let read = match load_task_events_from_offset(&root, &task_id, previous_offset) {
-                Ok(read) => read,
-                Err(_) => continue,
-            };
-            let mut newest_delivered_seq = last_seen_seq;
-            for frame in read
-                .events
-                .into_iter()
-                .filter(|frame| frame.seq > last_seen_seq)
-            {
-                if frame.event.kind != "context_updated" {
-                    newest_delivered_seq = newest_delivered_seq.max(frame.seq);
-                    continue;
-                }
-                let mut params = match frame.event.data {
-                    Value::Object(map) => map,
-                    other => {
-                        let mut map = Map::new();
-                        map.insert("data".to_string(), other);
-                        map
-                    }
-                };
-                params.insert("task_id".to_string(), Value::String(task_id.clone()));
-                params.insert(
-                    "context_version".to_string(),
-                    params
-                        .get("context_version")
-                        .cloned()
-                        .unwrap_or(Value::Null),
-                );
-                params.insert("event_seq".to_string(), Value::Number(frame.seq.into()));
-                let notification = json!({
-                    "jsonrpc":"2.0",
-                    "method":"notifications/packet28.context_updated",
-                    "params": Value::Object(params),
-                });
-                let write_ok = if let Ok(mut guard) = writer.lock() {
-                    write_message(&mut *guard, &notification, framing).is_ok()
-                } else {
-                    false
-                };
-                if !write_ok {
-                    if let Ok(mut guard) = session.lock() {
-                        guard.shutdown = true;
-                    }
-                    return;
-                }
-                newest_delivered_seq = newest_delivered_seq.max(frame.seq);
-            }
-            if newest_delivered_seq > last_seen_seq || read.next_offset != previous_offset {
-                if let Ok(mut guard) = session.lock() {
-                    if let Some(current) = guard.tracked_tasks.get_mut(&task_id) {
-                        *current = newest_delivered_seq;
-                    }
-                    guard
-                        .tracked_task_offsets
-                        .insert(task_id.clone(), read.next_offset);
-                }
-            }
-        }
-        thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
-    });
 }
 
 fn handle_notification(
