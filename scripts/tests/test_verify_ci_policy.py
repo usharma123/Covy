@@ -83,5 +83,69 @@ class AutofixSecurityPolicyTests(unittest.TestCase):
         )
 
 
+class ReleasePermissionPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.workflow = (
+            verify_ci_policy.WORKFLOW_DIR / "release.yml"
+        ).read_text(encoding="utf-8")
+
+    def test_repository_release_permissions_are_least_privilege(self) -> None:
+        self.assertEqual(
+            verify_ci_policy.release_permission_errors(self.workflow),
+            [],
+        )
+
+    def test_rejects_workflow_wide_publication_permissions(self) -> None:
+        unsafe = self.workflow.replace(
+            "permissions:\n  contents: read",
+            "permissions:\n  contents: write\n  id-token: write",
+            1,
+        )
+
+        errors = verify_ci_policy.release_permission_errors(unsafe)
+
+        self.assertIn(
+            "workflow-wide release permissions may not grant writes",
+            errors,
+        )
+        self.assertIn(
+            "contents write permission must occur only in the publish job",
+            errors,
+        )
+        self.assertIn(
+            "OIDC write permission must occur only in the publish job",
+            errors,
+        )
+
+    def test_rejects_publication_permissions_on_build_job(self) -> None:
+        unsafe = self.workflow.replace(
+            "  build:\n    needs: release-gates\n    permissions:\n"
+            "      contents: read",
+            "  build:\n    needs: release-gates\n    permissions:\n"
+            "      contents: write\n      id-token: write",
+            1,
+        )
+
+        self.assertIn(
+            "build job may not receive publication permissions",
+            verify_ci_policy.release_permission_errors(unsafe),
+        )
+
+    def test_rejects_publish_job_without_oidc(self) -> None:
+        unsafe = self.workflow.replace("      id-token: write\n", "", 1)
+
+        errors = verify_ci_policy.release_permission_errors(unsafe)
+
+        self.assertIn(
+            "publish job lacks scoped id-token: write permission",
+            errors,
+        )
+        self.assertIn(
+            "OIDC write permission must occur only in the publish job",
+            errors,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

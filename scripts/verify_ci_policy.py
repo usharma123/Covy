@@ -250,6 +250,56 @@ def verify_autofix_security(errors: list[str]) -> None:
     )
 
 
+def release_permission_errors(text: str) -> list[str]:
+    """Return violations of the release workflow's least-privilege boundary."""
+
+    errors: list[str] = []
+    pre_jobs = text.partition("\njobs:")[0]
+    release_gates = text.partition("\n  release-gates:")[2].partition("\n  build:")[0]
+    build = text.partition("\n  build:")[2].partition("\n  publish:")[0]
+    publish = text.partition("\n  publish:")[2]
+
+    if "permissions:\n  contents: read" not in pre_jobs:
+        errors.append("workflow default permission must be contents: read")
+    if "contents: write" in pre_jobs or "id-token: write" in pre_jobs:
+        errors.append("workflow-wide release permissions may not grant writes")
+
+    for name, job in (("release-gates", release_gates), ("build", build)):
+        if not job:
+            errors.append(f"{name} job is missing")
+            continue
+        if "permissions:\n      contents: read" not in job:
+            errors.append(f"{name} job must declare read-only contents")
+        if "contents: write" in job or "id-token: write" in job:
+            errors.append(f"{name} job may not receive publication permissions")
+
+    if not publish:
+        errors.append("publish job is missing")
+    else:
+        required_publish_permissions = (
+            "actions: read",
+            "contents: write",
+            "id-token: write",
+        )
+        for permission in required_publish_permissions:
+            if permission not in publish:
+                errors.append(f"publish job lacks scoped {permission} permission")
+
+    if text.count("contents: write") != 1:
+        errors.append("contents write permission must occur only in the publish job")
+    if text.count("id-token: write") != 1:
+        errors.append("OIDC write permission must occur only in the publish job")
+
+    return errors
+
+
+def verify_release_permissions(errors: list[str]) -> None:
+    release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
+    errors.extend(
+        f"release.yml: {error}" for error in release_permission_errors(release)
+    )
+
+
 def verify_workflow_wiring(errors: list[str]) -> None:
     build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
     release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
@@ -339,6 +389,7 @@ def main() -> int:
     verify_rust_toolchains(errors)
     verify_locked_commands(errors)
     verify_autofix_security(errors)
+    verify_release_permissions(errors)
     verify_workflow_wiring(errors)
     if errors:
         for error in errors:
