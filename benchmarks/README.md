@@ -29,6 +29,9 @@ What it does:
 
 ## Focused experiments
 
+- [`per-01-task-persistence/`](per-01-task-persistence/) contains the
+  full-registry-checkpoint-under-lock versus owned, coalesced daemon task
+  persistence comparison.
 - [`per-02-cache-persistence/`](per-02-cache-persistence/) contains the
   full-checkpoint-under-lock versus owned dirty-delta WAL comparison.
 - [`per-05-testmap/`](per-05-testmap/) contains the deterministic dense-to-sparse

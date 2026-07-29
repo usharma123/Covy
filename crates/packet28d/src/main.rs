@@ -23,9 +23,8 @@ use diffy_core::model::CoverageFormat;
 use notify::{Config, Event, PollWatcher, RecursiveMode, Watcher};
 use packet28_daemon_core::retention::recover_task_store_quarantine_and_acquire_daemon_lease;
 use packet28_daemon_core::storage::{
-    append_task_event, ensure_daemon_dir, load_task_events, load_task_registry,
-    load_watch_registry, now_unix, remove_runtime_files, save_task_registry, save_watch_registry,
-    write_runtime_info,
+    ensure_daemon_dir, load_task_events, load_task_registry_with_event_tails, load_watch_registry,
+    now_unix, remove_runtime_files, write_runtime_info,
 };
 use packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease;
 use packet28_daemon_protocol::broker::{
@@ -84,6 +83,7 @@ mod index;
 mod instruction_files;
 mod kernel_registry;
 mod launch;
+mod persistence;
 mod planning;
 mod runtime;
 mod runtime_files;
@@ -118,6 +118,7 @@ use crate::index::{
 use crate::instruction_files::resolve_instruction_file;
 use crate::kernel_registry::PersistentKernelRegistry;
 use crate::launch::task_launch_agent;
+use crate::persistence::PersistenceOwner;
 use crate::planning::*;
 use crate::runtime::{BlockingPool, DaemonRuntimeConfig, ShutdownSignal, StateChangeSignal};
 use crate::runtime_files::{
@@ -155,6 +156,7 @@ const DEFAULT_CONTEXT_MANAGE_BUDGET_TOKENS: u64 = 5_000;
 const DEFAULT_CONTEXT_MANAGE_BUDGET_BYTES: usize = 32_000;
 const INTERACTIVE_INDEX_SCHEMA_VERSION: u32 = 2;
 const INDEX_BATCH_DEBOUNCE_MS: u64 = 150;
+const TASK_PERSISTENCE_DEBOUNCE_MS: u64 = 20;
 
 fn main() {
     if let Err(err) = run() {
@@ -217,8 +219,16 @@ fn serve(root: PathBuf) -> Result<()> {
         kernel.clone(),
         config.max_persistent_roots,
     )?);
-    let tasks = load_task_registry(&root)?;
+    let (mut tasks, event_tails) = load_task_registry_with_event_tails(&root)?;
     let watches = load_watch_registry(&root)?;
+    let (persistence_owner, persistence) = PersistenceOwner::start(
+        root.clone(),
+        task_store_lease.clone(),
+        Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
+    )?;
+    if reconcile_task_event_high_waters(&mut tasks, &event_tails)? {
+        persistence.checkpoint(Arc::new(tasks.clone()), Arc::new(watches.clone()))?;
+    }
     let manifest = load_index_manifest_file(&root);
     let interactive_index = load_index_runtime_files(&root, manifest);
     let (index_tx, index_rx) = IndexIngress::new();
@@ -240,6 +250,9 @@ fn serve(root: PathBuf) -> Result<()> {
         interactive_index,
         index_tx,
         background_tx,
+        persistence,
+        #[cfg(test)]
+        _persistence_owner: None,
         shutdown: shutdown.clone(),
         changes: StateChangeSignal::new(),
         shutting_down: false,
@@ -278,6 +291,13 @@ fn serve(root: PathBuf) -> Result<()> {
     record_runtime_result(
         &mut lifecycle_result,
         shutdown_persistent_kernels(&state, remaining_until(shutdown_deadline)),
+    );
+    record_runtime_result(
+        &mut lifecycle_result,
+        persistence_owner
+            .shutdown(remaining_until(shutdown_deadline))
+            .map(|_| ())
+            .context("failed to shut down daemon task persistence"),
     );
     runtime.shutdown_timeout(remaining_until(shutdown_deadline));
 
@@ -853,9 +873,62 @@ fn is_benign_connection_error(error: &anyhow::Error) -> bool {
 }
 
 fn persist_state(state: &DaemonState) -> Result<()> {
-    save_watch_registry(&state.root, &state.watches)?;
-    save_task_registry(&state.root, &state.tasks)?;
-    Ok(())
+    mark_state_dirty(state).map(|_| ())
+}
+
+fn mark_state_dirty(state: &DaemonState) -> Result<u64> {
+    state.persistence.checkpoint_async(
+        Arc::new(state.tasks.clone()),
+        Arc::new(state.watches.clone()),
+    )
+}
+
+fn flush_persistence(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
+    let persistence = state.lock().map_err(lock_err)?.persistence.clone();
+    persistence.flush().map(|_| ())
+}
+
+fn reconcile_task_event_high_waters(
+    tasks: &mut TaskRegistry,
+    event_tails: &BTreeMap<String, Option<u64>>,
+) -> Result<bool> {
+    if tasks.tasks.len() != event_tails.len() {
+        anyhow::bail!(
+            "task registry/event-tail snapshot cardinality mismatch: {} tasks, {} tails",
+            tasks.tasks.len(),
+            event_tails.len()
+        );
+    }
+    let mut changed = false;
+    for (task_id, task) in &mut tasks.tasks {
+        let durable_sequence = *event_tails
+            .get(task_id)
+            .ok_or_else(|| anyhow!("task '{task_id}' is missing from the event-tail snapshot"))?;
+        match durable_sequence {
+            None if task.last_event_seq == 0 => {}
+            None => {
+                anyhow::bail!(
+                    "task registry high-water {} for '{}' is ahead of its missing event log",
+                    task.last_event_seq,
+                    task_id
+                );
+            }
+            Some(durable_sequence) if task.last_event_seq > durable_sequence => {
+                anyhow::bail!(
+                    "task registry high-water {} for '{}' is ahead of durable event sequence {}",
+                    task.last_event_seq,
+                    task_id,
+                    durable_sequence
+                );
+            }
+            Some(durable_sequence) if task.last_event_seq < durable_sequence => {
+                task.last_event_seq = durable_sequence;
+                changed = true;
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(changed)
 }
 
 fn mark_ready(state: &Arc<Mutex<DaemonState>>) -> Result<()> {

@@ -95,6 +95,9 @@ pub(crate) struct DaemonState {
     pub(crate) interactive_index: InteractiveIndexRuntime,
     pub(crate) index_tx: crate::index::IndexIngress,
     pub(crate) background_tx: tokio::sync::mpsc::Sender<BackgroundCommand>,
+    pub(crate) persistence: crate::persistence::PersistenceHandle,
+    #[cfg(test)]
+    pub(crate) _persistence_owner: Option<crate::persistence::PersistenceOwner>,
     pub(crate) shutdown: crate::runtime::ShutdownSignal,
     pub(crate) changes: crate::runtime::StateChangeSignal,
     pub(crate) shutting_down: bool,

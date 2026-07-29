@@ -1,6 +1,7 @@
-use super::support::{daemon_test_state, insert_admitted_task_record};
+use super::support::{daemon_test_state, insert_admitted_task_record, shutdown_test_persistence};
 use super::*;
 use fs2::FileExt;
+use packet28_daemon_core::storage::load_task_registry;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 static TCP_TRANSPORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -67,15 +68,18 @@ async fn processor_failure_is_fatal_bounded_and_detached_work_retains_its_lease(
                 release_rx
                     .recv()
                     .map_err(|_| anyhow!("release probe closed"))?;
-                let mut guard = mutation_state.lock().map_err(lock_err)?;
-                guard.tasks.tasks.insert(
-                    "task-during-shutdown".to_string(),
-                    TaskRecord {
-                        task_id: "task-during-shutdown".to_string(),
-                        ..TaskRecord::default()
-                    },
-                );
-                persist_state(&guard)?;
+                {
+                    let mut guard = mutation_state.lock().map_err(lock_err)?;
+                    guard.tasks.tasks.insert(
+                        "task-during-shutdown".to_string(),
+                        TaskRecord {
+                            task_id: "task-during-shutdown".to_string(),
+                            ..TaskRecord::default()
+                        },
+                    );
+                    persist_state(&guard)?;
+                }
+                flush_persistence(&mutation_state)?;
                 Ok(())
             })
             .await
@@ -147,6 +151,7 @@ async fn processor_failure_is_fatal_bounded_and_detached_work_retains_its_lease(
     release_tx.send(()).unwrap();
     index_release_tx.send(()).unwrap();
     blocking_worker.await.unwrap().unwrap();
+    shutdown_test_persistence(&state);
     assert!(
         load_task_registry(&root)
             .unwrap()

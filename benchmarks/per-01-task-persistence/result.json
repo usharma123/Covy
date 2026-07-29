@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "captured_at": "2026-07-29",
+  "source": {
+    "implementation_base": "a6599e56a8cccbda8fe2b4eb45293707f8713fc5",
+    "files": {
+      "crates/packet28d/src/persistence.rs": "ae71d5014b5fdf39b98dcef8ee0c0ef06564abad1579501ff02a5d476b8e9b0c",
+      "crates/packet28d/src/broker_support.rs": "9f47520c6eec5442f95dc4dec7f965280d6f77ebf232679d05f334a44839853f",
+      "crates/packet28d/src/main.rs": "62e992c422d37c7600242e970db1dc9614d658f7d202cddb1bab5b56a08fcd42",
+      "crates/packet28d/src/server.rs": "1f5efd39a0b0ceb3ac0a67036780ed870c0e115816fb3fe55e85d64668060a17",
+      "crates/packet28-daemon-core/src/storage/event_tail.rs": "22b39f332ad8c5d93d653816269e82c314cb8da808c31308073fcd71114e2f88",
+      "crates/packet28d/src/tests/persistence.rs": "75254dff681f68921d25f090182413845118d8d3eb83fd63c1489244091e3c12"
+    }
+  },
+  "environment": {
+    "os": "Darwin 24.6.0",
+    "arch": "arm64",
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "cargo": "cargo 1.93.0"
+  },
+  "fixture_tasks": 300,
+  "fixture_registry_bytes": 1848325,
+  "measured_events": 32,
+  "repeats": 3,
+  "legacy_full_checkpoint_under_lock": {
+    "median_event_lock_ns": 67221542,
+    "median_elapsed_us": 2157329,
+    "median_published_bytes": 59150656,
+    "median_checkpoints": 32
+  },
+  "owned_coalesced_checkpoint_after_lock": {
+    "median_event_lock_ns": 125292,
+    "median_elapsed_us": 471700,
+    "median_published_bytes": 1852233,
+    "median_checkpoints": 1
+  },
+  "lock_time_reduction_percent": 99.81361332056322,
+  "write_byte_reduction_percent": 96.86861799132033,
+  "elapsed_speedup": 4.5735191859232565,
+  "parity_event_count": 33
+}

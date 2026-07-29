@@ -239,9 +239,28 @@ the complete prefix, truncates and synchronizes only that incomplete suffix,
 then appends its replacement frame. A newline-terminated malformed frame,
 cross-task frame, duplicate, conflict, or gap is durable corruption: both tail
 inspection and append-next return a typed error with the log bytes unchanged.
-Daemon publication follows append, registry save, then subscriber notification,
-so a failed registry save can be reconciled without publishing a phantom event
-or appending a duplicate on retry.
+
+Daemon persistence has one lifecycle owner. Callers submit immutable task/watch
+snapshots into a single replaceable pending slot and wake a capacity-one command
+lane. A fixed first-wake debounce coalesces bursts without extending the
+deadline indefinitely; serialization, atomic replacement, and synchronization
+run on the owner after the daemon state mutex is released. Request barriers and
+orderly shutdown flush through a requested revision. Failed checkpoints stay
+dirty, are retried, and are surfaced by the next barrier instead of being
+discarded. A timed-out shutdown detaches rather than blocking forever, but the
+worker retains its task-store lifecycle lease until it actually exits.
+
+For task events, subscriber publication follows the synchronized event-log
+append and the in-memory high-water update. The derived full-registry snapshot
+is queued before publication but may be checkpointed later by the owner. This
+does not make the registry a second sequence authority: after a crash, startup
+loads the registry once with every bounded authenticated event tail, advances
+lagging high-waters, and synchronously checkpoints any reconciliation before
+serving requests. A registry ahead of its log, or a nonzero high-water with no
+log, fails startup as corruption. The event lane spans append acknowledgement,
+high-water update, snapshot submission, and bounded subscriber sends, so
+concurrent publications remain sequence ordered without holding the daemon
+state mutex during filesystem I/O.
 
 The paginated event reader inspects at most 4 MiB and returns at most 4,096
 decoded frames per call; a line is capped at 1 MiB. It reads from a verified

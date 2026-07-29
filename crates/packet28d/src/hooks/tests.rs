@@ -21,6 +21,11 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
     thread::spawn(move || index_rx.discard_until_shutdown());
     let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
     thread::spawn(move || while background_rx.blocking_recv().is_some() {});
+    let (persistence_owner, persistence) = PersistenceOwner::start_unleased(
+        root.clone(),
+        Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
+    )
+    .unwrap();
     Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
@@ -36,6 +41,8 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
         interactive_index: InteractiveIndexRuntime::default(),
         index_tx,
         background_tx,
+        persistence,
+        _persistence_owner: Some(persistence_owner),
         shutdown: ShutdownSignal::new(),
         changes: StateChangeSignal::new(),
         shutting_down: false,

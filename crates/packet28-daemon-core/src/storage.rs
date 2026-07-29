@@ -34,7 +34,8 @@ use crate::{DaemonCoreError, Result};
 mod event_tail;
 
 pub use event_tail::{
-    append_next_task_event, task_event_log_tail_sequence, MAX_TASK_EVENT_TAIL_SCAN_BYTES,
+    append_next_task_event, load_task_registry_with_event_tails, task_event_log_tail_sequence,
+    MAX_TASK_EVENT_TAIL_SCAN_BYTES,
 };
 #[cfg(all(test, unix))]
 use event_tail::{

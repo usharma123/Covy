@@ -63,51 +63,90 @@ pub(crate) fn emit_task_event(
     kind: &str,
     data: Value,
 ) -> Result<()> {
-    let mut guard = state.lock().map_err(lock_err)?;
-    let _ = emit_task_event_locked(&mut guard, task_id, kind, data, true)?;
+    let _ = emit_task_event_ordered(state, task_id, None, kind, data, true)?;
     Ok(())
 }
 
-fn emit_task_event_locked(
-    state: &mut DaemonState,
+fn emit_task_event_ordered(
+    state: Arc<Mutex<DaemonState>>,
     task_id: &str,
+    expected_generation: Option<TaskGenerationId>,
     kind: &str,
     data: Value,
     create_task: bool,
 ) -> Result<bool> {
-    if !state.tasks.tasks.contains_key(task_id) {
-        if !create_task {
-            return Ok(false);
+    let persistence = state.lock().map_err(lock_err)?.persistence.clone();
+    let _event_guard = persistence.event_guard();
+    let (_activity_lease, required_revision, prepare_lock_hold) = {
+        let mut guard = state.lock().map_err(lock_err)?;
+        let lock_acquired = Instant::now();
+        if !guard.tasks.tasks.contains_key(task_id) {
+            if !create_task {
+                return Ok(false);
+            }
+            guard.tasks.tasks.insert(
+                task_id.to_string(),
+                TaskRecord {
+                    task_id: task_id.to_string(),
+                    ..TaskRecord::default()
+                },
+            );
         }
-        state.tasks.tasks.insert(
-            task_id.to_string(),
-            TaskRecord {
-                task_id: task_id.to_string(),
-                ..TaskRecord::default()
-            },
+
+        let generation = match expected_generation {
+            Some(expected) => {
+                let Some(current) = guard.task_generations.current(task_id) else {
+                    return Ok(false);
+                };
+                if current.id() != expected || current.is_cancelled() {
+                    return Ok(false);
+                }
+                current
+            }
+            None => guard.task_generations.ensure(task_id)?,
+        };
+        let Some(activity_lease) = generation.acquire_operation() else {
+            return Ok(false);
+        };
+        let required_revision = guard
+            .tasks
+            .tasks
+            .get(task_id)
+            .is_some_and(|task| task.last_event_seq == 0)
+            .then(|| mark_state_dirty(&guard))
+            .transpose()?;
+        (activity_lease, required_revision, lock_acquired.elapsed())
+    };
+    persistence.record_event_state_lock_hold(prepare_lock_hold);
+
+    let frame = persistence.append_event(
+        task_id,
+        DaemonEvent {
+            kind: kind.to_string(),
+            occurred_at_unix: now_unix(),
+            data,
+        },
+        required_revision,
+    )?;
+
+    let mut guard = state.lock().map_err(lock_err)?;
+    let lock_acquired = Instant::now();
+    let task = guard
+        .tasks
+        .tasks
+        .get_mut(task_id)
+        .ok_or_else(|| anyhow!("task '{task_id}' disappeared after durable event append"))?;
+    if task.last_event_seq > frame.seq {
+        anyhow::bail!(
+            "task '{}' in-memory high-water {} is ahead of appended event sequence {}",
+            task_id,
+            task.last_event_seq,
+            frame.seq
         );
     }
-    let root = state.root.clone();
-    let frame = {
-        let task = state
-            .tasks
-            .tasks
-            .get_mut(task_id)
-            .expect("task presence established before event append");
-        task.last_event_seq = task.last_event_seq.saturating_add(1);
-        let frame = DaemonEventFrame {
-            seq: task.last_event_seq,
-            task_id: task_id.to_string(),
-            event: DaemonEvent {
-                kind: kind.to_string(),
-                occurred_at_unix: now_unix(),
-                data,
-            },
-        };
-        append_task_event(&root, &frame)?;
-        frame
-    };
-    if let Some(subscribers) = state.subscribers.get_mut(task_id) {
+    task.last_event_seq = frame.seq;
+    persist_state(&guard)?;
+    if let Some(subscribers) = guard.subscribers.get_mut(task_id) {
         subscribers.retain(
             |subscriber| match subscriber.sender.try_send(frame.clone()) {
                 Ok(()) => true,
@@ -124,11 +163,13 @@ fn emit_task_event_locked(
             },
         );
         if subscribers.is_empty() {
-            state.subscribers.remove(task_id);
+            guard.subscribers.remove(task_id);
         }
     }
-    state.changes.notify();
-    persist_state(state)?;
+    guard.changes.notify();
+    let publication_lock_hold = lock_acquired.elapsed();
+    drop(guard);
+    persistence.record_event_state_lock_hold(publication_lock_hold);
     Ok(true)
 }
 
@@ -139,15 +180,7 @@ pub(crate) fn emit_task_event_for_generation(
     kind: &str,
     data: Value,
 ) -> Result<bool> {
-    let mut guard = state.lock().map_err(lock_err)?;
-    let Some(current) = guard.task_generations.current(task_id) else {
-        return Ok(false);
-    };
-    if current.id() != generation || current.is_cancelled() {
-        return Ok(false);
-    }
-
-    emit_task_event_locked(&mut guard, task_id, kind, data, false)
+    emit_task_event_ordered(state, task_id, Some(generation), kind, data, false)
 }
 
 pub(crate) fn refresh_task_context_summary_for_generation(

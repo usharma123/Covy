@@ -22,6 +22,11 @@ pub(crate) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
     thread::spawn(move || index_rx.discard_until_shutdown());
     let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
     thread::spawn(move || while background_rx.blocking_recv().is_some() {});
+    let (persistence_owner, persistence) = PersistenceOwner::start_unleased(
+        root.clone(),
+        Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
+    )
+    .unwrap();
     Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
@@ -37,6 +42,8 @@ pub(crate) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
         interactive_index: InteractiveIndexRuntime::default(),
         index_tx,
         background_tx,
+        persistence,
+        _persistence_owner: Some(persistence_owner),
         shutdown: ShutdownSignal::new(),
         changes: StateChangeSignal::new(),
         shutting_down: false,
@@ -51,6 +58,16 @@ pub(crate) fn insert_admitted_task_record(state: &Arc<Mutex<DaemonState>>, recor
     let mut guard = state.lock().unwrap();
     guard.tasks.tasks.insert(record.task_id.clone(), record);
     persist_state(&guard).unwrap();
+}
+
+pub(crate) fn shutdown_test_persistence(state: &Arc<Mutex<DaemonState>>) {
+    let owner = state
+        .lock()
+        .unwrap()
+        ._persistence_owner
+        .take()
+        .expect("test persistence owner is present");
+    owner.shutdown(Duration::from_secs(5)).unwrap();
 }
 
 pub(super) fn broker_evidence_confidence_body(

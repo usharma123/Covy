@@ -221,16 +221,33 @@ async fn run_blocking_request(
     let request_state = state.clone();
     let response = if matches!(&request, DaemonRequest::TaskCancel { .. }) {
         blocking_pool
-            .run_cancellation(move || handle_request(request_state, watch_tx, request))
+            .run_cancellation(move || handle_request_and_flush(request_state, watch_tx, request))
             .await?
     } else {
         blocking_pool
-            .run(move || handle_request(request_state, watch_tx, request))
+            .run(move || handle_request_and_flush(request_state, watch_tx, request))
             .await?
     };
     let changes = state.lock().map_err(lock_err)?.changes.clone();
     changes.notify();
     Ok(response)
+}
+
+fn handle_request_and_flush(
+    state: Arc<Mutex<DaemonState>>,
+    watch_tx: WatchIngress,
+    request: DaemonRequest,
+) -> Result<DaemonResponse> {
+    let request_result = handle_request(state.clone(), watch_tx, request);
+    let flush_result = flush_persistence(&state);
+    match (request_result, flush_result) {
+        (Ok(response), Ok(())) => Ok(response),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error.context("failed to checkpoint daemon request state")),
+        (Err(error), Err(flush_error)) => Err(error.context(format!(
+            "daemon request also failed to checkpoint state: {flush_error:#}"
+        ))),
+    }
 }
 
 fn launch_wait_request(

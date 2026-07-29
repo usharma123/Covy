@@ -9,6 +9,7 @@ mod context_render;
 mod evidence_confidence;
 mod handoff;
 mod instruction_resolution;
+mod persistence;
 mod plan_validation;
 mod search;
 pub(crate) mod support;

@@ -6,6 +6,70 @@ use super::*;
 /// maximum-size crash-partial frame.
 pub const MAX_TASK_EVENT_TAIL_SCAN_BYTES: usize = 3 * (MAX_TASK_EVENT_LINE_BYTES + 1);
 
+/// Loads the strict durable task registry and every authenticated event tail
+/// under one shared registry authority lock.
+///
+/// This is the daemon-startup reconciliation primitive. On Unix targets, the
+/// registry is decoded once, then each admitted task's bounded event suffix is
+/// inspected while the same registry binding remains locked. That avoids
+/// decoding an O(tasks)-sized registry once per task and prevents a writer
+/// from changing admission between the registry snapshot and its tail
+/// observations. The portable fallback preserves the same validation
+/// contract through the existing per-task tail API.
+///
+/// # Errors
+///
+/// Returns the same typed registry, identifier, event-tail, authority-limit,
+/// and filesystem errors as [`load_task_registry`] and
+/// [`task_event_log_tail_sequence`].
+pub fn load_task_registry_with_event_tails(
+    root: &Path,
+) -> Result<(TaskRegistry, BTreeMap<String, Option<u64>>)> {
+    #[cfg(unix)]
+    {
+        let registry_path = task_registry_path(root);
+        let writer_lease = acquire_task_store_writer_lease(root)?;
+        with_anchored_task_registry_lock(
+            root,
+            RegistryLockMode::Shared,
+            || Ok(()),
+            |daemon| {
+                let registry = match daemon
+                    .read_file_limited(OsStr::new(TASK_REGISTRY_FILE_NAME), MAX_TASK_REGISTRY_BYTES)
+                {
+                    Ok(raw) => decode_task_registry(&registry_path, &raw)?,
+                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                        TaskRegistry::default()
+                    }
+                    Err(source) => {
+                        return Err(task_registry_read_error(daemon, &registry_path, source));
+                    }
+                };
+                let mut tails = BTreeMap::new();
+                for task_id in registry.tasks.keys() {
+                    let storage_id = checked_task_storage_id(root, task_id)?;
+                    let tail =
+                        task_event_log_tail_sequence_admitted(root, &storage_id, &writer_lease)?;
+                    tails.insert(task_id.clone(), tail);
+                }
+                Ok((registry, tails))
+            },
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let registry = load_task_registry(root)?;
+        let mut tails = BTreeMap::new();
+        for task_id in registry.tasks.keys() {
+            tails.insert(
+                task_id.clone(),
+                task_event_log_tail_sequence(root, task_id)?,
+            );
+        }
+        Ok((registry, tails))
+    }
+}
+
 /// Returns the authenticated sequence of the last complete durable event.
 ///
 /// Only a bounded suffix containing the last two complete frames and an
