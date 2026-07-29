@@ -56,7 +56,11 @@ pub struct Kernel {
     reducers: HashMap<String, Arc<ReducerFn>>,
     next_request_id: AtomicU64,
     pub(crate) memory: Arc<Mutex<PacketCache>>,
-    persist_config: Option<PersistConfig>,
+    persistence: Option<CachePersistence>,
+    persist_ttl_secs: Option<u64>,
+    persistence_error: Mutex<Option<String>>,
+    cache_mutation_lock_operations: AtomicU64,
+    cache_mutation_lock_nanos: AtomicU64,
 }
 
 impl Default for Kernel {
@@ -71,7 +75,11 @@ impl Kernel {
             reducers: HashMap::new(),
             next_request_id: AtomicU64::new(1),
             memory: Arc::new(Mutex::new(PacketCache::new())),
-            persist_config: None,
+            persistence: None,
+            persist_ttl_secs: None,
+            persistence_error: Mutex::new(None),
+            cache_mutation_lock_operations: AtomicU64::new(0),
+            cache_mutation_lock_nanos: AtomicU64::new(0),
         }
     }
 
@@ -81,15 +89,72 @@ impl Kernel {
         kernel
     }
 
-    pub fn with_v1_reducers_and_persistence(config: PersistConfig) -> Self {
-        let mut kernel = Self {
+    pub fn with_persistence(config: PersistConfig) -> Self {
+        let cache = PacketCache::load_from_disk(&config);
+        let persist_ttl_secs = config.ttl_secs;
+        let (persistence, persistence_error) = match CachePersistence::start(config, cache.clone())
+        {
+            Ok(persistence) => (Some(persistence), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+        Self {
             reducers: HashMap::new(),
             next_request_id: AtomicU64::new(1),
-            memory: Arc::new(Mutex::new(PacketCache::load_from_disk(&config))),
-            persist_config: Some(config),
-        };
+            memory: Arc::new(Mutex::new(cache)),
+            persistence,
+            persist_ttl_secs: Some(persist_ttl_secs),
+            persistence_error: Mutex::new(persistence_error),
+            cache_mutation_lock_operations: AtomicU64::new(0),
+            cache_mutation_lock_nanos: AtomicU64::new(0),
+        }
+    }
+
+    pub fn with_v1_reducers_and_persistence(config: PersistConfig) -> Self {
+        let mut kernel = Self::with_persistence(config);
         register_v1_reducers(&mut kernel);
         kernel
+    }
+
+    pub fn flush_cache_persistence(
+        &self,
+        timeout: Duration,
+    ) -> Result<CachePersistenceMetrics, KernelError> {
+        let Some(persistence) = self.persistence.as_ref() else {
+            let detail = self
+                .persistence_error
+                .lock()
+                .map_err(|source| KernelError::CacheLock {
+                    detail: source.to_string(),
+                })?
+                .clone()
+                .unwrap_or_else(|| "persistence is not configured".to_string());
+            return Err(KernelError::CachePersistence { detail });
+        };
+        persistence
+            .flush(timeout)
+            .map_err(|source| KernelError::CachePersistence {
+                detail: source.to_string(),
+            })
+    }
+
+    pub fn cache_runtime_metrics(&self) -> CacheRuntimeMetrics {
+        let owner_error = self
+            .persistence
+            .as_ref()
+            .and_then(CachePersistence::last_error)
+            .map(|error| error.to_string());
+        let persistence_error = self
+            .persistence_error
+            .lock()
+            .map(|error| error.clone())
+            .unwrap_or_else(|source| Some(source.to_string()))
+            .or(owner_error);
+        CacheRuntimeMetrics {
+            mutation_lock_operations: self.cache_mutation_lock_operations.load(Ordering::Relaxed),
+            mutation_lock_nanos: self.cache_mutation_lock_nanos.load(Ordering::Relaxed),
+            persistence: self.persistence.as_ref().map(CachePersistence::metrics),
+            persistence_error,
+        }
     }
 
     pub fn register_reducer<F>(&mut self, target: impl Into<String>, reducer: F)
@@ -311,12 +376,6 @@ impl Kernel {
         };
 
         if let Some(cache_lookup) = cache_lookup {
-            let mut cache = self
-                .memory
-                .lock()
-                .map_err(|source| KernelError::CacheLock {
-                    detail: source.to_string(),
-                })?;
             let packets = output_packets
                 .iter()
                 .map(|packet| CachePacket {
@@ -329,12 +388,39 @@ impl Kernel {
                 .collect();
 
             let metadata = response.metadata.clone();
-            cache.put_with_hooks(&target, &cache_lookup, packets, metadata, hooks);
-            if let Some(persist_config) = &self.persist_config {
-                cache.evict_expired(persist_config.ttl_secs);
-                let _ = cache.save_to_disk(persist_config);
+            let (entry, removed_cache_keys, stats, lock_nanos) = {
+                let mut cache = self
+                    .memory
+                    .lock()
+                    .map_err(|source| KernelError::CacheLock {
+                        detail: source.to_string(),
+                    })?;
+                let lock_started = Instant::now();
+                let entry = cache.put_with_hooks(&target, &cache_lookup, packets, metadata, hooks);
+                let removed_cache_keys = self
+                    .persist_ttl_secs
+                    .map(|ttl_secs| cache.evict_expired_entries(ttl_secs))
+                    .unwrap_or_default();
+                let stats = cache.stats();
+                let lock_nanos = lock_started
+                    .elapsed()
+                    .as_nanos()
+                    .try_into()
+                    .unwrap_or(u64::MAX);
+                (entry, removed_cache_keys, stats, lock_nanos)
+            };
+            self.cache_mutation_lock_operations
+                .fetch_add(1, Ordering::Relaxed);
+            self.cache_mutation_lock_nanos
+                .fetch_add(lock_nanos, Ordering::Relaxed);
+
+            if let Some(persistence) = &self.persistence {
+                if let Err(error) = persistence.record_update(&entry, removed_cache_keys) {
+                    if let Ok(mut last_error) = self.persistence_error.lock() {
+                        *last_error = Some(error.to_string());
+                    }
+                }
             }
-            let stats = cache.stats();
             if let Some(cache_obj) = response
                 .metadata
                 .as_object_mut()

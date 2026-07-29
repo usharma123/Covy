@@ -196,7 +196,11 @@ The kernel supports two execution modes:
 
 #### Memory and Recall (`context-memory-core`)
 
-Packets are persisted in `.packet28/packet-cache-v2.bin` (bincode). The cache maintains six indexes:
+Packets are checkpointed in `.packet28/packet-cache-v3.bin` using the versioned
+Packet28 binary codec, with
+checksummed dirty-entry deltas durably staged in
+`.packet28/packet-cache-v3.wal` between debounced checkpoints. The cache
+maintains six indexes:
 
 | Index | Key | Value | Used For |
 | --- | --- | --- | --- |
@@ -358,7 +362,8 @@ Daemon persistence:
 - `.packet28/daemon/watch-registry-v1.json` — Active watches
 - `.packet28/daemon/task-registry-v1.json` — Task state
 - `.packet28/daemon/tasks/<id>/events.jsonl` — Per-task event log
-- `.packet28/packet-cache-v2.bin` — Persistent packet cache with indexes
+- `.packet28/packet-cache-v3.bin` — Persistent packet-cache checkpoint with indexes
+- `.packet28/packet-cache-v3.wal` — Checksummed dirty-entry deltas between checkpoints
 
 The `--via-daemon` flag on any Packet28 command routes execution through the daemon instead of running locally. The daemon auto-starts if not running.
 
@@ -534,7 +539,8 @@ All persistent state lives under `.packet28/` at the workspace root:
 
 ```
 .packet28/
-├── packet-cache-v2.bin          Packet cache with BM25 + ref indexes (bincode)
+├── packet-cache-v3.bin          Packet-cache checkpoint with BM25 + ref indexes
+├── packet-cache-v3.wal          Checksummed dirty-entry deltas
 ├── artifacts/                   Full packet artifacts for --json=handle
 ├── agent/
 │   └── latest-bootstrap.json    Last handoff bootstrap from packet28-agent

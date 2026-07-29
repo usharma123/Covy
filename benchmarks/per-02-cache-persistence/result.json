@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-28",
+  "source": {
+    "head": "829ebe7042130da8f6b976cf400dd4d848928ca6",
+    "files": {
+      "crates/context-memory-core/src/cache.rs": "ef0a7db426f4aae2c8d5e5e1d74b4ed9df7d93b5b7de8ddb9b00c561b8cf3f25",
+      "crates/context-memory-core/src/persist.rs": "c2992bc2be7e9e13cac7960dd1248a66b3ed5cb195a7bf647ad968c84614c24e",
+      "crates/context-memory-core/src/persistence_owner.rs": "0cbc9d10eabcd2aaf6a1b004a84580577200597ebce2f6dfef393925cd25fa03",
+      "crates/context-memory-core/examples/cache_persistence_experiment.rs": "1c5b59b3bf023ffc2626919f90c311ea4ebc4cb46efda1ee96815f51b0fa34b3"
+    }
+  },
+  "environment": {
+    "os": "Darwin 24.6.0",
+    "arch": "arm64",
+    "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+    "cargo": "cargo 1.93.1 (083ac5135 2025-12-15)"
+  },
+  "fixture_entries": 512,
+  "measured_writes": 64,
+  "payload_bytes": 1024,
+  "repeats": 3,
+  "legacy_full_checkpoint_under_lock": {
+    "median_write_lock_ns": 20131584,
+    "median_elapsed_us": 1344839,
+    "median_published_bytes": 266982600
+  },
+  "owned_delta_wal_after_lock": {
+    "median_write_lock_ns": 39459,
+    "median_elapsed_us": 10838,
+    "median_published_bytes": 101461
+  },
+  "lock_time_reduction_percent": 99.80399455899745,
+  "write_byte_reduction_percent": 99.96199714887787,
+  "parity_entries": 576
+}

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 fn kernel_cache_file(root: &Path) -> PathBuf {
-    root.join(".packet28").join("packet-cache-v2.bin")
+    root.join(".packet28").join("packet-cache-v3.bin")
 }
 
 #[test]

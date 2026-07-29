@@ -141,7 +141,8 @@ When watches detect file changes:
 | `.packet28/daemon/watch-registry-v1.json` | Active watches (survives restart) |
 | `.packet28/daemon/task-registry-v1.json` | Task state (survives restart) |
 | `.packet28/daemon/tasks/<id>/events.jsonl` | Per-task event log |
-| `.packet28/packet-cache-v2.bin` | Persistent packet cache |
+| `.packet28/packet-cache-v3.bin` | Persistent packet-cache checkpoint |
+| `.packet28/packet-cache-v3.wal` | Checksummed cache deltas between checkpoints |
 
 ## CLI Integration
 

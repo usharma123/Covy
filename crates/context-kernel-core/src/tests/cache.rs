@@ -142,7 +142,111 @@ fn persistent_kernel_reuses_cache_across_instances() {
             .and_then(Value::as_bool),
         Some(true)
     );
-    assert!(dir.path().join(".packet28/packet-cache-v2.bin").exists());
+    assert!(dir.path().join(".packet28/packet-cache-v3.bin").exists());
+}
+
+#[test]
+fn persistent_kernel_flushes_deltas_after_releasing_cache_lock() {
+    let dir = tempdir().unwrap();
+    let config = PersistConfig::new(dir.path().to_path_buf());
+    let mut kernel = Kernel::with_persistence(config.clone());
+    kernel.register_reducer("count.reducer", |_ctx, _packets| {
+        Ok(ReducerResult {
+            output_packets: vec![KernelPacket::from_value(json!({"ok": true}), None)],
+            metadata: Value::Null,
+        })
+    });
+
+    kernel
+        .execute(KernelRequest {
+            target: "count.reducer".to_string(),
+            reducer_input: json!({"task":"flush"}),
+            ..KernelRequest::default()
+        })
+        .unwrap();
+    let persistence = kernel
+        .flush_cache_persistence(Duration::from_secs(2))
+        .unwrap();
+    let runtime = kernel.cache_runtime_metrics();
+    let loaded = context_memory_core::PacketCache::load_from_disk(&config);
+
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(runtime.mutation_lock_operations, 1);
+    assert!(runtime.mutation_lock_nanos > 0);
+    assert_eq!(persistence.persisted_deltas, 1);
+    assert!(persistence.wal_bytes > 0);
+    assert_eq!(persistence.checkpoints, 0);
+}
+
+#[test]
+fn persistent_kernel_concurrent_writes_replay_every_entry() {
+    let dir = tempdir().unwrap();
+    let config = PersistConfig::new(dir.path().to_path_buf());
+    let mut kernel = Kernel::with_persistence(config.clone());
+    kernel.register_reducer("echo.reducer", |ctx, _packets| {
+        Ok(ReducerResult {
+            output_packets: vec![KernelPacket::from_value(ctx.reducer_input.clone(), None)],
+            metadata: Value::Null,
+        })
+    });
+    let kernel = Arc::new(kernel);
+    let mut workers = Vec::new();
+    for worker_id in 0..8 {
+        let kernel = kernel.clone();
+        workers.push(std::thread::spawn(move || {
+            for offset in 0..8 {
+                kernel
+                    .execute(KernelRequest {
+                        target: "echo.reducer".to_string(),
+                        reducer_input: json!({
+                            "worker": worker_id,
+                            "offset": offset,
+                        }),
+                        ..KernelRequest::default()
+                    })
+                    .unwrap();
+            }
+        }));
+    }
+    for worker in workers {
+        worker.join().unwrap();
+    }
+
+    kernel
+        .flush_cache_persistence(Duration::from_secs(5))
+        .unwrap();
+    let loaded = context_memory_core::PacketCache::load_from_disk(&config);
+    assert_eq!(loaded.len(), 64);
+}
+
+#[test]
+fn persistent_kernel_reports_background_filesystem_failure_on_flush() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let mut kernel = Kernel::with_persistence(PersistConfig::new(root.clone()));
+    std::fs::remove_dir(&root).unwrap();
+    std::fs::write(&root, b"file").unwrap();
+    kernel.register_reducer("count.reducer", |_ctx, _packets| {
+        Ok(ReducerResult {
+            output_packets: vec![KernelPacket::from_value(json!({"ok": true}), None)],
+            metadata: Value::Null,
+        })
+    });
+
+    kernel
+        .execute(KernelRequest {
+            target: "count.reducer".to_string(),
+            reducer_input: json!({"task":"failure"}),
+            ..KernelRequest::default()
+        })
+        .unwrap();
+    let error = kernel
+        .flush_cache_persistence(Duration::from_secs(2))
+        .unwrap_err();
+
+    assert!(matches!(error, KernelError::CachePersistence { .. }));
+    assert!(kernel.cache_runtime_metrics().persistence_error.is_some());
 }
 
 #[test]

@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::*;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PacketCache {
     pub(crate) entries_by_hash: HashMap<String, PacketCacheEntry>,
     pub(crate) latest_request_index: HashMap<String, String>,
@@ -21,6 +21,7 @@ pub struct PacketCache {
     pub(crate) symbol_index: HashMap<String, BTreeSet<String>>,
     pub(crate) test_index: HashMap<String, BTreeSet<String>>,
     pub(crate) task_index: HashMap<String, BTreeSet<String>>,
+    pub(crate) persisted_sequence: u64,
 }
 
 impl PacketCache {
@@ -29,10 +30,14 @@ impl PacketCache {
     }
 
     pub fn evict_expired(&mut self, ttl_secs: u64) {
+        self.evict_expired_entries(ttl_secs);
+    }
+
+    pub fn evict_expired_entries(&mut self, ttl_secs: u64) -> Vec<String> {
         self.remove_where(
             |entry, now| is_expired(entry.created_at_unix, ttl_secs, now),
             EvictionReason::ExpiredTtl,
-        );
+        )
     }
 
     pub fn len(&self) -> usize {
@@ -245,6 +250,7 @@ impl PacketCache {
                 |entry, now| is_expired(entry.created_at_unix, ttl_secs, now),
                 EvictionReason::ManualPrune,
             )
+            .len()
         };
 
         ContextStorePruneReport {
@@ -273,28 +279,32 @@ impl PacketCache {
         }
     }
 
-    pub(crate) fn remove_where<F>(&mut self, mut predicate: F, reason: EvictionReason) -> usize
+    pub(crate) fn remove_where<F>(
+        &mut self,
+        mut predicate: F,
+        reason: EvictionReason,
+    ) -> Vec<String>
     where
         F: FnMut(&PacketCacheEntry, u64) -> bool,
     {
         let now = now_unix();
-        let before = self.entries_by_hash.len();
-        let to_remove = self
+        let mut to_remove = self
             .entries_by_hash
             .iter()
             .filter(|(_, entry)| predicate(entry, now))
             .map(|(cache_key, _)| cache_key.clone())
             .collect::<Vec<_>>();
+        to_remove.sort();
         for cache_key in &to_remove {
             self.entries_by_hash.remove(cache_key);
             self.remove_index_for(cache_key);
         }
         self.rebuild_latest_request_index();
-        let removed = before.saturating_sub(self.entries_by_hash.len());
+        let removed = to_remove.len();
         if removed > 0 {
             self.evict_reason(reason, removed);
         }
-        removed
+        to_remove
     }
 
     pub(crate) fn evict_reason(&mut self, reason: EvictionReason, count: usize) {
@@ -590,9 +600,9 @@ mod tests {
         );
 
         cache.save_to_disk(&config).unwrap();
-        let cache_path = persist_cache_path_v2(dir.path());
+        let cache_path = persist_cache_path_v3(dir.path());
         let raw = fs::read(cache_path).unwrap();
-        let envelope: PersistEnvelopeV2 = wincode::deserialize(&raw).unwrap();
+        let envelope: PersistEnvelopeV3 = wincode::deserialize(&raw).unwrap();
         assert_eq!(envelope.version, PERSIST_CACHE_VERSION);
         assert_eq!(envelope.entries.len(), 1);
         assert!(!envelope.recall_docs.is_empty());
@@ -694,6 +704,54 @@ mod tests {
             .match_reasons
             .iter()
             .any(|reason| reason == "basename_fallback" || reason == "canonical_path_match"));
+    }
+
+    #[test]
+    fn load_from_v2_rebuilds_missing_indexes_before_v3_checkpoint() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task_id":"task-v2"}),
+            &mut hooks,
+        );
+        cache.put_with_hooks(
+            "demo.reducer",
+            &lookup,
+            vec![CachePacket {
+                body: serde_json::json!({
+                    "summary": "v2 cache for src/migration.rs",
+                    "task_id": "task-v2",
+                    "files": [{"path": "src/migration.rs"}],
+                }),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+            &mut hooks,
+        );
+        let envelope = PersistEnvelopeV2 {
+            version: 2,
+            entries: cache.collect_live_entries(config.ttl_secs),
+            ..PersistEnvelopeV2::default()
+        };
+        let path = persist_cache_path_v2(dir.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, wincode::serialize(&envelope).unwrap()).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+        let hits = loaded.recall(
+            "src/migration.rs",
+            &RecallOptions {
+                limit: 4,
+                ..RecallOptions::default()
+            },
+        );
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].cache_key, lookup.cache_key);
     }
 
     #[test]

@@ -10,7 +10,8 @@ Root directory: `.packet28/` under the workspace root.
 
 ```
 .packet28/
-├── packet-cache-v2.bin          Packet cache with indexes (bincode)
+├── packet-cache-v3.bin          Packet-cache checkpoint with indexes (binary codec)
+├── packet-cache-v3.wal          Checksummed dirty-entry deltas
 ├── artifacts/                   Full packet artifacts for --json=handle
 │   └── <handle_id>.json
 ├── agent/
@@ -27,13 +28,18 @@ Root directory: `.packet28/` under the workspace root.
             └── events.jsonl     Per-task event log
 ```
 
-## Cache Format (V2)
+## Cache Format (V3)
 
-The cache is stored as `packet-cache-v2.bin` using bincode with a versioned envelope:
+The cache is checkpointed as `packet-cache-v3.bin` using the versioned Packet28
+binary codec. Between debounced checkpoints, per-key upserts and
+tombstones are appended to `packet-cache-v3.wal` as checksummed frames. Startup
+replays only a valid prefix, so a torn final frame cannot discard earlier
+durable updates:
 
 ```rust
-struct PersistEnvelopeV2 {
-    version: u32,                              // 2
+struct PersistEnvelopeV3 {
+    version: u32,                              // 3
+    applied_wal_sequence: u64,
     entries: Vec<PacketCacheEntry>,
     recall_postings: HashMap<String, Vec<(String, usize)>>,  // BM25 term index
     recall_docs: HashMap<String, RecallDocument>,
@@ -45,14 +51,20 @@ struct PersistEnvelopeV2 {
 }
 ```
 
-The V2 format persists all indexes alongside cache entries, so recall is immediately available on load without reindexing.
+The V3 checkpoint persists all indexes alongside cache entries, so recall is
+immediately available on load without reindexing. Its WAL sequence watermark
+makes replay idempotent if a process stops after publishing the checkpoint but
+before truncating the WAL.
 
 ### Schema Migration
 
 - V1 files (`packet-cache-v1.bin`) are loaded and indexes rebuilt on first access
 - V2 files include pre-built indexes
-- Unknown versions are ignored (empty cache, warning logged)
-- Corrupt files are ignored (empty cache, no hard failure)
+- V3 adds the checkpoint watermark and checksummed delta WAL
+- Unknown versions are counted and ignored
+- Corrupt checkpoint files fall back to the prior compatible format
+- A corrupt or torn WAL tail is ignored after its last valid frame and repaired
+  only when a persistence owner starts
 
 ## PacketCacheEntry
 

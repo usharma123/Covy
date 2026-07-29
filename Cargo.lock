@@ -380,6 +380,7 @@ dependencies = [
  "serde_json",
  "suite-packet-core",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]

@@ -29,6 +29,8 @@ What it does:
 
 ## Focused experiments
 
+- [`per-02-cache-persistence/`](per-02-cache-persistence/) contains the
+  full-checkpoint-under-lock versus owned dirty-delta WAL comparison.
 - [`per-05-testmap/`](per-05-testmap/) contains the deterministic dense-to-sparse
   test-map planning and persistence comparison.
 
