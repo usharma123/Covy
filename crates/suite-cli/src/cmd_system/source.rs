@@ -305,7 +305,7 @@ fn extract_source_symbols(
         (ReadLanguage::Go, SourceSymbolKind::Type) => r"type\s+([A-Za-z_][A-Za-z0-9_]*)\s+struct",
         _ => return Vec::new(),
     };
-    let re = Regex::new(pattern).expect("valid smart symbol regex");
+    let re = compile_smart_regex(pattern);
     re.captures_iter(content)
         .filter_map(|caps| caps.get(1).or_else(|| caps.get(2)))
         .map(|item| item.as_str().to_string())
@@ -324,7 +324,7 @@ fn extract_source_imports(content: &str, language: ReadLanguage) -> Vec<String> 
         ReadLanguage::Go => r#"^\s*"([^"]+)"$"#,
         _ => return Vec::new(),
     };
-    let re = Regex::new(pattern).expect("valid smart import regex");
+    let re = compile_smart_regex(pattern);
     let mut seen = HashSet::new();
     let mut imports = Vec::new();
     for caps in re.captures_iter(content) {
@@ -338,6 +338,14 @@ fn extract_source_imports(content: &str, language: ReadLanguage) -> Vec<String> 
         imports.push(base.to_string());
     }
     imports.into_iter().take(5).collect()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "callers select only compile-time regex literals covered by smart-read tests"
+)]
+fn compile_smart_regex(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("hard-coded smart-read regex must compile")
 }
 
 fn is_standard_import(name: &str, language: ReadLanguage) -> bool {

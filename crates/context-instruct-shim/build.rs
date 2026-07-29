@@ -1,3 +1,9 @@
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a build script must abort when Cargo invariants or native bridge compilation fail"
+)]
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;

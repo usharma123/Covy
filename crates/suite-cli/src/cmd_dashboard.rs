@@ -541,13 +541,12 @@ fn context_anomaly_history_record(payload: &Value) -> ContextAnomalyHistoryRecor
 
 fn reducer_drift_tile(root: &Path) -> Result<ReducerDriftTile> {
     let records = load_reducer_drift_history(root, 32)?;
-    if records.is_empty() {
+    let Some(latest) = records.last() else {
         return Ok(ReducerDriftTile {
             latest_status: "none".to_string(),
             ..ReducerDriftTile::default()
         });
-    }
-    let latest = records.last().expect("non-empty reducer drift history");
+    };
     let mut counts = BTreeMap::<String, usize>::new();
     for record in &records {
         for kind in &record.issue_kinds {
@@ -570,13 +569,12 @@ fn reducer_drift_tile(root: &Path) -> Result<ReducerDriftTile> {
 
 fn memory_lint_tile(root: &Path) -> Result<MemoryLintTile> {
     let records = load_memory_lint_history(root, 32)?;
-    if records.is_empty() {
+    let Some(latest) = records.last() else {
         return Ok(MemoryLintTile {
             latest_status: "none".to_string(),
             ..MemoryLintTile::default()
         });
-    }
-    let latest = records.last().expect("non-empty memory lint history");
+    };
     let mut counts = BTreeMap::<String, usize>::new();
     for record in &records {
         for kind in &record.issue_kinds {
@@ -602,13 +600,12 @@ fn context_anomaly_tile(root: &Path, history_path: Option<&Path>) -> Result<Cont
         Some(path) => load_context_anomaly_history_from_path(path, 32)?,
         None => load_context_anomaly_history(root, 32)?,
     };
-    if records.is_empty() {
+    let Some(latest) = records.last() else {
         return Ok(ContextAnomalyTile {
             latest_status: "none".to_string(),
             ..ContextAnomalyTile::default()
         });
-    }
-    let latest = records.last().expect("non-empty context anomaly history");
+    };
     let (latest_age_ms, oldest_recurring_hidden_age_ms) =
         context_anomaly_age_summary(&records, now_unix_ms());
     Ok(ContextAnomalyTile {

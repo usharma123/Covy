@@ -197,6 +197,8 @@ def verify_workflow_wiring(errors: list[str]) -> None:
         errors.append("canonical gate does not run architecture-checker unit tests")
     if "run_cmd python3 scripts/check_instruction_claims.py" not in full_gate:
         errors.append("canonical gate does not run the instruction-claim checker")
+    if "run_cmd python3 scripts/check_rust_hazards.py" not in full_gate:
+        errors.append("canonical gate does not run the Rust hazard-policy checker")
     if "run_cmd cargo deny --locked check" not in full_gate:
         errors.append("canonical gate does not run cargo-deny against the lockfile")
 

@@ -1271,9 +1271,7 @@ fn normalize_syntax_text(text: &str) -> String {
 }
 
 fn display_name_for_candidate(candidate: &crate::SyntaxCandidate) -> String {
-    static IDENTIFIER_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = IDENTIFIER_RE
-        .get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("identifier regex is valid"));
+    let re = crate::identifier_re();
 
     re.find_iter(&candidate.text)
         .map(|matched| matched.as_str())

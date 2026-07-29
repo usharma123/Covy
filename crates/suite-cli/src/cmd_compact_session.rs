@@ -92,11 +92,9 @@ pub fn run_session(args: SessionArgs) -> Result<i32> {
 }
 
 fn run_session_adoption(args: SessionArgs) -> Result<i32> {
-    let sessions_dir = args
-        .sessions_dir
-        .as_deref()
-        .map(PathBuf::from)
-        .expect("checked by caller");
+    let Some(sessions_dir) = args.sessions_dir.as_deref().map(PathBuf::from) else {
+        anyhow::bail!("session adoption requires --sessions-dir");
+    };
     let session_files = crate::cmd_discover::collect_session_files_for_scan(
         &sessions_dir,
         args.limit,

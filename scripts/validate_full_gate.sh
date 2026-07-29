@@ -69,6 +69,7 @@ run_cmd scripts/verify_workspace_policy.sh
 run_cmd python3 scripts/check_architecture.py
 run_cmd python3 -m unittest scripts.tests.test_check_architecture
 run_cmd python3 scripts/check_instruction_claims.py
+run_cmd python3 scripts/check_rust_hazards.py
 run_cmd python3 scripts/verify_ci_policy.py
 run_cmd python3 scripts/verify_readme_stats.py --check
 run_cmd python3 -m unittest discover -s scripts/tests -p 'test_*.py'

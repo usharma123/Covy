@@ -412,17 +412,27 @@ fn normalize_path(input: &str) -> String {
 fn pathish_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+|[A-Za-z0-9_./\\-]+/[A-Za-z0-9_./\\-]+)")
-            .expect("valid regex")
+        compile_literal_regex(
+            r"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+|[A-Za-z0-9_./\\-]+/[A-Za-z0-9_./\\-]+)",
+        )
     })
 }
 
 fn path_capture_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+|[A-Za-z0-9_./\\-]+/[A-Za-z0-9_./\\-]+)")
-            .expect("valid regex")
+        compile_literal_regex(
+            r"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+|[A-Za-z0-9_./\\-]+/[A-Za-z0-9_./\\-]+)",
+        )
     })
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "all callers pass compile-time regex literals covered by proxy tests"
+)]
+fn compile_literal_regex(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("hard-coded path regex must compile")
 }
 
 fn now_unix() -> u64 {

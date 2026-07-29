@@ -55,19 +55,16 @@ pub fn run(args: RunArgs) -> Result<i32> {
     let cwd = crate::cmd_common::caller_cwd()?;
     let root = PathBuf::from(crate::cmd_common::resolve_path_from_cwd(&args.root, &cwd));
     let root = packet28_daemon_protocol::paths::resolve_workspace_root(&root);
-    if args.backend == RuntimeBackend::Auto {
-        return run_reducer_aware(&root, &cwd, &args);
-    }
     let backend = args.backend;
 
     match backend {
+        RuntimeBackend::Auto => run_reducer_aware(&root, &cwd, &args),
         RuntimeBackend::LinuxPreload => run_linux_preload(&root, &args.command),
         RuntimeBackend::LinuxOci => run_linux_oci(&root, &args.command),
         RuntimeBackend::MacosSwap => run_macos_swap(&root, &args.command),
         RuntimeBackend::MacosFuse => run_macos_fuse(&root, &args.command),
         RuntimeBackend::WindowsFuse => run_windows_fuse(&root, &args.command),
         RuntimeBackend::ProxyOnly => run_proxy_only(&root, &args.command),
-        RuntimeBackend::Auto => unreachable!("auto backend should be resolved before execution"),
     }
 }
 

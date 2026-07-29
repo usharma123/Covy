@@ -175,6 +175,8 @@ fn test_runtime_backend_macos_run_command_restores_files_after_sigterm() {
     let active: Value = serde_json::from_slice(&fs::read(&active_reports[0]).unwrap()).unwrap();
     assert_eq!(active.get("state").and_then(Value::as_str), Some("active"));
 
+    // SAFETY: `child.id()` identifies the live child spawned above; `kill(2)`
+    // accepts that PID and does not retain any Rust-owned memory.
     unsafe {
         libc::kill(child.id() as i32, libc::SIGTERM);
     }

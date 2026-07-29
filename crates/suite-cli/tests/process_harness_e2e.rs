@@ -110,9 +110,9 @@ time.sleep(30)
     let diagnostics = error
         .diagnostics()
         .expect("timeout errors should include process diagnostics");
+    let mut wait_status = 0;
     // SAFETY: `pid` was this test's direct child. ECHILD proves timeout
     // cleanup waited for it instead of leaving a waitable zombie.
-    let mut wait_status = 0;
     let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut wait_status, libc::WNOHANG) };
     let wait_error = io::Error::last_os_error().raw_os_error();
 
@@ -393,9 +393,9 @@ fn process_harness_unwind_kills_group_and_reaps_leader_and_grandchild() {
     wait_for_process_absence(leader, TEST_TIMEOUT);
     wait_for_process_absence(grandchild, TEST_TIMEOUT);
 
+    let mut status = 0;
     // SAFETY: `leader` was this test's child PID. ECHILD proves the harness
     // already waited for it instead of leaving a waitable zombie.
-    let mut status = 0;
     let waited = unsafe { libc::waitpid(leader as libc::pid_t, &mut status, libc::WNOHANG) };
     let wait_error = io::Error::last_os_error().raw_os_error();
 

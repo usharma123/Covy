@@ -430,6 +430,10 @@ fn collect_inputs_from_manifest(
     Ok(())
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "file_index is built from the same canonical paths immediately before binary search"
+)]
 fn build_testmap_index(
     by_test: BTreeMap<String, TestCoverageInput>,
     base_ref: &str,

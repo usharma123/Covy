@@ -38,7 +38,7 @@ pub fn render_terminal(
             "coverage" => entries.sort_by(|a, b| {
                 let pa = a.1.line_coverage_pct().unwrap_or(0.0);
                 let pb = b.1.line_coverage_pct().unwrap_or(0.0);
-                pa.partial_cmp(&pb).unwrap()
+                pa.total_cmp(&pb)
             }),
             "name" => entries.sort_by_key(|(k, _)| (*k).clone()),
             _ => entries.sort_by_key(|(k, _)| (*k).clone()),

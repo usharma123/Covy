@@ -552,7 +552,7 @@ fn prompt_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<SetupPlanChoic
             runtime_scope: SetupRuntimeScope::Detected,
             fallback_only: true,
         },
-        _ => unreachable!("validated menu choice"),
+        _ => return Ok(None),
     };
     Ok(Some(choice))
 }
@@ -596,7 +596,7 @@ fn prompt_advanced_setup_choice(runtimes: &[RuntimeInfo]) -> Result<Option<Setup
         1 => SetupRuntimeScope::Detected,
         2 => SetupRuntimeScope::All,
         3 => prompt_single_runtime_scope(runtimes)?,
-        _ => unreachable!("validated menu choice"),
+        _ => return Ok(None),
     };
 
     Ok(Some(SetupPlanChoice {

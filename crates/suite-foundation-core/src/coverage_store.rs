@@ -44,12 +44,7 @@ pub fn deserialize_coverage(data: &[u8]) -> Result<CoverageData, CovyError> {
 
     let mut pos = 0;
     let read_u32 = |pos: &mut usize| -> Result<u32, CovyError> {
-        if *pos + 4 > data.len() {
-            return Err(CovyError::Cache("unexpected EOF".to_string()));
-        }
-        let val = u32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
-        *pos += 4;
-        Ok(val)
+        read_array::<4>(data, pos).map(u32::from_le_bytes)
     };
 
     let file_count = read_u32(&mut pos)?;
@@ -92,17 +87,29 @@ pub fn deserialize_coverage(data: &[u8]) -> Result<CoverageData, CovyError> {
         );
     }
 
-    let timestamp = if pos + 8 <= data.len() {
-        u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap())
-    } else {
-        0
-    };
+    let timestamp = read_array::<8>(data, &mut pos)
+        .map(u64::from_le_bytes)
+        .unwrap_or_default();
 
     Ok(CoverageData {
         files,
         format: None,
         timestamp,
     })
+}
+
+fn read_array<const N: usize>(data: &[u8], pos: &mut usize) -> Result<[u8; N], CovyError> {
+    let end = pos
+        .checked_add(N)
+        .ok_or_else(|| CovyError::Cache("unexpected EOF".to_string()))?;
+    let bytes = data
+        .get(*pos..end)
+        .ok_or_else(|| CovyError::Cache("unexpected EOF".to_string()))?;
+    let array = bytes
+        .try_into()
+        .map_err(|_| CovyError::Cache("unexpected EOF".to_string()))?;
+    *pos = end;
+    Ok(array)
 }
 
 #[cfg(test)]
@@ -126,5 +133,12 @@ mod tests {
         let rfc = &restored.files["test.rs"];
         assert_eq!(rfc.lines_covered.len(), 2);
         assert_eq!(rfc.lines_instrumented.len(), 3);
+    }
+
+    #[test]
+    fn truncated_file_count_returns_cache_error_without_panicking() {
+        let error = deserialize_coverage(&[1, 0, 0]).unwrap_err();
+
+        assert!(matches!(error, CovyError::Cache(message) if message == "unexpected EOF"));
     }
 }

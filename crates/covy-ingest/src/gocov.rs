@@ -12,7 +12,15 @@ pub struct GoCovIngestor;
 static LINE_RE: OnceLock<Regex> = OnceLock::new();
 
 fn line_re() -> &'static Regex {
-    LINE_RE.get_or_init(|| Regex::new(r"^(.+):(\d+)\.\d+,(\d+)\.\d+\s+\d+\s+(\d+)$").unwrap())
+    LINE_RE.get_or_init(|| compile_literal_regex(r"^(.+):(\d+)\.\d+,(\d+)\.\d+\s+\d+\s+(\d+)$"))
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the compile-time Go coverage regex is exercised by parser tests"
+)]
+fn compile_literal_regex(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("hard-coded Go coverage regex must compile")
 }
 
 impl Ingestor for GoCovIngestor {

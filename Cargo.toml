@@ -85,7 +85,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [workspace.lints.rust]
 future-incompatible = "warn"
 nonstandard-style = "warn"
+unsafe-op-in-unsafe-fn = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
-perf = "warn"
+missing-safety-doc = "deny"
+perf = { level = "warn", priority = -1 }
+undocumented-unsafe-blocks = "deny"

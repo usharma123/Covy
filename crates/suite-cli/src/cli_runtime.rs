@@ -633,6 +633,8 @@ fn configure_stdout_output(path: Option<&str>) -> anyhow::Result<()> {
         .write(true)
         .open(Path::new(path))?;
 
+    // SAFETY: `file` owns a valid open descriptor for the duration of the
+    // call, and `STDOUT_FILENO` is the process stdout descriptor.
     let ret = unsafe { libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO) };
     if ret < 0 {
         return Err(std::io::Error::last_os_error().into());

@@ -62,11 +62,15 @@ pub unsafe extern "C" fn context_instruct_shim_open(
     mode: libc::mode_t,
 ) -> libc::c_int {
     if !INITIALIZED.load(Ordering::Relaxed) {
+        // SAFETY: This exported hook inherits the caller's `open(2)` contract
+        // documented above and forwards the arguments without retaining them.
         return unsafe { libc::open(path, flags, libc::c_uint::from(mode)) };
     }
     if let Some(fd) = maybe_virtualize(path, None) {
         return fd;
     }
+    // SAFETY: This exported hook inherits the caller's `open(2)` contract
+    // documented above and forwards the arguments without retaining them.
     unsafe { libc::open(path, flags, libc::c_uint::from(mode)) }
 }
 
@@ -83,11 +87,15 @@ pub unsafe extern "C" fn context_instruct_shim_openat(
     mode: libc::mode_t,
 ) -> libc::c_int {
     if !INITIALIZED.load(Ordering::Relaxed) {
+        // SAFETY: This exported hook inherits the caller's `openat(2)`
+        // contract documented above and forwards the arguments unchanged.
         return unsafe { libc::openat(dirfd, path, flags, libc::c_uint::from(mode)) };
     }
     if let Some(fd) = maybe_virtualize(path, Some(dirfd)) {
         return fd;
     }
+    // SAFETY: This exported hook inherits the caller's `openat(2)` contract
+    // documented above and forwards the arguments unchanged.
     unsafe { libc::openat(dirfd, path, flags, libc::c_uint::from(mode)) }
 }
 
@@ -144,6 +152,9 @@ fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<l
 }
 
 fn detect_candidate(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<InterceptCandidate> {
+    // SAFETY: `maybe_virtualize` rejects null pointers, and this helper is
+    // reached only through hooks whose documented ABI requires `path` to
+    // remain a valid NUL-terminated C string for the duration of the call.
     let raw_path = unsafe { CStr::from_ptr(path) }.to_str().ok()?;
     let absolute_path = resolve_absolute_path(raw_path, dirfd)?;
     let file_name = absolute_path.file_name()?.to_str()?;
@@ -184,11 +195,16 @@ fn resolve_absolute_path(raw_path: &str, dirfd: Option<libc::c_int>) -> Option<P
 
 fn resolve_dirfd_path(dirfd: libc::c_int) -> Option<PathBuf> {
     let mut buffer = [0 as c_char; libc::PATH_MAX as usize];
+    // SAFETY: `buffer` is writable for `PATH_MAX` bytes. `dirfd` comes from
+    // the intercepted `openat(2)` call, and `fcntl` reports invalid
+    // descriptors through its return value below.
     let result = unsafe { libc::fcntl(dirfd, libc::F_GETPATH, buffer.as_mut_ptr()) };
     if result != 0 {
         return None;
     }
     Some(PathBuf::from(
+        // SAFETY: A successful `F_GETPATH` writes a NUL-terminated path into
+        // the `PATH_MAX`-sized buffer, which remains live for this conversion.
         unsafe { CStr::from_ptr(buffer.as_ptr()) }
             .to_string_lossy()
             .into_owned(),
@@ -300,17 +316,23 @@ fn resolve_instruction_file(
 fn create_temp_fd(name: &str, content: &[u8]) -> Option<libc::c_int> {
     let template = format!("{}/{}-XXXXXX", std::env::temp_dir().to_string_lossy(), name);
     let mut bytes = CString::new(template).ok()?.into_bytes_with_nul();
+    // SAFETY: `bytes` is a writable NUL-terminated template containing the
+    // six trailing `X` bytes required by `mkstemp(3)`.
     let fd = unsafe { libc::mkstemp(bytes.as_mut_ptr().cast()) };
     if fd < 0 {
         return None;
     }
+    // SAFETY: On success `mkstemp` replaced the template with the live
+    // NUL-terminated path. Unlinking it is safe while `fd` keeps the file open.
     let _ = unsafe { libc::unlink(bytes.as_ptr().cast()) };
     if !write_all_fd(fd, content) {
+        // SAFETY: `fd` was returned by `mkstemp` and is still owned here.
         unsafe {
             libc::close(fd);
         }
         return None;
     }
+    // SAFETY: `fd` remains an open descriptor owned by this function.
     unsafe {
         libc::lseek(fd, 0, libc::SEEK_SET);
     }
@@ -319,6 +341,8 @@ fn create_temp_fd(name: &str, content: &[u8]) -> Option<libc::c_int> {
 
 fn write_all_fd(fd: libc::c_int, mut bytes: &[u8]) -> bool {
     while !bytes.is_empty() {
+        // SAFETY: `bytes` is readable for `bytes.len()` bytes, and callers
+        // supply the open descriptor owned by `create_temp_fd`.
         let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
         if written <= 0 {
             return false;
@@ -349,6 +373,8 @@ fn debug_log(message: &str) {
     let _guard = disable_intercept();
     let mut line = String::from(message);
     line.push('\n');
+    // SAFETY: `line` remains live and readable for the duration of this
+    // best-effort write to the process-owned stderr descriptor.
     let _ = unsafe { libc::write(libc::STDERR_FILENO, line.as_ptr().cast(), line.len()) };
 }
 

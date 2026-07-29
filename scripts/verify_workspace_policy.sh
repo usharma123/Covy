@@ -23,6 +23,12 @@ grep -Fqx '[workspace.lints.rust]' Cargo.toml ||
   fail "workspace Rust lint policy is missing"
 grep -Fqx '[workspace.lints.clippy]' Cargo.toml ||
   fail "workspace Clippy lint policy is missing"
+grep -Fqx 'unsafe-op-in-unsafe-fn = "deny"' Cargo.toml ||
+  fail "unsafe operations in unsafe functions must require explicit blocks"
+grep -Fqx 'missing-safety-doc = "deny"' Cargo.toml ||
+  fail "public unsafe APIs must document their safety contract"
+grep -Fqx 'undocumented-unsafe-blocks = "deny"' Cargo.toml ||
+  fail "unsafe blocks must carry a local safety rationale"
 
 internal_dependencies=(
   buildy-core
