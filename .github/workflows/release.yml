@@ -19,6 +19,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20.20.2
+
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.93.1
@@ -115,25 +119,37 @@ jobs:
             platform: darwin-arm64
             npm_os: darwin
             npm_cpu: arm64
+            smoke_mode: native
+            smoke_reason: ""
           - target: x86_64-apple-darwin
             os: macos-14
             platform: darwin-x64
             npm_os: darwin
             npm_cpu: x64
+            smoke_mode: native-or-metadata
+            smoke_reason: "The hosted macOS runner may be ARM64; x86_64 execution requires an Intel runner or Rosetta and remains an external release check."
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             platform: linux-x64
             npm_os: linux
             npm_cpu: x64
+            smoke_mode: native
+            smoke_reason: ""
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             platform: linux-arm64
             npm_os: linux
             npm_cpu: arm64
+            smoke_mode: qemu-aarch64
+            smoke_reason: ""
 
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20.20.2
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -148,6 +164,13 @@ jobs:
       - name: Install cross (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: cargo install cross --git https://github.com/cross-rs/cross --rev 88f49ff79e777bef6d3564531636ee4d3cc2f8d2 --locked
+
+      - name: Install qemu user emulator (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user
+          command -v qemu-aarch64
 
       - name: Build release binaries
         run: |
@@ -189,11 +212,29 @@ jobs:
           fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
 
+      - name: Smoke staged platform package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python3 scripts/verify_release_packages.py platform \
+            --package-dir "dist/@packet28/${{ matrix.platform }}" \
+            --platform "${{ matrix.platform }}" \
+            --version "$VERSION" \
+            --run-mode "${{ matrix.smoke_mode }}" \
+            --skip-reason "${{ matrix.smoke_reason }}"
+
+      # upload-artifact does not preserve Unix executable modes, so transfer a
+      # tar archive and revalidate its extracted contents in the publish job.
+      - name: Archive verified platform package
+        run: |
+          PKG_DIR="dist/@packet28/${{ matrix.platform }}"
+          tar -C "$PKG_DIR" -czf "dist/pkg-${{ matrix.platform }}.tar.gz" .
+
       - name: Upload platform package
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: pkg-${{ matrix.platform }}
-          path: dist/@packet28/${{ matrix.platform }}
+          path: dist/pkg-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
 
   publish:
     needs:
@@ -216,6 +257,16 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: dist/platforms
+
+      - name: Extract platform packages with executable modes
+        run: |
+          set -euo pipefail
+          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            PKG_DIR="dist/platforms/pkg-${platform}"
+            ARCHIVE="$PKG_DIR/pkg-${platform}.tar.gz"
+            test -f "$ARCHIVE"
+            tar -xzf "$ARCHIVE" -C "$PKG_DIR"
+          done
 
       - name: Stage root package
         run: |
@@ -241,16 +292,18 @@ jobs:
       - name: Dry-run every npm package
         run: |
           set -euo pipefail
-          REGISTRY="https://registry.npmjs.org"
-          for package_dir in \
-            dist/platforms/pkg-darwin-arm64 \
-            dist/platforms/pkg-darwin-x64 \
-            dist/platforms/pkg-linux-x64 \
-            dist/platforms/pkg-linux-arm64 \
-            dist/packet28; do
-            (cd "$package_dir" && npm pack --dry-run --json)
-            (cd "$package_dir" && npm publish --dry-run --access public --registry="$REGISTRY")
+          VERSION="${GITHUB_REF_NAME#v}"
+          for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            python3 scripts/verify_release_packages.py platform \
+              --package-dir "dist/platforms/pkg-${platform}" \
+              --platform "$platform" \
+              --version "$VERSION" \
+              --run-mode native-or-metadata \
+              --skip-reason "The Linux publish host revalidates headers and npm metadata; cross-platform execution already ran in the build matrix."
           done
+          python3 scripts/verify_release_packages.py npm \
+            --package-dir dist/packet28 \
+            --version "$VERSION"
 
       - name: Publish platform packages
         env:

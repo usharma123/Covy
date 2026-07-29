@@ -354,6 +354,160 @@ def verify_dependabot_policy(errors: list[str]) -> None:
     )
 
 
+def release_package_smoke_errors(
+    build: str, release: str, full_gate: str, package_verifier: str
+) -> list[str]:
+    """Return violations of the pre-publish package verification boundary."""
+
+    errors: list[str] = []
+    quality_job = build.partition("\n  quality:")[2].partition("\n  msrv:")[0]
+    release_gate_job = release.partition("\n  release-gates:")[2].partition(
+        "\n  build:"
+    )[0]
+    release_build_job = release.partition("\n  build:")[2].partition(
+        "\n  publish:"
+    )[0]
+    release_publish_job = release.partition("\n  publish:")[2]
+    node_action = (
+        "actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444"
+    )
+    node_jobs = {
+        "canonical build gate": quality_job,
+        "release gate": release_gate_job,
+        "release artifact build": release_build_job,
+        "release publish": release_publish_job,
+    }
+    for job_name, job in node_jobs.items():
+        if node_action not in job or "node-version: 20.20.2" not in job:
+            errors.append(f"{job_name} must pin the reviewed Node 20.20.2 action")
+
+    expected_modes = {
+        "smoke_mode: native": 2,
+        "smoke_mode: native-or-metadata": 1,
+        "smoke_mode: qemu-aarch64": 1,
+    }
+    for fragment, expected_count in expected_modes.items():
+        actual_count = len(
+            re.findall(rf"^\s*{re.escape(fragment)}\s*$", release, re.MULTILINE)
+        )
+        if actual_count != expected_count:
+            errors.append(
+                f"release matrix expected {expected_count} occurrences of "
+                f"{fragment!r}, found {actual_count}"
+            )
+    if (
+        "x86_64 execution requires an Intel runner or Rosetta and remains an "
+        "external release check."
+        not in release
+    ):
+        errors.append("macOS x86_64 execution limitation is not explicit")
+
+    required_release_fragments = {
+        "Linux ARM64 emulator package is not installed": (
+            "sudo apt-get install -y --no-install-recommends qemu-user"
+        ),
+        "Linux ARM64 emulator executable is not checked": (
+            "command -v qemu-aarch64"
+        ),
+        "staged package path is not matrix-bound": (
+            '--package-dir "dist/@packet28/${{ matrix.platform }}"'
+        ),
+        "staged package platform is not matrix-bound": (
+            '--platform "${{ matrix.platform }}"'
+        ),
+        "staged package execution mode is not matrix-bound": (
+            '--run-mode "${{ matrix.smoke_mode }}"'
+        ),
+        "staged package skip reason is not matrix-bound": (
+            '--skip-reason "${{ matrix.smoke_reason }}"'
+        ),
+        "verified platform package is not archived": (
+            'tar -C "$PKG_DIR" -czf "dist/pkg-${{ matrix.platform }}.tar.gz" .'
+        ),
+        "platform artifact does not preserve executable metadata": (
+            "path: dist/pkg-${{ matrix.platform }}.tar.gz"
+        ),
+        "downloaded platform archive is not extracted": (
+            'tar -xzf "$ARCHIVE" -C "$PKG_DIR"'
+        ),
+    }
+    for message, fragment in required_release_fragments.items():
+        if fragment not in release:
+            errors.append(message)
+
+    platform_verifier = "python3 scripts/verify_release_packages.py platform"
+    if platform_verifier not in release_build_job:
+        errors.append("staged platform verifier is not invoked in the build job")
+    if platform_verifier not in release_publish_job:
+        errors.append("downloaded platform packages are not revalidated")
+    npm_verifier = "python3 scripts/verify_release_packages.py npm"
+    if npm_verifier not in release_publish_job:
+        errors.append("root npm package is not revalidated")
+
+    smoke_position = release.find("- name: Smoke staged platform package")
+    archive_position = release.find("- name: Archive verified platform package")
+    upload_position = release.find("- name: Upload platform package")
+    if (
+        smoke_position < 0
+        or archive_position < smoke_position
+        or upload_position < archive_position
+    ):
+        errors.append("platform package smoke must run before artifact upload")
+    extract_position = release.find(
+        "- name: Extract platform packages with executable modes"
+    )
+    dry_run_position = release.find("- name: Dry-run every npm package")
+    publish_position = release.find("- name: Publish platform packages")
+    if (
+        extract_position < 0
+        or dry_run_position < extract_position
+        or publish_position < 0
+        or dry_run_position > publish_position
+    ):
+        errors.append("npm package dry-runs must run before publication")
+    if "npm publish --dry-run" in release:
+        errors.append(
+            "release workflow may not bypass the offline package verifier"
+        )
+
+    if "run_cmd python3 scripts/verify_release_packages.py source" not in full_gate:
+        errors.append("canonical gate lacks the pre-tag npm package dry-run")
+
+    required_verifier_fragments = {
+        "package verifier does not force npm offline": '"--offline"',
+        "package verifier does not force npm dry-run": '"--dry-run"',
+        "package verifier does not inspect binary headers": "def binary_identity(",
+        "package verifier does not execute staged binaries": (
+            "def smoke_platform_binaries("
+        ),
+        "package verifier does not check npm package integrity": (
+            "pack.get(\"integrity\") == publish.get(\"integrity\")"
+        ),
+    }
+    for message, fragment in required_verifier_fragments.items():
+        if fragment not in package_verifier:
+            errors.append(message)
+
+    return errors
+
+
+def verify_release_package_smoke(errors: list[str]) -> None:
+    build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
+    release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
+    full_gate = (ROOT / "scripts" / "validate_full_gate.sh").read_text(
+        encoding="utf-8"
+    )
+    package_verifier = (ROOT / "scripts" / "verify_release_packages.py").read_text(
+        encoding="utf-8"
+    )
+    errors.extend(
+        f"release-package-smoke: {error}"
+        for error in release_package_smoke_errors(
+            build, release, full_gate, package_verifier
+        )
+    )
+
+
 def verify_workflow_wiring(errors: list[str]) -> None:
     build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
     release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
@@ -445,6 +599,7 @@ def main() -> int:
     verify_autofix_security(errors)
     verify_release_permissions(errors)
     verify_dependabot_policy(errors)
+    verify_release_package_smoke(errors)
     verify_workflow_wiring(errors)
     if errors:
         for error in errors:

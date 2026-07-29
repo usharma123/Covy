@@ -7,7 +7,8 @@ Usage: scripts/validate_full_gate.sh [--list] [--msrv] [--release-tag TAG]
 
 Runs the canonical repository gate. The default mode verifies repository policy,
 formatting, locked workspace check/build, strict Clippy, all tests and doctests,
-strict rustdoc, cargo-deny policy, and Cargo package assembly.
+strict rustdoc, cargo-deny policy, offline npm package dry-runs, and Cargo
+package assembly.
 
 Pass --msrv to run the policy checks and locked workspace check intended for the
 exact minimum supported Rust toolchain.
@@ -95,4 +96,5 @@ run_cmd cargo test --workspace --doc --all-features --locked
 run_cmd env RUSTDOCFLAGS="-D warnings -D rustdoc::broken_intra_doc_links" \
   cargo doc --workspace --all-features --no-deps --locked
 run_cmd cargo deny --locked check
+run_cmd python3 scripts/verify_release_packages.py source
 run_cmd cargo package --workspace --all-features --locked --allow-dirty

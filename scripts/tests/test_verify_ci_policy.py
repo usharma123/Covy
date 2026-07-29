@@ -187,5 +187,114 @@ class DependabotPolicyTests(unittest.TestCase):
         )
 
 
+class ReleasePackageSmokePolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.build = (verify_ci_policy.WORKFLOW_DIR / "build.yml").read_text(
+            encoding="utf-8"
+        )
+        cls.release = (verify_ci_policy.WORKFLOW_DIR / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        cls.full_gate = (
+            verify_ci_policy.ROOT / "scripts" / "validate_full_gate.sh"
+        ).read_text(encoding="utf-8")
+        cls.package_verifier = (
+            verify_ci_policy.ROOT / "scripts" / "verify_release_packages.py"
+        ).read_text(encoding="utf-8")
+
+    def errors(
+        self,
+        *,
+        build: str | None = None,
+        release: str | None = None,
+        full_gate: str | None = None,
+        package_verifier: str | None = None,
+    ) -> list[str]:
+        return verify_ci_policy.release_package_smoke_errors(
+            build if build is not None else self.build,
+            release if release is not None else self.release,
+            full_gate if full_gate is not None else self.full_gate,
+            (
+                package_verifier
+                if package_verifier is not None
+                else self.package_verifier
+            ),
+        )
+
+    def test_repository_release_package_smoke_is_complete(self) -> None:
+        self.assertEqual(self.errors(), [])
+
+    def test_rejects_missing_pre_upload_binary_smoke(self) -> None:
+        unsafe = self.release.replace(
+            "python3 scripts/verify_release_packages.py platform",
+            "python3 scripts/removed_release_package_verifier.py platform",
+            1,
+        )
+
+        self.assertIn(
+            "staged platform verifier is not invoked in the build job",
+            self.errors(release=unsafe),
+        )
+
+    def test_rejects_linux_arm64_without_emulated_execution(self) -> None:
+        unsafe = self.release.replace(
+            "smoke_mode: qemu-aarch64",
+            "smoke_mode: native-or-metadata",
+            1,
+        )
+
+        errors = self.errors(release=unsafe)
+
+        self.assertTrue(
+            any("smoke_mode: qemu-aarch64" in error for error in errors)
+        )
+
+    def test_rejects_silent_macos_cross_architecture_skip(self) -> None:
+        unsafe = self.release.replace(
+            "x86_64 execution requires an Intel runner or Rosetta and remains an "
+            "external release check.",
+            "cross build",
+            1,
+        )
+
+        self.assertIn(
+            "macOS x86_64 execution limitation is not explicit",
+            self.errors(release=unsafe),
+        )
+
+    def test_rejects_artifact_transfer_that_loses_executable_modes(self) -> None:
+        unsafe = self.release.replace(
+            "path: dist/pkg-${{ matrix.platform }}.tar.gz",
+            "path: dist/@packet28/${{ matrix.platform }}",
+            1,
+        )
+
+        self.assertIn(
+            "platform artifact does not preserve executable metadata",
+            self.errors(release=unsafe),
+        )
+
+    def test_rejects_missing_pre_tag_package_dry_run(self) -> None:
+        unsafe = self.full_gate.replace(
+            "run_cmd python3 scripts/verify_release_packages.py source\n",
+            "",
+            1,
+        )
+
+        self.assertIn(
+            "canonical gate lacks the pre-tag npm package dry-run",
+            self.errors(full_gate=unsafe),
+        )
+
+    def test_rejects_online_npm_publish_dry_run(self) -> None:
+        unsafe = self.package_verifier.replace('"--offline",', '"--online",', 1)
+
+        self.assertIn(
+            "package verifier does not force npm offline",
+            self.errors(package_verifier=unsafe),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
