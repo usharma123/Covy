@@ -298,12 +298,16 @@ pub(crate) fn build_budget_preflight_section(
         return None;
     }
 
-    let snapshot_focus_paths =
-        merged_unique(&snapshot.focus_paths, &snapshot.checkpoint_focus_paths);
-    let focus_paths = merged_unique(&snapshot_focus_paths, &request.focus_paths);
-    let snapshot_focus_symbols =
-        merged_unique(&snapshot.focus_symbols, &snapshot.checkpoint_focus_symbols);
-    let focus_symbols = merged_unique(&snapshot_focus_symbols, focus_symbols);
+    let focus_paths = merged_unique_many([
+        &snapshot.focus_paths,
+        &snapshot.checkpoint_focus_paths,
+        &request.focus_paths,
+    ]);
+    let focus_symbols = merged_unique_many([
+        &snapshot.focus_symbols,
+        &snapshot.checkpoint_focus_symbols,
+        focus_symbols,
+    ]);
     if !focus_paths.is_empty() || !focus_symbols.is_empty() {
         return None;
     }
@@ -519,17 +523,19 @@ pub(crate) fn build_broker_sections(
         });
     }
 
-    let focus_lines = merged_unique(
-        &merged_unique(&snapshot.focus_paths, &snapshot.checkpoint_focus_paths),
+    let focus_lines = merged_unique_many([
+        &snapshot.focus_paths,
+        &snapshot.checkpoint_focus_paths,
         &request.focus_paths,
-    )
+    ])
     .into_iter()
     .map(|path| format!("- path: {path}"))
     .chain(
-        merged_unique(
-            &merged_unique(&snapshot.focus_symbols, &snapshot.checkpoint_focus_symbols),
+        merged_unique_many([
+            &snapshot.focus_symbols,
+            &snapshot.checkpoint_focus_symbols,
             &request.focus_symbols,
-        )
+        ])
         .into_iter()
         .map(|symbol| format!("- symbol: {symbol}")),
     )
@@ -1552,10 +1558,11 @@ fn build_edit_action_critic_lines(
     focus_symbols: &[String],
 ) -> Vec<String> {
     let mut lines = Vec::new();
-    let focus_paths = merged_unique(
-        &merged_unique(&snapshot.focus_paths, &snapshot.checkpoint_focus_paths),
+    let focus_paths = merged_unique_many([
+        &snapshot.focus_paths,
+        &snapshot.checkpoint_focus_paths,
         &request.focus_paths,
-    );
+    ]);
     if focus_paths.is_empty() && focus_symbols.is_empty() {
         lines.push(
             "- missing_edit_scope: add focus_paths or focus_symbols before requesting edit context"

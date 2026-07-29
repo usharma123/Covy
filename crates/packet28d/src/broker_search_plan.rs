@@ -354,13 +354,20 @@ pub(crate) fn derive_broker_focus_symbols(
     request: &BrokerGetContextRequest,
 ) -> Vec<String> {
     let query_focus = derive_query_focus(request.query.as_deref());
-    let snapshot_symbols = if request.focus_symbols.is_empty() {
-        merged_unique(&snapshot.focus_symbols, &snapshot.checkpoint_focus_symbols)
+    if request.focus_symbols.is_empty() {
+        merged_unique_many([
+            &snapshot.focus_symbols,
+            &snapshot.checkpoint_focus_symbols,
+            &request.focus_symbols,
+            &query_focus.symbol_terms,
+        ])
     } else {
-        snapshot.focus_symbols.clone()
-    };
-    let explicit = merged_unique(&snapshot_symbols, &request.focus_symbols);
-    merged_unique(&explicit, &query_focus.symbol_terms)
+        merged_unique_many([
+            &snapshot.focus_symbols,
+            &request.focus_symbols,
+            &query_focus.symbol_terms,
+        ])
+    }
 }
 
 pub(crate) fn derive_broker_focus_paths(
@@ -372,15 +379,20 @@ pub(crate) fn derive_broker_focus_paths(
     max_paths: usize,
 ) -> Result<Vec<String>> {
     let query_focus = derive_query_focus(objective.or(request.query.as_deref()));
-    let snapshot_paths = if request.focus_paths.is_empty() {
-        merged_unique(&snapshot.focus_paths, &snapshot.checkpoint_focus_paths)
+    let explicit_paths = if request.focus_paths.is_empty() {
+        merged_unique_many([
+            &snapshot.focus_paths,
+            &snapshot.checkpoint_focus_paths,
+            &request.focus_paths,
+            &query_focus.path_terms,
+        ])
     } else {
-        snapshot.focus_paths.clone()
+        merged_unique_many([
+            &snapshot.focus_paths,
+            &request.focus_paths,
+            &query_focus.path_terms,
+        ])
     };
-    let explicit_paths = merged_unique(
-        &merged_unique(&snapshot_paths, &request.focus_paths),
-        &query_focus.path_terms,
-    );
     let explicit_symbols = derive_broker_focus_symbols(snapshot, request);
     if explicit_paths.is_empty() && explicit_symbols.is_empty() && objective.is_none() {
         return Ok(Vec::new());
@@ -729,13 +741,12 @@ fn requested_search_paths(
     request: &BrokerGetContextRequest,
     query_focus: &QueryFocus,
 ) -> Vec<String> {
-    merged_unique(
-        &merged_unique(
-            &merged_unique(&snapshot.focus_paths, &snapshot.checkpoint_focus_paths),
-            &request.focus_paths,
-        ),
+    merged_unique_many([
+        &snapshot.focus_paths,
+        &snapshot.checkpoint_focus_paths,
+        &request.focus_paths,
         &query_focus.path_terms,
-    )
+    ])
 }
 
 fn apply_search_candidate_results(

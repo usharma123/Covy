@@ -2,6 +2,21 @@ use super::support::*;
 use super::*;
 
 #[test]
+fn merged_unique_many_normalizes_all_groups_in_one_pass() {
+    let first = vec![" beta ".to_string(), String::new(), "alpha".to_string()];
+    let second = vec!["gamma".to_string(), "beta".to_string()];
+    let third = vec![" delta ".to_string(), "alpha".to_string()];
+
+    assert_eq!(
+        merged_unique_many([first.as_slice(), second.as_slice(), third.as_slice()]),
+        ["alpha", "beta", "delta", "gamma"]
+    );
+    assert_eq!(first, [" beta ", "", "alpha"]);
+    assert_eq!(second, ["gamma", "beta"]);
+    assert_eq!(third, [" delta ", "alpha"]);
+}
+
+#[test]
 fn normalize_plan_steps_trims_and_assigns_missing_ids() {
     let normalized = normalize_plan_steps(&[BrokerPlanStep {
         id: " ".to_string(),
