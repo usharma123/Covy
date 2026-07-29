@@ -53,8 +53,8 @@ CASES: tuple[Case, ...] = (
         query="Where is BrokerWriteStateRequest defined and used?",
         needle="BrokerWriteStateRequest",
         expected_paths=(
-            "crates/packet28-daemon-core/src/lib.rs",
-            "crates/packet28d/src/main.rs",
+            "crates/packet28-daemon-protocol/src/broker.rs",
+            "crates/packet28d/src/broker/ops.rs",
             "crates/suite-cli/src/broker_client.rs",
             "crates/suite-cli/src/cmd_mcp.rs",
         ),
@@ -68,8 +68,8 @@ CASES: tuple[Case, ...] = (
         query="Where is RepoIndexSnapshot defined and used?",
         needle="RepoIndexSnapshot",
         expected_paths=(
-            "crates/mapy-core/src/lib.rs",
-            "crates/packet28d/src/main.rs",
+            "crates/mapy-core/src/types.rs",
+            "crates/mapy-core/src/runtime.rs",
         ),
         rg_paths=("crates",),
         whole_word=True,

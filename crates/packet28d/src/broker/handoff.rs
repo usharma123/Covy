@@ -1,7 +1,32 @@
-use super::*;
-use crate::broker_context::compute_broker_response;
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result};
+use context_kernel_core::KernelRequest;
 use packet28_daemon_protocol::broker::{
+    BrokerAction, BrokerDeltaResponse, BrokerGetContextRequest, BrokerGetContextResponse,
     BrokerHandoffDescriptor, BrokerHandoffReadiness, BrokerHandoffStatus,
+    BrokerPrepareHandoffRequest, BrokerPrepareHandoffResponse, BrokerResponseMode, BrokerSection,
+};
+use packet28_daemon_protocol::paths::{
+    task_brief_json_path, task_brief_markdown_path, task_event_log_path, task_state_json_path,
+    task_version_json_path,
+};
+use packet28_daemon_protocol::task::TaskRecord;
+use serde_json::json;
+
+use super::context::compute_broker_response;
+use super::limits::estimate_text_cost;
+use super::render::{load_task_record, load_versioned_broker_response, render_brief};
+use super::support::{
+    ensure_task_record_mut, load_agent_snapshot_for_task, now_unix_millis, set_context_reason,
+};
+use crate::state::DaemonState;
+use crate::{
+    context_version_storage_id, fence_task_namespace_admission, lock_err, persist_state,
+    task_storage_id,
 };
 
 pub(crate) fn next_action_summary(

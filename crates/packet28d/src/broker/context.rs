@@ -1,9 +1,47 @@
 #![warn(clippy::redundant_clone)]
 
-use super::*;
-use crate::broker_handoff::{
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use anyhow::Result;
+use packet28_daemon_protocol::broker::{
+    BrokerAction, BrokerDecision, BrokerDecomposeIntent, BrokerDecomposeRequest,
+    BrokerDecomposeResponse, BrokerDecomposedStep, BrokerEstimateContextRequest,
+    BrokerEstimateContextResponse, BrokerGetContextRequest, BrokerGetContextResponse,
+    BrokerPacketRef, BrokerPlanViolation, BrokerQuestion, BrokerRecommendedAction,
+    BrokerResponseMode, BrokerSupersessionMode, BrokerValidatePlanRequest,
+    BrokerValidatePlanResponse, BrokerVerbosity,
+};
+
+use super::handoff::{
     compute_handoff_state, next_action_summary, slim_broker_response, write_broker_artifacts,
 };
+use super::limits::{estimate_text_cost, filter_requested_section_ids, resolve_effective_limits};
+use super::render::{
+    build_broker_sections, build_delta, build_eviction_candidates, build_section_estimates,
+    load_task_record, load_versioned_broker_response, prune_sections_for_budget, render_brief,
+    should_use_delta_view,
+};
+use super::search_plan::{
+    derive_broker_focus_paths, derive_broker_focus_symbols, expand_scope_paths, infer_scope_paths,
+};
+use super::snapshot::{build_resolved_questions, postprocess_selected_sections};
+use super::support::{
+    broker_default_budget_bytes, broker_default_budget_tokens, broker_objective,
+    broker_request_response_mode, build_repo_map_envelope, current_context_version,
+    ensure_context_version, ensure_task_record_mut, inherit_broker_request_defaults,
+    load_agent_snapshot_for_task, load_cached_coverage, load_cached_testmap,
+    load_context_manage_for_task, set_context_reason, should_persist_broker_artifacts,
+};
+use crate::planning::{
+    coverage_gap_for_path, current_deleted_paths, estimate_plan_step_tokens,
+    find_candidate_test_paths, is_edit_like_action, is_read_like_action, merged_unique,
+    normalize_plan_steps, test_step_covers_path, test_step_targets_mapped_tests,
+    testmap_tests_for_path,
+};
+use crate::state::DaemonState;
+use crate::{daemon_log, lock_err, persist_state};
 
 pub(crate) fn compute_broker_response(
     state: &Arc<Mutex<DaemonState>>,

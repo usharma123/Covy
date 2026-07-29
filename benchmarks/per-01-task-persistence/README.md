@@ -23,7 +23,7 @@ The captured run passes every condition.
 ## Reproduce
 
 ```text
-cargo test --release --locked -p packet28d --bin packet28d \
+cargo test --release --locked -p packet28d --lib \
   benchmark_task_persistence_owner -- --ignored --nocapture
 python3 benchmarks/per-01-task-persistence/verify.py
 ```
@@ -38,7 +38,10 @@ Environment:
 The result artifact records checksums for every measured product and benchmark
 source. Those file identities, rather than the pre-implementation base commit,
 are the mechanically enforced provenance after replaying the atomic change
-onto a newer integration parent.
+onto a newer integration parent. The daemon application now lives in
+`application.rs`, shared persistence/admission helpers live in `lib.rs`, and
+the thin `main.rs` CLI adapter is deliberately excluded because it no longer
+owns measured persistence behavior.
 
 ## Workload and evidence boundary
 
@@ -68,10 +71,10 @@ startup reconciliation, torn-tail, lease, and failure-path tests.
 
 | Path | Median event state-lock hold | Median elapsed, 32 events | Published bytes | Full checkpoints |
 | --- | ---: | ---: | ---: | ---: |
-| Full checkpoint under lock | 69,370,084 ns | 2,229,331 µs | 59,150,656 | 32 |
-| Owned/coalesced after lock | 129,166 ns | 525,906 µs | 1,852,233 | 1 |
+| Full checkpoint under lock | 64,921,416 ns | 2,081,749 µs | 59,150,656 | 32 |
+| Owned/coalesced after lock | 116,041 ns | 461,802 µs | 1,852,233 | 1 |
 
-- Median daemon-state lock-hold reduction: **99.814%**
+- Median daemon-state lock-hold reduction: **99.821%**
 - Published-byte reduction: **96.869%**
-- Wall-clock improvement on the capture host: **4.24×**
+- Wall-clock improvement on the capture host: **4.51×**
 - Recovered events on both paths: **33**

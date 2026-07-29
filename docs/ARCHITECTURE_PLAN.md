@@ -86,11 +86,19 @@ runtime path has been benchmarked or revalidated.
 
 ### Daemon and tests
 
-- `crates/packet28-daemon-core` owns shared protocol, path, storage, integrity,
-  and request/response types.
-- `crates/packet28d` owns the server process. Broker context/handoff/search
-  operations, hooks, indexing, launch, planning, runtime files, server
-  transports, state, and watches are separate modules.
+- `crates/packet28-daemon-protocol` owns implementation-free wire DTOs,
+  framing, and endpoint paths. `crates/packet28-daemon-core` owns typed storage,
+  integrity, leases, recovery, and retention plus a frozen `0.2.x`
+  compatibility facade.
+- `crates/packet28d/src/application.rs` owns the server lifecycle and
+  `packet28d::serve`; `src/main.rs` is only the CLI/exit adapter. Broker
+  context, handoff, search, rendering, limits, snapshots, and writes live under
+  `src/broker/` behind an explicit crate-internal facade. Hooks, indexing,
+  launch, planning, runtime files, server dispatch, state, and watches remain
+  separate modules.
+- [Daemon runtime](daemon-runtime.md) records startup/shutdown order,
+  cancellation, transport, persistence/recovery, compatibility/errors, and the
+  reviewed happy-path example inventory and exclusions.
 - Tokio is confined to the `packet28d`/`suite-cli` process-orchestration
   boundary. TCP and Unix listeners share one cancellation signal and owned
   connection task set; framing has separate header, body, and write deadlines.
@@ -138,7 +146,9 @@ boundaries. Verify their callers, persisted-data role, and tests before removal.
 
 - Continue reducing the size of orchestration facades such as `cmd_mcp.rs`,
   `cmd_setup.rs`, `cmd_dashboard.rs`, `cmd_system.rs`, `memory_store.rs`, and
-  `packet28d/src/main.rs` when a cohesive responsibility can be extracted.
+  `packet28d/src/application.rs` when a cohesive responsibility can be
+  extracted. Keep `packet28d/src/main.rs` as the shallow CLI and process-exit
+  adapter enforced by `scripts/check_architecture.py`.
 - Narrow broad internal re-exports and remove `allow(dead_code)` exceptions only
   after static reference checks and targeted runtime tests show they are
   unnecessary.

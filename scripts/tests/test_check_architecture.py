@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +41,35 @@ KERNEL_BUILTIN_TARGETS = (
     "proxy.run",
     "stacky.slice",
     "testy.impact",
+)
+PACKET28D_BROKER_MODULES = (
+    "context",
+    "handoff",
+    "limits",
+    "ops",
+    "render",
+    "search",
+    "search_plan",
+    "snapshot",
+    "support",
+)
+PROTOCOL_PUBLIC_MODULES = (
+    "broker",
+    "commands",
+    "context_store",
+    "frame",
+    "hooks",
+    "index",
+    "message",
+    "paths",
+    "task",
+)
+CORE_PUBLIC_MODULES = (
+    "integrity",
+    "retention",
+    "storage",
+    "task_store_lease",
+    "trust",
 )
 
 
@@ -117,6 +146,100 @@ def write_kernel_sources(root: Path, mechanism_source: str) -> None:
     )
 
 
+def write_packet28d_sources(
+    root: Path,
+    *,
+    main_source: str = "fn main() { packet28d::serve(Default::default()); }\n",
+    broker_child_source: str = "use crate::state::DaemonState;\n",
+) -> None:
+    source = root / "crates" / "packet28d" / "src"
+    broker = source / "broker"
+    broker.mkdir(parents=True)
+    (source / "main.rs").write_text(main_source, encoding="utf-8")
+    (source / "application.rs").write_text(
+        "pub fn serve() {}\n", encoding="utf-8"
+    )
+    (source / "lib.rs").write_text(
+        "mod application;\n"
+        "mod broker;\n"
+        "pub use application::serve;\n"
+        '#[cfg(feature = "shared-repository-scan")]\n'
+        "pub mod shared_repository_scan;\n",
+        encoding="utf-8",
+    )
+    (source / "shared_repository_scan.rs").write_text(
+        "//! ```no_run\n"
+        "//! rebuild_full_indexes_with_shared_scan(());\n"
+        "//! let _ = result.telemetry.walk_passes;\n"
+        "//! ```\n",
+        encoding="utf-8",
+    )
+    (broker / "mod.rs").write_text(
+        "\n".join(f"mod {module};" for module in PACKET28D_BROKER_MODULES),
+        encoding="utf-8",
+    )
+    for module in PACKET28D_BROKER_MODULES:
+        (broker / f"{module}.rs").write_text(
+            broker_child_source, encoding="utf-8"
+        )
+
+    protocol = root / "crates" / "packet28-daemon-protocol" / "src"
+    protocol.mkdir(parents=True)
+    (protocol / "lib.rs").write_text(
+        "\n".join(f"pub mod {module};" for module in PROTOCOL_PUBLIC_MODULES),
+        encoding="utf-8",
+    )
+    (protocol / "frame.rs").write_text(
+        "//! ```\n"
+        "//! write_frame(()); read_frame(());\n"
+        "//! let _ = DaemonRequest::Status;\n"
+        "//! let _ = DaemonResponse::Ack;\n"
+        "//! ```\n",
+        encoding="utf-8",
+    )
+    (protocol / "task.rs").write_text(
+        "/// ```\n"
+        "/// let mut lifecycle = TaskLifecycle::Idle;\n"
+        "/// lifecycle.start()?;\n"
+        "/// lifecycle.finish_run()?;\n"
+        "/// ```\n"
+        "/// ```compile_fail\n"
+        "/// let _ = TaskLifecycle {\n"
+        "///     running: true, cancel_requested: true,\n"
+        "/// };\n"
+        "/// ```\n",
+        encoding="utf-8",
+    )
+
+    core = root / "crates" / "packet28-daemon-core" / "src"
+    core.mkdir(parents=True)
+    (core / "lib.rs").write_text(
+        "//! ```\n"
+        "//! save_task_registry((), &TaskRegistry::default());\n"
+        "//! load_task_registry(());\n"
+        "//! ```\n"
+        "//! ```compile_fail\n"
+        "//! use packet28_daemon_core::write_frame;\n"
+        "//! ```\n"
+        + "\n".join(f"pub mod {module};" for module in CORE_PUBLIC_MODULES),
+        encoding="utf-8",
+    )
+    (core / "error.rs").write_text(
+        "/// ```\n"
+        "/// let _ = DaemonCoreError::Frame;\n"
+        "/// assert!(error.source().is_some());\n"
+        "/// ```\n",
+        encoding="utf-8",
+    )
+
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "daemon-runtime.md").write_text(
+        (ROOT / "docs" / "daemon-runtime.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+
 class ArchitectureDependencyTests(unittest.TestCase):
     def run_checker(
         self, fixture: dict[str, object], *, source_root: Path | None = None
@@ -134,6 +257,20 @@ class ArchitectureDependencyTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 check=False,
             )
+
+    def run_packet28d_mutation(
+        self,
+        relative_path: str,
+        mutate: Callable[[str], str],
+    ) -> subprocess.CompletedProcess[str]:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "")
+            write_packet28d_sources(root)
+            path = root / relative_path
+            path.write_text(mutate(path.read_text(encoding="utf-8")), encoding="utf-8")
+            return self.run_checker(fixture, source_root=root)
 
     def test_good_graph_passes_and_ignores_non_normal_edges(self) -> None:
         fixture = metadata(
@@ -399,6 +536,193 @@ class ArchitectureDependencyTests(unittest.TestCase):
         self.assertIn(
             "context-kernel-builtins registry must own exactly one "
             "registration literal for 'guardy.check'",
+            result.stderr,
+        )
+
+    def test_packet28d_thin_entrypoint_and_explicit_broker_facade_pass(
+        self,
+    ) -> None:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "")
+            write_packet28d_sources(root)
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_packet28d_broker_child_rejects_wildcard_import(self) -> None:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "")
+            write_packet28d_sources(root, broker_child_source="use super::*;\n")
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "packet28d broker modules must use explicit imports: "
+            "crates/packet28d/src/broker/context.rs",
+            result.stderr,
+        )
+
+    def test_packet28d_entrypoint_rejects_runtime_ownership(self) -> None:
+        fixture = metadata({})
+        thick_main = "\n".join(
+            (
+                "use std::sync::Mutex;",
+                "use packet28_daemon_protocol::message::DaemonRequest;",
+                "fn main() {",
+                "    let _state: Option<DaemonState> = None;",
+                "    packet28d::serve(Default::default());",
+                "}",
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "")
+            write_packet28d_sources(root, main_source=thick_main)
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "packet28d executable entrypoint owns daemon internals 'Mutex'",
+            result.stderr,
+        )
+        self.assertIn(
+            "packet28d executable entrypoint owns daemon internals "
+            "'packet28_daemon_protocol'",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_is_required_without_a_docs_directory(
+        self,
+    ) -> None:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "")
+            write_packet28d_sources(root)
+            (root / "docs" / "daemon-runtime.md").unlink()
+            (root / "docs").rmdir()
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "packet28d runtime architecture documentation is missing or unreadable",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_missing_public_marker(self) -> None:
+        marker = (
+            "<!-- packet28d-public owner=packet28-daemon-protocol item=broker "
+            "classification=excluded evidence=wire-dto-json-compat-tests -->\n"
+        )
+        result = self.run_packet28d_mutation(
+            "docs/daemon-runtime.md",
+            lambda source: source.replace(marker, "", 1),
+        )
+
+        self.assertIn(
+            "exactly one public marker for packet28-daemon-protocol::broker "
+            "(found 0)",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_duplicate_public_marker(self) -> None:
+        marker = (
+            "<!-- packet28d-public owner=packet28d item=serve "
+            "classification=excluded "
+            "evidence=non-hermetic-process-lifecycle-owner -->"
+        )
+        result = self.run_packet28d_mutation(
+            "docs/daemon-runtime.md",
+            lambda source: source + f"\n{marker}\n",
+        )
+
+        self.assertIn(
+            "exactly one public marker for packet28d::serve (found 2)",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_classification_mutation(self) -> None:
+        original = (
+            "owner=packet28d item=serve classification=excluded "
+            "evidence=non-hermetic-process-lifecycle-owner"
+        )
+        mutated = original.replace("classification=excluded", "classification=covered")
+        result = self.run_packet28d_mutation(
+            "docs/daemon-runtime.md",
+            lambda source: source.replace(original, mutated, 1),
+        )
+
+        self.assertIn(
+            "classification/evidence mismatch for packet28d::serve",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_unclassified_public_source(self) -> None:
+        result = self.run_packet28d_mutation(
+            "crates/packet28-daemon-protocol/src/lib.rs",
+            lambda source: source + "\npub mod surprise;\n",
+        )
+
+        self.assertIn(
+            "does not classify public source item "
+            "packet28-daemon-protocol::surprise",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_missing_public_source(self) -> None:
+        result = self.run_packet28d_mutation(
+            "crates/packet28-daemon-core/src/lib.rs",
+            lambda source: source.replace("pub mod trust;", "", 1),
+        )
+
+        self.assertIn(
+            "lists missing public source item packet28-daemon-core::trust",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_duplicate_public_source(self) -> None:
+        result = self.run_packet28d_mutation(
+            "crates/packet28-daemon-protocol/src/lib.rs",
+            lambda source: source + "\npub mod broker;\n",
+        )
+
+        self.assertIn(
+            "public source item packet28-daemon-protocol::broker is declared 2 times",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_duplicate_anchor_marker(self) -> None:
+        marker = (
+            "<!-- packet28d-anchor id=protocol-frame-runnable "
+            "source=crates/packet28-daemon-protocol/src/frame.rs "
+            "fence=runnable -->"
+        )
+        result = self.run_packet28d_mutation(
+            "docs/daemon-runtime.md",
+            lambda source: source + f"\n{marker}\n",
+        )
+
+        self.assertIn(
+            "exactly one anchor marker for protocol-frame-runnable (found 2)",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_source_anchor_mutation(self) -> None:
+        result = self.run_packet28d_mutation(
+            "crates/packet28d/src/shared_repository_scan.rs",
+            lambda source: source.replace("//! ```no_run", "//! ```ignore", 1),
+        )
+
+        self.assertIn(
+            "doctest anchor packet28d-shared-scan-no_run is missing source evidence",
             result.stderr,
         )
 

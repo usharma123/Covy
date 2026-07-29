@@ -1,4 +1,16 @@
-use super::*;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use anyhow::Result;
+use packet28_daemon_protocol::broker::{BrokerAction, BrokerGetContextRequest};
+
+use super::search::{
+    build_reducer_search_evidence, classify_symbol_match, contains_identifier_term,
+    looks_like_signature, CodeEvidenceSummary, EvidenceMatchKind,
+};
+use crate::planning::{merged_unique, merged_unique_many};
+use crate::state::DaemonState;
 
 pub(crate) const SEARCH_PLAN_MAX_CANDIDATES: usize = 8;
 pub(crate) const SEARCH_PLAN_PHASE1_MAX_CANDIDATES: usize = 5;

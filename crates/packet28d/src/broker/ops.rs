@@ -1,4 +1,29 @@
-use super::*;
+use std::sync::{Arc, Mutex};
+
+use anyhow::{anyhow, Result};
+use context_kernel_core::KernelRequest;
+use packet28_daemon_protocol::broker::{
+    BrokerTaskStatusRequest, BrokerTaskStatusResponse, BrokerWriteOp, BrokerWriteStateBatchRequest,
+    BrokerWriteStateBatchResponse, BrokerWriteStateRequest, BrokerWriteStateResponse,
+};
+use packet28_daemon_protocol::paths::{
+    task_brief_markdown_path, task_event_log_path, task_state_json_path,
+};
+use serde_json::json;
+
+use super::context::refresh_broker_context_for_task;
+use super::handoff::{
+    compute_handoff_state, latest_handoff_descriptor, latest_ready_handoff_descriptor,
+};
+use super::snapshot::apply_agent_snapshot_event_to_cache;
+use super::support::{
+    bump_context_version, current_context_version, derived_tool_invocation_id,
+    derived_tool_sequence, emit_task_event, event_id_for_write, load_agent_snapshot_for_task,
+    material_write_is_noop, now_unix_millis, set_context_reason, update_broker_link_state,
+};
+use crate::index::{enqueue_full_index_rebuild, enqueue_incremental_index_paths};
+use crate::state::DaemonState;
+use crate::{lock_err, task_storage_id};
 
 pub(crate) fn broker_write_to_event(
     request: &BrokerWriteStateRequest,
@@ -495,9 +520,8 @@ pub(crate) fn broker_task_status(
         .tasks
         .get(&request.task_id)
         .cloned();
-    let latest_handoff = crate::broker_handoff::latest_handoff_descriptor(task.as_ref());
-    let latest_ready_handoff =
-        crate::broker_handoff::latest_ready_handoff_descriptor(task.as_ref());
+    let latest_handoff = latest_handoff_descriptor(task.as_ref());
+    let latest_ready_handoff = latest_ready_handoff_descriptor(task.as_ref());
     let (handoff_needed, handoff_reason) = compute_handoff_state(task.as_ref(), &snapshot);
     let handoff_available = latest_ready_handoff.is_some();
     let handoff_ready = handoff_needed || handoff_available;

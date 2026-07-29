@@ -1,4 +1,10 @@
 use super::*;
+#[cfg(test)]
+use crate::broker::broker_write_state;
+use crate::broker::{
+    broker_prepare_handoff, broker_task_status, broker_write_state_batch, ensure_task_record_mut,
+    load_agent_snapshot_for_task, load_task_record, now_unix_millis,
+};
 use packet28_daemon_protocol::hooks::{
     HookBoundaryKind, HookEventKind, HookIngestRequest, HookIngestResponse, HookReducerCacheEntry,
     HookRuntimeConfig, RelaunchPreference, ThresholdLevel,

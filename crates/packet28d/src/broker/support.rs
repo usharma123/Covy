@@ -1,4 +1,26 @@
-use super::*;
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use anyhow::{anyhow, Context, Result};
+use context_kernel_core::{Kernel, KernelRequest};
+use packet28_daemon_core::storage::now_unix;
+use packet28_daemon_protocol::broker::{
+    BrokerAction, BrokerGetContextRequest, BrokerResponseMode, BrokerWriteOp,
+    BrokerWriteStateRequest,
+};
+use packet28_daemon_protocol::message::{DaemonEvent, DaemonStatus};
+use packet28_daemon_protocol::task::{TaskRecord, TaskRegistry};
+use serde_json::{json, Value};
+
+use crate::index::build_index_status;
+use crate::state::{DaemonState, TaskGenerationId};
+use crate::{daemon_log, lock_err, mark_state_dirty, persist_state, resolve_root};
+
+const DEFAULT_CONTEXT_MANAGE_BUDGET_TOKENS: u64 = 5_000;
+const DEFAULT_CONTEXT_MANAGE_BUDGET_BYTES: usize = 32_000;
 
 pub(crate) fn kernel_for_request(
     state: &Arc<Mutex<DaemonState>>,

@@ -1,5 +1,19 @@
-use super::*;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::Read;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result};
+use packet28_daemon_protocol::broker::BrokerGetContextRequest;
+
+use super::search_plan::{
+    collect_tool_result_provenance_for_path, preferred_search_regions, QueryFocus,
+    ReducerSearchFile, ToolResultProvenance,
+};
+use super::support::metadata_mtime_secs;
+use crate::lock_err;
+use crate::state::{CachedSourceFile, DaemonState};
 
 fn truncate_evidence_line(line: &str, max_len: usize) -> String {
     let trimmed = line.trim();

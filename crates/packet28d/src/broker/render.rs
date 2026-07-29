@@ -1,4 +1,39 @@
-use super::*;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result};
+use packet28_daemon_protocol::broker::{
+    BrokerAction, BrokerDeltaResponse, BrokerEvictionCandidate, BrokerGetContextRequest,
+    BrokerGetContextResponse, BrokerResponseMode, BrokerSection, BrokerSectionEstimate,
+    BrokerSourceKind, BrokerToolResultKind,
+};
+use packet28_daemon_protocol::paths::task_version_json_path;
+use packet28_daemon_protocol::task::TaskRecord;
+use serde_json::Value;
+
+use super::limits::{
+    action_critical_section_ids, estimate_brief_banner_cost, estimate_rendered_section_cost,
+    estimate_text_cost, filter_requested_section_ids, resolve_effective_limits, section_item_limit,
+    should_run_reducer_search,
+};
+use super::search_plan::{
+    build_reducer_search_execution, derive_query_focus, merge_query_focus_with_symbols,
+    SearchExecutionArgs,
+};
+use super::snapshot::{
+    build_resolved_questions, latest_intention_lines, render_checkpoint_context_lines,
+    render_missed_savings_lines, render_recent_tool_activity_lines, render_task_memory_lines,
+    truncate_lines,
+};
+use super::support::{
+    broker_default_budget_tokens, broker_objective, broker_request_response_mode,
+    BrokerEffectiveLimits,
+};
+use crate::planning::{merged_unique, merged_unique_many};
+use crate::state::DaemonState;
+use crate::{context_version_storage_id, task_storage_id};
 
 fn packet_source_kind(packet: &suite_packet_core::ContextManagePacketRef) -> BrokerSourceKind {
     if packet.source_tier == Some(suite_packet_core::MemorySourceTier::Telemetry)

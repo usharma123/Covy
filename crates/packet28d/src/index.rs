@@ -1,4 +1,5 @@
 use super::*;
+use crate::broker::insert_sorted_unique;
 use crate::runtime_files::{
     clear_index_files, clear_regex_index_files, complete_index_clear_revision,
     index_clear_is_complete, index_clear_is_pending, pending_index_clear,
@@ -1005,12 +1006,12 @@ fn perform_full_index_rebuild_with_hooks(
         mark_regex_build_started(state)?;
         let mut last_repo_progress = None::<(usize, std::time::Instant)>;
         let mut last_regex_progress = None::<(usize, std::time::Instant)>;
-        let shared = match packet28d::shared_repository_scan::rebuild_full_indexes_with_shared_scan(
+        let shared = match crate::shared_repository_scan::rebuild_full_indexes_with_shared_scan(
             &root,
             true,
             || shutdown.is_some_and(crate::runtime::ShutdownSignal::is_requested),
             |progress| match progress.engine {
-                packet28d::shared_repository_scan::SharedScanEngine::Map => {
+                crate::shared_repository_scan::SharedScanEngine::Map => {
                     if should_persist_progress(
                         progress.completed,
                         progress.total,
@@ -1020,7 +1021,7 @@ fn perform_full_index_rebuild_with_hooks(
                             update_repo_build_progress(state, progress.completed, progress.total);
                     }
                 }
-                packet28d::shared_repository_scan::SharedScanEngine::Regex => {
+                crate::shared_repository_scan::SharedScanEngine::Regex => {
                     if should_persist_progress(
                         progress.completed,
                         progress.total,
@@ -1037,7 +1038,7 @@ fn perform_full_index_rebuild_with_hooks(
             },
         ) {
             Ok(shared) => shared,
-            Err(packet28d::shared_repository_scan::SharedScanError::Cancelled) => {
+            Err(crate::shared_repository_scan::SharedScanError::Cancelled) => {
                 return requeue_interrupted_index_build(state);
             }
             Err(error) => return Err(anyhow!("failed to build shared indexes: {error}")),

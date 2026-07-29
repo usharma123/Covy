@@ -1,4 +1,9 @@
 use super::*;
+use crate::broker::{
+    broker_decompose, broker_estimate_context, broker_get_context, broker_prepare_handoff,
+    broker_task_status, broker_validate_plan, broker_write_state, broker_write_state_batch,
+    build_status, kernel_for_context_root, kernel_for_request, mark_handoff_consumed,
+};
 use crate::instruction_files::resolve_context;
 use crate::runtime::{BlockingPool, DaemonRuntimeConfig};
 use crate::state::TaskSubscriber;
@@ -676,11 +681,7 @@ fn handle_request(
         )),
         DaemonRequest::TaskMarkHandoffConsumed { request } => {
             let response = TaskMarkHandoffConsumedResponse {
-                handoff: crate::broker_handoff::mark_handoff_consumed(
-                    &state,
-                    &request.task_id,
-                    &request.handoff_id,
-                )?,
+                handoff: mark_handoff_consumed(&state, &request.task_id, &request.handoff_id)?,
             };
             Ok(DaemonResponse::TaskMarkHandoffConsumed { response })
         }

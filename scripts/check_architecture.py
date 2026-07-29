@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,88 @@ KERNEL_CONCRETE_PACKAGES = frozenset(
 
 KERNEL_CONCRETE_SOURCE_NAMES = tuple(
     package.replace("-", "_") for package in sorted(KERNEL_CONCRETE_PACKAGES)
+)
+
+PACKET28D_BROKER_MODULES = (
+    "context",
+    "handoff",
+    "limits",
+    "ops",
+    "render",
+    "search",
+    "search_plan",
+    "snapshot",
+    "support",
+)
+
+PACKET28D_MAIN_MAX_LINES = 80
+
+PACKET28D_PUBLIC_DOC_INVENTORY = (
+    ("packet28-daemon-protocol", "broker", "excluded", "wire-dto-json-compat-tests"),
+    ("packet28-daemon-protocol", "commands", "excluded", "command-json-dispatch-tests"),
+    ("packet28-daemon-protocol", "context_store", "excluded", "context-store-process-tests"),
+    ("packet28-daemon-protocol", "frame", "covered", "protocol-frame-runnable"),
+    ("packet28-daemon-protocol", "hooks", "excluded", "hook-ingest-json-tests"),
+    ("packet28-daemon-protocol", "index", "excluded", "index-state-process-tests"),
+    ("packet28-daemon-protocol", "message", "excluded", "request-response-json-tests"),
+    ("packet28-daemon-protocol", "paths", "excluded", "path-endpoint-tests"),
+    ("packet28-daemon-protocol", "task", "covered", "protocol-task-lifecycle-runnable+compile_fail"),
+    ("packet28-daemon-core", "integrity", "excluded", "integrity-corruption-tests"),
+    ("packet28-daemon-core", "retention", "excluded", "retention-recovery-process-tests"),
+    ("packet28-daemon-core", "storage", "covered", "daemon-core-storage-runnable"),
+    ("packet28-daemon-core", "task_store_lease", "excluded", "lease-authority-process-tests"),
+    ("packet28-daemon-core", "trust", "excluded", "trust-platform-tests"),
+    ("packet28d", "serve", "excluded", "non-hermetic-process-lifecycle-owner"),
+    ("packet28d", "shared_repository_scan", "covered", "packet28d-shared-scan-no_run+feature-shared-repository-scan"),
+)
+
+PACKET28D_DOCTEST_ANCHORS = (
+    (
+        "protocol-frame-runnable", "crates/packet28-daemon-protocol/src/frame.rs",
+        "runnable", "//! ```",
+        ("write_frame(", "read_frame(", "DaemonRequest::Status", "DaemonResponse::Ack"),
+    ),
+    (
+        "protocol-task-lifecycle-runnable", "crates/packet28-daemon-protocol/src/task.rs",
+        "runnable", "/// ```",
+        ("TaskLifecycle::Idle", "lifecycle.start()?", "lifecycle.finish_run()?"),
+    ),
+    (
+        "protocol-task-lifecycle-compile_fail", "crates/packet28-daemon-protocol/src/task.rs",
+        "compile_fail", "/// ```compile_fail",
+        ("TaskLifecycle {", "running: true", "cancel_requested: true"),
+    ),
+    (
+        "daemon-core-storage-runnable", "crates/packet28-daemon-core/src/lib.rs",
+        "runnable", "//! ```",
+        ("save_task_registry(", "load_task_registry(", "TaskRegistry::default()"),
+    ),
+    (
+        "daemon-core-error-source-chain-runnable", "crates/packet28-daemon-core/src/error.rs",
+        "runnable", "/// ```",
+        ("DaemonCoreError::Frame", "error.source().is_some()"),
+    ),
+    (
+        "daemon-core-root-compatibility-compile_fail", "crates/packet28-daemon-core/src/lib.rs",
+        "compile_fail", "//! ```compile_fail",
+        ("use packet28_daemon_core::write_frame;",),
+    ),
+    (
+        "packet28d-shared-scan-no_run", "crates/packet28d/src/shared_repository_scan.rs",
+        "no_run", "//! ```no_run",
+        ("rebuild_full_indexes_with_shared_scan(", "result.telemetry.walk_passes"),
+    ),
+)
+
+PACKET28D_PUBLIC_DOC_MARKER = re.compile(
+    r"^<!-- packet28d-public owner=([a-z0-9-]+) item=([a-z0-9_]+) "
+    r"classification=(covered|excluded) evidence=([A-Za-z0-9_+.-]+) -->$",
+    re.MULTILINE,
+)
+PACKET28D_ANCHOR_DOC_MARKER = re.compile(
+    r"^<!-- packet28d-anchor id=([A-Za-z0-9_+-]+) "
+    r"source=([A-Za-z0-9_./-]+) fence=(runnable|compile_fail|no_run) -->$",
+    re.MULTILINE,
 )
 
 
@@ -355,6 +438,278 @@ def check_kernel_source_boundaries(root: Path) -> list[str]:
     return errors
 
 
+def check_packet28d_runtime_documentation(root: Path) -> list[str]:
+    """Match the daemon's public source surface to exact documentation markers."""
+    runtime_doc = root / "docs" / "daemon-runtime.md"
+    try:
+        doc_source = runtime_doc.read_text(encoding="utf-8")
+    except OSError as error:
+        return [
+            "packet28d runtime architecture documentation is missing or "
+            f"unreadable at {runtime_doc.relative_to(root)}: {error}"
+        ]
+
+    errors: list[str] = []
+    public_markers = PACKET28D_PUBLIC_DOC_MARKER.findall(doc_source)
+    if doc_source.count("<!-- packet28d-public ") != len(public_markers):
+        errors.append("packet28d runtime documentation has a malformed public marker")
+    expected_public = {
+        (owner, item): (classification, evidence)
+        for owner, item, classification, evidence in PACKET28D_PUBLIC_DOC_INVENTORY
+    }
+    public_counts = Counter((owner, item) for owner, item, _, _ in public_markers)
+    documented_public = {
+        (owner, item): (classification, evidence)
+        for owner, item, classification, evidence in public_markers
+    }
+    for owner, item in sorted(expected_public):
+        count = public_counts[(owner, item)]
+        if count != 1:
+            errors.append(
+                "packet28d runtime documentation must contain exactly one "
+                f"public marker for {owner}::{item} (found {count})"
+            )
+        elif documented_public[(owner, item)] != expected_public[(owner, item)]:
+            errors.append(
+                "packet28d runtime documentation classification/evidence "
+                f"mismatch for {owner}::{item}"
+            )
+    for owner, item in sorted(documented_public.keys() - expected_public.keys()):
+        errors.append(
+            "packet28d runtime documentation contains unclassified public "
+            f"marker {owner}::{item}"
+        )
+
+    public_source_paths = {
+        "packet28-daemon-protocol": "crates/packet28-daemon-protocol/src/lib.rs",
+        "packet28-daemon-core": "crates/packet28-daemon-core/src/lib.rs",
+        "packet28d": "crates/packet28d/src/lib.rs",
+    }
+    expected_source_items = {
+        owner: {
+            item
+            for inventory_owner, item, _, _ in PACKET28D_PUBLIC_DOC_INVENTORY
+            if inventory_owner == owner
+        }
+        for owner in public_source_paths
+    }
+    for owner, relative_path in public_source_paths.items():
+        source_path = root / relative_path
+        try:
+            source = source_path.read_text(encoding="utf-8")
+        except OSError as error:
+            errors.append(
+                f"cannot read {source_path.relative_to(root)} for public "
+                f"inventory: {error}"
+            )
+            continue
+        items = re.findall(
+            r"^pub mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;",
+            source,
+            flags=re.MULTILINE,
+        )
+        if owner == "packet28d":
+            exports = re.findall(
+                r"^pub use\s+([A-Za-z_][A-Za-z0-9_:]*)"
+                r"(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*;",
+                source,
+                flags=re.MULTILINE,
+            )
+            if len(exports) != len(re.findall(r"^pub use\s+", source, re.MULTILINE)):
+                errors.append("packet28d has an unclassified public re-export form")
+            items.extend(alias or target.rsplit("::", 1)[-1] for target, alias in exports)
+            if not re.search(
+                r'#\[cfg\(feature = "shared-repository-scan"\)\]\s*'
+                r"pub mod shared_repository_scan\s*;",
+                source,
+            ):
+                errors.append(
+                    "packet28d shared_repository_scan must remain feature-gated "
+                    "by 'shared-repository-scan'"
+                )
+        item_counts = Counter(items)
+        for item, count in sorted(item_counts.items()):
+            if count != 1:
+                errors.append(
+                    f"public source item {owner}::{item} is declared {count} times"
+                )
+        actual_items = set(items)
+        for item in sorted(actual_items - expected_source_items[owner]):
+            errors.append(
+                "packet28d runtime documentation does not classify public "
+                f"source item {owner}::{item}"
+            )
+        for item in sorted(expected_source_items[owner] - actual_items):
+            errors.append(
+                "packet28d runtime documentation lists missing public source "
+                f"item {owner}::{item}"
+            )
+
+    anchor_markers = PACKET28D_ANCHOR_DOC_MARKER.findall(doc_source)
+    if doc_source.count("<!-- packet28d-anchor ") != len(anchor_markers):
+        errors.append("packet28d runtime documentation has a malformed anchor marker")
+    expected_anchors = {
+        anchor: (path, fence)
+        for anchor, path, fence, _, _ in PACKET28D_DOCTEST_ANCHORS
+    }
+    anchor_counts = Counter(anchor for anchor, _, _ in anchor_markers)
+    documented_anchors = {
+        anchor: (path, fence) for anchor, path, fence in anchor_markers
+    }
+    for anchor in sorted(expected_anchors):
+        count = anchor_counts[anchor]
+        if count != 1:
+            errors.append(
+                "packet28d runtime documentation must contain exactly one "
+                f"anchor marker for {anchor} (found {count})"
+            )
+        elif documented_anchors[anchor] != expected_anchors[anchor]:
+            errors.append(
+                "packet28d runtime documentation source/fence mismatch for "
+                f"anchor {anchor}"
+            )
+    for anchor in sorted(documented_anchors.keys() - expected_anchors.keys()):
+        errors.append(
+            f"packet28d runtime documentation contains unknown anchor {anchor}"
+        )
+
+    source_cache: dict[str, str] = {}
+    for anchor, relative_path, _, fence_tag, tokens in PACKET28D_DOCTEST_ANCHORS:
+        if relative_path not in source_cache:
+            try:
+                source_cache[relative_path] = (root / relative_path).read_text(
+                    encoding="utf-8"
+                )
+            except OSError as error:
+                errors.append(
+                    f"cannot read {relative_path} for doctest anchor {anchor}: "
+                    f"{error}"
+                )
+                source_cache[relative_path] = ""
+        missing = [
+            token
+            for token in (fence_tag, *tokens)
+            if token not in source_cache[relative_path]
+        ]
+        if missing:
+            errors.append(
+                f"packet28d doctest anchor {anchor} is missing source evidence "
+                f"{missing!r}"
+            )
+    return errors
+
+
+def check_packet28d_source_boundaries(root: Path) -> list[str]:
+    """Keep daemon composition in the library and broker coupling explicit."""
+    source_root = root / "crates" / "packet28d" / "src"
+    if not source_root.exists():
+        # Source-only metadata fixtures may intentionally omit packet28d.
+        return []
+
+    errors = check_packet28d_runtime_documentation(root)
+    main_path = source_root / "main.rs"
+    application_path = source_root / "application.rs"
+    library_path = source_root / "lib.rs"
+    broker_root = source_root / "broker"
+    broker_facade_path = broker_root / "mod.rs"
+
+    required_files = (main_path, application_path, library_path, broker_facade_path)
+    missing_required = False
+    for path in required_files:
+        if not path.is_file():
+            missing_required = True
+            errors.append(
+                f"packet28d architecture source is missing: {path.relative_to(root)}"
+            )
+    if missing_required:
+        return errors
+
+    try:
+        main_source = main_path.read_text(encoding="utf-8")
+        library_source = library_path.read_text(encoding="utf-8")
+        broker_facade = broker_facade_path.read_text(encoding="utf-8")
+    except OSError as error:
+        return [f"cannot read packet28d architecture source: {error}"]
+
+    main_lines = len(main_source.splitlines())
+    if main_lines > PACKET28D_MAIN_MAX_LINES:
+        errors.append(
+            "packet28d executable entrypoint exceeds its "
+            f"{PACKET28D_MAIN_MAX_LINES}-line composition budget: {main_lines} lines"
+        )
+    if "packet28d::serve" not in main_source:
+        errors.append(
+            "packet28d executable entrypoint must delegate to packet28d::serve"
+        )
+    forbidden_entrypoint_literals = (
+        "packet28_daemon_core",
+        "packet28_daemon_protocol",
+        "context_kernel_core",
+        "tokio::",
+        "DaemonState",
+        "TcpListener",
+        "UnixListener",
+        "Mutex",
+        "broker::",
+        "persistence::",
+    )
+    for literal in forbidden_entrypoint_literals:
+        if literal in main_source:
+            errors.append(
+                "packet28d executable entrypoint owns daemon internals "
+                f"{literal!r}; move lifecycle composition into application.rs"
+            )
+
+    required_library_seams = (
+        "mod application;",
+        "mod broker;",
+        "pub use application::serve;",
+    )
+    for seam in required_library_seams:
+        if seam not in library_source:
+            errors.append(
+                f"packet28d library must own the application seam {seam!r}"
+            )
+
+    for module in PACKET28D_BROKER_MODULES:
+        child = broker_root / f"{module}.rs"
+        if not child.is_file():
+            errors.append(
+                f"packet28d broker module is missing: {child.relative_to(root)}"
+            )
+        if f"mod {module};" not in broker_facade:
+            errors.append(
+                f"packet28d broker facade must declare private module {module!r}"
+            )
+
+    legacy_modules = sorted(source_root.glob("broker_*.rs"))
+    for path in legacy_modules:
+        errors.append(
+            "packet28d broker implementation must live under src/broker: "
+            f"{path.relative_to(root)}"
+        )
+
+    wildcard_import = re.compile(r"^\s*use\s+(?:crate|super)::\*\s*;", re.MULTILINE)
+    for path in sorted(broker_root.glob("*.rs")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as error:
+            errors.append(f"cannot read {path.relative_to(root)}: {error}")
+            continue
+        if wildcard_import.search(source):
+            errors.append(
+                "packet28d broker modules must use explicit imports: "
+                f"{path.relative_to(root)}"
+            )
+        if path != broker_facade_path and "crate::application" in source:
+            errors.append(
+                "packet28d broker implementation must not depend on the "
+                f"application lifecycle: {path.relative_to(root)}"
+            )
+
+    return errors
+
+
 def check_architecture(
     metadata: dict[str, Any], source_root: Path | None = None
 ) -> list[str]:
@@ -398,6 +753,7 @@ def check_architecture(
         )
     if source_root is not None:
         errors.extend(check_kernel_source_boundaries(source_root))
+        errors.extend(check_packet28d_source_boundaries(source_root))
     return errors
 
 

@@ -2,14 +2,20 @@
 
 ## Overview
 
-`packet28d` is a local Unix socket daemon that provides persistent state, file watching, task lifecycle management, and command routing for long-running agent workflows.
+`packet28d` is a local framed daemon that provides persistent state, file
+watching, task lifecycle management, and command routing for long-running
+agent workflows. The authoritative lifecycle, cancellation, persistence, and
+error contract is [Packet28 daemon runtime](../docs/daemon-runtime.md).
 
 ## Transport
 
-- Unix domain socket at `.packet28/daemon/packet28d.sock`
-- Thread-per-connection accept loop (blocking accept + `thread::spawn`)
-- JSON-over-socket: one JSON object per request, one JSON object per response
-- Connection-scoped: each CLI invocation opens a new connection
+- Unix domain socket by preference, with a workspace-local Unix fallback and a
+  loopback TCP fallback
+- One Tokio-owned accept loop and bounded connection task set
+- Eight-byte big-endian length prefix followed by one bounded JSON request or
+  response value
+- Connection-scoped requests, except task subscriptions, which retain the
+  connection for bounded event streaming
 
 ## Lifecycle
 
@@ -26,8 +32,13 @@ Packet28 daemon stop --root .
 
 Runtime info is persisted to `.packet28/daemon/runtime.json`:
 - `pid`: Daemon process ID
-- `socket_path`: Absolute path to the socket
+- `socket_path`: Selected Unix path or `tcp://127.0.0.1:<port>` endpoint
 - `started_at_unix`: Startup timestamp
+- `ready_at_unix`: Readiness timestamp once startup is complete
+
+Clients wait for the readiness file and then read `runtime.json`; the
+conventional `.sock` path is not authoritative when fallback transport is
+active.
 
 ## Request / Response Protocol
 
@@ -67,6 +78,12 @@ DaemonRequest::TaskCancel { task_id }
 ```
 
 Failed tasks automatically clean up their watches.
+
+`TaskCancel` uses a reserved cancellation lane. It generation-fences work,
+removes watches, terminates and reaps owned process groups with bounded
+TERM-to-KILL escalation, waits for quiescence, and flushes the resulting state
+before returning success. A missing task is an idempotent success. See the
+[full cancellation contract](../docs/daemon-runtime.md#taskcancel-contract).
 
 ### Task Streaming
 
@@ -135,8 +152,8 @@ When watches detect file changes:
 
 | File | Purpose |
 | --- | --- |
-| `.packet28/daemon/packet28d.sock` | Unix socket |
-| `.packet28/daemon/runtime.json` | PID, socket path, startup time |
+| `.packet28/daemon/packet28d.sock` | Workspace-local Unix fallback; not every run uses it |
+| `.packet28/daemon/runtime.json` | PID, selected endpoint, startup time, readiness time |
 | `.packet28/daemon/packet28d.log` | Daemon log output |
 | `.packet28/daemon/watch-registry-v1.json` | Active watches (survives restart) |
 | `.packet28/daemon/task-registry-v1.json` | Task state (survives restart) |
@@ -161,3 +178,10 @@ The daemon auto-starts if not already running. `--daemon-root` overrides the wor
 - Broken pipe on subscriber disconnect is suppressed (not logged as error)
 - Failed task submissions clean up associated watches
 - Socket write errors on benign disconnects are silently ignored
+- Request state is flushed even when request handling fails; a flush failure
+  converts an otherwise successful request into a failure
+- Runtime failures cross the legacy wire as
+  `DaemonResponse::Error { message: String }`; typed internal error chains are
+  not preserved in that response
+- The standalone `packet28d` CLI uses status `2` for argument errors; runtime
+  failures print their error chain and also exit `2`

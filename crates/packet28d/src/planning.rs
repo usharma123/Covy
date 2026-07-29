@@ -1,4 +1,5 @@
 use super::*;
+use crate::broker::estimate_text_cost;
 
 pub(crate) fn normalize_plan_steps(steps: &[BrokerPlanStep]) -> Vec<BrokerPlanStep> {
     steps

@@ -5,9 +5,10 @@
     "implementation_base": "14e1f4eadea91961c46a5fecb62e5cbc96778040",
     "files": {
       "crates/packet28d/src/persistence.rs": "da930dc33aa0b1c1a17a63b982ef0b11696c2e601efdd20071bfb73700882057",
-      "crates/packet28d/src/broker_support.rs": "9f47520c6eec5442f95dc4dec7f965280d6f77ebf232679d05f334a44839853f",
-      "crates/packet28d/src/main.rs": "94e5598af708d3b6af3d2ae5d0e4b5e8d27cfff83520f0f6092ff0f30cd27132",
-      "crates/packet28d/src/server.rs": "10f86aab8fe439996b1085d3ea9cb3de35d037f23c66468b926539cab030186c",
+      "crates/packet28d/src/broker/support.rs": "bfa15c0b94915ed3e350c015fd247c4ea4ad8cb55d6c8eaf89ebc78ab9d553cb",
+      "crates/packet28d/src/application.rs": "fe7dffc1a0c7138fb8d875db20b5602fec4e1fe8817897c074856ba417f03ef4",
+      "crates/packet28d/src/lib.rs": "822c45180a094626df195a8634898ccdbe0778283ddd9076d37320fcad52529a",
+      "crates/packet28d/src/server.rs": "ac1c218fae3ff86c23c1383c95367286133650f92e627f5a57ce46f31efd2476",
       "crates/packet28-daemon-core/src/storage/event_tail.rs": "22b39f332ad8c5d93d653816269e82c314cb8da808c31308073fcd71114e2f88",
       "crates/packet28d/src/tests/persistence.rs": "75254dff681f68921d25f090182413845118d8d3eb83fd63c1489244091e3c12"
     }
@@ -23,19 +24,19 @@
   "measured_events": 32,
   "repeats": 3,
   "legacy_full_checkpoint_under_lock": {
-    "median_event_lock_ns": 69370084,
-    "median_elapsed_us": 2229331,
+    "median_event_lock_ns": 64921416,
+    "median_elapsed_us": 2081749,
     "median_published_bytes": 59150656,
     "median_checkpoints": 32
   },
   "owned_coalesced_checkpoint_after_lock": {
-    "median_event_lock_ns": 129166,
-    "median_elapsed_us": 525906,
+    "median_event_lock_ns": 116041,
+    "median_elapsed_us": 461802,
     "median_published_bytes": 1852233,
     "median_checkpoints": 1
   },
-  "lock_time_reduction_percent": 99.81380158051992,
+  "lock_time_reduction_percent": 99.82125928984667,
   "write_byte_reduction_percent": 96.86861799132033,
-  "elapsed_speedup": 4.2390294082973,
+  "elapsed_speedup": 4.507882165949909,
   "parity_event_count": 33
 }

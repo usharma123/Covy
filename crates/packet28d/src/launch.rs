@@ -1,4 +1,8 @@
 use super::*;
+use crate::broker::{
+    broker_prepare_handoff, broker_task_status, emit_task_event_for_generation,
+    ensure_task_record_mut, mark_handoff_consumed,
+};
 use std::os::unix::process::CommandExt;
 use std::process::Child;
 
@@ -312,7 +316,7 @@ fn task_prepare_handoff_bootstrap(
         .as_ref()
         .map(|handoff| handoff.handoff_id.clone());
     if let Some(handoff_id) = handoff_id.as_deref() {
-        let _ = crate::broker_handoff::mark_handoff_consumed(&state, &task_id, handoff_id)?;
+        let _ = mark_handoff_consumed(&state, &task_id, handoff_id)?;
     }
     Ok(TaskLaunchBootstrap {
         mode: "handoff",

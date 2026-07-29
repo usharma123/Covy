@@ -327,15 +327,21 @@ Reducer, packet, and context commands emit `suite.packet.v1` JSON wrappers. Thre
 - `--json=full`: Complete payload with all fields
 - `--json=handle`: Compact output + persisted artifact handle for later `packet fetch`
 
-Exit codes: `0` success/passing, `1` domain failure, `2+` runtime/config error.
+Exit codes: `0` success/passing, `1` domain failure, `2+` runtime/config
+error. The standalone `packet28d` binary uses exit status `2` for argument
+parsing and every top-level startup, runtime, persistence, or cleanup failure.
 
 #### Daemon (`packet28d`)
 
-A local Unix socket daemon that provides persistent state, file watching, task streaming, and command routing for long-running agent workflows.
+A local framed daemon that prefers Unix sockets and can fall back to a
+workspace-local Unix endpoint or loopback TCP. It provides persistent state,
+file watching, task streaming, and command routing for long-running agent
+workflows. See the authoritative
+[daemon runtime contract](docs/daemon-runtime.md).
 
 ```mermaid
 flowchart TD
-  AGENT["Agent / CI"] -->|"DaemonRequest"| SOCK["Unix socket\n.packet28/daemon/packet28d.sock"]
+  AGENT["Agent / CI"] -->|"DaemonRequest"| SOCK["runtime.json endpoint\nUnix or loopback TCP"]
   SOCK --> DAEMON["packet28d"]
 
   DAEMON --> KERNEL["Kernel execution"]
@@ -351,14 +357,15 @@ flowchart TD
   STREAM -->|"TaskSubscribe"| AGENT
 ```
 
-**Daemon protocol** (`packet28-daemon-core`):
+**Daemon protocol** (`packet28-daemon-protocol`; persistence and recovery live
+in `packet28-daemon-core`):
 
 | Request | Response | Purpose |
 | --- | --- | --- |
 | `Execute` | `Execute` | Run single kernel request |
 | `ExecuteSequence` | `ExecuteSequence` | Submit multi-step task with watches |
 | `TaskStatus` | `TaskStatus` | Query task state |
-| `TaskCancel` | `TaskCancel` | Cancel task and remove watches |
+| `TaskCancel` | `TaskCancel` | Generation-fence work, remove watches, reap process groups, quiesce, and persist cancellation |
 | `TaskSubscribe` | `TaskSubscribeAck` + streaming events | Live per-step lifecycle events |
 | `WatchList` / `WatchRemove` | Watch metadata | Manage file watchers |
 | `CoverCheck` | `CoverCheck` | Direct cover check (no kernel overhead) |
@@ -369,8 +376,8 @@ flowchart TD
 Watch kinds: `File` (glob pattern), `Git` (ref changes), `TestReport` (test result files).
 
 Daemon persistence:
-- `.packet28/daemon/packet28d.sock` — Unix socket
-- `.packet28/daemon/runtime.json` — PID, startup time, socket path
+- `.packet28/daemon/packet28d.sock` — Workspace-local Unix fallback
+- `.packet28/daemon/runtime.json` — PID, startup/readiness time, selected Unix or TCP endpoint
 - `.packet28/daemon/packet28d.log` — Daemon logs
 - `.packet28/daemon/watch-registry-v1.json` — Active watches
 - `.packet28/daemon/task-registry-v1.json` — Task state
@@ -471,7 +478,7 @@ Operationally:
 | Reducers | `covy-ingest`, `diffy-core`, `testy-core`, `stacky-core`, `buildy-core`, `mapy-core`, `suite-proxy-core`, `suite-ingest` |
 | Context runtime | `context-kernel-core`, `context-memory-core`, `context-scheduler-core`, `contextq-core` |
 | Governance | `guardy-core`, `suite-policy-core` |
-| CLI + daemon | `suite-cli`, `packet28-daemon-core`, `packet28d`, `packet28-reducer-core` |
+| CLI + daemon | `suite-cli`, `packet28-daemon-protocol`, `packet28-daemon-core`, `packet28d`, `packet28-reducer-core` |
 | Legacy CLIs | `covy-cli`, `diffy-cli`, `testy-cli`, `testy-cli-common` |
 
 ```mermaid
@@ -484,6 +491,7 @@ flowchart TD
 
   subgraph Daemon["Daemon"]
     D["packet28d"]
+    DP["packet28-daemon-protocol"]
     DC["packet28-daemon-core"]
   end
 
@@ -514,10 +522,13 @@ flowchart TD
 
   PA --> P28
   P28 --> K
+  P28 --> DP
   P28 --> DC
+  D --> DP
   D --> DC
   D --> K
   D --> M
+  DC --> DP
 
   K --> S
   K --> M
@@ -562,8 +573,8 @@ All persistent state lives under `.packet28/` at the workspace root:
 ├── agent/
 │   └── latest-bootstrap.json    Last handoff bootstrap from packet28-agent
 └── daemon/
-    ├── packet28d.sock           Unix socket
-    ├── runtime.json             Daemon PID and metadata
+    ├── packet28d.sock           Workspace-local Unix fallback
+    ├── runtime.json             Daemon PID, readiness, selected endpoint
     ├── packet28d.log            Daemon log
     ├── watch-registry-v1.json   Active file watches
     ├── task-registry-v1.json    Task state

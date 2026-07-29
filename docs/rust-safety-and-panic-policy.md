@@ -38,9 +38,9 @@ mapy-core/src/ast.rs                             expect=5
 mapy-core/src/generation.rs                      expect=2
 mapy-core/src/runtime.rs                         expect=1
 packet28-search-core/src/lib.rs                  expect=9
-packet28d/src/broker_handoff.rs                  unwrap=1
-packet28d/src/broker_render.rs                   expect=2
-packet28d/src/broker_support.rs                  expect=1
+packet28d/src/broker/handoff.rs                  unwrap=1
+packet28d/src/broker/render.rs                   expect=2
+packet28d/src/broker/support.rs                  expect=1
 packet28d/src/watch.rs                           expect=2
 stacky-core/src/parse.rs                         unwrap=3
 suite-cli/build.rs                               expect=4 panic=5
