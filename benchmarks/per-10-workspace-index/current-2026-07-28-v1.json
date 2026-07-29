@@ -1,0 +1,357 @@
+{
+  "benchmark": "PER-10 cold full workspace index build",
+  "blocker": null,
+  "build": {
+    "argv": [
+      "cargo",
+      "build",
+      "--quiet",
+      "--release",
+      "--locked",
+      "-p",
+      "packet28-search-cli"
+    ],
+    "binary_sha256": "c9e80882c0b38c89b58b2899749efea780b0234524894c6c5199c06093e4c088",
+    "command": "cargo build --quiet --release --locked -p packet28-search-cli",
+    "cwd": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/source-attempt-2",
+    "environment": {
+      "CARGO_TARGET_DIR": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/cargo-target"
+    },
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "",
+    "wall_ms": 39093.49025
+  },
+  "evidence_boundary": {
+    "cross_machine_ratio_reported": false,
+    "current_result": "machine-local measurement of the exact frozen dirty source snapshot",
+    "historical_result": "historical evidence only; it was not rerun at the current source snapshot and must not be used to claim a current speedup or regression"
+  },
+  "generated_at_utc": "2026-07-28T23:37:23.994628+00:00",
+  "historical": {
+    "comparability": "historical evidence only; it was not rerun at the current source snapshot and must not be used to claim a current speedup or regression",
+    "p28_git": "59e54fb",
+    "packet28d_version": "0.2.39",
+    "recorded_at": "2026-03-31T13:56:32.170705+00:00",
+    "source": "benchmarks/packet28_search_tool_benchmark.md",
+    "source_sha256": "b61978a4c3e72aadf72761d9a4abbb9c0e9ff232a9758ce2e41a020b465ef244",
+    "workspace_index_build_ms": 10375.754
+  },
+  "isolation": {
+    "fixture_created_under_os_temporary_directory": true,
+    "fixture_git": {
+      "commands": [
+        {
+          "argv": [
+            "git",
+            "-c",
+            "init.defaultBranch=benchmark-snapshot",
+            "init",
+            "-q"
+          ],
+          "command": "git -c init.defaultBranch=benchmark-snapshot init -q",
+          "cwd": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/fixture-template",
+          "environment": {
+            "GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z",
+            "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z"
+          },
+          "exit_code": 0,
+          "stderr": "",
+          "stdout": "",
+          "wall_ms": 36.264459
+        },
+        {
+          "argv": [
+            "git",
+            "-c",
+            "user.name=Packet28 benchmark",
+            "-c",
+            "user.email=benchmark@invalid.example",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "benchmark snapshot"
+          ],
+          "command": "git -c 'user.name=Packet28 benchmark' -c user.email=benchmark@invalid.example -c commit.gpgsign=false commit --allow-empty -q -m 'benchmark snapshot'",
+          "cwd": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/fixture-template",
+          "environment": {
+            "GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z",
+            "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z"
+          },
+          "exit_code": 0,
+          "stderr": "",
+          "stdout": "",
+          "wall_ms": 20.831208
+        }
+      ],
+      "commit": "a7049de58d71bba99a3e8d336657252e100c06d2",
+      "purpose": "temporary empty commit makes git-aware traversal and commit capture deterministic without copying or linking the user's .git directory"
+    },
+    "fresh_fixture_per_iteration": true,
+    "frozen_source_snapshot": true,
+    "historical_report_unchanged": true,
+    "live_packet28_state_read_or_written": false,
+    "live_workspace_passed_to_p28": false,
+    "temporary_fixture_packet28_state_removed_by_temporary_directory_cleanup": true
+  },
+  "machine": {
+    "architecture": "arm64",
+    "cpu_model": "Apple M4 Pro",
+    "hardware": {
+      "chip": "Apple M4 Pro",
+      "cores": "14 (10 performance and 4 efficiency)",
+      "memory": "24 GB",
+      "model_identifier": "Mac16,8",
+      "model_name": "MacBook Pro"
+    },
+    "logical_cpu_count": 14,
+    "operating_system": "Darwin",
+    "os_release": "24.6.0",
+    "os_version": "Darwin Kernel Version 24.6.0: Wed Oct  8 21:15:02 PDT 2025; root:xnu-11417.140.69.703.11~1/RELEASE_ARM64_T6041",
+    "python": {
+      "implementation": "CPython",
+      "version": "3.14.5"
+    },
+    "total_memory_bytes": 25769803776,
+    "uname": {
+      "machine": "arm64",
+      "release": "24.6.0",
+      "system": "Darwin",
+      "version": "Darwin Kernel Version 24.6.0: Wed Oct  8 21:15:02 PDT 2025; root:xnu-11417.140.69.703.11~1/RELEASE_ARM64_T6041"
+    }
+  },
+  "method": {
+    "build_graph_locked": true,
+    "external_timer": "Python time.perf_counter_ns around process execution",
+    "index_kind": "cold full build",
+    "internal_timer": "p28 build_ms",
+    "iterations_requested": 3,
+    "warmups": 0
+  },
+  "runs": [
+    {
+      "argv": [
+        "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/cargo-target/release/p28",
+        "debug",
+        "build",
+        "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-01"
+      ],
+      "build_ms": 26949.847,
+      "command": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/cargo-target/release/p28 debug build /var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-01",
+      "cwd": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-01",
+      "exit_code": 0,
+      "files": 1010,
+      "fixture_was_cold": true,
+      "fixture_was_isolated": true,
+      "generation": 1,
+      "iteration": 1,
+      "stderr": "",
+      "stdout": "build_ms=26949.847 generation=1 files=1010\n",
+      "wall_ms": 27118.517
+    },
+    {
+      "argv": [
+        "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/cargo-target/release/p28",
+        "debug",
+        "build",
+        "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-02"
+      ],
+      "build_ms": 18266.493,
+      "command": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/cargo-target/release/p28 debug build /var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-02",
+      "cwd": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-02",
+      "exit_code": 0,
+      "files": 1010,
+      "fixture_was_cold": true,
+      "fixture_was_isolated": true,
+      "generation": 1,
+      "iteration": 2,
+      "stderr": "",
+      "stdout": "build_ms=18266.493 generation=1 files=1010\n",
+      "wall_ms": 18274.757292
+    },
+    {
+      "argv": [
+        "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/cargo-target/release/p28",
+        "debug",
+        "build",
+        "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-03"
+      ],
+      "build_ms": 18245.793,
+      "command": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/cargo-target/release/p28 debug build /var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-03",
+      "cwd": "/var/folders/l3/6x2gqh2x1rbdkr21_hzckff40000gn/T/packet28-per10-znq28y4v/runs/run-03",
+      "exit_code": 0,
+      "files": 1010,
+      "fixture_was_cold": true,
+      "fixture_was_isolated": true,
+      "generation": 1,
+      "iteration": 3,
+      "stderr": "",
+      "stdout": "build_ms=18245.793 generation=1 files=1010\n",
+      "wall_ms": 18254.116875
+    }
+  ],
+  "schema": "packet28.per10.workspace-index.v1",
+  "source": {
+    "capture": {
+      "attempts": [
+        {
+          "attempt": 1,
+          "end_head_commit": "8ea049265f7fe3129e53680f570b179b6aa78084",
+          "end_status_sha256": "b506ade25bf0b4bab98b685b14809ec3fe6341455d3029e2c3902fa4f616054c",
+          "reason": "worktree file content or mode changed during capture",
+          "snapshot_sha256": "35057810e78e7feace5858ff559307a1d7cdb3c55218ef760b759825f596394f",
+          "stable": false,
+          "start_head_commit": "8ea049265f7fe3129e53680f570b179b6aa78084",
+          "start_status_sha256": "b506ade25bf0b4bab98b685b14809ec3fe6341455d3029e2c3902fa4f616054c"
+        },
+        {
+          "attempt": 2,
+          "end_head_commit": "8ea049265f7fe3129e53680f570b179b6aa78084",
+          "end_status_sha256": "b506ade25bf0b4bab98b685b14809ec3fe6341455d3029e2c3902fa4f616054c",
+          "reason": "source paths, bytes, modes, HEAD, and status were stable",
+          "snapshot_sha256": "fe106066be0ac7b1c16b76598281c867eb93cdb49f3dce581cd09e0a7e59ae50",
+          "stable": true,
+          "start_head_commit": "8ea049265f7fe3129e53680f570b179b6aa78084",
+          "start_status_sha256": "b506ade25bf0b4bab98b685b14809ec3fe6341455d3029e2c3902fa4f616054c"
+        }
+      ],
+      "generated_output_paths_excluded": [
+        "benchmarks/per-10-workspace-index/README.md",
+        "benchmarks/per-10-workspace-index/current-2026-07-28-v1.json"
+      ],
+      "selected_attempt": 2,
+      "stable": true
+    },
+    "excluded_state": [
+      ".git/",
+      ".packet28/",
+      "target/ and other ignored files",
+      "Python __pycache__/ and *.py[co] runtime artifacts"
+    ],
+    "git": {
+      "branch": "remediate/architecture-audit-20260728",
+      "dirty": true,
+      "head_commit": "8ea049265f7fe3129e53680f570b179b6aa78084",
+      "status_entry_count": 54,
+      "status_porcelain_v1": [
+        " M Cargo.lock",
+        " M benchmarks/README.md",
+        " M crates/covy-ingest/src/lib.rs",
+        " M crates/mapy-core/Cargo.toml",
+        " M crates/packet28-daemon-core/src/error.rs",
+        " M crates/packet28-daemon-core/src/lib.rs",
+        " M crates/packet28-daemon-core/src/storage.rs",
+        " M crates/packet28-daemon-core/tests/public_api.rs",
+        " M crates/suite-cli/src/cmd_daemon.rs",
+        " M crates/suite-cli/src/lib.rs",
+        " M crates/suite-cli/tests/daemon_task_e2e.rs",
+        " M crates/suite-cli/tests/daemon_task_launch_e2e.rs",
+        " M crates/suite-cli/tests/mcp_graph_e2e.rs",
+        " M crates/suite-cli/tests/mcp_proxy_cache_e2e.rs",
+        " M crates/suite-cli/tests/mcp_proxy_e2e.rs",
+        " M crates/suite-cli/tests/support/daemon_task_core.rs",
+        " M crates/suite-cli/tests/support/daemon_task_mcp.rs",
+        " M crates/suite-cli/tests/support/daemon_task_seed.rs",
+        " M crates/suite-cli/tests/support/mcp_graph.rs",
+        " M crates/suite-cli/tests/support/mcp_proxy.rs",
+        " M crates/suite-packet-core/src/envelope.rs",
+        " M crates/suite-packet-core/src/error.rs",
+        " M crates/suite-packet-core/src/lib.rs",
+        " M crates/suite-packet-core/src/machine.rs",
+        " M crates/suite-packet-core/src/registry.rs",
+        "M  docs/ARCHITECTURE_PLAN.md",
+        " M docs/PRODUCT.md",
+        " M docs/architecture-audit-remediation-20260728.md",
+        "M  scripts/check_architecture.py",
+        "M  scripts/tests/test_check_architecture.py",
+        "?? benchmarks/per-03-incremental-index/README.md",
+        "?? benchmarks/per-06-shared-scan/.gitignore",
+        "?? benchmarks/per-06-shared-scan/Cargo.lock",
+        "?? benchmarks/per-06-shared-scan/Cargo.toml",
+        "?? benchmarks/per-06-shared-scan/README.md",
+        "?? benchmarks/per-06-shared-scan/result.json",
+        "?? benchmarks/per-06-shared-scan/src/lib.rs",
+        "?? benchmarks/per-06-shared-scan/src/main.rs",
+        "?? benchmarks/per-10-workspace-index/.gitignore",
+        "?? benchmarks/per-10-workspace-index/README.md",
+        "?? benchmarks/per-10-workspace-index/current-2026-07-28-v1.json",
+        "?? benchmarks/per-10-workspace-index/run.py",
+        "?? benchmarks/per-10-workspace-index/test_run.py",
+        "?? crates/mapy-core/examples/per03_incremental_index.rs",
+        "?? crates/packet28-daemon-core/src/retention.rs",
+        "?? crates/suite-cli/src/cmd_daemon_storage.rs",
+        "?? crates/suite-cli/tests/daemon_storage_retention_e2e.rs",
+        "?? crates/suite-cli/tests/fixtures/daemon_storage/report.json",
+        "?? crates/suite-cli/tests/process_harness_e2e.rs",
+        "?? crates/suite-cli/tests/support/process_harness.rs",
+        "?? crates/suite-packet-core/tests/public_api.rs",
+        "?? docs/task-store-metrics/20260728/README.md",
+        "?? docs/task-store-metrics/20260728/current-worktree.json",
+        "?? docs/task-store-retention.md"
+      ],
+      "status_sha256": "b506ade25bf0b4bab98b685b14809ec3fe6341455d3029e2c3902fa4f616054c"
+    },
+    "selection": "git ls-files --cached --others --exclude-standard -z",
+    "snapshot_bytes": 54236068,
+    "snapshot_file_count": 1049,
+    "snapshot_sha256": "fe106066be0ac7b1c16b76598281c867eb93cdb49f3dce581cd09e0a7e59ae50",
+    "tracked_paths_absent_from_worktree": []
+  },
+  "status": "complete",
+  "summary": {
+    "build_ms": {
+      "max": 26949.847,
+      "median": 18266.493,
+      "min": 18245.793
+    },
+    "generations": [
+      1
+    ],
+    "generations_consistent": true,
+    "indexed_files": [
+      1010
+    ],
+    "indexed_files_consistent": true,
+    "iterations": 3,
+    "wall_ms": {
+      "max": 27118.517,
+      "median": 18274.757292,
+      "min": 18254.116875
+    }
+  },
+  "toolchain": {
+    "cargo": {
+      "argv": [
+        "cargo",
+        "-V"
+      ],
+      "available": true,
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "cargo 1.93.1 (083ac5135 2025-12-15)"
+    },
+    "git": {
+      "argv": [
+        "git",
+        "--version"
+      ],
+      "available": true,
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "git version 2.51.2"
+    },
+    "rustc": {
+      "argv": [
+        "rustc",
+        "-Vv"
+      ],
+      "available": true,
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: aarch64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8"
+    }
+  }
+}

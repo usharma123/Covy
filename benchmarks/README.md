@@ -33,6 +33,9 @@ What it does:
   full-checkpoint-under-lock versus owned dirty-delta WAL comparison.
 - [`per-05-testmap/`](per-05-testmap/) contains the deterministic dense-to-sparse
   test-map planning and persistence comparison.
+- [`per-10-workspace-index/`](per-10-workspace-index/) contains the isolated,
+  locked current-source workspace-index build benchmark while preserving the
+  older Packet28 measurement as historical, non-comparable evidence.
 
 ## Generated Fixtures
 
