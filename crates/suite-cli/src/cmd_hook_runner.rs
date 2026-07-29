@@ -102,15 +102,10 @@ pub(crate) fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
 
     let command_id = format!("runner-{}", now_unix_millis());
     let spool_dir = task_artifact_dir(&root, &task_storage_id).join("hook-spool");
-    fs::create_dir_all(&spool_dir)?;
     let stdout_path = spool_dir.join(format!("{command_id}-stdout.log"));
     let stderr_path = spool_dir.join(format!("{command_id}-stderr.log"));
-    let stdout_file = File::create(&stdout_path)
-        .with_context(|| format!("failed to create '{}'", stdout_path.display()))?;
-    let stderr_file = File::create(&stderr_path)
-        .with_context(|| format!("failed to create '{}'", stderr_path.display()))?;
 
-    let _ = crate::broker_client::hook_ingest(
+    let admission = crate::broker_client::hook_ingest(
         &root,
         HookIngestRequest {
             task_id: task_id.clone(),
@@ -133,6 +128,17 @@ pub(crate) fn run_reducer_runner(args: ReducerRunnerArgs) -> Result<i32> {
             host_context_budget_tokens: None,
         },
     )?;
+    if !admission.accepted {
+        return Err(anyhow!(
+            "reducer-runner task admission was rejected for '{task_id}'"
+        ));
+    }
+
+    fs::create_dir_all(&spool_dir)?;
+    let stdout_file = File::create(&stdout_path)
+        .with_context(|| format!("failed to create '{}'", stdout_path.display()))?;
+    let stderr_file = File::create(&stderr_path)
+        .with_context(|| format!("failed to create '{}'", stderr_path.display()))?;
 
     let started = Instant::now();
     let mut child = Command::new(&args.argv[0])
