@@ -2,6 +2,7 @@ use super::support::{daemon_test_root, daemon_test_state};
 use super::*;
 use std::os::unix::process::CommandExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 fn insert_task_generation(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> TaskGenerationToken {
     let mut guard = state.lock().unwrap();

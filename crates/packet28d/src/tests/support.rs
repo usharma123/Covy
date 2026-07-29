@@ -15,8 +15,8 @@ pub(crate) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
     let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
         PersistConfig::new(root.clone()),
     ));
-    let (index_tx, index_rx) = mpsc::channel();
-    thread::spawn(move || while index_rx.recv().is_ok() {});
+    let (index_tx, index_rx) = IndexIngress::new();
+    thread::spawn(move || index_rx.discard_until_shutdown());
     let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
     thread::spawn(move || while background_rx.blocking_recv().is_some() {});
     Arc::new(Mutex::new(DaemonState {

@@ -56,6 +56,8 @@ impl InteractiveIndexRuntime {
         !self.repo_is_current()
             || !self.regex_is_current()
             || self.manifest.status != DaemonIndexState::Ready
+            || !self.manifest.dirty_paths.is_empty()
+            || !self.manifest.queued_paths.is_empty()
     }
 }
 
@@ -90,7 +92,7 @@ pub(crate) struct DaemonState {
     pub(crate) subscribers: HashMap<String, Vec<TaskSubscriber>>,
     pub(crate) source_file_cache: BTreeMap<String, CachedSourceFile>,
     pub(crate) interactive_index: InteractiveIndexRuntime,
-    pub(crate) index_tx: Sender<IndexCommand>,
+    pub(crate) index_tx: crate::index::IndexIngress,
     pub(crate) background_tx: tokio::sync::mpsc::Sender<BackgroundCommand>,
     pub(crate) shutdown: crate::runtime::ShutdownSignal,
     pub(crate) changes: crate::runtime::StateChangeSignal,

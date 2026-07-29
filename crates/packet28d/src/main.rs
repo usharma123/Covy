@@ -6,7 +6,6 @@ use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -110,7 +109,7 @@ use crate::hooks::hook_ingest;
 use crate::index::{
     build_index_status, daemon_index_clear, daemon_index_rebuild, daemon_index_status,
     daemon_packet28_search, enqueue_full_index_rebuild, enqueue_incremental_index_paths,
-    run_index_worker,
+    run_index_worker, IndexIngress, IndexWorkReceiver,
 };
 use crate::instruction_files::resolve_instruction_file;
 use crate::launch::task_launch_agent;
@@ -199,7 +198,7 @@ fn serve(root: PathBuf) -> Result<()> {
     let watches = load_watch_registry(&root)?;
     let manifest = load_index_manifest_file(&root);
     let interactive_index = load_index_runtime_files(&root, manifest);
-    let (index_tx, index_rx) = mpsc::channel();
+    let (index_tx, index_rx) = IndexIngress::new();
     let (background_tx, background_rx) =
         tokio::sync::mpsc::channel(config.background_queue_capacity);
     let shutdown = ShutdownSignal::new();
@@ -230,7 +229,7 @@ fn serve(root: PathBuf) -> Result<()> {
             guard.interactive_index.needs_rebuild()
         };
         if should_queue {
-            let _ = enqueue_full_index_rebuild(&state);
+            enqueue_full_index_rebuild(&state)?;
         }
     }
     mark_ready(&state)?;
@@ -267,7 +266,7 @@ struct DaemonRuntimeInputs {
     watch_tx: WatchIngress,
     watch_rx: tokio::sync::mpsc::Receiver<WatchEventMsg>,
     background_rx: tokio::sync::mpsc::Receiver<BackgroundCommand>,
-    index_rx: Receiver<IndexCommand>,
+    index_rx: IndexWorkReceiver,
     blocking_pool: BlockingPool,
     config: DaemonRuntimeConfig,
 }
@@ -295,8 +294,11 @@ async fn run_daemon_runtime(inputs: DaemonRuntimeInputs) -> Result<()> {
         blocking_pool.clone(),
     ));
     let index_state = state.clone();
-    let mut index_task =
-        tokio::task::spawn_blocking(move || run_index_worker(index_state, index_rx));
+    let mut index_task = tokio::task::spawn_blocking(move || {
+        if let Err(error) = run_index_worker(index_state, index_rx) {
+            daemon_log(&format!("index worker stopped: {error:#}"));
+        }
+    });
     let transport_result = run_transport(
         listener,
         state.clone(),
