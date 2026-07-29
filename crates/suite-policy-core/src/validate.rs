@@ -172,7 +172,7 @@ pub fn validate_config_file(path: &Path) -> Result<ConfigValidationResult, CovyE
 }
 
 pub fn validate_config_str(raw: &str) -> ConfigValidationResult {
-    match serde_yaml::from_str::<ContextConfig>(raw) {
+    match yaml_serde::from_str::<ContextConfig>(raw) {
         Ok(config) => {
             let errors = config.validate();
             ConfigValidationResult {
@@ -188,7 +188,7 @@ pub fn validate_config_str(raw: &str) -> ConfigValidationResult {
 }
 
 pub fn parse_context_strict(raw: &str) -> Result<ContextConfig, CovyError> {
-    let config: ContextConfig = serde_yaml::from_str(raw)
+    let config: ContextConfig = yaml_serde::from_str(raw)
         .map_err(|source| CovyError::Config(format!("invalid context.yaml: {source}")))?;
 
     let validation_errors = config.validate();

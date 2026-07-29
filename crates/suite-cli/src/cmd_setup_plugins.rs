@@ -228,38 +228,38 @@ fn hermes_plugin_is_configured(home: &Path) -> Result<bool> {
 
 pub(crate) fn patch_hermes_config(existing: &str) -> Result<String> {
     let mut value = if existing.trim().is_empty() {
-        serde_yaml::Value::Mapping(Default::default())
+        yaml_serde::Value::Mapping(Default::default())
     } else {
-        serde_yaml::from_str::<serde_yaml::Value>(existing)?
+        yaml_serde::from_str::<yaml_serde::Value>(existing)?
     };
     let root = value
         .as_mapping_mut()
         .ok_or_else(|| anyhow!("Hermes config root must be a YAML mapping"))?;
-    let plugins_key = serde_yaml::Value::String("plugins".to_string());
-    let enabled_key = serde_yaml::Value::String("enabled".to_string());
+    let plugins_key = yaml_serde::Value::String("plugins".to_string());
+    let enabled_key = yaml_serde::Value::String("enabled".to_string());
     let plugins = root
         .entry(plugins_key)
-        .or_insert_with(|| serde_yaml::Value::Mapping(Default::default()))
+        .or_insert_with(|| yaml_serde::Value::Mapping(Default::default()))
         .as_mapping_mut()
         .ok_or_else(|| anyhow!("Hermes config 'plugins' must be a YAML mapping"))?;
     let enabled = plugins
         .entry(enabled_key)
-        .or_insert_with(|| serde_yaml::Value::Sequence(Vec::new()))
+        .or_insert_with(|| yaml_serde::Value::Sequence(Vec::new()))
         .as_sequence_mut()
         .ok_or_else(|| anyhow!("Hermes config 'plugins.enabled' must be a YAML sequence"))?;
-    let plugin = serde_yaml::Value::String("packet28-rewrite".to_string());
+    let plugin = yaml_serde::Value::String("packet28-rewrite".to_string());
     if !enabled.iter().any(|entry| entry == &plugin) {
         enabled.push(plugin);
     }
-    Ok(serde_yaml::to_string(&value)?)
+    Ok(yaml_serde::to_string(&value)?)
 }
 
 pub(crate) fn hermes_config_enables_packet28(content: &str) -> Result<bool> {
-    let value = serde_yaml::from_str::<serde_yaml::Value>(content)?;
+    let value = yaml_serde::from_str::<yaml_serde::Value>(content)?;
     Ok(value
         .get("plugins")
         .and_then(|plugins| plugins.get("enabled"))
-        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(yaml_serde::Value::as_sequence)
         .is_some_and(|enabled| {
             enabled
                 .iter()

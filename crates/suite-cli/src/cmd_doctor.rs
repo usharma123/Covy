@@ -831,10 +831,14 @@ fn build_hermes_report(root: &Path) -> DoctorReport {
 
 fn check_hermes_plugin() -> DoctorCheck {
     let home = dirs_home();
-    let plugin_dir = hermes::plugin_dir(&home);
+    check_hermes_plugin_at(&home)
+}
+
+fn check_hermes_plugin_at(home: &Path) -> DoctorCheck {
+    let plugin_dir = hermes::plugin_dir(home);
     let init_path = plugin_dir.join("__init__.py");
     let manifest_path = plugin_dir.join("plugin.yaml");
-    let config_path = hermes::config_path(&home);
+    let config_path = hermes::config_path(home);
     let result = (|| -> Result<String> {
         let init = fs::read_to_string(&init_path)
             .with_context(|| format!("failed to read '{}'", init_path.display()))?;
@@ -845,17 +849,8 @@ fn check_hermes_plugin() -> DoctorCheck {
         if !init.contains("Packet28 rewrite") || !manifest.contains("packet28-rewrite") {
             return Err(anyhow!("Packet28 Hermes plugin files are not configured"));
         }
-        let config_value = serde_yaml::from_str::<serde_yaml::Value>(&config)
+        let enabled = crate::cmd_setup::setup_plugins::hermes_config_enables_packet28(&config)
             .with_context(|| format!("invalid YAML in '{}'", config_path.display()))?;
-        let enabled = config_value
-            .get("plugins")
-            .and_then(|plugins| plugins.get("enabled"))
-            .and_then(serde_yaml::Value::as_sequence)
-            .is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item.as_str() == Some("packet28-rewrite"))
-            });
         if !enabled {
             return Err(anyhow!("Hermes config does not enable packet28-rewrite"));
         }
@@ -1265,4 +1260,54 @@ fn print_human_report(report: &DoctorReport) {
         println!("  {}", check.detail);
     }
     println!("overall: {}", if report.ok { "ok" } else { "fail" });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::tempdir;
+
+    fn write_hermes_fixture(home: &Path, config: &str) {
+        let plugin_dir = hermes::plugin_dir(home);
+        fs::create_dir_all(&plugin_dir).unwrap();
+        fs::write(plugin_dir.join("__init__.py"), "# Packet28 rewrite\n").unwrap();
+        fs::write(plugin_dir.join("plugin.yaml"), "name: packet28-rewrite\n").unwrap();
+        let config_path = hermes::config_path(home);
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(config_path, config).unwrap();
+    }
+
+    #[test]
+    fn hermes_doctor_accepts_tagged_unrelated_config() {
+        let home = tempdir().unwrap();
+        write_hermes_fixture(
+            home.path(),
+            r#"
+workspace: !Packet28
+  id: !!str 001
+plugins:
+  enabled:
+    - packet28-rewrite
+"#,
+        );
+
+        let check = check_hermes_plugin_at(home.path());
+
+        assert!(check.ok, "{}", check.detail);
+    }
+
+    #[test]
+    fn hermes_doctor_reports_malformed_yaml() {
+        let home = tempdir().unwrap();
+        write_hermes_fixture(home.path(), "plugins: [");
+
+        let check = check_hermes_plugin_at(home.path());
+
+        assert!(
+            !check.ok && check.detail.contains("invalid YAML"),
+            "{}",
+            check.detail
+        );
+    }
 }

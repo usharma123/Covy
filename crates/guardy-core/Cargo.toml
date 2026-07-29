@@ -17,7 +17,7 @@ suite-foundation-core.workspace = true
 suite-packet-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
+yaml_serde.workspace = true
 glob.workspace = true
 regex.workspace = true
 

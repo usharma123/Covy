@@ -540,6 +540,41 @@ plugins:
 }
 
 #[test]
+fn patch_hermes_config_preserves_order_tags_and_unknown_keys() {
+    let original = r#"
+theme: dark
+workspace: !Packet28
+  id: !!str 001
+plugins:
+  search_path: ./plugins
+  enabled:
+    - existing-plugin
+mode: on
+"#;
+    let before = yaml_serde::from_str::<yaml_serde::Value>(original).unwrap();
+
+    let patched = setup_plugins::patch_hermes_config(original).unwrap();
+    let after = yaml_serde::from_str::<yaml_serde::Value>(&patched).unwrap();
+
+    assert_eq!(after["workspace"], before["workspace"]);
+    assert_eq!(
+        after["plugins"]["search_path"],
+        before["plugins"]["search_path"]
+    );
+    assert_eq!(after["mode"], before["mode"]);
+    assert_eq!(
+        after
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .filter_map(yaml_serde::Value::as_str)
+            .collect::<Vec<_>>(),
+        ["theme", "workspace", "plugins", "mode"]
+    );
+    assert!(setup_plugins::hermes_config_enables_packet28(&patched).unwrap());
+}
+
+#[test]
 fn write_windsurf_hook_config_installs_packet28_hooks() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".windsurf").join("hooks.json");
