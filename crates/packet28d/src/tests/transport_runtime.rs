@@ -4,6 +4,19 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 static TCP_TRANSPORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+fn shutdown_waiter(signal: ShutdownSignal) -> tokio::task::JoinHandle<Result<()>> {
+    tokio::spawn(async move {
+        let mut receiver = signal.subscribe();
+        while !*receiver.borrow() {
+            receiver
+                .changed()
+                .await
+                .map_err(|_| anyhow!("test shutdown signal closed"))?;
+        }
+        Ok(())
+    })
+}
+
 async fn exchange<S>(stream: &mut S, request: &DaemonRequest) -> DaemonResponse
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -18,6 +31,179 @@ where
     let mut body = vec![0_u8; len];
     stream.read_exact(&mut body).await.unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn processor_failure_is_fatal_bounded_and_detached_work_retains_its_lease() {
+    let state = daemon_test_state();
+    let root = state.lock().unwrap().root.clone();
+    let daemon_instance_lease =
+        packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease(&root).unwrap();
+    let (_, task_store_lease) =
+        packet28_daemon_core::retention::recover_task_store_quarantine_and_acquire_daemon_lease(
+            &root,
+            &daemon_instance_lease,
+        )
+        .unwrap();
+    let shutdown = state.lock().unwrap().shutdown.clone();
+    let blocking_pool = BlockingPool::with_lifecycle_leases(
+        1,
+        daemon_instance_lease.clone(),
+        task_store_lease.clone(),
+    );
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let (index_started_tx, index_started_rx) = tokio::sync::oneshot::channel();
+    let (index_release_tx, index_release_rx) = std::sync::mpsc::sync_channel(1);
+    let worker_pool = blocking_pool.clone();
+    let mutation_state = state.clone();
+    let blocking_worker = tokio::spawn(async move {
+        worker_pool
+            .run(move || {
+                started_tx
+                    .send(())
+                    .map_err(|_| anyhow!("start probe closed"))?;
+                release_rx
+                    .recv()
+                    .map_err(|_| anyhow!("release probe closed"))?;
+                let mut guard = mutation_state.lock().map_err(lock_err)?;
+                guard.tasks.tasks.insert(
+                    "task-during-shutdown".to_string(),
+                    TaskRecord {
+                        task_id: "task-during-shutdown".to_string(),
+                        ..TaskRecord::default()
+                    },
+                );
+                persist_state(&guard)?;
+                Ok(())
+            })
+            .await
+    });
+    started_rx.await.unwrap();
+    let index_daemon_instance_lease = daemon_instance_lease.clone();
+    let index_task_store_lease = task_store_lease.clone();
+    let index_worker = tokio::task::spawn_blocking(move || {
+        let _daemon_instance_lease = index_daemon_instance_lease;
+        let _task_store_lease = index_task_store_lease;
+        index_started_tx
+            .send(())
+            .map_err(|_| anyhow!("index start probe closed"))?;
+        index_release_rx
+            .recv()
+            .map_err(|_| anyhow!("index release probe closed"))?;
+        Ok(())
+    });
+    index_started_rx.await.unwrap();
+    std::fs::write(ready_path(&root), b"ready\n").unwrap();
+
+    let supervisor_started = Instant::now();
+    let supervisor = tokio::spawn(supervise_daemon_tasks(
+        state.clone(),
+        shutdown.clone(),
+        blocking_pool,
+        Duration::from_millis(25),
+        DaemonRuntimeTasks {
+            transport: shutdown_waiter(shutdown.clone()),
+            watch: tokio::spawn(async { Err(anyhow!("injected watch processor failure")) }),
+            background: shutdown_waiter(shutdown.clone()),
+            index: index_worker,
+        },
+    ));
+    drop(task_store_lease);
+    drop(daemon_instance_lease);
+    let outcome = tokio::time::timeout(Duration::from_millis(500), supervisor)
+        .await
+        .expect("supervisor exceeded its shared shutdown deadline")
+        .unwrap();
+    assert!(
+        supervisor_started.elapsed() < Duration::from_millis(500),
+        "supervisor did not detach blocking work at the shared deadline"
+    );
+    let error = outcome
+        .result
+        .expect_err("injected processor failure was not fatal");
+    assert!(
+        format!("{error:#}").contains("injected watch processor failure"),
+        "unexpected supervisor error: {error:#}"
+    );
+    assert!(shutdown.is_requested());
+    assert!(state.lock().unwrap().shutting_down);
+    assert!(
+        !ready_path(&root).exists(),
+        "fatal processor exit left daemon readiness published"
+    );
+    assert!(
+        packet28_daemon_core::task_store_lease::try_acquire_task_store_retention_lease(&root)
+            .unwrap()
+            .is_none(),
+        "exclusive retention acquired while detached blocking owners were still running"
+    );
+    assert!(
+        packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease(&root).is_err(),
+        "a second daemon acquired the instance lease while detached owners were still running"
+    );
+
+    release_tx.send(()).unwrap();
+    index_release_tx.send(()).unwrap();
+    blocking_worker.await.unwrap().unwrap();
+    assert!(
+        load_task_registry(&root)
+            .unwrap()
+            .tasks
+            .contains_key("task-during-shutdown"),
+        "detached task-store mutation did not persist before releasing its lease"
+    );
+    let retention_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if packet28_daemon_core::task_store_lease::try_acquire_task_store_retention_lease(&root)
+            .unwrap()
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < retention_deadline,
+            "exclusive retention did not become available after detached owners exited"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease(&root).is_ok(),
+        "daemon instance lease remained held after detached owners exited"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn early_index_worker_failure_withdraws_readiness_and_stops_peer_owners() {
+    let state = daemon_test_state();
+    let root = state.lock().unwrap().root.clone();
+    std::fs::write(ready_path(&root), b"ready\n").unwrap();
+    let shutdown = state.lock().unwrap().shutdown.clone();
+
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(1),
+        supervise_daemon_tasks(
+            state.clone(),
+            shutdown.clone(),
+            BlockingPool::new(1),
+            Duration::from_millis(250),
+            DaemonRuntimeTasks {
+                transport: shutdown_waiter(shutdown.clone()),
+                watch: shutdown_waiter(shutdown.clone()),
+                background: shutdown_waiter(shutdown),
+                index: tokio::task::spawn_blocking(|| Err(anyhow!("injected early index failure"))),
+            },
+        ),
+    )
+    .await
+    .expect("early index failure did not stop daemon owners");
+    let error = outcome
+        .result
+        .expect_err("early index failure was not fatal");
+
+    assert!(format!("{error:#}").contains("injected early index failure"));
+    assert!(state.lock().unwrap().shutting_down);
+    assert!(!ready_path(&root).exists());
 }
 
 #[test]

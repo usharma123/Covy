@@ -81,7 +81,7 @@ where
             }
         };
         let request = match blocking_pool
-            .run(move || {
+            .run_control(move || {
                 serde_json::from_slice::<DaemonRequest>(&frame)
                     .map_err(|error| anyhow!("invalid daemon request frame: {error}"))
             })
@@ -102,6 +102,19 @@ where
                 return Ok(());
             }
         };
+        if matches!(&request, DaemonRequest::Stop) {
+            write_control_frame(
+                &mut stream,
+                DaemonResponse::Ack {
+                    message: "stopping".to_string(),
+                },
+                config.frame_write_timeout,
+                &blocking_pool,
+            )
+            .await?;
+            request_daemon_stop(&state, &blocking_pool)?;
+            return Ok(());
+        }
         if let DaemonRequest::TaskSubscribe {
             task_id,
             replay_last,
@@ -120,6 +133,7 @@ where
             .await;
         }
 
+        let control_response = matches!(&request, DaemonRequest::TaskCancel { .. });
         let response =
             dispatch_request(state.clone(), watch_tx.clone(), request, &blocking_pool).await;
         let response = match response {
@@ -131,17 +145,44 @@ where
                 }
             }
         };
-        write_async_frame(
-            &mut stream,
-            response,
-            config.frame_write_timeout,
-            &blocking_pool,
-        )
-        .await?;
+        if control_response {
+            write_control_frame(
+                &mut stream,
+                response,
+                config.frame_write_timeout,
+                &blocking_pool,
+            )
+            .await?;
+        } else {
+            write_async_frame(
+                &mut stream,
+                response,
+                config.frame_write_timeout,
+                &blocking_pool,
+            )
+            .await?;
+        }
         if state.lock().map_err(lock_err)?.shutdown.is_requested() {
             return Ok(());
         }
     }
+}
+
+fn request_daemon_stop(
+    state: &Arc<Mutex<DaemonState>>,
+    blocking_pool: &BlockingPool,
+) -> Result<()> {
+    let (shutdown, index_result) = {
+        let mut guard = state.lock().map_err(lock_err)?;
+        guard.shutting_down = true;
+        let index_result = guard.index_tx.send(IndexCommand::Shutdown);
+        (guard.shutdown.clone(), index_result)
+    };
+    // The acknowledgement is already on the wire. This is the stop
+    // linearization point: no later blocking request or child can be admitted.
+    blocking_pool.request_shutdown();
+    shutdown.request();
+    index_result
 }
 
 async fn dispatch_request(
@@ -178,9 +219,15 @@ async fn run_blocking_request(
     blocking_pool: &BlockingPool,
 ) -> Result<DaemonResponse> {
     let request_state = state.clone();
-    let response = blocking_pool
-        .run(move || handle_request(request_state, watch_tx, request))
-        .await?;
+    let response = if matches!(&request, DaemonRequest::TaskCancel { .. }) {
+        blocking_pool
+            .run_cancellation(move || handle_request(request_state, watch_tx, request))
+            .await?
+    } else {
+        blocking_pool
+            .run(move || handle_request(request_state, watch_tx, request))
+            .await?
+    };
     let changes = state.lock().map_err(lock_err)?.changes.clone();
     changes.notify();
     Ok(response)
@@ -479,13 +526,43 @@ where
     W: AsyncWrite + Unpin,
     T: Serialize + Send + 'static,
 {
-    let encoded = blocking_pool
-        .run(move || {
-            let mut encoded = Vec::new();
-            write_frame(&mut encoded, &value)?;
-            Ok(encoded)
-        })
-        .await?;
+    write_async_frame_with_lane(writer, value, deadline, blocking_pool, false).await
+}
+
+async fn write_control_frame<W, T>(
+    writer: &mut W,
+    value: T,
+    deadline: Duration,
+    blocking_pool: &BlockingPool,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+    T: Serialize + Send + 'static,
+{
+    write_async_frame_with_lane(writer, value, deadline, blocking_pool, true).await
+}
+
+async fn write_async_frame_with_lane<W, T>(
+    writer: &mut W,
+    value: T,
+    deadline: Duration,
+    blocking_pool: &BlockingPool,
+    control: bool,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+    T: Serialize + Send + 'static,
+{
+    let encode = move || {
+        let mut encoded = Vec::new();
+        write_frame(&mut encoded, &value)?;
+        Ok(encoded)
+    };
+    let encoded = if control {
+        blocking_pool.run_control(encode).await?
+    } else {
+        blocking_pool.run(encode).await?
+    };
     tokio::time::timeout(deadline, async {
         writer.write_all(&encoded).await?;
         writer.flush().await
@@ -564,18 +641,9 @@ fn handle_request(
             let status = build_status(&guard)?;
             Ok(DaemonResponse::Status { status })
         }
-        DaemonRequest::Stop => {
-            let shutdown = {
-                let mut guard = state.lock().map_err(lock_err)?;
-                guard.shutting_down = true;
-                let _ = guard.index_tx.send(IndexCommand::Shutdown);
-                guard.shutdown.clone()
-            };
-            shutdown.request();
-            Ok(DaemonResponse::Ack {
-                message: "stopping".to_string(),
-            })
-        }
+        DaemonRequest::Stop => Err(anyhow!(
+            "daemon stop must be acknowledged by the async control plane"
+        )),
         DaemonRequest::TaskStatus { task_id } => {
             let task = state
                 .lock()
@@ -746,6 +814,21 @@ fn handle_request(
 mod tests {
     use super::*;
 
+    async fn exchange(
+        stream: &mut tokio::io::DuplexStream,
+        request: &DaemonRequest,
+    ) -> DaemonResponse {
+        let mut encoded = Vec::new();
+        write_frame(&mut encoded, request).unwrap();
+        stream.write_all(&encoded).await.unwrap();
+        let mut header = [0_u8; 8];
+        stream.read_exact(&mut header).await.unwrap();
+        let length = usize::try_from(u64::from_be_bytes(header)).unwrap();
+        let mut body = vec![0_u8; length];
+        stream.read_exact(&mut body).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
     fn frame(seq: u64) -> DaemonEventFrame {
         DaemonEventFrame {
             seq,
@@ -870,5 +953,129 @@ mod tests {
 
         let error = waiter.await.unwrap().unwrap_err();
         assert!(error.to_string().contains("daemon stopped while waiting"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_ack_uses_reserved_control_lane_before_publishing_shutdown() {
+        let state = crate::tests::support::daemon_test_state();
+        let pool = BlockingPool::new(1);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let worker_pool = pool.clone();
+        let data_worker = tokio::spawn(async move {
+            worker_pool
+                .run(move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+        assert_eq!(pool.available_permits(), 0);
+        assert_eq!(
+            pool.available_control_permits(),
+            crate::runtime::CONTROL_BLOCKING_OPERATIONS
+        );
+
+        let (mut client, server_stream) = tokio::io::duplex(4 * 1_024);
+        let (watch_tx, _watch_rx) = WatchIngress::new(1);
+        let server_state = state.clone();
+        let server_pool = pool.clone();
+        let server = tokio::spawn(async move {
+            handle_connection(
+                server_state,
+                watch_tx,
+                server_stream,
+                deadline_config(),
+                server_pool,
+            )
+            .await
+        });
+
+        let response = tokio::time::timeout(
+            Duration::from_millis(250),
+            exchange(&mut client, &DaemonRequest::Stop),
+        )
+        .await
+        .expect("Stop was blocked behind saturated data work");
+        assert!(matches!(
+            response,
+            DaemonResponse::Ack { ref message } if message == "stopping"
+        ));
+        assert!(state.lock().unwrap().shutdown.is_requested());
+        assert!(pool.is_shutting_down());
+        server.await.unwrap().unwrap();
+
+        release_tx.send(()).unwrap();
+        data_worker.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn task_cancel_uses_reserved_control_lane_when_data_is_saturated() {
+        let state = crate::tests::support::daemon_test_state();
+        {
+            let mut guard = state.lock().unwrap();
+            guard.tasks.tasks.insert(
+                "task-control-cancel".to_string(),
+                TaskRecord {
+                    task_id: "task-control-cancel".to_string(),
+                    ..TaskRecord::default()
+                },
+            );
+            guard
+                .task_generations
+                .create("task-control-cancel")
+                .unwrap();
+        }
+        let pool = BlockingPool::new(1);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let worker_pool = pool.clone();
+        let data_worker = tokio::spawn(async move {
+            worker_pool
+                .run(move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+
+        let (mut client, server_stream) = tokio::io::duplex(4 * 1_024);
+        let (watch_tx, _watch_rx) = WatchIngress::new(1);
+        let server_state = state.clone();
+        let server_pool = pool.clone();
+        let server = tokio::spawn(async move {
+            handle_connection(
+                server_state,
+                watch_tx,
+                server_stream,
+                deadline_config(),
+                server_pool,
+            )
+            .await
+        });
+        let response = tokio::time::timeout(
+            Duration::from_millis(250),
+            exchange(
+                &mut client,
+                &DaemonRequest::TaskCancel {
+                    task_id: "task-control-cancel".to_string(),
+                },
+            ),
+        )
+        .await
+        .expect("TaskCancel was blocked behind saturated data work");
+        assert!(matches!(
+            response,
+            DaemonResponse::TaskCancel { task: Some(_), .. }
+        ));
+
+        state.lock().unwrap().shutdown.request();
+        server.await.unwrap().unwrap();
+        release_tx.send(()).unwrap();
+        data_worker.await.unwrap().unwrap();
     }
 }

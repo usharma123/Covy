@@ -300,6 +300,13 @@ impl TaskGenerationRegistry {
         self.active.remove(task_id);
         true
     }
+
+    pub(crate) fn request_cancel_all(&self) -> usize {
+        for token in self.active.values() {
+            token.request_cancel();
+        }
+        self.active.len()
+    }
 }
 
 pub(crate) struct TaskSequenceObserver {

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::ErrorKind;
 use std::net::TcpListener;
@@ -173,7 +173,7 @@ fn serve(root: PathBuf) -> Result<()> {
     std::env::set_current_dir(&root)
         .with_context(|| format!("failed to set daemon cwd to '{}'", root.display()))?;
     let daemon_instance_lease = acquire_daemon_instance_lease(&root)?;
-    let (recovery, _task_store_lease) =
+    let (recovery, task_store_lease) =
         recover_task_store_quarantine_and_acquire_daemon_lease(&root, &daemon_instance_lease)?;
     if recovery.restored_precommit_groups > 0
         || recovery.completed_committed_groups > 0
@@ -243,13 +243,17 @@ fn serve(root: PathBuf) -> Result<()> {
     enqueue_initial_index_work(&state)?;
     mark_ready(&state)?;
 
-    let blocking_pool = BlockingPool::new(config.max_blocking_operations);
+    let blocking_pool = BlockingPool::with_lifecycle_leases(
+        config.max_blocking_operations,
+        daemon_instance_lease.clone(),
+        task_store_lease.clone(),
+    );
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("packet28d-runtime")
         .build()
         .context("failed to create packet28d Tokio runtime")?;
-    let runtime_result = runtime.block_on(run_daemon_runtime(DaemonRuntimeInputs {
+    let runtime_outcome = runtime.block_on(run_daemon_runtime(DaemonRuntimeInputs {
         listener,
         state: state.clone(),
         watch_tx,
@@ -257,16 +261,24 @@ fn serve(root: PathBuf) -> Result<()> {
         background_rx,
         index_rx,
         blocking_pool,
+        daemon_instance_lease: daemon_instance_lease.clone(),
+        task_store_lease: task_store_lease.clone(),
         config: config.clone(),
     }));
     shutdown.request();
-    runtime.shutdown_timeout(config.shutdown_grace);
+    let shutdown_deadline = runtime_outcome.deadline;
+    let mut lifecycle_result = runtime_outcome.result;
+    runtime.shutdown_timeout(remaining_until(shutdown_deadline));
 
     daemon_log("shutting down packet28d");
-    let cleanup_result = remove_runtime_files(&root);
-    runtime_result?;
-    cleanup_result?;
-    Ok(())
+    let cleanup_result = remove_runtime_files(&root).map_err(anyhow::Error::from);
+    // The supervisor has joined uncancellable index work and waited for every
+    // admitted blocking mutation before the task-store lease can be released.
+    // Runtime-file cleanup is part of the same lifecycle ownership window.
+    drop(task_store_lease);
+    drop(daemon_instance_lease);
+    record_runtime_result(&mut lifecycle_result, cleanup_result);
+    lifecycle_result
 }
 
 struct DaemonRuntimeInputs {
@@ -277,10 +289,30 @@ struct DaemonRuntimeInputs {
     background_rx: tokio::sync::mpsc::Receiver<BackgroundCommand>,
     index_rx: IndexWorkReceiver,
     blocking_pool: BlockingPool,
+    daemon_instance_lease: packet28_daemon_core::task_store_lease::TaskStoreLease,
+    task_store_lease: packet28_daemon_core::task_store_lease::TaskStoreLease,
     config: DaemonRuntimeConfig,
 }
 
-async fn run_daemon_runtime(inputs: DaemonRuntimeInputs) -> Result<()> {
+struct DaemonRuntimeOutcome {
+    result: Result<()>,
+    deadline: Instant,
+}
+
+impl DaemonRuntimeOutcome {
+    fn with_new_deadline(result: Result<()>, grace: Duration) -> Self {
+        Self {
+            result,
+            deadline: Instant::now() + grace,
+        }
+    }
+}
+
+fn remaining_until(deadline: Instant) -> Duration {
+    deadline.saturating_duration_since(Instant::now())
+}
+
+async fn run_daemon_runtime(inputs: DaemonRuntimeInputs) -> DaemonRuntimeOutcome {
     let DaemonRuntimeInputs {
         listener,
         state,
@@ -289,66 +321,302 @@ async fn run_daemon_runtime(inputs: DaemonRuntimeInputs) -> Result<()> {
         background_rx,
         index_rx,
         blocking_pool,
+        daemon_instance_lease,
+        task_store_lease,
         config,
     } = inputs;
-    let mut watch_task = tokio::spawn(run_watch_processor(
+    let shutdown = match state.lock().map_err(lock_err) {
+        Ok(guard) => guard.shutdown.clone(),
+        Err(error) => {
+            return DaemonRuntimeOutcome::with_new_deadline(Err(error), config.shutdown_grace)
+        }
+    };
+    let watch_task = tokio::spawn(run_watch_processor(
         state.clone(),
         watch_tx.clone(),
         watch_rx,
         blocking_pool.clone(),
     ));
-    let mut background_task = tokio::spawn(run_background_tasks(
+    let background_task = tokio::spawn(run_background_tasks(
         state.clone(),
         background_rx,
         blocking_pool.clone(),
     ));
     let index_state = state.clone();
-    let mut index_task = tokio::task::spawn_blocking(move || {
-        if let Err(error) = run_index_worker(index_state, index_rx) {
-            daemon_log(&format!("index worker stopped: {error:#}"));
-        }
+    let index_task = tokio::task::spawn_blocking(move || {
+        let _daemon_instance_lease = daemon_instance_lease;
+        let _task_store_lease = task_store_lease;
+        run_index_worker(index_state, index_rx)
     });
-    let transport_result = run_transport(
+    let transport_task = tokio::spawn(run_transport(
         listener,
         state.clone(),
         watch_tx,
-        blocking_pool,
+        blocking_pool.clone(),
         config.clone(),
-    )
-    .await;
+    ));
 
-    let shutdown = {
-        let mut guard = state.lock().map_err(lock_err)?;
-        guard.shutting_down = true;
-        guard.watcher_handles.clear();
-        let _ = guard.index_tx.send(IndexCommand::Shutdown);
-        guard.shutdown.clone()
-    };
-    shutdown.request();
-    join_owned_runtime_task("watch processor", config.shutdown_grace, &mut watch_task).await;
-    join_owned_runtime_task(
-        "background processor",
+    supervise_daemon_tasks(
+        state,
+        shutdown,
+        blocking_pool,
         config.shutdown_grace,
-        &mut background_task,
+        DaemonRuntimeTasks {
+            transport: transport_task,
+            watch: watch_task,
+            background: background_task,
+            index: index_task,
+        },
     )
-    .await;
-    join_owned_runtime_task("index worker", config.shutdown_grace, &mut index_task).await;
-    transport_result
+    .await
 }
 
-async fn join_owned_runtime_task(
-    name: &str,
-    grace: Duration,
-    task: &mut tokio::task::JoinHandle<()>,
-) {
-    match tokio::time::timeout(grace, &mut *task).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            daemon_log(&format!("{name} failed to join: {error}"));
+struct DaemonRuntimeTasks {
+    transport: tokio::task::JoinHandle<Result<()>>,
+    watch: tokio::task::JoinHandle<Result<()>>,
+    background: tokio::task::JoinHandle<Result<()>>,
+    index: tokio::task::JoinHandle<Result<()>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DaemonRuntimeTask {
+    Transport,
+    Watch,
+    Background,
+    Index,
+}
+
+impl DaemonRuntimeTask {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Transport => "transport",
+            Self::Watch => "watch processor",
+            Self::Background => "background processor",
+            Self::Index => "index worker",
         }
+    }
+}
+
+async fn supervise_daemon_tasks(
+    state: Arc<Mutex<DaemonState>>,
+    shutdown: ShutdownSignal,
+    blocking_pool: BlockingPool,
+    grace: Duration,
+    tasks: DaemonRuntimeTasks,
+) -> DaemonRuntimeOutcome {
+    let DaemonRuntimeTasks {
+        mut transport,
+        mut watch,
+        mut background,
+        mut index,
+    } = tasks;
+    let mut shutdown_receiver = shutdown.subscribe();
+    let trigger = tokio::select! {
+        biased;
+        () = wait_for_shutdown_request(&mut shutdown_receiver) => DaemonRuntimeTrigger::Shutdown,
+        result = &mut transport => {
+            DaemonRuntimeTrigger::TaskExit(DaemonRuntimeTask::Transport, result)
+        }
+        result = &mut watch => {
+            DaemonRuntimeTrigger::TaskExit(DaemonRuntimeTask::Watch, result)
+        }
+        result = &mut background => {
+            DaemonRuntimeTrigger::TaskExit(DaemonRuntimeTask::Background, result)
+        }
+        result = &mut index => {
+            DaemonRuntimeTrigger::TaskExit(DaemonRuntimeTask::Index, result)
+        }
+    };
+    let deadline = Instant::now() + grace;
+    let (first_task, mut result) = match trigger {
+        DaemonRuntimeTrigger::Shutdown => (None, Ok(())),
+        DaemonRuntimeTrigger::TaskExit(task, exit) => {
+            (Some(task), classify_first_runtime_exit(task, exit))
+        }
+    };
+
+    shutdown.request();
+    blocking_pool.request_shutdown();
+    let shutdown_start = begin_daemon_shutdown(&state);
+    record_runtime_result(&mut result, shutdown_start.result);
+
+    if first_task != Some(DaemonRuntimeTask::Transport) {
+        record_runtime_result(
+            &mut result,
+            join_abortable_runtime_task(
+                DaemonRuntimeTask::Transport.name(),
+                deadline,
+                &mut transport,
+            )
+            .await,
+        );
+    }
+    if first_task != Some(DaemonRuntimeTask::Watch) {
+        record_runtime_result(
+            &mut result,
+            join_abortable_runtime_task(DaemonRuntimeTask::Watch.name(), deadline, &mut watch)
+                .await,
+        );
+    }
+    if first_task != Some(DaemonRuntimeTask::Background) {
+        record_runtime_result(
+            &mut result,
+            join_abortable_runtime_task(
+                DaemonRuntimeTask::Background.name(),
+                deadline,
+                &mut background,
+            )
+            .await,
+        );
+    }
+    if first_task != Some(DaemonRuntimeTask::Index) {
+        record_runtime_result(
+            &mut result,
+            join_blocking_runtime_task(DaemonRuntimeTask::Index.name(), deadline, &mut index).await,
+        );
+    }
+    if tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        blocking_pool.wait_for_idle(),
+    )
+    .await
+    .is_err()
+    {
+        record_runtime_result(
+            &mut result,
+            Err(anyhow!(
+                "{} blocking operation(s) exceeded shutdown grace and remain lease-owned",
+                blocking_pool.active_operations()
+            )),
+        );
+    }
+    DaemonRuntimeOutcome { result, deadline }
+}
+
+enum DaemonRuntimeTrigger {
+    Shutdown,
+    TaskExit(
+        DaemonRuntimeTask,
+        std::result::Result<Result<()>, tokio::task::JoinError>,
+    ),
+}
+
+async fn wait_for_shutdown_request(receiver: &mut tokio::sync::watch::Receiver<bool>) {
+    loop {
+        if *receiver.borrow() {
+            return;
+        }
+        if receiver.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+struct DaemonShutdownStart {
+    result: Result<()>,
+}
+
+fn begin_daemon_shutdown(state: &Arc<Mutex<DaemonState>>) -> DaemonShutdownStart {
+    let (root, cancelled_generations, mut result) = {
+        let mut guard = match state.lock().map_err(lock_err) {
+            Ok(guard) => guard,
+            Err(error) => {
+                return DaemonShutdownStart { result: Err(error) };
+            }
+        };
+        guard.shutting_down = true;
+        let cancelled_generations = guard.task_generations.request_cancel_all();
+        guard.watcher_handles.clear();
+        (
+            guard.root.clone(),
+            cancelled_generations,
+            guard.index_tx.send(IndexCommand::Shutdown),
+        )
+    };
+    if cancelled_generations > 0 {
+        daemon_log(&format!(
+            "requested cancellation for {} active task generation(s)",
+            cancelled_generations
+        ));
+    }
+    match fs::remove_file(ready_path(&root)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            record_runtime_result(
+                &mut result,
+                Err(error).with_context(|| {
+                    format!("failed to withdraw readiness for '{}'", root.display())
+                }),
+            );
+        }
+    }
+    DaemonShutdownStart { result }
+}
+
+fn classify_first_runtime_exit(
+    task: DaemonRuntimeTask,
+    exit: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> Result<()> {
+    classify_runtime_join(task.name(), exit)?;
+    anyhow::bail!("{} exited before daemon shutdown", task.name())
+}
+
+fn classify_runtime_join(
+    name: &str,
+    joined: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> Result<()> {
+    joined
+        .map_err(|error| anyhow!("{name} failed to join: {error}"))?
+        .with_context(|| format!("{name} failed"))
+}
+
+fn record_runtime_result(primary: &mut Result<()>, candidate: Result<()>) {
+    let Err(error) = candidate else {
+        return;
+    };
+    if primary.is_ok() {
+        *primary = Err(error);
+    } else {
+        daemon_log(&format!("additional daemon shutdown failure: {error:#}"));
+    }
+}
+
+async fn join_abortable_runtime_task(
+    name: &str,
+    deadline: Instant,
+    task: &mut tokio::task::JoinHandle<Result<()>>,
+) -> Result<()> {
+    match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut *task).await {
+        Ok(joined) => classify_runtime_join(name, joined),
         Err(_) => {
-            daemon_log(&format!("{name} exceeded bounded shutdown grace"));
+            daemon_log(&format!(
+                "{name} exceeded shutdown grace; aborting async owner"
+            ));
             task.abort();
+            if let Err(error) = task.await {
+                if !error.is_cancelled() {
+                    daemon_log(&format!("{name} failed while being reaped: {error}"));
+                }
+            }
+            anyhow::bail!("{name} exceeded shutdown grace")
+        }
+    }
+}
+
+async fn join_blocking_runtime_task(
+    name: &str,
+    deadline: Instant,
+    task: &mut tokio::task::JoinHandle<Result<()>>,
+) -> Result<()> {
+    match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut *task).await {
+        Ok(joined) => classify_runtime_join(name, joined),
+        Err(_) => {
+            daemon_log(&format!(
+                "{name} exceeded shutdown grace; detaching lease-owned blocking work"
+            ));
+            task.abort();
+            anyhow::bail!("{name} exceeded shutdown grace and remains lease-owned")
         }
     }
 }
@@ -357,18 +625,15 @@ async fn run_background_tasks(
     state: Arc<Mutex<DaemonState>>,
     mut receiver: tokio::sync::mpsc::Receiver<BackgroundCommand>,
     blocking_pool: BlockingPool,
-) {
-    let mut shutdown = match state.lock().map_err(lock_err) {
-        Ok(guard) => guard.shutdown.subscribe(),
-        Err(error) => {
-            daemon_log(&format!(
-                "background processor could not subscribe to shutdown: {error}"
-            ));
-            return;
-        }
-    };
+) -> Result<()> {
+    let mut shutdown = state.lock().map_err(lock_err)?.shutdown.subscribe();
+    let max_pending = blocking_pool.max_operations();
+    let mut pending = VecDeque::<(tokio::time::Instant, BackgroundCommand)>::new();
     let mut tasks = tokio::task::JoinSet::new();
     loop {
+        let next_ready = pending.front().map(|(ready_at, _)| *ready_at);
+        let command_is_ready =
+            next_ready.is_some_and(|ready_at| ready_at <= tokio::time::Instant::now());
         tokio::select! {
             biased;
             changed = shutdown.changed() => {
@@ -376,19 +641,28 @@ async fn run_background_tasks(
                     break;
                 }
             }
-            command = receiver.recv() => {
-                let Some(command) = command else {
-                    break;
+            joined = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(error)) = joined {
+                    if error.is_cancelled() {
+                        continue;
+                    }
+                    return Err(anyhow!("background task failed to join: {error}"));
+                }
+            }
+            admission = blocking_pool.admit(),
+                if command_is_ready && tasks.len() < max_pending => {
+                let admission = admission?;
+                let Some((_, command)) = pending.pop_front() else {
+                    drop(admission);
+                    continue;
                 };
                 let task_state = state.clone();
-                let task_pool = blocking_pool.clone();
                 tasks.spawn(async move {
                     let BackgroundCommand::RelaunchAgent { task_id, command } =
                         command;
-                    tokio::time::sleep(Duration::from_millis(500)).await;
                     let log_task_id = task_id.clone();
-                    let result = task_pool
-                        .run(move || {
+                    let result = admission
+                        .run_cancellable(move |_| {
                             task_launch_agent(
                                 task_state,
                                 TaskLaunchAgentRequest {
@@ -410,18 +684,36 @@ async fn run_background_tasks(
                         Err(error) => daemon_log(&format!(
                             "auto-relaunch failed for task {log_task_id}: {error:#}"
                         )),
-                        }
+                    }
                 });
             }
-            joined = tasks.join_next(), if !tasks.is_empty() => {
-                if let Some(Err(error)) = joined {
-                    daemon_log(&format!("background task failed to join: {error}"));
-                }
+            command = receiver.recv(), if pending.len() < max_pending => {
+                let Some(command) = command else {
+                    break;
+                };
+                pending.push_back((
+                    tokio::time::Instant::now() + Duration::from_millis(500),
+                    command,
+                ));
             }
+            () = sleep_until_optional(next_ready), if next_ready.is_some() && !command_is_ready => {}
         }
     }
     tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
+    while let Some(joined) = tasks.join_next().await {
+        if let Err(error) = joined {
+            if !error.is_cancelled() {
+                return Err(anyhow!("background task failed to join: {error}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn sleep_until_optional(deadline: Option<tokio::time::Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline).await;
+    }
 }
 
 async fn run_transport(
@@ -437,12 +729,18 @@ async fn run_transport(
     let mut connections = tokio::task::JoinSet::new();
 
     loop {
+        while let Some(joined) = connections.try_join_next() {
+            log_connection_join(Some(joined));
+        }
         tokio::select! {
             biased;
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
                     break;
                 }
+            }
+            joined = connections.join_next(), if !connections.is_empty() => {
+                log_connection_join(joined);
             }
             accepted = listener.accept() => {
                 let stream = accepted.context("daemon listener accept failed")?;
@@ -486,27 +784,12 @@ async fn run_transport(
                     }
                 }
             }
-            joined = connections.join_next(), if !connections.is_empty() => {
-                log_connection_join(joined);
-            }
         }
     }
     drop(listener);
 
-    let deadline = tokio::time::Instant::now() + config.shutdown_grace;
-    while !connections.is_empty() {
-        match tokio::time::timeout_at(deadline, connections.join_next()).await {
-            Ok(joined) => log_connection_join(joined),
-            Err(_) => {
-                daemon_log(&format!(
-                    "{} connection task(s) exceeded bounded shutdown grace",
-                    connections.len()
-                ));
-                connections.abort_all();
-                while connections.join_next().await.is_some() {}
-                break;
-            }
-        }
+    while let Some(joined) = connections.join_next().await {
+        log_connection_join(Some(joined));
     }
     Ok(())
 }
