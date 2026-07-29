@@ -17,7 +17,7 @@ use packet28_daemon_core::storage::{
 use packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease;
 use packet28_daemon_protocol::message::DaemonRuntimeInfo;
 use packet28_daemon_protocol::paths::{log_path, ready_path, socket_path, workspace_socket_path};
-use packet28_daemon_protocol::task::TaskLaunchAgentRequest;
+use packet28_daemon_protocol::task::{TaskLaunchAgentRequest, TaskLifecycle};
 
 use crate::index::{enqueue_initial_index_work, run_index_worker, IndexIngress, IndexWorkReceiver};
 use crate::kernel_registry::PersistentKernelRegistry;
@@ -29,10 +29,12 @@ use crate::server::handle_connection;
 use crate::state::{
     BackgroundCommand, DaemonState, IndexCommand, TaskGenerationRegistry, WatchEventMsg,
 };
-use crate::watch::{restore_watchers, run_watch_processor, WatchIngress};
+use crate::watch::{
+    restore_watchers, run_recovered_replan_for_task, run_watch_processor, WatchIngress,
+};
 use crate::{
-    daemon_log, lock_err, reconcile_task_event_high_waters, resolve_root,
-    TASK_PERSISTENCE_DEBOUNCE_MS,
+    daemon_log, lock_err, preflight_restart_recovery, reconcile_interrupted_task_lifecycles,
+    reconcile_task_event_high_waters, resolve_root, TASK_PERSISTENCE_DEBOUNCE_MS,
 };
 
 /// Runs one Packet28 daemon instance for `root` until shutdown completes.
@@ -107,15 +109,30 @@ pub fn serve(root: PathBuf) -> Result<()> {
         kernel.clone(),
         config.max_persistent_roots,
     )?);
-    let (mut tasks, watches, event_tails) =
+    let (mut tasks, mut watches, event_tails) =
         load_task_watch_registry_checkpoint_with_event_tails(&root)?;
+    preflight_restart_recovery(&tasks)?;
+    let _event_high_waters_changed = reconcile_task_event_high_waters(&mut tasks, &event_tails)?;
+    let restart_reconciliation =
+        reconcile_interrupted_task_lifecycles(&mut tasks, &mut watches, now_unix())?;
     let (persistence_owner, persistence) = PersistenceOwner::start(
         root.clone(),
         task_store_lease.clone(),
         Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
         &tasks,
     )?;
-    let _event_high_waters_changed = reconcile_task_event_high_waters(&mut tasks, &event_tails)?;
+    if restart_reconciliation.changed_tasks > 0 {
+        daemon_log(&format!(
+            "reconciled {} interrupted task lifecycle(s) after restart",
+            restart_reconciliation.changed_tasks
+        ));
+    }
+    if !restart_reconciliation.replan_task_ids.is_empty() {
+        daemon_log(&format!(
+            "restoring {} durable queued task replan(s) after restart",
+            restart_reconciliation.replan_task_ids.len()
+        ));
+    }
     persistence.checkpoint(Arc::new(tasks.clone()), Arc::new(watches.clone()))?;
     let manifest = load_index_manifest_file(&root);
     let interactive_index = load_index_runtime_files(&root, manifest);
@@ -145,6 +162,8 @@ pub fn serve(root: PathBuf) -> Result<()> {
         changes: StateChangeSignal::new(),
         shutting_down: false,
     }));
+    let recovered_replans =
+        prepare_recovered_replans(&state, restart_reconciliation.replan_task_ids)?;
 
     let (watch_tx, watch_rx) = WatchIngress::new(config.watch_queue_capacity);
     restore_watchers(&state, &watch_tx)?;
@@ -171,6 +190,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
         blocking_pool,
         daemon_instance_lease: daemon_instance_lease.clone(),
         task_store_lease: task_store_lease.clone(),
+        recovered_replans,
         config: config.clone(),
     }));
     shutdown.request();
@@ -214,6 +234,37 @@ fn remove_stale_ready_marker(root: &Path) -> Result<()> {
     }
 }
 
+fn prepare_recovered_replans(
+    state: &Arc<Mutex<DaemonState>>,
+    task_ids: Vec<String>,
+) -> Result<Vec<BackgroundCommand>> {
+    let mut guard = state.lock().map_err(lock_err)?;
+    let mut commands = Vec::with_capacity(task_ids.len());
+    for task_id in task_ids {
+        let task = guard
+            .tasks
+            .tasks
+            .get(&task_id)
+            .ok_or_else(|| anyhow!("startup replan task '{task_id}' disappeared"))?;
+        if task.lifecycle != TaskLifecycle::ReplanPending {
+            anyhow::bail!(
+                "startup replan task '{task_id}' changed lifecycle before runtime admission"
+            );
+        }
+        if !task.sequence_present || task.sequence.is_none() {
+            anyhow::bail!(
+                "startup replan task '{task_id}' has no stored sequence and cannot be recovered"
+            );
+        }
+        let generation = guard.task_generations.ensure(&task_id)?.id();
+        commands.push(BackgroundCommand::RunRecoveredReplan {
+            task_id,
+            generation,
+        });
+    }
+    Ok(commands)
+}
+
 pub(crate) fn shutdown_persistent_kernels(
     state: &Arc<Mutex<DaemonState>>,
     timeout: Duration,
@@ -248,6 +299,7 @@ struct DaemonRuntimeInputs {
     blocking_pool: BlockingPool,
     daemon_instance_lease: packet28_daemon_core::task_store_lease::TaskStoreLease,
     task_store_lease: packet28_daemon_core::task_store_lease::TaskStoreLease,
+    recovered_replans: Vec<BackgroundCommand>,
     config: DaemonRuntimeConfig,
 }
 
@@ -280,6 +332,7 @@ async fn run_daemon_runtime(inputs: DaemonRuntimeInputs) -> DaemonRuntimeOutcome
         blocking_pool,
         daemon_instance_lease,
         task_store_lease,
+        recovered_replans,
         config,
     } = inputs;
     let shutdown = match state.lock().map_err(lock_err) {
@@ -298,6 +351,7 @@ async fn run_daemon_runtime(inputs: DaemonRuntimeInputs) -> DaemonRuntimeOutcome
         state.clone(),
         background_rx,
         blocking_pool.clone(),
+        recovered_replans,
     ));
     let index_state = state.clone();
     let index_task = tokio::task::spawn_blocking(move || {
@@ -582,10 +636,15 @@ async fn run_background_tasks(
     state: Arc<Mutex<DaemonState>>,
     mut receiver: tokio::sync::mpsc::Receiver<BackgroundCommand>,
     blocking_pool: BlockingPool,
+    recovered_replans: Vec<BackgroundCommand>,
 ) -> Result<()> {
     let mut shutdown = state.lock().map_err(lock_err)?.shutdown.subscribe();
     let max_pending = blocking_pool.max_operations();
-    let mut pending = VecDeque::<(tokio::time::Instant, BackgroundCommand)>::new();
+    let now = tokio::time::Instant::now();
+    let mut pending = recovered_replans
+        .into_iter()
+        .map(|command| (now, command))
+        .collect::<VecDeque<_>>();
     let mut tasks = tokio::task::JoinSet::new();
     loop {
         let next_ready = pending.front().map(|(ready_at, _)| *ready_at);
@@ -599,11 +658,15 @@ async fn run_background_tasks(
                 }
             }
             joined = tasks.join_next(), if !tasks.is_empty() => {
-                if let Some(Err(error)) = joined {
-                    if error.is_cancelled() {
-                        continue;
+                match joined {
+                    Some(Ok(Ok(()))) | None => {}
+                    Some(Ok(Err(error))) => return Err(error),
+                    Some(Err(error)) => {
+                        if error.is_cancelled() {
+                            continue;
+                        }
+                        return Err(anyhow!("background task failed to join: {error}"));
                     }
-                    return Err(anyhow!("background task failed to join: {error}"));
                 }
             }
             admission = blocking_pool.admit(),
@@ -615,32 +678,93 @@ async fn run_background_tasks(
                 };
                 let task_state = state.clone();
                 tasks.spawn(async move {
-                    let BackgroundCommand::RelaunchAgent { task_id, command } =
-                        command;
-                    let log_task_id = task_id.clone();
-                    let result = admission
-                        .run_cancellable(move |_| {
-                            task_launch_agent(
-                                task_state,
-                                TaskLaunchAgentRequest {
-                                    task_id,
-                                    task: None,
-                                    wait_for_handoff: false,
-                                    handoff_timeout_ms: None,
-                                    handoff_poll_ms: None,
-                                    command,
-                                },
-                            )
-                        })
-                        .await;
-                    match result {
-                        Ok(launched) => daemon_log(&format!(
-                            "auto-relaunched agent pid={} task={log_task_id}",
-                            launched.pid
-                        )),
-                        Err(error) => daemon_log(&format!(
-                            "auto-relaunch failed for task {log_task_id}: {error:#}"
-                        )),
+                    match command {
+                        BackgroundCommand::RelaunchAgent { task_id, command } => {
+                            let log_task_id = task_id.clone();
+                            let result = admission
+                                .run_cancellable(move |_| {
+                                    task_launch_agent(
+                                        task_state,
+                                        TaskLaunchAgentRequest {
+                                            task_id,
+                                            task: None,
+                                            wait_for_handoff: false,
+                                            handoff_timeout_ms: None,
+                                            handoff_poll_ms: None,
+                                            command,
+                                        },
+                                    )
+                                })
+                                .await;
+                            match result {
+                                Ok(launched) => daemon_log(&format!(
+                                    "auto-relaunched agent pid={} task={log_task_id}",
+                                    launched.pid
+                                )),
+                                Err(error) => daemon_log(&format!(
+                                    "auto-relaunch failed for task {log_task_id}: {error:#}"
+                                )),
+                            }
+                            Ok(())
+                        }
+                        BackgroundCommand::RunRecoveredReplan {
+                            task_id,
+                            generation,
+                        } => {
+                            let log_task_id = task_id.clone();
+                            let recovery_state = task_state.clone();
+                            let result = admission
+                                .run_cancellable(move |cancellation| {
+                                    if cancellation.is_cancelled() {
+                                        return Ok(false);
+                                    }
+                                    run_recovered_replan_for_task(
+                                        task_state,
+                                        &task_id,
+                                        generation,
+                                    )
+                                })
+                                .await;
+                            match result {
+                                Ok(true) => daemon_log(&format!(
+                                    "completed recovered queued replan task={log_task_id}"
+                                )),
+                                Ok(false) => daemon_log(&format!(
+                                    "skipped stale recovered queued replan task={log_task_id}"
+                                )),
+                                Err(error) => {
+                                    let recovery_work_is_ownerless = {
+                                        let guard = recovery_state.lock().map_err(lock_err)?;
+                                        guard
+                                            .tasks
+                                            .tasks
+                                            .get(&log_task_id)
+                                            .is_some_and(|task| {
+                                                matches!(
+                                                    task.lifecycle,
+                                                    TaskLifecycle::ReplanPending
+                                                        | TaskLifecycle::RunningRecoveredReplan
+                                                        | TaskLifecycle::RunningReplanPending
+                                                )
+                                            })
+                                            && guard
+                                                .task_generations
+                                                .matches(&log_task_id, generation)
+                                    };
+                                    if recovery_work_is_ownerless {
+                                        return Err(error.context(format!(
+                                            "recovered queued replan for task '{log_task_id}' \
+                                             failed while durable work remained ownerless"
+                                        )));
+                                    }
+                                    daemon_log(&format!(
+                                        "recovered queued replan failed for task {log_task_id}: \
+                                         {error:#}"
+                                    ));
+                                }
+                            }
+                            Ok(())
+                        }
                     }
                 });
             }
@@ -658,10 +782,11 @@ async fn run_background_tasks(
     }
     tasks.abort_all();
     while let Some(joined) = tasks.join_next().await {
-        if let Err(error) = joined {
-            if !error.is_cancelled() {
-                return Err(anyhow!("background task failed to join: {error}"));
-            }
+        match joined {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(error),
+            Err(error) if error.is_cancelled() => {}
+            Err(error) => return Err(anyhow!("background task failed to join: {error}")),
         }
     }
     Ok(())

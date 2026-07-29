@@ -1295,6 +1295,13 @@ fn encode_task_registry_preserving_existing(
             .and_then(serde_json::Value::as_object)
             .cloned()
             .unwrap_or_default();
+        // These additive lifecycle markers are known fields even when their
+        // false value is represented by omission. Remove an older true marker
+        // before overlaying the newly serialized record so forward-field
+        // preservation cannot resurrect a completed transition.
+        for known_optional_field in ["cancelled", "recovered_replan"] {
+            merged.remove(known_optional_field);
+        }
         for (field, value) in known {
             merged.insert(field, value);
         }
@@ -7199,6 +7206,35 @@ mod tests {
         assert_eq!(saved["future_root"]["enabled"], true);
         assert_eq!(saved["tasks"]["live"]["future_record"]["version"], 7);
         assert_eq!(saved["tasks"]["live"]["running"], true);
+    }
+
+    #[test]
+    fn paired_checkpoint_drops_completed_recovery_lifecycle_marker() {
+        let root = tempdir().unwrap();
+        let mut registry = TaskRegistry {
+            tasks: BTreeMap::from([(
+                "recovered".to_string(),
+                TaskRecord {
+                    task_id: "recovered".to_string(),
+                    lifecycle: TaskLifecycle::RunningRecoveredReplan,
+                    ..TaskRecord::default()
+                },
+            )]),
+        };
+        save_task_watch_registry_checkpoint(root.path(), &registry, &WatchRegistry::default())
+            .unwrap();
+
+        registry.tasks.get_mut("recovered").unwrap().lifecycle = TaskLifecycle::Idle;
+        save_task_watch_registry_checkpoint(root.path(), &registry, &WatchRegistry::default())
+            .unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(task_registry_path(root.path())).unwrap()).unwrap();
+        assert!(raw["tasks"]["recovered"].get("recovered_replan").is_none());
+        assert_eq!(
+            load_task_registry(root.path()).unwrap().tasks["recovered"].lifecycle,
+            TaskLifecycle::Idle
+        );
     }
 
     #[test]

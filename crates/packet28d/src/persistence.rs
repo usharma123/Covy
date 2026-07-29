@@ -96,6 +96,15 @@ struct PersistenceState {
     event_lane: Mutex<()>,
     accepting: std::sync::atomic::AtomicBool,
     backend: Arc<dyn PersistenceBackend>,
+    #[cfg(test)]
+    checkpoint_gate: Mutex<Option<CheckpointTestGate>>,
+}
+
+#[cfg(test)]
+struct CheckpointTestGate {
+    remaining: usize,
+    reached: SyncSender<()>,
+    release: Receiver<()>,
 }
 
 type UnitReply = SyncSender<std::result::Result<(), String>>;
@@ -181,6 +190,8 @@ impl PersistenceOwner {
             event_lane: Mutex::new(()),
             accepting: std::sync::atomic::AtomicBool::new(true),
             backend,
+            #[cfg(test)]
+            checkpoint_gate: Mutex::new(None),
         });
         let worker_state = state.clone();
         let worker = thread::Builder::new()
@@ -367,6 +378,29 @@ impl PersistenceHandle {
         *lock_unpoisoned(&self.state.metrics)
     }
 
+    #[cfg(test)]
+    pub(crate) fn exhaust_revisions_for_test(&self) {
+        lock_unpoisoned(&self.state.pending).next_revision = u64::MAX;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_checkpoint_for_test(
+        &self,
+        ordinal: usize,
+    ) -> (Receiver<()>, SyncSender<()>) {
+        assert!(ordinal > 0, "checkpoint gate ordinal must be positive");
+        let (reached, reached_rx) = mpsc::sync_channel(1);
+        let (release_tx, release) = mpsc::sync_channel(1);
+        let mut gate = lock_unpoisoned(&self.state.checkpoint_gate);
+        assert!(gate.is_none(), "a checkpoint gate is already installed");
+        *gate = Some(CheckpointTestGate {
+            remaining: ordinal,
+            reached,
+            release,
+        });
+        (reached_rx, release_tx)
+    }
+
     pub(crate) fn record_event_state_lock_hold(&self, duration: Duration) {
         let nanos = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
         let mut metrics = lock_unpoisoned(&self.state.metrics);
@@ -548,6 +582,7 @@ fn persist_pending(
                 _ => take_prior_error(&mut pending, surface_prior_error),
             };
         };
+        await_checkpoint_test_gate(state);
         match state
             .backend
             .save_checkpoint(&state.root, &snapshot.tasks, &snapshot.watches)
@@ -593,6 +628,28 @@ fn persist_pending(
         }
     }
 }
+
+#[cfg(test)]
+fn await_checkpoint_test_gate(state: &PersistenceState) {
+    let gate = {
+        let mut installed = lock_unpoisoned(&state.checkpoint_gate);
+        let Some(gate) = installed.as_mut() else {
+            return;
+        };
+        if gate.remaining > 1 {
+            gate.remaining -= 1;
+            return;
+        }
+        installed.take()
+    };
+    if let Some(gate) = gate {
+        let _ = gate.reached.send(());
+        let _ = gate.release.recv();
+    }
+}
+
+#[cfg(not(test))]
+fn await_checkpoint_test_gate(_state: &PersistenceState) {}
 
 fn take_prior_error(pending: &mut PendingState, surface: bool) -> Result<()> {
     if surface {

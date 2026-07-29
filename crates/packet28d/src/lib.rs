@@ -76,11 +76,10 @@ use packet28_daemon_protocol::paths::{
 };
 #[cfg(test)]
 use packet28_daemon_protocol::paths::{ready_path, task_event_log_path, task_version_json_path};
-#[cfg(test)]
-use packet28_daemon_protocol::task::TaskLifecycle;
 use packet28_daemon_protocol::task::{
     TaskAwaitHandoffRequest, TaskAwaitHandoffResponse, TaskLaunchAgentRequest,
-    TaskLaunchAgentResponse, TaskRecord, TaskRegistry, WatchRegistration, WatchRegistry,
+    TaskLaunchAgentResponse, TaskLifecycle, TaskRecord, TaskRegistry, WatchRegistration,
+    WatchRegistry,
 };
 use serde_json::{json, Value};
 
@@ -216,6 +215,136 @@ fn reconcile_task_event_high_waters(
         }
     }
     Ok(changed)
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TaskRestartReconciliation {
+    changed_tasks: usize,
+    replan_task_ids: Vec<String>,
+}
+
+/// Validates restart work before any lifecycle or watch state is mutated.
+///
+/// A live process group cannot be authenticated from its persisted numeric PID
+/// alone because operating systems reuse process identifiers. Startup
+/// therefore fails closed until an operator quiesces that group, instead of
+/// risking signalling an unrelated process.
+fn preflight_restart_recovery(tasks: &TaskRegistry) -> Result<()> {
+    for (task_id, task) in &tasks.tasks {
+        if matches!(
+            task.lifecycle,
+            TaskLifecycle::ReplanPending
+                | TaskLifecycle::RunningRecoveredReplan
+                | TaskLifecycle::RunningReplanPending
+        ) && (!task.sequence_present || task.sequence.is_none())
+        {
+            anyhow::bail!(
+                "startup replan task '{task_id}' has no stored sequence and cannot be recovered"
+            );
+        }
+        if matches!(
+            task.lifecycle,
+            TaskLifecycle::Cancelling { .. } | TaskLifecycle::Cancelled
+        ) && task.latest_agent_completed_at_unix.is_none()
+        {
+            if let Some(pid) = task.latest_agent_pid {
+                if crate::launch::recovered_agent_process_group_exists(pid)? {
+                    anyhow::bail!(
+                        "task '{task_id}' has a live recovered agent process group for pid {pid}; \
+                         refusing to complete cancellation from an unauthenticated persisted pid"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reconciles lifecycle state that cannot survive process ownership changes.
+///
+/// Restart-completed cancellation is intentionally evidenced by the terminal
+/// registry record rather than a synthetic `task_cancelled` event. The paired
+/// registry checkpoint can atomically persist `Cancelled`, its completion
+/// timestamp, and `last_error` before readiness. An event written before that
+/// checkpoint could be duplicated after a crash, while one written afterward
+/// could be lost after the terminal state commits. Keeping the registry record
+/// as the recovery marker makes repeated startup reconciliation idempotent;
+/// live cancellation continues to publish `task_cancelled`.
+fn reconcile_interrupted_task_lifecycles(
+    tasks: &mut TaskRegistry,
+    watches: &mut WatchRegistry,
+    recovered_at_unix: u64,
+) -> Result<TaskRestartReconciliation> {
+    let mut reconciliation = TaskRestartReconciliation::default();
+    for (task_id, task) in &mut tasks.tasks {
+        let persisted_lifecycle = task.lifecycle;
+        let evidence = match persisted_lifecycle {
+            TaskLifecycle::Idle => continue,
+            TaskLifecycle::Cancelled => {
+                if task.watch_ids.is_empty() {
+                    continue;
+                }
+                let removed_watch_ids = std::mem::take(&mut task.watch_ids);
+                watches.watches.retain(|watch| {
+                    !removed_watch_ids
+                        .iter()
+                        .any(|watch_id| watch_id == &watch.watch_id)
+                });
+                reconciliation.changed_tasks += 1;
+                continue;
+            }
+            TaskLifecycle::ReplanPending => {
+                reconciliation.replan_task_ids.push(task_id.clone());
+                continue;
+            }
+            TaskLifecycle::Cancelling { .. } => {
+                if task.latest_agent_completed_at_unix.is_none() && task.latest_agent_pid.is_some()
+                {
+                    task.latest_agent_completed_at_unix = Some(recovered_at_unix);
+                }
+                let removed_watch_ids = std::mem::take(&mut task.watch_ids);
+                watches.watches.retain(|watch| {
+                    !removed_watch_ids
+                        .iter()
+                        .any(|watch_id| watch_id == &watch.watch_id)
+                });
+                task.lifecycle.complete_cancel()?;
+                task.last_completed_at_unix = Some(recovered_at_unix);
+                format!(
+                    "task cancellation completed by packet28d restart from persisted lifecycle \
+                     {persisted_lifecycle:?}"
+                )
+            }
+            TaskLifecycle::Running => {
+                task.lifecycle = TaskLifecycle::Idle;
+                format!(
+                    "task interrupted by packet28d restart before persisted lifecycle \
+                     {persisted_lifecycle:?} completed"
+                )
+            }
+            TaskLifecycle::RunningRecoveredReplan => {
+                task.lifecycle = TaskLifecycle::ReplanPending;
+                reconciliation.replan_task_ids.push(task_id.clone());
+                "task interrupted after its durable claim before completion; \
+                 durable replan remains queued"
+                    .to_string()
+            }
+            TaskLifecycle::RunningReplanPending => {
+                task.lifecycle = TaskLifecycle::ReplanPending;
+                reconciliation.replan_task_ids.push(task_id.clone());
+                format!(
+                    "task interrupted by packet28d restart before persisted lifecycle \
+                     {persisted_lifecycle:?} completed; durable replan remains queued"
+                )
+            }
+        };
+        task.last_error = Some(match task.last_error.take() {
+            Some(existing) if !existing.is_empty() => format!("{existing}; {evidence}"),
+            _ => evidence,
+        });
+        reconciliation.changed_tasks += 1;
+    }
+    Ok(reconciliation)
 }
 
 fn daemon_log(message: &str) {

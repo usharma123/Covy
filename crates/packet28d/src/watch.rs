@@ -286,29 +286,151 @@ pub(crate) fn run_sequence_for_task(
     state: Arc<Mutex<DaemonState>>,
     task_id: &str,
 ) -> Result<context_kernel_core::KernelSequenceResponse> {
+    run_sequence_for_task_with_generation_fence(state, task_id, None)?
+        .ok_or_else(|| anyhow!("unfenced task run was not admitted"))
+}
+
+pub(crate) fn run_recovered_replan_for_task(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    expected_generation: TaskGenerationId,
+) -> Result<bool> {
+    Ok(
+        run_sequence_for_task_with_generation_fence(state, task_id, Some(expected_generation))?
+            .is_some(),
+    )
+}
+
+fn run_sequence_for_task_with_generation_fence(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    expected_generation: Option<TaskGenerationId>,
+) -> Result<Option<context_kernel_core::KernelSequenceResponse>> {
+    run_sequence_for_task_with_executor(
+        state,
+        task_id,
+        expected_generation,
+        |kernel, sequence, observer| kernel.execute_sequence_with_observer(sequence, observer),
+    )
+}
+
+pub(crate) fn run_sequence_for_task_with_executor<F>(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    expected_generation: Option<TaskGenerationId>,
+    execute_sequence: F,
+) -> Result<Option<context_kernel_core::KernelSequenceResponse>>
+where
+    F: Fn(
+        &Kernel,
+        context_kernel_core::KernelSequenceRequest,
+        &mut dyn SequenceObserver,
+    ) -> std::result::Result<
+        context_kernel_core::KernelSequenceResponse,
+        context_kernel_core::KernelError,
+    >,
+{
     loop {
-        let (kernel, sequence, generation, _sequence_lease) = {
+        let fence_pending_replan = {
+            let guard = state.lock().map_err(lock_err)?;
+            if guard.shutting_down {
+                if expected_generation.is_some() {
+                    return Ok(None);
+                }
+                anyhow::bail!("daemon is shutting down");
+            }
+            if let Some(expected_generation) = expected_generation {
+                let is_pending_generation = guard
+                    .tasks
+                    .tasks
+                    .get(task_id)
+                    .is_some_and(|task| task.lifecycle == TaskLifecycle::ReplanPending)
+                    && guard.task_generations.matches(task_id, expected_generation);
+                if !is_pending_generation {
+                    return Ok(None);
+                }
+            }
+            let task = guard
+                .tasks
+                .tasks
+                .get(task_id)
+                .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
+            if task.lifecycle == TaskLifecycle::ReplanPending {
+                if let Err(error) = persist_state(&guard) {
+                    guard.shutdown.request();
+                    return Err(error.context("failed to persist queued task replan"));
+                }
+                true
+            } else {
+                false
+            }
+        };
+        if fence_pending_replan {
+            if let Err(error) = flush_persistence(&state) {
+                state.lock().map_err(lock_err)?.shutdown.request();
+                return Err(error.context("failed to durably fence queued task replan"));
+            }
+        }
+
+        let (kernel, sequence, generation, _sequence_lease, durable_replan_claim) = {
             let mut guard = state.lock().map_err(lock_err)?;
-            let (sequence, running_lifecycle) = {
+            if guard.shutting_down {
+                if expected_generation.is_some() {
+                    return Ok(None);
+                }
+                anyhow::bail!("daemon is shutting down");
+            }
+            if let Some(expected_generation) = expected_generation {
+                let is_pending_generation = guard
+                    .tasks
+                    .tasks
+                    .get(task_id)
+                    .is_some_and(|task| task.lifecycle == TaskLifecycle::ReplanPending)
+                    && guard.task_generations.matches(task_id, expected_generation);
+                if !is_pending_generation {
+                    return Ok(None);
+                }
+            }
+            let (sequence, running_lifecycle, durable_replan_claim) = {
                 let task = guard
                     .tasks
                     .tasks
                     .get(task_id)
                     .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
                 let mut running_lifecycle = task.lifecycle;
-                running_lifecycle.start()?;
+                let durable_replan_claim = running_lifecycle == TaskLifecycle::ReplanPending;
+                if durable_replan_claim {
+                    running_lifecycle.start_durable_replan()?;
+                } else {
+                    running_lifecycle.start()?;
+                }
                 let sequence = task
                     .sequence
                     .clone()
                     .ok_or_else(|| anyhow!("task '{}' has no stored sequence", task_id))?;
-                (sequence, running_lifecycle)
+                (sequence, running_lifecycle, durable_replan_claim)
             };
-            let generation = guard.task_generations.ensure(task_id)?;
-            let sequence_lease = generation.acquire_operation().ok_or_else(|| {
-                context_kernel_core::KernelError::SequenceCancelled {
+            let generation = match expected_generation {
+                Some(expected_generation) => {
+                    let Some(generation) = guard.task_generations.current(task_id) else {
+                        return Ok(None);
+                    };
+                    if generation.id() != expected_generation {
+                        return Ok(None);
+                    }
+                    generation
+                }
+                None => guard.task_generations.ensure(task_id)?,
+            };
+            let Some(sequence_lease) = generation.acquire_operation() else {
+                if expected_generation.is_some() {
+                    return Ok(None);
+                }
+                return Err(context_kernel_core::KernelError::SequenceCancelled {
                     task_id: Some(task_id.to_string()),
                 }
-            })?;
+                .into());
+            };
             let task = guard
                 .tasks
                 .tasks
@@ -317,9 +439,42 @@ pub(crate) fn run_sequence_for_task(
             task.lifecycle = running_lifecycle;
             task.last_started_at_unix = Some(now_unix());
             task.last_error = None;
-            persist_state(&guard)?;
-            (guard.kernel.clone(), sequence, generation, sequence_lease)
+            if let Err(error) = persist_state(&guard) {
+                if durable_replan_claim {
+                    guard.shutdown.request();
+                }
+                return Err(error.context("failed to persist claimed task lifecycle"));
+            }
+            (
+                guard.kernel.clone(),
+                sequence,
+                generation,
+                sequence_lease,
+                durable_replan_claim,
+            )
         };
+        if durable_replan_claim {
+            // Every queued replan claim must be durable before reducer
+            // execution. A crash can then distinguish it from ordinary
+            // Running residue and restore the still-owned replan.
+            if let Err(error) = flush_persistence(&state) {
+                state.lock().map_err(lock_err)?.shutdown.request();
+                return Err(error.context("failed to durably publish claimed task replan"));
+            }
+            let guard = state.lock().map_err(lock_err)?;
+            let claim_is_current = !guard.shutting_down
+                && !generation.is_cancelled()
+                && guard.task_generations.matches(task_id, generation.id())
+                && guard.tasks.tasks.get(task_id).is_some_and(|task| {
+                    matches!(
+                        task.lifecycle,
+                        TaskLifecycle::RunningRecoveredReplan | TaskLifecycle::RunningReplanPending
+                    )
+                });
+            if !claim_is_current {
+                return Ok(None);
+            }
+        }
         let _ = emit_task_event_for_generation(
             state.clone(),
             task_id,
@@ -333,7 +488,7 @@ pub(crate) fn run_sequence_for_task(
             task_id: task_id.to_string(),
             generation: generation.clone(),
         };
-        let result = kernel.execute_sequence_with_observer(sequence, &mut observer);
+        let result = execute_sequence(&kernel, sequence, &mut observer);
 
         let rerun = {
             let mut guard = state.lock().map_err(lock_err)?;
@@ -366,79 +521,102 @@ pub(crate) fn run_sequence_for_task(
             if rerun {
                 task.last_replan_at_unix = Some(now_unix());
             }
-            persist_state(&guard)?;
+            if let Err(error) = persist_state(&guard) {
+                if rerun {
+                    // The active invocation can no longer publish ownership of
+                    // its queued rerun. Force process-level recovery instead
+                    // of leaving ReplanPending live without an executor.
+                    guard.shutdown.request();
+                }
+                return Err(error.context("failed to persist completed task lifecycle"));
+            }
             rerun
         };
 
-        if result.is_ok() && !generation.is_cancelled() {
-            let mut summary = refresh_task_context_summary_for_generation(
-                state.clone(),
-                task_id,
-                generation.id(),
-            )?
-            .unwrap_or_else(|| json!({}));
-            if generation.is_cancelled() {
-                return Err(context_kernel_core::KernelError::SequenceCancelled {
-                    task_id: Some(task_id.to_string()),
+        let postprocessing = (|| -> Result<()> {
+            if result.is_ok() && !generation.is_cancelled() {
+                let mut summary = refresh_task_context_summary_for_generation(
+                    state.clone(),
+                    task_id,
+                    generation.id(),
+                )?
+                .unwrap_or_else(|| json!({}));
+                if generation.is_cancelled() {
+                    return Err(context_kernel_core::KernelError::SequenceCancelled {
+                        task_id: Some(task_id.to_string()),
+                    }
+                    .into());
                 }
-                .into());
-            }
-            let _ = set_context_reason_for_generation(
-                &state,
-                task_id,
-                generation.id(),
-                "replan_applied",
-            )?;
-            if !generation.is_cancelled() {
-                if let Some(response) = refresh_broker_context_for_task(&state, task_id, None)? {
-                    let storage_id = task_storage_id(task_id)?;
-                    let root = state.lock().map_err(lock_err)?.root.clone();
-                    let brief_path = task_brief_markdown_path(&root, &storage_id);
-                    if let Some(object) = summary.as_object_mut() {
-                        object.insert(
-                            "changed_section_ids".to_string(),
-                            Value::Array(
-                                response
-                                    .delta
-                                    .changed_sections
-                                    .iter()
-                                    .map(|section| Value::String(section.id.clone()))
-                                    .collect(),
-                            ),
-                        );
-                        object.insert(
-                            "removed_section_ids".to_string(),
-                            Value::Array(
-                                response
-                                    .delta
-                                    .removed_section_ids
-                                    .iter()
-                                    .map(|id| Value::String(id.clone()))
-                                    .collect(),
-                            ),
-                        );
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("replan_applied".to_string()),
-                        );
-                        object.insert(
-                            "context_version".to_string(),
-                            Value::String(response.context_version.clone()),
-                        );
-                        object.insert(
-                            "brief_path".to_string(),
-                            Value::String(brief_path.to_string_lossy().to_string()),
-                        );
+                let _ = set_context_reason_for_generation(
+                    &state,
+                    task_id,
+                    generation.id(),
+                    "replan_applied",
+                )?;
+                if !generation.is_cancelled() {
+                    if let Some(response) = refresh_broker_context_for_task(&state, task_id, None)?
+                    {
+                        let storage_id = task_storage_id(task_id)?;
+                        let root = state.lock().map_err(lock_err)?.root.clone();
+                        let brief_path = task_brief_markdown_path(&root, &storage_id);
+                        if let Some(object) = summary.as_object_mut() {
+                            object.insert(
+                                "changed_section_ids".to_string(),
+                                Value::Array(
+                                    response
+                                        .delta
+                                        .changed_sections
+                                        .iter()
+                                        .map(|section| Value::String(section.id.clone()))
+                                        .collect(),
+                                ),
+                            );
+                            object.insert(
+                                "removed_section_ids".to_string(),
+                                Value::Array(
+                                    response
+                                        .delta
+                                        .removed_section_ids
+                                        .iter()
+                                        .map(|id| Value::String(id.clone()))
+                                        .collect(),
+                                ),
+                            );
+                            object.insert(
+                                "reason".to_string(),
+                                Value::String("replan_applied".to_string()),
+                            );
+                            object.insert(
+                                "context_version".to_string(),
+                                Value::String(response.context_version.clone()),
+                            );
+                            object.insert(
+                                "brief_path".to_string(),
+                                Value::String(brief_path.to_string_lossy().to_string()),
+                            );
+                        }
                     }
                 }
+                let _ = emit_task_event_for_generation(
+                    state.clone(),
+                    task_id,
+                    generation.id(),
+                    "context_updated",
+                    summary,
+                )?;
             }
-            let _ = emit_task_event_for_generation(
-                state.clone(),
-                task_id,
-                generation.id(),
-                "context_updated",
-                summary,
-            )?;
+            Ok(())
+        })();
+        if let Err(error) = postprocessing {
+            if rerun && !generation.is_cancelled() {
+                daemon_log(&format!(
+                    "task run postprocessing failed before owned rerun task_id={task_id}: \
+                     {error:#}"
+                ));
+                continue;
+            } else {
+                return Err(error);
+            }
         }
 
         match result {
@@ -465,7 +643,7 @@ pub(crate) fn run_sequence_for_task(
                     }
                     .into());
                 }
-                return Ok(response);
+                return Ok(Some(response));
             }
             Err(err) => {
                 let _ = emit_task_event_for_generation(
@@ -648,7 +826,7 @@ pub(crate) async fn run_watch_processor(
     let mut shutdown = state.lock().map_err(lock_err)?.shutdown.subscribe();
     let mut pending = HashMap::<(String, TaskGenerationId), PendingWatchEvent>::new();
     let mut global_sweep = None;
-    let mut workers = tokio::task::JoinSet::new();
+    let mut workers = tokio::task::JoinSet::<Result<()>>::new();
     let max_workers = blocking_pool.max_operations();
     loop {
         let overflowed = ingress.drain_overflowed();
@@ -678,7 +856,7 @@ pub(crate) async fn run_watch_processor(
                         return Err(anyhow!("watch worker failed to join: {error}"));
                     }
                     Some(Ok(Err(error))) => {
-                        daemon_log(&format!("watch event processing failed: {error}"));
+                        return Err(error.context("watch event processing failed"));
                     }
                     Some(Ok(Ok(()))) | Some(Err(_)) | None => {}
                 }
@@ -822,9 +1000,28 @@ fn process_watch_event(
         persist_state(&guard)?;
         should_start
     };
+    flush_persistence(&state)
+        .with_context(|| format!("failed to durably queue watch replan for task '{task_id}'"))?;
 
     if should_start && !cancellation.is_cancelled() {
-        let _ = run_sequence_for_task(state, &task_id);
+        if let Err(error) = run_sequence_for_task(state.clone(), &task_id) {
+            let work_remains_owned = {
+                let guard = state.lock().map_err(lock_err)?;
+                guard.tasks.tasks.get(&task_id).is_some_and(|task| {
+                    task.lifecycle == TaskLifecycle::ReplanPending || task.lifecycle.is_running()
+                }) && guard.task_generations.matches(&task_id, generation.id())
+                    && !generation.is_cancelled()
+            };
+            if work_remains_owned {
+                return Err(error.context(format!(
+                    "task '{task_id}' run failed while durable work remained ownerless"
+                )));
+            }
+            daemon_log(&format!(
+                "watch-triggered task run failed after releasing ownership task_id={task_id}: \
+                 {error:#}"
+            ));
+        }
     }
     Ok(())
 }

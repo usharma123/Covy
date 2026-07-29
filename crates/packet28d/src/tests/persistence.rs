@@ -1,9 +1,11 @@
 use super::*;
+use crate::watch::{run_recovered_replan_for_task, run_sequence_for_task_with_executor};
 use packet28_daemon_core::storage::{
     append_next_task_event, append_task_event, load_task_registry,
     load_task_registry_with_event_tails, save_task_registry, save_watch_registry,
 };
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Barrier;
 
 fn registry_with_task(task_id: &str, last_event_seq: u64) -> TaskRegistry {
@@ -72,6 +74,570 @@ fn startup_reconciliation_rejects_nonzero_high_water_without_an_event_log() {
             .contains("high-water 1 for 'missing-log' is ahead of its missing event log"),
         "unexpected error: {error:#}"
     );
+}
+
+#[test]
+fn startup_reconciliation_preserves_terminal_and_completes_cancellation_idempotently() {
+    const RECOVERED_AT_UNIX: u64 = 31;
+    let mut tasks = TaskRegistry::default();
+    let mut watches = WatchRegistry::default();
+    for (task_id, lifecycle) in [
+        ("queued", TaskLifecycle::ReplanPending),
+        ("recovered-running", TaskLifecycle::RunningRecoveredReplan),
+        ("running", TaskLifecycle::Running),
+        ("running-queued", TaskLifecycle::RunningReplanPending),
+        (
+            "cancelling-idle",
+            TaskLifecycle::Cancelling { was_running: false },
+        ),
+        (
+            "cancelling-running",
+            TaskLifecycle::Cancelling { was_running: true },
+        ),
+    ] {
+        let watch_ids = if task_id.starts_with("cancelling") {
+            vec![format!("watch-{task_id}")]
+        } else {
+            Vec::new()
+        };
+        if let Some(watch_id) = watch_ids.first() {
+            watches.watches.push(WatchRegistration {
+                watch_id: watch_id.clone(),
+                spec: WatchSpec {
+                    task_id: task_id.to_string(),
+                    ..WatchSpec::default()
+                },
+                active: true,
+                ..WatchRegistration::default()
+            });
+        }
+        tasks.tasks.insert(
+            task_id.to_string(),
+            TaskRecord {
+                task_id: task_id.to_string(),
+                lifecycle,
+                watch_ids,
+                last_error: task_id
+                    .starts_with("cancelling")
+                    .then(|| "existing cancellation detail".to_string()),
+                ..TaskRecord::default()
+            },
+        );
+    }
+    tasks.tasks.insert(
+        "idle".to_string(),
+        TaskRecord {
+            task_id: "idle".to_string(),
+            last_error: Some("existing failure".to_string()),
+            ..TaskRecord::default()
+        },
+    );
+    tasks.tasks.insert(
+        "cancelled".to_string(),
+        TaskRecord {
+            task_id: "cancelled".to_string(),
+            lifecycle: TaskLifecycle::Cancelled,
+            last_completed_at_unix: Some(17),
+            last_error: Some("durable cancellation history".to_string()),
+            ..TaskRecord::default()
+        },
+    );
+
+    let reconciliation =
+        reconcile_interrupted_task_lifecycles(&mut tasks, &mut watches, RECOVERED_AT_UNIX).unwrap();
+    assert_eq!(reconciliation.changed_tasks, 5);
+    assert_eq!(
+        reconciliation.replan_task_ids,
+        vec![
+            "queued".to_string(),
+            "recovered-running".to_string(),
+            "running-queued".to_string()
+        ]
+    );
+    assert!(watches.watches.is_empty());
+    for (task_id, task) in &tasks.tasks {
+        match task_id.as_str() {
+            "idle" => {
+                assert_eq!(task.lifecycle, TaskLifecycle::Idle);
+                assert_eq!(task.last_error.as_deref(), Some("existing failure"));
+            }
+            "cancelled" => {
+                assert_eq!(task.lifecycle, TaskLifecycle::Cancelled);
+                assert_eq!(task.last_completed_at_unix, Some(17));
+                assert_eq!(
+                    task.last_error.as_deref(),
+                    Some("durable cancellation history")
+                );
+            }
+            "cancelling-idle" | "cancelling-running" => {
+                assert_eq!(task.lifecycle, TaskLifecycle::Cancelled);
+                assert_eq!(task.last_completed_at_unix, Some(RECOVERED_AT_UNIX));
+                assert!(task.watch_ids.is_empty());
+                assert!(
+                    task.last_error.as_deref().is_some_and(|error| {
+                        error.starts_with("existing cancellation detail; ")
+                            && error.contains("task cancellation completed by packet28d restart")
+                    }),
+                    "task {task_id:?} did not retain cancellation evidence"
+                );
+            }
+            "queued" => {
+                assert_eq!(task.lifecycle, TaskLifecycle::ReplanPending);
+                assert_eq!(task.last_error, None);
+            }
+            "running-queued" => {
+                assert_eq!(task.lifecycle, TaskLifecycle::ReplanPending);
+                assert!(
+                    task.last_error.as_deref().is_some_and(|error| {
+                        error.starts_with("task interrupted by packet28d restart")
+                            && error.contains("durable replan remains queued")
+                    }),
+                    "task {task_id:?} did not retain its queued replan"
+                );
+            }
+            "recovered-running" => {
+                assert_eq!(task.lifecycle, TaskLifecycle::ReplanPending);
+                assert!(
+                    task.last_error.as_deref().is_some_and(|error| {
+                        error.contains("interrupted after its durable claim")
+                            && error.contains("durable replan remains queued")
+                    }),
+                    "task {task_id:?} did not retain its recovered replan"
+                );
+            }
+            "running" => {
+                assert_eq!(task.lifecycle, TaskLifecycle::Idle);
+                assert!(
+                    task.last_error.as_deref().is_some_and(
+                        |error| error.starts_with("task interrupted by packet28d restart")
+                    ),
+                    "task {task_id:?} did not retain interruption evidence"
+                );
+            }
+            _ => unreachable!("unexpected task {task_id:?}"),
+        }
+    }
+    let reconciled = serde_json::to_value(&tasks).unwrap();
+
+    let repeated =
+        reconcile_interrupted_task_lifecycles(&mut tasks, &mut watches, RECOVERED_AT_UNIX + 1)
+            .unwrap();
+    assert_eq!(repeated.changed_tasks, 0);
+    assert_eq!(
+        repeated.replan_task_ids,
+        vec![
+            "queued".to_string(),
+            "recovered-running".to_string(),
+            "running-queued".to_string()
+        ]
+    );
+    assert_eq!(serde_json::to_value(&tasks).unwrap(), reconciled);
+}
+
+#[test]
+fn recovered_replan_claim_is_pending_only_generation_fenced_and_shutdown_safe() {
+    let state = super::support::daemon_test_state();
+    let root = super::support::daemon_test_root(&state);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let reducer_calls = calls.clone();
+    let durable_root = root.clone();
+    let mut kernel = Kernel::new();
+    kernel.register_reducer("recovery.count", move |_ctx, _packets| {
+        assert_eq!(
+            load_task_registry(&durable_root).unwrap().tasks["recovered-claim"].lifecycle,
+            TaskLifecycle::RunningRecoveredReplan,
+            "the recovered claim must be durable before reducer entry"
+        );
+        reducer_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(context_kernel_core::ReducerResult::default())
+    });
+    state.lock().unwrap().kernel = Arc::new(kernel);
+    let sequence = context_kernel_core::KernelSequenceRequest {
+        steps: vec![KernelStepRequest {
+            id: "count".to_string(),
+            target: "recovery.count".to_string(),
+            ..KernelStepRequest::default()
+        }],
+        ..context_kernel_core::KernelSequenceRequest::default()
+    };
+    super::support::insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: "recovered-claim".to_string(),
+            lifecycle: TaskLifecycle::ReplanPending,
+            sequence_present: true,
+            sequence: Some(sequence.clone()),
+            ..TaskRecord::default()
+        },
+    );
+    let original_generation = state
+        .lock()
+        .unwrap()
+        .task_generations
+        .create("recovered-claim")
+        .unwrap()
+        .id();
+
+    assert!(
+        run_recovered_replan_for_task(state.clone(), "recovered-claim", original_generation)
+            .unwrap()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.lock().unwrap().tasks.tasks["recovered-claim"].lifecycle,
+        TaskLifecycle::Idle
+    );
+    assert!(
+        !run_recovered_replan_for_task(state.clone(), "recovered-claim", original_generation)
+            .unwrap(),
+        "a duplicate recovery command must not claim an idle task"
+    );
+
+    let (watch_tx, _watch_rx) = WatchIngress::new(1);
+    register_task_and_watches(
+        state.clone(),
+        watch_tx,
+        TaskSubmitSpec {
+            task_id: "recovered-claim".to_string(),
+            sequence,
+            ..TaskSubmitSpec::default()
+        },
+    )
+    .unwrap();
+    let replacement_generation = state
+        .lock()
+        .unwrap()
+        .task_generations
+        .current("recovered-claim")
+        .unwrap()
+        .id();
+    assert_ne!(replacement_generation, original_generation);
+    assert!(
+        !run_recovered_replan_for_task(state.clone(), "recovered-claim", original_generation)
+            .unwrap(),
+        "a stale recovery command must not cross same-id replacement"
+    );
+
+    {
+        let mut guard = state.lock().unwrap();
+        assert!(guard
+            .tasks
+            .tasks
+            .get_mut("recovered-claim")
+            .unwrap()
+            .lifecycle
+            .request_replan()
+            .unwrap());
+        guard.shutting_down = true;
+    }
+    assert!(
+        !run_recovered_replan_for_task(state.clone(), "recovered-claim", replacement_generation)
+            .unwrap(),
+        "shutdown must prevent late recovery admission"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        load_task_events(&root, "recovered-claim")
+            .unwrap()
+            .iter()
+            .filter(|frame| frame.event.kind == "task_started")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn durable_replan_claim_keeps_ownership_when_another_replan_arrives_during_its_barrier() {
+    let state = super::support::daemon_test_state();
+    let task_id = "recovered-claim-race";
+    let calls = Arc::new(AtomicUsize::new(0));
+    super::support::insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: task_id.to_string(),
+            lifecycle: TaskLifecycle::ReplanPending,
+            sequence_present: true,
+            sequence: Some(context_kernel_core::KernelSequenceRequest {
+                steps: vec![KernelStepRequest {
+                    id: "claim-race".to_string(),
+                    target: "recovery.claim-race".to_string(),
+                    ..KernelStepRequest::default()
+                }],
+                ..context_kernel_core::KernelSequenceRequest::default()
+            }),
+            ..TaskRecord::default()
+        },
+    );
+    flush_persistence(&state).unwrap();
+    let (claim_reached, release_claim) = state
+        .lock()
+        .unwrap()
+        .persistence
+        .gate_checkpoint_for_test(2);
+
+    let run_state = state.clone();
+    let executor_calls = calls.clone();
+    let run = thread::spawn(move || {
+        run_sequence_for_task_with_executor(
+            run_state,
+            task_id,
+            None,
+            move |_kernel, _sequence, _observer| {
+                let ordinal = executor_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok(context_kernel_core::KernelSequenceResponse {
+                    request_id: u64::try_from(ordinal).unwrap(),
+                    scheduled: Vec::new(),
+                    skipped: Vec::new(),
+                    budget_exhausted: false,
+                    step_results: Vec::new(),
+                    metadata: json!({}),
+                })
+            },
+        )
+    });
+
+    claim_reached
+        .recv_timeout(Duration::from_secs(2))
+        .expect("durable claim did not reach its persistence barrier");
+    assert_eq!(
+        state.lock().unwrap().tasks.tasks[task_id].lifecycle,
+        TaskLifecycle::RunningRecoveredReplan
+    );
+    {
+        let mut guard = state.lock().unwrap();
+        assert!(!guard
+            .tasks
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .lifecycle
+            .request_replan()
+            .unwrap());
+        assert_eq!(
+            guard.tasks.tasks[task_id].lifecycle,
+            TaskLifecycle::RunningReplanPending
+        );
+        persist_state(&guard).unwrap();
+    }
+    release_claim.send(()).unwrap();
+
+    let response = run.join().unwrap().unwrap().unwrap();
+    assert_eq!(response.request_id, 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        state.lock().unwrap().tasks.tasks[task_id].lifecycle,
+        TaskLifecycle::Idle
+    );
+}
+
+#[test]
+fn restart_preflight_rejects_malformed_work_without_mutating_earlier_tasks() {
+    let tasks = TaskRegistry {
+        tasks: BTreeMap::from([
+            (
+                "a-running".to_string(),
+                TaskRecord {
+                    task_id: "a-running".to_string(),
+                    lifecycle: TaskLifecycle::Running,
+                    ..TaskRecord::default()
+                },
+            ),
+            (
+                "z-malformed".to_string(),
+                TaskRecord {
+                    task_id: "z-malformed".to_string(),
+                    lifecycle: TaskLifecycle::ReplanPending,
+                    sequence_present: true,
+                    sequence: None,
+                    ..TaskRecord::default()
+                },
+            ),
+        ]),
+    };
+    let before = serde_json::to_value(&tasks).unwrap();
+
+    let error = preflight_restart_recovery(&tasks).unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("startup replan task 'z-malformed' has no stored sequence"));
+    assert_eq!(serde_json::to_value(&tasks).unwrap(), before);
+}
+
+#[test]
+fn recovered_process_group_probe_rejects_unsafe_identifiers() {
+    let zero_error = crate::launch::recovered_agent_process_group_exists(0).unwrap_err();
+    assert!(zero_error.to_string().contains("greater than zero"));
+
+    // SAFETY: `getpgrp` has no preconditions and only reads process state.
+    let current_group = unsafe { libc::getpgrp() };
+    let current_group = u32::try_from(current_group).unwrap();
+    let group_error =
+        crate::launch::recovered_agent_process_group_exists(current_group).unwrap_err();
+    assert!(group_error.to_string().contains("owns the current daemon"));
+}
+
+#[test]
+fn successful_run_postprocessing_failure_does_not_abandon_owned_rerun() {
+    let state = super::support::daemon_test_state();
+    let root = super::support::daemon_test_root(&state);
+    let task_id = "postprocess-rerun";
+    let event_path = task_event_log_path(&root, &task_storage_id(task_id).unwrap());
+    let saved_event_path = event_path.with_extension("jsonl.saved");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let executor_calls = calls.clone();
+    let executor_state = state.clone();
+    super::support::insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: task_id.to_string(),
+            sequence_present: true,
+            sequence: Some(context_kernel_core::KernelSequenceRequest {
+                steps: vec![KernelStepRequest {
+                    id: "succeed-twice".to_string(),
+                    target: "replan.succeed-twice".to_string(),
+                    ..KernelStepRequest::default()
+                }],
+                ..context_kernel_core::KernelSequenceRequest::default()
+            }),
+            ..TaskRecord::default()
+        },
+    );
+
+    let result = run_sequence_for_task_with_executor(
+        state.clone(),
+        task_id,
+        None,
+        move |_kernel, _sequence, _observer| {
+            let ordinal = executor_calls.fetch_add(1, Ordering::SeqCst);
+            if ordinal == 0 {
+                {
+                    let mut guard = executor_state.lock().unwrap();
+                    assert!(!guard
+                        .tasks
+                        .tasks
+                        .get_mut(task_id)
+                        .unwrap()
+                        .lifecycle
+                        .request_replan()
+                        .unwrap());
+                    persist_state(&guard).unwrap();
+                }
+                flush_persistence(&executor_state).unwrap();
+                fs::rename(&event_path, &saved_event_path).unwrap();
+                fs::create_dir(&event_path).unwrap();
+                return Ok(context_kernel_core::KernelSequenceResponse {
+                    request_id: 1,
+                    scheduled: Vec::new(),
+                    skipped: Vec::new(),
+                    budget_exhausted: false,
+                    step_results: Vec::new(),
+                    metadata: json!({}),
+                });
+            }
+            fs::remove_dir(&event_path).unwrap();
+            fs::rename(&saved_event_path, &event_path).unwrap();
+            Ok(context_kernel_core::KernelSequenceResponse {
+                request_id: 2,
+                scheduled: Vec::new(),
+                skipped: Vec::new(),
+                budget_exhausted: false,
+                step_results: Vec::new(),
+                metadata: json!({}),
+            })
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(result.request_id, 2);
+    flush_persistence(&state).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        state.lock().unwrap().tasks.tasks[task_id].lifecycle,
+        TaskLifecycle::Idle
+    );
+    let events = load_task_events(&root, task_id).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|frame| frame.event.kind == "task_completed")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn completed_rerun_checkpoint_failure_requests_process_recovery() {
+    let state = super::support::daemon_test_state();
+    let task_id = "checkpoint-failure-rerun";
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    super::support::insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: task_id.to_string(),
+            sequence_present: true,
+            sequence: Some(context_kernel_core::KernelSequenceRequest {
+                steps: vec![KernelStepRequest {
+                    id: "checkpoint-failure".to_string(),
+                    target: "recovery.checkpoint-failure".to_string(),
+                    ..KernelStepRequest::default()
+                }],
+                ..context_kernel_core::KernelSequenceRequest::default()
+            }),
+            ..TaskRecord::default()
+        },
+    );
+
+    let run_state = state.clone();
+    let run = thread::spawn(move || {
+        run_sequence_for_task_with_executor(
+            run_state,
+            task_id,
+            None,
+            move |_kernel, _sequence, _observer| {
+                started_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                Ok(context_kernel_core::KernelSequenceResponse {
+                    request_id: 1,
+                    scheduled: Vec::new(),
+                    skipped: Vec::new(),
+                    budget_exhausted: false,
+                    step_results: Vec::new(),
+                    metadata: json!({}),
+                })
+            },
+        )
+    });
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let persistence = {
+        let mut guard = state.lock().unwrap();
+        assert!(!guard
+            .tasks
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .lifecycle
+            .request_replan()
+            .unwrap());
+        persist_state(&guard).unwrap();
+        guard.persistence.clone()
+    };
+    persistence.flush().unwrap();
+    persistence.exhaust_revisions_for_test();
+    release_tx.send(()).unwrap();
+
+    let error = run.join().unwrap().unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("failed to persist completed task lifecycle"));
+    let guard = state.lock().unwrap();
+    assert_eq!(
+        guard.tasks.tasks[task_id].lifecycle,
+        TaskLifecycle::ReplanPending
+    );
+    assert!(guard.shutdown.is_requested());
 }
 
 #[test]

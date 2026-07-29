@@ -48,6 +48,14 @@ pub enum TaskLifecycle {
     ReplanPending,
     /// The stored sequence is currently executing.
     Running,
+    /// A queued replan has been durably claimed for execution.
+    ///
+    /// This state is distinct from [`Self::Running`] so another crash before
+    /// completion can restore the still-owned replan instead of treating it as
+    /// ordinary interrupted work. Recovery is at-least-once: reducers must
+    /// tolerate replay if a process crashes after a reducer side effect but
+    /// before the terminal task checkpoint.
+    RunningRecoveredReplan,
     /// The sequence is executing and must run again after it completes.
     RunningReplanPending,
     /// Cancellation owns the task and no new work may start.
@@ -64,7 +72,10 @@ impl TaskLifecycle {
     pub const fn is_running(self) -> bool {
         matches!(
             self,
-            Self::Running | Self::RunningReplanPending | Self::Cancelling { was_running: true }
+            Self::Running
+                | Self::RunningRecoveredReplan
+                | Self::RunningReplanPending
+                | Self::Cancelling { was_running: true }
         )
     }
 
@@ -102,6 +113,24 @@ impl TaskLifecycle {
         }
     }
 
+    /// Claims one queued replan while retaining durable restart provenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskLifecycleTransitionError`] unless a replan is pending.
+    pub fn start_durable_replan(&mut self) -> Result<(), TaskLifecycleTransitionError> {
+        match *self {
+            Self::ReplanPending => {
+                *self = Self::RunningRecoveredReplan;
+                Ok(())
+            }
+            from => Err(TaskLifecycleTransitionError {
+                from,
+                action: TaskLifecycleAction::StartDurableReplan,
+            }),
+        }
+    }
+
     /// Requests a replan without starting duplicate work.
     ///
     /// # Errors
@@ -115,6 +144,10 @@ impl TaskLifecycle {
                 true
             }
             Self::Running => {
+                *self = Self::RunningReplanPending;
+                false
+            }
+            Self::RunningRecoveredReplan => {
                 *self = Self::RunningReplanPending;
                 false
             }
@@ -137,6 +170,10 @@ impl TaskLifecycle {
     pub fn finish_run(&mut self) -> Result<bool, TaskLifecycleTransitionError> {
         match *self {
             Self::Running => {
+                *self = Self::Idle;
+                Ok(false)
+            }
+            Self::RunningRecoveredReplan => {
                 *self = Self::Idle;
                 Ok(false)
             }
@@ -187,24 +224,41 @@ impl TaskLifecycle {
         TaskLifecycleWire {
             running: self.is_running(),
             cancel_requested: self.is_cancelling() || self.is_cancelled(),
-            pending_replan: self.has_pending_replan(),
+            // Preserve a queued-work projection for readers that predate the
+            // additive recovery marker. Such readers recover this state as
+            // RunningReplanPending instead of dropping it as ordinary Running.
+            pending_replan: self.has_pending_replan()
+                || matches!(self, Self::RunningRecoveredReplan),
             cancelled: self.is_cancelled(),
+            recovered_replan: matches!(self, Self::RunningRecoveredReplan),
         }
     }
 
-    const fn from_legacy_flags(flags: TaskLifecycleWire) -> Self {
+    fn from_legacy_flags(flags: TaskLifecycleWire) -> Result<Self, &'static str> {
+        if flags.recovered_replan {
+            if flags.running && !flags.cancel_requested && flags.pending_replan && !flags.cancelled
+            {
+                return Ok(Self::RunningRecoveredReplan);
+            }
+            return Err(
+                "recovered_replan requires running=true, cancel_requested=false, \
+                 pending_replan=true, and cancelled=false",
+            );
+        }
         if flags.cancelled {
-            return Self::Cancelled;
+            return Ok(Self::Cancelled);
         }
-        match (flags.running, flags.cancel_requested, flags.pending_replan) {
-            (running, true, _) => Self::Cancelling {
-                was_running: running,
+        Ok(
+            match (flags.running, flags.cancel_requested, flags.pending_replan) {
+                (running, true, _) => Self::Cancelling {
+                    was_running: running,
+                },
+                (true, false, true) => Self::RunningReplanPending,
+                (true, false, false) => Self::Running,
+                (false, false, true) => Self::ReplanPending,
+                (false, false, false) => Self::Idle,
             },
-            (true, false, true) => Self::RunningReplanPending,
-            (true, false, false) => Self::Running,
-            (false, false, true) => Self::ReplanPending,
-            (false, false, false) => Self::Idle,
-        }
+        )
     }
 }
 
@@ -216,12 +270,16 @@ impl Serialize for TaskLifecycle {
         use serde::ser::SerializeMap;
 
         let flags = self.legacy_flags();
-        let mut map = serializer.serialize_map(Some(if flags.cancelled { 4 } else { 3 }))?;
+        let extra_fields = usize::from(flags.cancelled) + usize::from(flags.recovered_replan);
+        let mut map = serializer.serialize_map(Some(3 + extra_fields))?;
         map.serialize_entry("running", &flags.running)?;
         map.serialize_entry("cancel_requested", &flags.cancel_requested)?;
         map.serialize_entry("pending_replan", &flags.pending_replan)?;
         if flags.cancelled {
             map.serialize_entry("cancelled", &true)?;
+        }
+        if flags.recovered_replan {
+            map.serialize_entry("recovered_replan", &true)?;
         }
         map.end()
     }
@@ -232,7 +290,8 @@ impl<'de> Deserialize<'de> for TaskLifecycle {
     where
         D: serde::Deserializer<'de>,
     {
-        TaskLifecycleWire::deserialize(deserializer).map(Self::from_legacy_flags)
+        let flags = TaskLifecycleWire::deserialize(deserializer)?;
+        Self::from_legacy_flags(flags).map_err(serde::de::Error::custom)
     }
 }
 
@@ -243,6 +302,7 @@ struct TaskLifecycleWire {
     cancel_requested: bool,
     pending_replan: bool,
     cancelled: bool,
+    recovered_replan: bool,
 }
 
 /// Task lifecycle operation rejected by the current runtime state.
@@ -260,6 +320,8 @@ pub struct TaskLifecycleTransitionError {
 pub enum TaskLifecycleAction {
     /// Start one sequence generation.
     Start,
+    /// Claim a durable replan generation.
+    StartDurableReplan,
     /// Queue a replan.
     RequestReplan,
     /// Complete the active sequence generation.
@@ -272,6 +334,7 @@ impl std::fmt::Display for TaskLifecycleAction {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Start => "start task work",
+            Self::StartDurableReplan => "start durable task replan",
             Self::RequestReplan => "request a task replan",
             Self::FinishRun => "finish task work",
             Self::CompleteCancel => "complete task cancellation",
@@ -432,6 +495,10 @@ mod tests {
             (TaskLifecycle::ReplanPending, Ok(TaskLifecycle::Running)),
             (TaskLifecycle::Running, Err(TaskLifecycle::Running)),
             (
+                TaskLifecycle::RunningRecoveredReplan,
+                Err(TaskLifecycle::RunningRecoveredReplan),
+            ),
+            (
                 TaskLifecycle::RunningReplanPending,
                 Err(TaskLifecycle::RunningReplanPending),
             ),
@@ -476,6 +543,11 @@ mod tests {
                 false,
             ),
             (
+                TaskLifecycle::RunningRecoveredReplan,
+                TaskLifecycle::RunningReplanPending,
+                false,
+            ),
+            (
                 TaskLifecycle::RunningReplanPending,
                 TaskLifecycle::RunningReplanPending,
                 false,
@@ -484,6 +556,116 @@ mod tests {
             let mut lifecycle = initial;
             assert_eq!(lifecycle.request_replan().unwrap(), should_start);
             assert_eq!(lifecycle, expected);
+        }
+    }
+
+    #[test]
+    fn recovered_replan_claim_roundtrips_and_rejects_duplicate_ownership() {
+        let mut lifecycle = TaskLifecycle::ReplanPending;
+        lifecycle.start_durable_replan().unwrap();
+        assert_eq!(lifecycle, TaskLifecycle::RunningRecoveredReplan);
+        assert!(lifecycle.is_running());
+
+        let record = TaskRecord {
+            task_id: "recovered".to_string(),
+            lifecycle,
+            ..TaskRecord::default()
+        };
+        let encoded = serde_json::to_value(&record).unwrap();
+        assert_eq!(encoded["recovered_replan"], serde_json::json!(true));
+        assert_eq!(encoded["running"], serde_json::json!(true));
+        assert_eq!(encoded["pending_replan"], serde_json::json!(true));
+        assert_eq!(
+            serde_json::from_value::<TaskRecord>(encoded.clone())
+                .unwrap()
+                .lifecycle,
+            TaskLifecycle::RunningRecoveredReplan
+        );
+        let mut legacy_projection = encoded;
+        legacy_projection
+            .as_object_mut()
+            .unwrap()
+            .remove("recovered_replan");
+        assert_eq!(
+            serde_json::from_value::<TaskRecord>(legacy_projection)
+                .unwrap()
+                .lifecycle,
+            TaskLifecycle::RunningReplanPending
+        );
+        assert_eq!(
+            lifecycle.start_durable_replan().unwrap_err(),
+            TaskLifecycleTransitionError {
+                from: TaskLifecycle::RunningRecoveredReplan,
+                action: TaskLifecycleAction::StartDurableReplan,
+            }
+        );
+
+        assert!(!lifecycle.finish_run().unwrap());
+        assert_eq!(lifecycle, TaskLifecycle::Idle);
+        let completed = TaskRecord {
+            lifecycle,
+            ..record.clone()
+        };
+        let completed = serde_json::to_value(completed).unwrap();
+        assert!(completed.get("recovered_replan").is_none());
+        assert_eq!(
+            serde_json::from_value::<TaskRecord>(completed)
+                .unwrap()
+                .lifecycle,
+            TaskLifecycle::Idle
+        );
+
+        let mut cancelled_lifecycle = TaskLifecycle::RunningRecoveredReplan;
+        assert!(cancelled_lifecycle.request_cancel());
+        let cancelling = serde_json::to_value(TaskRecord {
+            lifecycle: cancelled_lifecycle,
+            ..record
+        })
+        .unwrap();
+        assert!(cancelling.get("recovered_replan").is_none());
+        assert_eq!(
+            serde_json::from_value::<TaskRecord>(cancelling)
+                .unwrap()
+                .lifecycle,
+            TaskLifecycle::Cancelling { was_running: true }
+        );
+    }
+
+    #[test]
+    fn malformed_recovered_replan_marker_is_rejected() {
+        for malformed in [
+            serde_json::json!({
+                "task_id": "recovered",
+                "running": false,
+                "cancel_requested": false,
+                "pending_replan": true,
+                "recovered_replan": true
+            }),
+            serde_json::json!({
+                "task_id": "recovered",
+                "running": true,
+                "cancel_requested": true,
+                "pending_replan": true,
+                "recovered_replan": true
+            }),
+            serde_json::json!({
+                "task_id": "recovered",
+                "running": true,
+                "cancel_requested": false,
+                "pending_replan": false,
+                "recovered_replan": true
+            }),
+            serde_json::json!({
+                "task_id": "recovered",
+                "running": true,
+                "cancel_requested": false,
+                "pending_replan": true,
+                "cancelled": true,
+                "recovered_replan": true
+            }),
+        ] {
+            let error = serde_json::from_value::<TaskRecord>(malformed).unwrap_err();
+            assert!(error.to_string().contains("recovered_replan requires"));
         }
     }
 
@@ -508,6 +690,11 @@ mod tests {
     fn finish_run_preserves_only_a_pending_rerun() {
         for (initial, expected, rerun) in [
             (TaskLifecycle::Running, TaskLifecycle::Idle, false),
+            (
+                TaskLifecycle::RunningRecoveredReplan,
+                TaskLifecycle::Idle,
+                false,
+            ),
             (
                 TaskLifecycle::RunningReplanPending,
                 TaskLifecycle::ReplanPending,
@@ -564,6 +751,7 @@ mod tests {
             TaskLifecycle::Idle,
             TaskLifecycle::ReplanPending,
             TaskLifecycle::Running,
+            TaskLifecycle::RunningRecoveredReplan,
             TaskLifecycle::RunningReplanPending,
             TaskLifecycle::Cancelled,
         ] {
@@ -612,6 +800,7 @@ mod tests {
             TaskLifecycle::Idle,
             TaskLifecycle::ReplanPending,
             TaskLifecycle::Running,
+            TaskLifecycle::RunningRecoveredReplan,
             TaskLifecycle::RunningReplanPending,
             TaskLifecycle::Cancelling { was_running: false },
             TaskLifecycle::Cancelling { was_running: true },

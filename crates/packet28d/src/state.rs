@@ -74,6 +74,10 @@ pub(crate) enum BackgroundCommand {
         task_id: String,
         command: Vec<String>,
     },
+    RunRecoveredReplan {
+        task_id: String,
+        generation: TaskGenerationId,
+    },
 }
 
 pub(crate) struct TaskSubscriber {

@@ -89,6 +89,29 @@ fn terminate_remaining_process_group(process: OwnedChildProcess) -> Result<()> {
     )
 }
 
+pub(crate) fn recovered_agent_process_group_exists(pid: u32) -> Result<bool> {
+    if pid == 0 {
+        anyhow::bail!("recovered agent pid must be greater than zero");
+    }
+    if pid == std::process::id() {
+        anyhow::bail!(
+            "refusing to trust recovered agent pid {pid} because it is the current daemon"
+        );
+    }
+    let process_group = i32::try_from(pid)
+        .with_context(|| format!("recovered agent pid {pid} does not fit in a process-group id"))?;
+    // SAFETY: `getpgrp` has no preconditions and only reads the caller's
+    // current process-group id.
+    if process_group == unsafe { libc::getpgrp() } {
+        anyhow::bail!(
+            "refusing to trust recovered agent process group {process_group} because it owns the \
+             current daemon"
+        );
+    }
+    process_group_exists(OwnedChildProcess { pid, process_group })
+        .with_context(|| format!("failed to inspect recovered agent process group for pid {pid}"))
+}
+
 fn terminate_and_reap_child(child: &mut Child, process: OwnedChildProcess) -> Result<()> {
     let _ = signal_process_group(process, libc::SIGTERM);
     let started = Instant::now();
