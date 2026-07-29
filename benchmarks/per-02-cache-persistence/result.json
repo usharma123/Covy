@@ -1,13 +1,13 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "captured_at": "2026-07-28",
   "source": {
-    "head": "829ebe7042130da8f6b976cf400dd4d848928ca6",
+    "head": "5389ce5f3e64334dc17d368d3e718b1fde9b981b",
     "files": {
-      "crates/context-memory-core/src/cache.rs": "ef0a7db426f4aae2c8d5e5e1d74b4ed9df7d93b5b7de8ddb9b00c561b8cf3f25",
-      "crates/context-memory-core/src/persist.rs": "c2992bc2be7e9e13cac7960dd1248a66b3ed5cb195a7bf647ad968c84614c24e",
-      "crates/context-memory-core/src/persistence_owner.rs": "0cbc9d10eabcd2aaf6a1b004a84580577200597ebce2f6dfef393925cd25fa03",
-      "crates/context-memory-core/examples/cache_persistence_experiment.rs": "1c5b59b3bf023ffc2626919f90c311ea4ebc4cb46efda1ee96815f51b0fa34b3"
+      "crates/context-memory-core/src/cache.rs": "2056a7a7e3607c1ba6eab54cf32dcfb8e8784b53f2ccf71c6a8f5540ade32d1d",
+      "crates/context-memory-core/src/persist.rs": "32932c7c3b2c31650cba5c1b6f748bd61133aec50b9a08c60f6c9b4816b99bde",
+      "crates/context-memory-core/src/persistence_owner.rs": "7b4f1b0f1d155f9b63f1bd5f3bb523fa96cee46e1ad29d3d3bab1fe8cf454cce",
+      "crates/context-memory-core/examples/cache_persistence_experiment.rs": "7dafac9a14ae73c38ae2e33a2f4fc14a3bc5a3667797ab224214f39107f63e28"
     }
   },
   "environment": {
@@ -21,16 +21,20 @@
   "payload_bytes": 1024,
   "repeats": 3,
   "legacy_full_checkpoint_under_lock": {
-    "median_write_lock_ns": 20131584,
-    "median_elapsed_us": 1344839,
-    "median_published_bytes": 266982600
+    "median_write_lock_ns": 52867167,
+    "median_elapsed_us": 3420527,
+    "median_payload_bytes": 533971344,
+    "median_coordination_bytes": 0,
+    "median_published_bytes": 533971344
   },
   "owned_delta_wal_after_lock": {
-    "median_write_lock_ns": 39459,
-    "median_elapsed_us": 10838,
-    "median_published_bytes": 101461
+    "median_write_lock_ns": 40458,
+    "median_elapsed_us": 16828,
+    "median_payload_bytes": 101461,
+    "median_coordination_bytes": 8,
+    "median_published_bytes": 101469
   },
-  "lock_time_reduction_percent": 99.80399455899745,
-  "write_byte_reduction_percent": 99.96199714887787,
+  "lock_time_reduction_percent": 99.92347235099622,
+  "write_byte_reduction_percent": 99.98099729486607,
   "parity_entries": 576
 }

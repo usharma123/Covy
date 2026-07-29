@@ -33,7 +33,7 @@ Environment:
 - Darwin 24.6.0 arm64
 - rustc 1.93.1 (01f6ddf75 2026-02-11)
 - cargo 1.93.1 (083ac5135 2025-12-15)
-- source base `829ebe7042130da8f6b976cf400dd4d848928ca6`
+- source base `5389ce5f3e64334dc17d368d3e718b1fde9b981b`
 
 The result artifact records checksums for the measured context-memory source and
 example. The source base is informational because the measured implementation
@@ -51,10 +51,17 @@ controlled work model in the current source, not a checkout of a historical
 binary.
 
 `owned_delta_wal_after_lock` exercises the product `CachePersistence` path:
-mutate under the live cache mutex, release it, mark the entry dirty, then use a
-bounded flush to await the debounced WAL owner. Published bytes are actual WAL
-frame bytes reported by product telemetry. Initial fixture checkpoints are
-excluded from both measured write totals.
+reserve bounded persistence capacity and mutate under the root-shared live
+cache mutex, release it, commit the reserved entry delta, then use a bounded
+flush to await the debounced WAL owner. Published bytes combine actual WAL
+frame bytes and durable eight-byte coordination-generation writes reported by
+product telemetry.
+
+The legacy path counts both authenticated checkpoint payload copies (backup
+and primary) written for every measured mutation. The owned path reports its
+WAL payload and coordination bytes separately. Initial fixture checkpoints are
+excluded from both measured write totals. Metadata-only filesystem operations
+such as rename and truncation are not assigned synthetic byte counts.
 
 The experiment measures local filesystem behavior, not power-loss behavior on
 every filesystem. Crash boundaries are established mechanically by the
@@ -62,13 +69,13 @@ checksummed valid-prefix replay and checkpoint sequence-watermark tests.
 
 ## Results
 
-| Path | Median write-lock hold | Median elapsed, 64 writes | Published bytes |
-| --- | ---: | ---: | ---: |
-| Full checkpoint under lock | 20,131,584 ns | 1,344,839 µs | 266,982,600 |
-| Owned delta WAL after lock | 39,459 ns | 10,838 µs | 101,461 |
+| Path | Median write-lock hold | Median elapsed, 64 writes | Payload bytes | Coordination bytes | Published bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Full checkpoint under lock | 52,867,167 ns | 3,420,527 µs | 533,971,344 | 0 | 533,971,344 |
+| Owned delta WAL after lock | 40,458 ns | 16,828 µs | 101,461 | 8 | 101,469 |
 
-- Median cache-lock hold reduction: **99.804%**
-- Published-byte reduction: **99.962%**
+- Median cache-lock hold reduction: **99.923%**
+- Published-byte reduction: **99.981%**
 - Recovered entries on both paths: **576**
 
 The timing values are machine-specific. The architectural conclusion rests on

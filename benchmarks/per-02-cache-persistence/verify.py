@@ -22,7 +22,7 @@ def sha256(path: Path) -> str:
 
 def main() -> None:
     result = json.loads(RESULT_PATH.read_text(encoding="utf-8"))
-    assert result["schema_version"] == 1
+    assert result["schema_version"] == 2
     assert result["parity_entries"] == (
         result["fixture_entries"] + result["measured_writes"]
     )
@@ -33,6 +33,11 @@ def main() -> None:
     assert owned["median_published_bytes"] < legacy["median_published_bytes"]
     assert result["lock_time_reduction_percent"] >= 90.0
     assert result["write_byte_reduction_percent"] >= 90.0
+    for measurement in (legacy, owned):
+        assert measurement["median_published_bytes"] == (
+            measurement["median_payload_bytes"]
+            + measurement["median_coordination_bytes"]
+        )
 
     for relative, expected in result["source"]["files"].items():
         actual = sha256(ROOT / relative)
