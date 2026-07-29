@@ -93,6 +93,13 @@ pub enum DaemonCoreError {
         path: PathBuf,
     },
 
+    /// Another daemon process already owns this workspace.
+    #[error("another Packet28 daemon already owns {}", path.display())]
+    DaemonInstanceAlreadyRunning {
+        /// Persistent instance-lock path owned by the running daemon.
+        path: PathBuf,
+    },
+
     /// A candidate changed after inspection and was not removed.
     #[error("task-retention candidate changed during cleanup: {}", path.display())]
     RetentionCandidateChanged {
@@ -148,6 +155,9 @@ impl DaemonCoreError {
             }
             Self::RetentionBlockedByDaemon { .. } => {
                 "Stop packet28d before applying task retention."
+            }
+            Self::DaemonInstanceAlreadyRunning { .. } => {
+                "Use the running daemon or stop it before starting another instance."
             }
             Self::RetentionCandidateChanged { .. } => {
                 "Re-run the dry-run inspection before retrying cleanup."
