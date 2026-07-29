@@ -12,6 +12,7 @@ mod compat_v0;
 mod error;
 pub mod integrity;
 pub mod storage;
+pub mod task_store_lease;
 pub mod trust;
 
 pub use compat_v0::*;
