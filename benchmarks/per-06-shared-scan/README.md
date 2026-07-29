@@ -23,6 +23,34 @@ cargo clippy --manifest-path benchmarks/per-06-shared-scan/Cargo.toml --all-targ
 cargo run --manifest-path benchmarks/per-06-shared-scan/Cargo.toml --locked --offline --release -- --iterations 9 --output benchmarks/per-06-shared-scan/result.json
 ```
 
+The feature-gated production coordinator has a separate release-only binary:
+
+```text
+cargo test --manifest-path benchmarks/per-06-shared-scan/Cargo.toml --locked --offline --bin production
+cargo clippy --manifest-path benchmarks/per-06-shared-scan/Cargo.toml --locked --offline --bin production -- -D warnings
+rustup run 1.88.0 cargo check --manifest-path benchmarks/per-06-shared-scan/Cargo.toml --locked --offline --bin production
+cargo run --manifest-path benchmarks/per-06-shared-scan/Cargo.toml --locked --offline --release --bin production -- --iterations 6 --output benchmarks/per-06-shared-scan/production-result.json
+```
+
+The production run requires an even count of at least six measured pairs. It
+warms each strategy on throwaway roots, alternates AB/BA execution order, and
+reports the median of the paired latency deltas. Each measured pair is dropped
+and its root removed before the next pair, so immutable runtimes and mapped
+index files do not accumulate across samples.
+
+The separate arm is deliberately an instrumented counterfactual: it reproduces
+the two standalone discovery policies while holding the feature-gated engine
+builder and publication mechanics constant. Before timing, an untimed build
+through the literal default `rebuild_repo_index_runtime` and
+`rebuild_full_index` entry points must match that counterfactual. Every measured
+pair then proves map snapshot, regex artifact, query-result, ignore policy,
+malformed-input, symlink, size-boundary, and buffer-residency invariants.
+
+Production I/O counters cover repository inputs only. They exclude index
+artifact, manifest, scan-cache, filesystem cache, and physical-kernel I/O.
+Host, toolchain, clean-tree state, source-file digests, raw pair times, and
+execution order are recorded with the result.
+
 The release run uses two independently materialized, byte-identical roots for
 each fixture. It performs one unmeasured warmup per strategy, then alternates
 strategy order across nine iterations. Both strategies execute the same

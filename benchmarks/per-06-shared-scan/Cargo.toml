@@ -7,10 +7,15 @@ edition = "2021"
 publish = false
 
 [dependencies]
+anyhow = "=1.0.103"
 blake3 = "=1.8.3"
 ignore = "=0.4.25"
+mapy-core = { path = "../../crates/mapy-core", features = ["shared-repository-scan"] }
+packet28-search-core = { path = "../../crates/packet28-search-core", features = ["shared-repository-scan"] }
+packet28d = { path = "../../crates/packet28d", features = ["shared-repository-scan"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"
+suite-packet-core = { path = "../../crates/suite-packet-core" }
 tempfile = "=3.25.0"
 
 [lints.rust]
