@@ -147,5 +147,45 @@ class ReleasePermissionPolicyTests(unittest.TestCase):
         )
 
 
+class DependabotPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config = (
+            verify_ci_policy.ROOT / ".github" / "dependabot.yml"
+        ).read_text(encoding="utf-8")
+
+    def test_repository_dependency_lane_is_reviewed_and_bounded(self) -> None:
+        self.assertEqual(
+            verify_ci_policy.dependabot_policy_errors(self.config),
+            [],
+        )
+
+    def test_rejects_missing_ecosystem_or_unbounded_prs(self) -> None:
+        unsafe = self.config.replace(
+            '- package-ecosystem: "github-actions"',
+            '- package-ecosystem: "docker"',
+            1,
+        ).replace("    open-pull-requests-limit: 5\n", "", 1)
+
+        errors = verify_ci_policy.dependabot_policy_errors(unsafe)
+
+        self.assertIn(
+            'Dependabot must configure "github-actions" exactly once',
+            errors,
+        )
+        self.assertIn(
+            "every dependency ecosystem must bound open update PRs at five",
+            errors,
+        )
+
+    def test_rejects_automatic_merge(self) -> None:
+        unsafe = self.config + "\nauto-merge: true\n"
+
+        self.assertIn(
+            "dependency updates must not bypass review through auto-merge",
+            verify_ci_policy.dependabot_policy_errors(unsafe),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

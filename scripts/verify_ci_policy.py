@@ -300,6 +300,60 @@ def verify_release_permissions(errors: list[str]) -> None:
     )
 
 
+def dependabot_policy_errors(text: str) -> list[str]:
+    """Return violations of the reviewed dependency-update lane."""
+
+    errors: list[str] = []
+    if not text.startswith("version: 2\n"):
+        errors.append("Dependabot schema version must be 2")
+
+    ecosystems = ('"cargo"', '"npm"', '"github-actions"')
+    for ecosystem in ecosystems:
+        marker = f'package-ecosystem: {ecosystem}'
+        if text.count(marker) != 1:
+            errors.append(
+                f"Dependabot must configure {ecosystem} exactly once"
+            )
+    if text.count('interval: "weekly"') != len(ecosystems):
+        errors.append("every dependency ecosystem must use a weekly review cadence")
+    if text.count("open-pull-requests-limit: 5") != len(ecosystems):
+        errors.append("every dependency ecosystem must bound open update PRs at five")
+    if text.count('rebase-strategy: "auto"') != len(ecosystems):
+        errors.append("every dependency ecosystem must refresh its locked update branch")
+
+    required_fragments = {
+        "Cargo updates must cover the workspace root": (
+            '- package-ecosystem: "cargo"\n    directory: "/"'
+        ),
+        "npm updates must cover every reviewed package directory": (
+            'directories:\n      - "/"\n      - "/npm/*"\n      - "/package"'
+        ),
+        "GitHub Actions updates must cover workflow files": (
+            '- package-ecosystem: "github-actions"\n    directory: "/"'
+        ),
+        "compatible Rust updates must be grouped": "rust-compatible:",
+        "compatible npm updates must be grouped": "npm-compatible:",
+        "compatible action updates must be grouped": "actions-compatible:",
+        "minor updates must be reviewed": '- "minor"',
+        "patch updates must be reviewed": '- "patch"',
+    }
+    for message, fragment in required_fragments.items():
+        if fragment not in text:
+            errors.append(message)
+
+    if "auto-merge" in text or "automerge" in text:
+        errors.append("dependency updates must not bypass review through auto-merge")
+    return errors
+
+
+def verify_dependabot_policy(errors: list[str]) -> None:
+    dependabot = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    errors.extend(
+        f"dependabot.yml: {error}"
+        for error in dependabot_policy_errors(dependabot)
+    )
+
+
 def verify_workflow_wiring(errors: list[str]) -> None:
     build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
     release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
@@ -390,6 +444,7 @@ def main() -> int:
     verify_locked_commands(errors)
     verify_autofix_security(errors)
     verify_release_permissions(errors)
+    verify_dependabot_policy(errors)
     verify_workflow_wiring(errors)
     if errors:
         for error in errors:
