@@ -30,6 +30,7 @@ use packet28_daemon_core::storage::{
     load_watch_registry, now_unix, remove_runtime_files, save_task_registry, save_watch_registry,
     write_runtime_info,
 };
+use packet28_daemon_core::task_store_lease::acquire_daemon_task_store_lease;
 use packet28_daemon_protocol::broker::{
     BrokerAction, BrokerDecision, BrokerDecomposeIntent, BrokerDecomposeRequest,
     BrokerDecomposeResponse, BrokerDecomposedStep, BrokerDeltaResponse,
@@ -171,6 +172,7 @@ fn serve(root: PathBuf) -> Result<()> {
     std::env::set_current_dir(&root)
         .with_context(|| format!("failed to set daemon cwd to '{}'", root.display()))?;
     ensure_daemon_dir(&root)?;
+    let _task_store_lease = acquire_daemon_task_store_lease(&root)?;
     let config = DaemonRuntimeConfig::from_env()?;
     let daemon_log_path = log_path(&root);
     let listener = bind_daemon_listener(&root)?;
