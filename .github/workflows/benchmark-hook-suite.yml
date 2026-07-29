@@ -108,15 +108,17 @@ jobs:
 
       - name: Publish workflow summary
         run: |
-          cat .packet28/benchmarks/ci-hook-suite/summary.md >> "$GITHUB_STEP_SUMMARY"
-          printf '\n' >> "$GITHUB_STEP_SUMMARY"
-          cat .packet28/benchmarks/ci-hook-suite/validation.md >> "$GITHUB_STEP_SUMMARY"
-          printf '\n' >> "$GITHUB_STEP_SUMMARY"
-          cat .packet28/benchmarks/ci-native-suite/summary.md >> "$GITHUB_STEP_SUMMARY"
-          printf '\n' >> "$GITHUB_STEP_SUMMARY"
-          cat .packet28/benchmarks/ci-native-suite/validation.md >> "$GITHUB_STEP_SUMMARY"
-          printf '\n' >> "$GITHUB_STEP_SUMMARY"
-          cat .packet28/benchmarks/ci-agentic-tokenomics/summary.md >> "$GITHUB_STEP_SUMMARY"
+          {
+            cat .packet28/benchmarks/ci-hook-suite/summary.md
+            printf '\n'
+            cat .packet28/benchmarks/ci-hook-suite/validation.md
+            printf '\n'
+            cat .packet28/benchmarks/ci-native-suite/summary.md
+            printf '\n'
+            cat .packet28/benchmarks/ci-native-suite/validation.md
+            printf '\n'
+            cat .packet28/benchmarks/ci-agentic-tokenomics/summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hook benchmark artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
