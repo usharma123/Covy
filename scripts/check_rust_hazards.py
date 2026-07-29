@@ -23,7 +23,7 @@ ALLOWED_UNSAFE_FILES = {
     "crates/context-instruct-shim/src/linux.rs": "Linux preload FFI and syscalls",
     "crates/context-instruct-shim/src/macos.rs": "macOS interpose FFI and syscalls",
     "crates/covy-ingest/examples/ingest_allocation_probe.rs": "allocation-counting example",
-    "crates/packet28-search-core/src/lib.rs": "read-only memory-mapped index layer",
+    "crates/packet28-search-core/src/layer.rs": "read-only memory-mapped index layer",
     "crates/packet28d/src/launch.rs": "Unix process-group signals",
     "crates/packet28d/src/runtime_files_unix.rs": "retained Unix dirfd capability filesystem operations",
     "crates/packet28d/src/tests/cancellation.rs": "Unix process-group test probe",

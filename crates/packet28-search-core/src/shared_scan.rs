@@ -11,21 +11,20 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::{Result, SearchError};
+#[cfg(test)]
+use crate::generation::rebuild_full_index;
 use crate::generation::{
-    acquire_writer_lock, current_git_commit, durable_manifest, load_manifest, overlay_state_digest,
-    prune_generation_artifacts, publish_manifest, save_generation_record,
+    acquire_writer_lock, current_git_commit, durable_manifest, load_manifest, load_runtime,
+    overlay_state_digest, prune_generation_artifacts, publish_manifest, save_generation_record,
     validate_generation_record, GenerationWriterLock,
 };
 use crate::layer::{build_layer, write_atomic, IndexedDocument};
-use crate::load_runtime;
 use crate::model::{
     LayerFiles, LoadedIndex, OverlayState, RegexGenerationRecord, RegexIndexManifest,
     RegexIndexRuntime, MAX_INDEXED_FILE_BYTES, REGEX_INDEX_SCHEMA_VERSION,
 };
 use crate::paths::{manifest_path, previous_manifest_path};
 use crate::postings::build_indexed_grams;
-#[cfg(test)]
-use crate::rebuild_full_index;
 use crate::support::{mtime_secs, now_unix, ResultContext};
 use crate::weights::WEIGHT_TABLE_VERSION;
 

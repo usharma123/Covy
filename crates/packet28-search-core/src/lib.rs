@@ -34,6 +34,13 @@
 //! let runtime = RegexIndexRuntime::default();
 //! assert!(!runtime.is_loaded());
 //! ```
+//!
+//! Implementation modules are deliberately private; callers use the root
+//! facade (or the feature-gated [`shared_scan`] composition API):
+//!
+//! ```compile_fail
+//! use packet28_search_core::query::indexed_search;
+//! ```
 
 extern crate packet28_binary_codec as wincode;
 

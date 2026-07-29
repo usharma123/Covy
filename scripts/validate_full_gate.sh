@@ -76,6 +76,7 @@ run_cmd python3 scripts/verify_ci_policy.py
 run_cmd python3 scripts/verify_tooling.py
 run_cmd python3 scripts/verify_readme_stats.py --check
 run_cmd python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+run_cmd cargo test --locked -p packet28-search-core --test module_architecture --all-features
 
 if [[ -n "$release_tag" ]]; then
   run_cmd python3 scripts/verify_release_version.py --root . --tag "$release_tag"

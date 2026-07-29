@@ -62,6 +62,28 @@ runtime path has been benchmarked or revalidated.
 - Dependency summaries, JSON filtering, output envelopes, search/find, source
   reads, and command summaries live under `cmd_system/`.
 
+### Persistent search index
+
+- `packet28-search-core/src/lib.rs` is a documented compatibility facade. It
+  exposes only the typed error/result, manifest/runtime, lifecycle entrypoints,
+  query entrypoints, and the feature-gated shared-scan API.
+- `model.rs` owns public and persisted formats plus immutable loaded-generation
+  views; `postings.rs` owns gram derivation and the validated posting codec;
+  `layer.rs` owns repository scanning, layer construction, mmap loading, and
+  artifact validation; `query.rs` owns pure planning, candidate selection, and
+  source verification; `generation.rs` owns writer serialization, publication,
+  recovery, and retention; `paths.rs` owns repository-relative and on-disk
+  layout rules; `support.rs` owns narrow shared error/context helpers.
+- Generation publication depends on the immutable model view and never on query
+  orchestration. Shared-scan composition imports implementation entrypoints
+  from their owning modules rather than reaching back through the public facade.
+- `tests/module_architecture.rs` parses the Rust source to lock the facade export
+  set, reviewed file inventory and size ceilings, explicit acyclic dependency
+  graph, owning-module imports, generated-source provenance, and the absence of
+  production wildcard imports. External API tests compile every facade
+  entrypoint and exercise manifest JSON, lifecycle, reducer-search, and
+  shared-scan parity contracts.
+
 ### Daemon and tests
 
 - `crates/packet28-daemon-core` owns shared protocol, path, storage, integrity,

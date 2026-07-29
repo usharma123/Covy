@@ -1,3 +1,5 @@
+//! Generated gram-pair weights behind a small stable lookup interface.
+
 mod generated {
     include!("generated_pair_weights.rs");
 }
