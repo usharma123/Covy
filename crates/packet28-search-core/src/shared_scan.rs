@@ -165,6 +165,7 @@ impl RegexIndexScanSession {
         for (index, document) in self.docs.iter_mut().enumerate() {
             document.doc_id = u32::try_from(index)?;
         }
+        let overlay_state = OverlayState::default();
         let mut manifest = RegexIndexManifest {
             schema_version: REGEX_INDEX_SCHEMA_VERSION,
             weight_table_version: WEIGHT_TABLE_VERSION,
@@ -172,6 +173,7 @@ impl RegexIndexScanSession {
             include_tests: self.include_tests,
             status: "ready".to_string(),
             last_build_started_at_unix: Some(self.started_at_unix),
+            overlay_state_digest: Some(overlay_state_digest(&overlay_state)?),
             ..RegexIndexManifest::default()
         };
         let mut base_files = LayerFiles::base(self.generation);
@@ -186,7 +188,7 @@ impl RegexIndexScanSession {
             manifest: manifest.clone(),
             base: base_files.clone(),
             segments: Vec::new(),
-            overlay_state: OverlayState::default(),
+            overlay_state: overlay_state.clone(),
         };
         validate_generation_record(&record)?;
         save_generation_record(&self.root, &record)?;
@@ -196,7 +198,7 @@ impl RegexIndexScanSession {
                 base: Arc::new(base_layer),
                 base_files,
                 overlays: Vec::new(),
-                overlay_state: OverlayState::default(),
+                overlay_state,
             })),
         };
         Ok(PreparedRegexIndexRuntime {

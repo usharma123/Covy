@@ -10,6 +10,10 @@
 //! Public writers serialize on a repository-local lock and reject stale
 //! generation handles rather than silently overwriting a newer publication.
 //! Every generation record carries BLAKE3 digests for its artifacts, and
+//! published manifests bind overlay ownership/tombstone state to a digest.
+//! Legacy digestless records remain readable only when their owner mapping
+//! names the newest segment containing each live path.
+//!
 //! best-effort pruning retains only the current and explicitly recoverable
 //! previous generation under normal filesystem operation.
 //!
@@ -153,6 +157,12 @@ pub struct RegexIndexManifest {
     pub overlay_files: usize,
     /// Number of immutable overlay segments referenced by this generation.
     pub overlay_segments: usize,
+    /// Digest binding the overlay ownership and tombstone state to this manifest.
+    ///
+    /// Older generation records may omit this field; those records are still
+    /// subject to structural newest-owner validation when loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlay_state_digest: Option<String>,
     /// Git commit associated with the base layer, when available.
     pub base_commit: Option<String>,
     /// Reason the index cannot currently serve queries.
@@ -600,6 +610,7 @@ where
         .generation
         .max(previous.as_ref().map_or(0, |manifest| manifest.generation))
         .saturating_add(1);
+    let overlay_state = OverlayState::default();
     let mut manifest = RegexIndexManifest {
         schema_version: REGEX_INDEX_SCHEMA_VERSION,
         weight_table_version: WEIGHT_TABLE_VERSION,
@@ -607,6 +618,7 @@ where
         include_tests,
         status: "ready".to_string(),
         last_build_started_at_unix: Some(started),
+        overlay_state_digest: Some(overlay_state_digest(&overlay_state)?),
         ..RegexIndexManifest::default()
     };
 
@@ -625,7 +637,7 @@ where
         manifest: manifest.clone(),
         base: base_files.clone(),
         segments: Vec::new(),
-        overlay_state: OverlayState::default(),
+        overlay_state: overlay_state.clone(),
     };
     validate_generation_record(&record)?;
     save_generation_record(root, &record)?;
@@ -635,7 +647,7 @@ where
             base: Arc::new(base_layer),
             base_files,
             overlays: Vec::new(),
-            overlay_state: OverlayState::default(),
+            overlay_state,
         })),
     };
     publish_manifest(root, previous.as_ref(), &manifest)?;
@@ -744,6 +756,7 @@ pub fn update_overlay_index(
     manifest.total_files = all_indexed_paths(&loaded_index, None).len();
     manifest.overlay_files = loaded_index.overlay_state.owners.len();
     manifest.overlay_segments = loaded_index.overlays.len();
+    manifest.overlay_state_digest = Some(overlay_state_digest(&loaded_index.overlay_state)?);
     manifest.stale_reason = None;
     manifest.last_error = None;
     manifest.last_build_completed_at_unix = Some(now_unix());
@@ -3238,6 +3251,14 @@ fn validate_generation_record(record: &RegexGenerationRecord) -> Result<()> {
         record.manifest.overlay_files,
         record.overlay_state.owners.len()
     );
+    if let Some(expected) = record.manifest.overlay_state_digest.as_deref() {
+        let actual = overlay_state_digest(&record.overlay_state)?;
+        ensure_valid_index!(
+            actual == expected,
+            "regex generation {} overlay state failed digest validation (expected {expected}, found {actual})",
+            record.generation
+        );
+    }
     Ok(())
 }
 
@@ -3326,6 +3347,12 @@ fn load_legacy_generation(
 }
 
 fn validate_loaded_overlay_state(loaded: &LoadedIndex) -> Result<()> {
+    let mut newest_document_owner = BTreeMap::<&str, u64>::new();
+    for segment in &loaded.overlays {
+        for document in &segment.layer.docs {
+            newest_document_owner.insert(&document.path, segment.generation);
+        }
+    }
     for (path, owner) in &loaded.overlay_state.owners {
         ensure_valid_index!(
             loaded.overlay_state.shadowed_paths.contains(path)
@@ -3341,6 +3368,10 @@ fn validate_loaded_overlay_state(loaded: &LoadedIndex) -> Result<()> {
                 .and_then(|segment| segment.layer.doc_ids_by_path.get(path))
                 .is_some(),
             "regex overlay owner generation {owner} has no document for '{path}'"
+        );
+        ensure_valid_index!(
+            newest_document_owner.get(path.as_str()).copied() == Some(*owner),
+            "regex overlay owner generation {owner} is not the newest document for '{path}'"
         );
     }
     for path in &loaded.overlay_state.deleted_paths {
@@ -3360,7 +3391,28 @@ fn validate_loaded_overlay_state(loaded: &LoadedIndex) -> Result<()> {
             );
         }
     }
+    for (path, owner) in newest_document_owner {
+        if loaded.overlay_state.deleted_paths.contains(path) {
+            continue;
+        }
+        ensure_valid_index!(
+            loaded.overlay_state.owners.get(path).copied() == Some(owner),
+            "regex overlay newest document generation {owner} has no matching owner for '{path}'"
+        );
+    }
+    ensure_valid_index!(
+        loaded.overlay_state.shadowed_paths.iter().all(|path| loaded
+            .overlay_state
+            .owners
+            .contains_key(path)
+            || loaded.overlay_state.deleted_paths.contains(path)),
+        "regex overlay shadow state contains a path without an owner or tombstone"
+    );
     Ok(())
+}
+
+fn overlay_state_digest(state: &OverlayState) -> Result<String> {
+    Ok(artifact_digest(&serde_json::to_vec(state)?))
 }
 
 fn validate_manifest_counts(manifest: &RegexIndexManifest, loaded: &LoadedIndex) -> Result<()> {
@@ -3976,6 +4028,79 @@ mod tests {
             Some(&gamma.manifest.generation)
         );
         assert!(base.shares_base_with(&gamma));
+    }
+
+    #[test]
+    fn owner_mapping_mutation_recovers_instead_of_loading_stale_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
+        let base = rebuild_full_index(root, true).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Beta;\n").unwrap();
+        let beta = update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Gamma;\n").unwrap();
+        let gamma = update_overlay_index(root, Some(&beta), &[String::from("src/lib.rs")]).unwrap();
+        let mut record = current_generation_record(root);
+        assert_eq!(record.segments.len(), 2);
+        record
+            .overlay_state
+            .owners
+            .insert("src/lib.rs".to_string(), beta.manifest.generation);
+        write_atomic(
+            generation_record_path(root, record.generation),
+            &serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+
+        let recovered = load_runtime(root).unwrap();
+
+        assert!(recovered.is_loaded());
+        assert_eq!(recovered.manifest.generation, beta.manifest.generation);
+        assert_ne!(recovered.manifest.generation, gamma.manifest.generation);
+        assert!(recovered
+            .manifest
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("overlay state failed digest validation")));
+    }
+
+    #[test]
+    fn legacy_digestless_record_still_rejects_an_older_valid_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
+        let base = rebuild_full_index(root, true).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Beta;\n").unwrap();
+        let beta = update_overlay_index(root, Some(&base), &[String::from("src/lib.rs")]).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub struct Gamma;\n").unwrap();
+        let _gamma =
+            update_overlay_index(root, Some(&beta), &[String::from("src/lib.rs")]).unwrap();
+        let mut manifest = load_manifest_strict(root).unwrap();
+        manifest.overlay_state_digest = None;
+        save_manifest(root, &manifest).unwrap();
+        let mut record = current_generation_record(root);
+        record.manifest.overlay_state_digest = None;
+        record
+            .overlay_state
+            .owners
+            .insert("src/lib.rs".to_string(), beta.manifest.generation);
+        write_atomic(
+            generation_record_path(root, record.generation),
+            &serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+
+        let recovered = load_runtime(root).unwrap();
+
+        assert!(recovered.is_loaded());
+        assert_eq!(recovered.manifest.generation, beta.manifest.generation);
+        assert!(recovered
+            .manifest
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("is not the newest document")));
     }
 
     #[test]
