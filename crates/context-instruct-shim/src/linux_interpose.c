@@ -15,9 +15,10 @@
  * entry points; the only Rust business-logic calls are the two fixed callbacks
  * below. No Rust code retypes a variadic function or RTLD_NEXT pointer.
  */
-extern int context_instruct_shim_linux_try_open(const char *path,
+extern int context_instruct_shim_linux_try_open(const char *path, int flags,
                                                 int *replacement_fd);
 extern int context_instruct_shim_linux_try_openat(int dirfd, const char *path,
+                                                  int flags,
                                                   int *replacement_fd);
 
 typedef int (*open_fn)(const char *path, int flags, ...);
@@ -156,7 +157,7 @@ int context_instruct_shim_linux_open(const char *path, int flags, ...) {
   }
 
   int replacement_fd = -1;
-  if (context_instruct_shim_linux_try_open(path, &replacement_fd) != 0) {
+  if (context_instruct_shim_linux_try_open(path, flags, &replacement_fd) != 0) {
     return replacement_fd;
   }
   return call_open(required_open(), path, flags, mode, has_mode);
@@ -173,7 +174,7 @@ int context_instruct_shim_linux_open64(const char *path, int flags, ...) {
   }
 
   int replacement_fd = -1;
-  if (context_instruct_shim_linux_try_open(path, &replacement_fd) != 0) {
+  if (context_instruct_shim_linux_try_open(path, flags, &replacement_fd) != 0) {
     return replacement_fd;
   }
   return call_open(optional_open64(), path, flags, mode, has_mode);
@@ -191,8 +192,8 @@ int context_instruct_shim_linux_openat(int dirfd, const char *path, int flags,
   }
 
   int replacement_fd = -1;
-  if (context_instruct_shim_linux_try_openat(dirfd, path, &replacement_fd) !=
-      0) {
+  if (context_instruct_shim_linux_try_openat(dirfd, path, flags,
+                                             &replacement_fd) != 0) {
     return replacement_fd;
   }
   return call_openat(required_openat(), dirfd, path, flags, mode, has_mode);
@@ -210,8 +211,8 @@ int context_instruct_shim_linux_openat64(int dirfd, const char *path, int flags,
   }
 
   int replacement_fd = -1;
-  if (context_instruct_shim_linux_try_openat(dirfd, path, &replacement_fd) !=
-      0) {
+  if (context_instruct_shim_linux_try_openat(dirfd, path, flags,
+                                             &replacement_fd) != 0) {
     return replacement_fd;
   }
   return call_openat(optional_openat64(), dirfd, path, flags, mode, has_mode);

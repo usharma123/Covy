@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::ffi::{c_char, CString};
 use std::fs;
 use std::io::{BufReader, BufWriter};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -81,17 +82,19 @@ interpose_trampoline!(openat64, "context_instruct_shim_linux_openat64");
 /// # Safety
 ///
 /// `path` must point to a valid NUL-terminated C string for the duration of
-/// this call. `replacement_fd` must be non-null, properly aligned, and valid
-/// for writing one `libc::c_int`.
+/// this call. `flags` must be the flag word received by the corresponding
+/// libc `open` call. `replacement_fd` must be non-null, properly aligned, and
+/// valid for writing one `libc::c_int`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn context_instruct_shim_linux_try_open(
     path: *const c_char,
+    flags: libc::c_int,
     replacement_fd: *mut libc::c_int,
 ) -> libc::c_int {
     if replacement_fd.is_null() {
         return 0;
     }
-    let Some(fd) = maybe_virtualize(path, None) else {
+    let Some(fd) = maybe_virtualize(path, None, flags) else {
         return 0;
     };
     // SAFETY: The caller guarantees that `replacement_fd` is writable, and
@@ -113,18 +116,20 @@ pub unsafe extern "C" fn context_instruct_shim_linux_try_open(
 ///
 /// `path` must point to a valid NUL-terminated C string for the duration of
 /// this call. `dirfd` must be `AT_FDCWD` or a descriptor suitable for
-/// resolving `path`. `replacement_fd` must be non-null, properly aligned, and
-/// valid for writing one `libc::c_int`.
+/// resolving `path`. `flags` must be the flag word received by the
+/// corresponding libc `openat` call. `replacement_fd` must be non-null,
+/// properly aligned, and valid for writing one `libc::c_int`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn context_instruct_shim_linux_try_openat(
     dirfd: libc::c_int,
     path: *const c_char,
+    flags: libc::c_int,
     replacement_fd: *mut libc::c_int,
 ) -> libc::c_int {
     if replacement_fd.is_null() {
         return 0;
     }
-    let Some(fd) = maybe_virtualize(path, Some(dirfd)) else {
+    let Some(fd) = maybe_virtualize(path, Some(dirfd), flags) else {
         return 0;
     };
     // SAFETY: The caller guarantees that `replacement_fd` is writable, and
@@ -135,7 +140,12 @@ pub unsafe extern "C" fn context_instruct_shim_linux_try_openat(
     1
 }
 
-fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<libc::c_int> {
+fn maybe_virtualize(
+    path: *const c_char,
+    dirfd: Option<libc::c_int>,
+    flags: libc::c_int,
+) -> Option<libc::c_int> {
+    let replacement_flags = virtualized_read_flags(flags)?;
     if path.is_null() || intercept_disabled() {
         return None;
     }
@@ -161,7 +171,11 @@ fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<l
             rewritten_bytes,
             ..
         } => {
-            let fd = create_memfd("context-instruct-shim", content.as_bytes())?;
+            let fd = create_readonly_memfd(
+                "context-instruct-shim",
+                content.as_bytes(),
+                replacement_flags,
+            )?;
             debug_log(&format!(
                 "p28 virtualized path={} task={} original_bytes={} rewritten_bytes={}",
                 candidate.absolute_path.display(),
@@ -185,6 +199,17 @@ fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<l
             None
         }
     }
+}
+
+fn virtualized_read_flags(flags: libc::c_int) -> Option<libc::c_int> {
+    if flags & libc::O_ACCMODE != libc::O_RDONLY {
+        return None;
+    }
+    let allowed = libc::O_CLOEXEC | libc::O_LARGEFILE;
+    if flags & !allowed != 0 {
+        return None;
+    }
+    Some(flags & allowed)
 }
 
 fn detect_candidate(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<InterceptCandidate> {
@@ -334,40 +359,88 @@ fn resolve_instruction_file(
     }
 }
 
-fn create_memfd(name: &str, content: &[u8]) -> Option<libc::c_int> {
+fn create_readonly_memfd(
+    name: &str,
+    content: &[u8],
+    requested_flags: libc::c_int,
+) -> Option<libc::c_int> {
     let cname = CString::new(name).ok()?;
     // SAFETY: `cname` is a live NUL-terminated string, and the flags are valid
     // for Linux `memfd_create(2)`.
-    let fd = unsafe {
+    let raw_fd = unsafe {
         libc::syscall(
             libc::SYS_memfd_create,
             cname.as_ptr(),
             libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
         ) as libc::c_int
     };
-    if fd < 0 {
+    if raw_fd < 0 {
         return None;
     }
-    if !write_all_fd(fd, content) {
-        // SAFETY: `fd` was returned by `memfd_create` and remains owned here.
-        unsafe {
-            libc::close(fd);
-        }
+    // SAFETY: `raw_fd` is a new owned descriptor returned by
+    // `memfd_create(2)`.
+    let writable = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+    if !write_all_fd(writable.as_raw_fd(), content) {
         return None;
     }
-    // SAFETY: `fd` is an open descriptor owned by this function.
-    unsafe {
-        libc::lseek(fd, 0, libc::SEEK_SET);
+    let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    // SAFETY: `writable` is a live memfd created with `MFD_ALLOW_SEALING`, and
+    // the third argument is the documented `F_ADD_SEALS` bitset.
+    if unsafe { libc::fcntl(writable.as_raw_fd(), libc::F_ADD_SEALS, seals) } != 0 {
+        return None;
     }
-    Some(fd)
+    let readonly = reopen_memfd_readonly(&writable, requested_flags)?;
+    if !replacement_descriptor_matches(&readonly, requested_flags) {
+        return None;
+    }
+    Some(readonly.into_raw_fd())
+}
+
+fn reopen_memfd_readonly(writable: &OwnedFd, requested_flags: libc::c_int) -> Option<OwnedFd> {
+    let proc_path = CString::new(format!("/proc/self/fd/{}", writable.as_raw_fd())).ok()?;
+    // SAFETY: `proc_path` is a live NUL-terminated string. The direct
+    // `openat(2)` syscall avoids re-entering the interposed libc symbol.
+    // `requested_flags` contains only O_CLOEXEC/O_LARGEFILE; O_RDONLY is zero.
+    let raw_fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat,
+            libc::AT_FDCWD,
+            proc_path.as_ptr(),
+            requested_flags,
+            0,
+        ) as libc::c_int
+    };
+    if raw_fd < 0 {
+        return None;
+    }
+    // SAFETY: a successful `openat(2)` returns one new owned descriptor.
+    Some(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+}
+
+fn replacement_descriptor_matches(fd: &OwnedFd, requested_flags: libc::c_int) -> bool {
+    // SAFETY: `fd` is live and both commands are descriptor-only queries.
+    let status_flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+    if status_flags < 0 || status_flags & libc::O_ACCMODE != libc::O_RDONLY {
+        return false;
+    }
+    // SAFETY: `fd` is live and `F_GETFD` takes no third argument.
+    let descriptor_flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
+    descriptor_flags >= 0
+        && (descriptor_flags & libc::FD_CLOEXEC != 0) == (requested_flags & libc::O_CLOEXEC != 0)
 }
 
 fn write_all_fd(fd: libc::c_int, mut bytes: &[u8]) -> bool {
     while !bytes.is_empty() {
         // SAFETY: `bytes` is valid for `bytes.len()` reads and `fd` is an open
-        // descriptor supplied by `create_memfd`.
+        // descriptor supplied by `create_readonly_memfd`.
         let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
-        if written <= 0 {
+        if written < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if written == 0 {
             return false;
         }
         bytes = &bytes[written as usize..];
@@ -433,5 +506,32 @@ mod tests {
         let nested = root.join("docs").join("AGENTS.md");
         let expected = root.join("AGENTS.md");
         assert_ne!(normalize_path(&nested), normalize_path(&expected));
+    }
+
+    #[test]
+    fn virtualized_read_flags_accept_only_read_and_descriptor_semantics() {
+        assert_eq!(virtualized_read_flags(libc::O_RDONLY), Some(0));
+        assert_eq!(
+            virtualized_read_flags(libc::O_RDONLY | libc::O_CLOEXEC),
+            Some(libc::O_CLOEXEC)
+        );
+        assert_eq!(
+            virtualized_read_flags(libc::O_RDONLY | libc::O_LARGEFILE),
+            Some(libc::O_LARGEFILE)
+        );
+    }
+
+    #[test]
+    fn virtualized_read_flags_reject_mutating_and_special_modes() {
+        for flags in [
+            libc::O_WRONLY,
+            libc::O_RDWR,
+            libc::O_RDONLY | libc::O_TRUNC,
+            libc::O_RDONLY | libc::O_APPEND,
+            libc::O_PATH,
+            libc::O_RDONLY | libc::O_DIRECTORY,
+        ] {
+            assert_eq!(virtualized_read_flags(flags), None, "flags={flags:#x}");
+        }
     }
 }

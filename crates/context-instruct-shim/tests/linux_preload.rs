@@ -2,10 +2,20 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use packet28_daemon_protocol::frame::{read_frame, write_frame};
+use packet28_daemon_protocol::message::{
+    ContextBackendKind, ContextResolveOutcome, ContextResolveResponse, ContextSourceKind,
+    DaemonRequest, DaemonResponse, InstructionRenderMode,
+};
+use packet28_daemon_protocol::paths::socket_path;
 
 static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -108,6 +118,142 @@ fn preload_bridge_preserves_open_arities_modes_and_errno() {
     assert_mode(&fixture_root.path().join("created64.txt"), 0o640);
     assert_mode(&fixture_root.path().join("created_at.txt"), 0o624);
     assert_mode(&fixture_root.path().join("created_at64.txt"), 0o660);
+}
+
+#[test]
+fn preload_virtualizes_only_sealed_readonly_instruction_opens() {
+    let fixture_root = TestDir::new();
+    let canonical_root = fs::canonicalize(fixture_root.path()).unwrap();
+    let shim = build_shim(&fixture_root.path().join("cargo-target"));
+    let instruction_path = fixture_root.path().join("AGENTS.md");
+    fs::write(&instruction_path, "agents-original").unwrap();
+    let fixture_binary = fixture_root.path().join("linux-open-semantics");
+    let fixture_source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/linux_open_semantics.c");
+    let compile = Command::new("cc")
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&fixture_source)
+        .arg("-o")
+        .arg(&fixture_binary)
+        .output()
+        .expect("invoke cc for Linux open semantics fixture");
+    assert!(
+        compile.status.success(),
+        "failed to compile Linux open semantics fixture\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let (done, socket, server) = spawn_rewrite_server(&canonical_root);
+    let output = Command::new(&fixture_binary)
+        .arg(&canonical_root)
+        .current_dir(&canonical_root)
+        .env("LD_PRELOAD", &shim)
+        .env("P28_DEBUG", "1")
+        .env_remove("PACKET28_DAEMON_ROOT")
+        .env_remove("PACKET28_AGENT_FAMILY")
+        .output()
+        .expect("run Linux open semantics fixture with LD_PRELOAD");
+    done.store(true, Ordering::Release);
+    let requests = server
+        .join()
+        .expect("rewrite server thread must not panic")
+        .expect("rewrite server must complete");
+    let _ = fs::remove_file(&socket);
+
+    assert_eq!(
+        requests, 8,
+        "only two pure-read opens for each interposed symbol may reach the daemon"
+    );
+    assert!(
+        output.status.success(),
+        "Linux open semantics fixture failed with shim '{}'\nstdout:\n{}\nstderr:\n{}",
+        shim.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "linux-open-semantics-ok"
+    );
+    assert_eq!(
+        fs::read_to_string(instruction_path).unwrap(),
+        "agents-original"
+    );
+}
+
+fn spawn_rewrite_server(
+    root: &Path,
+) -> (
+    Arc<AtomicBool>,
+    PathBuf,
+    thread::JoinHandle<Result<usize, String>>,
+) {
+    let socket = socket_path(root);
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let _ = fs::remove_file(&socket);
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let done = Arc::new(AtomicBool::new(false));
+    let thread_done = Arc::clone(&done);
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut requests = 0;
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .map_err(|error| error.to_string())?;
+                    let request: DaemonRequest =
+                        read_frame(&mut stream).map_err(|error| error.to_string())?;
+                    let DaemonRequest::ContextResolve { request } = request else {
+                        return Err("unexpected daemon request variant".to_string());
+                    };
+                    if request.source_content != "agents-original"
+                        || request.source_path.as_deref() != Some("AGENTS.md")
+                        || request.backend_kind != ContextBackendKind::LinuxPreload
+                    {
+                        return Err(format!("unexpected context request: {request:?}"));
+                    }
+                    let response = DaemonResponse::ContextResolve {
+                        response: ContextResolveResponse {
+                            source_kind: ContextSourceKind::InstructionFile,
+                            source_path: Some("AGENTS.md".to_string()),
+                            outcome: ContextResolveOutcome::Rewrite {
+                                content: "agents-rewritten".to_string(),
+                                content_sha256: "test-content".to_string(),
+                                render_mode: InstructionRenderMode::Stable,
+                                stable_config_sha256: String::new(),
+                                snapshot_sha256: None,
+                                rendered_sha256: "test-render".to_string(),
+                                task_label: "linux-open-test".to_string(),
+                                original_bytes: "agents-original".len(),
+                                rewritten_bytes: "agents-rewritten".len(),
+                                cache_hit: false,
+                                matched_terms: Vec::new(),
+                                section_titles: Vec::new(),
+                                schema_version: 1,
+                            },
+                        },
+                    };
+                    write_frame(&mut stream, &response).map_err(|error| error.to_string())?;
+                    requests += 1;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if thread_done.load(Ordering::Acquire) {
+                        return Ok(requests);
+                    }
+                    if Instant::now() >= deadline {
+                        return Err("rewrite server exceeded 20-second deadline".to_string());
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+    });
+    (done, socket, handle)
 }
 
 fn build_shim(target_dir: &Path) -> PathBuf {
