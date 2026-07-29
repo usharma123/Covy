@@ -43,6 +43,32 @@ class RustHazardPolicyTests(unittest.TestCase):
                 {"crates/core-algorithm/src/lib.rs"},
             )
 
+    def test_generated_cargo_target_sources_are_not_inventoried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "benchmarks" / "probe" / "src" / "lib.rs"
+            generated = (
+                root
+                / "benchmarks"
+                / "probe"
+                / "target"
+                / "debug"
+                / "build"
+                / "generated.rs"
+            )
+            source.parent.mkdir(parents=True)
+            generated.parent.mkdir(parents=True)
+            source.write_text("pub fn safe() {}\n", encoding="utf-8")
+            generated.write_text(
+                "#![allow(clippy::unwrap_used)]\n"
+                "fn generated(pointer: *const u8) -> u8 { unsafe { *pointer } }\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(hazards.unsafe_source_files(root), set())
+            self.assertEqual(list(hazards.production_rust_source_files(root)), [source])
+            self.assertEqual(hazards.panic_override_inventory(root), (hazards.Counter(), []))
+
     def test_stale_allowlist_entry_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

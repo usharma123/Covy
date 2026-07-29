@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import os
 from pathlib import Path
 import re
 import shlex
@@ -79,6 +80,23 @@ UNSAFE_LINTS = (
     "clippy::missing_safety_doc",
 )
 
+IGNORED_SOURCE_DIRECTORIES = frozenset({"target"})
+
+
+def rust_files_beneath(base: Path) -> Iterable[Path]:
+    """Yield Rust files without traversing generated Cargo target trees."""
+
+    for directory, child_directories, file_names in os.walk(base):
+        child_directories[:] = sorted(
+            name
+            for name in child_directories
+            if name not in IGNORED_SOURCE_DIRECTORIES
+        )
+        current = Path(directory)
+        for file_name in sorted(file_names):
+            if file_name.endswith(".rs"):
+                yield current / file_name
+
 
 def rust_source_files(root: Path) -> Iterable[Path]:
     """Yield checked Rust sources without descending into generated targets."""
@@ -86,7 +104,7 @@ def rust_source_files(root: Path) -> Iterable[Path]:
     for base_name in ("crates", "benchmarks"):
         base = root / base_name
         if base.exists():
-            yield from base.rglob("*.rs")
+            yield from rust_files_beneath(base)
 
 
 def production_rust_source_files(root: Path) -> Iterable[Path]:
@@ -96,15 +114,18 @@ def production_rust_source_files(root: Path) -> Iterable[Path]:
         base = root / base_name
         if not base.exists():
             continue
-        for package in base.iterdir():
-            if not package.is_dir():
+        for package in sorted(base.iterdir()):
+            if (
+                not package.is_dir()
+                or package.name in IGNORED_SOURCE_DIRECTORIES
+            ):
                 continue
             build_script = package / "build.rs"
             if build_script.is_file():
                 yield build_script
             source = package / "src"
             if source.exists():
-                yield from source.rglob("*.rs")
+                yield from rust_files_beneath(source)
 
 
 def unsafe_source_files(root: Path) -> set[str]:
