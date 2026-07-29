@@ -2,11 +2,11 @@
   "schema_version": 2,
   "captured_at": "2026-07-28",
   "source": {
-    "head": "cac2ae303cde58f0265127452afcfbbe4407a518",
+    "head": "a7c21073c1f1b37fd00822a4ba5ab75ed879480e",
     "files": {
       "crates/context-memory-core/src/cache.rs": "2056a7a7e3607c1ba6eab54cf32dcfb8e8784b53f2ccf71c6a8f5540ade32d1d",
       "crates/context-memory-core/src/persist.rs": "32932c7c3b2c31650cba5c1b6f748bd61133aec50b9a08c60f6c9b4816b99bde",
-      "crates/context-memory-core/src/persistence_owner.rs": "c5248051e7010604f575d49a551fb93760d7cfb923a8c10943f4b9c44c78849e",
+      "crates/context-memory-core/src/persistence_owner.rs": "7200c9c4c5e166e274faa4edf598a1d3df5ebed9906e48f37a6aa7465d71d5b0",
       "crates/context-memory-core/examples/cache_persistence_experiment.rs": "7dafac9a14ae73c38ae2e33a2f4fc14a3bc5a3667797ab224214f39107f63e28"
     }
   },
@@ -21,20 +21,20 @@
   "payload_bytes": 1024,
   "repeats": 3,
   "legacy_full_checkpoint_under_lock": {
-    "median_write_lock_ns": 47988708,
-    "median_elapsed_us": 3134432,
+    "median_write_lock_ns": 49159083,
+    "median_elapsed_us": 3255867,
     "median_payload_bytes": 533971344,
     "median_coordination_bytes": 0,
     "median_published_bytes": 533971344
   },
   "owned_delta_wal_after_lock": {
-    "median_write_lock_ns": 41167,
-    "median_elapsed_us": 15272,
+    "median_write_lock_ns": 40125,
+    "median_elapsed_us": 15905,
     "median_payload_bytes": 101461,
     "median_coordination_bytes": 8,
     "median_published_bytes": 101469
   },
-  "lock_time_reduction_percent": 99.91421523580088,
+  "lock_time_reduction_percent": 99.91837724068205,
   "write_byte_reduction_percent": 99.98099729486607,
   "parity_entries": 576
 }
