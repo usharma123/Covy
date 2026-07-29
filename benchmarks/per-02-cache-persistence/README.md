@@ -33,11 +33,12 @@ Environment:
 - Darwin 24.6.0 arm64
 - rustc 1.93.1 (01f6ddf75 2026-02-11)
 - cargo 1.93.1 (083ac5135 2025-12-15)
-- source base `5389ce5f3e64334dc17d368d3e718b1fde9b981b`
+- source base `cac2ae303cde58f0265127452afcfbbe4407a518`
 
 The result artifact records checksums for the measured context-memory source and
-example. The source base is informational because the measured implementation
-was an uncommitted atomic remediation slice at capture time.
+example. The source base identifies the committed lifecycle implementation used
+for this capture; the per-file checksums remain the mechanically enforced
+identity.
 
 ## Workload and evidence boundary
 
@@ -71,10 +72,10 @@ checksummed valid-prefix replay and checkpoint sequence-watermark tests.
 
 | Path | Median write-lock hold | Median elapsed, 64 writes | Payload bytes | Coordination bytes | Published bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Full checkpoint under lock | 52,867,167 ns | 3,420,527 µs | 533,971,344 | 0 | 533,971,344 |
-| Owned delta WAL after lock | 40,458 ns | 16,828 µs | 101,461 | 8 | 101,469 |
+| Full checkpoint under lock | 47,988,708 ns | 3,134,432 µs | 533,971,344 | 0 | 533,971,344 |
+| Owned delta WAL after lock | 41,167 ns | 15,272 µs | 101,461 | 8 | 101,469 |
 
-- Median cache-lock hold reduction: **99.923%**
+- Median cache-lock hold reduction: **99.914%**
 - Published-byte reduction: **99.981%**
 - Recovered entries on both paths: **576**
 
