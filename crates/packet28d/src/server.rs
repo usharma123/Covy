@@ -144,10 +144,9 @@ where
         let response = match response {
             Ok(value) => value,
             Err(error) => {
-                daemon_log(&format!("daemon request failed: {error}"));
-                DaemonResponse::Error {
-                    message: error.to_string(),
-                }
+                let message = format!("{error:#}");
+                daemon_log(&format!("daemon request failed: {message}"));
+                DaemonResponse::Error { message }
             }
         };
         if control_response {
