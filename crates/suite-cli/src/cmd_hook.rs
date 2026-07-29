@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use packet28_daemon_core::storage::now_unix;
+use packet28_daemon_core::task_store_lease::acquire_task_store_writer_lease;
 use packet28_daemon_protocol::broker::{BrokerAction, BrokerGetContextRequest};
 use packet28_daemon_protocol::hooks::{
     ActiveTaskRecord, HookBoundaryKind, HookEventKind, HookIngestRequest, HookRuntimeConfig,
@@ -238,6 +239,7 @@ pub(crate) fn process_claude_hook_payload(
         ensure_hook_http_server(root, &runtime_config)?;
     }
     crate::broker_client::ensure_daemon(root)?;
+    let _writer_lease = acquire_task_store_writer_lease(root)?;
 
     let session_id = json_string(payload, "session_id");
     let task_id = resolve_task_id(root, payload, session_id.as_deref())?;
@@ -339,6 +341,7 @@ fn process_runtime_hook_payload(
     let root = resolve_runtime_hook_root(&args, &payload);
     let runtime_config = load_hook_runtime_config(&root);
     crate::broker_client::ensure_daemon(&root)?;
+    let _writer_lease = acquire_task_store_writer_lease(&root)?;
 
     let event_kind = args
         .event
@@ -532,7 +535,7 @@ fn resolve_task_id(root: &Path, payload: &Value, session_id: Option<&str>) -> Re
         )?;
         return Ok(task_id);
     }
-    if let Some(active) = crate::task_runtime::load_active_task(root) {
+    if let Some(active) = crate::task_runtime::load_active_task(root)? {
         if session_id.is_none() || active.session_id.as_deref() == session_id {
             return Ok(active.task_id);
         }
@@ -569,7 +572,7 @@ fn resolve_runtime_task_id(
         )?;
         return Ok(task_id);
     }
-    if let Some(active) = crate::task_runtime::load_active_task(root) {
+    if let Some(active) = crate::task_runtime::load_active_task(root)? {
         return Ok(active.task_id);
     }
     let seed = match runtime {

@@ -7,10 +7,11 @@ pub(crate) fn handle_packet28_read_regions(
     session: &Arc<Mutex<McpSessionState>>,
     args: Packet28ReadRegionsArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.read_regions requires task_id"));
     }
+    validated_task_storage_id(task_id)?;
     let (sequence, invocation_id) = next_task_invocation(session, task_id)?;
     let request_summary = read_regions_request_summary(&args, &args.path);
 
@@ -177,10 +178,11 @@ pub(crate) fn handle_packet28_glob(
     session: &Arc<Mutex<McpSessionState>>,
     args: Packet28GlobArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.glob requires task_id"));
     }
+    validated_task_storage_id(task_id)?;
     let pattern = args.pattern.trim();
     if pattern.is_empty() {
         return Err(anyhow!("packet28.glob requires pattern"));

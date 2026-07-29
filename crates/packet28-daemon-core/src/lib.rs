@@ -31,6 +31,9 @@
 //! use packet28_daemon_core::write_frame;
 //! ```
 
+#[cfg(unix)]
+#[path = "retention/capability.rs"]
+mod capability;
 mod compat_v0;
 mod error;
 pub mod integrity;

@@ -62,6 +62,21 @@ The 18 unsafe diagnostics were similarly exhaustive: 13 in the macOS
 interpose adapter, one in the read-only search mmap, one in Unix stdout
 redirection, two in the process-harness E2E, and one in the macOS runtime E2E.
 
+Task-store retention adds two reviewed unsafe-bearing files while keeping the
+same locality rule. `retention/capability.rs` owns the task store's
+descriptor-level OS boundary: `fpathconf`, Linux ACL xattrs, and macOS ACL
+calls. Each call has a local `SAFETY` contract; the capability tests exercise
+name limits, ACL rejection without mutation, inherited-ACL stripping before
+publication, and descriptor identity checks. `storage.rs` uses `getrusage`
+only inside a `cfg(test)` subprocess probe that proves adversarial authority
+JSON stays within the resident-memory bound. No reusable retention or storage
+algorithm requires callers to write unsafe Rust. The MCP artifact boundary is
+similarly isolated in `cmd_mcp_artifact_io.rs`: its `openat`, `mkdirat`,
+`renameat`, `unlinkat`, `fstatat`, and bounded directory-enumeration calls
+implement descriptor-relative confinement. Its tests cover exact-name
+revalidation, symlink and hard-link rejection, case-folded alias rejection,
+bounded reads/writes, and non-mutation on failure.
+
 After fallible paths were repaired, 13 reviewed lint expectations remain:
 four lint entries cover the two build scripts' intentional fatal exits, seven
 cover compile-time regex literals exercised by parser/filter tests, and two
@@ -79,7 +94,7 @@ and requires a reason on each expectation.
   reason, are checked for fulfillment, and are reconciled against an exact
   reviewed inventory. Production `#[allow]` overrides are rejected.
 - The same checker inventories unsafe syntax. Its reviewed allowlist currently
-  contains 14 files: seven production OS/FFI/mmap adapters and seven
+  contains 18 files: ten production OS/FFI/mmap adapters and eight
   test/benchmark instrumentation files. A new unsafe-bearing file or stale
   allowlist entry fails the gate until the architectural inventory is
   reconciled explicitly.

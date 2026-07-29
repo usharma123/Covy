@@ -199,14 +199,19 @@ pub(crate) fn store_tool_artifact(
     suffix: &str,
     payload: &Value,
 ) -> Result<String> {
-    let dir = task_artifact_dir(root, task_id).join("tool-evidence");
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create tool evidence dir '{}'", dir.display()))?;
-    let artifact_id = format!("{invocation_id}-{suffix}.json");
-    let path = dir.join(&artifact_id);
-    fs::write(&path, serde_json::to_vec_pretty(payload)?)
-        .with_context(|| format!("failed to write tool evidence '{}'", path.display()))?;
-    Ok(artifact_id)
+    let task_id = TaskStorageId::try_from(task_id)?;
+    let handle = artifact_io::ArtifactHandle::from_invocation(invocation_id, suffix)?;
+    let bytes = artifact_io::encode_json_artifact(payload)?;
+    let _writer_lease =
+        packet28_daemon_core::task_store_lease::acquire_task_store_writer_lease(root)?;
+    artifact_io::write_task_artifact(
+        root,
+        &task_id,
+        artifact_io::ArtifactLocation::ToolEvidence,
+        &handle,
+        &bytes,
+    )?;
+    Ok(handle.as_str().to_owned())
 }
 
 pub(crate) fn load_tool_result_artifact(
@@ -215,31 +220,41 @@ pub(crate) fn load_tool_result_artifact(
     artifact_id: Option<&str>,
     invocation_id: Option<&str>,
 ) -> Result<(String, Value)> {
-    let selected_artifact_id = match (artifact_id, invocation_id) {
-        (Some(artifact_id), _) if !artifact_id.trim().is_empty() => artifact_id.trim().to_string(),
-        (None, Some(invocation_id)) if !invocation_id.trim().is_empty() => {
-            format!("{}-result.json", invocation_id.trim())
-        }
-        _ => {
-            return Err(anyhow!(
-                "packet28.fetch_tool_result requires artifact_id or invocation_id"
-            ));
-        }
-    };
-    let tool_path = task_artifact_dir(root, task_id)
-        .join("tool-evidence")
-        .join(&selected_artifact_id);
-    let hook_path = task_artifact_dir(root, task_id)
-        .join("hook-artifacts")
-        .join(format!("{selected_artifact_id}.json"));
-    let path = if tool_path.exists() {
-        tool_path
+    let task_id = TaskStorageId::try_from(task_id)?;
+    let selected_handle = if let Some(artifact_id) = artifact_id {
+        artifact_io::ArtifactHandle::try_from(artifact_id)?
+    } else if let Some(invocation_id) = invocation_id {
+        artifact_io::ArtifactHandle::from_invocation(invocation_id, "result")?
     } else {
-        hook_path
+        return Err(anyhow!(
+            "packet28.fetch_tool_result requires artifact_id or invocation_id"
+        ));
     };
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read stored artifact '{}'", path.display()))?;
-    let value = serde_json::from_str(&text)
+    let selected_artifact_id = selected_handle.as_str().to_owned();
+    let artifact = artifact_io::read_task_artifact(
+        root,
+        &task_id,
+        artifact_io::ArtifactLocation::ToolEvidence,
+        &selected_handle,
+    )?;
+    let artifact = if artifact.is_some() {
+        artifact
+    } else {
+        let hook_handle = selected_handle.json_file_name()?;
+        artifact_io::read_task_artifact(
+            root,
+            &task_id,
+            artifact_io::ArtifactLocation::HookArtifacts,
+            &hook_handle,
+        )?
+    };
+    let (path, bytes) = artifact.ok_or_else(|| {
+        anyhow!(
+            "failed to resolve stored artifact handle {:?}",
+            selected_handle.as_str()
+        )
+    })?;
+    let value = serde_json::from_slice(&bytes)
         .with_context(|| format!("invalid artifact JSON '{}'", path.display()))?;
     Ok((selected_artifact_id, value))
 }
@@ -249,25 +264,28 @@ pub(crate) fn load_raw_output_artifact(
     task_id: &str,
     handle: &str,
 ) -> Result<(String, String)> {
-    let trimmed = handle.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow!("packet28.fetch_raw_output requires handle"));
+    let task_id = TaskStorageId::try_from(task_id)?;
+    let handle = artifact_io::ArtifactHandle::try_from(handle)?;
+    let mut artifact = None;
+    for location in [
+        artifact_io::ArtifactLocation::TaskRoot,
+        artifact_io::ArtifactLocation::HookSpool,
+        artifact_io::ArtifactLocation::HookArtifacts,
+        artifact_io::ArtifactLocation::ToolEvidence,
+    ] {
+        artifact = artifact_io::read_task_artifact(root, &task_id, location, &handle)?;
+        if artifact.is_some() {
+            break;
+        }
     }
-    let direct = PathBuf::from(trimmed);
-    let task_root = task_artifact_dir(root, task_id);
-    let candidates = [
-        direct.clone(),
-        task_root.join(trimmed),
-        task_root.join("hook-spool").join(trimmed),
-        task_root.join("hook-artifacts").join(trimmed),
-        task_root.join("tool-evidence").join(trimmed),
-    ];
-    let path = candidates
-        .into_iter()
-        .find(|candidate| candidate.exists())
-        .ok_or_else(|| anyhow!("failed to resolve raw artifact handle '{trimmed}'"))?;
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read raw artifact '{}'", path.display()))?;
+    let (path, bytes) = artifact.ok_or_else(|| {
+        anyhow!(
+            "failed to resolve raw artifact handle {:?}",
+            handle.as_str()
+        )
+    })?;
+    let text = String::from_utf8(bytes)
+        .with_context(|| format!("raw artifact '{}' is not UTF-8", path.display()))?;
     Ok((path.display().to_string(), text))
 }
 
@@ -309,11 +327,12 @@ pub(crate) fn resolve_session_task_id(
     derive_hint: Option<&str>,
     tool_name: &str,
 ) -> Result<String> {
-    let task_id = if !explicit_task_id.trim().is_empty() {
-        explicit_task_id.trim().to_string()
+    let task_id = if !explicit_task_id.is_empty() {
+        validated_task_storage_id(explicit_task_id)?;
+        explicit_task_id.to_string()
     } else if let Some(task_id) = session_current_task_id(session) {
         task_id
-    } else if let Some(task) = crate::task_runtime::load_active_task(root) {
+    } else if let Some(task) = crate::task_runtime::load_active_task(root)? {
         task.task_id
     } else if let Ok(task_id) = resolve_current_task_id(root, session) {
         task_id
@@ -324,6 +343,7 @@ pub(crate) fn resolve_session_task_id(
             "{tool_name} requires task_id or an active Packet28 session task"
         ));
     };
+    validated_task_storage_id(&task_id)?;
     track_task(session, root, &task_id)?;
     Ok(task_id)
 }

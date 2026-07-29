@@ -17,7 +17,8 @@ fn load_hook_runtime_config(root: &Path) -> HookRuntimeConfig {
 }
 
 fn store_hook_artifact(root: &Path, task_id: &str, prefix: &str, value: &Value) -> Result<String> {
-    let dir = task_artifact_dir(root, task_id).join("hook-artifacts");
+    let storage_id = task_storage_id(task_id)?;
+    let dir = task_artifact_dir(root, &storage_id).join("hook-artifacts");
     fs::create_dir_all(&dir).with_context(|| format!("failed to create '{}'", dir.display()))?;
     let id = format!(
         "{prefix}-{}-{:x}",
@@ -50,7 +51,8 @@ fn hook_task_additional_context(
     {
         return Ok(None);
     }
-    let path = task_brief_markdown_path(&root, task_id);
+    let storage_id = task_storage_id(task_id)?;
+    let path = task_brief_markdown_path(&root, &storage_id);
     let brief = fs::read_to_string(path).ok();
     {
         let mut guard = state.lock().map_err(lock_err)?;

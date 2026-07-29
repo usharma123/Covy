@@ -8,10 +8,11 @@ use thiserror::Error;
 
 /// Failure produced by reusable `packet28-daemon-core` operations.
 ///
-/// Each variant retains its concrete source in the standard
-/// [`std::error::Error::source`] chain. The enum is non-exhaustive so future
-/// storage backends can add precise failure modes without forcing downstream
-/// exhaustive matches.
+/// Filesystem, codec, and framing variants retain their concrete source in the
+/// standard [`std::error::Error::source`] chain. Policy and validation
+/// variants expose their rejected values directly. The enum is non-exhaustive
+/// so future storage backends can add precise failure modes without forcing
+/// downstream exhaustive matches.
 ///
 /// # Examples
 ///
@@ -52,6 +53,122 @@ pub enum DaemonCoreError {
         /// Typed JSON codec failure.
         #[source]
         source: serde_json::Error,
+    },
+
+    /// A task registry would exceed the supported serialized-size bound.
+    #[error(
+        "task registry {} is {encoded_bytes} bytes; maximum supported size is {max_bytes} bytes",
+        path.display()
+    )]
+    TaskRegistryTooLarge {
+        /// Registry path that was not replaced.
+        path: PathBuf,
+        /// Encoded size of the rejected registry.
+        encoded_bytes: u64,
+        /// Maximum supported encoded size.
+        max_bytes: u64,
+    },
+
+    /// A registry record cannot fit the bounded crash-recovery journal.
+    #[error(
+        "task registry {} requires a {journal_bytes}-byte retention journal; maximum supported size is {max_bytes} bytes",
+        path.display()
+    )]
+    TaskRegistryRetentionEnvelopeTooLarge {
+        /// Registry path that was not replaced.
+        path: PathBuf,
+        /// Encoded size of the rejected maximum candidate journal.
+        journal_bytes: u64,
+        /// Maximum supported encoded journal size.
+        max_bytes: u64,
+    },
+
+    /// An active-task record would exceed the supported serialized-size bound.
+    #[error(
+        "active-task record {} is {encoded_bytes} bytes; maximum supported size is {max_bytes} bytes",
+        path.display()
+    )]
+    ActiveTaskRecordTooLarge {
+        /// Active-task path that was not replaced or decoded.
+        path: PathBuf,
+        /// Encoded size of the rejected record.
+        encoded_bytes: u64,
+        /// Maximum supported encoded size.
+        max_bytes: u64,
+    },
+
+    /// An active-task record violates an invariant required by all writers.
+    #[error("invalid active-task record {}: {message}", path.display())]
+    InvalidActiveTaskRecord {
+        /// Active-task path that was rejected.
+        path: PathBuf,
+        /// Stable explanation of the invalid record.
+        message: String,
+    },
+
+    /// A task registry violates an invariant required by all supported writers.
+    #[error("invalid task registry {}: {message}", path.display())]
+    InvalidTaskRegistry {
+        /// Registry path that was rejected.
+        path: PathBuf,
+        /// Stable explanation of the invalid registry shape.
+        message: String,
+    },
+
+    /// A task identifier cannot be represented safely by task storage paths.
+    #[error("invalid task storage identifier for {}: {message}", path.display())]
+    InvalidTaskStorageIdentifier {
+        /// Storage path that was not created or changed.
+        path: PathBuf,
+        /// Stable explanation of the invalid identifier.
+        message: String,
+    },
+
+    /// A task-event frame is not bound to the log selected by its path.
+    #[error("invalid task event frame {}: {message}", path.display())]
+    InvalidTaskEventFrame {
+        /// Event-log path whose frame was rejected.
+        path: PathBuf,
+        /// Stable explanation of the identity mismatch.
+        message: String,
+    },
+
+    /// A durable mutation completed before its storage authority was lost.
+    ///
+    /// The mutation must not be retried blindly: its bytes may already be
+    /// durable even though Packet28 could not prove that the canonical
+    /// filename and lock still named the authenticated objects at return.
+    #[error(
+        "{operation} may have committed at {} before storage authority was lost: {source}",
+        path.display()
+    )]
+    StorageMutationAuthorityLost {
+        /// Durable mutation whose completion could not be authenticated.
+        operation: &'static str,
+        /// Canonical path whose final binding became uncertain.
+        path: PathBuf,
+        /// Attachment or descriptor/name authentication failure.
+        #[source]
+        source: io::Error,
+    },
+
+    /// Authority JSON exceeded a pre-materialization resource budget.
+    #[error(
+        "{authority} JSON {} exceeds the {resource} budget: observed {observed}, maximum {max}"
+        ,
+        path.display()
+    )]
+    AuthorityJsonLimitExceeded {
+        /// Authority file that was rejected without materializing it.
+        path: PathBuf,
+        /// Stable authority kind, such as `task registry`.
+        authority: &'static str,
+        /// Stable resource name, such as `value nodes`.
+        resource: &'static str,
+        /// First count that exceeded the budget.
+        observed: u64,
+        /// Maximum accepted count.
+        max: u64,
     },
 
     /// A legacy daemon-core socket frame could not be encoded or decoded.
@@ -143,6 +260,33 @@ impl DaemonCoreError {
             Self::Io { .. } => "Check that the reported path exists and is readable and writable.",
             Self::Json { .. } => {
                 "Repair or regenerate the reported daemon state file before retrying."
+            }
+            Self::TaskRegistryTooLarge { .. } => {
+                "Reduce completed task history before saving the task registry."
+            }
+            Self::TaskRegistryRetentionEnvelopeTooLarge { .. } => {
+                "Reduce the largest task record before saving the task registry."
+            }
+            Self::ActiveTaskRecordTooLarge { .. } => {
+                "Reduce active-task metadata before saving the record."
+            }
+            Self::InvalidActiveTaskRecord { .. } => {
+                "Provide a non-empty active task identifier."
+            }
+            Self::InvalidTaskRegistry { .. } => {
+                "Make each non-empty task map key match its embedded task identifier."
+            }
+            Self::InvalidTaskStorageIdentifier { .. } => {
+                "Use a non-empty task identifier whose derived storage key is portable and unambiguous."
+            }
+            Self::InvalidTaskEventFrame { .. } => {
+                "Repair the event log so every frame carries the exact task identifier selected by its path."
+            }
+            Self::StorageMutationAuthorityLost { .. } => {
+                "Do not retry blindly; inspect the canonical file and registry under an authenticated lock first."
+            }
+            Self::AuthorityJsonLimitExceeded { .. } => {
+                "Reduce the authority document's nesting, entry count, or decoded string content."
             }
             Self::Frame { .. } => {
                 "Verify that the peer uses the same Packet28 daemon protocol version."

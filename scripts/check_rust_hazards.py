@@ -23,12 +23,21 @@ ALLOWED_UNSAFE_FILES = {
     "crates/context-instruct-shim/src/linux.rs": "Linux preload FFI and syscalls",
     "crates/context-instruct-shim/src/macos.rs": "macOS interpose FFI and syscalls",
     "crates/covy-ingest/examples/ingest_allocation_probe.rs": "allocation-counting example",
+    "crates/packet28-daemon-core/src/retention/capability.rs": (
+        "task-store descriptor, ACL, and xattr capability adapter"
+    ),
+    "crates/packet28-daemon-core/src/storage.rs": (
+        "test-only resident-memory bound instrumentation"
+    ),
     "crates/packet28-search-core/src/layer.rs": "read-only memory-mapped index layer",
     "crates/packet28d/src/launch.rs": "Unix process-group signals",
     "crates/packet28d/src/runtime_files_unix.rs": "retained Unix dirfd capability filesystem operations",
     "crates/packet28d/src/tests/cancellation.rs": "Unix process-group test probe",
     "crates/suite-cli/src/cli_runtime.rs": "Unix stdout descriptor redirection",
     "crates/suite-cli/src/cmd_macos_swap.rs": "macOS process and filesystem syscalls",
+    "crates/suite-cli/src/cmd_mcp_artifact_io.rs": (
+        "descriptor-relative MCP artifact filesystem adapter"
+    ),
     "crates/suite-cli/src/cmd_shell.rs": "Unix pre-exec process-group setup",
     "crates/suite-cli/tests/daemon_lifecycle_e2e.rs": "Unix daemon liveness probe",
     "crates/suite-cli/tests/process_harness_e2e.rs": "Unix process-harness probes",

@@ -415,10 +415,11 @@ pub(crate) fn handle_packet28_search(
     session: &Arc<Mutex<McpSessionState>>,
     args: Packet28SearchArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.search requires task_id"));
     }
+    validated_task_storage_id(task_id)?;
     let query = args.query.trim();
     if query.is_empty() {
         return Err(anyhow!("packet28.search requires query"));
@@ -567,9 +568,10 @@ pub(crate) fn handle_packet28_validate_plan(
     root: &Path,
     args: Packet28ValidatePlanArgs,
 ) -> Result<Value> {
-    if args.task_id.trim().is_empty() {
+    if args.task_id.is_empty() {
         return Err(anyhow!("packet28.validate_plan requires task_id"));
     }
+    validated_task_storage_id(&args.task_id)?;
     if args.steps.is_empty() {
         return Err(anyhow!("packet28.validate_plan requires at least one step"));
     }
@@ -590,9 +592,10 @@ pub(crate) fn handle_packet28_action_critic(
     root: &Path,
     args: Packet28ActionCriticArgs,
 ) -> Result<Value> {
-    if args.task_id.trim().is_empty() {
+    if args.task_id.is_empty() {
         return Err(anyhow!("packet28.action_critic requires task_id"));
     }
+    validated_task_storage_id(&args.task_id)?;
     if !matches!(args.action, BrokerAction::ChooseTool | BrokerAction::Edit) {
         return Err(anyhow!(
             "packet28.action_critic action must be choose_tool or edit"
@@ -1010,9 +1013,10 @@ pub(crate) fn handle_packet28_write_intention(
     if text.is_empty() {
         return Err(anyhow!("packet28.write_intention requires text"));
     }
-    if args.task_id.trim().is_empty() {
+    if args.task_id.is_empty() {
         return Err(anyhow!("packet28.write_intention requires task_id"));
     }
+    validated_task_storage_id(&args.task_id)?;
     crate::cmd_mcp::support::track_task(session, root, &args.task_id)?;
     let response = crate::broker_client::write_intention(
         root,

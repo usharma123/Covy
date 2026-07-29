@@ -278,6 +278,9 @@ pub(crate) fn run_sequence_for_task(
             )?;
             if !generation.is_cancelled() {
                 if let Some(response) = refresh_broker_context_for_task(&state, task_id, None)? {
+                    let storage_id = task_storage_id(task_id)?;
+                    let root = state.lock().map_err(lock_err)?.root.clone();
+                    let brief_path = task_brief_markdown_path(&root, &storage_id);
                     if let Some(object) = summary.as_object_mut() {
                         object.insert(
                             "changed_section_ids".to_string(),
@@ -311,14 +314,7 @@ pub(crate) fn run_sequence_for_task(
                         );
                         object.insert(
                             "brief_path".to_string(),
-                            Value::String(
-                                task_brief_markdown_path(
-                                    &state.lock().map_err(lock_err)?.root.clone(),
-                                    task_id,
-                                )
-                                .to_string_lossy()
-                                .to_string(),
-                            ),
+                            Value::String(brief_path.to_string_lossy().to_string()),
                         );
                     }
                 }

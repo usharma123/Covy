@@ -11,6 +11,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use packet28_daemon_core::storage::{
     load_task_events, load_task_events_from_offset, task_event_log_len,
 };
+use packet28_daemon_core::task_store_lease::acquire_task_store_writer_lease;
 use packet28_daemon_protocol::broker::{
     BrokerAction, BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
     BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
@@ -18,12 +19,14 @@ use packet28_daemon_protocol::broker::{
 };
 use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 use packet28_daemon_protocol::paths::{
-    task_artifact_dir, task_brief_markdown_path, task_state_json_path, task_version_json_path,
+    task_version_json_path, ContextVersionStorageId, TaskStorageId,
 };
 use packet28_daemon_protocol::task::TaskRecord;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+#[path = "cmd_mcp_artifact_io.rs"]
+mod artifact_io;
 #[path = "cmd_mcp_config.rs"]
 mod config;
 #[path = "cmd_mcp_core_tools.rs"]
@@ -77,6 +80,66 @@ const MCP_PROTOCOL_VERSION_2024_11_05: &str = "2024-11-05";
 const MCP_PROTOCOL_VERSION_2025_03_26: &str = "2025-03-26";
 const MCP_LATEST_PROTOCOL_VERSION: &str = MCP_PROTOCOL_VERSION_2025_03_26;
 const MCP_NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+fn validated_task_storage_id(task_id: &str) -> Result<TaskStorageId> {
+    Ok(TaskStorageId::try_from(task_id)?)
+}
+
+fn validated_task_version_json_path(
+    root: &Path,
+    task_id: &str,
+    context_version: &str,
+) -> Result<PathBuf> {
+    let task_id = validated_task_storage_id(task_id)?;
+    let context_version = ContextVersionStorageId::try_from(context_version)?;
+    Ok(task_version_json_path(root, &task_id, &context_version))
+}
+
+fn read_validated_named_task_artifact(
+    root: &Path,
+    task_id: &str,
+    location: artifact_io::ArtifactLocation,
+    file_name: &str,
+) -> Result<(PathBuf, Vec<u8>)> {
+    let task_id = validated_task_storage_id(task_id)?;
+    let handle = artifact_io::ArtifactHandle::try_from(file_name)?;
+    artifact_io::read_task_artifact(root, &task_id, location, &handle)?.ok_or_else(|| {
+        anyhow!(
+            "stored task artifact {file_name:?} does not exist for task {:?}",
+            task_id.as_str()
+        )
+    })
+}
+
+fn read_validated_context_artifact(
+    root: &Path,
+    task_id: &str,
+    context_version: &str,
+) -> Result<(PathBuf, Vec<u8>)> {
+    let task_id = validated_task_storage_id(task_id)?;
+    let context_version = ContextVersionStorageId::try_from(context_version)?;
+    let handle = artifact_io::ArtifactHandle::from_json_stem(context_version.as_str())?;
+    read_validated_named_task_artifact(
+        root,
+        task_id.as_str(),
+        artifact_io::ArtifactLocation::Versions,
+        handle.as_str(),
+    )
+}
+
+fn validate_context_artifact_identity(payload: &Value, requested_version: &str) -> Result<()> {
+    for field in ["context_version", "artifact_id"] {
+        let persisted = payload.get(field).and_then(Value::as_str).ok_or_else(|| {
+            anyhow!("stored context artifact is missing required {field} identity")
+        })?;
+        if persisted != requested_version {
+            return Err(anyhow!(
+                "stored context artifact {field} identity {persisted:?} does not match requested version {requested_version:?}"
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Args)]
 pub struct McpArgs {
@@ -168,6 +231,7 @@ pub fn run(args: McpArgs) -> Result<i32> {
 fn run_serve(args: McpServeArgs) -> Result<i32> {
     let root = crate::broker_client::resolve_root(&args.root);
     crate::broker_client::ensure_daemon(&root)?;
+    let _writer_lease = acquire_task_store_writer_lease(&root)?;
     serve_stdio(root, args.toolset)?;
     Ok(0)
 }
@@ -175,6 +239,7 @@ fn run_serve(args: McpServeArgs) -> Result<i32> {
 fn run_proxy(args: McpProxyArgs) -> Result<i32> {
     let root = crate::broker_client::resolve_root(&args.root);
     crate::broker_client::ensure_daemon(&root)?;
+    let _writer_lease = acquire_task_store_writer_lease(&root)?;
     let config_path = crate::cmd_common::resolve_path_from_cwd(
         &args.upstream_config,
         &crate::cmd_common::caller_cwd()?,

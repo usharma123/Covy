@@ -5,7 +5,7 @@ pub(crate) fn handle_packet28_fetch_tool_result(
     root: &Path,
     args: Packet28FetchToolResultArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.fetch_tool_result requires task_id"));
     }
@@ -76,7 +76,7 @@ pub(crate) fn handle_packet28_fetch_raw_output(
     root: &Path,
     args: Packet28FetchRawOutputArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.fetch_raw_output requires task_id"));
     }
@@ -94,7 +94,7 @@ pub(crate) fn handle_packet28_fetch_context(
     root: &Path,
     args: Packet28FetchContextArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.fetch_context requires task_id"));
     }
@@ -102,17 +102,9 @@ pub(crate) fn handle_packet28_fetch_context(
         .artifact_id
         .or(args.context_version)
         .ok_or_else(|| anyhow!("packet28.fetch_context requires artifact_id or context_version"))?;
-    let path = task_version_json_path(root, task_id, &artifact_id);
-    let bytes = fs::read(&path).with_context(|| {
-        format!(
-            "failed to read stored broker context artifact '{}'",
-            path.display()
-        )
-    })?;
+    let (_path, bytes) = read_validated_context_artifact(root, task_id, &artifact_id)?;
     let mut payload: Value = serde_json::from_slice(&bytes)?;
-    if payload.get("artifact_id").is_none() {
-        payload["artifact_id"] = json!(artifact_id.clone());
-    }
+    validate_context_artifact_identity(&payload, &artifact_id)?;
     // Honour response_mode: when slim is requested, strip heavy section
     // data and keep only the metadata the agent needs to decide next steps.
     if matches!(args.response_mode, Some(BrokerResponseMode::Slim)) {

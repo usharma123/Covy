@@ -1666,7 +1666,9 @@ pub(crate) fn load_versioned_broker_response(
     task_id: &str,
     context_version: &str,
 ) -> Result<Option<BrokerGetContextResponse>> {
-    let path = task_version_json_path(root, task_id, context_version);
+    let task_id = task_storage_id(task_id)?;
+    let context_version = context_version_storage_id(context_version)?;
+    let path = task_version_json_path(root, &task_id, &context_version);
     if !path.exists() {
         return Ok(None);
     }

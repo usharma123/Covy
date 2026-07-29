@@ -1,19 +1,23 @@
-use super::support::{daemon_test_root, daemon_test_state};
+use super::support::{daemon_test_root, daemon_test_state, insert_admitted_task_record};
 use super::*;
 use std::os::unix::process::CommandExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 fn insert_task_generation(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> TaskGenerationToken {
-    let mut guard = state.lock().unwrap();
-    guard.tasks.tasks.insert(
-        task_id.to_string(),
+    insert_admitted_task_record(
+        state,
         TaskRecord {
             task_id: task_id.to_string(),
             ..TaskRecord::default()
         },
     );
-    guard.task_generations.create(task_id).unwrap()
+    state
+        .lock()
+        .unwrap()
+        .task_generations
+        .create(task_id)
+        .unwrap()
 }
 
 fn wait_until_cancelled(generation: &TaskGenerationToken) {

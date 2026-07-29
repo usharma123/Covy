@@ -1,6 +1,13 @@
 use super::*;
 use crate::savings_analytics::{record_run_savings, RunSavingsRecord};
 
+fn task_artifact_dir(root: &Path, task_id: &str) -> PathBuf {
+    packet28_daemon_protocol::paths::task_artifact_dir(
+        root,
+        &TaskStorageId::try_from(task_id).unwrap(),
+    )
+}
+
 fn drift_payload(ok: bool, issue_count: u64) -> Value {
     let issues = if issue_count == 0 {
         Vec::new()

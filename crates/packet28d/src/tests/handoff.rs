@@ -103,14 +103,22 @@ fn prepare_handoff_only_resumes_recorded_handoff_artifacts() {
         brief: "context".to_string(),
         ..BrokerGetContextResponse::default()
     };
-    let version_path = task_version_json_path(&root, "task-resume-guard", "ctx-1");
+    insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: "task-resume-guard".to_string(),
+            ..TaskRecord::default()
+        },
+    );
+    let task_id = TaskStorageId::try_from("task-resume-guard").unwrap();
+    let context_version = ContextVersionStorageId::try_from("ctx-1").unwrap();
+    let version_path = task_version_json_path(&root, &task_id, &context_version);
     std::fs::create_dir_all(version_path.parent().unwrap()).unwrap();
     std::fs::write(&version_path, serde_json::to_vec_pretty(&context).unwrap()).unwrap();
 
     {
         let mut guard = state.lock().unwrap();
-        let task = ensure_task_record_mut(&mut guard.tasks, "task-resume-guard");
-        task.task_id = "task-resume-guard".to_string();
+        let task = guard.tasks.tasks.get_mut("task-resume-guard").unwrap();
         task.latest_context_version = Some("ctx-1".to_string());
         task.latest_handoff_artifact_id = Some("handoff-1".to_string());
         persist_state(&guard).unwrap();

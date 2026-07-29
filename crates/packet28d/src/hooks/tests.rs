@@ -954,7 +954,8 @@ fn e2e_hook_threshold_handoff_cycle() {
     assert!(!task.hook_threshold_exceeded);
 
     // Phase 6: Verify brief artifact was persisted.
-    let brief_path = crate::task_brief_markdown_path(&root, task_id);
+    let storage_id = crate::TaskStorageId::try_from(task_id).unwrap();
+    let brief_path = crate::task_brief_markdown_path(&root, &storage_id);
     assert!(
         brief_path.exists(),
         "brief.md should be written after handoff"

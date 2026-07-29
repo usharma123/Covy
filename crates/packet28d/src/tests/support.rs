@@ -43,6 +43,12 @@ pub(crate) fn daemon_test_root(state: &Arc<Mutex<DaemonState>>) -> PathBuf {
     state.lock().unwrap().root.clone()
 }
 
+pub(crate) fn insert_admitted_task_record(state: &Arc<Mutex<DaemonState>>, record: TaskRecord) {
+    let mut guard = state.lock().unwrap();
+    guard.tasks.tasks.insert(record.task_id.clone(), record);
+    persist_state(&guard).unwrap();
+}
+
 pub(super) fn broker_evidence_confidence_body(
     state: &Arc<Mutex<DaemonState>>,
     snapshot: suite_packet_core::AgentSnapshotPayload,

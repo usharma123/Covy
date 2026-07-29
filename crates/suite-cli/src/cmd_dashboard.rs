@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use clap::Args;
 use packet28_daemon_core::storage::load_task_registry;
-use packet28_daemon_protocol::paths::task_artifact_dir;
+use packet28_daemon_protocol::paths::{task_artifact_dir, TaskStorageId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -945,6 +945,9 @@ fn context_anomaly_category_rank(category: &str) -> usize {
 fn handoff_readiness_tile(root: &Path) -> Result<HandoffReadinessTile> {
     let mut records = Vec::<Vec<String>>::new();
     for task_id in dashboard_task_ids(root)? {
+        let Ok(task_id) = TaskStorageId::try_from(task_id) else {
+            continue;
+        };
         let versions_dir = task_artifact_dir(root, &task_id).join("versions");
         if !versions_dir.exists() {
             continue;
@@ -1006,7 +1009,8 @@ fn dashboard_task_ids(root: &Path) -> Result<Vec<String>> {
     let mut ids = load_task_registry(root)
         .map(|registry| registry.tasks.into_keys().collect::<Vec<_>>())
         .unwrap_or_default();
-    let probe = task_artifact_dir(root, "__packet28_probe__");
+    let probe_id = TaskStorageId::try_from("__packet28_probe__")?;
+    let probe = task_artifact_dir(root, &probe_id);
     if let Some(tasks_dir) = probe.parent() {
         if tasks_dir.exists() {
             for entry in fs::read_dir(tasks_dir)? {

@@ -101,7 +101,7 @@ pub(super) fn handle_core_tool_call(
                 other => {
                     return Err(anyhow!(
                         "packet28.hypothesis_resolve status must be confirmed or rejected, got '{other}'"
-                    ))
+                    ));
                 }
             };
             let task_id = request.task_id.as_deref().unwrap_or_default();
@@ -249,7 +249,7 @@ pub(super) fn handle_packet28_agent_status(root: &Path, arguments: Value) -> Res
     }
 
     let request = serde_json::from_value::<AgentStatusArgs>(arguments).unwrap_or_default();
-    let active = crate::task_runtime::load_active_task(root);
+    let active = crate::task_runtime::load_active_task(root)?;
     let task_id = request
         .task_id
         .or_else(|| active.as_ref().map(|record| record.task_id.clone()));

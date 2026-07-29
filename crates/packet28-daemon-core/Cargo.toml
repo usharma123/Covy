@@ -19,6 +19,12 @@ serde_json.workspace = true
 packet28-daemon-protocol.workspace = true
 fs2 = "0.4"
 thiserror.workspace = true
+unicode-casefold = "0.2"
+unicode-normalization = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+rustix = { version = "1.1", features = ["fs", "process"] }
 
 [dev-dependencies]
 tempfile.workspace = true

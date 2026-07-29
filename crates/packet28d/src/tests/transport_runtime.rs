@@ -1,4 +1,4 @@
-use super::support::daemon_test_state;
+use super::support::{daemon_test_state, insert_admitted_task_record};
 use super::*;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -23,16 +23,13 @@ where
 #[test]
 fn slow_subscriber_is_closed_at_capacity_and_can_replay_exact_gap() {
     let state = daemon_test_state();
-    {
-        let mut guard = state.lock().unwrap();
-        guard.tasks.tasks.insert(
-            "task-slow".to_string(),
-            TaskRecord {
-                task_id: "task-slow".to_string(),
-                ..TaskRecord::default()
-            },
-        );
-    }
+    insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: "task-slow".to_string(),
+            ..TaskRecord::default()
+        },
+    );
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     state.lock().unwrap().subscribers.insert(
         "task-slow".to_string(),

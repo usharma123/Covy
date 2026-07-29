@@ -1,6 +1,7 @@
 #[path = "support/verify.rs"]
 mod verify;
 
+use packet28_daemon_protocol::paths::{ContextVersionStorageId, TaskStorageId};
 use predicates::prelude::*;
 use serde_json::json;
 use std::fs;
@@ -11,6 +12,7 @@ use verify::suite_cmd;
 fn test_verify_handoffs_reports_ci_summary_and_threshold() {
     let root = TempDir::new().unwrap();
     let task_id = "task-verify-handoffs";
+    let storage_task_id = TaskStorageId::try_from(task_id).unwrap();
     for (context_version, body) in [
         (
             "ctx-ci-1",
@@ -22,10 +24,11 @@ fn test_verify_handoffs_reports_ci_summary_and_threshold() {
             "cargo test -p suite-cli ci_handoff_test $PACKET28_CI_MISSING_ENV_12345",
         ),
     ] {
+        let storage_context_version = ContextVersionStorageId::try_from(context_version).unwrap();
         let path = packet28_daemon_protocol::paths::task_version_json_path(
             root.path(),
-            task_id,
-            context_version,
+            &storage_task_id,
+            &storage_context_version,
         );
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(

@@ -508,6 +508,10 @@ pub(crate) fn broker_task_status(
     } else {
         handoff_reason
     };
+    let storage_id = task_storage_id(&request.task_id)?;
+    let brief_path = task_brief_markdown_path(&root, &storage_id);
+    let state_path = task_state_json_path(&root, &storage_id);
+    let event_path = task_event_log_path(&root, &storage_id);
     Ok(BrokerTaskStatusResponse {
         latest_context_version: task
             .as_ref()
@@ -544,26 +548,14 @@ pub(crate) fn broker_task_status(
             }),
         supports_push: true,
         task,
-        brief_path: task_brief_markdown_path(&root, &request.task_id)
+        brief_path: brief_path
             .exists()
-            .then(|| {
-                task_brief_markdown_path(&root, &request.task_id)
-                    .to_string_lossy()
-                    .to_string()
-            }),
-        state_path: task_state_json_path(&root, &request.task_id)
+            .then(|| brief_path.to_string_lossy().to_string()),
+        state_path: state_path
             .exists()
-            .then(|| {
-                task_state_json_path(&root, &request.task_id)
-                    .to_string_lossy()
-                    .to_string()
-            }),
-        event_path: task_event_log_path(&root, &request.task_id)
+            .then(|| state_path.to_string_lossy().to_string()),
+        event_path: event_path
             .exists()
-            .then(|| {
-                task_event_log_path(&root, &request.task_id)
-                    .to_string_lossy()
-                    .to_string()
-            }),
+            .then(|| event_path.to_string_lossy().to_string()),
     })
 }

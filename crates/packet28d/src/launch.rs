@@ -255,20 +255,21 @@ pub(crate) struct TaskLaunchBootstrap {
     pub(crate) handoff_reason: Option<String>,
 }
 
-fn task_agent_dir(root: &Path, task_id: &str) -> PathBuf {
-    task_artifact_dir(root, task_id).join("agent")
+fn task_agent_dir(root: &Path, task_id: &str) -> Result<PathBuf> {
+    let task_id = task_storage_id(task_id)?;
+    Ok(task_artifact_dir(root, &task_id).join("agent"))
 }
 
-fn task_agent_bootstrap_path(root: &Path, task_id: &str) -> PathBuf {
-    task_agent_dir(root, task_id).join("latest-bootstrap.json")
+fn task_agent_bootstrap_path(root: &Path, task_id: &str) -> Result<PathBuf> {
+    Ok(task_agent_dir(root, task_id)?.join("latest-bootstrap.json"))
 }
 
-fn task_agent_handoff_path(root: &Path, task_id: &str) -> PathBuf {
-    task_agent_dir(root, task_id).join("latest-handoff.json")
+fn task_agent_handoff_path(root: &Path, task_id: &str) -> Result<PathBuf> {
+    Ok(task_agent_dir(root, task_id)?.join("latest-handoff.json"))
 }
 
-fn task_agent_launch_log_path(root: &Path, task_id: &str, started_at_unix: u64) -> PathBuf {
-    task_agent_dir(root, task_id).join(format!("launch-{}.log", started_at_unix))
+fn task_agent_launch_log_path(root: &Path, task_id: &str, started_at_unix: u64) -> Result<PathBuf> {
+    Ok(task_agent_dir(root, task_id)?.join(format!("launch-{}.log", started_at_unix)))
 }
 
 fn task_prepare_handoff_bootstrap(
@@ -337,8 +338,8 @@ fn task_prepare_launch_bootstrap(
         anyhow::bail!("daemon task launch-agent requires a delegated command after --");
     }
     let root = state.lock().map_err(lock_err)?.root.clone();
-    let bootstrap_path = task_agent_bootstrap_path(&root, &request.task_id);
-    let handoff_path = task_agent_handoff_path(&root, &request.task_id);
+    let bootstrap_path = task_agent_bootstrap_path(&root, &request.task_id)?;
+    let handoff_path = task_agent_handoff_path(&root, &request.task_id)?;
 
     let status = broker_task_status(
         state.clone(),
@@ -409,9 +410,10 @@ pub(crate) fn task_launch_agent(
             bootstrap.bootstrap_path.display()
         )
     })?;
-    let brief_json_path = task_brief_json_path(&root, &bootstrap.task_id);
-    let brief_md_path = task_brief_markdown_path(&root, &bootstrap.task_id);
-    let state_json_path = task_state_json_path(&root, &bootstrap.task_id);
+    let storage_id = task_storage_id(&bootstrap.task_id)?;
+    let brief_json_path = task_brief_json_path(&root, &storage_id);
+    let brief_md_path = task_brief_markdown_path(&root, &storage_id);
+    let state_json_path = task_state_json_path(&root, &storage_id);
     let proxy_config = std::env::var_os("PACKET28_MCP_UPSTREAM_CONFIG")
         .map(PathBuf::from)
         .or_else(|| {
@@ -430,7 +432,7 @@ pub(crate) fn task_launch_agent(
         .clone()
         .unwrap_or_else(|| format!("Packet28 mcp serve --root {}", root.display()));
     let started_at_unix = now_unix();
-    let log_path = task_agent_launch_log_path(&root, &bootstrap.task_id, started_at_unix);
+    let log_path = task_agent_launch_log_path(&root, &bootstrap.task_id, started_at_unix)?;
     if let Some(parent) = log_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create '{}'", parent.display()))?;

@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use packet28_daemon_protocol::paths::{ContextVersionStorageId, TaskStorageId};
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,6 +59,7 @@ pub fn seed_dashboard_product_state(root: &Path, home: &Path) {
         .success();
 
     let task_id = "task-dashboard-handoff";
+    let storage_task_id = TaskStorageId::try_from(task_id).unwrap();
     for (context_version, body) in [
         (
             "ctx-dashboard-1",
@@ -72,8 +74,12 @@ pub fn seed_dashboard_product_state(root: &Path, home: &Path) {
             "cargo test -p suite-cli dashboard_handoff_test $PACKET28_DASHBOARD_MISSING_ENV_12345",
         ),
     ] {
-        let path =
-            packet28_daemon_protocol::paths::task_version_json_path(root, task_id, context_version);
+        let storage_context_version = ContextVersionStorageId::try_from(context_version).unwrap();
+        let path = packet28_daemon_protocol::paths::task_version_json_path(
+            root,
+            &storage_task_id,
+            &storage_context_version,
+        );
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,

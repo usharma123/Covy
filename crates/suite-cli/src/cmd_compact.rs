@@ -7,7 +7,7 @@ use packet28_daemon_core::storage::load_task_registry;
 use packet28_daemon_protocol::broker::{
     BrokerGetContextResponse, BrokerWriteOp, BrokerWriteStateRequest,
 };
-use packet28_daemon_protocol::paths::task_state_json_path;
+use packet28_daemon_protocol::paths::{task_state_json_path, TaskStorageId};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -930,7 +930,8 @@ fn run_fetch_raw(args: FetchRawArgs) -> Result<i32> {
         if candidate.exists() {
             candidate
         } else {
-            task_state_json_path(&root, &args.task_id)
+            let task_id = TaskStorageId::try_from(args.task_id.as_str())?;
+            task_state_json_path(&root, &task_id)
                 .parent()
                 .unwrap_or(&root)
                 .join(&args.handle)
@@ -1204,7 +1205,8 @@ fn render_toml_value(value: &toml::Value) -> String {
 }
 
 fn load_task_state(root: &Path, task_id: &str) -> Result<BrokerGetContextResponse> {
-    let bytes = fs::read(task_state_json_path(root, task_id))
+    let task_storage_id = TaskStorageId::try_from(task_id)?;
+    let bytes = fs::read(task_state_json_path(root, &task_storage_id))
         .with_context(|| format!("failed to read task state for '{}'", task_id))?;
     Ok(serde_json::from_slice(&bytes)?)
 }

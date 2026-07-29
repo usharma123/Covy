@@ -22,12 +22,13 @@ use context_memory_core::{
 };
 use diffy_core::model::CoverageFormat;
 use notify::{Config, Event, PollWatcher, RecursiveMode, Watcher};
+use packet28_daemon_core::retention::recover_task_store_quarantine_and_acquire_daemon_lease;
 use packet28_daemon_core::storage::{
     append_task_event, ensure_daemon_dir, load_task_events, load_task_registry,
     load_watch_registry, now_unix, remove_runtime_files, save_task_registry, save_watch_registry,
     write_runtime_info,
 };
-use packet28_daemon_core::task_store_lease::acquire_daemon_task_store_lease;
+use packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease;
 use packet28_daemon_protocol::broker::{
     BrokerAction, BrokerDecision, BrokerDecomposeIntent, BrokerDecomposeRequest,
     BrokerDecomposeResponse, BrokerDecomposedStep, BrokerDeltaResponse,
@@ -60,7 +61,8 @@ use packet28_daemon_protocol::message::{
 use packet28_daemon_protocol::paths::{
     index_dir, index_manifest_path, index_snapshot_path, log_path, ready_path, socket_path,
     task_artifact_dir, task_brief_json_path, task_brief_markdown_path, task_event_log_path,
-    task_state_json_path, task_version_json_path, workspace_socket_path,
+    task_state_json_path, task_version_json_path, workspace_socket_path, ContextVersionStorageId,
+    TaskStorageId,
 };
 use packet28_daemon_protocol::task::{
     TaskAwaitHandoffRequest, TaskAwaitHandoffResponse, TaskLaunchAgentRequest,
@@ -170,8 +172,21 @@ fn run() -> Result<()> {
 fn serve(root: PathBuf) -> Result<()> {
     std::env::set_current_dir(&root)
         .with_context(|| format!("failed to set daemon cwd to '{}'", root.display()))?;
+    let daemon_instance_lease = acquire_daemon_instance_lease(&root)?;
+    let (recovery, _task_store_lease) =
+        recover_task_store_quarantine_and_acquire_daemon_lease(&root, &daemon_instance_lease)?;
+    if recovery.restored_precommit_groups > 0
+        || recovery.completed_committed_groups > 0
+        || !recovery.issues.is_empty()
+    {
+        daemon_log(&format!(
+            "task-store recovery restored={} completed={} issues={}",
+            recovery.restored_precommit_groups,
+            recovery.completed_committed_groups,
+            recovery.issues.len()
+        ));
+    }
     ensure_daemon_dir(&root)?;
-    let _task_store_lease = acquire_daemon_task_store_lease(&root)?;
     let config = DaemonRuntimeConfig::from_env()?;
     let daemon_log_path = log_path(&root);
     let listener = bind_daemon_listener(&root)?;
@@ -724,6 +739,16 @@ fn resolve_root(path: &Path) -> PathBuf {
             return path.to_path_buf();
         }
     }
+}
+
+fn task_storage_id(value: &str) -> Result<TaskStorageId> {
+    TaskStorageId::try_from(value)
+        .map_err(|error| anyhow!("invalid task storage identifier {value:?}: {error}"))
+}
+
+fn context_version_storage_id(value: &str) -> Result<ContextVersionStorageId> {
+    ContextVersionStorageId::try_from(value)
+        .map_err(|error| anyhow!("invalid context-version storage identifier {value:?}: {error}"))
 }
 
 fn lock_err<T>(err: std::sync::PoisonError<T>) -> anyhow::Error {

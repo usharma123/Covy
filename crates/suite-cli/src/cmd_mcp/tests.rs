@@ -1,5 +1,82 @@
 use super::*;
 
+fn task_version_json_path(root: &Path, task_id: &str, context_version: &str) -> PathBuf {
+    validated_task_version_json_path(root, task_id, context_version).unwrap()
+}
+
+#[test]
+fn artifact_fetch_entry_points_reject_nonopaque_external_handles() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::NamedTempFile::new().unwrap();
+
+    for handle in [
+        "../outside.json",
+        outside.path().to_str().unwrap(),
+        "Result.json",
+        "con.json",
+    ] {
+        assert!(
+            support::load_tool_result_artifact(root.path(), "task", Some(handle), None,).is_err()
+        );
+        assert!(support::load_raw_output_artifact(root.path(), "task", handle).is_err());
+    }
+    assert!(!root.path().join(".packet28").exists());
+}
+
+#[test]
+fn artifact_store_entry_point_validates_before_task_store_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let overlong = "a".repeat(251);
+
+    for invocation_id in ["../escape", "Invocation", "con", overlong.as_str()] {
+        assert!(support::store_tool_artifact(
+            root.path(),
+            "task",
+            invocation_id,
+            "result",
+            &json!({"ok": true}),
+        )
+        .is_err());
+    }
+    assert!(!root.path().join(".packet28").exists());
+}
+
+#[test]
+fn artifact_store_and_fetch_entry_points_roundtrip_opaque_handles() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact_id = support::store_tool_artifact(
+        root.path(),
+        "task",
+        "invocation-1",
+        "result",
+        &json!({"task_id": "task", "value": 1}),
+    )
+    .unwrap();
+
+    let (loaded_id, payload) =
+        support::load_tool_result_artifact(root.path(), "task", Some(&artifact_id), None).unwrap();
+
+    assert_eq!(loaded_id, artifact_id);
+    assert_eq!(payload["value"], 1);
+}
+
+#[test]
+fn context_artifact_identity_requires_exact_version_and_artifact_fields() {
+    assert!(validate_context_artifact_identity(
+        &json!({"context_version": "ctx-1", "artifact_id": "ctx-1"}),
+        "ctx-1",
+    )
+    .is_ok());
+    assert!(
+        validate_context_artifact_identity(&json!({"context_version": "ctx-1"}), "ctx-1",).is_err()
+    );
+    assert!(validate_context_artifact_identity(
+        &json!({"context_version": "ctx-1", "artifact_id": "ctx-2"}),
+        "ctx-1",
+    )
+    .is_err());
+}
+
 #[test]
 fn native_tool_lifecycle_matches_reviewed_structural_snapshot() {
     let mut actual = native_tools::structural_snapshot();

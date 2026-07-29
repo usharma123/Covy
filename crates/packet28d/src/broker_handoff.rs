@@ -497,10 +497,12 @@ pub(crate) fn write_broker_artifacts(
     response: &BrokerGetContextResponse,
 ) -> Result<String> {
     let root = state.lock().map_err(lock_err)?.root.clone();
-    let brief_md_path = task_brief_markdown_path(&root, task_id);
-    let brief_json_path = task_brief_json_path(&root, task_id);
-    let state_json_path = task_state_json_path(&root, task_id);
-    let version_json_path = task_version_json_path(&root, task_id, &response.context_version);
+    let storage_id = task_storage_id(task_id)?;
+    let context_version = context_version_storage_id(&response.context_version)?;
+    let brief_md_path = task_brief_markdown_path(&root, &storage_id);
+    let brief_json_path = task_brief_json_path(&root, &storage_id);
+    let state_json_path = task_state_json_path(&root, &storage_id);
+    let version_json_path = task_version_json_path(&root, &storage_id, &context_version);
     let version_snapshot =
         build_version_snapshot_response(&root, task_id, since_version, response)?;
     if let Some(parent) = brief_md_path.parent() {
@@ -545,7 +547,7 @@ pub(crate) fn write_broker_artifacts(
             "latest_brief_generated_at_unix": task.latest_brief_generated_at_unix,
             "latest_context_reason": task.latest_context_reason,
             "brief_json_path": brief_json_path.to_string_lossy().to_string(),
-            "event_path": task_event_log_path(&root, task_id).to_string_lossy().to_string(),
+            "event_path": task_event_log_path(&root, &storage_id).to_string_lossy().to_string(),
             "supports_push": true,
         });
         persist_state(&guard)?;
