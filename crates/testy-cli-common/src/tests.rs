@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 use suite_packet_core::{CoverageFormat, CovyError};
-use testy_core::error::AdapterError;
+use testy_core::error::{AdapterError, TestyError};
 
 use crate::adapters::{default_impact_adapters, default_testmap_adapters};
 use crate::impact::{
@@ -19,6 +19,7 @@ use crate::support::deserialize_json_with_example;
 use crate::testmap::{
     run_testmap_command, TestmapArgs, TestmapBuildArgs, TestmapCommands, TestmapRunnerOptions,
 };
+use crate::TestyCliError;
 
 #[derive(Parser)]
 #[command(name = "testy")]
@@ -179,6 +180,7 @@ fn impact_runner_reports_missing_plan_with_runnable_usage() {
     let message = error.to_string();
     assert!(message.contains("Missing --plan"));
     assert!(message.contains("testy impact run --plan plan.json -- <command>"));
+    assert!(matches!(error, TestyCliError::InvalidInput { .. }));
 }
 
 #[test]
@@ -206,6 +208,10 @@ fn shard_runner_delegates_missing_count_failure() {
     .expect_err("missing shard count must fail");
 
     assert_eq!(error.to_string(), "--shards is required");
+    assert!(matches!(
+        error,
+        TestyCliError::Core(TestyError::InvalidInput { .. })
+    ));
 }
 
 #[test]
@@ -225,6 +231,10 @@ fn testmap_runner_delegates_empty_manifest_failure() {
     .expect_err("an empty manifest set must fail");
 
     assert_eq!(error.to_string(), "No manifest files found");
+    assert!(matches!(
+        error,
+        TestyCliError::Core(TestyError::InvalidInput { .. })
+    ));
 }
 
 #[test]

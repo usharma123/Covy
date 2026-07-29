@@ -2217,7 +2217,6 @@ dependencies = [
 name = "testy-cli-common"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "clap",
  "covy-ingest",
  "diffy-core",
@@ -2227,6 +2226,7 @@ dependencies = [
  "suite-packet-core",
  "tempfile",
  "testy-core",
+ "thiserror",
 ]
 
 [[package]]

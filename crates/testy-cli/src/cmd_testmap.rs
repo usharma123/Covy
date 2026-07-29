@@ -7,4 +7,5 @@ pub fn run(args: TestmapArgs, _config_path: &str) -> Result<i32> {
         args,
         &testy_cli_common::testmap::TestmapRunnerOptions::default(),
     )
+    .map_err(Into::into)
 }

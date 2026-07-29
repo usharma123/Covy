@@ -1,5 +1,6 @@
-use anyhow::Result;
 use clap::{Args, Subcommand};
+
+use crate::error::Result;
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum PlannerAlgorithmArg {
@@ -137,8 +138,8 @@ pub struct ShardUpdateArgs {
 ///
 /// # Errors
 ///
-/// Returns an error when shard planning, timing ingestion, persistence, or
-/// output serialization fails.
+/// Returns [`crate::TestyCliError`] when shard planning, timing ingestion,
+/// persistence, or output serialization fails.
 pub fn run_shard_command(args: ShardArgs, config_path: &str) -> Result<i32> {
     match args.command {
         ShardCommands::Plan(plan) => run_shard_plan_command(plan, config_path),
@@ -150,8 +151,9 @@ pub fn run_shard_command(args: ShardArgs, config_path: &str) -> Result<i32> {
 ///
 /// # Errors
 ///
-/// Returns an error when configuration or planning input is invalid, persisted
-/// state cannot be read or written, or JSON output cannot be serialized.
+/// Returns [`crate::TestyCliError`] when configuration or planning input is
+/// invalid, persisted state cannot be read or written, or JSON output cannot
+/// be serialized.
 pub fn run_shard_plan_command(args: ShardPlanArgs, config_path: &str) -> Result<i32> {
     if args.schema {
         println!("{}", testy_core::command_shard::SHARD_PLAN_SCHEMA_EXAMPLES);
@@ -188,8 +190,8 @@ pub fn run_shard_plan_command(args: ShardPlanArgs, config_path: &str) -> Result<
 ///
 /// # Errors
 ///
-/// Returns an error when configuration or reports cannot be read, parsed, or
-/// persisted, or when JSON output cannot be serialized.
+/// Returns [`crate::TestyCliError`] when configuration or reports cannot be
+/// read, parsed, or persisted, or when JSON output cannot be serialized.
 pub fn run_shard_update_command(args: ShardUpdateArgs, config_path: &str) -> Result<i32> {
     let summary = testy_core::command_shard::run_shard_update_command(
         testy_core::command_shard::ShardUpdateArgs {

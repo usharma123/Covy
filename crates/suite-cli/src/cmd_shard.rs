@@ -78,6 +78,7 @@ pub fn run(args: ShardArgs, config_path: &str) -> Result<i32> {
         },
         config_path,
     )
+    .map_err(Into::into)
 }
 
 pub fn run_remote(args: ShardArgs, config_path: &str, daemon_root: &Path) -> Result<i32> {
