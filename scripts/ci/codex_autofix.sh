@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
+ROOT="${CODEX_AUTOFIX_ROOT:-${GITHUB_WORKSPACE:-$(pwd)}}"
 FAILURE_LOG="${CI_FAILURE_LOG:-$ROOT/.packet28/ci-autofix/failure.log}"
 OUT_DIR="${CODEX_AUTOFIX_DIR:-$ROOT/.packet28/ci-autofix}"
 CODEX_BIN="${CODEX_BIN:-codex}"
@@ -60,11 +60,11 @@ else
     - <"$OUT_DIR/prompt.txt" 2>&1 | tee "$OUT_DIR/codex.log"
 fi
 
-if git diff --quiet -- . ':!.packet28'; then
+if git -C "$ROOT" diff --quiet -- . ':!.packet28'; then
   echo "Codex completed but produced no tracked diff" >&2
   exit 0
 fi
 
 echo "Codex produced a diff:" >&2
-git diff --stat -- . ':!.packet28'
-git diff -- . ':!.packet28' >"$OUT_DIR/diff.patch"
+git -C "$ROOT" diff --stat -- . ':!.packet28'
+git -C "$ROOT" diff --binary --full-index -- . ':!.packet28' >"$OUT_DIR/diff.patch"

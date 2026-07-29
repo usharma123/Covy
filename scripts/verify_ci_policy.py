@@ -175,6 +175,81 @@ def verify_locked_commands(errors: list[str]) -> None:
                 )
 
 
+def autofix_security_errors(text: str) -> list[str]:
+    """Return violations of the privileged autofix trust boundary."""
+
+    errors: list[str] = []
+    required_fragments = {
+        "automatic runs are not restricted to the trusted default branch": (
+            "github.event.workflow_run.head_branch == "
+            "github.event.repository.default_branch"
+        ),
+        "trusted control checkout is missing": "path: trusted-control",
+        "repair target checkout is not isolated": "path: target",
+        "trusted autofix driver is not selected explicitly": (
+            "TRUSTED_AUTOFIX: "
+            "${{ github.workspace }}/trusted-control/scripts/ci/codex_autofix.sh"
+        ),
+        "repair target root is not bound explicitly": (
+            "CODEX_AUTOFIX_ROOT: ${{ env.TARGET_ROOT }}"
+        ),
+        "candidate patch is not applied in a separate job": (
+            "git apply --index --binary .packet28/ci-autofix/diff.patch"
+        ),
+        "publish job does not depend on the read-only autofix job": (
+            "needs: autofix"
+        ),
+        "Codex CLI is not pinned to the reviewed version": (
+            "npm install -g @openai/codex@0.145.0"
+        ),
+    }
+    for message, fragment in required_fragments.items():
+        if fragment not in text:
+            errors.append(message)
+
+    if text.count("persist-credentials: false") < 3:
+        errors.append("every autofix checkout must discard persisted credentials")
+    if text.count("OPENAI_API_KEY:") != 1:
+        errors.append("OpenAI credentials must be scoped to exactly one execution step")
+    if re.search(r"^\s*run:\s*scripts/ci/codex_autofix\.sh\s*$", text, re.MULTILINE):
+        errors.append("candidate checkout may not supply the executed autofix driver")
+    if "git push --force" in text:
+        errors.append("autofix publication may not force-push")
+    if "pull_request_target" in text:
+        errors.append("autofix may not use pull_request_target")
+
+    autofix_job = text.partition("\n  autofix:")[2].partition("\n  publish:")[0]
+    if not autofix_job:
+        errors.append("read-only autofix job is missing")
+    else:
+        if "permissions:\n      actions: read\n      contents: read" not in autofix_job:
+            errors.append("autofix execution job must have read-only permissions")
+        if "contents: write" in autofix_job or "pull-requests: write" in autofix_job:
+            errors.append("autofix execution job may not have write permissions")
+        if "gh auth setup-git" in autofix_job:
+            errors.append("autofix execution job may not configure write credentials")
+
+    publish_job = text.partition("\n  publish:")[2]
+    if not publish_job:
+        errors.append("credential-isolated publish job is missing")
+    else:
+        if "contents: write" not in publish_job:
+            errors.append("publish job lacks scoped contents permission")
+        if "pull-requests: write" not in publish_job:
+            errors.append("publish job lacks scoped pull-request permission")
+        if "OPENAI_API_KEY" in publish_job:
+            errors.append("publish job may not receive OpenAI credentials")
+
+    return errors
+
+
+def verify_autofix_security(errors: list[str]) -> None:
+    autofix = (WORKFLOW_DIR / "codex-autofix.yml").read_text(encoding="utf-8")
+    errors.extend(
+        f"codex-autofix.yml: {error}" for error in autofix_security_errors(autofix)
+    )
+
+
 def verify_workflow_wiring(errors: list[str]) -> None:
     build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
     release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
@@ -263,6 +338,7 @@ def main() -> int:
     verify_action_references(errors)
     verify_rust_toolchains(errors)
     verify_locked_commands(errors)
+    verify_autofix_security(errors)
     verify_workflow_wiring(errors)
     if errors:
         for error in errors:
