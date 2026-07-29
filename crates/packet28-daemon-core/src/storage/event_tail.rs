@@ -7,6 +7,87 @@ use super::*;
 /// corruption outside the former suffix cannot be accepted.
 pub const MAX_TASK_EVENT_TAIL_SCAN_BYTES: usize = 3 * (MAX_TASK_EVENT_LINE_BYTES + 1);
 
+/// Loads one generation-consistent task/watch checkpoint and authenticated
+/// event tails while holding the task registry as the cross-registry lock.
+///
+/// Legacy task and watch documents are accepted only when both omit the
+/// checkpoint generation. Once either document carries a generation, both
+/// must carry the same value. Downgrading that workspace to a writer predating
+/// paired checkpoints is unsupported: an old task-only writer can preserve an
+/// unknown generation while changing content, so restart does not claim to
+/// detect or repair downgrade/re-upgrade writes.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::RegistryCheckpointGenerationMismatch`] when the
+/// task and watch documents are from different durable generations. Returns
+/// the same registry, event-tail, validation, and filesystem errors as
+/// [`load_task_registry_with_event_tails`] and [`load_watch_registry`].
+pub fn load_task_watch_registry_checkpoint_with_event_tails(
+    root: &Path,
+) -> Result<(TaskRegistry, WatchRegistry, BTreeMap<String, Option<u64>>)> {
+    #[cfg(unix)]
+    {
+        let registry_path = task_registry_path(root);
+        let writer_lease = acquire_task_store_writer_lease(root)?;
+        with_anchored_task_registry_lock(
+            root,
+            RegistryLockMode::Shared,
+            || Ok(()),
+            |daemon| {
+                let (registry, task_generation) = match daemon
+                    .read_file_limited(OsStr::new(TASK_REGISTRY_FILE_NAME), MAX_TASK_REGISTRY_BYTES)
+                {
+                    Ok(raw) => {
+                        decode_task_registry_with_checkpoint_generation(&registry_path, &raw)?
+                    }
+                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                        (TaskRegistry::default(), None)
+                    }
+                    Err(source) => {
+                        return Err(task_registry_read_error(daemon, &registry_path, source));
+                    }
+                };
+                let (watches, watch_generation) =
+                    load_watch_registry_with_generation_under_task_lock(root, daemon)?;
+                validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+                validate_task_watch_registry_relationships(root, &registry, &watches)?;
+                let mut tails = BTreeMap::new();
+                for task_id in registry.tasks.keys() {
+                    let storage_id = checked_task_storage_id(root, task_id)?;
+                    let tail =
+                        task_event_log_tail_sequence_admitted(root, &storage_id, &writer_lease)?;
+                    tails.insert(task_id.clone(), tail);
+                }
+                Ok((registry, watches, tails))
+            },
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let registry_path = task_registry_path(root);
+        let writer_lease = acquire_task_store_writer_lease(root)?;
+        with_registry_lock(root, &registry_path, RegistryLockMode::Shared, || {
+            let (registry, task_generation) = match read_task_registry_portable(&registry_path)? {
+                Some(raw) => decode_task_registry_with_checkpoint_generation(&registry_path, &raw)?,
+                None => (TaskRegistry::default(), None),
+            };
+            let (watches, watch_generation) =
+                load_watch_registry_with_generation_portable_under_task_lock(root)?;
+            validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+            validate_task_watch_registry_relationships(root, &registry, &watches)?;
+            let mut tails = BTreeMap::new();
+            for task_id in registry.tasks.keys() {
+                let storage_id = checked_task_storage_id(root, task_id)?;
+                let tail = task_event_log_tail_sequence_portable(root, &storage_id)?;
+                tails.insert(task_id.clone(), tail);
+            }
+            let _ = writer_lease;
+            Ok((registry, watches, tails))
+        })
+    }
+}
+
 /// Loads the strict durable task registry and every authenticated event tail
 /// under one shared registry authority lock.
 ///

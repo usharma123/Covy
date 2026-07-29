@@ -16,6 +16,7 @@ use packet28_daemon_protocol::paths::{
     socket_path, task_artifacts_dir, task_event_log_path, task_events_dir, task_registry_path,
     watch_registry_path, workspace_socket_path, TaskStorageId, AGENT_ACTIVE_TASK_FILE_NAME,
     MAX_TASK_STORAGE_ID_BYTES, TASK_EVENT_LOG_SUFFIX, TASK_REGISTRY_FILE_NAME,
+    WATCH_REGISTRY_FILE_NAME,
 };
 use packet28_daemon_protocol::task::{TaskRegistry, WatchRegistry};
 use unicode_casefold::UnicodeCaseFold as _;
@@ -34,7 +35,8 @@ use crate::{DaemonCoreError, Result};
 mod event_tail;
 
 pub use event_tail::{
-    append_next_task_event, load_task_registry_with_event_tails, task_event_log_tail_sequence,
+    append_next_task_event, load_task_registry_with_event_tails,
+    load_task_watch_registry_checkpoint_with_event_tails, task_event_log_tail_sequence,
     MAX_TASK_EVENT_TAIL_SCAN_BYTES,
 };
 #[cfg(all(test, unix))]
@@ -49,6 +51,11 @@ static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Writers validate this bound before acquiring a task-store lease or
 /// mutating state. Readers use the same constant for their bounded read.
 pub const MAX_TASK_REGISTRY_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum supported encoded size of the watch registry.
+///
+/// Writers validate this bound before acquiring a task-store lease or
+/// mutating state. Readers use the same constant for their bounded read.
+pub const MAX_WATCH_REGISTRY_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum supported encoded size of the active-task record.
 ///
 /// All task-store readers and writers must use this shared contract so
@@ -76,6 +83,8 @@ pub const MAX_AUTHORITY_JSON_ENTRIES_PER_CONTAINER: usize = 65_536;
 pub const MAX_AUTHORITY_JSON_TOKENS: usize = 524_288;
 /// Maximum task records accepted in one persisted task registry.
 pub const MAX_TASK_REGISTRY_RECORDS: usize = 65_536;
+/// Maximum watch records accepted in one persisted watch registry.
+pub const MAX_WATCH_REGISTRY_RECORDS: usize = 65_536;
 /// Maximum event-frame bytes returned by one paginated task-event read.
 ///
 /// A resumed read may additionally inspect one bounded predecessor frame to
@@ -91,7 +100,12 @@ pub const MAX_TASK_EVENT_LOAD_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_TASK_EVENT_LOAD_FRAMES: usize = MAX_TASK_REGISTRY_RECORDS;
 #[cfg(unix)]
 pub(crate) const TASK_REGISTRY_LOCK_FILE_NAME: &str = ".task-registry-v1.json.lock";
+#[cfg(unix)]
+const WATCH_REGISTRY_LOCK_FILE_NAME: &str = ".watch-registry-v1.json.lock";
+#[cfg(unix)]
+const WATCH_REGISTRY_WRITE_TEMP_PREFIX: &str = ".watch-registry-v1.json.packet28-write.";
 pub(crate) const ACTIVE_TASK_LOCK_FILE_NAME: &str = ".active-task.json.lock";
+const REGISTRY_CHECKPOINT_GENERATION_FIELD: &str = "task_watch_checkpoint_generation";
 
 #[cfg(test)]
 std::thread_local! {
@@ -607,21 +621,52 @@ pub fn remove_runtime_files(root: &Path) -> Result<()> {
 /// # Errors
 ///
 /// Returns [`DaemonCoreError::Io`] if the registry or lock file cannot be
-/// opened, read, locked, or unlocked. Returns [`DaemonCoreError::Json`] if the
-/// persisted registry is malformed.
+/// opened, read, locked, or unlocked. Returns
+/// [`DaemonCoreError::WatchRegistryTooLarge`] when the persisted registry
+/// exceeds 64 MiB, or [`DaemonCoreError::Json`] if the bounded authority JSON
+/// is malformed. Returns
+/// [`DaemonCoreError::RegistryCheckpointGenerationMismatch`] or
+/// [`DaemonCoreError::InvalidTaskWatchRegistry`] rather than exposing a watch
+/// half that is not part of the committed task/watch checkpoint.
 pub fn load_watch_registry(root: &Path) -> Result<WatchRegistry> {
-    let path = watch_registry_path(root);
-    with_registry_lock(root, &path, RegistryLockMode::Shared, || {
-        if !path.exists() {
-            return Ok(WatchRegistry::default());
-        }
-        let raw = fs::read(&path).map_err(|source| {
-            DaemonCoreError::io("failed to read watch registry", &path, source)
-        })?;
-        serde_json::from_slice(&raw).map_err(|source| {
-            DaemonCoreError::json("failed to decode watch registry from", &path, source)
+    #[cfg(unix)]
+    {
+        with_anchored_task_registry_lock(
+            root,
+            RegistryLockMode::Shared,
+            || Ok(()),
+            |daemon| {
+                let task_path = task_registry_path(root);
+                let (tasks, task_generation) =
+                    match read_anchored_task_registry(daemon, &task_path)? {
+                        Some(raw) => {
+                            decode_task_registry_with_checkpoint_generation(&task_path, &raw)?
+                        }
+                        None => (TaskRegistry::default(), None),
+                    };
+                let (watches, watch_generation) =
+                    load_watch_registry_with_generation_under_task_lock(root, daemon)?;
+                validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+                validate_task_watch_registry_relationships(root, &tasks, &watches)?;
+                Ok(watches)
+            },
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let task_path = task_registry_path(root);
+        with_registry_lock(root, &task_path, RegistryLockMode::Shared, || {
+            let (tasks, task_generation) = match read_task_registry_portable(&task_path)? {
+                Some(raw) => decode_task_registry_with_checkpoint_generation(&task_path, &raw)?,
+                None => (TaskRegistry::default(), None),
+            };
+            let (watches, watch_generation) =
+                load_watch_registry_with_generation_portable_under_task_lock(root)?;
+            validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+            validate_task_watch_registry_relationships(root, &tasks, &watches)?;
+            Ok(watches)
         })
-    })
+    }
 }
 
 /// Persists the workspace watch registry under an exclusive interprocess lock.
@@ -629,16 +674,47 @@ pub fn load_watch_registry(root: &Path) -> Result<WatchRegistry> {
 /// # Errors
 ///
 /// Returns [`DaemonCoreError::Json`] if the registry cannot be encoded.
+/// Returns [`DaemonCoreError::WatchRegistryTooLarge`] before taking a
+/// lifecycle lease or changing state when its encoding exceeds 64 MiB.
+/// Returns [`DaemonCoreError::RegistryCheckpointRequired`] when either
+/// registry already belongs to paired checkpoint authority; callers must then
+/// use [`save_task_watch_registry_checkpoint`].
 /// Returns [`DaemonCoreError::Io`] if the daemon directory, lock, or registry
 /// file cannot be created, written, synchronized, replaced, or unlocked.
 pub fn save_watch_registry(root: &Path, registry: &WatchRegistry) -> Result<()> {
     let path = watch_registry_path(root);
-    let bytes = serde_json::to_vec_pretty(registry).map_err(|source| {
-        DaemonCoreError::json("failed to encode watch registry for", &path, source)
-    })?;
-    with_registry_lock(root, &path, RegistryLockMode::Exclusive, || {
-        write_atomically(&path, &bytes)
-    })
+    let _ = encode_watch_registry(&path, registry, None)?;
+    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    #[cfg(unix)]
+    {
+        with_anchored_task_registry_lock(
+            root,
+            RegistryLockMode::Exclusive,
+            || Ok(()),
+            |daemon| {
+                let task_path = task_registry_path(root);
+                let (tasks, task_generation) =
+                    match read_anchored_task_registry(daemon, &task_path)? {
+                        Some(raw) => {
+                            decode_task_registry_with_checkpoint_generation(&task_path, &raw)?
+                        }
+                        None => (TaskRegistry::default(), None),
+                    };
+                save_watch_registry_under_task_lock(root, daemon, registry, &tasks, task_generation)
+            },
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let task_path = task_registry_path(root);
+        with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
+            let (tasks, task_generation) = match read_task_registry_portable(&task_path)? {
+                Some(raw) => decode_task_registry_with_checkpoint_generation(&task_path, &raw)?,
+                None => (TaskRegistry::default(), None),
+            };
+            save_watch_registry_under_task_lock(root, registry, &tasks, task_generation)
+        })
+    }
 }
 
 /// Loads the task registry under a shared interprocess lock.
@@ -652,7 +728,10 @@ pub fn save_watch_registry(root: &Path, registry: &WatchRegistry) -> Result<()> 
 /// persisted registry is malformed. Returns
 /// [`DaemonCoreError::TaskRegistryTooLarge`] when the persisted registry
 /// exceeds 64 MiB, or [`DaemonCoreError::InvalidTaskRegistry`] when a map key
-/// and its embedded task identifier disagree.
+/// and its embedded task identifier disagree. Returns
+/// [`DaemonCoreError::RegistryCheckpointGenerationMismatch`] or
+/// [`DaemonCoreError::InvalidTaskWatchRegistry`] when the paired watch
+/// authority is not generation-consistent and bijective.
 pub fn load_task_registry(root: &Path) -> Result<TaskRegistry> {
     #[cfg(unix)]
     {
@@ -662,18 +741,22 @@ pub fn load_task_registry(root: &Path) -> Result<TaskRegistry> {
             RegistryLockMode::Shared,
             || Ok(()),
             |daemon| {
-                let raw = match daemon
+                let (registry, task_generation) = match daemon
                     .read_file_limited(OsStr::new(TASK_REGISTRY_FILE_NAME), MAX_TASK_REGISTRY_BYTES)
                 {
-                    Ok(raw) => raw,
+                    Ok(raw) => decode_task_registry_with_checkpoint_generation(&path, &raw)?,
                     Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                        return Ok(TaskRegistry::default());
+                        (TaskRegistry::default(), None)
                     }
                     Err(source) => {
                         return Err(task_registry_read_error(daemon, &path, source));
                     }
                 };
-                decode_task_registry(&path, &raw)
+                let (watches, watch_generation) =
+                    load_watch_registry_with_generation_under_task_lock(root, daemon)?;
+                validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+                validate_task_watch_registry_relationships(root, &registry, &watches)?;
+                Ok(registry)
             },
         )
     }
@@ -719,6 +802,9 @@ fn task_registry_read_error(
 /// boundary if a record cannot fit the crash-recovery journal. Returns
 /// [`DaemonCoreError::InvalidTaskRegistry`] on the same no-mutation boundary
 /// when a map key and its embedded task identifier disagree.
+/// Returns [`DaemonCoreError::RegistryCheckpointRequired`] when either
+/// registry already belongs to paired checkpoint authority; callers must then
+/// use [`save_task_watch_registry_checkpoint`].
 /// Returns [`DaemonCoreError::Io`] if the daemon directory, lock, or registry
 /// file cannot be created, written, synchronized, replaced, or unlocked.
 pub fn save_task_registry(root: &Path, registry: &TaskRegistry) -> Result<()> {
@@ -732,6 +818,88 @@ pub fn save_task_registry(root: &Path, registry: &TaskRegistry) -> Result<()> {
     }
 }
 
+/// Persists task and watch registries as one monotonic durable generation.
+///
+/// Both documents are fully encoded before either is replaced. The watch
+/// registry is published first and the task registry is the commit record, so
+/// a crash between replacements leaves unequal generations that startup
+/// rejects instead of advertising mixed state.
+///
+/// Workspace downgrade to writers that predate paired checkpoints is not
+/// supported once either document carries a generation. An older task-only
+/// writer can preserve the unknown generation field while replacing task
+/// content, which cannot be distinguished from a complete checkpoint by the
+/// generation alone. Operators must not run such writers against upgraded
+/// workspace state.
+///
+/// # Errors
+///
+/// Returns the same validation, encoding, locking, and filesystem errors as
+/// [`save_task_registry`] and [`save_watch_registry`]. Returns
+/// [`DaemonCoreError::RegistryCheckpointGenerationExhausted`] without
+/// mutation when the stored generation cannot advance.
+pub fn save_task_watch_registry_checkpoint(
+    root: &Path,
+    tasks: &TaskRegistry,
+    watches: &WatchRegistry,
+) -> Result<()> {
+    validate_task_watch_registry_relationships(root, tasks, watches)?;
+    let task_path = task_registry_path(root);
+    let watch_path = watch_registry_path(root);
+    let task_bytes = encode_task_registry(&task_path, tasks)?;
+    let _ = encode_watch_registry(&watch_path, watches, None)?;
+    let _writer_lease = acquire_task_store_writer_lease(root)?;
+
+    #[cfg(unix)]
+    {
+        with_anchored_task_registry_lock(
+            root,
+            RegistryLockMode::Exclusive,
+            || Ok(()),
+            |daemon| {
+                let existing_task = read_anchored_task_registry(daemon, &task_path)?;
+                let task_bytes = encode_task_registry_preserving_existing(
+                    root,
+                    &task_path,
+                    tasks,
+                    existing_task.as_deref(),
+                    task_bytes,
+                )?;
+                save_task_watch_registry_checkpoint_anchored(
+                    root,
+                    daemon,
+                    tasks,
+                    watches,
+                    existing_task.as_deref(),
+                    task_bytes,
+                    |bytes| write_anchored_task_registry(daemon, &task_path, bytes, || Ok(())),
+                )
+            },
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
+            let existing_task = read_task_registry_portable(&task_path)?;
+            let task_bytes = encode_task_registry_preserving_existing(
+                root,
+                &task_path,
+                tasks,
+                existing_task.as_deref(),
+                task_bytes,
+            )?;
+            save_task_watch_registry_checkpoint_portable(
+                root,
+                tasks,
+                watches,
+                existing_task.as_deref(),
+                task_bytes,
+                |bytes| write_atomically(&task_path, bytes),
+            )
+        })
+    }
+}
+
 #[cfg(any(not(unix), test))]
 fn save_task_registry_portable(root: &Path, registry: &TaskRegistry) -> Result<()> {
     let path = task_registry_path(root);
@@ -739,6 +907,17 @@ fn save_task_registry_portable(root: &Path, registry: &TaskRegistry) -> Result<(
     let _writer_lease = acquire_task_store_writer_lease(root)?;
     with_registry_lock(root, &path, RegistryLockMode::Exclusive, || {
         let existing = read_task_registry_portable(&path)?;
+        let task_generation = existing
+            .as_deref()
+            .map(|raw| {
+                registry_checkpoint_generation(&path, raw, AuthorityJsonProfile::TaskRegistry)
+            })
+            .transpose()?
+            .flatten();
+        let (watches, watch_generation) =
+            load_watch_registry_with_generation_portable_under_task_lock(root)?;
+        reject_standalone_registry_write(root, "task", task_generation, watch_generation)?;
+        validate_task_watch_registry_relationships(root, registry, &watches)?;
         let bytes = encode_task_registry_preserving_existing(
             root,
             &path,
@@ -774,13 +953,18 @@ fn save_task_registry_with_observers(
         RegistryLockMode::Exclusive,
         after_daemon_open,
         |daemon| {
-            let existing = match daemon
-                .read_file_limited(OsStr::new(TASK_REGISTRY_FILE_NAME), MAX_TASK_REGISTRY_BYTES)
-            {
-                Ok(raw) => Some(raw),
-                Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
-                Err(source) => return Err(task_registry_read_error(daemon, &path, source)),
-            };
+            let existing = read_anchored_task_registry(daemon, &path)?;
+            let task_generation = existing
+                .as_deref()
+                .map(|raw| {
+                    registry_checkpoint_generation(&path, raw, AuthorityJsonProfile::TaskRegistry)
+                })
+                .transpose()?
+                .flatten();
+            let (watches, watch_generation) =
+                load_watch_registry_with_generation_under_task_lock(root, daemon)?;
+            reject_standalone_registry_write(root, "task", task_generation, watch_generation)?;
+            validate_task_watch_registry_relationships(root, registry, &watches)?;
             let bytes = encode_task_registry_preserving_existing(
                 root,
                 &path,
@@ -788,29 +972,227 @@ fn save_task_registry_with_observers(
                 existing.as_deref(),
                 bytes,
             )?;
-            daemon
-                .write_json_atomically_with_observers(
-                    OsStr::new(TASK_REGISTRY_FILE_NAME),
-                    &bytes,
-                    TASK_REGISTRY_WRITE_TEMP_PREFIX,
-                    |_| Ok(()),
-                    after_temp_sync,
-                    || Ok(()),
-                )
-                .map_err(|error| {
-                    DaemonCoreError::io(
-                        if error.renamed {
-                            "failed to synchronize anchored task registry replacement"
-                        } else {
-                            "failed to write anchored task registry"
-                        },
-                        &path,
-                        error.source,
-                    )
-                })
+            write_anchored_task_registry(daemon, &path, &bytes, after_temp_sync)
         },
     )
 }
+
+#[cfg(unix)]
+fn read_anchored_task_registry(daemon: &CapabilityDir, path: &Path) -> Result<Option<Vec<u8>>> {
+    match daemon.read_file_limited(OsStr::new(TASK_REGISTRY_FILE_NAME), MAX_TASK_REGISTRY_BYTES) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(task_registry_read_error(daemon, path, source)),
+    }
+}
+
+#[cfg(unix)]
+fn write_anchored_task_registry(
+    daemon: &CapabilityDir,
+    path: &Path,
+    bytes: &[u8],
+    after_temp_sync: impl FnOnce() -> std::io::Result<()>,
+) -> Result<()> {
+    daemon
+        .write_json_atomically_with_observers(
+            OsStr::new(TASK_REGISTRY_FILE_NAME),
+            bytes,
+            TASK_REGISTRY_WRITE_TEMP_PREFIX,
+            |_| Ok(()),
+            after_temp_sync,
+            || Ok(()),
+        )
+        .map_err(|error| {
+            DaemonCoreError::io(
+                if error.renamed {
+                    "failed to synchronize anchored task registry replacement"
+                } else {
+                    "failed to write anchored task registry"
+                },
+                path,
+                error.source,
+            )
+        })
+}
+
+#[cfg(unix)]
+fn write_anchored_watch_registry(daemon: &CapabilityDir, path: &Path, bytes: &[u8]) -> Result<()> {
+    daemon
+        .write_json_atomically(
+            OsStr::new(WATCH_REGISTRY_FILE_NAME),
+            bytes,
+            WATCH_REGISTRY_WRITE_TEMP_PREFIX,
+        )
+        .map_err(|error| {
+            DaemonCoreError::io(
+                if error.renamed {
+                    "failed to synchronize anchored watch registry replacement"
+                } else {
+                    "failed to write anchored watch registry"
+                },
+                path,
+                error.source,
+            )
+        })
+}
+
+#[cfg(unix)]
+fn save_task_watch_registry_checkpoint_anchored(
+    root: &Path,
+    daemon: &CapabilityDir,
+    tasks: &TaskRegistry,
+    watches: &WatchRegistry,
+    existing_task: Option<&[u8]>,
+    task_bytes: Vec<u8>,
+    write_task: impl FnOnce(&[u8]) -> Result<()>,
+) -> Result<()> {
+    let watch_path = watch_registry_path(root);
+    with_anchored_watch_registry_lock(daemon, RegistryLockMode::Exclusive, || {
+        let existing_watch = read_anchored_watch_registry(daemon, &watch_path)?;
+        save_task_watch_registry_checkpoint_locked(
+            root,
+            tasks,
+            watches,
+            existing_task,
+            existing_watch.as_deref(),
+            task_bytes,
+            |bytes| write_anchored_watch_registry(daemon, &watch_path, bytes),
+            write_task,
+        )
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn save_retained_task_registry_checkpoint_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+    task_bytes: Vec<u8>,
+) -> Result<()> {
+    let task_path = task_registry_path(root);
+    let watch_path = watch_registry_path(root);
+    let tasks = decode_task_registry(&task_path, &task_bytes)?;
+    validate_encoded_task_registry(&task_path, &tasks, &task_bytes)?;
+    let existing_task = read_anchored_task_registry(daemon, &task_path)?;
+    with_anchored_watch_registry_lock(daemon, RegistryLockMode::Exclusive, || {
+        let existing_watch = read_anchored_watch_registry(daemon, &watch_path)?;
+        let task_generation = existing_task
+            .as_deref()
+            .map(|raw| {
+                registry_checkpoint_generation(&task_path, raw, AuthorityJsonProfile::TaskRegistry)
+            })
+            .transpose()?
+            .flatten();
+        let (watches, watch_generation) = match existing_watch.as_deref() {
+            Some(raw) => decode_watch_registry_with_generation(&watch_path, raw)?,
+            None => (WatchRegistry::default(), None),
+        };
+        validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+        validate_task_watch_registry_relationships(root, &tasks, &watches)?;
+        save_task_watch_registry_checkpoint_locked(
+            root,
+            &tasks,
+            &watches,
+            existing_task.as_deref(),
+            existing_watch.as_deref(),
+            task_bytes,
+            |bytes| write_anchored_watch_registry(daemon, &watch_path, bytes),
+            |bytes| write_anchored_task_registry(daemon, &task_path, bytes, || Ok(())),
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn save_task_watch_registry_checkpoint_portable(
+    root: &Path,
+    tasks: &TaskRegistry,
+    watches: &WatchRegistry,
+    existing_task: Option<&[u8]>,
+    task_bytes: Vec<u8>,
+    write_task: impl FnOnce(&[u8]) -> Result<()>,
+) -> Result<()> {
+    let watch_path = watch_registry_path(root);
+    with_registry_lock(root, &watch_path, RegistryLockMode::Exclusive, || {
+        let existing_watch = read_watch_registry(&watch_path)?;
+        save_task_watch_registry_checkpoint_locked(
+            root,
+            tasks,
+            watches,
+            existing_task,
+            existing_watch.as_deref(),
+            task_bytes,
+            |bytes| write_atomically(&watch_path, bytes),
+            write_task,
+        )
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "both checkpoint halves and their authenticated writers are explicit"
+)]
+fn save_task_watch_registry_checkpoint_locked(
+    root: &Path,
+    tasks: &TaskRegistry,
+    watches: &WatchRegistry,
+    existing_task: Option<&[u8]>,
+    existing_watch: Option<&[u8]>,
+    task_bytes: Vec<u8>,
+    write_watch: impl FnOnce(&[u8]) -> Result<()>,
+    write_task: impl FnOnce(&[u8]) -> Result<()>,
+) -> Result<()> {
+    let task_path = task_registry_path(root);
+    let watch_path = watch_registry_path(root);
+    let task_generation = existing_task
+        .map(|raw| {
+            registry_checkpoint_generation(&task_path, raw, AuthorityJsonProfile::TaskRegistry)
+        })
+        .transpose()?
+        .flatten();
+    let watch_generation = existing_watch
+        .map(|raw| {
+            registry_checkpoint_generation(&watch_path, raw, AuthorityJsonProfile::WatchRegistry)
+        })
+        .transpose()?
+        .flatten();
+    let generation = next_registry_checkpoint_generation(root, task_generation, watch_generation)?;
+    let task_bytes = inject_registry_checkpoint_generation(&task_path, task_bytes, generation)?;
+    validate_encoded_task_registry(&task_path, tasks, &task_bytes)?;
+    let watch_bytes = encode_watch_registry(&watch_path, watches, Some(generation))?;
+
+    write_watch(&watch_bytes)?;
+    maybe_exit_after_registry_checkpoint_phase("watch");
+    write_task(&task_bytes)?;
+    maybe_exit_after_registry_checkpoint_phase("task");
+    Ok(())
+}
+
+fn next_registry_checkpoint_generation(
+    root: &Path,
+    task_generation: Option<u64>,
+    watch_generation: Option<u64>,
+) -> Result<u64> {
+    task_generation
+        .into_iter()
+        .chain(watch_generation)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| DaemonCoreError::RegistryCheckpointGenerationExhausted {
+            root: root.to_path_buf(),
+            task_generation,
+            watch_generation,
+        })
+}
+
+#[cfg(test)]
+fn maybe_exit_after_registry_checkpoint_phase(phase: &str) {
+    if std::env::var("PACKET28_REGISTRY_CHECKPOINT_EXIT_AFTER").as_deref() == Ok(phase) {
+        std::process::exit(86);
+    }
+}
+
+#[cfg(not(test))]
+fn maybe_exit_after_registry_checkpoint_phase(_phase: &str) {}
 
 fn encode_task_registry(path: &Path, registry: &TaskRegistry) -> Result<Vec<u8>> {
     validate_task_registry(path, registry)?;
@@ -861,6 +1243,7 @@ fn encode_task_registry_preserving_existing(
     // a replacement. This prevents a normal save from laundering corrupt or
     // legacy-ambiguous state into a newly trusted registry.
     let existing_registry = decode_task_registry(path, existing_raw)?;
+    let _ = registry_checkpoint_generation(path, existing_raw, AuthorityJsonProfile::TaskRegistry)?;
     validate_task_registry_namespace_bindings(root, registry, Some(&existing_registry), path)?;
     let mut root =
         decode_json_value_without_duplicate_keys(existing_raw, AuthorityJsonProfile::TaskRegistry)
@@ -927,6 +1310,459 @@ fn encode_task_registry_preserving_existing(
     })?;
     validate_encoded_task_registry(path, registry, &bytes)?;
     Ok(bytes)
+}
+
+#[cfg(unix)]
+pub(super) fn load_watch_registry_with_generation_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+) -> Result<(WatchRegistry, Option<u64>)> {
+    let path = watch_registry_path(root);
+    with_anchored_watch_registry_lock(daemon, RegistryLockMode::Shared, || {
+        let Some(raw) = read_anchored_watch_registry(daemon, &path)? else {
+            return Ok((WatchRegistry::default(), None));
+        };
+        decode_watch_registry_with_generation(&path, &raw)
+    })
+}
+
+#[cfg(any(not(unix), test))]
+fn load_watch_registry_with_generation_portable_under_task_lock(
+    root: &Path,
+) -> Result<(WatchRegistry, Option<u64>)> {
+    let path = watch_registry_path(root);
+    with_registry_lock(root, &path, RegistryLockMode::Shared, || {
+        let Some(raw) = read_watch_registry(&path)? else {
+            return Ok((WatchRegistry::default(), None));
+        };
+        decode_watch_registry_with_generation(&path, &raw)
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn validate_task_registry_against_persisted_watches_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+    tasks: &TaskRegistry,
+) -> Result<()> {
+    let task_path = task_registry_path(root);
+    let task_generation = read_anchored_task_registry(daemon, &task_path)?
+        .as_deref()
+        .map(|raw| {
+            registry_checkpoint_generation(&task_path, raw, AuthorityJsonProfile::TaskRegistry)
+        })
+        .transpose()?
+        .flatten();
+    let (watches, watch_generation) =
+        load_watch_registry_with_generation_under_task_lock(root, daemon)?;
+    validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+    let _ = next_registry_checkpoint_generation(root, task_generation, watch_generation)?;
+    validate_task_watch_registry_relationships(root, tasks, &watches)
+}
+
+#[cfg(unix)]
+fn save_watch_registry_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+    registry: &WatchRegistry,
+    tasks: &TaskRegistry,
+    task_generation: Option<u64>,
+) -> Result<()> {
+    let path = watch_registry_path(root);
+    with_anchored_watch_registry_lock(daemon, RegistryLockMode::Exclusive, || {
+        let existing = read_anchored_watch_registry(daemon, &path)?;
+        save_watch_registry_locked(
+            root,
+            &path,
+            registry,
+            tasks,
+            task_generation,
+            existing.as_deref(),
+            |bytes| write_anchored_watch_registry(daemon, &path, bytes),
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn save_watch_registry_under_task_lock(
+    root: &Path,
+    registry: &WatchRegistry,
+    tasks: &TaskRegistry,
+    task_generation: Option<u64>,
+) -> Result<()> {
+    let path = watch_registry_path(root);
+    with_registry_lock(root, &path, RegistryLockMode::Exclusive, || {
+        let existing = read_watch_registry(&path)?;
+        save_watch_registry_locked(
+            root,
+            &path,
+            registry,
+            tasks,
+            task_generation,
+            existing.as_deref(),
+            |bytes| write_atomically(&path, bytes),
+        )
+    })
+}
+
+fn save_watch_registry_locked(
+    root: &Path,
+    path: &Path,
+    registry: &WatchRegistry,
+    tasks: &TaskRegistry,
+    task_generation: Option<u64>,
+    existing: Option<&[u8]>,
+    write: impl FnOnce(&[u8]) -> Result<()>,
+) -> Result<()> {
+    let watch_generation = existing
+        .map(|raw| registry_checkpoint_generation(path, raw, AuthorityJsonProfile::WatchRegistry))
+        .transpose()?
+        .flatten();
+    reject_standalone_registry_write(root, "watch", task_generation, watch_generation)?;
+    validate_task_watch_registry_relationships(root, tasks, registry)?;
+    let bytes = encode_watch_registry(path, registry, None)?;
+    write(&bytes)
+}
+
+#[cfg(unix)]
+fn read_anchored_watch_registry(daemon: &CapabilityDir, path: &Path) -> Result<Option<Vec<u8>>> {
+    match daemon.read_file_limited(
+        OsStr::new(WATCH_REGISTRY_FILE_NAME),
+        MAX_WATCH_REGISTRY_BYTES,
+    ) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(watch_registry_read_error(daemon, path, source)),
+    }
+}
+
+#[cfg(unix)]
+fn watch_registry_read_error(
+    daemon: &CapabilityDir,
+    path: &Path,
+    source: std::io::Error,
+) -> DaemonCoreError {
+    if source.kind() == std::io::ErrorKind::InvalidData
+        && matches!(
+            daemon.entry_is_regular_file(OsStr::new(WATCH_REGISTRY_FILE_NAME)),
+            Ok(Some(true))
+        )
+    {
+        if let Ok(Some((encoded_bytes, _))) =
+            daemon.entry_storage_bytes(OsStr::new(WATCH_REGISTRY_FILE_NAME))
+        {
+            if encoded_bytes > MAX_WATCH_REGISTRY_BYTES as u64 {
+                return DaemonCoreError::WatchRegistryTooLarge {
+                    path: path.to_path_buf(),
+                    encoded_bytes,
+                    max_bytes: MAX_WATCH_REGISTRY_BYTES as u64,
+                };
+            }
+        }
+    }
+    DaemonCoreError::io("failed to read anchored watch registry", path, source)
+}
+
+#[cfg(any(not(unix), test))]
+fn read_watch_registry(path: &Path) -> Result<Option<Vec<u8>>> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(DaemonCoreError::io(
+                "failed to open watch registry",
+                path,
+                source,
+            ));
+        }
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|source| DaemonCoreError::io("failed to inspect watch registry", path, source))?;
+    if metadata.len() > MAX_WATCH_REGISTRY_BYTES as u64 {
+        return Err(DaemonCoreError::WatchRegistryTooLarge {
+            path: path.to_path_buf(),
+            encoded_bytes: metadata.len(),
+            max_bytes: MAX_WATCH_REGISTRY_BYTES as u64,
+        });
+    }
+    let mut raw = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_WATCH_REGISTRY_BYTES as u64 + 1)
+        .read_to_end(&mut raw)
+        .map_err(|source| DaemonCoreError::io("failed to read watch registry", path, source))?;
+    if raw.len() > MAX_WATCH_REGISTRY_BYTES {
+        return Err(DaemonCoreError::WatchRegistryTooLarge {
+            path: path.to_path_buf(),
+            encoded_bytes: raw.len() as u64,
+            max_bytes: MAX_WATCH_REGISTRY_BYTES as u64,
+        });
+    }
+    Ok(Some(raw))
+}
+
+fn encode_watch_registry(
+    path: &Path,
+    registry: &WatchRegistry,
+    generation: Option<u64>,
+) -> Result<Vec<u8>> {
+    let mut value = serde_json::to_value(registry).map_err(|source| {
+        DaemonCoreError::json("failed to encode watch registry for", path, source)
+    })?;
+    if let Some(generation) = generation {
+        let object = value.as_object_mut().ok_or_else(|| {
+            DaemonCoreError::json(
+                "failed to encode watch registry for",
+                path,
+                <serde_json::Error as serde::ser::Error>::custom(
+                    "watch registry root must serialize as a JSON object",
+                ),
+            )
+        })?;
+        object.insert(
+            REGISTRY_CHECKPOINT_GENERATION_FIELD.to_string(),
+            serde_json::Value::from(generation),
+        );
+    }
+    let bytes = serde_json::to_vec_pretty(&value).map_err(|source| {
+        DaemonCoreError::json("failed to encode watch registry for", path, source)
+    })?;
+    validate_encoded_watch_registry(path, &bytes)?;
+    Ok(bytes)
+}
+
+fn validate_encoded_watch_registry(path: &Path, bytes: &[u8]) -> Result<()> {
+    if bytes.len() > MAX_WATCH_REGISTRY_BYTES {
+        return Err(DaemonCoreError::WatchRegistryTooLarge {
+            path: path.to_path_buf(),
+            encoded_bytes: bytes.len() as u64,
+            max_bytes: MAX_WATCH_REGISTRY_BYTES as u64,
+        });
+    }
+    validate_authority_json(bytes, AuthorityJsonProfile::WatchRegistry).map_err(|error| {
+        map_authority_json_error(
+            path,
+            AuthorityJsonProfile::WatchRegistry,
+            "failed to validate encoded watch registry for",
+            error,
+        )
+    })
+}
+
+fn decode_watch_registry_with_generation(
+    path: &Path,
+    raw: &[u8],
+) -> Result<(WatchRegistry, Option<u64>)> {
+    let value = decode_json_value_without_duplicate_keys(raw, AuthorityJsonProfile::WatchRegistry)
+        .map_err(|error| {
+            map_authority_json_error(
+                path,
+                AuthorityJsonProfile::WatchRegistry,
+                "failed to decode watch registry from",
+                error,
+            )
+        })?;
+    let generation = registry_checkpoint_generation_from_value(path, &value)?;
+    let registry = serde_json::from_value(value).map_err(|source| {
+        DaemonCoreError::json("failed to decode watch registry from", path, source)
+    })?;
+    Ok((registry, generation))
+}
+
+pub(super) fn decode_task_registry_with_checkpoint_generation(
+    path: &Path,
+    raw: &[u8],
+) -> Result<(TaskRegistry, Option<u64>)> {
+    let registry = decode_task_registry(path, raw)?;
+    let generation = registry_checkpoint_generation(path, raw, AuthorityJsonProfile::TaskRegistry)?;
+    Ok((registry, generation))
+}
+
+fn registry_checkpoint_generation(
+    path: &Path,
+    raw: &[u8],
+    profile: AuthorityJsonProfile,
+) -> Result<Option<u64>> {
+    let value = decode_json_value_without_duplicate_keys(raw, profile).map_err(|error| {
+        map_authority_json_error(
+            path,
+            profile,
+            "failed to decode registry checkpoint generation from",
+            error,
+        )
+    })?;
+    registry_checkpoint_generation_from_value(path, &value)
+}
+
+fn registry_checkpoint_generation_from_value(
+    path: &Path,
+    value: &serde_json::Value,
+) -> Result<Option<u64>> {
+    let object = value.as_object().ok_or_else(|| {
+        DaemonCoreError::json(
+            "failed to decode registry checkpoint generation from",
+            path,
+            <serde_json::Error as serde::de::Error>::custom("registry root must be a JSON object"),
+        )
+    })?;
+    let Some(generation) = object.get(REGISTRY_CHECKPOINT_GENERATION_FIELD) else {
+        return Ok(None);
+    };
+    generation.as_u64().map(Some).ok_or_else(|| {
+        DaemonCoreError::json(
+            "failed to decode registry checkpoint generation from",
+            path,
+            <serde_json::Error as serde::de::Error>::custom(format!(
+                "{REGISTRY_CHECKPOINT_GENERATION_FIELD} must be an unsigned 64-bit integer"
+            )),
+        )
+    })
+}
+
+fn inject_registry_checkpoint_generation(
+    path: &Path,
+    bytes: Vec<u8>,
+    generation: u64,
+) -> Result<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|source| {
+        DaemonCoreError::json(
+            "failed to inject registry checkpoint generation into",
+            path,
+            source,
+        )
+    })?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        DaemonCoreError::json(
+            "failed to inject registry checkpoint generation into",
+            path,
+            <serde_json::Error as serde::de::Error>::custom("registry root must be a JSON object"),
+        )
+    })?;
+    object.insert(
+        REGISTRY_CHECKPOINT_GENERATION_FIELD.to_string(),
+        serde_json::Value::from(generation),
+    );
+    serde_json::to_vec_pretty(&value).map_err(|source| {
+        DaemonCoreError::json(
+            "failed to encode registry checkpoint generation for",
+            path,
+            source,
+        )
+    })
+}
+
+pub(super) fn validate_registry_checkpoint_generations(
+    root: &Path,
+    task_generation: Option<u64>,
+    watch_generation: Option<u64>,
+) -> Result<()> {
+    if task_generation == watch_generation {
+        return Ok(());
+    }
+    Err(DaemonCoreError::RegistryCheckpointGenerationMismatch {
+        root: root.to_path_buf(),
+        task_generation,
+        watch_generation,
+    })
+}
+
+pub(crate) fn validate_task_watch_registry_relationships(
+    root: &Path,
+    tasks: &TaskRegistry,
+    watches: &WatchRegistry,
+) -> Result<()> {
+    let mut watch_owners = BTreeMap::<&str, &str>::new();
+    for watch in &watches.watches {
+        if watch.watch_id.trim().is_empty() {
+            return Err(DaemonCoreError::InvalidTaskWatchRegistry {
+                root: root.to_path_buf(),
+                message: "watch registry contains an empty watch identifier".to_string(),
+            });
+        }
+        let task_id = watch.spec.task_id.as_str();
+        if task_id.trim().is_empty() {
+            return Err(DaemonCoreError::InvalidTaskWatchRegistry {
+                root: root.to_path_buf(),
+                message: format!("watch '{}' has an empty task identifier", watch.watch_id),
+            });
+        }
+        if !tasks.tasks.contains_key(task_id) {
+            return Err(DaemonCoreError::InvalidTaskWatchRegistry {
+                root: root.to_path_buf(),
+                message: format!(
+                    "watch '{}' refers to missing task '{task_id}'",
+                    watch.watch_id
+                ),
+            });
+        }
+        if let Some(existing_owner) = watch_owners.insert(&watch.watch_id, task_id) {
+            return Err(DaemonCoreError::InvalidTaskWatchRegistry {
+                root: root.to_path_buf(),
+                message: format!(
+                    "watch identifier '{}' is duplicated for tasks '{existing_owner}' and \
+                     '{task_id}'",
+                    watch.watch_id
+                ),
+            });
+        }
+    }
+    for (task_id, task) in &tasks.tasks {
+        let mut task_watch_ids = BTreeSet::new();
+        for watch_id in &task.watch_ids {
+            if !task_watch_ids.insert(watch_id.as_str()) {
+                return Err(DaemonCoreError::InvalidTaskWatchRegistry {
+                    root: root.to_path_buf(),
+                    message: format!("task '{task_id}' repeats watch identifier '{watch_id}'"),
+                });
+            }
+            match watch_owners.get(watch_id.as_str()) {
+                Some(owner) if *owner == task_id => {}
+                Some(owner) => {
+                    return Err(DaemonCoreError::InvalidTaskWatchRegistry {
+                        root: root.to_path_buf(),
+                        message: format!(
+                            "task '{task_id}' lists watch '{watch_id}' owned by task '{owner}'"
+                        ),
+                    });
+                }
+                None => {
+                    return Err(DaemonCoreError::InvalidTaskWatchRegistry {
+                        root: root.to_path_buf(),
+                        message: format!("task '{task_id}' refers to missing watch '{watch_id}'"),
+                    });
+                }
+            }
+        }
+    }
+    for (watch_id, task_id) in watch_owners {
+        if !tasks.tasks[task_id]
+            .watch_ids
+            .iter()
+            .any(|candidate| candidate == watch_id)
+        {
+            return Err(DaemonCoreError::InvalidTaskWatchRegistry {
+                root: root.to_path_buf(),
+                message: format!("watch '{watch_id}' is not listed by its task record '{task_id}'"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn reject_standalone_registry_write(
+    root: &Path,
+    registry: &'static str,
+    task_generation: Option<u64>,
+    watch_generation: Option<u64>,
+) -> Result<()> {
+    if task_generation.is_none() && watch_generation.is_none() {
+        return Ok(());
+    }
+    Err(DaemonCoreError::RegistryCheckpointRequired {
+        root: Box::new(root.to_path_buf()),
+        registry,
+        task_generation,
+        watch_generation,
+    })
 }
 
 fn validate_task_registry_namespace_bindings(
@@ -1100,6 +1936,7 @@ pub(crate) fn task_registry_value_shape_error(value: &serde_json::Value) -> Opti
 pub(crate) enum AuthorityJsonProfile {
     ActiveTask,
     TaskRegistry,
+    WatchRegistry,
     TaskEventFrame,
     RetentionJournal { max_bytes: usize },
 }
@@ -1109,6 +1946,7 @@ impl AuthorityJsonProfile {
         match self {
             Self::ActiveTask => "active-task",
             Self::TaskRegistry => "task-registry",
+            Self::WatchRegistry => "watch-registry",
             Self::TaskEventFrame => "task-event-frame",
             Self::RetentionJournal { .. } => "retention-journal",
         }
@@ -1118,8 +1956,19 @@ impl AuthorityJsonProfile {
         match self {
             Self::ActiveTask => MAX_ACTIVE_TASK_RECORD_BYTES,
             Self::TaskRegistry => MAX_TASK_REGISTRY_BYTES,
+            Self::WatchRegistry => MAX_WATCH_REGISTRY_BYTES,
             Self::TaskEventFrame => MAX_TASK_EVENT_LINE_BYTES,
             Self::RetentionJournal { max_bytes } => max_bytes,
+        }
+    }
+
+    const fn max_registry_records(self) -> usize {
+        match self {
+            Self::WatchRegistry => MAX_WATCH_REGISTRY_RECORDS,
+            Self::ActiveTask
+            | Self::TaskRegistry
+            | Self::TaskEventFrame
+            | Self::RetentionJournal { .. } => MAX_TASK_REGISTRY_RECORDS,
         }
     }
 }
@@ -1179,7 +2028,7 @@ impl AuthorityJsonLimits {
             max_entries_per_container: MAX_AUTHORITY_JSON_ENTRIES_PER_CONTAINER,
             max_tokens: MAX_AUTHORITY_JSON_TOKENS,
             max_decoded_string_bytes: profile.max_decoded_string_bytes(),
-            max_registry_records: MAX_TASK_REGISTRY_RECORDS,
+            max_registry_records: profile.max_registry_records(),
         }
     }
 }
@@ -1188,6 +2037,7 @@ impl AuthorityJsonLimits {
 enum AuthorityJsonPosition {
     Root,
     RegistryTasks,
+    RegistryWatches,
     JournalRecordValues,
     JournalComponents,
     Other,
@@ -1307,6 +2157,9 @@ impl AuthorityJsonBudget {
             AuthorityJsonPosition::RegistryTasks => {
                 (self.limits.max_registry_records, "task-registry records")
             }
+            AuthorityJsonPosition::RegistryWatches => {
+                (self.limits.max_registry_records, "watch-registry records")
+            }
             AuthorityJsonPosition::JournalRecordValues => (1, "journal record values"),
             AuthorityJsonPosition::JournalComponents => (2, "journal components"),
             AuthorityJsonPosition::Root | AuthorityJsonPosition::Other => return Ok(()),
@@ -1323,6 +2176,9 @@ impl AuthorityJsonBudget {
         }
         match (self.profile, key) {
             (AuthorityJsonProfile::TaskRegistry, "tasks") => AuthorityJsonPosition::RegistryTasks,
+            (AuthorityJsonProfile::WatchRegistry, "watches") => {
+                AuthorityJsonPosition::RegistryWatches
+            }
             (AuthorityJsonProfile::RetentionJournal { .. }, "record_values") => {
                 AuthorityJsonPosition::JournalRecordValues
             }
@@ -1418,9 +2274,9 @@ impl<'de> serde::de::Visitor<'de> for AuthorityJsonVisitor<'_> {
             position: AuthorityJsonPosition::Other,
         })? {
             entries = entries.saturating_add(1);
-            self.budget.check_container_length::<A::Error>(entries)?;
             self.budget
                 .check_profile_container_length::<A::Error>(self.position, entries)?;
+            self.budget.check_container_length::<A::Error>(entries)?;
             self.budget.consume_container_entry::<A::Error>()?;
         }
         Ok(())
@@ -1439,9 +2295,9 @@ impl<'de> serde::de::Visitor<'de> for AuthorityJsonVisitor<'_> {
                 return Err(serde::de::Error::custom("duplicate JSON object key"));
             }
             entries = entries.saturating_add(1);
-            self.budget.check_container_length::<A::Error>(entries)?;
             self.budget
                 .check_profile_container_length::<A::Error>(self.position, entries)?;
+            self.budget.check_container_length::<A::Error>(entries)?;
             self.budget.consume_container_entry::<A::Error>()?;
             let child_position = self.budget.child_position(self.position, &key);
             keys.insert(key, ());
@@ -1630,10 +2486,15 @@ fn windows_storage_key_is_reserved(storage_key: &str) -> bool {
 fn load_task_registry_portable(root: &Path) -> Result<TaskRegistry> {
     let path = task_registry_path(root);
     with_registry_lock(root, &path, RegistryLockMode::Shared, || {
-        let Some(raw) = read_task_registry_portable(&path)? else {
-            return Ok(TaskRegistry::default());
+        let (registry, task_generation) = match read_task_registry_portable(&path)? {
+            Some(raw) => decode_task_registry_with_checkpoint_generation(&path, &raw)?,
+            None => (TaskRegistry::default(), None),
         };
-        decode_task_registry(&path, &raw)
+        let (watches, watch_generation) =
+            load_watch_registry_with_generation_portable_under_task_lock(root)?;
+        validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+        validate_task_watch_registry_relationships(root, &registry, &watches)?;
+        Ok(registry)
     })
 }
 
@@ -3001,48 +3862,110 @@ fn with_anchored_task_registry_lock<T>(
             )
         })?;
     let lock_path = daemon.display_path().join(TASK_REGISTRY_LOCK_FILE_NAME);
-    let lock = daemon
-        .open_lock_file(OsStr::new(TASK_REGISTRY_LOCK_FILE_NAME))
-        .map_err(|source| {
-            DaemonCoreError::io(
-                "failed to open anchored task registry lock",
-                &lock_path,
-                source,
-            )
-        })?;
-    match mode {
-        RegistryLockMode::Shared => FileExt::lock_shared(&lock).map_err(|source| {
-            DaemonCoreError::io(
-                "failed to acquire shared anchored task registry lock",
-                &lock_path,
-                source,
-            )
-        })?,
-        RegistryLockMode::Exclusive => {
-            FileExt::lock_exclusive(&lock).map_err(|source| {
-                DaemonCoreError::io(
-                    "failed to acquire exclusive anchored task registry lock",
-                    &lock_path,
-                    source,
-                )
-            })?;
-        }
-    }
-
-    let result = after_daemon_open().and_then(|()| operation(&daemon));
-    let unlock = FileExt::unlock(&lock).map_err(|source| {
+    let lock = AnchoredFileLock::acquire(
+        &daemon,
+        OsStr::new(TASK_REGISTRY_LOCK_FILE_NAME),
+        lock_path.clone(),
+        match mode {
+            RegistryLockMode::Shared => AnchoredFileLockMode::Shared,
+            RegistryLockMode::Exclusive => AnchoredFileLockMode::Exclusive,
+        },
+    )
+    .map_err(|source| {
         DaemonCoreError::io(
-            "failed to unlock anchored task registry",
+            "failed to open, acquire, or authenticate anchored task registry lock",
             &lock_path,
             source,
         )
-    });
-    match (result, unlock) {
+    })?;
+    let result = after_daemon_open()
+        .and_then(|()| {
+            lock.validate_attachment().map_err(|source| {
+                DaemonCoreError::io(
+                    "anchored task registry lock detached before operation",
+                    &lock_path,
+                    source,
+                )
+            })
+        })
+        .and_then(|()| operation(&daemon));
+    let finish = lock.finish();
+    match (result, finish) {
         (Ok(value), Ok(())) => Ok(value),
-        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+        (_, Err(AnchoredFileLockFinishError::Attachment(source)))
+            if matches!(mode, RegistryLockMode::Exclusive) =>
+        {
+            Err(DaemonCoreError::StorageMutationAuthorityLost {
+                operation: "task-registry mutation",
+                path: task_registry_path(root),
+                source,
+            })
+        }
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(AnchoredFileLockFinishError::Attachment(source))) => Err(DaemonCoreError::io(
+            "anchored task registry lock detached during read",
+            &lock_path,
+            source,
+        )),
+        (Ok(_), Err(AnchoredFileLockFinishError::Unlock(source))) => Err(DaemonCoreError::io(
+            "failed to unlock anchored task registry",
+            &lock_path,
+            source,
+        )),
     }
 }
 
+#[cfg(unix)]
+fn with_anchored_watch_registry_lock<T>(
+    daemon: &CapabilityDir,
+    mode: RegistryLockMode,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let lock_path = daemon.display_path().join(WATCH_REGISTRY_LOCK_FILE_NAME);
+    let lock = AnchoredFileLock::acquire(
+        daemon,
+        OsStr::new(WATCH_REGISTRY_LOCK_FILE_NAME),
+        lock_path.clone(),
+        match mode {
+            RegistryLockMode::Shared => AnchoredFileLockMode::Shared,
+            RegistryLockMode::Exclusive => AnchoredFileLockMode::Exclusive,
+        },
+    )
+    .map_err(|source| {
+        DaemonCoreError::io(
+            "failed to open, acquire, or authenticate anchored watch registry lock",
+            &lock_path,
+            source,
+        )
+    })?;
+    let result = operation();
+    let finish = lock.finish();
+    match (result, finish) {
+        (Ok(value), Ok(())) => Ok(value),
+        (_, Err(AnchoredFileLockFinishError::Attachment(source)))
+            if matches!(mode, RegistryLockMode::Exclusive) =>
+        {
+            Err(DaemonCoreError::StorageMutationAuthorityLost {
+                operation: "watch-registry mutation",
+                path: daemon.display_path().join(WATCH_REGISTRY_FILE_NAME),
+                source,
+            })
+        }
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(AnchoredFileLockFinishError::Attachment(source))) => Err(DaemonCoreError::io(
+            "anchored watch registry lock detached during read",
+            &lock_path,
+            source,
+        )),
+        (Ok(_), Err(AnchoredFileLockFinishError::Unlock(source))) => Err(DaemonCoreError::io(
+            "failed to unlock anchored watch registry",
+            &lock_path,
+            source,
+        )),
+    }
+}
+
+#[cfg(any(not(unix), test))]
 fn with_registry_lock<T>(
     root: &Path,
     registry_path: &Path,
@@ -3083,6 +4006,7 @@ fn with_registry_lock<T>(
     }
 }
 
+#[cfg(any(not(unix), test))]
 fn registry_lock_path(registry_path: &Path) -> PathBuf {
     let file_name = registry_path
         .file_name()
@@ -3108,7 +4032,7 @@ fn atomic_temp_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use packet28_daemon_protocol::message::DaemonEvent;
-    use packet28_daemon_protocol::task::{TaskLifecycle, TaskRecord};
+    use packet28_daemon_protocol::task::{TaskLifecycle, TaskRecord, WatchRegistration};
     #[cfg(unix)]
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
@@ -3158,6 +4082,456 @@ mod tests {
                     )
                 })
                 .collect(),
+        }
+    }
+
+    fn registry_with_watch(task_id: &str, watch_id: &str) -> TaskRegistry {
+        let mut registry = registry_for_tasks(&[task_id]);
+        registry.tasks.get_mut(task_id).unwrap().watch_ids = vec![watch_id.to_string()];
+        registry
+    }
+
+    fn watch_registry_with_marker(marker: &str, task_id: &str) -> WatchRegistry {
+        WatchRegistry {
+            watches: vec![WatchRegistration {
+                watch_id: marker.to_string(),
+                spec: packet28_daemon_protocol::commands::WatchSpec {
+                    task_id: task_id.to_string(),
+                    ..packet28_daemon_protocol::commands::WatchSpec::default()
+                },
+                ..WatchRegistration::default()
+            }],
+        }
+    }
+
+    fn set_checkpoint_generation(path: &Path, generation: u64) {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().insert(
+            REGISTRY_CHECKPOINT_GENERATION_FIELD.to_string(),
+            serde_json::Value::from(generation),
+        );
+        fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    }
+
+    fn write_frozen_legacy_registry_pair(
+        root: &Path,
+        tasks: &TaskRegistry,
+        watches: &WatchRegistry,
+    ) {
+        ensure_daemon_dir(root).unwrap();
+        fs::write(
+            task_registry_path(root),
+            serde_json::to_vec_pretty(tasks).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            watch_registry_path(root),
+            serde_json::to_vec_pretty(watches).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn invalid_task_watch_registry_pairs() -> Vec<(TaskRegistry, WatchRegistry)> {
+        let mut watch_not_listed = registry_with_watch("task", "watch");
+        watch_not_listed
+            .tasks
+            .get_mut("task")
+            .unwrap()
+            .watch_ids
+            .clear();
+
+        let mut missing_watch = registry_with_watch("task", "watch");
+        missing_watch
+            .tasks
+            .get_mut("task")
+            .unwrap()
+            .watch_ids
+            .push("missing-watch".to_string());
+
+        let mut missing_task_watch = watch_registry_with_marker("watch", "missing-task");
+        missing_task_watch.watches[0].spec.task_id = "missing-task".to_string();
+
+        let duplicate_watch = {
+            let mut watches = watch_registry_with_marker("watch", "task");
+            watches.watches.push(watches.watches[0].clone());
+            watches
+        };
+
+        let mut wrong_owner_tasks = registry_with_watch("task", "watch");
+        wrong_owner_tasks.tasks.insert(
+            "other".to_string(),
+            TaskRecord {
+                task_id: "other".to_string(),
+                ..TaskRecord::default()
+            },
+        );
+
+        vec![
+            (
+                watch_not_listed,
+                watch_registry_with_marker("watch", "task"),
+            ),
+            (missing_watch, watch_registry_with_marker("watch", "task")),
+            (registry_with_watch("task", "watch"), missing_task_watch),
+            (registry_with_watch("task", "watch"), duplicate_watch),
+            (
+                wrong_owner_tasks,
+                watch_registry_with_marker("watch", "other"),
+            ),
+        ]
+    }
+
+    #[test]
+    fn paired_registry_checkpoint_rejects_standalone_half_writes_without_mutation() {
+        let root = tempdir().unwrap();
+        let mut tasks = registry_with_watch("paired", "watch-first");
+        let mut watches = watch_registry_with_marker("watch-first", "paired");
+        save_task_watch_registry_checkpoint(root.path(), &tasks, &watches).unwrap();
+
+        let (loaded_tasks, loaded_watches, tails) =
+            load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap();
+        assert!(loaded_tasks.tasks.contains_key("paired"));
+        assert_eq!(loaded_watches.watches[0].watch_id, "watch-first");
+        assert_eq!(tails["paired"], None);
+        let task_path = task_registry_path(root.path());
+        let watch_path = watch_registry_path(root.path());
+        let generation = registry_checkpoint_generation(
+            &task_path,
+            &fs::read(&task_path).unwrap(),
+            AuthorityJsonProfile::TaskRegistry,
+        )
+        .unwrap();
+        assert_eq!(
+            registry_checkpoint_generation(
+                &watch_path,
+                &fs::read(&watch_path).unwrap(),
+                AuthorityJsonProfile::WatchRegistry,
+            )
+            .unwrap(),
+            generation
+        );
+        let task_before = fs::read(&task_path).unwrap();
+        let watch_before = fs::read(&watch_path).unwrap();
+
+        tasks.tasks.get_mut("paired").unwrap().last_error =
+            Some("standalone-task-save".to_string());
+        let task_error = save_task_registry(root.path(), &tasks).unwrap_err();
+        assert!(matches!(
+            task_error,
+            DaemonCoreError::RegistryCheckpointRequired {
+                registry: "task",
+                ..
+            }
+        ));
+        watches.watches[0].last_error = Some("standalone-watch-save".to_string());
+        let watch_error = save_watch_registry(root.path(), &watches).unwrap_err();
+        assert!(matches!(
+            watch_error,
+            DaemonCoreError::RegistryCheckpointRequired {
+                registry: "watch",
+                ..
+            }
+        ));
+        assert_eq!(fs::read(&task_path).unwrap(), task_before);
+        assert_eq!(fs::read(&watch_path).unwrap(), watch_before);
+
+        save_task_watch_registry_checkpoint(root.path(), &tasks, &watches).unwrap();
+
+        let replacement_generation = registry_checkpoint_generation(
+            &task_path,
+            &fs::read(&task_path).unwrap(),
+            AuthorityJsonProfile::TaskRegistry,
+        )
+        .unwrap();
+        assert_ne!(replacement_generation, generation);
+        assert_eq!(
+            registry_checkpoint_generation(
+                &watch_path,
+                &fs::read(&watch_path).unwrap(),
+                AuthorityJsonProfile::WatchRegistry,
+            )
+            .unwrap(),
+            replacement_generation
+        );
+        load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap();
+    }
+
+    #[test]
+    fn paired_registry_save_rejects_non_bijective_or_non_unique_relationships() {
+        for (tasks, watches) in invalid_task_watch_registry_pairs() {
+            let root = tempdir().unwrap();
+
+            let error =
+                save_task_watch_registry_checkpoint(root.path(), &tasks, &watches).unwrap_err();
+
+            assert!(matches!(
+                error,
+                DaemonCoreError::InvalidTaskWatchRegistry { .. }
+            ));
+            assert!(!task_registry_path(root.path()).exists());
+            assert!(!watch_registry_path(root.path()).exists());
+        }
+    }
+
+    #[test]
+    fn paired_registry_load_rejects_non_bijective_or_non_unique_relationships() {
+        for (tasks, watches) in invalid_task_watch_registry_pairs() {
+            let root = tempdir().unwrap();
+            write_frozen_legacy_registry_pair(root.path(), &tasks, &watches);
+
+            let error =
+                load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap_err();
+
+            assert!(matches!(
+                error,
+                DaemonCoreError::InvalidTaskWatchRegistry { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn paired_registry_loader_accepts_legacy_and_rejects_mixed_generations() {
+        let root = tempdir().unwrap();
+        write_frozen_legacy_registry_pair(
+            root.path(),
+            &registry_with_watch("legacy", "legacy-watch"),
+            &watch_registry_with_marker("legacy-watch", "legacy"),
+        );
+        load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap();
+
+        save_task_watch_registry_checkpoint(
+            root.path(),
+            &registry_with_watch("next", "next-watch"),
+            &watch_registry_with_marker("next-watch", "next"),
+        )
+        .unwrap();
+        let task_path = task_registry_path(root.path());
+        let watch_path = watch_registry_path(root.path());
+        let task_generation = registry_checkpoint_generation(
+            &task_path,
+            &fs::read(&task_path).unwrap(),
+            AuthorityJsonProfile::TaskRegistry,
+        )
+        .unwrap()
+        .unwrap();
+        set_checkpoint_generation(&watch_path, task_generation + 1);
+
+        let error = load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::RegistryCheckpointGenerationMismatch {
+                task_generation: Some(task),
+                watch_generation: Some(watch),
+                ..
+            } if task == task_generation && watch == task_generation + 1
+        ));
+    }
+
+    #[test]
+    fn paired_registry_loader_rejects_a_frozen_old_writer_watch_only_crash() {
+        let root = tempdir().unwrap();
+        let tasks = registry_with_watch("legacy", "legacy-watch");
+        let mut watches = watch_registry_with_marker("legacy-watch", "legacy");
+        save_task_watch_registry_checkpoint(root.path(), &tasks, &watches).unwrap();
+        let task_path = task_registry_path(root.path());
+        let watch_path = watch_registry_path(root.path());
+        let generation = registry_checkpoint_generation(
+            &task_path,
+            &fs::read(&task_path).unwrap(),
+            AuthorityJsonProfile::TaskRegistry,
+        )
+        .unwrap()
+        .unwrap();
+        watches.watches[0].last_error = Some("old-writer-watch-phase".to_string());
+        fs::write(&watch_path, serde_json::to_vec_pretty(&watches).unwrap()).unwrap();
+
+        let error = load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::RegistryCheckpointGenerationMismatch {
+                task_generation: Some(task_generation),
+                watch_generation: None,
+                ..
+            } if task_generation == generation
+        ));
+    }
+
+    #[test]
+    fn checkpoint_generation_rejects_duplicate_top_level_keys_in_both_registries() {
+        let root = tempdir().unwrap();
+        let task_path = task_registry_path(root.path());
+        let watch_path = watch_registry_path(root.path());
+        let task_raw = br#"{
+            "tasks": {},
+            "task_watch_checkpoint_generation": 7,
+            "task_watch_checkpoint_generation": 7
+        }"#;
+        let watch_raw = br#"{
+            "watches": [],
+            "task_watch_checkpoint_generation": 7,
+            "task_watch_checkpoint_generation": 7
+        }"#;
+
+        for (path, raw, profile) in [
+            (
+                task_path.as_path(),
+                task_raw.as_slice(),
+                AuthorityJsonProfile::TaskRegistry,
+            ),
+            (
+                watch_path.as_path(),
+                watch_raw.as_slice(),
+                AuthorityJsonProfile::WatchRegistry,
+            ),
+        ] {
+            let error = registry_checkpoint_generation(path, raw, profile).unwrap_err();
+            assert!(matches!(error, DaemonCoreError::Json { .. }));
+            assert!(error.to_string().contains("duplicate JSON object key"));
+        }
+
+        let error = decode_watch_registry_with_generation(&watch_path, watch_raw).unwrap_err();
+        assert!(matches!(error, DaemonCoreError::Json { .. }));
+        assert!(error.to_string().contains("duplicate JSON object key"));
+    }
+
+    #[test]
+    fn watch_registry_profile_rejects_an_excessive_record_count() {
+        let root = tempdir().unwrap();
+        let path = watch_registry_path(root.path());
+        let raw = format!(
+            r#"{{"watches":[{}]}}"#,
+            vec!["{}"; MAX_WATCH_REGISTRY_RECORDS + 1].join(",")
+        );
+
+        let error = decode_watch_registry_with_generation(&path, raw.as_bytes()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::AuthorityJsonLimitExceeded {
+                authority: "watch-registry",
+                resource: "watch-registry records",
+                observed,
+                max,
+                ..
+            } if observed == (MAX_WATCH_REGISTRY_RECORDS + 1) as u64
+                && max == MAX_WATCH_REGISTRY_RECORDS as u64
+        ));
+    }
+
+    #[test]
+    fn exhausted_registry_checkpoint_generation_rejects_without_mutation() {
+        let root = tempdir().unwrap();
+        save_task_watch_registry_checkpoint(
+            root.path(),
+            &registry_with_watch("existing", "existing-watch"),
+            &watch_registry_with_marker("existing-watch", "existing"),
+        )
+        .unwrap();
+        let task_path = task_registry_path(root.path());
+        let watch_path = watch_registry_path(root.path());
+        set_checkpoint_generation(&task_path, u64::MAX);
+        set_checkpoint_generation(&watch_path, u64::MAX);
+        let task_before = fs::read(&task_path).unwrap();
+        let watch_before = fs::read(&watch_path).unwrap();
+
+        let error = save_task_watch_registry_checkpoint(
+            root.path(),
+            &registry_with_watch("replacement", "replacement-watch"),
+            &watch_registry_with_marker("replacement-watch", "replacement"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            &error,
+            DaemonCoreError::RegistryCheckpointGenerationExhausted {
+                root: exhausted_root,
+                task_generation: Some(u64::MAX),
+                watch_generation: Some(u64::MAX),
+            } if exhausted_root == root.path()
+        ));
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains(&root.path().display().to_string()));
+        assert!(diagnostic.contains(&format!("task=Some({})", u64::MAX)));
+        assert!(diagnostic.contains(&format!("watch=Some({})", u64::MAX)));
+        assert_eq!(fs::read(task_path).unwrap(), task_before);
+        assert_eq!(fs::read(watch_path).unwrap(), watch_before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_checkpoint_process_child() {
+        let Some(root) = std::env::var_os("PACKET28_REGISTRY_CHECKPOINT_CHILD_ROOT") else {
+            return;
+        };
+        let phase = std::env::var("PACKET28_REGISTRY_CHECKPOINT_EXIT_AFTER").unwrap();
+        save_task_watch_registry_checkpoint(
+            Path::new(&root),
+            &registry_with_watch(phase.as_str(), &format!("watch-{phase}")),
+            &watch_registry_with_marker(&format!("watch-{phase}"), phase.as_str()),
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn abrupt_checkpoint_exit_is_rejected_after_watch_and_committed_after_task() {
+        let executable = std::env::current_exe().unwrap();
+        for phase in ["watch", "task"] {
+            let root = tempdir().unwrap();
+            save_task_watch_registry_checkpoint(
+                root.path(),
+                &registry_with_watch("existing", "watch-existing"),
+                &watch_registry_with_marker("watch-existing", "existing"),
+            )
+            .unwrap();
+            let output = Command::new(&executable)
+                .arg("--exact")
+                .arg("storage::tests::registry_checkpoint_process_child")
+                .env("PACKET28_REGISTRY_CHECKPOINT_CHILD_ROOT", root.path())
+                .env("PACKET28_REGISTRY_CHECKPOINT_EXIT_AFTER", phase)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(86),
+                "checkpoint child failed unexpectedly: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let loaded = load_task_watch_registry_checkpoint_with_event_tails(root.path());
+            if phase == "watch" {
+                assert!(matches!(
+                    loaded.unwrap_err(),
+                    DaemonCoreError::RegistryCheckpointGenerationMismatch { .. }
+                ));
+                assert!(matches!(
+                    load_watch_registry(root.path()).unwrap_err(),
+                    DaemonCoreError::RegistryCheckpointGenerationMismatch { .. }
+                ));
+                assert!(matches!(
+                    load_task_registry(root.path()).unwrap_err(),
+                    DaemonCoreError::RegistryCheckpointGenerationMismatch { .. }
+                ));
+                save_task_watch_registry_checkpoint(
+                    root.path(),
+                    &registry_with_watch("healed", "watch-healed"),
+                    &watch_registry_with_marker("watch-healed", "healed"),
+                )
+                .unwrap();
+                let (tasks, watches, _) =
+                    load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap();
+                assert!(tasks.tasks.contains_key("healed"));
+                assert_eq!(watches.watches[0].watch_id, "watch-healed");
+            } else {
+                let (tasks, watches, _) = loaded.unwrap();
+                assert!(tasks.tasks.contains_key("task"));
+                assert_eq!(watches.watches[0].watch_id, "watch-task");
+            }
         }
     }
 
@@ -5105,6 +6479,91 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn task_registry_save_rejects_lock_replacement_before_mutation() {
+        let root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let lock_path = daemon_dir(root.path()).join(TASK_REGISTRY_LOCK_FILE_NAME);
+        let detached = daemon_dir(root.path()).join("detached-task-registry.lock");
+
+        let error = save_task_registry_with_observer(root.path(), &TaskRegistry::default(), || {
+            replace_locked_path(&lock_path, &detached).map_err(|source| {
+                DaemonCoreError::io(
+                    "failed to replace task registry lock during test",
+                    &lock_path,
+                    source,
+                )
+            })
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::StorageMutationAuthorityLost { .. }
+        ));
+        assert!(!task_registry_path(root.path()).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_registry_rejects_symlinked_registry_and_lock_aliases() {
+        use std::os::unix::fs::symlink;
+
+        for alias_lock in [false, true] {
+            let root = tempdir().unwrap();
+            ensure_daemon_dir(root.path()).unwrap();
+            let outside = root.path().join(if alias_lock {
+                "outside-watch-lock"
+            } else {
+                "outside-watch-registry"
+            });
+            fs::write(&outside, b"keep").unwrap();
+            let alias = if alias_lock {
+                daemon_dir(root.path()).join(WATCH_REGISTRY_LOCK_FILE_NAME)
+            } else {
+                watch_registry_path(root.path())
+            };
+            symlink(&outside, &alias).unwrap();
+
+            let error = save_watch_registry(root.path(), &WatchRegistry::default()).unwrap_err();
+
+            assert!(matches!(error, DaemonCoreError::Io { .. }));
+            assert_eq!(fs::read(&outside).unwrap(), b"keep");
+            assert!(fs::symlink_metadata(alias)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_registry_rejects_hardlinked_registry_and_lock_aliases() {
+        for alias_lock in [false, true] {
+            let root = tempdir().unwrap();
+            ensure_daemon_dir(root.path()).unwrap();
+            let outside = root.path().join(if alias_lock {
+                "outside-watch-lock"
+            } else {
+                "outside-watch-registry"
+            });
+            fs::write(&outside, b"keep").unwrap();
+            let alias = if alias_lock {
+                daemon_dir(root.path()).join(WATCH_REGISTRY_LOCK_FILE_NAME)
+            } else {
+                watch_registry_path(root.path())
+            };
+            fs::hard_link(&outside, &alias).unwrap();
+
+            let error = save_watch_registry(root.path(), &WatchRegistry::default()).unwrap_err();
+
+            assert!(matches!(error, DaemonCoreError::Io { .. }));
+            assert_eq!(fs::read(&outside).unwrap(), b"keep");
+            assert_eq!(fs::metadata(alias).unwrap().len(), 4);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn task_registry_supports_a_symlinked_workspace_root() {
         use std::os::unix::fs::symlink;
 
@@ -5459,6 +6918,51 @@ mod tests {
             } if error_path == path
                 && encoded_bytes == MAX_TASK_REGISTRY_BYTES as u64 + 1
                 && max_bytes == MAX_TASK_REGISTRY_BYTES as u64
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oversized_persisted_watch_registry_has_a_typed_load_error() {
+        let root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let path = watch_registry_path(root.path());
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_WATCH_REGISTRY_BYTES as u64 + 1).unwrap();
+
+        let error = load_watch_registry(root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::WatchRegistryTooLarge {
+                path: error_path,
+                encoded_bytes,
+                max_bytes,
+            } if error_path == path
+                && encoded_bytes == MAX_WATCH_REGISTRY_BYTES as u64 + 1
+                && max_bytes == MAX_WATCH_REGISTRY_BYTES as u64
+        ));
+    }
+
+    #[test]
+    fn portable_oversized_persisted_watch_registry_has_a_typed_load_error() {
+        let root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let path = watch_registry_path(root.path());
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_WATCH_REGISTRY_BYTES as u64 + 1).unwrap();
+
+        let error = read_watch_registry(&path).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::WatchRegistryTooLarge {
+                path: error_path,
+                encoded_bytes,
+                max_bytes,
+            } if error_path == path
+                && encoded_bytes == MAX_WATCH_REGISTRY_BYTES as u64 + 1
+                && max_bytes == MAX_WATCH_REGISTRY_BYTES as u64
         ));
     }
 

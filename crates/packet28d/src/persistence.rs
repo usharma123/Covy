@@ -6,9 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use packet28_daemon_core::storage::{
-    append_next_task_event, save_task_registry, save_watch_registry,
-};
+use packet28_daemon_core::storage::{append_next_task_event, save_task_watch_registry_checkpoint};
 use packet28_daemon_core::task_store_lease::TaskStoreLease;
 use packet28_daemon_protocol::message::{DaemonEvent, DaemonEventFrame};
 use packet28_daemon_protocol::paths::{task_registry_path, watch_registry_path};
@@ -76,9 +74,7 @@ impl PersistenceBackend for FilesystemBackend {
         tasks: &TaskRegistry,
         watches: &WatchRegistry,
     ) -> Result<()> {
-        save_watch_registry(root, watches)?;
-        save_task_registry(root, tasks)?;
-        Ok(())
+        Ok(save_task_watch_registry_checkpoint(root, tasks, watches)?)
     }
 
     fn append_event(
@@ -646,6 +642,7 @@ mod tests {
     use packet28_daemon_protocol::task::{TaskRecord, WatchRegistration};
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::fs;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     fn owner(root: &Path, debounce: Duration) -> (PersistenceOwner, PersistenceHandle) {
@@ -673,10 +670,29 @@ mod tests {
         Arc::new(TaskRegistry { tasks })
     }
 
-    fn watch_registry(marker: &str) -> Arc<WatchRegistry> {
+    fn task_registry_with_watch(
+        task_id: &str,
+        task_marker: &str,
+        watch_id: &str,
+    ) -> Arc<TaskRegistry> {
+        let mut registry = (*task_registry(task_id, task_marker)).clone();
+        registry
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .watch_ids
+            .push(watch_id.to_string());
+        Arc::new(registry)
+    }
+
+    fn watch_registry(task_id: &str, marker: &str) -> Arc<WatchRegistry> {
         Arc::new(WatchRegistry {
             watches: vec![WatchRegistration {
                 watch_id: marker.to_string(),
+                spec: packet28_daemon_protocol::commands::WatchSpec {
+                    task_id: task_id.to_string(),
+                    ..packet28_daemon_protocol::commands::WatchSpec::default()
+                },
                 ..WatchRegistration::default()
             }],
         })
@@ -690,15 +706,23 @@ mod tests {
         }
     }
 
+    fn checkpoint_generation(path: &Path) -> Option<u64> {
+        serde_json::from_slice::<serde_json::Value>(&fs::read(path).unwrap())
+            .unwrap()
+            .get("task_watch_checkpoint_generation")
+            .and_then(serde_json::Value::as_u64)
+    }
+
     #[test]
     fn pending_slot_coalesces_to_the_latest_immutable_snapshot() {
         let root = tempfile::tempdir().unwrap();
         let (owner, handle) = owner(root.path(), Duration::from_secs(1));
         for ordinal in 0..32 {
+            let watch_id = format!("watch-{ordinal}");
             handle
                 .checkpoint_async(
-                    task_registry("coalesced", &format!("task-{ordinal}")),
-                    watch_registry(&format!("watch-{ordinal}")),
+                    task_registry_with_watch("coalesced", &format!("task-{ordinal}"), &watch_id),
+                    watch_registry("coalesced", &watch_id),
                 )
                 .unwrap();
         }
@@ -715,6 +739,48 @@ mod tests {
         assert!(metrics.snapshots_coalesced > 0);
         assert!(metrics.checkpoints_written < metrics.snapshots_submitted);
         owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn filesystem_barrier_publishes_one_nonzero_paired_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, handle) = owner(root.path(), Duration::from_secs(1));
+
+        handle
+            .checkpoint(
+                task_registry("barrier-generation", "durable"),
+                Arc::new(WatchRegistry::default()),
+            )
+            .unwrap();
+
+        let task_generation = checkpoint_generation(&task_registry_path(root.path())).unwrap();
+        let watch_generation = checkpoint_generation(&watch_registry_path(root.path())).unwrap();
+        assert!(task_generation > 0);
+        assert_eq!(watch_generation, task_generation);
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn filesystem_shutdown_flushes_one_nonzero_paired_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, handle) = owner(root.path(), Duration::from_secs(1));
+        handle
+            .checkpoint_async(
+                task_registry("shutdown-generation", "durable"),
+                Arc::new(WatchRegistry::default()),
+            )
+            .unwrap();
+
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+
+        let task_generation = checkpoint_generation(&task_registry_path(root.path())).unwrap();
+        let watch_generation = checkpoint_generation(&watch_registry_path(root.path())).unwrap();
+        assert!(task_generation > 0);
+        assert_eq!(watch_generation, task_generation);
+        assert!(load_task_registry(root.path())
+            .unwrap()
+            .tasks
+            .contains_key("shutdown-generation"));
     }
 
     #[test]

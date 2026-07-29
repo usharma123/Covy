@@ -69,6 +69,20 @@ pub enum DaemonCoreError {
         max_bytes: u64,
     },
 
+    /// A watch registry would exceed the supported serialized-size bound.
+    #[error(
+        "watch registry {} is {encoded_bytes} bytes; maximum supported size is {max_bytes} bytes",
+        path.display()
+    )]
+    WatchRegistryTooLarge {
+        /// Registry path that was not replaced or decoded.
+        path: PathBuf,
+        /// Encoded size of the rejected registry.
+        encoded_bytes: u64,
+        /// Maximum supported encoded size.
+        max_bytes: u64,
+    },
+
     /// A registry record cannot fit the bounded crash-recovery journal.
     #[error(
         "task registry {} requires a {journal_bytes}-byte retention journal; maximum supported size is {max_bytes} bytes",
@@ -113,6 +127,59 @@ pub enum DaemonCoreError {
         path: PathBuf,
         /// Stable explanation of the invalid registry shape.
         message: String,
+    },
+
+    /// Task and watch registries do not describe one durable checkpoint.
+    #[error(
+        "task/watch registry checkpoint generations disagree under {}: task={task_generation:?}, watch={watch_generation:?}",
+        root.display()
+    )]
+    RegistryCheckpointGenerationMismatch {
+        /// Workspace root containing the mismatched registry documents.
+        root: PathBuf,
+        /// Generation stored in the task registry root, if present.
+        task_generation: Option<u64>,
+        /// Generation stored in the watch registry root, if present.
+        watch_generation: Option<u64>,
+    },
+
+    /// A standalone registry writer attempted to mutate paired authority.
+    #[error(
+        "standalone {registry} registry write rejected under paired checkpoint authority at {}: task={task_generation:?}, watch={watch_generation:?}",
+        root.display()
+    )]
+    RegistryCheckpointRequired {
+        /// Workspace root containing paired registry authority.
+        root: Box<PathBuf>,
+        /// Registry half whose standalone writer was rejected.
+        registry: &'static str,
+        /// Generation stored in the task registry root, if present.
+        task_generation: Option<u64>,
+        /// Generation stored in the watch registry root, if present.
+        watch_generation: Option<u64>,
+    },
+
+    /// Task and watch records violate their cross-registry relationship.
+    #[error("invalid task/watch registry checkpoint under {}: {message}", root.display())]
+    InvalidTaskWatchRegistry {
+        /// Workspace root containing the rejected checkpoint.
+        root: PathBuf,
+        /// Stable explanation of the invalid relationship.
+        message: String,
+    },
+
+    /// The monotonic task/watch checkpoint generation cannot advance.
+    #[error(
+        "task/watch registry checkpoint generation is exhausted under {}: task={task_generation:?}, watch={watch_generation:?}",
+        root.display()
+    )]
+    RegistryCheckpointGenerationExhausted {
+        /// Workspace root containing the exhausted checkpoint.
+        root: PathBuf,
+        /// Generation stored in the task registry root, if present.
+        task_generation: Option<u64>,
+        /// Generation stored in the watch registry root, if present.
+        watch_generation: Option<u64>,
     },
 
     /// A task identifier cannot be represented safely by task storage paths.
@@ -264,6 +331,9 @@ impl DaemonCoreError {
             Self::TaskRegistryTooLarge { .. } => {
                 "Reduce completed task history before saving the task registry."
             }
+            Self::WatchRegistryTooLarge { .. } => {
+                "Reduce persisted watch history before saving the watch registry."
+            }
             Self::TaskRegistryRetentionEnvelopeTooLarge { .. } => {
                 "Reduce the largest task record before saving the task registry."
             }
@@ -275,6 +345,18 @@ impl DaemonCoreError {
             }
             Self::InvalidTaskRegistry { .. } => {
                 "Make each non-empty task map key match its embedded task identifier."
+            }
+            Self::RegistryCheckpointGenerationMismatch { .. } => {
+                "Restore task and watch registries from the same checkpoint before restarting packet28d."
+            }
+            Self::RegistryCheckpointRequired { .. } => {
+                "Write task and watch registries through one paired checkpoint."
+            }
+            Self::InvalidTaskWatchRegistry { .. } => {
+                "Repair task and watch ownership references before retrying."
+            }
+            Self::RegistryCheckpointGenerationExhausted { .. } => {
+                "Archive and reinitialize daemon task/watch registry state before retrying."
             }
             Self::InvalidTaskStorageIdentifier { .. } => {
                 "Use a non-empty task identifier whose derived storage key is portable and unambiguous."

@@ -11,7 +11,7 @@ use anyhow::{anyhow, Context, Result};
 use context_kernel_core::{Kernel, PersistConfig};
 use packet28_daemon_core::retention::recover_task_store_quarantine_and_acquire_daemon_lease;
 use packet28_daemon_core::storage::{
-    ensure_daemon_dir, load_task_registry_with_event_tails, load_watch_registry, now_unix,
+    ensure_daemon_dir, load_task_watch_registry_checkpoint_with_event_tails, now_unix,
     remove_runtime_files, write_runtime_info,
 };
 use packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease;
@@ -57,6 +57,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
     std::env::set_current_dir(&root)
         .with_context(|| format!("failed to set daemon cwd to '{}'", root.display()))?;
     let daemon_instance_lease = acquire_daemon_instance_lease(&root)?;
+    remove_stale_ready_marker(&root)?;
     let (recovery, task_store_lease) =
         recover_task_store_quarantine_and_acquire_daemon_lease(&root, &daemon_instance_lease)?;
     if recovery.restored_precommit_groups > 0
@@ -106,17 +107,16 @@ pub fn serve(root: PathBuf) -> Result<()> {
         kernel.clone(),
         config.max_persistent_roots,
     )?);
-    let (mut tasks, event_tails) = load_task_registry_with_event_tails(&root)?;
-    let watches = load_watch_registry(&root)?;
+    let (mut tasks, watches, event_tails) =
+        load_task_watch_registry_checkpoint_with_event_tails(&root)?;
     let (persistence_owner, persistence) = PersistenceOwner::start(
         root.clone(),
         task_store_lease.clone(),
         Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
         &tasks,
     )?;
-    if reconcile_task_event_high_waters(&mut tasks, &event_tails)? {
-        persistence.checkpoint(Arc::new(tasks.clone()), Arc::new(watches.clone()))?;
-    }
+    let _event_high_waters_changed = reconcile_task_event_high_waters(&mut tasks, &event_tails)?;
+    persistence.checkpoint(Arc::new(tasks.clone()), Arc::new(watches.clone()))?;
     let manifest = load_index_manifest_file(&root);
     let interactive_index = load_index_runtime_files(&root, manifest);
     let (index_tx, index_rx) = IndexIngress::new();
@@ -149,7 +149,6 @@ pub fn serve(root: PathBuf) -> Result<()> {
     let (watch_tx, watch_rx) = WatchIngress::new(config.watch_queue_capacity);
     restore_watchers(&state, &watch_tx)?;
     enqueue_initial_index_work(&state)?;
-    mark_ready(&state)?;
 
     let blocking_pool = BlockingPool::with_lifecycle_leases(
         config.max_blocking_operations,
@@ -161,6 +160,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
         .thread_name("packet28d-runtime")
         .build()
         .context("failed to create packet28d Tokio runtime")?;
+    mark_ready(&state)?;
     let runtime_outcome = runtime.block_on(run_daemon_runtime(DaemonRuntimeInputs {
         listener,
         state: state.clone(),
@@ -198,6 +198,20 @@ pub fn serve(root: PathBuf) -> Result<()> {
     drop(daemon_instance_lease);
     record_runtime_result(&mut lifecycle_result, cleanup_result);
     lifecycle_result
+}
+
+fn remove_stale_ready_marker(root: &Path) -> Result<()> {
+    let path = ready_path(root);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove stale readiness marker '{}'",
+                path.display()
+            )
+        }),
+    }
 }
 
 pub(crate) fn shutdown_persistent_kernels(

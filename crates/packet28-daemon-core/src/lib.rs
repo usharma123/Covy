@@ -14,15 +14,25 @@
 //! # Preferred storage API
 //!
 //! ```
-//! use packet28_daemon_core::storage::{load_task_registry, save_task_registry};
-//! use packet28_daemon_protocol::task::TaskRegistry;
+//! use packet28_daemon_core::storage::{
+//!     load_task_registry, save_task_watch_registry_checkpoint,
+//! };
+//! use packet28_daemon_protocol::task::{TaskRegistry, WatchRegistry};
 //!
 //! let directory = tempfile::tempdir()?;
-//! save_task_registry(directory.path(), &TaskRegistry::default())?;
+//! save_task_watch_registry_checkpoint(
+//!     directory.path(),
+//!     &TaskRegistry::default(),
+//!     &WatchRegistry::default(),
+//! )?;
 //! let loaded = load_task_registry(directory.path())?;
 //! assert!(loaded.tasks.is_empty());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! Standalone task or watch saves remain available for creating legacy,
+//! unpaired state. Once either registry carries paired-checkpoint authority,
+//! mutations must use `save_task_watch_registry_checkpoint`.
 //!
 //! Compatibility helpers remain at the crate root, but implementation and
 //! protocol-module details are deliberately not part of that facade:

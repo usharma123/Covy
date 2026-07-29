@@ -4471,6 +4471,7 @@ fn remove_anchored_registry_records_if_unchanged_with_commit(
         for task_id in expected_records.keys() {
             tasks.remove(task_id);
         }
+        validate_anchored_registry_watch_relationships(daemon, workspace_root, &registry)?;
         let bytes = encode_anchored_registry_value(workspace_root, &registry)?;
         before_remove()?;
         write_anchored_registry_bytes(daemon, workspace_root, &bytes)?;
@@ -4502,6 +4503,7 @@ fn finish_anchored_committed_registry_removal(
             changed = true;
         }
         if changed {
+            validate_anchored_registry_watch_relationships(daemon, workspace_root, &registry)?;
             write_anchored_registry_value(daemon, workspace_root, &registry)?;
         }
         Ok(true)
@@ -4608,6 +4610,26 @@ fn registry_tasks_mut<'a>(
 }
 
 #[cfg(unix)]
+fn validate_anchored_registry_watch_relationships(
+    daemon: &CapabilityDir,
+    workspace_root: &Path,
+    registry: &serde_json::Value,
+) -> Result<()> {
+    let tasks: TaskRegistry = serde_json::from_value(registry.clone()).map_err(|source| {
+        DaemonCoreError::json(
+            "failed to validate retained task registry against watches from",
+            task_registry_path(workspace_root),
+            source,
+        )
+    })?;
+    crate::storage::validate_task_registry_against_persisted_watches_under_task_lock(
+        workspace_root,
+        daemon,
+        &tasks,
+    )
+}
+
+#[cfg(unix)]
 fn write_anchored_registry_value(
     daemon: &CapabilityDir,
     workspace_root: &Path,
@@ -4648,24 +4670,11 @@ fn write_anchored_registry_bytes(
     workspace_root: &Path,
     bytes: &[u8],
 ) -> Result<()> {
-    let path = task_registry_path(workspace_root);
-    daemon
-        .write_json_atomically(
-            OsStr::new(TASK_REGISTRY_FILE_NAME),
-            bytes,
-            TASK_REGISTRY_WRITE_TEMP_PREFIX,
-        )
-        .map_err(|error| {
-            DaemonCoreError::io(
-                if error.renamed {
-                    "failed to synchronize anchored task registry replacement"
-                } else {
-                    "failed to write anchored task registry"
-                },
-                &path,
-                error.source,
-            )
-        })
+    crate::storage::save_retained_task_registry_checkpoint_under_task_lock(
+        workspace_root,
+        daemon,
+        bytes.to_vec(),
+    )
 }
 
 #[cfg(not(unix))]
@@ -7443,11 +7452,15 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+    use packet28_daemon_protocol::commands::WatchSpec;
     use packet28_daemon_protocol::paths::{
         active_task_path, ready_path, task_artifact_dir as typed_task_artifact_dir,
-        task_event_log_path as typed_task_event_log_path, task_registry_path, TaskStorageId,
+        task_event_log_path as typed_task_event_log_path, task_registry_path, watch_registry_path,
+        TaskStorageId,
     };
-    use packet28_daemon_protocol::task::{TaskLifecycle, TaskRecord, TaskRegistry};
+    use packet28_daemon_protocol::task::{
+        TaskLifecycle, TaskRecord, TaskRegistry, WatchRegistration, WatchRegistry,
+    };
     use tempfile::tempdir;
 
     #[cfg(unix)]
@@ -7516,6 +7529,36 @@ mod tests {
             serde_json::to_vec_pretty(&registry).unwrap(),
         )
         .unwrap();
+    }
+
+    fn checkpoint_generation(path: &Path) -> Option<u64> {
+        serde_json::from_slice::<serde_json::Value>(&fs::read(path).unwrap())
+            .unwrap()
+            .get("task_watch_checkpoint_generation")
+            .and_then(serde_json::Value::as_u64)
+    }
+
+    fn paired_registry_with_watch(
+        mut record: TaskRecord,
+        watch_id: &str,
+    ) -> (TaskRegistry, WatchRegistry) {
+        record.watch_ids = vec![watch_id.to_string()];
+        let task_id = record.task_id.clone();
+        (
+            TaskRegistry {
+                tasks: BTreeMap::from([(task_id.clone(), record)]),
+            },
+            WatchRegistry {
+                watches: vec![WatchRegistration {
+                    watch_id: watch_id.to_string(),
+                    spec: WatchSpec {
+                        task_id,
+                        ..WatchSpec::default()
+                    },
+                    ..WatchRegistration::default()
+                }],
+            },
+        )
     }
 
     #[cfg(unix)]
@@ -10478,6 +10521,94 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn retention_removal_advances_the_paired_registry_generation() {
+        let root = tempdir().unwrap();
+        write_artifact(root.path(), "paired-retention", b"payload", 10);
+        write_registry(root.path(), [inactive_record("paired-retention", 10)]);
+        let tasks = crate::storage::load_task_registry(root.path()).unwrap();
+        crate::storage::save_task_watch_registry_checkpoint(
+            root.path(),
+            &tasks,
+            &WatchRegistry::default(),
+        )
+        .unwrap();
+        let task_path = task_registry_path(root.path());
+        let watch_path = watch_registry_path(root.path());
+        let before = checkpoint_generation(&task_path).unwrap();
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("paired-retention").unwrap();
+
+        let outcome = apply_candidate(&snapshot, candidate).unwrap();
+
+        assert_eq!(outcome, RetentionOutcome::Removed);
+        let task_generation = checkpoint_generation(&task_path).unwrap();
+        let watch_generation = checkpoint_generation(&watch_path).unwrap();
+        assert!(task_generation > before);
+        assert_eq!(watch_generation, task_generation);
+        assert!(!crate::storage::load_task_registry(root.path())
+            .unwrap()
+            .tasks
+            .contains_key("paired-retention"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_apply_rejects_removal_that_would_dangle_a_watch() {
+        let root = tempdir().unwrap();
+        let (tasks, watches) =
+            paired_registry_with_watch(inactive_record("watched-retention", 10), "watch-retained");
+        crate::storage::save_task_watch_registry_checkpoint(root.path(), &tasks, &watches).unwrap();
+        write_artifact(root.path(), "watched-retention", b"payload", 10);
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("watched-retention").unwrap();
+
+        let error = apply_candidate(&snapshot, candidate).unwrap_err();
+
+        assert!(matches!(
+            error.error,
+            DaemonCoreError::InvalidTaskWatchRegistry { .. }
+        ));
+        let (loaded_tasks, loaded_watches, _) =
+            crate::storage::load_task_watch_registry_checkpoint_with_event_tails(root.path())
+                .unwrap();
+        assert!(loaded_tasks.tasks.contains_key("watched-retention"));
+        assert_eq!(loaded_watches.watches[0].watch_id, "watch-retained");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_recovery_rejects_removal_that_would_dangle_a_watch() {
+        let root = tempdir().unwrap();
+        let record = inactive_record("watched-recovery", 10);
+        let (tasks, watches) =
+            paired_registry_with_watch(record.clone(), "watch-recovery-retained");
+        crate::storage::save_task_watch_registry_checkpoint(root.path(), &tasks, &watches).unwrap();
+        let state = CapabilityDir::open(&root.path().join(STATE_DIR_NAME)).unwrap();
+        let daemon = state.open_dir(OsStr::new("daemon")).unwrap();
+        let expected_records = BTreeMap::from([(
+            record.task_id.clone(),
+            serde_json::to_value(&tasks.tasks[&record.task_id]).unwrap(),
+        )]);
+
+        let error =
+            finish_anchored_committed_registry_removal(&daemon, root.path(), &expected_records)
+                .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("invalid task/watch registry checkpoint"));
+        let (loaded_tasks, loaded_watches, _) =
+            crate::storage::load_task_watch_registry_checkpoint_with_event_tails(root.path())
+                .unwrap();
+        assert!(loaded_tasks.tasks.contains_key("watched-recovery"));
+        assert_eq!(
+            loaded_watches.watches[0].watch_id,
+            "watch-recovery-retained"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn anchored_registry_mutation_survives_daemon_path_replacement() {
         use std::os::unix::fs::symlink;
 
@@ -11522,10 +11653,20 @@ mod tests {
                 "survivor": survivor.clone(),
             },
             "future_registry_field": {"keep": true},
+            "task_watch_checkpoint_generation": 7,
         });
         fs::write(
             task_registry_path(root.path()),
             serde_json::to_vec_pretty(&registry).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            watch_registry_path(root.path()),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "watches": [],
+                "task_watch_checkpoint_generation": 7,
+            }))
+            .unwrap(),
         )
         .unwrap();
         let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
@@ -11539,6 +11680,8 @@ mod tests {
         let recovery = recover_task_store_quarantine(root.path()).unwrap();
         let recovered: serde_json::Value =
             serde_json::from_slice(&fs::read(task_registry_path(root.path())).unwrap()).unwrap();
+        let recovered_watch: serde_json::Value =
+            serde_json::from_slice(&fs::read(watch_registry_path(root.path())).unwrap()).unwrap();
 
         assert_eq!(recovery.completed_committed_groups, 1);
         assert!(recovered["tasks"].get("future-record").is_none());
@@ -11547,6 +11690,49 @@ mod tests {
             recovered["future_registry_field"],
             serde_json::json!({"keep": true})
         );
+        let recovered_generation = recovered["task_watch_checkpoint_generation"]
+            .as_u64()
+            .unwrap();
+        assert!(recovered_generation > 7);
+        assert_eq!(
+            recovered_watch["task_watch_checkpoint_generation"],
+            serde_json::json!(recovered_generation)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_recovery_rejects_a_one_sided_checkpoint_generation() {
+        let root = tempdir().unwrap();
+        crate::storage::ensure_daemon_dir(root.path()).unwrap();
+        write_artifact(root.path(), "one-sided-recovery", b"artifact", 10);
+        let registry = serde_json::json!({
+            "tasks": {
+                "one-sided-recovery": inactive_record("one-sided-recovery", 10),
+            },
+            "task_watch_checkpoint_generation": 7,
+        });
+        let task_path = task_registry_path(root.path());
+        let task_before = serde_json::to_vec_pretty(&registry).unwrap();
+        fs::write(&task_path, &task_before).unwrap();
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("one-sided-recovery").unwrap();
+        let mut transaction = StagingTransaction::new(&snapshot, candidate).unwrap();
+        transaction.stage_all(candidate).unwrap();
+        transaction.mark_committed().unwrap();
+        std::mem::forget(transaction);
+
+        let recovery = recover_task_store_quarantine(root.path()).unwrap();
+
+        assert_eq!(recovery.completed_committed_groups, 0);
+        assert_eq!(recovery.conflicted_groups, 1);
+        assert_eq!(fs::read(&task_path).unwrap(), task_before);
+        assert!(!watch_registry_path(root.path()).exists());
+        assert!(recovery.issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("task/watch registry checkpoint generations disagree")
+        }));
     }
 
     #[cfg(unix)]
