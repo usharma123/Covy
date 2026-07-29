@@ -37,7 +37,17 @@ fn run_cleanup(args: StorageCleanupArgs) -> Result<i32> {
     }
     let report = retain_task_store(&root, now_unix(), options)?;
     emit_report(&report, args.json, args.pretty)?;
-    Ok(0)
+    Ok(cleanup_exit_code(&report))
+}
+
+fn cleanup_exit_code(report: &TaskStoreReport) -> i32 {
+    let retention = &report.retention;
+    i32::from(
+        retention.failed_tasks > 0
+            || retention.recovery_conflicted_groups > 0
+            || !retention.final_rescan_reliable
+            || !retention.action_byte_accounting_reliable,
+    )
 }
 
 fn emit_report(report: &TaskStoreReport, json: bool, pretty: bool) -> Result<()> {
@@ -112,6 +122,37 @@ fn render_text(report: &TaskStoreReport) -> Result<String> {
         "retention_skipped_tasks={}",
         retention.skipped_tasks
     );
+    let _ = writeln!(output, "retention_failed_tasks={}", retention.failed_tasks);
+    let _ = writeln!(
+        output,
+        "retention_failed_logical_bytes={}",
+        retention.failed_logical_bytes
+    );
+    let _ = writeln!(
+        output,
+        "retention_recovered_precommit_groups={}",
+        retention.recovered_precommit_groups
+    );
+    let _ = writeln!(
+        output,
+        "retention_recovered_committed_groups={}",
+        retention.recovered_committed_groups
+    );
+    let _ = writeln!(
+        output,
+        "retention_recovery_conflicted_groups={}",
+        retention.recovery_conflicted_groups
+    );
+    let _ = writeln!(
+        output,
+        "retention_final_rescan_reliable={}",
+        retention.final_rescan_reliable
+    );
+    let _ = writeln!(
+        output,
+        "retention_action_byte_accounting_reliable={}",
+        retention.action_byte_accounting_reliable
+    );
     let _ = writeln!(
         output,
         "retention_remaining_managed_logical_bytes={}",
@@ -138,10 +179,13 @@ fn render_text(report: &TaskStoreReport) -> Result<String> {
             .join(",");
         let _ = writeln!(
             output,
-            "action storage_key={} task_ids=[{}] logical_bytes={} latest_timestamp_unix={} reasons=[{}] outcome={}",
+            "action storage_key={} task_ids=[{}] logical_bytes={} removed_logical_bytes={} remaining_logical_bytes={} byte_accounting_reliable={} latest_timestamp_unix={} reasons=[{}] outcome={}",
             quoted(&action.storage_key)?,
             task_ids,
             action.logical_bytes,
+            action.removed_logical_bytes,
+            action.remaining_logical_bytes,
+            action.byte_accounting_reliable,
             optional_u64(action.latest_timestamp_unix),
             reasons,
             outcome_name(action.outcome)
@@ -240,6 +284,21 @@ fn write_metrics(output: &mut String, prefix: &str, metrics: &TaskStoreMetrics) 
     );
     let _ = writeln!(
         output,
+        "{prefix}_retention_quarantine_logical_bytes={}",
+        metrics.retention_quarantine_logical_bytes
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}_retention_quarantine_allocated_bytes={}",
+        metrics.retention_quarantine_allocated_bytes
+    );
+    let _ = writeln!(
+        output,
+        "{prefix}_retention_quarantine_groups={}",
+        metrics.retention_quarantine_groups
+    );
+    let _ = writeln!(
+        output,
         "{prefix}_managed_task_logical_bytes={}",
         metrics.managed_task_logical_bytes
     );
@@ -300,7 +359,7 @@ mod tests {
         TaskStoreMetrics, TaskStoreReport, TASK_STORE_REPORT_SCHEMA_VERSION,
     };
 
-    use super::{render_json, render_text};
+    use super::{cleanup_exit_code, render_json, render_text};
 
     fn fixture_report() -> TaskStoreReport {
         let before = TaskStoreMetrics {
@@ -406,5 +465,30 @@ mod tests {
         let expected =
             include_str!("../tests/fixtures/daemon_storage/report.json").trim_end_matches('\n');
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn cleanup_returns_failure_when_reported_progress_is_unreliable() {
+        let mut report = fixture_report();
+        report.retention.failed_tasks = 1;
+        report.retention.action_byte_accounting_reliable = false;
+
+        assert_eq!(cleanup_exit_code(&report), 1);
+    }
+
+    #[test]
+    fn cleanup_returns_failure_for_a_failed_action_with_reliable_rescan() {
+        let mut report = fixture_report();
+        report.actions[0].outcome = RetentionOutcome::Failed;
+        report.actions[0].removed_logical_bytes = 0;
+        report.actions[0].remaining_logical_bytes = report.actions[0].logical_bytes;
+        report.retention.removed_tasks = 0;
+        report.retention.removed_logical_bytes = 0;
+        report.retention.failed_tasks = 1;
+        report.retention.failed_logical_bytes = report.actions[0].logical_bytes;
+        assert!(report.retention.final_rescan_reliable);
+        assert!(report.retention.action_byte_accounting_reliable);
+
+        assert_eq!(cleanup_exit_code(&report), 1);
     }
 }

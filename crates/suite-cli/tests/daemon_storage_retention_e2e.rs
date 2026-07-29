@@ -1,6 +1,7 @@
 use std::fs;
 
 use assert_cmd::Command;
+use packet28_daemon_core::retention::TASK_STORE_REPORT_SCHEMA_VERSION;
 use packet28_daemon_core::task_store_lease::acquire_daemon_task_store_lease;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -36,7 +37,7 @@ fn storage_inspect_reports_current_timestamped_metrics_as_json() {
         .clone();
     let report: Value = serde_json::from_slice(&output).unwrap();
 
-    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["schema_version"], TASK_STORE_REPORT_SCHEMA_VERSION);
     assert_eq!(report["mode"], "inspect");
     assert!(report["observed_at_unix"].as_u64().unwrap() > 0);
     assert_eq!(
@@ -142,6 +143,44 @@ fn storage_cleanup_refuses_apply_while_daemon_owns_task_store() {
 
     assert!(artifact.exists());
     drop(daemon_lease);
+}
+
+#[cfg(unix)]
+#[test]
+fn storage_cleanup_returns_failure_for_a_conflicted_recovery_group() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = TempDir::new().unwrap();
+    let quarantine = root.path().join(".packet28/.retention-trash");
+    let group = quarantine.join("conflicted");
+    fs::create_dir_all(&group).unwrap();
+    fs::set_permissions(&quarantine, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&group, fs::Permissions::from_mode(0o700)).unwrap();
+    let journal = group.join("journal-v1.json");
+    fs::write(&journal, b"{not-json").unwrap();
+
+    let assertion = suite_cmd()
+        .args([
+            "daemon",
+            "storage",
+            "cleanup",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--max-bytes",
+            "0",
+            "--apply",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    let report: Value = serde_json::from_slice(&assertion.get_output().stdout).unwrap();
+
+    assert_eq!(
+        report["retention"]["recovery_conflicted_groups"],
+        serde_json::json!(1)
+    );
+    assert_eq!(report["retention"]["removed_tasks"], serde_json::json!(0));
+    assert!(journal.exists());
 }
 
 #[test]
