@@ -402,6 +402,7 @@ impl PacketCache {
             envelope.test_index,
             envelope.task_index,
         );
+        self.has_legacy_checkpoint_baseline = true;
         Some(())
     }
 
@@ -463,6 +464,7 @@ impl PacketCache {
             }
         }
         self.rebuild_indexes();
+        self.has_legacy_checkpoint_baseline = true;
         Some(())
     }
 }

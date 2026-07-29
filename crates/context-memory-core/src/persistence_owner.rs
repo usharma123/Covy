@@ -626,9 +626,11 @@ impl CachePersistence {
         let mut root_lock = RootPersistenceLock::open(&config)?;
         let (cache, observed_generation) = {
             let mut locked_root = root_lock.lock()?;
-            let cache = PacketCache::load_from_disk(&config);
+            let mut cache = PacketCache::load_from_disk(&config);
             let current = locked_root.generation()?;
-            let observed_generation = if repair_torn_wal_tail(&config, &cache)? {
+            let repaired_wal = repair_torn_wal_tail(&config, &cache)?;
+            let promoted_legacy = promote_legacy_checkpoint(&config, &mut cache)?;
+            let observed_generation = if repaired_wal || promoted_legacy {
                 locked_root.advance_generation(current)?
             } else {
                 current
@@ -1433,6 +1435,21 @@ fn repair_torn_wal_tail(
     Ok(false)
 }
 
+fn promote_legacy_checkpoint(
+    config: &PersistConfig,
+    cache: &mut PacketCache,
+) -> Result<bool, CachePersistenceError> {
+    if !cache.has_legacy_checkpoint_baseline {
+        return Ok(false);
+    }
+    cache
+        .write_checkpoint(config)
+        .map_err(|source| io_error("legacy checkpoint promotion", source))?;
+    cache.has_v3_checkpoint_baseline = true;
+    cache.has_legacy_checkpoint_baseline = false;
+    Ok(true)
+}
+
 fn complete_shutdown(
     completion: &ShutdownCompletion,
     result: Result<CachePersistenceMetrics, CachePersistenceError>,
@@ -1483,7 +1500,8 @@ mod tests {
 
     use super::*;
     use crate::persist::{
-        append_wal_record, persist_cache_path_v3, persist_cache_wal_path_v3, PersistDelta,
+        append_wal_record, persist_cache_path_v1, persist_cache_path_v2, persist_cache_path_v3,
+        persist_cache_wal_path_v3, PersistDelta, PersistEnvelopeV1, PersistEnvelopeV2,
     };
     use crate::{CachePacket, NoopDeltaReuseHooks};
 
@@ -1514,6 +1532,104 @@ mod tests {
             );
             thread::yield_now();
         }
+    }
+
+    fn write_legacy_checkpoint(config: &PersistConfig, version: u32) -> String {
+        let mut cache = PacketCache::new();
+        let entry = put_entry(&mut cache, 80_000 + version as usize, 32);
+        let entries = cache.collect_live_entries(config.ttl_secs);
+        let path = match version {
+            1 => {
+                let envelope = PersistEnvelopeV1 { version, entries };
+                let path = persist_cache_path_v1(&config.root_dir);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, wincode::serialize(&envelope).unwrap()).unwrap();
+                path
+            }
+            2 => {
+                let envelope = PersistEnvelopeV2 {
+                    version,
+                    entries,
+                    ..PersistEnvelopeV2::default()
+                };
+                let path = persist_cache_path_v2(&config.root_dir);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, wincode::serialize(&envelope).unwrap()).unwrap();
+                path
+            }
+            _ => panic!("unsupported legacy checkpoint version {version}"),
+        };
+        assert!(path.exists());
+        entry.cache_key
+    }
+
+    fn assert_legacy_baseline_survives_crash(version: u32, test_name: &str) {
+        const CHILD_ROOT: &str = "PACKET28_LEGACY_PROMOTION_CHILD_ROOT";
+        const CHILD_VERSION: &str = "PACKET28_LEGACY_PROMOTION_CHILD_VERSION";
+        if let (Ok(root), Ok(child_version)) =
+            (std::env::var(CHILD_ROOT), std::env::var(CHILD_VERSION))
+        {
+            let root = PathBuf::from(root);
+            let version = child_version.parse::<u32>().unwrap();
+            let config = PersistConfig::new(root.clone());
+            let owner = CachePersistence::open(config).unwrap();
+            assert!(persist_cache_path_v3(&root).exists());
+            let memory = owner.shared_cache();
+            let (entry, reservation) = {
+                let mut cache = lock_recover(&memory);
+                let reservation = owner.reserve_mutation(1).unwrap();
+                let entry = put_entry(&mut cache, 81_000 + version as usize, 32);
+                (entry, reservation)
+            };
+            owner
+                .record_update_reserved(&entry, Vec::new(), reservation)
+                .unwrap();
+            let metrics = owner.flush(Duration::from_secs(5)).unwrap();
+            assert_eq!(metrics.checkpoints, 0);
+            std::process::exit(0);
+        }
+
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let config = PersistConfig::new(root.clone());
+        let legacy_key = write_legacy_checkpoint(&config, version);
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env(CHILD_ROOT, &root)
+            .env(CHILD_VERSION, version.to_string())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let loaded = PacketCache::load_from_disk(&config);
+        let expected_new_key = {
+            let mut cache = PacketCache::new();
+            put_entry(&mut cache, 81_000 + version as usize, 32).cache_key
+        };
+        let actual = loaded
+            .entries()
+            .into_iter()
+            .map(|entry| entry.cache_key)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual, BTreeSet::from([legacy_key, expected_new_key]));
+    }
+
+    #[test]
+    fn v1_baseline_survives_process_exit_after_first_wal_flush() {
+        assert_legacy_baseline_survives_crash(
+            1,
+            "persistence_owner::tests::v1_baseline_survives_process_exit_after_first_wal_flush",
+        );
+    }
+
+    #[test]
+    fn v2_baseline_survives_process_exit_after_first_wal_flush() {
+        assert_legacy_baseline_survives_crash(
+            2,
+            "persistence_owner::tests::v2_baseline_survives_process_exit_after_first_wal_flush",
+        );
     }
 
     fn test_persistence_handle(

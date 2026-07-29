@@ -23,6 +23,7 @@ pub struct PacketCache {
     pub(crate) task_index: HashMap<String, BTreeSet<String>>,
     pub(crate) persisted_sequence: u64,
     pub(crate) has_v3_checkpoint_baseline: bool,
+    pub(crate) has_legacy_checkpoint_baseline: bool,
 }
 
 impl PacketCache {
