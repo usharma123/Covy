@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — Packet28</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "neutral",
+        securityLevel: "loose",
+        flowchart: { curve: "basis", htmlLabels: true },
+      });
+    </script>
+    <style>
+      :root { color-scheme: light; }
+      html { scroll-behavior: smooth; }
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .file-ref { overflow-wrap: anywhere; }
+      .metric-ring {
+        background: conic-gradient(#059669 var(--score), #e7e5e4 0);
+      }
+      .metric-ring::after {
+        content: "";
+        position: absolute;
+        inset: 7px;
+        border-radius: 9999px;
+        background: white;
+      }
+      .metric-ring > span { position: relative; z-index: 1; }
+      pre.mermaid { min-height: 250px; display: flex; align-items: center; justify-content: center; }
+      code { overflow-wrap: anywhere; }
+      @media print {
+        .break-avoid { break-inside: avoid; }
+        a { color: inherit !important; text-decoration: none !important; }
+      }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-6xl mx-auto px-5 md:px-8 py-10 md:py-14 space-y-14">
+      <header class="border-b border-stone-300 pb-7">
+        <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-5">
+          <div>
+            <p class="text-xs uppercase tracking-[0.25em] text-emerald-700 font-semibold">Deep Rust architecture audit</p>
+            <h1 class="mt-2 text-4xl md:text-5xl font-serif tracking-tight">Packet28</h1>
+            <p class="mt-2 text-sm text-slate-600">28 crates · 543 Rust files · ~154K lines · 28 July 2026</p>
+            <p class="mt-1 text-xs text-indigo-700">Updated with validated findings from task 019fa949-eafe-7aa0-bff3-38d4837a9f83</p>
+          </div>
+          <div class="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 max-w-xl">
+            <p class="text-xs uppercase tracking-wider font-semibold text-amber-900">Verdict</p>
+            <p class="mt-1 text-sm text-amber-950">Strong direction, broad tests, and an acyclic graph. Not best-practice yet: reproducibility, MSRV, public docs, lifecycle correctness, and several file-only seams need material work.</p>
+          </div>
+        </div>
+        <div class="mt-6 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-600">
+          <span class="inline-flex items-center gap-2"><span class="h-3 w-5 border-2 border-slate-700 bg-white"></span> module</span>
+          <span class="inline-flex items-center gap-2"><span class="h-0 w-7 border-t-2 border-dashed border-slate-500"></span> seam</span>
+          <span class="inline-flex items-center gap-2"><span class="h-0 w-7 border-t-2 border-red-600"></span> leakage</span>
+          <span class="inline-flex items-center gap-2"><span class="h-3 w-5 bg-slate-800"></span> deep module</span>
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-12">
+        <article id="daemon-protocol" class="break-avoid rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 md:px-8 py-6 border-b border-slate-200">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+              <span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs font-semibold">ports &amp; adapters</span>
+            </div>
+            <h2 class="mt-4 text-2xl md:text-3xl font-serif">Separate daemon protocol from daemon implementation</h2>
+            <p class="mt-3 font-mono text-xs text-slate-600 file-ref">crates/packet28-daemon-core/Cargo.toml:11–20 · daemon_protocol.rs:5,238 · context-instruct-shim/src/macos.rs:10</p>
+          </div>
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-red-700">Before</p>
+                <div class="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
+                  <pre class="mermaid">
+flowchart TD
+  SHIM[context-instruct-shim] --> DC[daemon-core]
+  P28[p28 client] --> DC
+  D[packet28d] --> DC
+  DC --> W[wire DTOs]
+  DC --> K[kernel implementation]
+  DC --> M[memory implementation]
+  DC --> R[reducer implementation]
+  classDef leak fill:#fee2e2,stroke:#dc2626,stroke-width:2px;
+  class DC,K,M,R leak;
+                  </pre>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">After</p>
+                <div class="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <pre class="mermaid">
+flowchart TD
+  SHIM[context-instruct-shim] --> P[daemon protocol]
+  P28[p28 client] --> P
+  D[packet28d] --> P
+  D --> RT[daemon runtime]
+  RT --> K[kernel]
+  RT --> M[memory]
+  RT --> R[reducers]
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a;
+  class P,RT deep;
+                  </pre>
+                </div>
+              </div>
+            </div>
+            <div class="grid md:grid-cols-[1fr_1fr_auto] gap-5">
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Problem</p><p class="mt-1 text-sm">The wire-contract module depends on kernel, memory, and reducer implementations, so small clients cross a wide implementation seam.</p></div>
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Solution</p><p class="mt-1 text-sm">Put framing and DTOs in a deep protocol module; keep storage, trust, and execution in the daemon runtime.</p></div>
+              <div class="min-w-40"><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Wins</p><ul class="mt-1 text-sm space-y-1"><li>interface shrinks</li><li>locality increases</li><li>three adapters justify seam</li><li>dependency leverage</li></ul></div>
+            </div>
+          </div>
+        </article>
+
+        <article id="kernel-composition" class="break-avoid rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 md:px-8 py-6 border-b border-slate-200">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+              <span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs font-semibold">in-process</span>
+            </div>
+            <h2 class="mt-4 text-2xl md:text-3xl font-serif">Deepen the kernel; move built-ins to composition</h2>
+            <p class="mt-3 font-mono text-xs text-slate-600 file-ref">crates/context-kernel-core/Cargo.toml:11–26 · kernel_runtime.rs:51–95 · kernel_registry.rs:28 · tool_reducers_runtime.rs:259</p>
+          </div>
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-red-700">Before</p>
+                <div class="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
+                  <pre class="mermaid">
+flowchart LR
+  K[kernel-core] --> I[reducer interface]
+  K --> C1[covy]
+  K --> C2[diffy]
+  K --> C3[testy CLI adapter]
+  K --> C4[mapy]
+  K --> C5[guardy]
+  K --> C6[stacky/buildy/proxy]
+  classDef leak fill:#fee2e2,stroke:#dc2626,stroke-width:2px;
+  class K,C3 leak;
+                  </pre>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">After</p>
+                <div class="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <pre class="mermaid">
+flowchart LR
+  APP[composition module] --> K[kernel mechanism]
+  APP --> C1[built-in reducers]
+  C1 -.register.-> K
+  K --> S[scheduler]
+  K --> P[policy/cache/audit]
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a;
+  class K,APP deep;
+                  </pre>
+                </div>
+              </div>
+            </div>
+            <div class="grid md:grid-cols-[1fr_1fr_auto] gap-5">
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Problem</p><p class="mt-1 text-sm">A good reducer interface sits in the same module as 15 concrete dependencies, including a CLI adapter.</p></div>
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Solution</p><p class="mt-1 text-sm">Keep execution, cache, budget, governance, and audit behind the kernel interface; move built-in registration to composition.</p></div>
+              <div class="min-w-40"><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Wins</p><ul class="mt-1 text-sm space-y-1"><li>mechanism gains depth</li><li>CLI leakage stops</li><li>reducers become replaceable</li><li>tests hit one interface</li></ul></div>
+            </div>
+          </div>
+        </article>
+
+        <article id="mcp-lifecycle" class="break-avoid rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 md:px-8 py-6 border-b border-slate-200">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+              <span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs font-semibold">in-process</span>
+            </div>
+            <h2 class="mt-4 text-2xl md:text-3xl font-serif">Co-locate each MCP tool lifecycle</h2>
+            <p class="mt-3 font-mono text-xs text-slate-600 file-ref">cmd_mcp.rs:22–87,486–521 · cmd_mcp_tool_catalog.rs:49–1177 · cmd_mcp_native_args.rs:37–49 · cmd_mcp_native_dispatch.rs:3–20 · cmd_mcp_response.rs:18–138</p>
+          </div>
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-red-700">Before</p>
+                <div class="mt-2 rounded-xl border border-red-200 bg-red-50 p-4 h-[300px]">
+                  <div class="grid grid-cols-3 gap-3 h-full items-center text-center text-xs uppercase tracking-wider">
+                    <div class="border border-red-400 bg-white p-3">catalog</div>
+                    <div class="border border-red-400 bg-white p-3">arguments</div>
+                    <div class="border border-red-400 bg-white p-3">dispatch</div>
+                    <div class="border border-red-400 bg-white p-3">execution</div>
+                    <div class="border border-red-400 bg-white p-3">summary</div>
+                    <div class="border border-red-400 bg-white p-3">response</div>
+                    <div class="col-span-3 text-red-700 normal-case tracking-normal">one tool change crosses six shallow modules</div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">After</p>
+                <div class="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 h-[300px] flex items-center">
+                  <div class="deep text-white rounded-xl border-4 border-slate-900 w-full p-8">
+                    <p class="text-xs uppercase tracking-wider text-emerald-300">deep native-tool module</p>
+                    <div class="mt-5 grid grid-cols-2 gap-3 text-sm">
+                      <span class="rounded bg-white/10 p-2">schema + parse</span>
+                      <span class="rounded bg-white/10 p-2">execute</span>
+                      <span class="rounded bg-white/10 p-2">summarize</span>
+                      <span class="rounded bg-white/10 p-2">shape result</span>
+                    </div>
+                    <p class="mt-5 text-xs text-slate-300">one narrow interface to session and daemon seams</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="grid md:grid-cols-[1fr_1fr_auto] gap-5">
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Problem</p><p class="mt-1 text-sm">Catalog, parsing, dispatch, implementation, summary, and response shape are mechanically coupled but physically scattered.</p></div>
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Solution</p><p class="mt-1 text-sm">Let each tool family own its full lifecycle while session and daemon behavior remain outside.</p></div>
+              <div class="min-w-40"><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Wins</p><ul class="mt-1 text-sm space-y-1"><li>locality increases</li><li>interface narrows</li><li>depth increases</li><li>one place to test</li></ul></div>
+            </div>
+          </div>
+        </article>
+
+        <article id="broker-module" class="break-avoid rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 md:px-8 py-6 border-b border-slate-200">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+              <span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs font-semibold">in-process</span>
+            </div>
+            <h2 class="mt-4 text-2xl md:text-3xl font-serif">Make the broker a real module</h2>
+            <p class="mt-3 font-mono text-xs text-slate-600 file-ref">packet28d/src/main.rs:26–112 · state.rs:1–50 · broker_context.rs:1–95 · broker_support.rs:1–80 · all broker_*.rs:1</p>
+          </div>
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-red-700">Before</p>
+                <div class="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
+                  <pre class="mermaid">
+flowchart TD
+  MAIN[main.rs parent prelude]
+  B1[broker_context] &lt;--&gt; MAIN
+  B2[broker_handoff] &lt;--&gt; MAIN
+  B3[broker_search] &lt;--&gt; MAIN
+  B4[broker_render] &lt;--&gt; MAIN
+  B1 &lt;--&gt; S[DaemonState]
+  B2 &lt;--&gt; S
+  B3 &lt;--&gt; S
+  B4 &lt;--&gt; S
+  classDef leak fill:#fee2e2,stroke:#dc2626,stroke-width:2px;
+  class MAIN,B1,B2,B3,B4 leak;
+                  </pre>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">After</p>
+                <div class="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <pre class="mermaid">
+flowchart TD
+  MAIN[thin process bootstrap] --> B[broker module]
+  B --> S[state seam]
+  B --> X[internal context / handoff / search]
+  X --> S
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a;
+  class B deep;
+                  </pre>
+                </div>
+              </div>
+            </div>
+            <div class="grid md:grid-cols-[1fr_1fr_auto] gap-5">
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Problem</p><p class="mt-1 text-sm">The broker is a monolith split into files: sibling modules import the parent wholesale and share one hidden interface.</p></div>
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Solution</p><p class="mt-1 text-sm">Put broker behavior behind one owning module and make process bootstrap depend on it.</p></div>
+              <div class="min-w-40"><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Wins</p><ul class="mt-1 text-sm space-y-1"><li>seams become explicit</li><li>state interface shrinks</li><li>locality increases</li><li>main becomes shallow</li></ul></div>
+            </div>
+          </div>
+        </article>
+
+        <article id="memory-ownership" class="break-avoid rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 md:px-8 py-6 border-b border-slate-200">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+              <span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs font-semibold">local-substitutable</span>
+            </div>
+            <h2 class="mt-4 text-2xl md:text-3xl font-serif">Put SQLite ownership behind local memory</h2>
+            <p class="mt-3 font-mono text-xs text-slate-600 file-ref">memory_store.rs:7–30,55–133 · memory_db.rs:21–371 · memory_local_store.rs:8–175 · memory_graph_store.rs:302–392</p>
+          </div>
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-red-700">Before</p>
+                <div class="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
+                  <pre class="mermaid">
+flowchart LR
+  C[CLI / MCP / hooks] --> F[memory_store re-export hub]
+  F &lt;--&gt; A[memory_* modules]
+  A --> H[HOME-derived SQLite]
+  A --> H
+  A --> H
+  classDef leak fill:#fee2e2,stroke:#dc2626,stroke-width:2px;
+  class F,A leak;
+                  </pre>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">After</p>
+                <div class="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <pre class="mermaid">
+flowchart LR
+  C[CLI / MCP / hooks] --> M[local-memory module]
+  M --> D[SQLite seam]
+  M --> W[memory / graph / feedback internals]
+  W --> D
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a;
+  class M deep;
+                  </pre>
+                </div>
+              </div>
+            </div>
+            <div class="grid md:grid-cols-[1fr_1fr_auto] gap-5">
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Problem</p><p class="mt-1 text-sm">A broad re-export hub exposes persistence details; dozens of operations independently open and initialize environment-derived storage.</p></div>
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Solution</p><p class="mt-1 text-sm">Let local memory own connection lifecycle, schema, transactions, and workflows behind one interface.</p></div>
+              <div class="min-w-40"><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Wins</p><ul class="mt-1 text-sm space-y-1"><li>storage seam narrows</li><li>tests gain locality</li><li>implementation gains depth</li><li>environment leakage stops</li></ul></div>
+            </div>
+          </div>
+        </article>
+
+        <article id="runtime-integration" class="break-avoid rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 md:px-8 py-6 border-b border-slate-200">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+              <span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs font-semibold">ports &amp; adapters</span>
+            </div>
+            <h2 class="mt-4 text-2xl md:text-3xl font-serif">Deepen runtime integration modules</h2>
+            <p class="mt-3 font-mono text-xs text-slate-600 file-ref">runtime_integrations.rs:3–162 · cmd_setup_runtime.rs:9–156,233–293 · cmd_setup.rs:686–799 · cmd_setup_hooks.rs:339,466 · agent_surface.rs:8–161</p>
+          </div>
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-red-700">Before</p>
+                <div class="mt-2 rounded-xl border border-red-200 bg-red-50 p-4 h-[280px]">
+                  <div class="space-y-2">
+                    <div class="h-9 border-l-4 border-red-500 bg-white px-3 flex items-center text-sm">setup: detection match</div>
+                    <div class="h-9 border-l-4 border-red-500 bg-white px-3 flex items-center text-sm">setup: capability match</div>
+                    <div class="h-9 border-l-4 border-red-500 bg-white px-3 flex items-center text-sm">runtime module: paths only</div>
+                    <div class="h-9 border-l-4 border-red-500 bg-white px-3 flex items-center text-sm">hook module: writer match</div>
+                    <div class="h-9 border-l-4 border-red-500 bg-white px-3 flex items-center text-sm">plugin module: installer match</div>
+                    <div class="h-9 border-l-4 border-red-500 bg-white px-3 flex items-center text-sm">agent surface: prompt match</div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">After</p>
+                <div class="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 h-[280px] flex items-center">
+                  <div class="deep text-white rounded-xl w-full p-8">
+                    <p class="text-xs uppercase tracking-wider text-emerald-300">runtime integration module</p>
+                    <p class="mt-4 text-2xl font-serif">paths · detection · capability · setup · status</p>
+                    <p class="mt-4 text-xs text-slate-300">setup keeps only cross-runtime orchestration</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="grid md:grid-cols-[1fr_1fr_auto] gap-5">
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Problem</p><p class="mt-1 text-sm">Runtime modules own path joins while behavior leaks across repeated RuntimeKind matches.</p></div>
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Solution</p><p class="mt-1 text-sm">Let each runtime module own its integration behavior and leave setup with orchestration.</p></div>
+              <div class="min-w-40"><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Wins</p><ul class="mt-1 text-sm space-y-1"><li>runtime locality</li><li>adapter leverage</li><li>interface shrinks</li><li>switchboards disappear</li></ul></div>
+            </div>
+          </div>
+        </article>
+
+        <article id="stable-instruction-prefix" class="break-avoid rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 md:px-8 py-6 border-b border-slate-200">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong direction</span>
+              <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">experiment-gated</span>
+            </div>
+            <h2 class="mt-4 text-2xl md:text-3xl font-serif">Keep instruction bytes stable; move task adaptation into the brief</h2>
+            <p class="mt-3 font-mono text-xs text-slate-600 file-ref">packet28d/src/instruction_files.rs:42–55 · context-kernel-core/src/instruction_runtime.rs:64,245–319,329–348 · packet28d/src/broker_context.rs:104–153</p>
+          </div>
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-red-700">Before</p>
+                <div class="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
+                  <pre class="mermaid">
+flowchart TD
+  S[instruction source] --> R[summary renderer]
+  T[active task ID] --> R
+  A[agent snapshot] --> R
+  R --> V[task-specific virtual instruction bytes]
+  classDef leak fill:#fee2e2,stroke:#dc2626,stroke-width:2px;
+  class R,V leak;
+                  </pre>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">After</p>
+                <div class="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <pre class="mermaid">
+flowchart TD
+  S[instruction source + stable repo config] --> V[stable instruction bytes]
+  T[active task ID] --> B[mutable broker brief]
+  A[agent snapshot] --> B
+  V --> C[worker context]
+  B --> C
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a;
+  class V,B deep;
+                  </pre>
+                </div>
+              </div>
+            </div>
+            <div class="grid md:grid-cols-[1fr_1fr_auto] gap-5">
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Confirmed problem</p><p class="mt-1 text-sm">Real shim requests omit a task ID, so the daemon loads the active task. Task labels and mutable snapshot focus terms then affect section selection, excerpts, the focus line, and the rendered header. Identical source can therefore produce different bytes.</p></div>
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Solution</p><p class="mt-1 text-sm">Make stable rewriting a pure function of source, path, schema, budget, and stable repo configuration. Keep focus paths, decisions, questions, and next actions in the already replaceable Packet28 brief.</p></div>
+              <div class="min-w-40"><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Wins</p><ul class="mt-1 text-sm space-y-1"><li>stable interface bytes</li><li>adaptive state stays local</li><li>cache identity narrows</li><li>brief gains leverage</li></ul></div>
+            </div>
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+              <span class="font-semibold">Evidence boundary:</span> byte instability is verified; provider-level cache placement, token cost, and net savings are not. Keep passthrough as the baseline and gate a stable mode on the controlled measurements in the addendum.
+            </div>
+          </div>
+        </article>
+
+        <article id="test-harness" class="break-avoid rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 md:px-8 py-6 border-b border-slate-200">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+              <span class="rounded-full bg-indigo-100 text-indigo-800 px-3 py-1 text-xs font-semibold">local-substitutable</span>
+            </div>
+            <h2 class="mt-4 text-2xl md:text-3xl font-serif">Deepen the integration-test harness</h2>
+            <p class="mt-3 font-mono text-xs text-slate-600 file-ref">suite-cli/tests/support/mod.rs:1 · support/mcp_native.rs:17–35 · 142 integration binaries · 63 support files</p>
+          </div>
+          <div class="p-6 md:p-8 space-y-6">
+            <div class="grid md:grid-cols-2 gap-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-red-700">Before</p>
+                <div class="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
+                  <pre class="mermaid">
+flowchart TD
+  T1[test binary] --> H1[private path helper]
+  T2[test binary] --> H2[private path helper]
+  T3[test binary] --> H3[private path helper]
+  H1 --> C1[nested cargo build]
+  H2 --> C2[nested cargo build]
+  H3 --> C3[nested cargo build]
+  classDef leak fill:#fee2e2,stroke:#dc2626,stroke-width:2px;
+  class H1,H2,H3,C1,C2,C3 leak;
+                  </pre>
+                </div>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">After</p>
+                <div class="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <pre class="mermaid">
+flowchart TD
+  T1[workflow tests] --> H[RAII process/MCP harness]
+  T2[workflow tests] --> H
+  T3[workflow tests] --> H
+  H --> P[bounded process seam]
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a;
+  class H deep;
+                  </pre>
+                </div>
+              </div>
+            </div>
+            <div class="grid md:grid-cols-[1fr_1fr_auto] gap-5">
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Problem</p><p class="mt-1 text-sm">One-off fixture modules and duplicated process helpers fragment the test interface and leak cleanup.</p></div>
+              <div><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Solution</p><p class="mt-1 text-sm">Keep one-off fixtures local; put reused process, MCP, timeout, and cleanup behavior behind one deep harness.</p></div>
+              <div class="min-w-40"><p class="text-xs uppercase tracking-wider font-semibold text-slate-500">Wins</p><ul class="mt-1 text-sm space-y-1"><li>test locality</li><li>cleanup behind interface</li><li>fewer shallow modules</li><li>higher harness leverage</li></ul></div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section id="top-recommendation" class="rounded-2xl deep text-white p-8 md:p-10 shadow-lg">
+        <p class="text-xs uppercase tracking-[0.22em] text-emerald-300 font-semibold">Top recommendation</p>
+        <h2 class="mt-3 text-3xl md:text-4xl font-serif"><a class="hover:text-emerald-200" href="#daemon-protocol">Separate daemon protocol from implementation</a></h2>
+        <p class="mt-3 text-slate-200">Three real adapters already justify this seam, and it removes kernel, memory, and reducer implementation weight from the shim and p28 client before deeper MCP and broker work.</p>
+      </section>
+
+      <section id="audit" class="space-y-8">
+        <div>
+          <p class="text-xs uppercase tracking-[0.22em] text-emerald-700 font-semibold">Evidence appendix</p>
+          <h2 class="mt-2 text-3xl md:text-4xl font-serif">Best-practice scorecard</h2>
+        </div>
+        <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:75%"><span class="text-sm font-bold">B</span></div><div><p class="font-semibold">Crate graph</p><p class="text-xs text-slate-500">Acyclic; two inverted seams</p></div></div></div>
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:72%"><span class="text-sm font-bold">B</span></div><div><p class="font-semibold">Rust idioms</p><p class="text-xs text-slate-500">Safe core; FFI debt</p></div></div></div>
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:82%"><span class="text-sm font-bold">B+</span></div><div><p class="font-semibold">Testing</p><p class="text-xs text-slate-500">Broad; costly harness</p></div></div></div>
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:30%"><span class="text-sm font-bold">D</span></div><div><p class="font-semibold">Rustdoc</p><p class="text-xs text-slate-500">Broken links; no examples</p></div></div></div>
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:56%"><span class="text-sm font-bold">C+</span></div><div><p class="font-semibold">Lifecycle</p><p class="text-xs text-slate-500">Cancellation/shutdown gaps</p></div></div></div>
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:55%"><span class="text-sm font-bold">C+</span></div><div><p class="font-semibold">Errors</p><p class="text-xs text-slate-500">Typed pockets; erased seams</p></div></div></div>
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:48%"><span class="text-sm font-bold">C</span></div><div><p class="font-semibold">CI/repro</p><p class="text-xs text-slate-500">Lock/MSRV not enforced</p></div></div></div>
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:45%"><span class="text-sm font-bold">C</span></div><div><p class="font-semibold">Scalability</p><p class="text-xs text-slate-500">Incremental paths rewrite global state</p></div></div></div>
+          <div class="rounded-xl border bg-white p-5"><div class="flex items-center gap-4"><div class="metric-ring relative h-14 w-14 rounded-full grid place-items-center" style="--score:65%"><span class="text-sm font-bold">B-</span></div><div><p class="font-semibold">Overall</p><p class="text-xs text-slate-500">Healthy, not best-in-class</p></div></div></div>
+        </div>
+
+        <div class="rounded-2xl border border-red-200 bg-red-50 p-6 md:p-8">
+          <h3 class="text-2xl font-serif text-red-950">Fix before more structural refactoring</h3>
+          <div class="mt-5 grid md:grid-cols-2 gap-4">
+            <div class="rounded-xl bg-white border border-red-200 p-5"><p class="text-xs font-semibold uppercase tracking-wider text-red-700">High · Linux ABI</p><p class="mt-2 text-sm">The Linux preload shim exports fixed three-argument <code>open/openat</code> functions and transmutes variadic libc symbols to fixed function pointers. The in-repo macOS bridge correctly uses C variadics.</p><p class="mt-3 text-xs font-mono file-ref">context-instruct-shim/src/linux.rs:17,44–94,320–370 · macos_interpose.c:15–26</p></div>
+            <div class="rounded-xl bg-white border border-red-200 p-5"><p class="text-xs font-semibold uppercase tracking-wider text-red-700">High · policy fail-open</p><p class="mt-2 text-sm">Fifteen command paths turn malformed or unreadable configuration into defaults, including coverage-gate commands.</p><p class="mt-3 text-xs font-mono file-ref">suite-foundation-core/src/config.rs:257–264 · covy-cli/src/cmd_check.rs:89–90 · 14 parallel call sites</p></div>
+            <div class="rounded-xl bg-white border border-red-200 p-5"><p class="text-xs font-semibold uppercase tracking-wider text-red-700">High · cancellation</p><p class="mt-2 text-sm"><code>TaskCancel</code> deletes bookkeeping but does not stop sequence work or child processes; completion can recreate the removed task.</p><p class="mt-3 text-xs font-mono file-ref">packet28d/src/watch.rs:101–161,243–261 · launch.rs:313–371 · broker_support.rs:143–153</p></div>
+            <div class="rounded-xl bg-white border border-red-200 p-5"><p class="text-xs font-semibold uppercase tracking-wider text-red-700">High · shutdown/cleanup</p><p class="mt-2 text-sm">Forced-TCP Stop acknowledges but cannot wake the TCP accept loop. The macOS swap path also lacks RAII after spawning.</p><p class="mt-3 text-xs font-mono file-ref">packet28d/src/main.rs:225–250,286–289,375–430 · server.rs:225–235 · suite-cli/src/cmd_macos_swap.rs:150–175</p></div>
+          </div>
+        </div>
+
+        <div class="grid lg:grid-cols-2 gap-6">
+          <div class="rounded-2xl border bg-white p-6">
+            <h3 class="text-2xl font-serif">What is already strong</h3>
+            <ul class="mt-4 space-y-3 text-sm">
+              <li><span class="font-semibold">Acyclic dependency graph.</span> Most edges point toward packet and foundation contracts.</li>
+              <li><span class="font-semibold">Deep scheduler.</span> One typed interface hides DAG validation, mutation, ordering, and budget enforcement.</li>
+              <li><span class="font-semibold">Broad behavioral coverage.</span> 1,099 test functions across 26 of 28 crates; full locked suite passed before a concurrent local edit.</li>
+              <li><span class="font-semibold">Idiomatic borrowing.</span> No production <code>&amp;String</code> or <code>&amp;Vec&lt;T&gt;</code> parameters found; strings, slices, and paths are used well.</li>
+              <li><span class="font-semibold">Deliberate dynamic dispatch.</span> The main owned trait object and reducer callbacks sit at real runtime-selection seams.</li>
+              <li><span class="font-semibold">Deterministic contracts.</span> Packet hashing, schema registry, route catalog, scheduler failures, and index parity receive focused tests.</li>
+              <li><span class="font-semibold">Unsafe stays peripheral.</span> It is concentrated in FFI, mmap, signals, and syscalls rather than core algorithms.</li>
+              <li><span class="font-semibold">Useful local gate.</span> Formatting, strict Clippy, and targeted/full tests are already scripted.</li>
+            </ul>
+          </div>
+          <div class="rounded-2xl border bg-white p-6">
+            <h3 class="text-2xl font-serif">Rust-practice debt</h3>
+            <ul class="mt-4 space-y-3 text-sm">
+              <li><span class="font-semibold">Unsafe contracts:</span> 17 focused <code>undocumented_unsafe_blocks</code> warnings; Linux public unsafe hooks lack Safety docs.</li>
+              <li><span class="font-semibold">Cloning:</span> roughly 60 focused <code>redundant_clone</code> warnings; the largest verified case clones the whole context section vector before pruning.</li>
+              <li><span class="font-semibold">Allocations:</span> line counting and coverage reporting collect intermediate vectors; daemon merge helpers allocate nested sets/vectors.</li>
+              <li><span class="font-semibold">Large Copy values:</span> 48–88 byte query/budget structs are repeatedly passed by value.</li>
+              <li><span class="font-semibold">State modeling:</span> task lifecycle uses parallel booleans; search status is a String plus optional fields. Runtime enums fit better than PhantomData typestate.</li>
+              <li><span class="font-semibold">Public errors:</span> reusable search, daemon, diff, and test libraries leak <code>anyhow</code>; typed sources disappear into strings.</li>
+              <li><span class="font-semibold">Corruption handling:</span> a partial search-index record is accepted as clean EOF.</li>
+              <li><span class="font-semibold">Backpressure:</span> unbounded subscriber queues and thread-per-connection servers have no read deadlines.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="rounded-2xl border bg-white overflow-hidden">
+          <div class="px-6 py-5 border-b"><h3 class="text-2xl font-serif">Verification record</h3></div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-stone-100 text-left"><tr><th class="px-6 py-3">Check</th><th class="px-6 py-3">Result</th><th class="px-6 py-3">Meaning</th></tr></thead>
+              <tbody class="divide-y">
+                <tr><td class="px-6 py-3 font-mono text-xs">cargo clippy --workspace --all-targets --all-features --locked -- -D warnings</td><td class="px-6 py-3 text-emerald-700 font-semibold">Pass</td><td class="px-6 py-3">Default strict lint gate is clean.</td></tr>
+                <tr><td class="px-6 py-3 font-mono text-xs">cargo test --workspace --all-features --locked</td><td class="px-6 py-3 text-emerald-700 font-semibold">Pass*</td><td class="px-6 py-3">All workspace and zero doctests passed before the later concurrent edit.</td></tr>
+                <tr><td class="px-6 py-3 font-mono text-xs">RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc …</td><td class="px-6 py-3 text-red-700 font-semibold">Fail</td><td class="px-6 py-3">Broken links at testy-cli-common/impact.rs:121 and covy-cli/cmd_map_paths.rs:27.</td></tr>
+                <tr><td class="px-6 py-3 font-mono text-xs">RUSTDOCFLAGS="-W missing_docs" cargo doc …</td><td class="px-6 py-3 text-amber-700 font-semibold">4,439 warnings</td><td class="px-6 py-3">Only one library root has crate docs; no doctest examples or Errors/Panics sections.</td></tr>
+                <tr><td class="px-6 py-3 font-mono text-xs">Focused panic / unsafe / clone Clippy groups</td><td class="px-6 py-3 text-amber-700 font-semibold">66 / 17 / ~60</td><td class="px-6 py-3">These useful opt-in lints are not enforced by workspace policy.</td></tr>
+                <tr class="bg-amber-50"><td class="px-6 py-3 font-mono text-xs">Post-edit fmt + context-kernel prefix tests</td><td class="px-6 py-3 text-red-700 font-semibold">Fail*</td><td class="px-6 py-3">A user-owned file changed at 11:41 during the audit; it is unformatted and its two new invariance tests fail. Audit did not modify it.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid lg:grid-cols-2 gap-6">
+          <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+            <h3 class="text-2xl font-serif text-amber-950">Reproducibility and CI</h3>
+            <ul class="mt-4 space-y-3 text-sm text-amber-950">
+              <li><code>Cargo.lock</code> exists locally but is ignored and untracked; clean CI and release tags resolve fresh graphs.</li>
+              <li><code>rust-version = "1.75"</code> is not credible with selected dependencies requiring at least 1.85; CI tests moving stable only.</li>
+              <li>PR CI runs fmt and tests, but not strict Clippy, rustdoc, MSRV, or cargo-deny.</li>
+              <li><code>deny.toml</code> has useful license/source policy but no workflow executes it.</li>
+              <li>No workspace lint inheritance; 93 internal path/version declarations are repeated across manifests.</li>
+              <li>Release tags are not asserted against the Cargo version; action references and the ARM cross install are mutable.</li>
+            </ul>
+            <p class="mt-4 text-xs font-mono file-ref">.gitignore:4 · Cargo.toml:1–56 · .github/workflows/build.yml:22–30 · deny.toml:1–25</p>
+          </div>
+          <div class="rounded-2xl border border-indigo-200 bg-indigo-50 p-6">
+            <h3 class="text-2xl font-serif text-indigo-950">Testing and documentation</h3>
+            <ul class="mt-4 space-y-3 text-sm text-indigo-950">
+              <li>142 integration binaries and 63 support files repeat process helpers and nested Cargo builds.</li>
+              <li><code>suite-ingest</code> and <code>testy-cli-common</code> have no direct tests.</li>
+              <li>No property, fuzz, snapshot, compile-fail, or doctest coverage exists.</li>
+              <li>Architecture layers are documented but no metadata test enforces negative dependency rules.</li>
+              <li>README counts have drifted from 25 to 28 crates and from 247 to 543 Rust files.</li>
+              <li>Stable public packet, ingestion, kernel, and daemon interfaces are largely undocumented.</li>
+            </ul>
+            <p class="mt-4 text-xs font-mono file-ref">README.md:32–54,742–744 · suite-cli/tests/support · suite-packet-core/src/lib.rs:1</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="thread-addendum" class="space-y-8">
+        <div>
+          <p class="text-xs uppercase tracking-[0.22em] text-indigo-700 font-semibold">Task addendum · 019fa949-eafe-7aa0-bff3-38d4837a9f83</p>
+          <h2 class="mt-2 text-3xl md:text-4xl font-serif">Runtime scalability, async boundaries, and prompt stability</h2>
+          <p class="mt-3 max-w-4xl text-sm text-slate-600">These findings were deduplicated against the original review and rechecked against the current worktree. “Confirmed” describes source mechanics; “live snapshot” is volatile local state; “historical benchmark” was not rerun against current HEAD.</p>
+        </div>
+
+        <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="rounded-xl border border-red-200 bg-red-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-red-700">Live snapshot</p><p class="mt-2 text-3xl font-serif">1,848,193 B</p><p class="mt-1 text-sm">task registry · exactly 300 records</p></div>
+          <div class="rounded-xl border border-amber-200 bg-amber-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-amber-700">Live snapshot</p><p class="mt-2 text-3xl font-serif">160.97 MiB</p><p class="mt-1 text-sm">whole <code>.packet28</code> store; volatile, not “artifact size”</p></div>
+          <div class="rounded-xl border border-indigo-200 bg-indigo-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-indigo-700">Task store</p><p class="mt-2 text-3xl font-serif">4,610 files</p><p class="mt-1 text-sm">4,302 artifact-like · 42.81 MiB on disk</p></div>
+          <div class="rounded-xl border border-sky-200 bg-sky-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-sky-700">Historical benchmark</p><p class="mt-2 text-3xl font-serif">10,375.754 ms</p><p class="mt-1 text-sm">workspace index build · 31 March 2026</p></div>
+        </div>
+
+        <div class="rounded-2xl border bg-white overflow-hidden">
+          <div class="px-6 py-5 border-b">
+            <h3 class="text-2xl font-serif">Performance architecture priorities</h3>
+            <p class="mt-1 text-sm text-slate-600">Fix ownership and write amplification before allocation micro-tuning.</p>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-stone-100 text-left"><tr><th class="px-6 py-3">Priority</th><th class="px-6 py-3">Confirmed mechanism</th><th class="px-6 py-3">Architectural move</th><th class="px-6 py-3">Evidence</th></tr></thead>
+              <tbody class="divide-y align-top">
+                <tr>
+                  <td class="px-6 py-4"><span class="rounded-full bg-red-100 text-red-800 px-2 py-1 text-xs font-semibold">P0</span></td>
+                  <td class="px-6 py-4">Every task event is appended and then the complete task and watch registries are serialized and atomically written while the daemon-wide mutex remains held; the write path calls <code>sync_all</code>.</td>
+                  <td class="px-6 py-4">Give persistence one owner: append a WAL/event record, coalesce dirty state, checkpoint asynchronously, and serialize immutable snapshots outside the state lock.</td>
+                  <td class="px-6 py-4 font-mono text-xs file-ref">packet28d/src/broker_support.rs:47–84 · packet28-daemon-core/src/storage.rs:74–104,249–264</td>
+                </tr>
+                <tr>
+                  <td class="px-6 py-4"><span class="rounded-full bg-red-100 text-red-800 px-2 py-1 text-xs font-semibold">P0</span></td>
+                  <td class="px-6 py-4">A context-cache write evicts, collects and clones all live entries and indexes, serializes the full envelope, and writes it while the cache mutex is held.</td>
+                  <td class="px-6 py-4">Track dirty entries, debounce persistence, write deltas/checkpoints, and move encoding and I/O behind a cache-persistence owner.</td>
+                  <td class="px-6 py-4 font-mono text-xs file-ref">context-kernel-core/src/kernel_runtime.rs:307–330 · context-memory-core/src/persist.rs:124–165</td>
+                </tr>
+                <tr>
+                  <td class="px-6 py-4"><span class="rounded-full bg-red-100 text-red-800 px-2 py-1 text-xs font-semibold">P0</span></td>
+                  <td class="px-6 py-4">A one-file update clones the complete repo snapshot and rewrites it. Regex overlay updates reread every prior overlay document, rebuild all overlay files, and reload the base layer.</td>
+                  <td class="px-6 py-4">Use an owned mutable index with immutable generations, overlay segments and tombstones, threshold compaction, and retain the existing base <code>Arc</code>.</td>
+                  <td class="px-6 py-4 font-mono text-xs file-ref">packet28d/src/index.rs:208–254 · runtime_files.rs:73–85 · packet28-search-core/src/lib.rs:422–493</td>
+                </tr>
+                <tr>
+                  <td class="px-6 py-4"><span class="rounded-full bg-amber-100 text-amber-800 px-2 py-1 text-xs font-semibold">P1</span></td>
+                  <td class="px-6 py-4">Each local-memory connection reruns the schema batch and rebuilds five FTS tables. Graph workflows compose operations that independently reopen that database.</td>
+                  <td class="px-6 py-4">Use <code>PRAGMA user_version</code> migrations, an owning store/connection boundary, prepared statements, and shared transactions for batch graph work.</td>
+                  <td class="px-6 py-4 font-mono text-xs file-ref">suite-cli/src/memory_db.rs:21–33,365–371 · memory_graph_store.rs:302–392,442–520</td>
+                </tr>
+                <tr>
+                  <td class="px-6 py-4"><span class="rounded-full bg-amber-100 text-amber-800 px-2 py-1 text-xs font-semibold">P1</span></td>
+                  <td class="px-6 py-4">Test planning materializes a dense tests × files matrix, rebuilds Roaring bitmaps for every plan, and clones remaining bitmaps inside gain calculation.</td>
+                  <td class="px-6 py-4">Persist sparse bitmap rows, intersect by reference, and benchmark realistic tests/files/changed-lines scaling.</td>
+                  <td class="px-6 py-4 font-mono text-xs file-ref">testy-core/src/pipeline.rs:458–478 · impact.rs:104–117,199–212</td>
+                </tr>
+                <tr>
+                  <td class="px-6 py-4"><span class="rounded-full bg-amber-100 text-amber-800 px-2 py-1 text-xs font-semibold">P1</span></td>
+                  <td class="px-6 py-4">The map and regex indexes separately walk/read the repository; diagnostic ingestion reads a whole file and then copies it into a second buffer. LCOV creates a vector for each comma-separated record.</td>
+                  <td class="px-6 py-4">Share bounded scan/content work, stream parsers where useful, and remove whole-input and per-record copies after scale benchmarks identify the dominant path.</td>
+                  <td class="px-6 py-4 font-mono text-xs file-ref">packet28d/src/index.rs:168–184 · mapy-core/src/scan.rs:14–35 · covy-ingest/src/lib.rs:143–156 · lcov.rs:52–67</td>
+                </tr>
+                <tr>
+                  <td class="px-6 py-4"><span class="rounded-full bg-stone-200 text-stone-800 px-2 py-1 text-xs font-semibold">P2</span></td>
+                  <td class="px-6 py-4">The map cache compares second-resolution modification times; same-size rapid edits can share the same coarse cache identity. No bounded retention policy was found for the local task/artifact tree.</td>
+                  <td class="px-6 py-4">Use nanosecond timestamps or content identity and add explicit age/size retention with observability and a dry-run cleanup command.</td>
+                  <td class="px-6 py-4 font-mono text-xs file-ref">mapy-core/src/scan.rs:209–215 · live .packet28 snapshot</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="border-t bg-stone-50 px-6 py-4 text-xs text-slate-600">
+            Measurement note: the tracked benchmark at <code>benchmarks/packet28_search_tool_benchmark.md:23–29</code> used p28 git <code>59e54fb</code> / packet28d 0.2.39. It is direct historical evidence, not a current-HEAD result. The live store figures were sampled at 2026-07-28 11:55 EDT and can change while the daemon runs.
+          </div>
+        </div>
+
+        <div class="grid lg:grid-cols-2 gap-6">
+          <div class="rounded-2xl border border-sky-200 bg-sky-50 p-6">
+            <h3 class="text-2xl font-serif text-sky-950">Where Tokio earns its cost</h3>
+            <p class="mt-2 text-sm text-sky-950">There is no production Tokio dependency today; the only matches are fixture text.</p>
+            <ul class="mt-4 space-y-3 text-sm text-sky-950">
+              <li><span class="font-semibold">MCP proxy:</span> async stdio, request-ID routing, per-upstream timeouts, concurrent requests, and owned child cleanup instead of one serial loop.</li>
+              <li><span class="font-semibold">packet28d transport:</span> structured connection tasks, bounded subscriber channels, socket deadlines, cancellation, and TCP/Unix shutdown under one lifecycle.</li>
+              <li><span class="font-semibold">Wait/watch/notifications:</span> replace sleep/poll loops and the single synchronous debounce processor with timers, signals, and bounded task ownership.</li>
+            </ul>
+            <p class="mt-4 text-xs font-mono file-ref">suite-cli/src/cmd_mcp_proxy.rs:40–86 · packet28d/src/main.rs:225–247 · server.rs:90–106 · watch.rs:370–404 · launch.rs:3–60 · suite-cli/src/cmd_mcp.rs:269–300</p>
+          </div>
+          <div class="rounded-2xl border border-stone-300 bg-stone-100 p-6">
+            <h3 class="text-2xl font-serif">Where Tokio does not help by itself</h3>
+            <ul class="mt-4 space-y-3 text-sm">
+              <li>Parsing, repository scans, bitmap work, index construction, SQLite, serialization, and filesystem writes remain blocking or CPU-heavy.</li>
+              <li>Keep Rayon for data parallelism; use bounded blocking workers or <code>spawn_blocking</code> at an async boundary.</li>
+              <li>Do not place synchronous SQLite or full-snapshot writes inside async tasks and call the architecture “non-blocking.”</li>
+              <li>First remove global lock-held I/O and write amplification; an async runtime cannot repair those ownership defects.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="rounded-2xl border border-indigo-200 bg-indigo-50 p-6 md:p-8">
+          <div class="grid lg:grid-cols-[1fr_1.2fr] gap-7">
+            <div>
+              <p class="text-xs uppercase tracking-wider font-semibold text-indigo-700">Controlled prompt-cache experiment</p>
+              <h3 class="mt-2 text-2xl font-serif text-indigo-950">Test byte stability before promising savings</h3>
+              <ol class="mt-5 space-y-3 text-sm text-indigo-950">
+                <li><span class="font-semibold">1 · passthrough:</span> untouched instruction content; baseline/default.</li>
+                <li><span class="font-semibold">2 · stable:</span> deterministic compression from source plus stable configuration only.</li>
+                <li><span class="font-semibold">3 · adaptive:</span> current task/snapshot-sensitive rewrite; experimental comparator.</li>
+              </ol>
+              <p class="mt-4 text-sm text-indigo-950">Exercise cold start, second request, compaction, active-task A→B, snapshot drift, and fresh-worker handoff. Require identical stable-prefix hashes across task/snapshot changes.</p>
+            </div>
+            <div class="rounded-xl bg-white border border-indigo-200 p-5">
+              <p class="font-semibold text-indigo-950">Record per request</p>
+              <div class="mt-4 grid sm:grid-cols-2 gap-3 text-xs">
+                <div class="rounded-lg bg-stone-50 p-3"><code>churn_rate = creation / (creation + read)</code></div>
+                <div class="rounded-lg bg-stone-50 p-3"><code>reuse_multiple = read / max(creation, 1)</code></div>
+                <div class="rounded-lg bg-stone-50 p-3"><code>effective_cost = creation_cost + read_cost</code></div>
+                <div class="rounded-lg bg-stone-50 p-3"><code>compaction_rewarm_tokens</code></div>
+              </div>
+              <p class="mt-4 text-sm text-slate-700"><span class="font-semibold">Success criterion:</span> stable hashes plus lower effective cache cost without harming instruction adherence. Aggregate hit rate alone is insufficient.</p>
+              <p class="mt-3 text-xs text-slate-500">Claims such as “20K tokens lost,” “100% misses,” or guaranteed net savings remain hypotheses until provider prompt ordering and cache boundaries are measured.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-2xl deep text-white p-7">
+          <p class="text-xs uppercase tracking-[0.2em] text-emerald-300 font-semibold">Performance-first sequence</p>
+          <p class="mt-3 text-lg">Persistence owner and lock split → incremental index generations/segments → SQLite migrations and batch ownership → parser/test-map allocation work → Tokio for daemon and MCP orchestration.</p>
+        </div>
+      </section>
+
+      <section id="ground-truth" class="space-y-6">
+        <div>
+          <p class="text-xs uppercase tracking-[0.22em] text-emerald-700 font-semibold">Ground truth</p>
+          <h2 class="mt-2 text-3xl md:text-4xl font-serif">What mature Rust repositories support</h2>
+        </div>
+        <div class="grid md:grid-cols-2 gap-4 text-sm">
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html"><p class="font-semibold">Cargo lockfile guidance ↗</p><p class="mt-1 text-slate-600">Cargo recommends checking Cargo.lock into version control when in doubt; it captures the successful dependency graph.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://doc.rust-lang.org/cargo/reference/workspaces.html#the-lints-table"><p class="font-semibold">Cargo workspace lint inheritance ↗</p><p class="mt-1 text-slate-600">Workspace lints are supported by the claimed MSRV, but members must explicitly inherit them.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://doc.rust-lang.org/cargo/reference/rust-version.html#support-expectations"><p class="font-semibold">Cargo rust-version support expectations ↗</p><p class="mt-1 text-slate-600">A declared minimum toolchain is a support promise and should be verified by automated tests.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://rust-lang.github.io/api-guidelines/documentation.html"><p class="font-semibold">Rust interface documentation guidelines ↗</p><p class="mt-1 text-slate-600">Public items need examples plus Errors, Panics, and Safety contracts where relevant.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://github.com/rust-lang/rust-analyzer/blob/30e799799fca143f05d28052c7292d9f2ee57386/docs/book/src/contributing/architecture.md#L118-L151"><p class="font-semibold">rust-analyzer negative dependency rules ↗</p><p class="mt-1 text-slate-600">Its architecture guide names what lower modules must not know, making diagrams enforceable.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://github.com/nextest-rs/nextest/blob/2d39374e3d588626c50ad578d34d30a29bbeaa57/Cargo.toml#L1-L13"><p class="font-semibold">nextest protocol / runner / binary split ↗</p><p class="mt-1 text-slate-600">Machine contracts, runner implementation, filtering, and the executable remain distinct modules.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://github.com/nextest-rs/nextest/blob/2d39374e3d588626c50ad578d34d30a29bbeaa57/cargo-nextest/src/main.rs#L4-L11"><p class="font-semibold">nextest thin main ↗</p><p class="mt-1 text-slate-600">The executable is eleven lines and delegates to a testable application library—matching suite-cli, not packet28d.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://github.com/BurntSushi/ripgrep/blob/f9c05a949d1a0dc8e16dee28ca9605d38611faeb/crates/core/main.rs#L43-L78"><p class="font-semibold">ripgrep error seam ↗</p><p class="mt-1 text-slate-600">Reusable crates stay separate; the executable adds anyhow-style reporting and semantic exit handling.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://github.com/modelcontextprotocol/rust-sdk/blob/0dea39d10146b96fbba4c0fcb2db74af822fad4c/crates/rmcp/Cargo.toml#L47-L109"><p class="font-semibold">MCP Rust SDK focused features ↗</p><p class="mt-1 text-slate-600">Optional transports and child-process adapters are gated deliberately; features do not replace crate seams.</p></a>
+          <a class="block rounded-xl border bg-white p-5 hover:border-emerald-400" href="https://tokio.rs/tokio/topics/shutdown"><p class="font-semibold">Explicit task shutdown ownership ↗</p><p class="mt-1 text-slate-600">Cancellation, owned task tracking, cleanup, and bounded shutdown are explicit even if Packet28 remains synchronous.</p></a>
+        </div>
+      </section>
+
+      <section id="roadmap" class="rounded-2xl border bg-white p-6 md:p-8">
+        <h2 class="text-3xl font-serif">Recommended order</h2>
+        <ol class="mt-6 grid md:grid-cols-2 gap-4">
+          <li class="rounded-xl border-l-4 border-red-600 bg-red-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-red-700">1 · Correctness</p><p class="mt-2 text-sm">Repair Linux variadic interposition, fail closed on malformed config, implement real cancellation, wake TCP shutdown, and make process/file restoration RAII.</p></li>
+          <li class="rounded-xl border-l-4 border-amber-500 bg-amber-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-amber-700">2 · Reproducibility</p><p class="mt-2 text-sm">Commit Cargo.lock, align or enforce MSRV, make CI call the strict canonical gate, run rustdoc and deny policy.</p></li>
+          <li class="rounded-xl border-l-4 border-indigo-600 bg-indigo-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-indigo-700">3 · Architecture</p><p class="mt-2 text-sm">Split daemon protocol/runtime, kernel mechanism/composition, then deepen MCP tool families and the broker module.</p></li>
+          <li class="rounded-xl border-l-4 border-emerald-600 bg-emerald-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-emerald-700">4 · Interfaces</p><p class="mt-2 text-sm">Use typed library errors, narrow public re-exports, add negative dependency tests, and quarantine compatibility modules.</p></li>
+          <li class="rounded-xl border-l-4 border-sky-600 bg-sky-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-sky-700">5 · Test/docs</p><p class="mt-2 text-sm">Build one RAII harness, add direct missing-crate tests, property/fuzz/schema snapshot coverage, crate docs, and doctests.</p></li>
+          <li class="rounded-xl border-l-4 border-slate-600 bg-slate-50 p-5"><p class="text-xs uppercase tracking-wider font-semibold text-slate-700">6 · Measure</p><p class="mt-2 text-sm">Enable selected performance/clone lints, benchmark release builds, then remove verified allocations and lock-held I/O.</p></li>
+        </ol>
+      </section>
+
+      <footer class="border-t border-stone-300 pt-6 text-xs text-slate-500">
+        <p>Read-only review. No repository files were modified by the audit. The requested improve-codebase-architecture skill was followed; its referenced codebase-design skill was not installed, so the architecture skill’s embedded vocabulary and deletion test were applied directly.</p>
+        <p class="mt-2">Addendum appended from task 019fa949-eafe-7aa0-bff3-38d4837a9f83 after current-source validation. Only this generated report was changed.</p>
+      </footer>
+    </main>
+  </body>
+</html>

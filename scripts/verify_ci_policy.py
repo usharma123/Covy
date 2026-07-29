@@ -590,6 +590,8 @@ def verify_workflow_wiring(errors: list[str]) -> None:
         not in full_gate
     ):
         errors.append("canonical gate does not run architecture-checker unit tests")
+    if "run_cmd python3 scripts/check_architecture_audit_ledger.py" not in full_gate:
+        errors.append("canonical gate does not run the architecture-audit ledger checker")
     if "run_cmd python3 scripts/check_instruction_claims.py" not in full_gate:
         errors.append("canonical gate does not run the instruction-claim checker")
     if "run_cmd python3 scripts/check_rust_hazards.py" not in full_gate:

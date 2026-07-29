@@ -69,6 +69,7 @@ run_cmd() {
 run_cmd scripts/verify_workspace_policy.sh
 run_cmd python3 scripts/check_architecture.py
 run_cmd python3 -m unittest scripts.tests.test_check_architecture
+run_cmd python3 scripts/check_architecture_audit_ledger.py
 run_cmd python3 scripts/check_instruction_claims.py
 run_cmd python3 scripts/check_rust_hazards.py
 run_cmd python3 scripts/check_test_harness.py
