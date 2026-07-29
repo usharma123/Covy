@@ -12,7 +12,10 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::persist::{append_wal_record, replay_wal, reset_wal, truncate_wal_to, PersistDelta};
+use crate::persist::{
+    append_wal_record, persist_cache_backup_path_v3, persist_cache_path_v1, persist_cache_path_v2,
+    persist_cache_path_v3, replay_wal, reset_wal, truncate_wal_to, PersistDelta,
+};
 use crate::{PacketCache, PacketCacheEntry, PersistConfig};
 
 const PERSISTENCE_QUEUE_CAPACITY: usize = 256;
@@ -691,7 +694,8 @@ impl CachePersistence {
             let mut cache = PacketCache::load_from_disk(&config);
             let repaired_wal = repair_torn_wal_tail(&config, &cache)?;
             let promoted_legacy = promote_legacy_checkpoint(&config, &mut cache)?;
-            let observed_generation = if repaired_wal || promoted_legacy {
+            let bootstrapped_pristine = bootstrap_pristine_checkpoint(&config, &mut cache)?;
+            let observed_generation = if repaired_wal || promoted_legacy || bootstrapped_pristine {
                 locked_root.advance_generation(current)?
             } else {
                 current
@@ -1481,12 +1485,12 @@ fn repair_torn_wal_tail(
         });
     }
     if replay.recovered_corruption {
-        if !cache.has_v3_checkpoint_baseline {
+        if !cache.has_v3_checkpoint_baseline && checkpoint_artifacts_exist(config)? {
             return Err(CachePersistenceError::Io {
                 operation: "WAL recovery",
-                detail:
-                    "WAL tail is corrupt without a trusted V3 checkpoint; refusing destructive repair"
-                        .to_string(),
+                detail: "WAL tail is corrupt while checkpoint artifacts exist without a \
+                         trusted V3 baseline; refusing destructive repair"
+                    .to_string(),
             });
         }
         truncate_wal_to(config, replay.valid_bytes)
@@ -1494,6 +1498,40 @@ fn repair_torn_wal_tail(
         return Ok(true);
     }
     Ok(false)
+}
+
+fn checkpoint_artifacts_exist(config: &PersistConfig) -> Result<bool, CachePersistenceError> {
+    for path in [
+        persist_cache_path_v1(&config.root_dir),
+        persist_cache_path_v2(&config.root_dir),
+        persist_cache_path_v3(&config.root_dir),
+        persist_cache_backup_path_v3(&config.root_dir),
+    ] {
+        match path.try_exists() {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(source) => return Err(io_error("checkpoint discovery", source)),
+        }
+    }
+    Ok(false)
+}
+
+fn bootstrap_pristine_checkpoint(
+    config: &PersistConfig,
+    cache: &mut PacketCache,
+) -> Result<bool, CachePersistenceError> {
+    if cache.has_v3_checkpoint_baseline
+        || cache.has_legacy_checkpoint_baseline
+        || checkpoint_artifacts_exist(config)?
+    {
+        return Ok(false);
+    }
+    cache
+        .write_checkpoint(config)
+        .map_err(|source| io_error("pristine checkpoint bootstrap", source))?;
+    reset_wal(config).map_err(|source| io_error("pristine WAL reset", source))?;
+    cache.has_v3_checkpoint_baseline = true;
+    Ok(true)
 }
 
 fn promote_legacy_checkpoint(
@@ -1697,11 +1735,11 @@ mod tests {
     fn legacy_generation_marker_binds_ttl_without_resetting_generation() {
         let dir = tempdir().unwrap();
         let root = dir.path().to_path_buf();
+        let config = PersistConfig::new(root.clone()).with_ttl_secs(7_200);
+        PacketCache::new().write_checkpoint(&config).unwrap();
         let cache_dir = root.join(crate::PERSIST_CACHE_DIR);
-        fs::create_dir_all(&cache_dir).unwrap();
         let lock_path = cache_dir.join(PERSISTENCE_COORDINATION_FILE);
         fs::write(&lock_path, 42_u64.to_le_bytes()).unwrap();
-        let config = PersistConfig::new(root).with_ttl_secs(7_200);
 
         let owner = CachePersistence::open(config).unwrap();
         let encoded = fs::read(lock_path).unwrap();
@@ -1772,6 +1810,157 @@ mod tests {
         let loaded = PacketCache::load_from_disk(&config);
         assert_eq!(fs::read(checkpoint_path).unwrap(), checkpoint_before);
         assert!(loaded.get(&entry.cache_key).is_some());
+    }
+
+    fn assert_pristine_root_recovers_torn_wal(valid_prefix: bool, test_name: &str) {
+        const CHILD_ROOT: &str = "PACKET28_PRISTINE_WAL_CHILD_ROOT";
+        const CHILD_VALID_PREFIX: &str = "PACKET28_PRISTINE_WAL_CHILD_VALID_PREFIX";
+        if let (Ok(root), Ok(child_valid_prefix)) =
+            (std::env::var(CHILD_ROOT), std::env::var(CHILD_VALID_PREFIX))
+        {
+            let root = PathBuf::from(root);
+            let config = PersistConfig::new(root.clone());
+            if child_valid_prefix == "1" {
+                let mut cache = PacketCache::new();
+                let entry = put_entry(&mut cache, 83_000, 32);
+                append_wal_record(&config, 1, &[PersistDelta::upsert(&entry)]).unwrap();
+            } else {
+                fs::create_dir_all(root.join(crate::PERSIST_CACHE_DIR)).unwrap();
+            }
+            let wal_path = persist_cache_wal_path_v3(&root);
+            let mut wal = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(wal_path)
+                .unwrap();
+            wal.write_all(b"P28CWAL1\x10\x00").unwrap();
+            wal.sync_all().unwrap();
+            std::process::exit(0);
+        }
+
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env(CHILD_ROOT, &root)
+            .env(CHILD_VALID_PREFIX, if valid_prefix { "1" } else { "0" })
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let config = PersistConfig::new(root.clone());
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let first_keys = lock_recover(&owner.shared_cache())
+            .entries()
+            .into_iter()
+            .map(|entry| entry.cache_key)
+            .collect::<BTreeSet<_>>();
+        let primary_exists = persist_cache_path_v3(&root).exists();
+        let backup_exists = persist_cache_backup_path_v3(&root).exists();
+        let wal_len = fs::metadata(persist_cache_wal_path_v3(&root))
+            .unwrap()
+            .len();
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        drop(owner);
+
+        let reopened = CachePersistence::open(config).unwrap();
+        let reopened_keys = lock_recover(&reopened.shared_cache())
+            .entries()
+            .into_iter()
+            .map(|entry| entry.cache_key)
+            .collect::<BTreeSet<_>>();
+        reopened.shutdown(Duration::from_secs(2)).unwrap();
+
+        let expected_keys = if valid_prefix {
+            let mut cache = PacketCache::new();
+            BTreeSet::from([put_entry(&mut cache, 83_000, 32).cache_key])
+        } else {
+            BTreeSet::new()
+        };
+        assert_eq!(
+            (
+                first_keys,
+                reopened_keys,
+                primary_exists,
+                backup_exists,
+                wal_len,
+            ),
+            (expected_keys.clone(), expected_keys, true, true, 0)
+        );
+    }
+
+    #[test]
+    fn pristine_root_reopens_after_process_leaves_torn_first_wal_frame() {
+        assert_pristine_root_recovers_torn_wal(
+            false,
+            "persistence_owner::tests::\
+             pristine_root_reopens_after_process_leaves_torn_first_wal_frame",
+        );
+    }
+
+    #[test]
+    fn pristine_root_preserves_valid_wal_prefix_before_torn_tail() {
+        assert_pristine_root_recovers_torn_wal(
+            true,
+            "persistence_owner::tests::\
+             pristine_root_preserves_valid_wal_prefix_before_torn_tail",
+        );
+    }
+
+    #[test]
+    fn open_bootstraps_authenticated_checkpoint_for_empty_root() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let owner =
+            CachePersistence::open(PersistConfig::new(root.clone()).with_ttl_secs(0)).unwrap();
+
+        let artifacts_exist = (
+            persist_cache_path_v3(&root).exists(),
+            persist_cache_backup_path_v3(&root).exists(),
+        );
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+
+        assert_eq!(artifacts_exist, (true, true));
+    }
+
+    #[test]
+    fn torn_wal_with_untrusted_checkpoint_artifacts_remains_fail_closed() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::create_dir_all(root.join(crate::PERSIST_CACHE_DIR)).unwrap();
+        let primary_path = persist_cache_path_v3(&root);
+        let backup_path = persist_cache_backup_path_v3(&root);
+        let wal_path = persist_cache_wal_path_v3(&root);
+        fs::write(&primary_path, b"corrupt-primary").unwrap();
+        fs::write(&backup_path, b"corrupt-backup").unwrap();
+        fs::write(&wal_path, b"P28CWAL1\x10\x00").unwrap();
+        let before = (
+            fs::read(&primary_path).unwrap(),
+            fs::read(&backup_path).unwrap(),
+            fs::read(&wal_path).unwrap(),
+        );
+
+        let error = match CachePersistence::open(PersistConfig::new(root).with_ttl_secs(0)) {
+            Ok(_) => panic!("untrusted checkpoint baseline unexpectedly opened"),
+            Err(error) => error,
+        };
+        let after = (
+            fs::read(primary_path).unwrap(),
+            fs::read(backup_path).unwrap(),
+            fs::read(wal_path).unwrap(),
+        );
+
+        assert!(
+            matches!(
+                error,
+                CachePersistenceError::Io {
+                    operation: "WAL recovery",
+                    ..
+                }
+            ) && after == before
+        );
     }
 
     fn test_persistence_handle(
@@ -2614,6 +2803,7 @@ mod tests {
         let config = PersistConfig::new(root.clone());
         let mut cache = PacketCache::new();
         let owner = CachePersistence::start(config, cache.clone()).unwrap();
+        fs::remove_file(persist_cache_wal_path_v3(&root)).unwrap();
         fs::create_dir(persist_cache_wal_path_v3(&root)).unwrap();
         let entry = put_entry(&mut cache, 4, 32);
 

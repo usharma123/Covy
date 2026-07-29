@@ -210,10 +210,13 @@ Unauthenticated legacy raw V3 checkpoint payloads are deliberately rejected:
 cache state is disposable, and accepting a structurally decodable but
 unverified payload would make silent result corruption possible. V1/V2
 migration remains available only when no current V3 WAL exists. A corrupt or
-gapped WAL without an authenticated V3 baseline is reported and left
-untouched for recovery rather than truncated. Long-lived callers should invoke
-the kernel's bounded cache-persistence shutdown API; dropping an owner is
-non-blocking and does not wait indefinitely on filesystem coordination.
+gapped WAL remains fail-closed when an existing checkpoint artifact cannot be
+authenticated. A root with no checkpoint artifacts is instead treated as an
+empty trusted baseline: its valid WAL prefix is retained, a torn tail is
+trimmed, and an authenticated V3 checkpoint is bootstrapped before new writes.
+Long-lived callers should invoke the kernel's bounded cache-persistence
+shutdown API; dropping an owner is non-blocking and does not wait indefinitely
+on filesystem coordination.
 
 The cache maintains six indexes:
 
