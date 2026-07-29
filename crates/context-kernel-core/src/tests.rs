@@ -1768,6 +1768,131 @@ fn stable_render_is_byte_identical_across_task_and_snapshot_changes() {
 }
 
 #[test]
+fn adaptive_render_fingerprints_untrusted_task_identity_within_budget() {
+    let mut request = InstructionSummaryRequest {
+        mode: suite_packet_core::InstructionRenderMode::Adaptive,
+        ..serde_json::from_value(
+            instruction_request(suite_packet_core::InstructionRenderMode::Adaptive).reducer_input,
+        )
+        .unwrap()
+    };
+    request.task_id = Some(format!(
+        "task-auth\r\n# injected-heading {}",
+        "oversized".repeat(2_048)
+    ));
+    request.budget_tokens = Some(96);
+
+    let rendered = render_instruction(&request, None).unwrap();
+    let header = rendered.summary_text().lines().next().unwrap_or_default();
+    let task_identity = header
+        .split(" task:")
+        .nth(1)
+        .and_then(|suffix| suffix.split_whitespace().next())
+        .unwrap_or_default();
+
+    assert_eq!(rendered.summary_text().len(), 384);
+    assert!(!rendered.summary_text().contains('\r'));
+    assert!(!rendered.summary_text().contains("# injected-heading"));
+    assert!(!header.contains("task-auth"));
+    assert!(task_identity.starts_with("sha256-"));
+    assert_eq!(
+        task_identity.trim_start_matches("sha256-").len(),
+        instruction_runtime::ADAPTIVE_TASK_FINGERPRINT_CHARS
+    );
+    assert!(task_identity
+        .trim_start_matches("sha256-")
+        .chars()
+        .all(|ch| ch.is_ascii_hexdigit()));
+}
+
+#[test]
+fn adaptive_render_normalizes_task_identity_before_fingerprinting() {
+    let request = InstructionSummaryRequest {
+        mode: suite_packet_core::InstructionRenderMode::Adaptive,
+        task_id: Some(" task-auth \r\n".to_string()),
+        ..serde_json::from_value(
+            instruction_request(suite_packet_core::InstructionRenderMode::Adaptive).reducer_input,
+        )
+        .unwrap()
+    };
+    let mut normalized = request.clone();
+    normalized.task_id = Some("task-auth".to_string());
+
+    let first = render_instruction(&request, None).unwrap();
+    let second = render_instruction(&normalized, None).unwrap();
+
+    assert_eq!(first.summary_text(), second.summary_text());
+    assert_eq!(first.rendered_sha256(), second.rendered_sha256());
+}
+
+#[test]
+fn adaptive_render_uses_snapshot_set_semantics_for_identity_and_bytes() {
+    let request = InstructionSummaryRequest {
+        mode: suite_packet_core::InstructionRenderMode::Adaptive,
+        ..serde_json::from_value(
+            instruction_request(suite_packet_core::InstructionRenderMode::Adaptive).reducer_input,
+        )
+        .unwrap()
+    };
+    let first_snapshot = suite_packet_core::AgentSnapshotPayload {
+        focus_paths: vec!["src/auth.rs".to_string(), "src/cache.rs".to_string()],
+        focus_symbols: vec!["Authenticate".to_string(), "CacheKey".to_string()],
+        open_questions: vec![
+            suite_packet_core::AgentQuestion {
+                id: "q-1".to_string(),
+                text: "Which cache key?".to_string(),
+            },
+            suite_packet_core::AgentQuestion {
+                id: "q-2".to_string(),
+                text: "Should auth retry?".to_string(),
+            },
+        ],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+    let reordered_with_duplicates = suite_packet_core::AgentSnapshotPayload {
+        focus_paths: vec![
+            "src/cache.rs".to_string(),
+            "src/auth.rs".to_string(),
+            "src/auth.rs".to_string(),
+        ],
+        focus_symbols: vec![
+            "CacheKey".to_string(),
+            "Authenticate".to_string(),
+            "Authenticate".to_string(),
+        ],
+        open_questions: vec![
+            suite_packet_core::AgentQuestion {
+                id: "q-2-other".to_string(),
+                text: "Should auth retry?".to_string(),
+            },
+            suite_packet_core::AgentQuestion {
+                id: "q-1-other".to_string(),
+                text: "Which cache key?".to_string(),
+            },
+            suite_packet_core::AgentQuestion {
+                id: "duplicate".to_string(),
+                text: "Which cache key?".to_string(),
+            },
+        ],
+        ..suite_packet_core::AgentSnapshotPayload::default()
+    };
+
+    let first = render_instruction(&request, Some(&first_snapshot)).unwrap();
+    let reordered = render_instruction(&request, Some(&reordered_with_duplicates)).unwrap();
+    assert_eq!(first.snapshot_sha256(), reordered.snapshot_sha256());
+    assert_eq!(first.summary_text(), reordered.summary_text());
+    assert_eq!(first.rendered_sha256(), reordered.rendered_sha256());
+
+    let changed_membership = suite_packet_core::AgentSnapshotPayload {
+        focus_paths: vec!["src/broker.rs".to_string()],
+        ..first_snapshot
+    };
+    let changed = render_instruction(&request, Some(&changed_membership)).unwrap();
+    assert_ne!(first.snapshot_sha256(), changed.snapshot_sha256());
+    assert_ne!(first.summary_text(), changed.summary_text());
+}
+
+#[test]
 fn adaptive_snapshot_drift_changes_bytes_and_never_reuses_cache() {
     let dir = tempdir().unwrap();
     let kernel =

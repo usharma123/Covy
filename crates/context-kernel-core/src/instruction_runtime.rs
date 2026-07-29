@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 
 pub const DEFAULT_INSTRUCTION_SUMMARY_BUDGET_TOKENS: u64 = 512;
 pub const INSTRUCTION_SUMMARY_SCHEMA_VERSION: u32 = 1;
+const ADAPTIVE_TASK_FOCUS_BYTES: usize = 256;
+pub(crate) const ADAPTIVE_TASK_FINGERPRINT_CHARS: usize = 12;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -509,8 +511,8 @@ pub fn render_instruction(
     let budget_tokens = effective_instruction_budget(request.budget_tokens);
     let budget_bytes = (budget_tokens as usize).saturating_mul(4).max(384);
     let display_path = stable_display_path(&request.path);
-    let header = match request.mode {
-        suite_packet_core::InstructionRenderMode::Stable => format!(
+    let header = if request.mode == suite_packet_core::InstructionRenderMode::Stable {
+        format!(
             "# [p28:stable:v{}] source:{} path:{} schema:{} budget:{} config:{}\n\n",
             stable_config.renderer_version,
             short_sha(&content_sha256),
@@ -518,8 +520,9 @@ pub fn render_instruction(
             schema_version,
             budget_tokens,
             short_sha(&stable_config_sha256),
-        ),
-        suite_packet_core::InstructionRenderMode::Adaptive => format!(
+        )
+    } else {
+        format!(
             "# [p28:adaptive:v{}] source:{} path:{} schema:{} budget:{} config:{} task:{} snapshot:{}\n\n",
             stable_config.renderer_version,
             short_sha(&content_sha256),
@@ -527,15 +530,12 @@ pub fn render_instruction(
             schema_version,
             budget_tokens,
             short_sha(&stable_config_sha256),
-            task_label,
+            adaptive_task_identity(task_label),
             snapshot_sha256
                 .as_deref()
                 .map(short_sha)
                 .unwrap_or_else(|| "none".to_string()),
-        ),
-        suite_packet_core::InstructionRenderMode::Passthrough => unreachable!(
-            "passthrough returns before rewritten instruction rendering"
-        ),
+        )
     };
     let summary_text = truncate_markdown(&(header + body.trim_end()), budget_bytes);
 
@@ -561,20 +561,30 @@ fn derive_focus_terms(
         collect_terms(term, &mut terms);
     }
     if let Some((task_label, snapshot)) = adaptive {
-        collect_terms(task_label, &mut terms);
+        collect_terms(&bounded_task_focus_label(task_label), &mut terms);
         if let Some(snapshot) = snapshot {
-            for path in snapshot.focus_paths.iter().take(6) {
-                collect_terms(path, &mut terms);
-            }
-            for symbol in snapshot.focus_symbols.iter().take(8) {
-                collect_terms(symbol, &mut terms);
-            }
-            for question in snapshot.open_questions.iter().take(4) {
-                collect_terms(&question.text, &mut terms);
+            for term in suite_packet_core::instruction::instruction_snapshot_focus_terms(snapshot) {
+                terms.insert(term);
             }
         }
     }
     terms
+}
+
+fn adaptive_task_identity(task_label: &str) -> String {
+    let normalized = stable_display_path(task_label);
+    let fingerprint = format!("{:x}", Sha256::digest(normalized.as_bytes()));
+    format!(
+        "sha256-{}",
+        fingerprint
+            .chars()
+            .take(ADAPTIVE_TASK_FINGERPRINT_CHARS)
+            .collect::<String>()
+    )
+}
+
+fn bounded_task_focus_label(task_label: &str) -> String {
+    truncate_line(&stable_display_path(task_label), ADAPTIVE_TASK_FOCUS_BYTES)
 }
 
 fn collect_terms(text: &str, terms: &mut BTreeSet<String>) {

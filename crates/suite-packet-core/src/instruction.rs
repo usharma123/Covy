@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -351,9 +353,9 @@ impl InstructionCacheMetricsV1 {
 
 /// Returns a canonical SHA-256 fingerprint for adaptive snapshot identity.
 ///
-/// Only the bounded snapshot fields that influence adaptive rendering are
-/// included. Object keys are sorted recursively and array order remains
-/// meaningful. Unrelated snapshot counters, tool history, and decision state
+/// Only the bounded, normalized focus terms that influence adaptive rendering
+/// are included. Term order and duplicate source values do not affect the
+/// fingerprint. Unrelated snapshot counters, tool history, and decision state
 /// cannot create apparent instruction-prefix drift.
 ///
 /// # Errors
@@ -363,18 +365,41 @@ pub fn instruction_snapshot_sha256(
     snapshot: &AgentSnapshotPayload,
 ) -> Result<String, serde_json::Error> {
     let mut value = serde_json::json!({
-        "focus_paths": snapshot.focus_paths.iter().take(6).collect::<Vec<_>>(),
-        "focus_symbols": snapshot.focus_symbols.iter().take(8).collect::<Vec<_>>(),
-        "open_question_text": snapshot
-            .open_questions
-            .iter()
-            .take(4)
-            .map(|question| &question.text)
-            .collect::<Vec<_>>(),
+        "focus_terms": instruction_snapshot_focus_terms(snapshot),
     });
     canonicalize_json(&mut value);
     let bytes = serde_json::to_vec(&value)?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+/// Returns the canonical bounded terms that can affect adaptive rendering.
+///
+/// The collection limits intentionally match the renderer. Terms are
+/// lowercased, sorted, and deduplicated so this projection is both the render
+/// input and the snapshot-identity contract.
+#[must_use]
+pub fn instruction_snapshot_focus_terms(snapshot: &AgentSnapshotPayload) -> Vec<String> {
+    let mut terms = BTreeSet::new();
+    for path in snapshot.focus_paths.iter().take(6) {
+        collect_instruction_focus_terms(path, &mut terms);
+    }
+    for symbol in snapshot.focus_symbols.iter().take(8) {
+        collect_instruction_focus_terms(symbol, &mut terms);
+    }
+    for question in snapshot.open_questions.iter().take(4) {
+        collect_instruction_focus_terms(&question.text, &mut terms);
+    }
+    terms.into_iter().collect()
+}
+
+fn collect_instruction_focus_terms(text: &str, terms: &mut BTreeSet<String>) {
+    for token in text
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.'))
+        .map(|value| value.trim_matches('.').trim())
+        .filter(|value| value.len() >= 3)
+    {
+        terms.insert(token.to_ascii_lowercase());
+    }
 }
 
 fn canonicalize_json(value: &mut serde_json::Value) {
@@ -553,6 +578,70 @@ mod tests {
         assert_ne!(
             instruction_snapshot_sha256(&first).unwrap(),
             instruction_snapshot_sha256(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn snapshot_fingerprint_uses_rendered_set_semantics() {
+        let first = AgentSnapshotPayload {
+            focus_paths: vec!["src/auth.rs".to_string(), "src/cache.rs".to_string()],
+            focus_symbols: vec!["Authenticate".to_string(), "CacheKey".to_string()],
+            open_questions: vec![
+                crate::AgentQuestion {
+                    id: "q-1".to_string(),
+                    text: "Which cache key?".to_string(),
+                },
+                crate::AgentQuestion {
+                    id: "q-2".to_string(),
+                    text: "Should auth retry?".to_string(),
+                },
+            ],
+            ..AgentSnapshotPayload::default()
+        };
+        let reordered_with_duplicates = AgentSnapshotPayload {
+            focus_paths: vec![
+                "src/cache.rs".to_string(),
+                "src/auth.rs".to_string(),
+                "src/auth.rs".to_string(),
+            ],
+            focus_symbols: vec![
+                "CacheKey".to_string(),
+                "Authenticate".to_string(),
+                "Authenticate".to_string(),
+            ],
+            open_questions: vec![
+                crate::AgentQuestion {
+                    id: "different-id".to_string(),
+                    text: "Should auth retry?".to_string(),
+                },
+                crate::AgentQuestion {
+                    id: "another-id".to_string(),
+                    text: "Which cache key?".to_string(),
+                },
+                crate::AgentQuestion {
+                    id: "duplicate".to_string(),
+                    text: "Which cache key?".to_string(),
+                },
+            ],
+            ..AgentSnapshotPayload::default()
+        };
+
+        assert_eq!(
+            instruction_snapshot_focus_terms(&first),
+            instruction_snapshot_focus_terms(&reordered_with_duplicates)
+        );
+        assert_eq!(
+            instruction_snapshot_sha256(&first).unwrap(),
+            instruction_snapshot_sha256(&reordered_with_duplicates).unwrap()
+        );
+
+        let changed_membership = AgentSnapshotPayload {
+            focus_paths: vec!["src/broker.rs".to_string()],
+            ..first.clone()
+        };
+        assert_ne!(
+            instruction_snapshot_sha256(&first).unwrap(),
+            instruction_snapshot_sha256(&changed_membership).unwrap()
         );
     }
 
