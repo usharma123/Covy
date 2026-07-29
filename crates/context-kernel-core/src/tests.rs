@@ -1958,3 +1958,21 @@ fn adaptive_snapshot_drift_changes_bytes_and_never_reuses_cache() {
         second_payload.rendered_sha256
     );
 }
+
+#[test]
+fn missing_scheduled_step_is_a_typed_scheduler_failure() {
+    let mut remaining = vec![KernelStepRequest {
+        id: "known".to_string(),
+        target: "guardy.check".to_string(),
+        ..KernelStepRequest::default()
+    }];
+
+    let error = kernel_runtime::take_scheduled_step(&mut remaining, "missing").unwrap_err();
+
+    assert_eq!(remaining.len(), 1);
+    assert!(matches!(
+        error,
+        KernelError::SchedulerFailed { detail }
+            if detail == "scheduler selected step `missing` that is absent from the remaining plan"
+    ));
+}

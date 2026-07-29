@@ -564,11 +564,7 @@ impl Kernel {
                 break;
             };
 
-            let next_idx = remaining
-                .iter()
-                .position(|step| step.id == next_step_id)
-                .expect("scheduled step must exist in remaining plan");
-            let original = remaining.remove(next_idx);
+            let original = take_scheduled_step(&mut remaining, &next_step_id)?;
             let position = scheduled.len() + 1;
             observer.on_step_started(position, &original);
             ensure_sequence_active(observer, task_id.as_deref())?;
@@ -710,6 +706,21 @@ impl Kernel {
             }),
         })
     }
+}
+
+pub(crate) fn take_scheduled_step(
+    remaining: &mut Vec<KernelStepRequest>,
+    scheduled_id: &str,
+) -> Result<KernelStepRequest, KernelError> {
+    let next_idx = remaining
+        .iter()
+        .position(|step| step.id == scheduled_id)
+        .ok_or_else(|| KernelError::SchedulerFailed {
+            detail: format!(
+                "scheduler selected step `{scheduled_id}` that is absent from the remaining plan"
+            ),
+        })?;
+    Ok(remaining.remove(next_idx))
 }
 
 fn ensure_sequence_active(
