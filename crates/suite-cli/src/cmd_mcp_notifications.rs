@@ -22,7 +22,7 @@ pub(super) enum NotificationDelivery {
 /// Owns notification cancellation and task completion.
 pub(super) struct NotificationTask {
     shutdown: watch::Sender<bool>,
-    task: Option<JoinHandle<()>>,
+    task: Option<JoinHandle<Result<()>>>,
 }
 
 impl NotificationTask {
@@ -41,7 +41,7 @@ impl NotificationTask {
             .take()
             .ok_or_else(|| anyhow!("MCP notification task was already joined"))?;
         task.await
-            .map_err(|error| anyhow!("MCP notification task failed: {error}"))
+            .map_err(|error| anyhow!("MCP notification task failed: {error}"))?
     }
 }
 
@@ -68,13 +68,16 @@ where
         session,
         poll_interval,
         |root, task_id, offset| async move {
+            let read_task_id = task_id.clone();
             match tokio::task::spawn_blocking(move || {
-                load_task_events_from_offset(&root, &task_id, offset)
+                load_task_events_from_offset(&root, &read_task_id, offset)
             })
             .await
             {
                 Ok(Ok(read)) => Ok(Some(read)),
-                Ok(Err(_)) => Ok(None),
+                Ok(Err(error)) => Err(anyhow!(
+                    "MCP notification event-log read failed for task {task_id:?} at offset {offset}: {error}"
+                )),
                 Err(error) => Err(anyhow!("MCP notification reader task failed: {error}")),
             }
         },
@@ -117,7 +120,8 @@ async fn run_notification_loop<Read, ReadFuture, Deliver, DeliveryFuture>(
     mut shutdown: watch::Receiver<bool>,
     mut read: Read,
     mut deliver: Deliver,
-) where
+) -> Result<()>
+where
     Read: FnMut(PathBuf, String, u64) -> ReadFuture,
     ReadFuture: Future<Output = Result<Option<TaskEventLogRead>>>,
     Deliver: FnMut(Value, McpMessageFraming) -> DeliveryFuture,
@@ -130,7 +134,7 @@ async fn run_notification_loop<Read, ReadFuture, Deliver, DeliveryFuture>(
             biased;
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
-                    return;
+                    return Ok(());
                 }
             }
             _ = interval.tick() => {
@@ -138,14 +142,11 @@ async fn run_notification_loop<Read, ReadFuture, Deliver, DeliveryFuture>(
                     biased;
                     changed = shutdown.changed() => {
                         if changed.is_err() || *shutdown.borrow() {
-                            return;
+                            return Ok(());
                         }
                     }
-                    keep_running =
-                        run_notification_pass(&root, &session, &mut read, &mut deliver) => {
-                        if !keep_running {
-                            return;
-                        }
+                    result = run_notification_pass(&root, &session, &mut read, &mut deliver) => {
+                        result?;
                     }
                 }
             }
@@ -158,7 +159,7 @@ async fn run_notification_pass<Read, ReadFuture, Deliver, DeliveryFuture>(
     session: &Arc<Mutex<McpSessionState>>,
     read: &mut Read,
     deliver: &mut Deliver,
-) -> bool
+) -> Result<()>
 where
     Read: FnMut(PathBuf, String, u64) -> ReadFuture,
     ReadFuture: Future<Output = Result<Option<TaskEventLogRead>>>,
@@ -172,10 +173,10 @@ where
             guard.tracked_task_offsets.clone(),
             guard.framing,
         ),
-        Err(_) => return false,
+        Err(_) => return Err(anyhow!("MCP notification session lock is poisoned")),
     };
     let Some(framing) = framing.filter(|_| initialized) else {
-        return true;
+        return Ok(());
     };
 
     for (task_id, last_seen_seq) in tracked_tasks {
@@ -183,7 +184,9 @@ where
         let read = match read(root.to_path_buf(), task_id.clone(), previous_offset).await {
             Ok(Some(read)) => read,
             Ok(None) => continue,
-            Err(_) => return false,
+            Err(error) => {
+                return Err(error);
+            }
         };
         let mut newest_delivered_seq = last_seen_seq;
         let mut backpressured = false;
@@ -224,7 +227,11 @@ where
                     backpressured = true;
                     break;
                 }
-                Err(_) => return false,
+                Err(error) => {
+                    return Err(anyhow!(
+                        "MCP notification delivery failed for task {task_id:?}: {error}"
+                    ));
+                }
             }
             newest_delivered_seq = newest_delivered_seq.max(frame.seq);
         }
@@ -232,7 +239,7 @@ where
             || (!backpressured && read.next_offset != previous_offset)
         {
             let Ok(mut guard) = session.lock() else {
-                return false;
+                return Err(anyhow!("MCP notification session lock is poisoned"));
             };
             if let Some(current) = guard.tracked_tasks.get_mut(&task_id) {
                 *current = newest_delivered_seq;
@@ -242,7 +249,7 @@ where
             }
         }
     }
-    true
+    Ok(())
 }
 
 #[cfg(test)]
@@ -293,7 +300,12 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        std::fs::write(&event_path, format!("{events}\n")).unwrap();
+        let events = if events.is_empty() {
+            String::new()
+        } else {
+            format!("{events}\n")
+        };
+        std::fs::write(&event_path, events).unwrap();
         let event_log_len = std::fs::metadata(event_path).unwrap().len();
 
         let session = Arc::new(Mutex::new(McpSessionState {
@@ -320,7 +332,9 @@ mod tests {
             session,
             super::super::MCP_NOTIFICATION_POLL_INTERVAL,
             |root, task_id, offset| async move {
-                Ok(load_task_events_from_offset(&root, &task_id, offset).ok())
+                load_task_events_from_offset(&root, &task_id, offset)
+                    .map(Some)
+                    .map_err(anyhow::Error::from)
             },
             deliver,
         )
@@ -360,6 +374,53 @@ mod tests {
         let message = receiver.recv().await.unwrap();
         assert_eq!(message.value["params"]["event_seq"], 1);
         task.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn empty_event_log_remains_a_transient_no_event_read() {
+        let (root, session, _) = fixture(0, true);
+        let mut task = start_deterministic_notification_task(
+            root.path().to_path_buf(),
+            session.clone(),
+            |_notification, _framing| async {
+                panic!("empty event log must not deliver a notification")
+            },
+        );
+
+        tokio::task::yield_now().await;
+
+        assert_eq!(session.lock().unwrap().tracked_tasks[TASK_ID], 0);
+        assert_eq!(session.lock().unwrap().tracked_task_offsets[TASK_ID], 0);
+        task.request_shutdown();
+        task.join().await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn durable_event_corruption_stops_notifications_without_advancing_the_cursor() {
+        use std::io::Write as _;
+
+        let (root, session, _) = fixture(1, true);
+        let task_id = TaskStorageId::try_from(TASK_ID).unwrap();
+        let event_path = task_event_log_path(root.path(), &task_id);
+        let mut events = std::fs::OpenOptions::new()
+            .append(true)
+            .open(event_path)
+            .unwrap();
+        events.write_all(b"{not-json}\n").unwrap();
+        events.sync_all().unwrap();
+        let mut task = start_deterministic_notification_task(
+            root.path().to_path_buf(),
+            session.clone(),
+            |_notification, _framing| async {
+                panic!("corrupt event log must not deliver a notification")
+            },
+        );
+
+        let error = task.join().await.unwrap_err();
+
+        assert!(error.to_string().contains("invalid task event frame"));
+        assert_eq!(session.lock().unwrap().tracked_tasks[TASK_ID], 0);
+        assert_eq!(session.lock().unwrap().tracked_task_offsets[TASK_ID], 0);
     }
 
     #[tokio::test(start_paused = true)]

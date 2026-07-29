@@ -76,7 +76,10 @@ pub const MAX_AUTHORITY_JSON_ENTRIES_PER_CONTAINER: usize = 65_536;
 pub const MAX_AUTHORITY_JSON_TOKENS: usize = 524_288;
 /// Maximum task records accepted in one persisted task registry.
 pub const MAX_TASK_REGISTRY_RECORDS: usize = 65_536;
-/// Maximum bytes inspected by one paginated task-event read.
+/// Maximum event-frame bytes returned by one paginated task-event read.
+///
+/// A resumed read may additionally inspect one bounded predecessor frame to
+/// verify sequence continuity at the supplied cursor.
 pub const MAX_TASK_EVENT_PAGE_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum decoded frames returned by one paginated task-event read.
 pub const MAX_TASK_EVENT_PAGE_FRAMES: usize = 4_096;
@@ -1763,15 +1766,16 @@ pub(crate) fn remove_task_registry_records_if_unchanged(
     })
 }
 
-/// Appends one complete JSON-line event to a task's durable event log.
+/// Appends one contiguous JSON-line event to a task's durable event log.
 ///
 /// # Errors
 ///
 /// Returns an error without changing the event namespace when the frame task
-/// identifier is invalid or has not already been admitted by the durable task
-/// registry. Returns [`DaemonCoreError::Json`] if `frame` cannot be encoded.
-/// Returns [`DaemonCoreError::Io`] if the event directory or log cannot be
-/// opened, locked, appended, synchronized, or unlocked.
+/// identifier is invalid, has not already been admitted by the durable task
+/// registry, or does not continue a fully valid existing log. Returns
+/// [`DaemonCoreError::Json`] if `frame` cannot be encoded. Returns
+/// [`DaemonCoreError::Io`] if the event directory or log cannot be opened,
+/// locked, appended, synchronized, or unlocked.
 pub fn append_task_event(root: &Path, frame: &DaemonEventFrame) -> Result<()> {
     let task_id = checked_task_storage_id(root, &frame.task_id)?;
     append_task_event_for(root, &task_id, frame)
@@ -1814,7 +1818,7 @@ pub fn append_task_event_for(
             // Re-enumerate before writing so a case-folding alias raced between
             // the first scan and open cannot receive event bytes.
             validate_anchored_event_namespace_aliases(&events, &file_name, &path)?;
-            append_locked_task_event(file, &path, &bytes)
+            append_locked_task_event(file, &path, task_id, frame, &bytes)
         }
         #[cfg(not(unix))]
         {
@@ -1824,13 +1828,14 @@ pub fn append_task_event_for(
             validate_portable_event_file_type(&path)?;
             let file = fs::OpenOptions::new()
                 .create(true)
+                .read(true)
                 .append(true)
                 .open(&path)
                 .map_err(|source| {
                     DaemonCoreError::io("failed to open portable task event log", &path, source)
                 })?;
             validate_portable_event_namespace_aliases(&dir, &file_name, &path)?;
-            append_locked_task_event(file, &path, &bytes)
+            append_locked_task_event(file, &path, task_id, frame, &bytes)
         }
     })
 }
@@ -1859,6 +1864,70 @@ fn encode_task_event_frame(
     Ok(bytes)
 }
 
+fn decode_complete_task_event_frame(
+    path: &Path,
+    task_id: &TaskStorageId,
+    offset: u64,
+    encoded: &[u8],
+) -> Result<DaemonEventFrame> {
+    let encoded = encoded.strip_suffix(b"\r").unwrap_or(encoded);
+    if encoded.len() > MAX_TASK_EVENT_LINE_BYTES {
+        return Err(task_event_limit_error(
+            path,
+            "event-line bytes",
+            encoded.len() as u64,
+            MAX_TASK_EVENT_LINE_BYTES as u64,
+        ));
+    }
+    validate_authority_json(encoded, AuthorityJsonProfile::TaskEventFrame).map_err(|error| {
+        match error {
+            AuthorityJsonError::Json(source) => DaemonCoreError::InvalidTaskEventFrame {
+                path: path.to_path_buf(),
+                message: format!("malformed task event JSON at byte {offset}: {source}"),
+            },
+            error @ AuthorityJsonError::Limit { .. } => map_authority_json_error(
+                path,
+                AuthorityJsonProfile::TaskEventFrame,
+                "failed to validate task event frame from",
+                error,
+            ),
+        }
+    })?;
+    let frame = serde_json::from_slice::<DaemonEventFrame>(encoded).map_err(|source| {
+        DaemonCoreError::InvalidTaskEventFrame {
+            path: path.to_path_buf(),
+            message: format!("failed to decode task event frame at byte {offset}: {source}"),
+        }
+    })?;
+    if frame.task_id != task_id.as_str() {
+        return Err(DaemonCoreError::InvalidTaskEventFrame {
+            path: path.to_path_buf(),
+            message: format!(
+                "task event at byte {offset} belongs to {:?}, expected {:?}",
+                frame.task_id,
+                task_id.as_str()
+            ),
+        });
+    }
+    if frame.seq == 0 {
+        return Err(DaemonCoreError::InvalidTaskEventFrame {
+            path: path.to_path_buf(),
+            message: format!("task event sequence at byte {offset} must be greater than zero"),
+        });
+    }
+    Ok(frame)
+}
+
+fn next_task_event_sequence(path: &Path, current: Option<u64>) -> Result<u64> {
+    current
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| DaemonCoreError::InvalidTaskEventFrame {
+            path: path.to_path_buf(),
+            message: "task event sequence is exhausted at u64::MAX".to_string(),
+        })
+}
+
 /// Loads all complete, valid event frames for one task.
 ///
 /// This compatibility API is bounded by [`MAX_TASK_EVENT_LOAD_BYTES`] and
@@ -1867,10 +1936,11 @@ fn encode_task_event_frame(
 ///
 /// # Errors
 ///
-/// Returns [`DaemonCoreError::AuthorityJsonLimitExceeded`] if the whole-log,
-/// per-line, or structural budgets are exceeded. Returns
-/// [`DaemonCoreError::Io`] if the event log cannot be safely opened, locked,
-/// inspected, read, sought, or unlocked.
+/// Returns [`DaemonCoreError::InvalidTaskEventFrame`] when any complete frame
+/// is malformed, semantically invalid, cross-task, or non-contiguous. Returns
+/// [`DaemonCoreError::AuthorityJsonLimitExceeded`] if the whole-log, per-line,
+/// or structural budgets are exceeded, or [`DaemonCoreError::Io`] if the event
+/// log cannot be safely opened, locked, inspected, read, sought, or unlocked.
 pub fn load_task_events(root: &Path, task_id: &str) -> Result<Vec<DaemonEventFrame>> {
     let task_id = checked_task_storage_id(root, task_id)?;
     let path = task_event_log_path(root, &task_id);
@@ -1944,13 +2014,19 @@ pub fn task_event_log_len(root: &Path, task_id: &str) -> Result<u64> {
 
 /// Loads complete, valid event frames beginning at a byte offset.
 ///
-/// The offset is clamped to the current log length. A trailing partial line is
-/// left unread so a caller can retry it after the append completes. Malformed
-/// complete lines are skipped for compatibility with existing event logs.
+/// The offset is clamped to the current log length. The bounded predecessor
+/// frame and every returned complete frame are decoded strictly to preserve
+/// sequence continuity across page boundaries. Daemon startup separately
+/// streams each complete log from byte zero before publishing readiness. A
+/// trailing partial line is left unread so a caller can retry it after the
+/// append completes.
 ///
 /// # Errors
 ///
-/// Returns [`DaemonCoreError::Io`] if the event log cannot be opened, locked,
+/// Returns [`DaemonCoreError::InvalidTaskEventFrame`] when any complete frame
+/// is malformed, semantically invalid, cross-task, or non-contiguous. Returns
+/// [`DaemonCoreError::AuthorityJsonLimitExceeded`] for an excessive frame, or
+/// [`DaemonCoreError::Io`] if the event log cannot be opened, locked,
 /// inspected, sought, read, or unlocked.
 pub fn load_task_events_from_offset(
     root: &Path,
@@ -2005,6 +2081,7 @@ fn read_locked_task_event_page(
         .map_err(|source| DaemonCoreError::io("failed to inspect task event log", path, source))?
         .len();
     let start = offset.min(len);
+    let mut previous_sequence = task_event_sequence_before_offset(file, path, task_id, start)?;
     file.seek(SeekFrom::Start(start))
         .map_err(|source| DaemonCoreError::io("failed to seek task event log", path, source))?;
     let mut reader = BufReader::new(file);
@@ -2059,58 +2136,25 @@ fn read_locked_task_event_page(
         }
         page_bytes = page_bytes.saturating_add(read);
         next_offset = next_offset.saturating_add(read as u64);
-        let mut encoded = &line[..encoded_len];
-        if encoded.ends_with(b"\r") {
-            encoded = &encoded[..encoded.len().saturating_sub(1)];
+        let frame = decode_complete_task_event_frame(
+            path,
+            task_id,
+            next_offset.saturating_sub(read as u64),
+            &line[..encoded_len],
+        )?;
+        let expected = next_task_event_sequence(path, previous_sequence)?;
+        if frame.seq != expected {
+            return Err(DaemonCoreError::InvalidTaskEventFrame {
+                path: path.to_path_buf(),
+                message: format!(
+                    "task event sequence is not contiguous at byte {}: expected {expected}, found {}",
+                    next_offset.saturating_sub(read as u64),
+                    frame.seq
+                ),
+            });
         }
-        if encoded.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        match validate_authority_json(encoded, AuthorityJsonProfile::TaskEventFrame) {
-            Ok(()) => {
-                let value =
-                    serde_json::from_slice::<serde_json::Value>(encoded).map_err(|source| {
-                        DaemonCoreError::json(
-                            "failed to decode task event frame from",
-                            path,
-                            source,
-                        )
-                    })?;
-                let persisted_task_id = value
-                    .as_object()
-                    .and_then(|object| object.get("task_id"))
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| DaemonCoreError::InvalidTaskEventFrame {
-                        path: path.to_path_buf(),
-                        message: "complete JSON frame must contain a string-valued task_id"
-                            .to_string(),
-                    })?;
-                if persisted_task_id != task_id.as_str() {
-                    return Err(DaemonCoreError::InvalidTaskEventFrame {
-                        path: path.to_path_buf(),
-                        message: format!(
-                            "persisted identifier {persisted_task_id:?} does not match requested identifier {:?}",
-                            task_id.as_str()
-                        ),
-                    });
-                }
-                if let Ok(frame) = serde_json::from_value::<DaemonEventFrame>(value) {
-                    events.push(frame);
-                }
-            }
-            Err(AuthorityJsonError::Json(_)) => {
-                // Preserve compatibility with legacy logs containing malformed
-                // complete lines while keeping every read resource-bounded.
-            }
-            Err(error @ AuthorityJsonError::Limit { .. }) => {
-                return Err(map_authority_json_error(
-                    path,
-                    AuthorityJsonProfile::TaskEventFrame,
-                    "failed to validate task event frame from",
-                    error,
-                ));
-            }
-        }
+        previous_sequence = Some(frame.seq);
+        events.push(frame);
     }
     Ok(TaskEventPageOutcome {
         read: TaskEventLogRead {
@@ -2120,6 +2164,72 @@ fn read_locked_task_event_page(
         at_end,
         log_len: len,
     })
+}
+
+fn task_event_sequence_before_offset(
+    file: &mut fs::File,
+    path: &Path,
+    task_id: &TaskStorageId,
+    offset: u64,
+) -> Result<Option<u64>> {
+    if offset == 0 {
+        return Ok(None);
+    }
+    let window_bytes = (MAX_TASK_EVENT_LINE_BYTES as u64).saturating_add(3);
+    let window_start = offset.saturating_sub(window_bytes);
+    file.seek(SeekFrom::Start(window_start)).map_err(|source| {
+        DaemonCoreError::io("failed to seek task event predecessor", path, source)
+    })?;
+    let expected_len = usize::try_from(offset - window_start).map_err(|_| {
+        DaemonCoreError::io(
+            "task event predecessor window does not fit memory",
+            path,
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bounded predecessor window does not fit usize",
+            ),
+        )
+    })?;
+    let mut window = Vec::new();
+    window.try_reserve_exact(expected_len).map_err(|source| {
+        DaemonCoreError::io(
+            "failed to reserve task event predecessor window",
+            path,
+            std::io::Error::new(std::io::ErrorKind::OutOfMemory, source),
+        )
+    })?;
+    file.take(expected_len as u64)
+        .read_to_end(&mut window)
+        .map_err(|source| {
+            DaemonCoreError::io("failed to read task event predecessor", path, source)
+        })?;
+    if window.len() != expected_len || !window.ends_with(b"\n") {
+        return Err(DaemonCoreError::InvalidTaskEventFrame {
+            path: path.to_path_buf(),
+            message: format!("task event replay offset {offset} is not a complete-frame boundary"),
+        });
+    }
+    let predecessor_end = window.len() - 1;
+    let predecessor_start = window[..predecessor_end]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |index| index + 1);
+    if window_start != 0 && predecessor_start == 0 {
+        return Err(task_event_limit_error(
+            path,
+            "event-line bytes",
+            window_bytes,
+            MAX_TASK_EVENT_LINE_BYTES as u64,
+        ));
+    }
+    let absolute_start = window_start + predecessor_start as u64;
+    let frame = decode_complete_task_event_frame(
+        path,
+        task_id,
+        absolute_start,
+        &window[predecessor_start..predecessor_end],
+    )?;
+    Ok(Some(frame.seq))
 }
 
 fn checked_task_storage_id(root: &Path, task_id: &str) -> Result<TaskStorageId> {
@@ -2230,13 +2340,39 @@ fn task_event_limit_error(
     }
 }
 
-fn append_locked_task_event(mut file: fs::File, path: &Path, bytes: &[u8]) -> Result<()> {
+fn append_locked_task_event(
+    mut file: fs::File,
+    path: &Path,
+    task_id: &TaskStorageId,
+    frame: &DaemonEventFrame,
+    bytes: &[u8],
+) -> Result<()> {
     FileExt::lock_exclusive(&file)
         .map_err(|source| DaemonCoreError::io("failed to lock task event log", path, source))?;
-    let result = file
-        .write_all(bytes)
-        .map_err(|source| DaemonCoreError::io("failed to append task event log", path, source))
-        .and_then(|()| sync_task_event_file(&file, path));
+    let result = (|| {
+        let inspection = event_tail::inspect_locked_task_event_tail(&mut file, path, task_id)?;
+        let expected =
+            next_task_event_sequence(path, inspection.tail.as_ref().map(|tail| tail.seq))?;
+        if frame.seq != expected {
+            return Err(DaemonCoreError::InvalidTaskEventFrame {
+                path: path.to_path_buf(),
+                message: format!(
+                    "task event append is not contiguous: expected {expected}, found {}",
+                    frame.seq
+                ),
+            });
+        }
+        if inspection.has_partial_suffix {
+            file.set_len(inspection.complete_len).map_err(|source| {
+                DaemonCoreError::io("failed to truncate partial task event tail", path, source)
+            })?;
+            sync_task_event_file(&file, path)?;
+        }
+        file.write_all(bytes).map_err(|source| {
+            DaemonCoreError::io("failed to append task event log", path, source)
+        })?;
+        sync_task_event_file(&file, path)
+    })();
     let unlock = FileExt::unlock(&file)
         .map_err(|source| DaemonCoreError::io("failed to unlock task event log", path, source));
     match (result, unlock) {
@@ -3702,6 +3838,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn explicit_event_append_rejects_duplicate_and_gap_without_mutation() {
+        let root = tempdir().unwrap();
+        let task_id = "explicit-sequence";
+        admit_task(root.path(), task_id);
+        append_task_event(root.path(), &task_event_frame(task_id, 1)).unwrap();
+        let path = task_event_path(root.path(), task_id);
+        let before = fs::read(&path).unwrap();
+
+        for invalid_sequence in [1, 3] {
+            let error =
+                append_task_event(root.path(), &task_event_frame(task_id, invalid_sequence))
+                    .unwrap_err();
+            assert!(matches!(
+                error,
+                DaemonCoreError::InvalidTaskEventFrame { .. }
+            ));
+            assert_eq!(fs::read(&path).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn explicit_event_append_recovers_a_bounded_partial_tail() {
+        let root = tempdir().unwrap();
+        let task_id = "explicit-partial";
+        admit_task(root.path(), task_id);
+        append_task_event(root.path(), &task_event_frame(task_id, 1)).unwrap();
+        let path = task_event_path(root.path(), task_id);
+        let complete_prefix = fs::read(&path).unwrap();
+        let partial = serde_json::to_vec(&task_event_frame(task_id, 2)).unwrap();
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(&partial[..partial.len() / 2]).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        append_task_event(root.path(), &task_event_frame(task_id, 2)).unwrap();
+
+        let mut expected = complete_prefix;
+        expected.extend(serde_json::to_vec(&task_event_frame(task_id, 2)).unwrap());
+        expected.push(b'\n');
+        assert_eq!(fs::read(path).unwrap(), expected);
+    }
+
     #[cfg(unix)]
     #[test]
     fn authoritative_event_tail_rejects_invalid_complete_history_without_mutation() {
@@ -3715,6 +3894,11 @@ mod tests {
                 serde_json::to_vec(&task_event_frame("first-not-one", 2)).unwrap(),
             ),
             ("malformed-tail", b"{not-json}".to_vec()),
+            ("blank-tail", Vec::new()),
+            (
+                "semantic-tail",
+                br#"{"seq":"not-a-number","task_id":"semantic-tail","event":{}}"#.to_vec(),
+            ),
             (
                 "cross-task",
                 serde_json::to_vec(&task_event_frame("other-task", 1)).unwrap(),
@@ -3750,38 +3934,83 @@ mod tests {
                 matches!(error, DaemonCoreError::InvalidTaskEventFrame { .. }),
                 "{task_id}: {error:?}"
             );
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+
+            let error = load_task_events_from_offset(root.path(), task_id, 0).unwrap_err();
+            assert!(
+                matches!(error, DaemonCoreError::InvalidTaskEventFrame { .. }),
+                "{task_id}: {error:?}"
+            );
             assert_eq!(fs::read(path).unwrap(), bytes);
         }
     }
 
     #[cfg(unix)]
     #[test]
-    fn exhausted_event_sequence_is_rejected_without_mutation() {
+    fn interior_event_corruption_outside_former_tail_window_fails_closed_everywhere() {
         let root = tempdir().unwrap();
-        let task_id = "exhausted-tail";
+        let task_id = "interior-corruption";
         admit_task(root.path(), task_id);
         let path = task_event_path(root.path(), task_id);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mut bytes = vec![b'\n'; MAX_TASK_EVENT_TAIL_SCAN_BYTES + 1];
-        bytes.extend(serde_json::to_vec(&task_event_frame(task_id, u64::MAX - 1)).unwrap());
-        bytes.push(b'\n');
-        bytes.extend(serde_json::to_vec(&task_event_frame(task_id, u64::MAX)).unwrap());
-        bytes.push(b'\n');
-        fs::write(&path, &bytes).unwrap();
 
-        assert_eq!(
-            task_event_log_tail_sequence(root.path(), task_id).unwrap(),
-            Some(u64::MAX)
-        );
-        let error =
-            append_next_task_event(root.path(), task_id, &test_daemon_event(1)).unwrap_err();
+        let mut raw = Vec::new();
+        serde_json::to_writer(&mut raw, &task_event_frame(task_id, 1)).unwrap();
+        raw.push(b'\n');
+        let corruption_start = raw.len();
+        serde_json::to_writer(&mut raw, &task_event_frame(task_id, 2)).unwrap();
+        raw.push(b'\n');
+        let corruption_end = raw.len();
+        for seq in 3..=6 {
+            let mut frame = task_event_frame_with_encoded_size(task_id, 900 * 1024);
+            frame.seq = seq;
+            frame.event.occurred_at_unix = seq;
+            serde_json::to_writer(&mut raw, &frame).unwrap();
+            raw.push(b'\n');
+        }
+        assert!(raw.len() - corruption_end > MAX_TASK_EVENT_TAIL_SCAN_BYTES);
+        fs::write(&path, &raw).unwrap();
+
+        let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(corruption_start as u64)).unwrap();
+        file.write_all(&vec![b'x'; corruption_end - corruption_start - 1])
+            .unwrap();
+        file.sync_all().unwrap();
+        let before = fs::read(&path).unwrap();
+
+        assert!(matches!(
+            task_event_log_tail_sequence(root.path(), task_id),
+            Err(DaemonCoreError::InvalidTaskEventFrame { .. })
+        ));
+        assert!(matches!(
+            load_task_registry_with_event_tails(root.path()),
+            Err(DaemonCoreError::InvalidTaskEventFrame { .. })
+        ));
+        assert!(matches!(
+            load_task_events_from_offset(root.path(), task_id, 0),
+            Err(DaemonCoreError::InvalidTaskEventFrame { .. })
+        ));
+        assert!(matches!(
+            append_next_task_event(root.path(), task_id, &test_daemon_event(7)),
+            Err(DaemonCoreError::InvalidTaskEventFrame { .. })
+        ));
+        assert!(matches!(
+            append_task_event(root.path(), &task_event_frame(task_id, 7)),
+            Err(DaemonCoreError::InvalidTaskEventFrame { .. })
+        ));
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    #[test]
+    fn exhausted_event_sequence_is_rejected() {
+        let path = Path::new("exhausted.events.jsonl");
+        let error = next_task_event_sequence(path, Some(u64::MAX)).unwrap_err();
 
         assert!(matches!(
             error,
             DaemonCoreError::InvalidTaskEventFrame { ref message, .. }
                 if message.contains("exhausted")
         ));
-        assert_eq!(fs::read(path).unwrap(), bytes);
     }
 
     #[cfg(unix)]
@@ -4243,7 +4472,7 @@ mod tests {
         for seq in 1..=8 {
             let root = Arc::clone(&root);
             handles.push(thread::spawn(move || {
-                append_task_event(root.path(), &task_event_frame("concurrent", seq)).unwrap();
+                append_next_task_event(root.path(), "concurrent", &test_daemon_event(seq)).unwrap();
             }));
         }
         for handle in handles {
@@ -4269,7 +4498,7 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap();
-        append_task_event(Path::new(&root), &task_event_frame("process", seq)).unwrap();
+        append_next_task_event(Path::new(&root), "process", &test_daemon_event(seq)).unwrap();
     }
 
     #[cfg(unix)]
@@ -4332,14 +4561,14 @@ mod tests {
             .unwrap();
         assert_eq!(output.status.code(), Some(86));
 
-        append_task_event(root.path(), &task_event_frame("process", 2)).unwrap();
+        append_next_task_event(root.path(), "process", &test_daemon_event(2)).unwrap();
         assert_eq!(
             load_task_events(root.path(), "process")
                 .unwrap()
                 .into_iter()
                 .map(|frame| frame.seq)
                 .collect::<Vec<_>>(),
-            vec![2]
+            vec![1]
         );
     }
 
@@ -4406,7 +4635,7 @@ mod tests {
     }
 
     #[test]
-    fn task_event_reads_skip_corrupt_lines_and_report_offsets() {
+    fn task_event_reads_reject_corrupt_complete_lines_without_mutation() {
         let dir = tempdir().unwrap();
         let path = task_event_path(dir.path(), "task-demo");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -4420,16 +4649,13 @@ mod tests {
         )
         .unwrap();
 
-        let full = load_task_events_from_offset(dir.path(), "task-demo", 0).unwrap();
-        assert_eq!(full.events.len(), 2);
-        assert_eq!(full.events[0].seq, 1);
-        assert_eq!(full.events[1].seq, 2);
-        assert_eq!(full.next_offset, fs::metadata(&path).unwrap().len());
-
-        let after_full =
-            load_task_events_from_offset(dir.path(), "task-demo", full.next_offset).unwrap();
-        assert!(after_full.events.is_empty());
-        assert_eq!(after_full.next_offset, full.next_offset);
+        let before = fs::read(&path).unwrap();
+        let error = load_task_events_from_offset(dir.path(), "task-demo", 0).unwrap_err();
+        assert!(matches!(
+            error,
+            DaemonCoreError::InvalidTaskEventFrame { .. }
+        ));
+        assert_eq!(fs::read(path).unwrap(), before);
     }
 
     #[test]
@@ -4453,12 +4679,36 @@ mod tests {
     }
 
     #[test]
+    fn task_event_reader_rejects_offsets_inside_complete_frames() {
+        let root = tempdir().unwrap();
+        let path = task_event_path(root.path(), "offset-boundary");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut raw = Vec::new();
+        serde_json::to_writer(&mut raw, &task_event_frame("offset-boundary", 1)).unwrap();
+        raw.push(b'\n');
+        let second_start = raw.len() as u64;
+        serde_json::to_writer(&mut raw, &task_event_frame("offset-boundary", 2)).unwrap();
+        raw.push(b'\n');
+        fs::write(&path, &raw).unwrap();
+
+        for offset in [1, second_start + 1] {
+            let error =
+                load_task_events_from_offset(root.path(), "offset-boundary", offset).unwrap_err();
+            assert!(matches!(
+                error,
+                DaemonCoreError::InvalidTaskEventFrame { .. }
+            ));
+        }
+        assert_eq!(fs::read(path).unwrap(), raw);
+    }
+
+    #[test]
     fn task_event_page_caps_decoded_frames_and_resumes_exactly() {
         let root = tempdir().unwrap();
         let path = task_event_path(root.path(), "paged");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut raw = Vec::new();
-        for seq in 0..=MAX_TASK_EVENT_PAGE_FRAMES as u64 {
+        for seq in 1..=MAX_TASK_EVENT_PAGE_FRAMES as u64 + 1 {
             serde_json::to_writer(&mut raw, &task_event_frame("paged", seq)).unwrap();
             raw.push(b'\n');
         }
@@ -4473,14 +4723,46 @@ mod tests {
     }
 
     #[test]
+    fn task_event_page_rejects_a_gap_at_the_page_boundary_without_mutation() {
+        let root = tempdir().unwrap();
+        let path = task_event_path(root.path(), "page-gap");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut raw = Vec::new();
+        for seq in 1..=MAX_TASK_EVENT_PAGE_FRAMES as u64 {
+            serde_json::to_writer(&mut raw, &task_event_frame("page-gap", seq)).unwrap();
+            raw.push(b'\n');
+        }
+        serde_json::to_writer(
+            &mut raw,
+            &task_event_frame("page-gap", MAX_TASK_EVENT_PAGE_FRAMES as u64 + 2),
+        )
+        .unwrap();
+        raw.push(b'\n');
+        fs::write(&path, &raw).unwrap();
+
+        let first = load_task_events_from_offset(root.path(), "page-gap", 0).unwrap();
+        assert_eq!(first.events.len(), MAX_TASK_EVENT_PAGE_FRAMES);
+        let error =
+            load_task_events_from_offset(root.path(), "page-gap", first.next_offset).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::InvalidTaskEventFrame { .. }
+        ));
+        assert_eq!(fs::read(path).unwrap(), raw);
+    }
+
+    #[test]
     fn task_event_page_caps_bytes_at_complete_line_boundary() {
         let root = tempdir().unwrap();
         let path = task_event_path(root.path(), "paged");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let line_bytes = 900 * 1024;
-        let frame = task_event_frame_with_encoded_size("paged", line_bytes);
         let mut raw = Vec::new();
-        for _ in 0..5 {
+        for seq in 1..=5 {
+            let mut frame = task_event_frame_with_encoded_size("paged", line_bytes);
+            frame.seq = seq;
+            frame.event.occurred_at_unix = seq;
             serde_json::to_writer(&mut raw, &frame).unwrap();
             raw.push(b'\n');
         }

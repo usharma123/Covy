@@ -1,17 +1,18 @@
 use super::*;
 
-/// Maximum suffix read while reconciling the authoritative event sequence.
+/// Former bounded suffix window retained for public API compatibility.
 ///
-/// The window holds the last two maximum-size complete frames plus one
-/// maximum-size crash-partial frame.
+/// Strict event-log integrity validation now streams from byte zero. This
+/// value remains useful to construct regression fixtures proving that
+/// corruption outside the former suffix cannot be accepted.
 pub const MAX_TASK_EVENT_TAIL_SCAN_BYTES: usize = 3 * (MAX_TASK_EVENT_LINE_BYTES + 1);
 
 /// Loads the strict durable task registry and every authenticated event tail
 /// under one shared registry authority lock.
 ///
 /// This is the daemon-startup reconciliation primitive. On Unix targets, the
-/// registry is decoded once, then each admitted task's bounded event suffix is
-/// inspected while the same registry binding remains locked. That avoids
+/// registry is decoded once, then each admitted task's complete event log is
+/// streamed while the same registry binding remains locked. That avoids
 /// decoding an O(tasks)-sized registry once per task and prevents a writer
 /// from changing admission between the registry snapshot and its tail
 /// observations. The portable fallback preserves the same validation
@@ -72,11 +73,10 @@ pub fn load_task_registry_with_event_tails(
 
 /// Returns the authenticated sequence of the last complete durable event.
 ///
-/// Only a bounded suffix containing the last two complete frames and an
-/// optional crash-partial frame is read. A malformed complete frame,
-/// cross-task frame, zero sequence, or non-contiguous final pair is rejected
-/// instead of skipped. A trailing non-newline suffix is ignored by this
-/// read-only reconciliation operation and will be truncated by
+/// The complete log is streamed with bounded per-line memory. A malformed
+/// complete frame, cross-task frame, zero sequence, duplicate, or gap is
+/// rejected instead of skipped. A trailing non-newline suffix is ignored by
+/// this read-only reconciliation operation and will be truncated by
 /// [`append_next_task_event`] while holding the same exclusive event lock.
 ///
 /// # Errors
@@ -85,7 +85,7 @@ pub fn load_task_registry_with_event_tails(
 /// durably admitted. Returns [`DaemonCoreError::InvalidTaskEventFrame`] for an
 /// invalid authoritative tail, [`DaemonCoreError::AuthorityJsonLimitExceeded`]
 /// for a structurally excessive frame, or [`DaemonCoreError::Io`] for bounded
-/// suffix, lock, descriptor, or namespace failures.
+/// streaming read, lock, descriptor, or namespace failures.
 pub fn task_event_log_tail_sequence(root: &Path, task_id: &str) -> Result<Option<u64>> {
     let task_id = checked_task_storage_id(root, task_id)?;
     let writer_lease = acquire_task_store_writer_lease(root)?;
@@ -105,7 +105,7 @@ pub fn task_event_log_tail_sequence(root: &Path, task_id: &str) -> Result<Option
 /// Allocates and appends the next durable task-event sequence under one
 /// exclusive event-file lock.
 ///
-/// The event log is the sequence owner. The last two complete frames are
+/// The event log is the sequence owner. Every complete frame is streamed and
 /// validated, `tail + 1` is assigned with overflow checking, and the returned
 /// frame is synchronized before the lock is released. A bounded trailing
 /// crash-partial suffix is truncated and synchronized under that same lock
@@ -149,10 +149,10 @@ pub fn append_next_task_event(
 }
 
 #[derive(Debug)]
-struct TaskEventTailInspection {
-    tail: Option<DaemonEventFrame>,
-    complete_len: u64,
-    has_partial_suffix: bool,
+pub(super) struct TaskEventTailInspection {
+    pub(super) tail: Option<DaemonEventFrame>,
+    pub(super) complete_len: u64,
+    pub(super) has_partial_suffix: bool,
 }
 
 #[cfg(unix)]
@@ -324,15 +324,7 @@ pub(super) fn append_next_task_event_admitted_with_observers(
         let inspection = inspect_locked_task_event_tail(lock.file_mut(), &path, task_id)?;
         after_tail_read()?;
         let sequence =
-            match inspection.tail {
-                Some(ref frame) => frame.seq.checked_add(1).ok_or_else(|| {
-                    DaemonCoreError::InvalidTaskEventFrame {
-                        path: path.clone(),
-                        message: "task event sequence is exhausted at u64::MAX".to_string(),
-                    }
-                })?,
-                None => 1,
-            };
+            next_task_event_sequence(&path, inspection.tail.as_ref().map(|frame| frame.seq))?;
         let frame = DaemonEventFrame {
             seq: sequence,
             task_id: task_id.as_str().to_string(),
@@ -474,15 +466,7 @@ fn append_next_task_event_portable(
         validate_portable_event_file_type(&path)?;
         let inspection = inspect_locked_task_event_tail(&mut file, &path, task_id)?;
         let sequence =
-            match inspection.tail {
-                Some(ref frame) => frame.seq.checked_add(1).ok_or_else(|| {
-                    DaemonCoreError::InvalidTaskEventFrame {
-                        path: path.clone(),
-                        message: "task event sequence is exhausted at u64::MAX".to_string(),
-                    }
-                })?,
-                None => 1,
-            };
+            next_task_event_sequence(&path, inspection.tail.as_ref().map(|frame| frame.seq))?;
         let frame = DaemonEventFrame {
             seq: sequence,
             task_id: task_id.as_str().to_string(),
@@ -522,7 +506,7 @@ fn append_next_task_event_portable(
     }
 }
 
-fn inspect_locked_task_event_tail(
+pub(super) fn inspect_locked_task_event_tail(
     file: &mut fs::File,
     path: &Path,
     task_id: &TaskStorageId,
@@ -531,217 +515,84 @@ fn inspect_locked_task_event_tail(
         .metadata()
         .map_err(|source| DaemonCoreError::io("failed to inspect task event tail", path, source))?
         .len();
-    if len == 0 {
-        return Ok(TaskEventTailInspection {
-            tail: None,
-            complete_len: 0,
-            has_partial_suffix: false,
-        });
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| DaemonCoreError::io("failed to seek task event log", path, source))?;
+    let mut reader = BufReader::new(&mut *file);
+    let mut complete_len = 0_u64;
+    let mut tail: Option<DaemonEventFrame> = None;
+    let mut has_partial_suffix = false;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = reader
+            .by_ref()
+            .take(MAX_TASK_EVENT_LINE_BYTES.saturating_add(2) as u64)
+            .read_until(b'\n', &mut line)
+            .map_err(|source| DaemonCoreError::io("failed to read task event log", path, source))?;
+        if read == 0 {
+            break;
+        }
+        if !line.ends_with(b"\n") {
+            if line.len() > MAX_TASK_EVENT_LINE_BYTES {
+                return Err(task_event_limit_error(
+                    path,
+                    "crash-partial tail bytes",
+                    line.len() as u64,
+                    MAX_TASK_EVENT_LINE_BYTES as u64,
+                ));
+            }
+            has_partial_suffix = true;
+            break;
+        }
+
+        let frame = decode_complete_task_event_frame(
+            path,
+            task_id,
+            complete_len,
+            &line[..line.len().saturating_sub(1)],
+        )?;
+        if let Some(previous) = tail.as_ref() {
+            let expected = next_task_event_sequence(path, Some(previous.seq))?;
+            if frame.seq != expected {
+                return Err(DaemonCoreError::InvalidTaskEventFrame {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "task event sequence is not contiguous at byte {complete_len}: expected {expected}, found {}",
+                        frame.seq
+                    ),
+                });
+            }
+        } else if frame.seq != 1 {
+            return Err(DaemonCoreError::InvalidTaskEventFrame {
+                path: path.to_path_buf(),
+                message: format!("first task event sequence must be 1, found {}", frame.seq),
+            });
+        }
+        complete_len += read as u64;
+        tail = Some(frame);
     }
-    let scan_bound = MAX_TASK_EVENT_TAIL_SCAN_BYTES as u64;
-    let start = len.saturating_sub(scan_bound);
-    file.seek(SeekFrom::Start(start))
-        .map_err(|source| DaemonCoreError::io("failed to seek task event tail", path, source))?;
-    let expected = usize::try_from(len - start).map_err(|_| {
-        DaemonCoreError::io(
-            "task event tail window does not fit memory",
-            path,
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "bounded tail window does not fit usize",
-            ),
-        )
-    })?;
-    let mut suffix = Vec::new();
-    suffix.try_reserve_exact(expected).map_err(|source| {
-        DaemonCoreError::io(
-            "failed to reserve task event tail window",
-            path,
-            std::io::Error::new(std::io::ErrorKind::OutOfMemory, source),
-        )
-    })?;
-    file.take(scan_bound + 1)
-        .read_to_end(&mut suffix)
-        .map_err(|source| DaemonCoreError::io("failed to read task event tail", path, source))?;
-    if suffix.len() != expected
-        || file
-            .metadata()
-            .map_err(|source| {
-                DaemonCoreError::io("failed to re-inspect task event tail", path, source)
-            })?
-            .len()
-            != len
+    drop(reader);
+
+    if file
+        .metadata()
+        .map_err(|source| DaemonCoreError::io("failed to re-inspect task event log", path, source))?
+        .len()
+        != len
     {
         return Err(DaemonCoreError::io(
-            "task event log changed during locked tail read",
+            "task event log changed during locked validation",
             path,
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "locked event length changed during bounded suffix read",
+                "locked event length changed during streaming validation",
             ),
         ));
-    }
-    let (complete_end, partial_len) = if suffix.ends_with(b"\n") {
-        (suffix.len(), 0)
-    } else if let Some(last_newline) = suffix.iter().rposition(|byte| *byte == b'\n') {
-        (last_newline + 1, suffix.len() - last_newline - 1)
-    } else {
-        if start != 0 || suffix.len() > MAX_TASK_EVENT_LINE_BYTES {
-            return Err(task_event_limit_error(
-                path,
-                "crash-partial tail bytes",
-                len - start,
-                MAX_TASK_EVENT_LINE_BYTES as u64,
-            ));
-        }
-        return Ok(TaskEventTailInspection {
-            tail: None,
-            complete_len: 0,
-            has_partial_suffix: true,
-        });
-    };
-    if partial_len > MAX_TASK_EVENT_LINE_BYTES {
-        return Err(task_event_limit_error(
-            path,
-            "crash-partial tail bytes",
-            partial_len as u64,
-            MAX_TASK_EVENT_LINE_BYTES as u64,
-        ));
-    }
-    let terminal_newline = complete_end - 1;
-    let last_start = suffix[..terminal_newline]
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |index| index + 1);
-    if start != 0 && last_start == 0 {
-        return Err(task_event_limit_error(
-            path,
-            "authoritative tail frame bytes",
-            MAX_TASK_EVENT_LINE_BYTES as u64 + 1,
-            MAX_TASK_EVENT_LINE_BYTES as u64,
-        ));
-    }
-    let tail =
-        decode_authoritative_tail_frame(path, task_id, &suffix[last_start..terminal_newline])?;
-    let (previous, previous_starts_file) = if last_start == 0 {
-        (None, false)
-    } else {
-        let previous_terminal = last_start - 1;
-        let previous_start = suffix[..previous_terminal]
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map_or(0, |index| index + 1);
-        if start != 0 && previous_start == 0 {
-            return Err(task_event_limit_error(
-                path,
-                "previous authoritative tail frame bytes",
-                MAX_TASK_EVENT_LINE_BYTES as u64 + 1,
-                MAX_TASK_EVENT_LINE_BYTES as u64,
-            ));
-        }
-        (
-            Some(decode_authoritative_tail_frame(
-                path,
-                task_id,
-                &suffix[previous_start..previous_terminal],
-            )?),
-            start == 0 && previous_start == 0,
-        )
-    };
-    if let Some(previous) = previous {
-        if previous_starts_file && previous.seq != 1 {
-            return Err(DaemonCoreError::InvalidTaskEventFrame {
-                path: path.to_path_buf(),
-                message: format!(
-                    "first authoritative task event sequence must be 1, found {}",
-                    previous.seq
-                ),
-            });
-        }
-        let expected =
-            previous
-                .seq
-                .checked_add(1)
-                .ok_or_else(|| DaemonCoreError::InvalidTaskEventFrame {
-                    path: path.to_path_buf(),
-                    message: "previous task event tail sequence is u64::MAX".to_string(),
-                })?;
-        if tail.seq != expected {
-            return Err(DaemonCoreError::InvalidTaskEventFrame {
-                path: path.to_path_buf(),
-                message: format!(
-                    "authoritative event tail is not contiguous: previous {}, last {}",
-                    previous.seq, tail.seq
-                ),
-            });
-        }
-    } else if start == 0 && tail.seq != 1 {
-        return Err(DaemonCoreError::InvalidTaskEventFrame {
-            path: path.to_path_buf(),
-            message: format!(
-                "first authoritative task event sequence must be 1, found {}",
-                tail.seq
-            ),
-        });
     }
     Ok(TaskEventTailInspection {
-        tail: Some(tail),
-        complete_len: start + complete_end as u64,
-        has_partial_suffix: partial_len != 0,
+        tail,
+        complete_len,
+        has_partial_suffix,
     })
-}
-
-fn decode_authoritative_tail_frame(
-    path: &Path,
-    task_id: &TaskStorageId,
-    encoded: &[u8],
-) -> Result<DaemonEventFrame> {
-    let encoded = encoded.strip_suffix(b"\r").unwrap_or(encoded);
-    if encoded.len() > MAX_TASK_EVENT_LINE_BYTES {
-        return Err(task_event_limit_error(
-            path,
-            "authoritative tail frame bytes",
-            encoded.len() as u64,
-            MAX_TASK_EVENT_LINE_BYTES as u64,
-        ));
-    }
-    validate_authority_json(encoded, AuthorityJsonProfile::TaskEventFrame).map_err(|error| {
-        match error {
-            AuthorityJsonError::Json(source) => DaemonCoreError::InvalidTaskEventFrame {
-                path: path.to_path_buf(),
-                message: format!("malformed authoritative task event JSON: {source}"),
-            },
-            error @ AuthorityJsonError::Limit { .. } => map_authority_json_error(
-                path,
-                AuthorityJsonProfile::TaskEventFrame,
-                "failed to validate authoritative task event tail from",
-                error,
-            ),
-        }
-    })?;
-    let frame = serde_json::from_slice::<DaemonEventFrame>(encoded).map_err(|source| {
-        DaemonCoreError::InvalidTaskEventFrame {
-            path: path.to_path_buf(),
-            message: format!("failed to decode authoritative task event frame: {source}"),
-        }
-    })?;
-    if frame.task_id != task_id.as_str() {
-        return Err(DaemonCoreError::InvalidTaskEventFrame {
-            path: path.to_path_buf(),
-            message: format!(
-                "authoritative tail task {:?} does not match expected task {:?}",
-                frame.task_id,
-                task_id.as_str()
-            ),
-        });
-    }
-    if frame.seq == 0 {
-        return Err(DaemonCoreError::InvalidTaskEventFrame {
-            path: path.to_path_buf(),
-            message: "authoritative task event sequence must be greater than zero".to_string(),
-        });
-    }
-    Ok(frame)
 }
 
 fn storage_mutation_authority_lost(

@@ -124,12 +124,12 @@ pub enum DaemonCoreError {
         message: String,
     },
 
-    /// A task-event frame is not bound to the log selected by its path.
+    /// A complete task-event frame violates durable log integrity.
     #[error("invalid task event frame {}: {message}", path.display())]
     InvalidTaskEventFrame {
         /// Event-log path whose frame was rejected.
         path: PathBuf,
-        /// Stable explanation of the identity mismatch.
+        /// Stable explanation of malformed data, identity, or sequence failure.
         message: String,
     },
 
@@ -280,7 +280,7 @@ impl DaemonCoreError {
                 "Use a non-empty task identifier whose derived storage key is portable and unambiguous."
             }
             Self::InvalidTaskEventFrame { .. } => {
-                "Repair the event log so every frame carries the exact task identifier selected by its path."
+                "Repair or restore the event log so every complete frame is valid, task-bound, and sequence-contiguous."
             }
             Self::StorageMutationAuthorityLost { .. } => {
                 "Do not retry blindly; inspect the canonical file and registry under an authenticated lock first."

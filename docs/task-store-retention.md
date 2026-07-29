@@ -225,9 +225,10 @@ an exclusive authenticated file lock, and the data barrier completes before
 the final authority check and unlock.
 
 The event log, not the in-memory task registry, allocates the next sequence.
-While holding that exclusive event-file lock, append-next validates the final
-complete frames, requires the exact task identifier and contiguous sequence,
-assigns `tail + 1`, appends, and synchronizes before registry publication.
+While holding that exclusive event-file lock, append-next streams every
+complete frame with bounded per-line memory, requires the exact task identifier
+and contiguous sequence, assigns `tail + 1`, appends, and synchronizes before
+registry publication.
 Independent daemon processes therefore cannot allocate the same sequence.
 The registry's `last_event_seq` is a derived high-water mark: startup and
 write admission advance a lagging value from the authenticated log before the
@@ -254,20 +255,22 @@ For task events, subscriber publication follows the synchronized event-log
 append and the in-memory high-water update. The derived full-registry snapshot
 is queued before publication but may be checkpointed later by the owner. This
 does not make the registry a second sequence authority: after a crash, startup
-loads the registry once with every bounded authenticated event tail, advances
-lagging high-waters, and synchronously checkpoints any reconciliation before
+loads the registry once and strictly streams every authenticated event log,
+advances lagging high-waters, and synchronously checkpoints reconciliation before
 serving requests. A registry ahead of its log, or a nonzero high-water with no
 log, fails startup as corruption. The event lane spans append acknowledgement,
 high-water update, snapshot submission, and bounded subscriber sends, so
 concurrent publications remain sequence ordered without holding the daemon
 state mutex during filesystem I/O.
 
-The paginated event reader inspects at most 4 MiB and returns at most 4,096
-decoded frames per call; a line is capped at 1 MiB. It reads from a verified
-descriptor using nonblocking/no-follow opens, never allocates an entire log,
-and leaves a trailing partial line at the caller's prior cursor. Valid JSON
-whose `task_id` is missing, non-string, or different from the requested log is
-a typed error before any cursor is returned. A failed admission or final
+The paginated event reader returns at most 4 MiB and 4,096 decoded frames per
+call; a line is capped at 1 MiB. A nonzero cursor also reads at most one bounded
+predecessor frame to verify continuity across pages. Cursors must come from a
+prior successful page. The reader uses a verified descriptor with
+nonblocking/no-follow opens, never allocates an entire log, and leaves a
+trailing partial line at the caller's prior cursor. Malformed or semantically
+invalid complete JSON, a wrong task identifier, duplicate, or gap is a typed
+error before any cursor is returned. A failed admission or final
 descriptor/name postcheck discards the buffered length, page, or whole-log
 result. The compatibility whole-log helper is capped at 64 MiB and 65,536
 frames; larger consumers must paginate.
