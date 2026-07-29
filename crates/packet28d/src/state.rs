@@ -83,6 +83,7 @@ pub(crate) struct TaskSubscriber {
 pub(crate) struct DaemonState {
     pub(crate) root: PathBuf,
     pub(crate) kernel: Arc<Kernel>,
+    pub(crate) kernel_registry: Arc<crate::kernel_registry::PersistentKernelRegistry>,
     pub(crate) runtime: DaemonRuntimeInfo,
     pub(crate) tasks: TaskRegistry,
     pub(crate) task_generations: TaskGenerationRegistry,

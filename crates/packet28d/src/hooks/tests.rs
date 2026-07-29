@@ -14,6 +14,9 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
     let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
         PersistConfig::new(root.clone()),
     ));
+    let kernel_registry = Arc::new(
+        crate::kernel_registry::PersistentKernelRegistry::new(&root, kernel.clone(), 4).unwrap(),
+    );
     let (index_tx, index_rx) = IndexIngress::new();
     thread::spawn(move || index_rx.discard_until_shutdown());
     let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
@@ -21,6 +24,7 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
     Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
+        kernel_registry,
         runtime: DaemonRuntimeInfo::default(),
         tasks: TaskRegistry::default(),
         task_generations: TaskGenerationRegistry::default(),

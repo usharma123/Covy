@@ -724,23 +724,28 @@ fn handle_request(
             Ok(DaemonResponse::TestMap { response })
         }
         DaemonRequest::ContextStoreList { request } => {
-            let response = run_context_store_list(request)?;
+            let kernel = kernel_for_context_root(&state, &request.root)?;
+            let response = run_context_store_list(&kernel, request)?;
             Ok(DaemonResponse::ContextStoreList { response })
         }
         DaemonRequest::ContextStoreGet { request } => {
-            let response = run_context_store_get(request)?;
+            let kernel = kernel_for_context_root(&state, &request.root)?;
+            let response = run_context_store_get(&kernel, request)?;
             Ok(DaemonResponse::ContextStoreGet { response })
         }
         DaemonRequest::ContextStorePrune { request } => {
-            let response = run_context_store_prune(request)?;
+            let kernel = kernel_for_context_root(&state, &request.root)?;
+            let response = run_context_store_prune(&kernel, request)?;
             Ok(DaemonResponse::ContextStorePrune { response })
         }
         DaemonRequest::ContextStoreStats { request } => {
-            let response = run_context_store_stats(request)?;
+            let kernel = kernel_for_context_root(&state, &request.root)?;
+            let response = run_context_store_stats(&kernel, request)?;
             Ok(DaemonResponse::ContextStoreStats { response })
         }
         DaemonRequest::ContextRecall { request } => {
-            let response = run_context_recall(request)?;
+            let kernel = kernel_for_context_root(&state, &request.root)?;
+            let response = run_context_recall(&kernel, request)?;
             Ok(DaemonResponse::ContextRecall { response })
         }
         DaemonRequest::BrokerGetContext { request } => {
@@ -1077,5 +1082,156 @@ mod tests {
         server.await.unwrap().unwrap();
         release_tx.send(()).unwrap();
         data_worker.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn context_store_handlers_observe_and_prune_the_live_kernel_owner() {
+        let state = crate::tests::support::daemon_test_state();
+        let root = state.lock().unwrap().root.to_string_lossy().to_string();
+        let (watch_tx, _watch_rx) = WatchIngress::new(1);
+        let execute = handle_request(
+            state.clone(),
+            watch_tx.clone(),
+            DaemonRequest::Execute {
+                request: KernelRequest {
+                    target: "contextq.assemble".to_string(),
+                    input_packets: vec![context_kernel_core::KernelPacket::from_value(
+                        json!({
+                            "packet_id": "live-context",
+                            "tool": "packet28d",
+                            "reducer": "context",
+                            "sections": [{
+                                "title": "Live context",
+                                "body": "daemon immediate visibility marker",
+                                "refs": [],
+                                "relevance": 1.0
+                            }]
+                        }),
+                        None,
+                    )],
+                    ..KernelRequest::default()
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(execute, DaemonResponse::Execute { .. }));
+
+        let listed = handle_request(
+            state.clone(),
+            watch_tx.clone(),
+            DaemonRequest::ContextStoreList {
+                request: ContextStoreListRequest {
+                    root: root.clone(),
+                    limit: 20,
+                    ..ContextStoreListRequest::default()
+                },
+            },
+        )
+        .unwrap();
+        let entries = match listed {
+            DaemonResponse::ContextStoreList { response } => response.entries,
+            response => panic!("unexpected list response: {response:?}"),
+        };
+        assert_eq!(entries.len(), 1);
+
+        let fetched = handle_request(
+            state.clone(),
+            watch_tx.clone(),
+            DaemonRequest::ContextStoreGet {
+                request: ContextStoreGetRequest {
+                    root: root.clone(),
+                    key: entries[0].cache_key.clone(),
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            fetched,
+            DaemonResponse::ContextStoreGet {
+                response: ContextStoreGetResponse { entry: Some(_) }
+            }
+        ));
+
+        let recalled = handle_request(
+            state.clone(),
+            watch_tx.clone(),
+            DaemonRequest::ContextRecall {
+                request: ContextRecallRequest {
+                    query: "immediate visibility".to_string(),
+                    root: root.clone(),
+                    limit: 10,
+                    since: Some(0),
+                    ..ContextRecallRequest::default()
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            recalled,
+            DaemonResponse::ContextRecall {
+                response: ContextRecallResponse { ref hits, .. }
+            } if hits.len() == 1
+        ));
+
+        let legacy_default_root_stats = handle_request(
+            state.clone(),
+            watch_tx.clone(),
+            DaemonRequest::ContextStoreStats {
+                request: ContextStoreStatsRequest {
+                    root: String::new(),
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy_default_root_stats,
+            DaemonResponse::ContextStoreStats {
+                response: ContextStoreStatsResponse {
+                    stats: context_memory_core::ContextStoreStats { entries: 1, .. }
+                }
+            }
+        ));
+
+        let pruned = handle_request(
+            state.clone(),
+            watch_tx.clone(),
+            DaemonRequest::ContextStorePrune {
+                request: ContextStorePruneDaemonRequest {
+                    root: root.clone(),
+                    all: true,
+                    ttl_secs: None,
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            pruned,
+            DaemonResponse::ContextStorePrune {
+                response: ContextStorePruneResponse {
+                    report: context_memory_core::ContextStorePruneReport {
+                        removed: 1,
+                        remaining: 0,
+                        ..
+                    }
+                }
+            }
+        ));
+
+        let stats = handle_request(
+            state,
+            watch_tx,
+            DaemonRequest::ContextStoreStats {
+                request: ContextStoreStatsRequest { root },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            stats,
+            DaemonResponse::ContextStoreStats {
+                response: ContextStoreStatsResponse {
+                    stats: context_memory_core::ContextStoreStats { entries: 0, .. }
+                }
+            }
+        ));
     }
 }

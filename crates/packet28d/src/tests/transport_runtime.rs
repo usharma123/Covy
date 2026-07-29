@@ -1,5 +1,6 @@
 use super::support::{daemon_test_state, insert_admitted_task_record};
 use super::*;
+use fs2::FileExt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 static TCP_TRANSPORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -204,6 +205,116 @@ async fn early_index_worker_failure_withdraws_readiness_and_stops_peer_owners() 
     assert!(format!("{error:#}").contains("injected early index failure"));
     assert!(state.lock().unwrap().shutting_down);
     assert!(!ready_path(&root).exists());
+}
+
+#[test]
+fn production_cache_finalizer_is_bounded_and_retryable_when_root_lock_is_blocked() {
+    let state = daemon_test_state();
+    let (root, kernel) = {
+        let guard = state.lock().unwrap();
+        (guard.root.clone(), guard.kernel.clone())
+    };
+    let lock_path = root.join(".packet28/packet-cache-v3.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    FileExt::lock_exclusive(&lock).unwrap();
+    kernel
+        .execute(KernelRequest {
+            target: "agenty.state.write".to_string(),
+            reducer_input: json!({
+                "task_id": "task-blocked-cache-shutdown",
+                "event_id": "event-1",
+                "occurred_at_unix": 1,
+                "actor": "agent",
+                "kind": "focus_set",
+                "paths": ["src/cache.rs"],
+                "data": {"type": "focus_set"}
+            }),
+            ..KernelRequest::default()
+        })
+        .unwrap();
+
+    let started = Instant::now();
+    let error = shutdown_persistent_kernels(&state, Duration::from_millis(25))
+        .expect_err("blocked persistence root unexpectedly shut down");
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "production cache shutdown exceeded its lifecycle bound: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        format!("{error:#}").contains("timed out"),
+        "unexpected bounded shutdown error: {error:#}"
+    );
+
+    FileExt::unlock(&lock).unwrap();
+    shutdown_persistent_kernels(&state, Duration::from_secs(2))
+        .expect("cache persistence shutdown did not succeed on bounded retry");
+}
+
+#[test]
+fn blocked_persistent_root_cannot_consume_later_roots_shutdown_budget() {
+    let state = daemon_test_state();
+    let (root, primary, registry) = {
+        let guard = state.lock().unwrap();
+        (
+            guard.root.clone(),
+            guard.kernel.clone(),
+            guard.kernel_registry.clone(),
+        )
+    };
+    let secondary_root = root.join("secondary-root");
+    std::fs::create_dir_all(&secondary_root).unwrap();
+    let secondary = registry.get(&secondary_root).unwrap();
+    let lock_path = root.join(".packet28/packet-cache-v3.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    FileExt::lock_exclusive(&lock).unwrap();
+    primary
+        .execute(KernelRequest {
+            target: "agenty.state.write".to_string(),
+            reducer_input: json!({
+                "task_id": "task-fair-cache-shutdown",
+                "event_id": "event-1",
+                "occurred_at_unix": 1,
+                "actor": "agent",
+                "kind": "focus_set",
+                "paths": ["src/fair-cache.rs"],
+                "data": {"type": "focus_set"}
+            }),
+            ..KernelRequest::default()
+        })
+        .unwrap();
+
+    let started = Instant::now();
+    let error = shutdown_persistent_kernels(&state, Duration::from_millis(200))
+        .expect_err("blocked primary root unexpectedly shut down");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "multi-root cache shutdown exceeded its shared deadline: {:?}",
+        started.elapsed()
+    );
+    assert!(format!("{error:#}").contains("timed out"));
+    assert!(
+        secondary
+            .flush_cache_persistence(Duration::from_millis(25))
+            .is_err(),
+        "later persistent root was not shut down after the earlier root consumed its fair share"
+    );
+
+    FileExt::unlock(&lock).unwrap();
+    shutdown_persistent_kernels(&state, Duration::from_secs(2))
+        .expect("multi-root cache persistence shutdown did not succeed on bounded retry");
 }
 
 #[test]

@@ -3,16 +3,29 @@ use super::*;
 pub(crate) fn kernel_for_request(
     state: &Arc<Mutex<DaemonState>>,
     request: &KernelRequest,
-) -> Result<Kernel> {
-    if let Some(root) = persist_root_override(&request.target, &request.policy_context) {
-        return Ok(Kernel::with_v1_reducers_and_persistence(
-            PersistConfig::new(resolve_root(Path::new(&root))),
-        ));
-    }
+) -> Result<Arc<Kernel>> {
+    let root = match persist_root_override(&request.target, &request.policy_context) {
+        Some(root) => resolve_root(Path::new(&root)),
+        None => state.lock().map_err(lock_err)?.root.clone(),
+    };
+    kernel_for_root(state, &root)
+}
 
-    Ok(Kernel::with_v1_reducers_and_persistence(
-        PersistConfig::new(state.lock().map_err(lock_err)?.root.clone()),
-    ))
+pub(crate) fn kernel_for_context_root(
+    state: &Arc<Mutex<DaemonState>>,
+    root: &str,
+) -> Result<Arc<Kernel>> {
+    if root.is_empty() {
+        let root = state.lock().map_err(lock_err)?.root.clone();
+        kernel_for_root(state, &root)
+    } else {
+        kernel_for_root(state, Path::new(root))
+    }
+}
+
+fn kernel_for_root(state: &Arc<Mutex<DaemonState>>, root: &Path) -> Result<Arc<Kernel>> {
+    let registry = state.lock().map_err(lock_err)?.kernel_registry.clone();
+    Ok(registry.get(root)?)
 }
 
 fn persist_root_override(target: &str, policy_context: &Value) -> Option<String> {

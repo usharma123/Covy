@@ -17,8 +17,7 @@ use context_kernel_core::{
     KernelStepRequest, PersistConfig, SequenceObserver,
 };
 use context_memory_core::{
-    ContextStoreListFilter, ContextStorePaging, ContextStorePruneRequest, PacketCache,
-    PersistConfig as MemoryPersistConfig, RecallOptions,
+    ContextStoreListFilter, ContextStorePaging, ContextStorePruneRequest, RecallOptions,
 };
 use diffy_core::model::CoverageFormat;
 use notify::{Config, Event, PollWatcher, RecursiveMode, Watcher};
@@ -83,6 +82,7 @@ mod commands;
 mod hooks;
 mod index;
 mod instruction_files;
+mod kernel_registry;
 mod launch;
 mod planning;
 mod runtime;
@@ -116,6 +116,7 @@ use crate::index::{
     enqueue_initial_index_work, run_index_worker, IndexIngress, IndexWorkReceiver,
 };
 use crate::instruction_files::resolve_instruction_file;
+use crate::kernel_registry::PersistentKernelRegistry;
 use crate::launch::task_launch_agent;
 use crate::planning::*;
 use crate::runtime::{BlockingPool, DaemonRuntimeConfig, ShutdownSignal, StateChangeSignal};
@@ -211,6 +212,11 @@ fn serve(root: PathBuf) -> Result<()> {
     let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
         PersistConfig::new(root.clone()),
     ));
+    let kernel_registry = Arc::new(PersistentKernelRegistry::new(
+        &root,
+        kernel.clone(),
+        config.max_persistent_roots,
+    )?);
     let tasks = load_task_registry(&root)?;
     let watches = load_watch_registry(&root)?;
     let manifest = load_index_manifest_file(&root);
@@ -222,6 +228,7 @@ fn serve(root: PathBuf) -> Result<()> {
     let state = Arc::new(Mutex::new(DaemonState {
         root: root.clone(),
         kernel,
+        kernel_registry,
         runtime,
         tasks,
         task_generations: TaskGenerationRegistry::default(),
@@ -268,6 +275,10 @@ fn serve(root: PathBuf) -> Result<()> {
     shutdown.request();
     let shutdown_deadline = runtime_outcome.deadline;
     let mut lifecycle_result = runtime_outcome.result;
+    record_runtime_result(
+        &mut lifecycle_result,
+        shutdown_persistent_kernels(&state, remaining_until(shutdown_deadline)),
+    );
     runtime.shutdown_timeout(remaining_until(shutdown_deadline));
 
     daemon_log("shutting down packet28d");
@@ -279,6 +290,27 @@ fn serve(root: PathBuf) -> Result<()> {
     drop(daemon_instance_lease);
     record_runtime_result(&mut lifecycle_result, cleanup_result);
     lifecycle_result
+}
+
+fn shutdown_persistent_kernels(state: &Arc<Mutex<DaemonState>>, timeout: Duration) -> Result<()> {
+    let registry = state.lock().map_err(lock_err)?.kernel_registry.clone();
+    let kernels = registry.kernels()?;
+    let started = Instant::now();
+    let mut result = Ok(());
+    let kernel_count = kernels.len();
+    for (index, kernel) in kernels.into_iter().enumerate() {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        let roots_remaining = u32::try_from(kernel_count.saturating_sub(index)).unwrap_or(u32::MAX);
+        let root_budget = remaining / roots_remaining.max(1);
+        record_runtime_result(
+            &mut result,
+            kernel
+                .shutdown_cache_persistence(root_budget)
+                .map(|_| ())
+                .context("failed to shut down daemon cache persistence"),
+        );
+    }
+    result
 }
 
 struct DaemonRuntimeInputs {

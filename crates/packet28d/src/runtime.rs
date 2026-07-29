@@ -10,6 +10,7 @@ const DEFAULT_MAX_CONNECTIONS: usize = 128;
 const DEFAULT_MAX_BLOCKING_OPERATIONS: usize = 8;
 pub(crate) const CONTROL_BLOCKING_OPERATIONS: usize = 2;
 pub(crate) const CANCELLATION_BLOCKING_OPERATIONS: usize = 2;
+const DEFAULT_MAX_PERSISTENT_ROOTS: usize = 8;
 const DEFAULT_SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 const DEFAULT_WATCH_QUEUE_CAPACITY: usize = 1_024;
 const DEFAULT_BACKGROUND_QUEUE_CAPACITY: usize = 64;
@@ -21,6 +22,7 @@ const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 pub(crate) struct DaemonRuntimeConfig {
     pub(crate) max_connections: usize,
     pub(crate) max_blocking_operations: usize,
+    pub(crate) max_persistent_roots: usize,
     pub(crate) subscriber_queue_capacity: usize,
     pub(crate) watch_queue_capacity: usize,
     pub(crate) background_queue_capacity: usize,
@@ -35,6 +37,7 @@ impl Default for DaemonRuntimeConfig {
         Self {
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_blocking_operations: DEFAULT_MAX_BLOCKING_OPERATIONS,
+            max_persistent_roots: DEFAULT_MAX_PERSISTENT_ROOTS,
             subscriber_queue_capacity: DEFAULT_SUBSCRIBER_QUEUE_CAPACITY,
             watch_queue_capacity: DEFAULT_WATCH_QUEUE_CAPACITY,
             background_queue_capacity: DEFAULT_BACKGROUND_QUEUE_CAPACITY,
@@ -57,6 +60,10 @@ impl DaemonRuntimeConfig {
             max_blocking_operations: env_nonzero_usize(
                 "PACKET28D_MAX_BLOCKING_OPERATIONS",
                 defaults.max_blocking_operations,
+            )?,
+            max_persistent_roots: env_nonzero_usize(
+                "PACKET28D_MAX_PERSISTENT_ROOTS",
+                defaults.max_persistent_roots,
             )?,
             subscriber_queue_capacity: env_nonzero_usize(
                 "PACKET28D_SUBSCRIBER_QUEUE_CAPACITY",
@@ -457,6 +464,7 @@ mod tests {
         let config = DaemonRuntimeConfig::default();
         assert!(config.max_connections > 0);
         assert!(config.max_blocking_operations > 0);
+        assert!(config.max_persistent_roots > 0);
         assert!(config.subscriber_queue_capacity > 0);
         assert!(config.watch_queue_capacity > 0);
         assert!(config.background_queue_capacity > 0);

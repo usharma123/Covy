@@ -1,5 +1,7 @@
 use super::*;
 
+const CONTEXT_STORE_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub(crate) fn run_cover_check(request: CoverCheckRequest) -> Result<CoverCheckResponse> {
     let config = if request.config_path.trim().is_empty() {
         suite_foundation_core::CovyConfig::default()
@@ -198,10 +200,10 @@ pub(crate) fn run_test_map(request: TestMapRequest) -> Result<TestMapResponse> {
 }
 
 pub(crate) fn run_context_store_list(
+    kernel: &Kernel,
     request: ContextStoreListRequest,
 ) -> Result<ContextStoreListResponse> {
-    let cache = load_cache_root(&request.root);
-    let entries = cache.list_entries(
+    let entries = kernel.context_store_list(
         &ContextStoreListFilter {
             target: request.target,
             contains_query: request.query,
@@ -212,46 +214,46 @@ pub(crate) fn run_context_store_list(
             offset: request.offset,
             limit: request.limit,
         },
-    );
+    )?;
     Ok(ContextStoreListResponse { entries })
 }
 
 pub(crate) fn run_context_store_get(
+    kernel: &Kernel,
     request: ContextStoreGetRequest,
 ) -> Result<ContextStoreGetResponse> {
-    let cache = load_cache_root(&request.root);
     Ok(ContextStoreGetResponse {
-        entry: cache.get_entry(&request.key),
+        entry: kernel.context_store_get(&request.key)?,
     })
 }
 
 pub(crate) fn run_context_store_prune(
+    kernel: &Kernel,
     request: ContextStorePruneDaemonRequest,
 ) -> Result<ContextStorePruneResponse> {
-    let root = std::path::PathBuf::from(&request.root);
-    let config = MemoryPersistConfig::new(root.clone());
-    let mut cache = PacketCache::load_from_disk(&config);
-    let report = cache.prune(ContextStorePruneRequest {
-        all: request.all,
-        ttl_secs: request.ttl_secs,
-    });
-    cache
-        .save_to_disk(&config)
-        .with_context(|| format!("failed to save context store at '{}'", root.display()))?;
+    let report = kernel.context_store_prune(
+        ContextStorePruneRequest {
+            all: request.all,
+            ttl_secs: request.ttl_secs,
+        },
+        CONTEXT_STORE_PERSISTENCE_TIMEOUT,
+    )?;
     Ok(ContextStorePruneResponse { report })
 }
 
 pub(crate) fn run_context_store_stats(
-    request: ContextStoreStatsRequest,
+    kernel: &Kernel,
+    _request: ContextStoreStatsRequest,
 ) -> Result<ContextStoreStatsResponse> {
-    let cache = load_cache_root(&request.root);
     Ok(ContextStoreStatsResponse {
-        stats: cache.stats(),
+        stats: kernel.context_store_stats()?,
     })
 }
 
-pub(crate) fn run_context_recall(request: ContextRecallRequest) -> Result<ContextRecallResponse> {
-    let cache = load_cache_root(&request.root);
+pub(crate) fn run_context_recall(
+    kernel: &Kernel,
+    request: ContextRecallRequest,
+) -> Result<ContextRecallResponse> {
     let now = now_unix();
     let since_default = now.saturating_sub(86_400);
     let scope = match request.scope.as_deref().unwrap_or_default() {
@@ -260,7 +262,7 @@ pub(crate) fn run_context_recall(request: ContextRecallRequest) -> Result<Contex
         _ if request.task_id.is_some() => context_memory_core::RecallScope::TaskFirst,
         _ => context_memory_core::RecallScope::Global,
     };
-    let hits = cache.recall(
+    let hits = kernel.context_store_recall(
         &request.query,
         &RecallOptions {
             limit: request.limit,
@@ -275,15 +277,11 @@ pub(crate) fn run_context_recall(request: ContextRecallRequest) -> Result<Contex
             mode: request.mode.unwrap_or_default(),
             include_debug: request.include_debug,
         },
-    );
+    )?;
     Ok(ContextRecallResponse {
         query: request.query,
         hits,
     })
-}
-
-fn load_cache_root(root: &str) -> PacketCache {
-    PacketCache::load_from_disk(&MemoryPersistConfig::new(std::path::PathBuf::from(root)))
 }
 
 fn parse_shard_algorithm(
