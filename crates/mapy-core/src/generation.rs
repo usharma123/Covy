@@ -1583,6 +1583,7 @@ fn read_optional_state_file(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8
     })
 }
 
+#[cfg(feature = "shared-repository-scan")]
 fn remove_state_file_if_exists(path: &Path) -> Result<(), CovyError> {
     let (root, components, name) = repo_state_spec(path)?;
     let directory = match StateDir::open(root, components, false) {
