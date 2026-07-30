@@ -71,11 +71,29 @@ pub(crate) fn refresh_test_repo_runtime(state: &Arc<Mutex<DaemonState>>) {
 }
 
 pub(crate) fn insert_admitted_task_record(state: &Arc<Mutex<DaemonState>>, record: TaskRecord) {
+    insert_admitted_task_and_watches(state, record, Vec::new());
+}
+
+pub(crate) fn insert_admitted_task_and_watches(
+    state: &Arc<Mutex<DaemonState>>,
+    record: TaskRecord,
+    watches: Vec<WatchRegistration>,
+) {
     let task_id = record.task_id.clone();
-    let mut guard = state.lock().unwrap();
-    guard.tasks.tasks.insert(task_id.clone(), record);
-    drop(guard);
-    fence_task_namespace_admission(state, &task_id).unwrap();
+    let (persistence, revision) = {
+        let mut guard = state.lock().unwrap();
+        guard.tasks.tasks.insert(task_id.clone(), record.clone());
+        guard.watches.watches.extend(watches.iter().cloned());
+        let mut delta = RegistryDelta::default().upsert_task(record);
+        for watch in watches {
+            delta = delta.upsert_watch(watch);
+        }
+        let revision = guard.persistence.stage(delta).unwrap();
+        (guard.persistence.clone(), revision)
+    };
+    persistence
+        .ensure_task_admitted(&task_id, revision)
+        .unwrap();
 }
 
 pub(crate) fn shutdown_test_persistence(state: &Arc<Mutex<DaemonState>>) {

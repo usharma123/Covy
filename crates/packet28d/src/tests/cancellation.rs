@@ -1,8 +1,11 @@
-use super::support::{daemon_test_root, daemon_test_state, insert_admitted_task_record};
+use super::support::{
+    daemon_test_root, daemon_test_state, insert_admitted_task_and_watches,
+    insert_admitted_task_record,
+};
 use super::*;
 use crate::broker::complete_task_cancellation_for_generation;
 use crate::watch::install_watch;
-use packet28_daemon_core::storage::{load_task_registry, load_watch_registry};
+use packet28_daemon_core::storage::load_task_watch_registry_with_deltas;
 use std::os::unix::process::CommandExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -79,7 +82,7 @@ fn cancel_before_start_persists_terminal_history_and_rejects_stale_events() {
         Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
     ));
     flush_persistence(&state).unwrap();
-    let persisted = load_task_registry(&root).unwrap();
+    let persisted = load_task_watch_registry_with_deltas(&root).unwrap().tasks;
     assert_eq!(
         persisted.tasks["task-cancel-before-start"].lifecycle,
         TaskLifecycle::Cancelled
@@ -133,13 +136,21 @@ fn failed_admission_rollback_quiesces_and_removes_runtime_and_durable_state() {
     let root = daemon_test_root(&state);
     let task_id = "task-failed-admission";
     let watch_id = "watch-failed-admission";
-    insert_admitted_task_record(
+    insert_admitted_task_and_watches(
         &state,
         TaskRecord {
             task_id: task_id.to_string(),
             watch_ids: vec![watch_id.to_string()],
             ..TaskRecord::default()
         },
+        vec![WatchRegistration {
+            watch_id: watch_id.to_string(),
+            spec: WatchSpec {
+                task_id: task_id.to_string(),
+                ..WatchSpec::default()
+            },
+            ..WatchRegistration::default()
+        }],
     );
     let generation = state
         .lock()
@@ -153,14 +164,6 @@ fn failed_admission_rollback_quiesces_and_removes_runtime_and_durable_state() {
     let (subscriber, mut receiver) = tokio::sync::mpsc::channel(1);
     {
         let mut guard = state.lock().unwrap();
-        guard.watches.watches.push(WatchRegistration {
-            watch_id: watch_id.to_string(),
-            spec: WatchSpec {
-                task_id: task_id.to_string(),
-                ..WatchSpec::default()
-            },
-            ..WatchRegistration::default()
-        });
         guard.subscribers.insert(
             task_id.to_string(),
             vec![crate::state::TaskSubscriber {
@@ -168,7 +171,6 @@ fn failed_admission_rollback_quiesces_and_removes_runtime_and_durable_state() {
                 sender: subscriber,
             }],
         );
-        persist_state_for_test(&guard).unwrap();
     }
     let (watch_tx, _watch_rx) = WatchIngress::new(1);
     install_watch(state.clone(), watch_tx, watch_id.to_string()).unwrap();
@@ -204,10 +206,10 @@ fn failed_admission_rollback_quiesces_and_removes_runtime_and_durable_state() {
         Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
     ));
 
-    let persisted_tasks = load_task_registry(&root).unwrap();
-    assert!(!persisted_tasks.tasks.contains_key(task_id));
-    let persisted_watches = load_watch_registry(&root).unwrap();
-    assert!(persisted_watches
+    let persisted = load_task_watch_registry_with_deltas(&root).unwrap();
+    assert!(!persisted.tasks.tasks.contains_key(task_id));
+    assert!(persisted
+        .watches
         .watches
         .iter()
         .all(|watch| watch.spec.task_id != task_id));
@@ -218,13 +220,21 @@ fn watch_installation_rejects_cancelled_generation_without_publishing_handle() {
     let state = daemon_test_state();
     let task_id = "task-cancelled-watch-install";
     let watch_id = "watch-cancelled-install";
-    insert_admitted_task_record(
+    insert_admitted_task_and_watches(
         &state,
         TaskRecord {
             task_id: task_id.to_string(),
             watch_ids: vec![watch_id.to_string()],
             ..TaskRecord::default()
         },
+        vec![WatchRegistration {
+            watch_id: watch_id.to_string(),
+            spec: WatchSpec {
+                task_id: task_id.to_string(),
+                ..WatchSpec::default()
+            },
+            ..WatchRegistration::default()
+        }],
     );
     let generation = state
         .lock()
@@ -232,17 +242,6 @@ fn watch_installation_rejects_cancelled_generation_without_publishing_handle() {
         .task_generations
         .create(task_id)
         .unwrap();
-    {
-        let mut guard = state.lock().unwrap();
-        guard.watches.watches.push(WatchRegistration {
-            watch_id: watch_id.to_string(),
-            spec: WatchSpec {
-                task_id: task_id.to_string(),
-                ..WatchSpec::default()
-            },
-            ..WatchRegistration::default()
-        });
-    }
     generation.request_cancel();
     let (watch_tx, _watch_rx) = WatchIngress::new(1);
 
@@ -270,7 +269,11 @@ fn failed_admission_rollback_preserves_concurrent_terminal_cancellation() {
         TaskLifecycle::Cancelled
     );
     assert_eq!(
-        load_task_registry(&root).unwrap().tasks[task_id].lifecycle,
+        load_task_watch_registry_with_deltas(&root)
+            .unwrap()
+            .tasks
+            .tasks[task_id]
+            .lifecycle,
         TaskLifecycle::Cancelled
     );
 }
@@ -337,7 +340,7 @@ fn failed_admission_rollback_restores_displaced_terminal_task() {
         .task_generations
         .current(task_id)
         .is_none());
-    let persisted = load_task_registry(&root).unwrap();
+    let persisted = load_task_watch_registry_with_deltas(&root).unwrap().tasks;
     assert_eq!(persisted.tasks[task_id].lifecycle, TaskLifecycle::Cancelled);
     assert_eq!(
         persisted.tasks[task_id].last_event_seq,
