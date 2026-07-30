@@ -1,9 +1,9 @@
 # PER-09 measured allocation cleanup
 
 This experiment revalidates the audit's broad clone/allocation warning against
-the committed tree at `d1da15d9caf2b0662df06cbbe36de48c3f98f9fe`.
-It deliberately separates mechanically actionable hot work from cold ownership
-cleanup that has no measured product value.
+the committed tree at `eef4db1b2cfa25788c282c126782b731979a7686`.
+It separates measurable hot-path work, mechanically safe ownership cleanup, and
+collections that are required by concurrency or borrowing invariants.
 
 ## Current-source lint inventory
 
@@ -11,23 +11,30 @@ The focused all-target/all-feature Clippy run reported:
 
 | Focused lint | Emitted diagnostics |
 |---|---:|
-| `redundant_clone` | 65 |
-| `needless_collect` | 5 |
+| `redundant_clone` | 1 |
+| `needless_collect` | 3 |
 | `trivially_copy_pass_by_ref` | 4 |
 | `large_types_passed_by_value` | 0 |
 
-Counts include duplicate lib/test diagnostics. The large-by-value claim is not
-reproducible with the current compiler and default lint threshold. The four
-copy-by-reference diagnostics are one-byte `WcMode` parameters, not the
-48–88-byte query/budget structs described by the audit, so changing those
-interfaces was rejected.
+The inventory fell from 65 redundant clones and five needless collections. The
+remaining clone is intentional: the state-filesystem regression must retain two
+directory-lease values from the same cloned authority to prove that they
+contend. The remaining collections are also mechanically required:
 
-The selected changes remove the three production `needless_collect` sites
-identified by the audit and the largest verified clone: the complete broker
-section vector was duplicated immediately before a consuming budget-prune
-operation. Focused module lints keep those sites from regressing. Other
-`redundant_clone` findings are ownership cleanups in cold CLI/test/error paths;
-they are not represented as performance wins without measurements.
+- scoped search workers must all be spawned before any worker joins, because
+  the workers synchronize on a barrier;
+- the concurrent index-writer test has the same spawn-before-join invariant;
+- watch pruning must copy the keys before mutating the same `HashMap`.
+
+The large-by-value claim is not reproducible with the current compiler and
+default lint threshold. The four copy-by-reference diagnostics are one-byte
+`WcMode` parameters, not the 48–88-byte query/budget structs described by the
+audit, so changing those public interfaces was rejected.
+
+The selected performance change removed the largest verified clone: the
+complete broker section vector was duplicated immediately before a consuming
+budget-prune operation. The later workspace cleanup removes only proven
+last-use copies and does not claim an additional runtime improvement.
 
 ## Release benchmark
 
@@ -56,4 +63,5 @@ allocation benchmark, not an end-to-end latency claim; it establishes that the
 removed clone is material at the scale where broker section bodies are large.
 
 Raw values and environment data are in `result.json`, `lint-summary.json`, and
-`metadata.json`.
+`metadata.json`. Strict Clippy and the full all-feature workspace test suite
+passed against the cleanup commit.
