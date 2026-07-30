@@ -19,12 +19,17 @@ const MAX_CHECKPOINT_MANIFEST_BYTES: usize = 64 * 1024;
 pub(super) struct RegistryRawPair {
     pub(super) tasks: Option<Vec<u8>>,
     pub(super) watches: Option<Vec<u8>>,
+    applied_delta_revision: u64,
     canonical_recovery: CanonicalRecovery,
 }
 
 impl RegistryRawPair {
     pub(super) fn canonical_recovery(&self) -> CanonicalRecovery {
         self.canonical_recovery
+    }
+
+    pub(super) fn applied_delta_revision(&self) -> u64 {
+        self.applied_delta_revision
     }
 
     pub(super) fn materialize(self, root: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
@@ -45,6 +50,11 @@ impl RegistryRawPair {
         self.canonical_recovery = canonical_recovery;
         self
     }
+
+    fn with_applied_delta_revision(mut self, applied_delta_revision: u64) -> Self {
+        self.applied_delta_revision = applied_delta_revision;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +62,31 @@ pub(super) enum CanonicalRecovery {
     None,
     Watch,
     TaskThenWatch,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RevisionedRegistryPair<'a> {
+    tasks: &'a [u8],
+    watches: &'a [u8],
+    applied_delta_revision: u64,
+}
+
+impl<'a> RevisionedRegistryPair<'a> {
+    pub(super) const fn new(
+        tasks: &'a [u8],
+        watches: &'a [u8],
+        applied_delta_revision: u64,
+    ) -> Self {
+        Self {
+            tasks,
+            watches,
+            applied_delta_revision,
+        }
+    }
+
+    const fn bytes(self) -> (&'a [u8], &'a [u8]) {
+        (self.tasks, self.watches)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -65,8 +100,14 @@ struct RegistryArtifactDescriptor {
 #[serde(deny_unknown_fields)]
 struct RegistryCheckpointDescriptor {
     generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    applied_delta_revision: u64,
     tasks: RegistryArtifactDescriptor,
     watches: RegistryArtifactDescriptor,
+}
+
+const fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -124,6 +165,7 @@ fn resolve_with_reader(
     let canonical = RegistryRawPair {
         tasks,
         watches,
+        applied_delta_revision: 0,
         canonical_recovery: CanonicalRecovery::None,
     };
     let manifest_raw = read(CHECKPOINT_MANIFEST_FILE_NAME, MAX_CHECKPOINT_MANIFEST_BYTES)?;
@@ -138,7 +180,9 @@ fn resolve_with_reader(
             ));
         }
         if pair_matches_descriptor(root, &canonical, &manifest.checkpoint)? {
-            return Ok(canonical);
+            return Ok(
+                canonical.with_applied_delta_revision(manifest.checkpoint.applied_delta_revision)
+            );
         }
 
         let (journal, recovered) = read_journal(root, &mut read)?;
@@ -147,7 +191,9 @@ fn resolve_with_reader(
         }
         validate_pair_descriptor(root, &recovered, &journal.base, "checkpoint journal base")?;
         let recovery = canonical_recovery(root, &canonical, &journal)?;
-        return Ok(recovered.with_canonical_recovery(recovery));
+        return Ok(recovered
+            .with_applied_delta_revision(journal.base.applied_delta_revision)
+            .with_canonical_recovery(recovery));
     }
 
     let Some(journal_raw) = read(CHECKPOINT_JOURNAL_FILE_NAME, MAX_CHECKPOINT_MANIFEST_BYTES)?
@@ -160,7 +206,9 @@ fn resolve_with_reader(
     let recovered = read_journal_pair(root, &mut read)?;
     validate_pair_descriptor(root, &recovered, &journal.base, "checkpoint journal base")?;
     let recovery = canonical_recovery(root, &canonical, &journal)?;
-    Ok(recovered.with_canonical_recovery(recovery))
+    Ok(recovered
+        .with_applied_delta_revision(journal.base.applied_delta_revision)
+        .with_canonical_recovery(recovery))
 }
 
 fn read_journal(
@@ -192,6 +240,7 @@ fn read_journal_pair(
     Ok(RegistryRawPair {
         tasks: Some(tasks),
         watches: Some(watches),
+        applied_delta_revision: 0,
         canonical_recovery: CanonicalRecovery::None,
     })
 }
@@ -373,15 +422,15 @@ pub(super) fn publish_anchored(
     root: &Path,
     daemon: &CapabilityDir,
     canonical_recovery: CanonicalRecovery,
-    base: (&[u8], &[u8]),
-    target: (&[u8], &[u8]),
+    base: RevisionedRegistryPair<'_>,
+    target: RevisionedRegistryPair<'_>,
     write_watch: impl Fn(&[u8]) -> Result<()>,
     write_task: impl Fn(&[u8]) -> Result<()>,
 ) -> Result<()> {
-    let (base_tasks, base_watches) = base;
-    let (target_tasks, target_watches) = target;
+    let (base_tasks, base_watches) = base.bytes();
+    let (target_tasks, target_watches) = target.bytes();
     let prepared = PreparedCheckpoint::new(root, base, target)?;
-    heal_canonical_pair(canonical_recovery, base, &write_watch, &write_task)?;
+    heal_canonical_pair(canonical_recovery, base.bytes(), &write_watch, &write_task)?;
     write_anchored_recovery_file(
         daemon,
         CHECKPOINT_JOURNAL_TASK_FILE_NAME,
@@ -419,15 +468,15 @@ pub(super) fn publish_anchored(
 pub(super) fn publish_portable(
     root: &Path,
     canonical_recovery: CanonicalRecovery,
-    base: (&[u8], &[u8]),
-    target: (&[u8], &[u8]),
+    base: RevisionedRegistryPair<'_>,
+    target: RevisionedRegistryPair<'_>,
     write_watch: impl Fn(&[u8]) -> Result<()>,
     write_task: impl Fn(&[u8]) -> Result<()>,
 ) -> Result<()> {
-    let (base_tasks, base_watches) = base;
-    let (target_tasks, target_watches) = target;
+    let (base_tasks, base_watches) = base.bytes();
+    let (target_tasks, target_watches) = target.bytes();
     let prepared = PreparedCheckpoint::new(root, base, target)?;
-    heal_canonical_pair(canonical_recovery, base, &write_watch, &write_task)?;
+    heal_canonical_pair(canonical_recovery, base.bytes(), &write_watch, &write_task)?;
     write_atomically(
         &daemon_dir(root).join(CHECKPOINT_JOURNAL_TASK_FILE_NAME),
         base_tasks,
@@ -477,11 +526,18 @@ struct PreparedCheckpoint {
 }
 
 impl PreparedCheckpoint {
-    fn new(root: &Path, base: (&[u8], &[u8]), target: (&[u8], &[u8])) -> Result<Self> {
-        let (base_tasks, base_watches) = base;
-        let (target_tasks, target_watches) = target;
-        let base = describe_pair(root, base_tasks, base_watches)?;
-        let target = describe_pair(root, target_tasks, target_watches)?;
+    fn new(
+        root: &Path,
+        base: RevisionedRegistryPair<'_>,
+        target: RevisionedRegistryPair<'_>,
+    ) -> Result<Self> {
+        let base = describe_pair(root, base.tasks, base.watches, base.applied_delta_revision)?;
+        let target = describe_pair(
+            root,
+            target.tasks,
+            target.watches,
+            target.applied_delta_revision,
+        )?;
         if target.generation.is_none() {
             return Err(invalid_checkpoint(
                 root,
@@ -513,6 +569,7 @@ fn describe_pair(
     root: &Path,
     tasks: &[u8],
     watches: &[u8],
+    applied_delta_revision: u64,
 ) -> Result<RegistryCheckpointDescriptor> {
     let task_generation = registry_checkpoint_generation(
         &task_registry_path(root),
@@ -527,6 +584,7 @@ fn describe_pair(
     validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
     Ok(RegistryCheckpointDescriptor {
         generation: task_generation,
+        applied_delta_revision,
         tasks: describe_artifact(tasks),
         watches: describe_artifact(watches),
     })

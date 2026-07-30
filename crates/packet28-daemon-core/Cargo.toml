@@ -17,6 +17,7 @@ blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 packet28-daemon-protocol.workspace = true
+packet28-state-fs.workspace = true
 fs2 = "0.4"
 thiserror.workspace = true
 unicode-casefold = "0.2"

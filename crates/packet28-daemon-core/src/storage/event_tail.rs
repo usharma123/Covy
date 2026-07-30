@@ -215,7 +215,7 @@ pub(super) struct TaskEventTailInspection {
 }
 
 #[cfg(unix)]
-fn task_event_log_tail_sequence_admitted(
+pub(super) fn task_event_log_tail_sequence_admitted(
     root: &Path,
     task_id: &TaskStorageId,
     lease: &crate::task_store_lease::TaskStoreLease,
@@ -469,7 +469,7 @@ pub(super) fn append_next_task_event_admitted_with_observers(
 }
 
 #[cfg(not(unix))]
-fn task_event_log_tail_sequence_portable(
+pub(super) fn task_event_log_tail_sequence_portable(
     root: &Path,
     task_id: &TaskStorageId,
 ) -> Result<Option<u64>> {

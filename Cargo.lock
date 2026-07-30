@@ -1451,6 +1451,7 @@ dependencies = [
  "fs2",
  "libc",
  "packet28-daemon-protocol",
+ "packet28-state-fs",
  "rustix",
  "serde",
  "serde_json",

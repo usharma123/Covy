@@ -168,6 +168,68 @@ pub enum DaemonCoreError {
         message: String,
     },
 
+    /// A proposed registry delta violates an identifier or batch invariant.
+    #[error("invalid task/watch registry delta under {}: {message}", root.display())]
+    InvalidRegistryDeltaBatch {
+        /// Workspace root whose delta was rejected.
+        root: PathBuf,
+        /// Stable explanation of the invalid delta.
+        message: String,
+    },
+
+    /// A complete registry-delta WAL artifact violates durable integrity.
+    #[error("invalid task/watch registry delta WAL {}: {message}", path.display())]
+    InvalidRegistryDeltaWal {
+        /// WAL path whose bytes were rejected.
+        path: PathBuf,
+        /// Stable explanation of malformed data, checksum, or revision failure.
+        message: String,
+    },
+
+    /// A registry-delta frame would exceed the supported serialized-size bound.
+    #[error(
+        "task/watch registry delta frame {} is {encoded_bytes} bytes; maximum supported size is {max_bytes} bytes",
+        path.display()
+    )]
+    RegistryDeltaFrameTooLarge {
+        /// WAL path that was not appended.
+        path: PathBuf,
+        /// Encoded payload size of the rejected frame.
+        encoded_bytes: u64,
+        /// Maximum supported encoded payload size.
+        max_bytes: u64,
+    },
+
+    /// The registry-delta WAL would exceed its bounded storage envelope.
+    #[error(
+        "task/watch registry delta WAL {} would be {encoded_bytes} bytes; maximum supported size is {max_bytes} bytes",
+        path.display()
+    )]
+    RegistryDeltaWalTooLarge {
+        /// WAL path that was not extended.
+        path: PathBuf,
+        /// Resulting WAL size of the rejected append.
+        encoded_bytes: u64,
+        /// Maximum supported WAL size.
+        max_bytes: u64,
+    },
+
+    /// A registry-delta append does not continue the durable revision stream.
+    #[error(
+        "task/watch registry delta revision mismatch at {}: expected first revision {expected_first}, received {actual_first}..={actual_last}",
+        path.display()
+    )]
+    RegistryDeltaRevisionMismatch {
+        /// WAL path whose revision stream was not changed.
+        path: PathBuf,
+        /// Required first revision for the next frame.
+        expected_first: u64,
+        /// First revision supplied by the caller.
+        actual_first: u64,
+        /// Last revision supplied by the caller.
+        actual_last: u64,
+    },
+
     /// The monotonic task/watch checkpoint generation cannot advance.
     #[error(
         "task/watch registry checkpoint generation is exhausted under {}: task={task_generation:?}, watch={watch_generation:?}",
@@ -354,6 +416,21 @@ impl DaemonCoreError {
             }
             Self::InvalidTaskWatchRegistry { .. } => {
                 "Repair task and watch ownership references before retrying."
+            }
+            Self::InvalidRegistryDeltaBatch { .. } => {
+                "Correct the delta identifiers and overlapping mutations before retrying."
+            }
+            Self::InvalidRegistryDeltaWal { .. } => {
+                "Restore the registry delta WAL from a valid checkpoint or investigate storage corruption before restarting packet28d."
+            }
+            Self::RegistryDeltaFrameTooLarge { .. } => {
+                "Split the registry mutation into smaller atomic batches."
+            }
+            Self::RegistryDeltaWalTooLarge { .. } => {
+                "Publish a task/watch checkpoint before appending more registry deltas."
+            }
+            Self::RegistryDeltaRevisionMismatch { .. } => {
+                "Reload durable registry authority and retry with the next contiguous revision."
             }
             Self::RegistryCheckpointGenerationExhausted { .. } => {
                 "Archive and reinitialize daemon task/watch registry state before retrying."

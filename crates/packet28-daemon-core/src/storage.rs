@@ -39,6 +39,7 @@ use crate::{DaemonCoreError, Result};
 
 mod checkpoint;
 mod event_tail;
+mod registry_delta;
 
 pub use event_tail::{
     append_next_task_event, load_task_registry_with_event_tails,
@@ -49,6 +50,13 @@ pub use event_tail::{
 use event_tail::{
     append_next_task_event_admitted_with_observers,
     task_event_log_tail_sequence_admitted_with_observer,
+};
+pub use registry_delta::{
+    append_task_watch_registry_delta, load_task_watch_registry_with_deltas,
+    load_task_watch_registry_with_deltas_and_event_tails, registry_delta_wal_path,
+    save_task_watch_registry_checkpoint_at_revision, LoadedTaskWatchRegistry, RegistryDeltaBatch,
+    RegistryDeltaValidationError, RegistryRevision, RegistryRevisionRange,
+    MAX_REGISTRY_DELTA_FRAME_BYTES, MAX_REGISTRY_DELTA_WAL_BYTES,
 };
 
 #[cfg(any(not(unix), test))]
@@ -1064,6 +1072,29 @@ pub(super) fn load_task_watch_registry_checkpoint_under_task_lock(
     root: &Path,
     daemon: &CapabilityDir,
 ) -> Result<(TaskRegistry, WatchRegistry, Option<u64>, Option<u64>)> {
+    let loaded =
+        load_task_watch_registry_checkpoint_with_delta_revision_under_task_lock(root, daemon)?;
+    Ok((
+        loaded.tasks,
+        loaded.watches,
+        loaded.task_generation,
+        loaded.watch_generation,
+    ))
+}
+
+pub(crate) struct LoadedRegistryCheckpoint {
+    pub(crate) tasks: TaskRegistry,
+    pub(crate) watches: WatchRegistry,
+    pub(crate) task_generation: Option<u64>,
+    pub(crate) watch_generation: Option<u64>,
+    pub(crate) applied_delta_revision: u64,
+}
+
+#[cfg(unix)]
+pub(crate) fn load_task_watch_registry_checkpoint_with_delta_revision_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+) -> Result<LoadedRegistryCheckpoint> {
     let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
     with_anchored_watch_registry_lock(daemon, RegistryLockMode::Shared, || {
@@ -1073,8 +1104,17 @@ pub(super) fn load_task_watch_registry_checkpoint_under_task_lock(
             read_anchored_task_registry(daemon, &task_path)?,
             read_anchored_watch_registry(daemon, &watch_path)?,
         )?;
+        let applied_delta_revision = resolved.applied_delta_revision();
         let (tasks, watches) = resolved.materialize(root)?;
-        decode_registry_checkpoint_pair(root, &tasks, &watches)
+        let (tasks, watches, task_generation, watch_generation) =
+            decode_registry_checkpoint_pair(root, &tasks, &watches)?;
+        Ok(LoadedRegistryCheckpoint {
+            tasks,
+            watches,
+            task_generation,
+            watch_generation,
+            applied_delta_revision,
+        })
     })
 }
 
@@ -1082,6 +1122,20 @@ pub(super) fn load_task_watch_registry_checkpoint_under_task_lock(
 fn load_task_watch_registry_checkpoint_portable_under_task_lock(
     root: &Path,
 ) -> Result<(TaskRegistry, WatchRegistry, Option<u64>, Option<u64>)> {
+    let loaded =
+        load_task_watch_registry_checkpoint_with_delta_revision_portable_under_task_lock(root)?;
+    Ok((
+        loaded.tasks,
+        loaded.watches,
+        loaded.task_generation,
+        loaded.watch_generation,
+    ))
+}
+
+#[cfg(any(not(unix), test))]
+pub(crate) fn load_task_watch_registry_checkpoint_with_delta_revision_portable_under_task_lock(
+    root: &Path,
+) -> Result<LoadedRegistryCheckpoint> {
     let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
     with_registry_lock(root, &watch_path, RegistryLockMode::Shared, || {
@@ -1090,8 +1144,17 @@ fn load_task_watch_registry_checkpoint_portable_under_task_lock(
             read_task_registry_portable(&task_path)?,
             read_watch_registry(&watch_path)?,
         )?;
+        let applied_delta_revision = resolved.applied_delta_revision();
         let (tasks, watches) = resolved.materialize(root)?;
-        decode_registry_checkpoint_pair(root, &tasks, &watches)
+        let (tasks, watches, task_generation, watch_generation) =
+            decode_registry_checkpoint_pair(root, &tasks, &watches)?;
+        Ok(LoadedRegistryCheckpoint {
+            tasks,
+            watches,
+            task_generation,
+            watch_generation,
+            applied_delta_revision,
+        })
     })
 }
 
@@ -1164,7 +1227,7 @@ pub fn save_task_watch_registry_checkpoint(
             || Ok(()),
             |daemon| {
                 save_task_watch_registry_checkpoint_anchored(
-                    root, daemon, tasks, watches, task_bytes,
+                    root, daemon, tasks, watches, task_bytes, None,
                 )
             },
         )
@@ -1172,7 +1235,7 @@ pub fn save_task_watch_registry_checkpoint(
     #[cfg(not(unix))]
     {
         with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
-            save_task_watch_registry_checkpoint_portable(root, tasks, watches, task_bytes)
+            save_task_watch_registry_checkpoint_portable(root, tasks, watches, task_bytes, None)
         })
     }
 }
@@ -1314,12 +1377,13 @@ fn write_anchored_watch_registry(daemon: &CapabilityDir, path: &Path, bytes: &[u
 }
 
 #[cfg(unix)]
-fn save_task_watch_registry_checkpoint_anchored(
+pub(crate) fn save_task_watch_registry_checkpoint_anchored(
     root: &Path,
     daemon: &CapabilityDir,
     tasks: &TaskRegistry,
     watches: &WatchRegistry,
     task_bytes: Vec<u8>,
+    target_delta_revision: Option<u64>,
 ) -> Result<()> {
     let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
@@ -1338,6 +1402,17 @@ fn save_task_watch_registry_checkpoint_anchored(
             task_bytes,
         )?;
         let canonical_recovery = resolved.canonical_recovery();
+        let applied_delta_revision = resolved.applied_delta_revision();
+        let target_delta_revision = target_delta_revision.unwrap_or(applied_delta_revision);
+        if target_delta_revision < applied_delta_revision {
+            return Err(DaemonCoreError::InvalidRegistryDeltaBatch {
+                root: root.to_path_buf(),
+                message: format!(
+                    "checkpoint delta revision {target_delta_revision} precedes committed revision \
+                     {applied_delta_revision}"
+                ),
+            });
+        }
         let (base_task, base_watch) = resolved.materialize(root)?;
         let (task_generation, watch_generation) =
             registry_checkpoint_generations_from_raw(root, &base_task, &base_watch)?;
@@ -1350,8 +1425,16 @@ fn save_task_watch_registry_checkpoint_anchored(
             root,
             daemon,
             canonical_recovery,
-            (&base_task, &base_watch),
-            (&task_bytes, &watch_bytes),
+            checkpoint::RevisionedRegistryPair::new(
+                &base_task,
+                &base_watch,
+                applied_delta_revision,
+            ),
+            checkpoint::RevisionedRegistryPair::new(
+                &task_bytes,
+                &watch_bytes,
+                target_delta_revision,
+            ),
             |bytes| write_anchored_watch_registry(daemon, &watch_path, bytes),
             |bytes| write_anchored_task_registry(daemon, &task_path, bytes, || Ok(())),
         )
@@ -1376,6 +1459,7 @@ pub(crate) fn save_retained_task_registry_checkpoint_under_task_lock(
             read_anchored_watch_registry(daemon, &watch_path)?,
         )?;
         let canonical_recovery = resolved.canonical_recovery();
+        let applied_delta_revision = resolved.applied_delta_revision();
         let (base_task, base_watch) = resolved.materialize(root)?;
         let (_, watches, task_generation, watch_generation) =
             decode_registry_checkpoint_pair(root, &base_task, &base_watch)?;
@@ -1389,8 +1473,16 @@ pub(crate) fn save_retained_task_registry_checkpoint_under_task_lock(
             root,
             daemon,
             canonical_recovery,
-            (&base_task, &base_watch),
-            (&task_bytes, &watch_bytes),
+            checkpoint::RevisionedRegistryPair::new(
+                &base_task,
+                &base_watch,
+                applied_delta_revision,
+            ),
+            checkpoint::RevisionedRegistryPair::new(
+                &task_bytes,
+                &watch_bytes,
+                applied_delta_revision,
+            ),
             |bytes| write_anchored_watch_registry(daemon, &watch_path, bytes),
             |bytes| write_anchored_task_registry(daemon, &task_path, bytes, || Ok(())),
         )
@@ -1398,11 +1490,12 @@ pub(crate) fn save_retained_task_registry_checkpoint_under_task_lock(
 }
 
 #[cfg(not(unix))]
-fn save_task_watch_registry_checkpoint_portable(
+pub(crate) fn save_task_watch_registry_checkpoint_portable(
     root: &Path,
     tasks: &TaskRegistry,
     watches: &WatchRegistry,
     task_bytes: Vec<u8>,
+    target_delta_revision: Option<u64>,
 ) -> Result<()> {
     let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
@@ -1420,6 +1513,17 @@ fn save_task_watch_registry_checkpoint_portable(
             task_bytes,
         )?;
         let canonical_recovery = resolved.canonical_recovery();
+        let applied_delta_revision = resolved.applied_delta_revision();
+        let target_delta_revision = target_delta_revision.unwrap_or(applied_delta_revision);
+        if target_delta_revision < applied_delta_revision {
+            return Err(DaemonCoreError::InvalidRegistryDeltaBatch {
+                root: root.to_path_buf(),
+                message: format!(
+                    "checkpoint delta revision {target_delta_revision} precedes committed revision \
+                     {applied_delta_revision}"
+                ),
+            });
+        }
         let (base_task, base_watch) = resolved.materialize(root)?;
         let (task_generation, watch_generation) =
             registry_checkpoint_generations_from_raw(root, &base_task, &base_watch)?;
@@ -1431,8 +1535,16 @@ fn save_task_watch_registry_checkpoint_portable(
         checkpoint::publish_portable(
             root,
             canonical_recovery,
-            (&base_task, &base_watch),
-            (&task_bytes, &watch_bytes),
+            checkpoint::RevisionedRegistryPair::new(
+                &base_task,
+                &base_watch,
+                applied_delta_revision,
+            ),
+            checkpoint::RevisionedRegistryPair::new(
+                &task_bytes,
+                &watch_bytes,
+                target_delta_revision,
+            ),
             |bytes| write_atomically(&watch_path, bytes),
             |bytes| write_atomically(&task_path, bytes),
         )
