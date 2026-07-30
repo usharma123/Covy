@@ -291,11 +291,11 @@ impl RegistryDeltaBatch {
             merged.watch_removals.insert(watch_id.clone());
         }
         for watch_id in &later.watch_upsert_order {
-            let watch = later
-                .watch_upserts
-                .get(watch_id)
-                .expect("validated watch upsert order")
-                .clone();
+            let watch = later.watch_upserts.get(watch_id).cloned().ok_or_else(|| {
+                RegistryDeltaValidationError::UnknownOrderedWatchUpsert {
+                    watch_id: watch_id.clone(),
+                }
+            })?;
             let later_reinserts = later.watch_removals.contains(watch_id);
             let already_upserted = merged.watch_upserts.contains_key(watch_id);
             let already_removed = merged.watch_removals.contains(watch_id);
@@ -1643,6 +1643,18 @@ fn encode_wal_header(base_revision: RegistryRevision) -> [u8; WAL_HEADER_BYTES] 
     header
 }
 
+fn decode_u32_le<const N: usize>(bytes: &[u8; N], start: usize) -> Option<u32> {
+    let end = start.checked_add(std::mem::size_of::<u32>())?;
+    let encoded = <[u8; std::mem::size_of::<u32>()]>::try_from(bytes.get(start..end)?).ok()?;
+    Some(u32::from_le_bytes(encoded))
+}
+
+fn decode_u64_le<const N: usize>(bytes: &[u8; N], start: usize) -> Option<u64> {
+    let end = start.checked_add(std::mem::size_of::<u64>())?;
+    let encoded = <[u8; std::mem::size_of::<u64>()]>::try_from(bytes.get(start..end)?).ok()?;
+    Some(u64::from_le_bytes(encoded))
+}
+
 fn decode_wal_header(path: &Path, header: &[u8; WAL_HEADER_BYTES]) -> Result<RegistryRevision> {
     if header[0..8] != WAL_MAGIC {
         return Err(invalid_wal(
@@ -1650,14 +1662,16 @@ fn decode_wal_header(path: &Path, header: &[u8; WAL_HEADER_BYTES]) -> Result<Reg
             "WAL magic does not identify Packet28 registry deltas",
         ));
     }
-    let version = u32::from_le_bytes(header[8..12].try_into().expect("fixed header slice"));
+    let version = decode_u32_le(header, 8)
+        .ok_or_else(|| invalid_wal(path, "WAL format version is truncated"))?;
     if version != WAL_FORMAT_VERSION {
         return Err(invalid_wal(
             path,
             format!("unsupported WAL format version {version}; expected {WAL_FORMAT_VERSION}"),
         ));
     }
-    let header_len = u32::from_le_bytes(header[12..16].try_into().expect("fixed header slice"));
+    let header_len = decode_u32_le(header, 12)
+        .ok_or_else(|| invalid_wal(path, "WAL header length is truncated"))?;
     if header_len as usize != WAL_HEADER_BYTES {
         return Err(invalid_wal(
             path,
@@ -1668,9 +1682,9 @@ fn decode_wal_header(path: &Path, header: &[u8; WAL_HEADER_BYTES]) -> Result<Reg
     if header[24..56] != expected_checksum.as_bytes()[..] {
         return Err(invalid_wal(path, "WAL header checksum mismatch"));
     }
-    Ok(RegistryRevision::new(u64::from_le_bytes(
-        header[16..24].try_into().expect("fixed header slice"),
-    )))
+    let base_revision = decode_u64_le(header, 16)
+        .ok_or_else(|| invalid_wal(path, "WAL base revision is truncated"))?;
+    Ok(RegistryRevision::new(base_revision))
 }
 
 fn encode_frame_header(
@@ -1705,9 +1719,7 @@ fn frame_length_from_footer(footer: &[u8; FRAME_FOOTER_BYTES]) -> Option<u64> {
     if footer[0..8] != FRAME_FOOTER_MAGIC {
         return None;
     }
-    Some(u64::from_le_bytes(
-        footer[8..16].try_into().expect("fixed footer slice"),
-    ))
+    decode_u64_le(footer, 8)
 }
 
 fn decode_frame_footer(
@@ -1724,8 +1736,8 @@ fn decode_frame_footer(
             format!("invalid complete frame footer magic at byte {offset}"),
         ));
     }
-    let encoded_frame_len =
-        u64::from_le_bytes(footer[8..16].try_into().expect("fixed footer slice"));
+    let encoded_frame_len = decode_u64_le(footer, 8)
+        .ok_or_else(|| invalid_wal(path, "complete frame footer length is truncated"))?;
     if encoded_frame_len != frame_len {
         return Err(invalid_wal(
             path,
@@ -1735,7 +1747,8 @@ fn decode_frame_footer(
             ),
         ));
     }
-    let encoded_last = u64::from_le_bytes(footer[16..24].try_into().expect("fixed footer slice"));
+    let encoded_last = decode_u64_le(footer, 16)
+        .ok_or_else(|| invalid_wal(path, "complete frame footer revision is truncated"))?;
     if encoded_last != decoded.revisions.last.get() {
         return Err(invalid_wal(
             path,
@@ -1773,7 +1786,8 @@ fn decode_frame_header(
             format!("invalid complete frame magic at byte {offset}"),
         ));
     }
-    let version = u32::from_le_bytes(header[8..12].try_into().expect("fixed header slice"));
+    let version = decode_u32_le(header, 8)
+        .ok_or_else(|| invalid_wal(path, "frame format version is truncated"))?;
     if version != FRAME_FORMAT_VERSION {
         return Err(invalid_wal(
             path,
@@ -1783,14 +1797,16 @@ fn decode_frame_header(
             ),
         ));
     }
-    let header_len = u32::from_le_bytes(header[12..16].try_into().expect("fixed header slice"));
+    let header_len = decode_u32_le(header, 12)
+        .ok_or_else(|| invalid_wal(path, "frame header length is truncated"))?;
     if header_len as usize != FRAME_HEADER_BYTES {
         return Err(invalid_wal(
             path,
             format!("invalid frame header length {header_len} at byte {offset}"),
         ));
     }
-    let payload_len = u64::from_le_bytes(header[16..24].try_into().expect("fixed header slice"));
+    let payload_len = decode_u64_le(header, 16)
+        .ok_or_else(|| invalid_wal(path, "frame payload length is truncated"))?;
     if payload_len > MAX_REGISTRY_DELTA_FRAME_BYTES as u64 {
         return Err(DaemonCoreError::RegistryDeltaFrameTooLarge {
             path: path.to_path_buf(),
@@ -1798,12 +1814,14 @@ fn decode_frame_header(
             max_bytes: MAX_REGISTRY_DELTA_FRAME_BYTES as u64,
         });
     }
-    let first = RegistryRevision::new(u64::from_le_bytes(
-        header[24..32].try_into().expect("fixed header slice"),
-    ));
-    let last = RegistryRevision::new(u64::from_le_bytes(
-        header[32..40].try_into().expect("fixed header slice"),
-    ));
+    let first = RegistryRevision::new(
+        decode_u64_le(header, 24)
+            .ok_or_else(|| invalid_wal(path, "frame first revision is truncated"))?,
+    );
+    let last = RegistryRevision::new(
+        decode_u64_le(header, 32)
+            .ok_or_else(|| invalid_wal(path, "frame last revision is truncated"))?,
+    );
     let revisions = RegistryRevisionRange::new(first, last).map_err(|error| {
         invalid_wal(
             path,
@@ -1935,6 +1953,18 @@ mod tests {
         let header = encode_frame_header(revisions, &payload);
         let footer = encode_frame_footer(&header, payload.len());
         [header.as_slice(), payload.as_slice(), footer.as_slice()].concat()
+    }
+
+    #[test]
+    fn fixed_width_decoders_are_little_endian_and_bounds_checked() {
+        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+
+        assert_eq!(decode_u32_le(&bytes, 0), Some(0x0403_0201));
+        assert_eq!(decode_u32_le(&bytes, 4), Some(0x0807_0605));
+        assert_eq!(decode_u64_le(&bytes, 0), Some(0x0807_0605_0403_0201));
+        assert_eq!(decode_u32_le(&bytes, 5), None);
+        assert_eq!(decode_u64_le(&bytes, 1), None);
+        assert_eq!(decode_u32_le(&bytes, usize::MAX), None);
     }
 
     #[test]
