@@ -42,9 +42,9 @@ mod event_tail;
 mod registry_delta;
 
 pub use event_tail::{
-    admit_task_event_from_registry, append_next_task_event, append_next_task_event_with_admission,
+    append_next_task_event, append_next_task_event_with_authority,
     load_task_registry_with_event_tails, load_task_watch_registry_checkpoint_with_event_tails,
-    task_event_log_tail_sequence, TaskEventAdmission, MAX_TASK_EVENT_TAIL_SCAN_BYTES,
+    task_event_log_tail_sequence, MAX_TASK_EVENT_TAIL_SCAN_BYTES,
 };
 #[cfg(all(test, unix))]
 use event_tail::{
@@ -52,11 +52,11 @@ use event_tail::{
     task_event_log_tail_sequence_admitted_with_observer,
 };
 pub use registry_delta::{
-    admit_registry_delta_from_registry, append_task_watch_registry_delta,
-    append_task_watch_registry_delta_with_admission, load_task_watch_registry_with_deltas,
+    append_task_watch_registry_delta, append_task_watch_registry_delta_with_authority,
+    load_registry_admission_authority, load_task_watch_registry_with_deltas,
     load_task_watch_registry_with_deltas_and_event_tails, registry_delta_wal_path,
     save_task_watch_registry_checkpoint_at_revision, LoadedTaskWatchRegistry,
-    RegistryDeltaAdmission, RegistryDeltaBatch, RegistryDeltaValidationError, RegistryRevision,
+    RegistryAdmissionAuthority, RegistryDeltaBatch, RegistryDeltaValidationError, RegistryRevision,
     RegistryRevisionRange, MAX_REGISTRY_DELTA_FRAME_BYTES, MAX_REGISTRY_DELTA_WAL_BYTES,
 };
 
@@ -6776,21 +6776,28 @@ mod tests {
             &delta,
         )
         .unwrap();
-        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
         assert!(!task_registry_path(root.path()).exists());
         let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
-        let admission =
-            admit_task_event_from_registry(root.path(), &loaded.tasks, &lease, task_id).unwrap();
+        let authority = load_registry_admission_authority(root.path(), lease).unwrap();
+        // A malformed checkpoint written after authority loading must not be
+        // consulted by the event fast path.
+        fs::write(task_registry_path(root.path()), b"not-json").unwrap();
 
-        let frame =
-            append_next_task_event_with_admission(admission, &task_event_frame(task_id, 1).event)
-                .unwrap();
+        let frame = append_next_task_event_with_authority(
+            root.path(),
+            &authority,
+            task_id,
+            &task_event_frame(task_id, 1).event,
+        )
+        .unwrap();
 
         assert_eq!(frame.seq, 1);
         assert_eq!(frame.task_id, task_id);
-        assert!(!task_registry_path(root.path()).exists());
-        drop(lease);
-
+        assert_eq!(
+            fs::read(task_registry_path(root.path())).unwrap(),
+            b"not-json"
+        );
+        fs::remove_file(task_registry_path(root.path())).unwrap();
         let (recovered, tails) =
             load_task_watch_registry_with_deltas_and_event_tails(root.path()).unwrap();
         assert!(recovered.tasks.tasks.contains_key(task_id));
@@ -6808,10 +6815,15 @@ mod tests {
         fs::create_dir_all(event_path.parent().unwrap()).unwrap();
         fs::write(&event_path, b"sentinel\n").unwrap();
         let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
+        let authority = load_registry_admission_authority(root.path(), lease).unwrap();
 
-        let error =
-            admit_task_event_from_registry(root.path(), &TaskRegistry::default(), &lease, task_id)
-                .unwrap_err();
+        let error = append_next_task_event_with_authority(
+            root.path(),
+            &authority,
+            task_id,
+            &task_event_frame(task_id, 1).event,
+        )
+        .unwrap_err();
 
         assert!(matches!(error, DaemonCoreError::InvalidTaskRegistry { .. }));
         assert_eq!(fs::read(event_path).unwrap(), b"sentinel\n");
@@ -6823,27 +6835,14 @@ mod tests {
         let other_root = tempdir().unwrap();
         ensure_daemon_dir(root.path()).unwrap();
         ensure_daemon_dir(other_root.path()).unwrap();
-        let registry = TaskRegistry {
-            tasks: BTreeMap::from([(
-                "lease-bound".to_string(),
-                TaskRecord {
-                    task_id: "lease-bound".to_string(),
-                    ..TaskRecord::default()
-                },
-            )]),
-        };
+        admit_task(root.path(), "lease-bound");
         let writer_lease = acquire_task_store_writer_lease(root.path()).unwrap();
-        let wrong_role =
-            admit_task_event_from_registry(root.path(), &registry, &writer_lease, "lease-bound")
-                .unwrap_err();
+        let wrong_role = load_registry_admission_authority(root.path(), writer_lease).unwrap_err();
         assert!(matches!(wrong_role, DaemonCoreError::Io { .. }));
-        drop(writer_lease);
 
         let other_lease =
             crate::task_store_lease::acquire_daemon_task_store_lease(other_root.path()).unwrap();
-        let wrong_root =
-            admit_task_event_from_registry(root.path(), &registry, &other_lease, "lease-bound")
-                .unwrap_err();
+        let wrong_root = load_registry_admission_authority(root.path(), other_lease).unwrap_err();
         assert!(matches!(wrong_root, DaemonCoreError::Io { .. }));
         assert!(!task_event_path(root.path(), "lease-bound").exists());
     }

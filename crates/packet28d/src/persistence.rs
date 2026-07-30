@@ -9,10 +9,10 @@ use anyhow::{anyhow, Context, Result};
 #[cfg(test)]
 use packet28_daemon_core::storage::append_task_watch_registry_delta;
 use packet28_daemon_core::storage::{
-    admit_registry_delta_from_registry, admit_task_event_from_registry,
-    append_next_task_event_with_admission, append_task_watch_registry_delta_with_admission,
-    registry_delta_wal_path, save_task_watch_registry_checkpoint_at_revision, RegistryDeltaBatch,
-    RegistryRevision, RegistryRevisionRange,
+    append_next_task_event_with_authority, append_task_watch_registry_delta_with_authority,
+    load_registry_admission_authority, registry_delta_wal_path,
+    save_task_watch_registry_checkpoint_at_revision, RegistryAdmissionAuthority,
+    RegistryDeltaBatch, RegistryRevision, RegistryRevisionRange,
 };
 use packet28_daemon_core::task_store_lease::TaskStoreLease;
 use packet28_daemon_core::DaemonCoreError;
@@ -35,7 +35,6 @@ pub(crate) struct PersistenceMetrics {
     pub(crate) events_started: u64,
     pub(crate) events_appended: u64,
     pub(crate) event_bytes_appended: u64,
-    pub(crate) event_admission_checkpoint_bytes_read: u64,
     pub(crate) event_state_lock_sections: u64,
     pub(crate) event_state_lock_nanos: u64,
     pub(crate) max_event_state_lock_nanos: u64,
@@ -83,13 +82,9 @@ struct PendingState {
 struct RegistryImage {
     tasks: TaskRegistry,
     watches: WatchRegistry,
+    authority: Option<RegistryAdmissionAuthority>,
     durable_revision: u64,
     checkpoint_revision: u64,
-}
-
-struct PersistedEvent {
-    frame: DaemonEventFrame,
-    admission_checkpoint_bytes_read: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -102,9 +97,7 @@ trait PersistenceBackend: Send + Sync {
     fn append_delta(
         &self,
         root: &Path,
-        tasks: &TaskRegistry,
-        task_store_lease: Option<&TaskStoreLease>,
-        current_revision: RegistryRevision,
+        authority: Option<&mut RegistryAdmissionAuthority>,
         revisions: RegistryRevisionRange,
         delta: &RegistryDelta,
     ) -> Result<u64>;
@@ -120,11 +113,10 @@ trait PersistenceBackend: Send + Sync {
     fn append_event(
         &self,
         root: &Path,
-        tasks: &TaskRegistry,
-        task_store_lease: Option<&TaskStoreLease>,
+        authority: Option<&RegistryAdmissionAuthority>,
         task_id: &str,
         event: &DaemonEvent,
-    ) -> Result<PersistedEvent>;
+    ) -> Result<DaemonEventFrame>;
 }
 
 struct FilesystemBackend;
@@ -133,21 +125,17 @@ impl PersistenceBackend for FilesystemBackend {
     fn append_delta(
         &self,
         root: &Path,
-        tasks: &TaskRegistry,
-        task_store_lease: Option<&TaskStoreLease>,
-        current_revision: RegistryRevision,
+        authority: Option<&mut RegistryAdmissionAuthority>,
         revisions: RegistryRevisionRange,
         delta: &RegistryDelta,
     ) -> Result<u64> {
-        let task_store_lease = task_store_lease
-            .ok_or_else(|| anyhow!("filesystem persistence requires a daemon task-store lease"))?;
-        let admission =
-            admit_registry_delta_from_registry(root, tasks, task_store_lease, current_revision)?;
+        let authority = authority
+            .ok_or_else(|| anyhow!("filesystem persistence requires registry authority"))?;
         let wal_path = registry_delta_wal_path(root);
         let before = std::fs::metadata(&wal_path)
             .map(|metadata| metadata.len())
             .unwrap_or_default();
-        append_task_watch_registry_delta_with_admission(admission, revisions, delta)?;
+        append_task_watch_registry_delta_with_authority(root, authority, revisions, delta)?;
         let after = std::fs::metadata(wal_path)
             .map(|metadata| metadata.len())
             .unwrap_or_default();
@@ -169,19 +157,15 @@ impl PersistenceBackend for FilesystemBackend {
     fn append_event(
         &self,
         root: &Path,
-        tasks: &TaskRegistry,
-        task_store_lease: Option<&TaskStoreLease>,
+        authority: Option<&RegistryAdmissionAuthority>,
         task_id: &str,
         event: &DaemonEvent,
-    ) -> Result<PersistedEvent> {
-        let task_store_lease = task_store_lease
-            .ok_or_else(|| anyhow!("filesystem persistence requires a daemon task-store lease"))?;
-        let admission = admit_task_event_from_registry(root, tasks, task_store_lease, task_id)?;
-        let frame = append_next_task_event_with_admission(admission, event)?;
-        Ok(PersistedEvent {
-            frame,
-            admission_checkpoint_bytes_read: 0,
-        })
+    ) -> Result<DaemonEventFrame> {
+        let authority = authority
+            .ok_or_else(|| anyhow!("filesystem persistence requires registry authority"))?;
+        Ok(append_next_task_event_with_authority(
+            root, authority, task_id, event,
+        )?)
     }
 }
 
@@ -300,6 +284,30 @@ impl PersistenceOwner {
                 revisions.replayed.get()
             );
         }
+        let authority = task_store_lease
+            .map(|lease| load_registry_admission_authority(&root, lease))
+            .transpose()
+            .context("failed to load daemon registry admission authority")?;
+        if let Some(authority) = &authority {
+            if authority.revision() != revisions.replayed {
+                anyhow::bail!(
+                    "daemon registry authority revision {} does not match replayed revision {}",
+                    authority.revision().get(),
+                    revisions.replayed.get()
+                );
+            }
+            let authority_task_ids = authority.task_ids().collect::<BTreeSet<_>>();
+            let durable_task_ids = durable_tasks
+                .tasks
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            if authority_task_ids != durable_task_ids {
+                anyhow::bail!(
+                    "daemon registry authority task membership does not match replayed registry"
+                );
+            }
+        }
         let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let durable_task_ids = if revisions.checkpoint == revisions.replayed {
             durable_tasks.tasks.keys().cloned().collect()
@@ -330,10 +338,10 @@ impl PersistenceOwner {
                 run_worker(
                     worker_state,
                     receiver,
-                    task_store_lease,
                     RegistryImage {
                         tasks: durable_tasks,
                         watches: durable_watches,
+                        authority,
                         durable_revision: revisions.replayed.get(),
                         checkpoint_revision: revisions.checkpoint.get(),
                     },
@@ -640,7 +648,6 @@ impl PersistenceHandle {
 fn run_worker(
     state: Arc<PersistenceState>,
     receiver: Receiver<PersistenceCommand>,
-    task_store_lease: Option<TaskStoreLease>,
     mut image: RegistryImage,
 ) {
     let mut retry_delta = None;
@@ -654,12 +661,7 @@ fn run_worker(
                     Ok(command) => Some(command),
                     Err(RecvTimeoutError::Timeout) => None,
                     Err(RecvTimeoutError::Disconnected) => {
-                        flush_on_disconnect(
-                            &state,
-                            &mut image,
-                            &mut retry_delta,
-                            task_store_lease.as_ref(),
-                        );
+                        flush_on_disconnect(&state, &mut image, &mut retry_delta);
                         return;
                     }
                 }
@@ -667,37 +669,19 @@ fn run_worker(
             None => match receiver.recv() {
                 Ok(command) => Some(command),
                 Err(_) => {
-                    flush_on_disconnect(
-                        &state,
-                        &mut image,
-                        &mut retry_delta,
-                        task_store_lease.as_ref(),
-                    );
+                    flush_on_disconnect(&state, &mut image, &mut retry_delta);
                     return;
                 }
             },
         };
         let Some(command) = command else {
-            service_deadline(
-                &state,
-                &mut image,
-                &mut retry_delta,
-                task_store_lease.as_ref(),
-                &mut deadline,
-            );
+            service_deadline(&state, &mut image, &mut retry_delta, &mut deadline);
             continue;
         };
         match command {
             PersistenceCommand::Wake => {
                 let before = image.durable_revision;
-                let result = append_pending(
-                    &state,
-                    &mut image,
-                    &mut retry_delta,
-                    task_store_lease.as_ref(),
-                    None,
-                    false,
-                );
+                let result = append_pending(&state, &mut image, &mut retry_delta, None, false);
                 update_deadline_after_append(
                     &state,
                     &image,
@@ -716,7 +700,6 @@ fn run_worker(
                     &state,
                     &mut image,
                     &mut retry_delta,
-                    task_store_lease.as_ref(),
                     Some(target_revision),
                     true,
                 );
@@ -743,7 +726,6 @@ fn run_worker(
                     &state,
                     &mut image,
                     &mut retry_delta,
-                    task_store_lease.as_ref(),
                     Some(target_revision),
                     true,
                 )
@@ -770,7 +752,6 @@ fn run_worker(
                     &state,
                     &mut image,
                     &mut retry_delta,
-                    task_store_lease.as_ref(),
                     Some(required_revision),
                     true,
                 )
@@ -788,15 +769,9 @@ fn run_worker(
                     }
                     state
                         .backend
-                        .append_event(
-                            &state.root,
-                            &image.tasks,
-                            task_store_lease.as_ref(),
-                            &task_id,
-                            &event,
-                        )
-                        .inspect(|persisted| {
-                            let encoded_bytes = serde_json::to_vec(&persisted.frame)
+                        .append_event(&state.root, image.authority.as_ref(), &task_id, &event)
+                        .inspect(|frame| {
+                            let encoded_bytes = serde_json::to_vec(frame)
                                 .map(|encoded| {
                                     u64::try_from(encoded.len())
                                         .unwrap_or(u64::MAX)
@@ -807,15 +782,11 @@ fn run_worker(
                             metrics.events_appended = metrics.events_appended.saturating_add(1);
                             metrics.event_bytes_appended =
                                 metrics.event_bytes_appended.saturating_add(encoded_bytes);
-                            metrics.event_admission_checkpoint_bytes_read = metrics
-                                .event_admission_checkpoint_bytes_read
-                                .saturating_add(persisted.admission_checkpoint_bytes_read);
                         })
                         .inspect_err(|_| {
                             let mut metrics = lock_unpoisoned(&state.metrics);
                             metrics.failures = metrics.failures.saturating_add(1);
                         })
-                        .map(|persisted| persisted.frame)
                 });
                 update_deadline_after_append(
                     &state,
@@ -835,7 +806,6 @@ fn run_worker(
                     &state,
                     &mut image,
                     &mut retry_delta,
-                    task_store_lease.as_ref(),
                     Some(target_revision),
                     true,
                 )
@@ -854,11 +824,10 @@ fn service_deadline(
     state: &PersistenceState,
     image: &mut RegistryImage,
     retry_delta: &mut Option<PendingDelta>,
-    task_store_lease: Option<&TaskStoreLease>,
     deadline: &mut Option<Instant>,
 ) {
     let before = image.durable_revision;
-    match append_pending(state, image, retry_delta, task_store_lease, None, false) {
+    match append_pending(state, image, retry_delta, None, false) {
         Ok(true) => {
             *deadline = Some(Instant::now() + state.debounce);
         }
@@ -929,19 +898,9 @@ fn flush_on_disconnect(
     state: &PersistenceState,
     image: &mut RegistryImage,
     retry_delta: &mut Option<PendingDelta>,
-    task_store_lease: Option<&TaskStoreLease>,
 ) {
     let target_revision = lock_unpoisoned(&state.pending).next_revision;
-    if append_pending(
-        state,
-        image,
-        retry_delta,
-        task_store_lease,
-        Some(target_revision),
-        false,
-    )
-    .is_ok()
-    {
+    if append_pending(state, image, retry_delta, Some(target_revision), false).is_ok() {
         let _ = save_current_image(state, image, false);
     }
 }
@@ -950,7 +909,6 @@ fn append_pending(
     state: &PersistenceState,
     image: &mut RegistryImage,
     retry_delta: &mut Option<PendingDelta>,
-    task_store_lease: Option<&TaskStoreLease>,
     required_revision: Option<u64>,
     surface_prior_error: bool,
 ) -> Result<bool> {
@@ -988,9 +946,7 @@ fn append_pending(
         .context("invalid daemon registry revision range")?;
         match state.backend.append_delta(
             &state.root,
-            &image.tasks,
-            task_store_lease,
-            RegistryRevision::new(image.durable_revision),
+            image.authority.as_mut(),
             revisions,
             &pending_delta.delta,
         ) {
@@ -1282,6 +1238,37 @@ mod tests {
         owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 
+    #[test]
+    fn start_rejects_caller_registry_that_does_not_match_durable_authority() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
+        let fabricated = TaskRegistry {
+            tasks: std::collections::BTreeMap::from([(
+                "fabricated".to_string(),
+                task_record("fabricated", "not-durable"),
+            )]),
+        };
+
+        let error = match PersistenceOwner::start(
+            root.path().to_path_buf(),
+            lease,
+            Duration::from_secs(1),
+            &fabricated,
+            &WatchRegistry::default(),
+            RegistryRevision::ZERO,
+            RegistryRevision::ZERO,
+        ) {
+            Ok(_) => panic!("fabricated registry unexpectedly started persistence"),
+            Err(error) => error,
+        };
+
+        assert!(error
+            .to_string()
+            .contains("task membership does not match replayed registry"));
+        assert!(!registry_delta_wal_path(root.path()).exists());
+    }
+
     fn task_record_with_watch(task_id: &str, task_marker: &str, watch_id: &str) -> TaskRecord {
         let mut task = task_record(task_id, task_marker);
         task.watch_ids.push(watch_id.to_string());
@@ -1355,9 +1342,7 @@ mod tests {
         fn append_delta(
             &self,
             root: &Path,
-            tasks: &TaskRegistry,
-            task_store_lease: Option<&TaskStoreLease>,
-            current_revision: RegistryRevision,
+            authority: Option<&mut RegistryAdmissionAuthority>,
             revisions: RegistryRevisionRange,
             delta: &RegistryDelta,
         ) -> Result<u64> {
@@ -1367,14 +1352,7 @@ mod tests {
                 }
                 let _ = lock_unpoisoned(&self.release).recv();
             }
-            FilesystemBackend.append_delta(
-                root,
-                tasks,
-                task_store_lease,
-                current_revision,
-                revisions,
-                delta,
-            )
+            FilesystemBackend.append_delta(root, authority, revisions, delta)
         }
 
         fn save_checkpoint(
@@ -1390,12 +1368,11 @@ mod tests {
         fn append_event(
             &self,
             root: &Path,
-            tasks: &TaskRegistry,
-            task_store_lease: Option<&TaskStoreLease>,
+            authority: Option<&RegistryAdmissionAuthority>,
             task_id: &str,
             event: &DaemonEvent,
-        ) -> Result<PersistedEvent> {
-            FilesystemBackend.append_event(root, tasks, task_store_lease, task_id, event)
+        ) -> Result<DaemonEventFrame> {
+            FilesystemBackend.append_event(root, authority, task_id, event)
         }
     }
 
@@ -1487,7 +1464,6 @@ mod tests {
         assert!(!task_registry_path(root.path()).exists());
         assert!(!watch_registry_path(root.path()).exists());
         assert!(registry_delta_wal_path(root.path()).exists());
-        assert_eq!(handle.metrics().event_admission_checkpoint_bytes_read, 0);
         let (loaded, event_tails) =
             load_task_watch_registry_with_deltas_and_event_tails(root.path()).unwrap();
         assert_eq!(loaded.checkpoint_revision, RegistryRevision::ZERO);
@@ -1546,20 +1522,11 @@ mod tests {
         fn append_delta(
             &self,
             root: &Path,
-            tasks: &TaskRegistry,
-            task_store_lease: Option<&TaskStoreLease>,
-            current_revision: RegistryRevision,
+            authority: Option<&mut RegistryAdmissionAuthority>,
             revisions: RegistryRevisionRange,
             delta: &RegistryDelta,
         ) -> Result<u64> {
-            FilesystemBackend.append_delta(
-                root,
-                tasks,
-                task_store_lease,
-                current_revision,
-                revisions,
-                delta,
-            )
+            FilesystemBackend.append_delta(root, authority, revisions, delta)
         }
 
         fn save_checkpoint(
@@ -1575,11 +1542,10 @@ mod tests {
         fn append_event(
             &self,
             _root: &Path,
-            _tasks: &TaskRegistry,
-            _task_store_lease: Option<&TaskStoreLease>,
+            _authority: Option<&RegistryAdmissionAuthority>,
             _task_id: &str,
             _event: &DaemonEvent,
-        ) -> Result<PersistedEvent> {
+        ) -> Result<DaemonEventFrame> {
             anyhow::bail!("injected event append failure")
         }
     }
@@ -1724,9 +1690,7 @@ mod tests {
         fn append_delta(
             &self,
             _root: &Path,
-            _tasks: &TaskRegistry,
-            _task_store_lease: Option<&TaskStoreLease>,
-            _current_revision: RegistryRevision,
+            _authority: Option<&mut RegistryAdmissionAuthority>,
             _revisions: RegistryRevisionRange,
             _delta: &RegistryDelta,
         ) -> Result<u64> {
@@ -1749,18 +1713,14 @@ mod tests {
         fn append_event(
             &self,
             _root: &Path,
-            _tasks: &TaskRegistry,
-            _task_store_lease: Option<&TaskStoreLease>,
+            _authority: Option<&RegistryAdmissionAuthority>,
             task_id: &str,
             event: &DaemonEvent,
-        ) -> Result<PersistedEvent> {
-            Ok(PersistedEvent {
-                frame: DaemonEventFrame {
-                    seq: 1,
-                    task_id: task_id.to_string(),
-                    event: event.clone(),
-                },
-                admission_checkpoint_bytes_read: 0,
+        ) -> Result<DaemonEventFrame> {
+            Ok(DaemonEventFrame {
+                seq: 1,
+                task_id: task_id.to_string(),
+                event: event.clone(),
             })
         }
     }
@@ -1805,20 +1765,11 @@ mod tests {
         fn append_delta(
             &self,
             root: &Path,
-            tasks: &TaskRegistry,
-            task_store_lease: Option<&TaskStoreLease>,
-            current_revision: RegistryRevision,
+            authority: Option<&mut RegistryAdmissionAuthority>,
             revisions: RegistryRevisionRange,
             delta: &RegistryDelta,
         ) -> Result<u64> {
-            FilesystemBackend.append_delta(
-                root,
-                tasks,
-                task_store_lease,
-                current_revision,
-                revisions,
-                delta,
-            )
+            FilesystemBackend.append_delta(root, authority, revisions, delta)
         }
 
         fn save_checkpoint(
@@ -1837,12 +1788,11 @@ mod tests {
         fn append_event(
             &self,
             root: &Path,
-            tasks: &TaskRegistry,
-            task_store_lease: Option<&TaskStoreLease>,
+            authority: Option<&RegistryAdmissionAuthority>,
             task_id: &str,
             event: &DaemonEvent,
-        ) -> Result<PersistedEvent> {
-            FilesystemBackend.append_event(root, tasks, task_store_lease, task_id, event)
+        ) -> Result<DaemonEventFrame> {
+            FilesystemBackend.append_event(root, authority, task_id, event)
         }
     }
 
@@ -1926,9 +1876,7 @@ mod tests {
         fn append_delta(
             &self,
             _root: &Path,
-            _tasks: &TaskRegistry,
-            _task_store_lease: Option<&TaskStoreLease>,
-            _current_revision: RegistryRevision,
+            _authority: Option<&mut RegistryAdmissionAuthority>,
             _revisions: RegistryRevisionRange,
             _delta: &RegistryDelta,
         ) -> Result<u64> {
@@ -1952,18 +1900,14 @@ mod tests {
         fn append_event(
             &self,
             _root: &Path,
-            _tasks: &TaskRegistry,
-            _task_store_lease: Option<&TaskStoreLease>,
+            _authority: Option<&RegistryAdmissionAuthority>,
             task_id: &str,
             event: &DaemonEvent,
-        ) -> Result<PersistedEvent> {
-            Ok(PersistedEvent {
-                frame: DaemonEventFrame {
-                    seq: self.sequence.fetch_add(1, Ordering::AcqRel) + 1,
-                    task_id: task_id.to_string(),
-                    event: event.clone(),
-                },
-                admission_checkpoint_bytes_read: 0,
+        ) -> Result<DaemonEventFrame> {
+            Ok(DaemonEventFrame {
+                seq: self.sequence.fetch_add(1, Ordering::AcqRel) + 1,
+                task_id: task_id.to_string(),
+                event: event.clone(),
             })
         }
     }

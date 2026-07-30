@@ -336,32 +336,24 @@ impl RegistryDeltaBatch {
         watches: &mut WatchRegistry,
     ) -> std::result::Result<(), RegistryDeltaValidationError> {
         self.validate()?;
-        let mutates_watches = !self.watch_upserts.is_empty()
-            || !self.watch_upsert_order.is_empty()
-            || !self.watch_removals.is_empty();
-        if mutates_watches {
-            let mut admitted_watch_ids = BTreeSet::new();
-            for watch in &watches.watches {
-                record_apply_watch_scan();
-                if !admitted_watch_ids.insert(watch.watch_id.as_str()) {
-                    return Err(RegistryDeltaValidationError::DuplicateWatchIdentifier {
-                        watch_id: watch.watch_id.clone(),
-                    });
-                }
+        let mut admitted_watch_ids = BTreeSet::new();
+        for watch in &watches.watches {
+            record_apply_watch_scan();
+            if !admitted_watch_ids.insert(watch.watch_id.as_str()) {
+                return Err(RegistryDeltaValidationError::DuplicateWatchIdentifier {
+                    watch_id: watch.watch_id.clone(),
+                });
             }
         }
 
-        // Task-only high-water updates never inspect or index the watch
-        // registry. Watch mutations retain the failure-atomic duplicate check
-        // above before either registry is changed.
+        // All fallible validation finishes above. Mutations below touch only
+        // dirty task/watch records plus one watch-position index, so applying
+        // a small delta never clones the O(total tasks) registry.
         for task_id in &self.task_removals {
             tasks.tasks.remove(task_id);
         }
         for (task_id, task) in &self.task_upserts {
             tasks.tasks.insert(task_id.clone(), task.clone());
-        }
-        if !mutates_watches {
-            return Ok(());
         }
         watches
             .watches
@@ -466,18 +458,72 @@ pub struct LoadedTaskWatchRegistry {
     pub replayed_revision: RegistryRevision,
 }
 
-/// Compact proof of the daemon's current durable task-registry authority.
+/// Authenticated task-admission state loaded from durable registry authority.
 ///
-/// The token borrows the in-memory registry image and daemon lifecycle lease
-/// that own `current_revision`. It lets the single persistence owner validate
-/// new task namespace admission without decoding the full checkpoint for
-/// every WAL append.
+/// Fields are private so callers cannot manufacture task membership or a WAL
+/// revision. The authority advances only after a checksummed WAL append
+/// succeeds.
 #[derive(Debug)]
-pub struct RegistryDeltaAdmission<'registry> {
-    root: &'registry Path,
-    current_tasks: &'registry TaskRegistry,
-    lease: &'registry crate::task_store_lease::TaskStoreLease,
-    current_revision: RegistryRevision,
+pub struct RegistryAdmissionAuthority {
+    root: PathBuf,
+    task_ids: BTreeSet<String>,
+    revision: RegistryRevision,
+    lease: crate::task_store_lease::TaskStoreLease,
+}
+
+impl RegistryAdmissionAuthority {
+    /// Returns the durable WAL revision represented by this authority.
+    #[must_use]
+    pub const fn revision(&self) -> RegistryRevision {
+        self.revision
+    }
+
+    /// Returns whether the authenticated durable registry contains `task_id`.
+    #[must_use]
+    pub fn contains_task(&self, task_id: &str) -> bool {
+        self.task_ids.contains(task_id)
+    }
+
+    /// Returns the authenticated task identifiers in stable order.
+    pub fn task_ids(&self) -> impl Iterator<Item = &str> {
+        self.task_ids.iter().map(String::as_str)
+    }
+
+    fn matches_root(&self, root: &Path) -> bool {
+        self.root == root
+    }
+
+    pub(super) fn require_task(&self, root: &Path, task_id: &TaskStorageId) -> Result<()> {
+        if !self.matches_root(root) {
+            return Err(invalid_registry_authority_root(root));
+        }
+        if self.task_ids.contains(task_id.as_str()) {
+            return Ok(());
+        }
+        Err(DaemonCoreError::InvalidTaskRegistry {
+            path: task_registry_path(root),
+            message: format!(
+                "task identifier {:?} is not present in authenticated registry authority",
+                task_id.as_str()
+            ),
+        })
+    }
+
+    pub(super) const fn lease(&self) -> &crate::task_store_lease::TaskStoreLease {
+        &self.lease
+    }
+
+    fn apply_committed_batch(
+        &mut self,
+        revisions: RegistryRevisionRange,
+        batch: &RegistryDeltaBatch,
+    ) {
+        for task_id in &batch.task_removals {
+            self.task_ids.remove(task_id);
+        }
+        self.task_ids.extend(batch.task_upserts.keys().cloned());
+        self.revision = revisions.last;
+    }
 }
 
 /// Returns the diagnostic path of the task/watch registry delta WAL.
@@ -485,28 +531,28 @@ pub fn registry_delta_wal_path(root: &Path) -> PathBuf {
     daemon_dir(root).join(REGISTRY_DELTA_WAL_FILE_NAME)
 }
 
-/// Admits a WAL append from the daemon's current durable registry image.
+/// Loads compact task-admission authority from checkpoint-plus-WAL state.
 ///
-/// `current_revision` must be the replayed revision represented by
-/// `current_tasks`. The returned token remains valid only while that image and
-/// the matching daemon lifecycle lease are retained by the persistence owner.
+/// The returned value has private fields and therefore cannot be forged from a
+/// caller-provided registry snapshot. It consumes and retains `lease`, keeping
+/// lifecycle ownership continuous from the authenticated load through every
+/// WAL and event append that uses the authority.
 ///
 /// # Errors
 ///
-/// Returns [`DaemonCoreError::Io`] when `lease` does not own the requested
-/// daemon task-store namespace.
-pub fn admit_registry_delta_from_registry<'registry>(
-    root: &'registry Path,
-    current_tasks: &'registry TaskRegistry,
-    lease: &'registry crate::task_store_lease::TaskStoreLease,
-    current_revision: RegistryRevision,
-) -> Result<RegistryDeltaAdmission<'registry>> {
-    require_daemon_lifecycle_lease(root, lease)?;
-    Ok(RegistryDeltaAdmission {
-        root,
-        current_tasks,
+/// Returns [`DaemonCoreError::Io`] if `lease` is not the daemon lifecycle lease
+/// for `root`. Other errors match [`load_task_watch_registry_with_deltas`].
+pub fn load_registry_admission_authority(
+    root: &Path,
+    lease: crate::task_store_lease::TaskStoreLease,
+) -> Result<RegistryAdmissionAuthority> {
+    require_daemon_lifecycle_lease(root, &lease)?;
+    let loaded = load_task_watch_registry_with_deltas(root)?;
+    Ok(RegistryAdmissionAuthority {
+        root: root.to_path_buf(),
+        task_ids: loaded.tasks.tasks.keys().cloned().collect(),
+        revision: loaded.replayed_revision,
         lease,
-        current_revision,
     })
 }
 
@@ -536,7 +582,11 @@ pub fn append_task_watch_registry_delta(
             || Ok(()),
             |daemon| {
                 let current = load_under_task_lock_anchored(root, daemon)?;
-                validate_registry_delta_namespace_admission(root, &current.tasks, batch)?;
+                validate_registry_delta_namespace_admission(
+                    root,
+                    |task_id| current.tasks.tasks.contains_key(task_id),
+                    batch,
+                )?;
                 append_under_task_lock(
                     root,
                     revisions,
@@ -553,7 +603,11 @@ pub fn append_task_watch_registry_delta(
         let task_path = task_registry_path(root);
         with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
             let current = load_under_task_lock_portable(root)?;
-            validate_registry_delta_namespace_admission(root, &current.tasks, batch)?;
+            validate_registry_delta_namespace_admission(
+                root,
+                |task_id| current.tasks.tasks.contains_key(task_id),
+                batch,
+            )?;
             append_under_task_lock(
                 root,
                 revisions,
@@ -577,22 +631,26 @@ pub fn append_task_watch_registry_delta(
 /// Returns lease, revision, namespace-admission, batch, size, corruption,
 /// locking, and synchronization errors without appending an unauthorized
 /// frame.
-pub fn append_task_watch_registry_delta_with_admission(
-    admission: RegistryDeltaAdmission<'_>,
+pub fn append_task_watch_registry_delta_with_authority(
+    root: &Path,
+    authority: &mut RegistryAdmissionAuthority,
     revisions: RegistryRevisionRange,
     batch: &RegistryDeltaBatch,
 ) -> Result<()> {
-    require_daemon_lifecycle_lease(admission.root, admission.lease)?;
-    let prepared = prepare_registry_delta(admission.root, revisions, batch)?;
-    let expected_first = admission.current_revision.checked_next().ok_or_else(|| {
+    require_daemon_lifecycle_lease(root, &authority.lease)?;
+    if !authority.matches_root(root) {
+        return Err(invalid_registry_authority_root(root));
+    }
+    let prepared = prepare_registry_delta(root, revisions, batch)?;
+    let expected_first = authority.revision.checked_next().ok_or_else(|| {
         invalid_wal(
-            &registry_delta_wal_path(admission.root),
+            &registry_delta_wal_path(root),
             "registry revision is exhausted",
         )
     })?;
     if revisions.first != expected_first {
         return Err(DaemonCoreError::RegistryDeltaRevisionMismatch {
-            path: registry_delta_wal_path(admission.root),
+            path: registry_delta_wal_path(root),
             expected_first: expected_first.get(),
             actual_first: revisions.first.get(),
             actual_last: revisions.last.get(),
@@ -600,52 +658,50 @@ pub fn append_task_watch_registry_delta_with_admission(
     }
 
     #[cfg(unix)]
-    {
+    let result = {
         with_anchored_task_registry_lock(
-            admission.root,
+            root,
             RegistryLockMode::Exclusive,
             || Ok(()),
             |_daemon| {
                 validate_registry_delta_namespace_admission(
-                    admission.root,
-                    admission.current_tasks,
+                    root,
+                    |task_id| authority.task_ids.contains(task_id),
                     batch,
                 )?;
                 append_under_task_lock(
-                    admission.root,
+                    root,
                     revisions,
                     &prepared.header,
                     &prepared.payload,
                     &prepared.footer,
-                    || Ok(admission.current_revision),
+                    || Ok(authority.revision),
                 )
             },
         )
-    }
+    };
     #[cfg(not(unix))]
-    {
-        let task_path = task_registry_path(admission.root);
-        with_registry_lock(
-            admission.root,
-            &task_path,
-            RegistryLockMode::Exclusive,
-            || {
-                validate_registry_delta_namespace_admission(
-                    admission.root,
-                    admission.current_tasks,
-                    batch,
-                )?;
-                append_under_task_lock(
-                    admission.root,
-                    revisions,
-                    &prepared.header,
-                    &prepared.payload,
-                    &prepared.footer,
-                    || Ok(admission.current_revision),
-                )
-            },
-        )
-    }
+    let result = {
+        let task_path = task_registry_path(root);
+        with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
+            validate_registry_delta_namespace_admission(
+                root,
+                |task_id| authority.task_ids.contains(task_id),
+                batch,
+            )?;
+            append_under_task_lock(
+                root,
+                revisions,
+                &prepared.header,
+                &prepared.payload,
+                &prepared.footer,
+                || Ok(authority.revision),
+            )
+        })
+    };
+    result?;
+    authority.apply_committed_batch(revisions, batch);
+    Ok(())
 }
 
 struct PreparedRegistryDelta {
@@ -687,13 +743,13 @@ fn prepare_registry_delta(
 
 fn validate_registry_delta_namespace_admission(
     root: &Path,
-    current_tasks: &TaskRegistry,
+    contains_task: impl Fn(&str) -> bool,
     batch: &RegistryDeltaBatch,
 ) -> Result<()> {
     let new_tasks = batch
         .task_upserts
         .iter()
-        .filter(|(task_id, _)| !current_tasks.tasks.contains_key(*task_id))
+        .filter(|(task_id, _)| !contains_task(task_id))
         .map(|(task_id, task)| (task_id.clone(), task.clone()))
         .collect();
     let new_registry = TaskRegistry { tasks: new_tasks };
@@ -706,6 +762,17 @@ fn validate_registry_delta_namespace_admission(
         None,
         None,
         &task_registry_path(root),
+    )
+}
+
+fn invalid_registry_authority_root(root: &Path) -> DaemonCoreError {
+    DaemonCoreError::io(
+        "registry admission authority does not own the requested root",
+        root,
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "registry authority belongs to another workspace",
+        ),
     )
 }
 
@@ -1861,38 +1928,37 @@ mod tests {
     }
 
     #[test]
-    fn task_only_apply_does_not_scan_or_index_watches() {
-        let watch_ids = (0..1_024)
-            .map(|ordinal| format!("watch-{ordinal}"))
-            .collect::<Vec<_>>();
+    fn task_only_apply_preserves_duplicate_watch_validation_before_mutation() {
         let mut tasks = TaskRegistry {
             tasks: BTreeMap::from([(
                 "task".to_string(),
                 TaskRecord {
                     task_id: "task".to_string(),
-                    watch_ids: watch_ids.clone(),
+                    watch_ids: vec!["duplicate".to_string()],
                     ..TaskRecord::default()
                 },
             )]),
         };
         let mut watches = WatchRegistry {
-            watches: watch_ids
-                .iter()
-                .map(|watch_id| watch(watch_id, "task"))
-                .collect(),
+            watches: vec![watch("duplicate", "task"), watch("duplicate", "task")],
         };
         let mut updated = tasks.tasks["task"].clone();
         updated.last_event_seq = 9;
         APPLY_WATCH_RECORDS_SCANNED.with(|observed| observed.set(0));
 
-        RegistryDeltaBatch::default()
+        let error = RegistryDeltaBatch::default()
             .upsert_task(updated)
             .apply_to(&mut tasks, &mut watches)
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(tasks.tasks["task"].last_event_seq, 9);
-        assert_eq!(watches.watches.len(), 1_024);
-        APPLY_WATCH_RECORDS_SCANNED.with(|observed| assert_eq!(observed.get(), 0));
+        assert!(matches!(
+            error,
+            RegistryDeltaValidationError::DuplicateWatchIdentifier { ref watch_id }
+                if watch_id == "duplicate"
+        ));
+        assert_eq!(tasks.tasks["task"].last_event_seq, 0);
+        assert_eq!(watches.watches.len(), 2);
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| assert_eq!(observed.get(), 2));
     }
 
     #[test]
@@ -2103,20 +2169,14 @@ mod tests {
         let managed = task_events_dir(root.path()).join("new-task.events.jsonl");
         fs::create_dir_all(managed.parent().unwrap()).unwrap();
         fs::write(&managed, b"event-before\n").unwrap();
-        let current = TaskRegistry::default();
         let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
-        let admission = admit_registry_delta_from_registry(
-            root.path(),
-            &current,
-            &lease,
-            RegistryRevision::ZERO,
-        )
-        .unwrap();
+        let mut authority = load_registry_admission_authority(root.path(), lease).unwrap();
         let delta = RegistryDeltaBatch::default().upsert_task(task("new-task", &[]));
         let wal_path = registry_delta_wal_path(root.path());
 
-        let error = append_task_watch_registry_delta_with_admission(
-            admission,
+        let error = append_task_watch_registry_delta_with_authority(
+            root.path(),
+            &mut authority,
             RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
             &delta,
         )
@@ -2155,16 +2215,9 @@ mod tests {
     fn registry_delta_admission_requires_a_daemon_lifecycle_lease() {
         let root = tempdir().unwrap();
         ensure_daemon_dir(root.path()).unwrap();
-        let current = TaskRegistry::default();
         let writer = acquire_task_store_writer_lease(root.path()).unwrap();
 
-        let error = admit_registry_delta_from_registry(
-            root.path(),
-            &current,
-            &writer,
-            RegistryRevision::ZERO,
-        )
-        .unwrap_err();
+        let error = load_registry_admission_authority(root.path(), writer).unwrap_err();
 
         assert!(matches!(error, DaemonCoreError::Io { .. }));
     }
@@ -2175,18 +2228,55 @@ mod tests {
         let other = tempdir().unwrap();
         ensure_daemon_dir(root.path()).unwrap();
         ensure_daemon_dir(other.path()).unwrap();
-        let current = TaskRegistry::default();
         let lease = crate::task_store_lease::acquire_daemon_task_store_lease(other.path()).unwrap();
 
-        let error = admit_registry_delta_from_registry(
-            root.path(),
-            &current,
-            &lease,
-            RegistryRevision::ZERO,
+        let error = load_registry_admission_authority(root.path(), lease).unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::Io { .. }));
+    }
+
+    #[test]
+    fn registry_authority_rejects_a_different_root_without_mutation() {
+        let root = tempdir().unwrap();
+        let other = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        ensure_daemon_dir(other.path()).unwrap();
+        let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
+        let mut authority = load_registry_admission_authority(root.path(), lease).unwrap();
+        let wal_path = registry_delta_wal_path(other.path());
+
+        let error = append_task_watch_registry_delta_with_authority(
+            other.path(),
+            &mut authority,
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &RegistryDeltaBatch::default().upsert_task(task("new-task", &[])),
         )
         .unwrap_err();
 
         assert!(matches!(error, DaemonCoreError::Io { .. }));
+        assert!(!wal_path.exists());
+        assert_eq!(authority.revision(), RegistryRevision::ZERO);
+        assert!(!authority.contains_task("new-task"));
+    }
+
+    #[test]
+    fn registry_authority_retains_lifecycle_ownership_until_drop() {
+        let root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
+        let authority = load_registry_admission_authority(root.path(), lease).unwrap();
+
+        assert!(
+            crate::task_store_lease::try_acquire_task_store_retention_lease(root.path())
+                .unwrap()
+                .is_none()
+        );
+        drop(authority);
+        assert!(
+            crate::task_store_lease::try_acquire_task_store_retention_lease(root.path())
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
