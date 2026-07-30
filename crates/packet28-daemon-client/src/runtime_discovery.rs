@@ -170,6 +170,21 @@ mod platform {
     }
 
     pub(super) fn read_runtime(root: &Path) -> io::Result<Option<RuntimeRead>> {
+        read_runtime_with_after_authenticated_read(root, |_| Ok(()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn read_runtime_after_authenticated_read_for_test(
+        root: &Path,
+        after_authenticated_read: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> io::Result<Option<RuntimeRead>> {
+        read_runtime_with_after_authenticated_read(root, after_authenticated_read)
+    }
+
+    fn read_runtime_with_after_authenticated_read(
+        root: &Path,
+        after_authenticated_read: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> io::Result<Option<RuntimeRead>> {
         let workspace = open_authenticated_workspace(root)?;
         let Some(state) = open_authenticated_child_directory(&workspace, STATE_DIRECTORY_NAME)?
         else {
@@ -179,7 +194,7 @@ mod platform {
         else {
             return Ok(None);
         };
-        read_authenticated_runtime_file(&daemon)
+        read_authenticated_runtime_file(&daemon, after_authenticated_read)
     }
 
     fn open_authenticated_workspace(root: &Path) -> io::Result<RetainedDirectory> {
@@ -345,6 +360,7 @@ mod platform {
 
     fn read_authenticated_runtime_file(
         daemon: &RetainedDirectory,
+        after_authenticated_read: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<Option<RuntimeRead>> {
         let name = CString::new(RUNTIME_FILE_NAME).map_err(|_| {
             io::Error::new(
@@ -413,6 +429,7 @@ mod platform {
             return Err(identity_changed(&path));
         }
         require_empty_acl(&fd, &path, "daemon runtime metadata")?;
+        after_authenticated_read(&path)?;
         let attached = fstatat_nofollow(daemon.fd.as_raw_fd(), &name)?;
         validate_runtime_file(&attached, daemon.identity.device, &path)?;
         if identity(&attached) != expected {
@@ -1009,8 +1026,12 @@ mod tests {
     mod unix {
         use std::ffi::CString;
         use std::fs;
+        #[cfg(target_os = "linux")]
+        use std::os::fd::AsRawFd as _;
         use std::os::unix::ffi::OsStrExt as _;
         use std::os::unix::fs::{symlink, PermissionsExt as _};
+        #[cfg(target_os = "macos")]
+        use std::process::Command;
 
         use tempfile::TempDir;
 
@@ -1202,6 +1223,105 @@ mod tests {
             assert!(error.to_string().contains("non-owner write authority"));
         }
 
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn macos_runtime_acl_is_rejected_without_changing_runtime_bytes() {
+            let root = TempDir::new().unwrap();
+            write_runtime(root.path(), &DaemonRuntimeInfo::default(), 0o644);
+            let path = runtime_path(root.path());
+            let bytes_before = fs::read(&path).unwrap();
+            add_macos_acl(&path, "everyone allow read");
+
+            let error = read_runtime_info_if_present(root.path()).unwrap_err();
+
+            assert!(error
+                .to_string()
+                .contains("daemon runtime metadata has an extended ACL"));
+            assert_eq!(fs::read(path).unwrap(), bytes_before);
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn macos_workspace_namespace_acl_is_rejected_without_changing_runtime_bytes() {
+            let root = TempDir::new().unwrap();
+            write_runtime(root.path(), &DaemonRuntimeInfo::default(), 0o644);
+            let path = runtime_path(root.path());
+            let bytes_before = fs::read(&path).unwrap();
+            add_macos_acl(root.path(), "everyone allow add_file");
+
+            let error = read_runtime_info_if_present(root.path()).unwrap_err();
+
+            assert!(error
+                .to_string()
+                .contains("workspace has extended ACL namespace authority"));
+            assert_eq!(fs::read(path).unwrap(), bytes_before);
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn linux_runtime_access_acl_is_rejected_without_changing_runtime_bytes() {
+            let root = TempDir::new().unwrap();
+            write_runtime(root.path(), &DaemonRuntimeInfo::default(), 0o644);
+            let path = runtime_path(root.path());
+            let bytes_before = fs::read(&path).unwrap();
+            let runtime = fs::File::open(&path).unwrap();
+            set_linux_acl_xattr(&runtime, LINUX_ACCESS_ACL, 0o644);
+
+            let error = read_runtime_info_if_present(root.path()).unwrap_err();
+
+            assert!(error
+                .to_string()
+                .contains("daemon runtime metadata has an extended ACL"));
+            assert_eq!(fs::read(path).unwrap(), bytes_before);
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn linux_workspace_default_acl_is_rejected_without_changing_runtime_bytes() {
+            let root = TempDir::new().unwrap();
+            fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+            write_runtime(root.path(), &DaemonRuntimeInfo::default(), 0o644);
+            let path = runtime_path(root.path());
+            let bytes_before = fs::read(&path).unwrap();
+            let workspace = fs::File::open(root.path()).unwrap();
+            set_linux_acl_xattr(&workspace, LINUX_DEFAULT_ACL, 0o755);
+
+            let error = read_runtime_info_if_present(root.path()).unwrap_err();
+
+            assert!(error
+                .to_string()
+                .contains("workspace has extended ACL namespace authority"));
+            assert_eq!(fs::read(path).unwrap(), bytes_before);
+        }
+
+        #[test]
+        fn runtime_identity_change_after_authenticated_read_is_rejected() {
+            let root = TempDir::new().unwrap();
+            write_runtime(root.path(), &DaemonRuntimeInfo::default(), 0o644);
+            let path = runtime_path(root.path());
+            let authenticated_path = daemon_dir(root.path()).join("authenticated-runtime.json");
+            let replacement_path = daemon_dir(root.path()).join("replacement-runtime.json");
+            let bytes_before = fs::read(&path).unwrap();
+            fs::write(&replacement_path, &bytes_before).unwrap();
+            fs::set_permissions(&replacement_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+            let error = platform::read_runtime_after_authenticated_read_for_test(
+                root.path(),
+                |runtime_path| {
+                    fs::rename(runtime_path, &authenticated_path)?;
+                    fs::rename(&replacement_path, runtime_path)
+                },
+            )
+            .err()
+            .expect("runtime identity replacement unexpectedly authenticated");
+
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(error
+                .to_string()
+                .contains("changed identity during discovery"));
+            assert_eq!(fs::read(authenticated_path).unwrap(), bytes_before);
+        }
+
         #[test]
         fn namespace_ancestry_trusts_only_root_or_the_effective_user() {
             let effective_uid = platform::effective_uid();
@@ -1216,6 +1336,67 @@ mod tests {
                 foreign_uid,
                 effective_uid
             ));
+        }
+
+        #[cfg(target_os = "macos")]
+        fn add_macos_acl(path: &Path, entry: &str) {
+            let status = Command::new("/bin/chmod")
+                .arg("+a")
+                .arg(entry)
+                .arg(path)
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "failed to seed macOS ACL on {}",
+                path.display()
+            );
+        }
+
+        #[cfg(target_os = "linux")]
+        const LINUX_ACCESS_ACL: &[u8] = b"system.posix_acl_access\0";
+
+        #[cfg(target_os = "linux")]
+        const LINUX_DEFAULT_ACL: &[u8] = b"system.posix_acl_default\0";
+
+        #[cfg(target_os = "linux")]
+        fn set_linux_acl_xattr(file: &fs::File, name: &'static [u8], mode: u16) {
+            const ACL_UNDEFINED_ID: u32 = u32::MAX;
+
+            let mut encoded = Vec::new();
+            encoded.extend_from_slice(&2_u32.to_le_bytes());
+            let mut push_entry = |tag: u16, permissions: u16, id: u32| {
+                encoded.extend_from_slice(&tag.to_le_bytes());
+                encoded.extend_from_slice(&permissions.to_le_bytes());
+                encoded.extend_from_slice(&id.to_le_bytes());
+            };
+            let owner_permissions = (mode >> 6) & 0o7;
+            let group_permissions = (mode >> 3) & 0o7;
+            let other_permissions = mode & 0o7;
+            let named_uid = platform::effective_uid().wrapping_add(1);
+            push_entry(0x01, owner_permissions, ACL_UNDEFINED_ID);
+            push_entry(0x02, group_permissions, named_uid);
+            push_entry(0x04, group_permissions, ACL_UNDEFINED_ID);
+            push_entry(0x10, group_permissions, ACL_UNDEFINED_ID);
+            push_entry(0x20, other_permissions, ACL_UNDEFINED_ID);
+
+            // SAFETY: the descriptor and NUL-terminated name are live, and
+            // `encoded` contains the kernel's fixed POSIX ACL xattr format.
+            let result = unsafe {
+                libc::fsetxattr(
+                    file.as_raw_fd(),
+                    name.as_ptr().cast(),
+                    encoded.as_ptr().cast(),
+                    encoded.len(),
+                    0,
+                )
+            };
+            assert_eq!(
+                result,
+                0,
+                "failed to seed POSIX ACL xattr: {}",
+                io::Error::last_os_error()
+            );
         }
 
         fn create_state_directories(root: &Path) {
