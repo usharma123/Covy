@@ -11,7 +11,7 @@ mod process_harness;
 
 use mcp_proxy_fake::{
     write_bidirectional_server, write_colliding_tool_server, write_compact_read_server,
-    write_concurrent_tool_server,
+    write_concurrent_tool_server, write_upstream_batch_server,
 };
 use process_harness::McpHarness;
 use serde_json::json;
@@ -154,6 +154,99 @@ fn test_mcp_proxy_routes_server_requests_and_json_rpc_batches() {
         .assert()
         .success();
 }
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_routes_mixed_upstream_batch_and_diagnoses_invalid_batches() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script_path = dir.path().join("upstream_batch_mcp.py");
+    write_upstream_batch_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "upstream-batch": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()]
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut server = start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-upstream-batch");
+    initialize_mcp_session(&mut server);
+    write_mcp_message(
+        &mut server,
+        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    );
+
+    let deadline = Instant::now() + MCP_RESPONSE_TIMEOUT;
+    let mut forwarded_batch = None;
+    let mut tools_response = None;
+    while forwarded_batch.is_none() || tools_response.is_none() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "timed out waiting for mixed upstream batch routing"
+        );
+        let message = server
+            .receive(remaining)
+            .unwrap_or_else(|error| panic!("failed to read MCP message: {error}"));
+        if message
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["method"] == "roots/list"))
+        {
+            forwarded_batch = Some(message);
+        } else if message["id"] == 2 {
+            tools_response = Some(message);
+        }
+    }
+
+    assert!(tools_response.unwrap()["result"]["tools"].is_array());
+    let forwarded_batch = forwarded_batch.unwrap();
+    let forwarded = forwarded_batch.as_array().unwrap();
+    assert_eq!(forwarded.len(), 2);
+    assert_eq!(forwarded[0]["method"], "roots/list");
+    assert!(forwarded[0]["id"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("packet28-upstream:upstream-batch:")));
+    assert_eq!(forwarded[1]["method"], "notifications/message");
+    assert_eq!(forwarded[1]["params"]["data"]["kind"], "mixed");
+    assert_eq!(forwarded[1]["params"]["upstream"], "upstream-batch");
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":forwarded[0]["id"],
+            "result":{"roots":[]}
+        }),
+    );
+    let empty_diagnostic = read_until(&mut server, |message| {
+        message["params"]["data"]["diagnostic"] == "empty"
+    });
+    assert_eq!(empty_diagnostic["params"]["upstream"], "upstream-batch");
+    assert_eq!(empty_diagnostic["params"]["data"]["count"], 1);
+    let invalid_diagnostic = read_until(&mut server, |message| {
+        message["params"]["data"]["diagnostic"] == "invalid"
+    });
+    assert_eq!(invalid_diagnostic["params"]["upstream"], "upstream-batch");
+    assert_eq!(invalid_diagnostic["params"]["data"]["count"], 3);
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
 #[test]
 #[cfg(unix)]
 fn test_mcp_proxy_cli_namespaces_colliding_tools() {

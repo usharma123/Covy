@@ -243,3 +243,110 @@ while True:
     )
     .unwrap();
 }
+
+pub fn write_upstream_batch_server(path: &Path) {
+    fs::write(
+        path,
+        r#"import json, sys
+
+def read_message():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, value = line.decode("utf-8").split(":", 1)
+        headers[name.lower().strip()] = value.strip()
+    length = int(headers.get("content-length", "0"))
+    return json.loads(sys.stdin.buffer.read(length))
+
+def write_message(value):
+    body = json.dumps(value).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+def diagnostic(kind, count):
+    write_message({
+        "jsonrpc": "2.0",
+        "method": "notifications/message",
+        "params": {"data": {"diagnostic": kind, "count": count}}
+    })
+
+sent_mixed_batch = False
+while True:
+    message = read_message()
+    if message is None:
+        break
+    if isinstance(message, list):
+        if message and all(item.get("error", {}).get("code") == -32600 for item in message):
+            diagnostic("invalid", len(message))
+        continue
+
+    method = message.get("method")
+    msg_id = message.get("id")
+    if method == "initialize":
+        write_message({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "upstream-batch", "version": "1"}
+            }
+        })
+    elif method == "tools/list" and not sent_mixed_batch:
+        sent_mixed_batch = True
+        write_message([
+            {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {"tools": []}
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": "server-batch-roots",
+                "method": "roots/list",
+                "params": {}
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/message",
+                "params": {"data": {"kind": "mixed"}}
+            }
+        ])
+    elif method is None and msg_id == "server-batch-roots":
+        write_message([])
+    elif method is None and msg_id is None and message.get("error", {}).get("code") == -32600:
+        diagnostic("empty", 1)
+        write_message([
+            17,
+            {
+                "jsonrpc": "2.0",
+                "id": "invalid-method",
+                "method": 17
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": "invalid-response"
+            }
+        ])
+    elif msg_id is not None:
+        if method == "resources/list":
+            result = {"resources": []}
+        elif method == "resources/templates/list":
+            result = {"resourceTemplates": []}
+        else:
+            write_message({
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "error": {"code": -32601, "message": "unknown method"}
+            })
+            continue
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": result})
+"#,
+    )
+    .unwrap();
+}
