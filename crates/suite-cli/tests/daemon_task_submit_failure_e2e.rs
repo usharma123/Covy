@@ -107,26 +107,20 @@ fn stop_daemon(root: &Path) {
     let pid = fs::read_to_string(root.join(".packet28/daemon/pid"))
         .unwrap()
         .trim()
-        .parse::<i32>()
+        .parse::<u32>()
         .unwrap();
     suite_cmd()
         .args(["daemon", "stop", "--root", root.to_str().unwrap()])
         .assert()
         .success();
     let started = Instant::now();
-    while daemon_process_exists(pid) {
+    while process_harness::process_alive(pid) {
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "packet28d did not finish shutting down"
         );
         thread::sleep(Duration::from_millis(10));
     }
-}
-
-fn daemon_process_exists(pid: i32) -> bool {
-    // SAFETY: signal 0 only probes the daemon PID read from this fixture's runtime file.
-    let result = unsafe { libc::kill(pid, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[test]

@@ -767,6 +767,20 @@ fn process_group_alive(pgid: u32) -> bool {
 }
 
 #[cfg(unix)]
+pub fn process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 only probes the positive process ID supplied by the
+    // integration harness and dereferences no pointers.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
 fn terminate_remaining_group(pgid: u32, grace: Duration, poll: Duration) {
     if !process_group_alive(pgid) {
         return;
