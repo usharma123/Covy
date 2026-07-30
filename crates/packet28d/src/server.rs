@@ -1358,6 +1358,42 @@ mod tests {
     }
 
     #[test]
+    fn broker_task_status_dispatch_matches_the_owning_facade() {
+        let state = crate::tests::support::daemon_test_state();
+        let task_id = "broker-facade-parity";
+        crate::tests::support::insert_admitted_task_record(
+            &state,
+            TaskRecord {
+                task_id: task_id.to_string(),
+                latest_context_version: Some("7".to_string()),
+                latest_context_reason: Some("facade parity".to_string()),
+                ..TaskRecord::default()
+            },
+        );
+        let request = BrokerTaskStatusRequest {
+            task_id: task_id.to_string(),
+        };
+        let direct = broker_task_status(state.clone(), request.clone()).unwrap();
+        let (watch_tx, _watch_rx) = WatchIngress::new(1);
+
+        let dispatched = handle_request(
+            state.clone(),
+            watch_tx,
+            DaemonRequest::BrokerTaskStatus { request },
+        )
+        .unwrap();
+        let DaemonResponse::BrokerTaskStatus { response } = dispatched else {
+            panic!("broker task status dispatch returned the wrong response variant");
+        };
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            serde_json::to_value(direct).unwrap()
+        );
+        crate::tests::support::shutdown_test_persistence(&state);
+    }
+
+    #[test]
     fn replay_after_seq_returns_only_later_frames() {
         let selected = select_replay_events(vec![frame(1), frame(2), frame(3)], 0, Some(1));
         assert_eq!(

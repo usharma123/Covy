@@ -177,7 +177,8 @@ def write_packet28d_sources(
         encoding="utf-8",
     )
     (broker / "mod.rs").write_text(
-        "\n".join(f"mod {module};" for module in PACKET28D_BROKER_MODULES),
+        "\n".join(f"mod {module};" for module in PACKET28D_BROKER_MODULES)
+        + "\npub(crate) use context::broker_get_context;\n",
         encoding="utf-8",
     )
     for module in PACKET28D_BROKER_MODULES:
@@ -613,6 +614,38 @@ class ArchitectureDependencyTests(unittest.TestCase):
                     "crates/packet28d/src/broker/context.rs",
                     result.stderr,
                 )
+
+    def test_packet28d_broker_facade_rejects_visible_child_module(self) -> None:
+        result = self.run_packet28d_mutation(
+            "crates/packet28d/src/broker/mod.rs",
+            lambda source: source.replace(
+                "mod context;",
+                "pub(crate) mod context;",
+                1,
+            ),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "packet28d broker facade must keep implementation module "
+            "'context' private",
+            result.stderr,
+        )
+
+    def test_packet28d_consumer_rejects_broker_facade_bypass(self) -> None:
+        result = self.run_packet28d_mutation(
+            "crates/packet28d/src/application.rs",
+            lambda source: (
+                "use crate::broker::context::broker_get_context;\n" + source
+            ),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "packet28d modules must consume broker ports through the owning "
+            "facade: crates/packet28d/src/application.rs",
+            result.stderr,
+        )
 
     def test_packet28d_entrypoint_rejects_runtime_ownership(self) -> None:
         fixture = metadata({})

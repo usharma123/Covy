@@ -696,9 +696,21 @@ def check_packet28d_source_boundaries(root: Path) -> list[str]:
             errors.append(
                 f"packet28d broker module is missing: {child.relative_to(root)}"
             )
-        if f"mod {module};" not in broker_facade:
+        module_declaration = re.compile(
+            rf"^\s*(?P<visibility>pub(?:\s*\([^)]*\))?\s+)?"
+            rf"mod\s+{re.escape(module)}\s*;\s*$",
+            re.MULTILINE,
+        )
+        declarations = list(module_declaration.finditer(broker_facade))
+        if len(declarations) != 1:
             errors.append(
-                f"packet28d broker facade must declare private module {module!r}"
+                "packet28d broker facade must declare exactly one private "
+                f"module {module!r}"
+            )
+        elif declarations[0].group("visibility") is not None:
+            errors.append(
+                "packet28d broker facade must keep implementation module "
+                f"{module!r} private"
             )
 
     legacy_modules = sorted(source_root.glob("broker_*.rs"))
@@ -730,6 +742,29 @@ def check_packet28d_source_boundaries(root: Path) -> list[str]:
             errors.append(
                 "packet28d broker implementation must not depend on the "
                 f"application lifecycle: {path.relative_to(root)}"
+            )
+
+    broker_child_names = "|".join(map(re.escape, PACKET28D_BROKER_MODULES))
+    direct_child_route = re.compile(
+        rf"(?<![\w:])(?:crate::)?broker::(?:{broker_child_names})\b"
+    )
+    grouped_child_route = re.compile(
+        rf"(?<![\w:])(?:crate::)?broker::\{{[^;}}]*"
+        rf"\b(?:{broker_child_names})\b\s*(?:::|,|}})",
+        re.DOTALL,
+    )
+    for path in sorted(source_root.rglob("*.rs")):
+        if path == broker_facade_path or broker_root in path.parents:
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError as error:
+            errors.append(f"cannot read {path.relative_to(root)}: {error}")
+            continue
+        if direct_child_route.search(source) or grouped_child_route.search(source):
+            errors.append(
+                "packet28d modules must consume broker ports through the owning "
+                f"facade: {path.relative_to(root)}"
             )
 
     return errors
