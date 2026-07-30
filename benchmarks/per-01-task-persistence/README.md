@@ -32,10 +32,10 @@ python3 benchmarks/per-01-task-persistence/verify.py
 Environment:
 
 - Darwin 24.6.0 arm64
-- rustc 1.93.0 (254b59607 2026-01-19)
-- cargo 1.93.0
+- rustc 1.93.1 (01f6ddf75 2026-02-11)
+- cargo 1.93.1 (083ac5135 2025-12-15)
 - exact integration base `48024d28a2a6aa3a11a406230a61fcfb0af66356`
-- measured implementation head `869581bf69eb0610285810fe43c425036d8c535d`
+- measured implementation head `c3eefcd51465b0ea8b30e9886bae07eb09d977ad`
 
 The result artifact records checksums for every measured product and benchmark
 source. Those file identities are the mechanically enforced provenance. The
@@ -78,11 +78,11 @@ startup reconciliation, torn-tail, lease, and failure-path tests.
 
 | Path | Median event state-lock hold | Median elapsed, 32 events | Published bytes | Full checkpoints |
 | --- | ---: | ---: | ---: | ---: |
-| Full checkpoint under lock | 87,428,083 ns | 2,801,016 µs | 59,150,656 | 32 |
-| Owned keyed WAL after lock | 2,541 ns | 652,998 µs | 193,096 | 0 |
+| Full checkpoint under lock | 86,058,542 ns | 2,755,669 µs | 59,150,656 | 32 |
+| Owned keyed WAL after lock | 7,249 ns | 461,943 µs | 193,096 | 0 |
 
-- Median daemon-state lock-hold reduction: **99.997%**
+- Median daemon-state lock-hold reduction: **99.992%**
 - Published-byte reduction: **99.674%**
-- Wall-clock improvement on the capture host: **4.29×**
+- Wall-clock improvement on the capture host: **5.97×**
 - Owned published-byte ratio, 300 tasks / 1 task: **1.00×**
 - Recovered events on both paths: **33**
