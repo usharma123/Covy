@@ -409,11 +409,20 @@ pub(crate) fn durable_manifest(manifest: &RegexIndexManifest) -> RegexIndexManif
     durable
 }
 
-pub(crate) fn load_overlay_state(root: &Path) -> OverlayState {
-    let Ok(raw) = fs::read(overlay_state_path(root)) else {
-        return OverlayState::default();
-    };
-    serde_json::from_slice(&raw).unwrap_or_default()
+pub(crate) fn load_overlay_state(root: &Path) -> Result<OverlayState> {
+    let path = overlay_state_path(root);
+    let raw = fs::read(&path).with_context(|| {
+        format!(
+            "failed to read legacy regex overlay state '{}'",
+            path.display()
+        )
+    })?;
+    serde_json::from_slice(&raw).with_context(|| {
+        format!(
+            "failed to decode legacy regex overlay state '{}'",
+            path.display()
+        )
+    })
 }
 
 pub(crate) fn generation_record_from_loaded(
@@ -675,7 +684,14 @@ pub(crate) fn load_legacy_generation(
     let overlay =
         load_layer(root, &overlay_files).context("failed to load overlay regex index layer")?;
     populate_layer_digests(root, &mut overlay_files)?;
-    let mut overlay_state = load_overlay_state(root);
+    let mut overlay_state = load_overlay_state(root)?;
+    if let Some(expected) = manifest.overlay_state_digest.as_deref() {
+        let actual = overlay_state_digest(&overlay_state)?;
+        ensure_valid_index!(
+            actual == expected,
+            "legacy regex overlay state failed digest validation (expected {expected}, found {actual})"
+        );
+    }
     let mut overlays = Vec::new();
     if !overlay.docs.is_empty() {
         for doc in &overlay.docs {

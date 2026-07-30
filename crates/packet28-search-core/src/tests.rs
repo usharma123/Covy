@@ -87,6 +87,92 @@ fn corrupt_first_lookup_range(root: &Path, offset: u64, len: u32) {
     refresh_current_base_digests(root);
 }
 
+fn copy_layer_as_legacy(root: &Path, source: &LayerFiles, destination: &LayerFiles) {
+    let directory = regex_index_dir(root);
+    for (source_name, destination_name) in [
+        (&source.lookup, &destination.lookup),
+        (&source.postings, &destination.postings),
+        (&source.docs, &destination.docs),
+    ] {
+        fs::copy(
+            directory.join(source_name),
+            directory.join(destination_name),
+        )
+        .unwrap();
+    }
+}
+
+fn build_legacy_tombstone_fixture(
+    root: &Path,
+    with_overlay_document: bool,
+    with_state_digest: bool,
+) -> OverlayState {
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/stale.rs"), "pub struct StaleBase;\n").unwrap();
+    fs::write(root.join("src/changed.rs"), "pub struct Original;\n").unwrap();
+    let base = rebuild_full_index(root, true).unwrap();
+    fs::remove_file(root.join("src/stale.rs")).unwrap();
+    let mut changed_paths = vec![String::from("src/stale.rs")];
+    if with_overlay_document {
+        fs::write(root.join("src/changed.rs"), "pub struct Replacement;\n").unwrap();
+        changed_paths.push(String::from("src/changed.rs"));
+    }
+    let updated = update_overlay_index(root, Some(&base), &changed_paths).unwrap();
+    let loaded = updated.loaded.as_ref().expect("updated index");
+    let overlay_state = loaded.overlay_state.clone();
+    copy_layer_as_legacy(root, &loaded.base_files, &LayerFiles::legacy_base());
+    if let Some(segment) = loaded.overlays.first() {
+        copy_layer_as_legacy(root, &segment.files, &LayerFiles::legacy_overlay());
+    } else {
+        build_layer(root, &[], &mut LayerFiles::legacy_overlay()).unwrap();
+    }
+    let mut manifest = updated.manifest.clone();
+    if !with_state_digest {
+        manifest.overlay_state_digest = None;
+    }
+    save_manifest(root, &manifest).unwrap();
+    write_atomic(
+        overlay_state_path(root),
+        &serde_json::to_vec_pretty(&overlay_state).unwrap(),
+    )
+    .unwrap();
+    fs::remove_file(generation_record_path(root, manifest.generation)).unwrap();
+    if previous_manifest_path(root).exists() {
+        fs::remove_file(previous_manifest_path(root)).unwrap();
+    }
+    fs::write(root.join("src/stale.rs"), "pub struct StaleBase;\n").unwrap();
+    overlay_state
+}
+
+fn stale_base_is_returned(root: &Path, runtime: &RegexIndexRuntime) -> bool {
+    indexed_search(
+        root,
+        runtime,
+        &SearchRequest {
+            query: "StaleBase".to_string(),
+            fixed_string: true,
+            ..SearchRequest::default()
+        },
+    )
+    .is_ok_and(|result| result.paths.iter().any(|path| path == "src/stale.rs"))
+}
+
+fn assert_legacy_state_is_corrupt(root: &Path, expected_error: &str) {
+    let runtime = load_runtime(root).unwrap();
+    assert!(
+        !runtime.is_loaded()
+            && runtime.manifest.status == "corrupt"
+            && runtime
+                .manifest
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains(expected_error))
+            && !stale_base_is_returned(root, &runtime),
+        "manifest={:?}",
+        runtime.manifest
+    );
+}
+
 #[test]
 fn read_segment_pair_returns_none_at_a_clean_record_boundary() {
     let expected = (
@@ -396,6 +482,90 @@ fn overlay_tombstone_delete_matches_reducer_before_and_after_reload() {
         .deleted_paths
         .contains("src/lib.rs")
         && !loaded.overlay_state.owners.contains_key("src/lib.rs")));
+}
+
+#[test]
+fn valid_digestless_legacy_overlay_state_preserves_tombstones() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let expected_state = build_legacy_tombstone_fixture(root, true, false);
+    let runtime = load_runtime(root).unwrap();
+    assert!(
+        runtime.is_loaded()
+            && runtime
+                .loaded
+                .as_ref()
+                .is_some_and(|loaded| loaded.overlay_state == expected_state)
+            && !stale_base_is_returned(root, &runtime),
+        "manifest={:?}",
+        runtime.manifest
+    );
+}
+
+#[test]
+fn missing_legacy_overlay_state_is_corrupt_without_resurrecting_base_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_legacy_tombstone_fixture(root, true, false);
+    fs::remove_file(overlay_state_path(root)).unwrap();
+
+    assert_legacy_state_is_corrupt(root, "failed to read legacy regex overlay state");
+}
+
+#[test]
+fn malformed_legacy_overlay_state_is_corrupt_without_resurrecting_base_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_legacy_tombstone_fixture(root, true, false);
+    fs::write(overlay_state_path(root), b"{").unwrap();
+
+    assert_legacy_state_is_corrupt(root, "failed to decode legacy regex overlay state");
+}
+
+#[test]
+fn unreadable_legacy_overlay_state_is_corrupt_without_resurrecting_base_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_legacy_tombstone_fixture(root, true, false);
+    fs::remove_file(overlay_state_path(root)).unwrap();
+    fs::create_dir(overlay_state_path(root)).unwrap();
+
+    assert_legacy_state_is_corrupt(root, "failed to read legacy regex overlay state");
+}
+
+#[test]
+fn empty_legacy_overlay_with_zero_file_count_still_loads_tombstones() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let expected_state = build_legacy_tombstone_fixture(root, false, false);
+    let manifest = load_manifest_strict(root).unwrap();
+    let runtime = load_runtime(root).unwrap();
+    assert!(
+        manifest.overlay_files == 0
+            && manifest.overlay_segments == 0
+            && runtime.is_loaded()
+            && runtime
+                .loaded
+                .as_ref()
+                .is_some_and(|loaded| loaded.overlay_state == expected_state)
+            && !stale_base_is_returned(root, &runtime),
+        "manifest={:?}",
+        runtime.manifest
+    );
+}
+
+#[test]
+fn legacy_overlay_state_digest_rejects_a_well_formed_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    build_legacy_tombstone_fixture(root, true, true);
+    fs::write(
+        overlay_state_path(root),
+        serde_json::to_vec_pretty(&OverlayState::default()).unwrap(),
+    )
+    .unwrap();
+
+    assert_legacy_state_is_corrupt(root, "legacy regex overlay state failed digest validation");
 }
 
 #[test]
