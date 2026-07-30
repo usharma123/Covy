@@ -1393,6 +1393,22 @@ fn scan_wal(
             .and_then(|bytes| bytes.checked_add(FRAME_FOOTER_BYTES as u64))
             .ok_or_else(|| invalid_wal(path, "registry delta frame length overflow"))?;
         if remaining < frame_len {
+            if let Some(authenticated_payload_len) = payload_len_authenticated_by_final_footer(
+                wal,
+                path,
+                offset,
+                file_len,
+                &frame_header,
+            )? {
+                return Err(invalid_wal(
+                    path,
+                    format!(
+                        "complete frame at byte {offset} has corrupted payload length: header \
+                         encodes {}, footer authenticates {authenticated_payload_len}",
+                        decoded.payload_len
+                    ),
+                ));
+            }
             return repair_or_reject_torn_suffix(
                 wal,
                 path,
@@ -1474,6 +1490,49 @@ fn scan_wal(
         complete_len: offset,
         last_frame,
     })
+}
+
+fn payload_len_authenticated_by_final_footer(
+    wal: &mut StateFile,
+    path: &Path,
+    frame_offset: u64,
+    file_len: u64,
+    frame_header: &[u8; FRAME_HEADER_BYTES],
+) -> Result<Option<u64>> {
+    let frame_len = file_len.saturating_sub(frame_offset);
+    let minimum_frame_len = (FRAME_HEADER_BYTES + FRAME_FOOTER_BYTES) as u64;
+    let Some(payload_len) = frame_len.checked_sub(minimum_frame_len) else {
+        return Ok(None);
+    };
+    wal.file_mut()
+        .seek(SeekFrom::Start(file_len - FRAME_FOOTER_BYTES as u64))
+        .map_err(|source| {
+            wal_io(
+                "failed to seek final registry delta frame footer",
+                path,
+                source,
+            )
+        })?;
+    let mut footer = [0_u8; FRAME_FOOTER_BYTES];
+    wal.read_exact(&mut footer).map_err(|source| {
+        wal_io(
+            "failed to read final registry delta frame footer",
+            path,
+            source,
+        )
+    })?;
+    if frame_length_from_footer(&footer) != Some(frame_len)
+        || footer[16..24] != frame_header[32..40]
+    {
+        return Ok(None);
+    }
+
+    let mut authenticated_header = *frame_header;
+    authenticated_header[16..24].copy_from_slice(&payload_len.to_le_bytes());
+    if footer[24..56] != blake3::hash(&authenticated_header).as_bytes()[..] {
+        return Ok(None);
+    }
+    Ok(Some(payload_len))
 }
 
 fn repair_or_reject_torn_suffix(
@@ -2564,6 +2623,42 @@ mod tests {
             DaemonCoreError::InvalidRegistryDeltaWal { .. }
         ));
         assert_eq!(fs::metadata(path).unwrap().len(), original_len);
+    }
+
+    #[test]
+    fn complete_frame_with_corrupted_payload_length_is_rejected_without_truncation() {
+        let root = tempdir().unwrap();
+        checkpoint(
+            root.path(),
+            [task("task", &["one"])],
+            [watch("one", "task")],
+        );
+        let delta = add_watch_delta("task", &["one"], "two");
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &delta,
+        )
+        .unwrap();
+        let path = registry_delta_wal_path(root.path());
+        let mut wal_bytes = fs::read(&path).unwrap();
+        let payload_len_offset = WAL_HEADER_BYTES + 16;
+        let payload_len = u64::from_le_bytes(
+            wal_bytes[payload_len_offset..payload_len_offset + 8]
+                .try_into()
+                .unwrap(),
+        );
+        wal_bytes[payload_len_offset..payload_len_offset + 8]
+            .copy_from_slice(&(payload_len + 1).to_le_bytes());
+        fs::write(&path, &wal_bytes).unwrap();
+
+        let error = load_task_watch_registry_with_deltas(root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::InvalidRegistryDeltaWal { .. }
+        ));
+        assert_eq!(fs::read(path).unwrap(), wal_bytes);
     }
 
     #[test]
