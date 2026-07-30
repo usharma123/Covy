@@ -48,4 +48,18 @@ fn git(root: &Path, args: &[&str]) {
 
 pub fn init_repo(root: &Path) {
     git(root, &["init"]);
+    fs::write(root.join(".gitignore"), ".packet28/\n").unwrap();
+    git(root, &["add", "--all"]);
+    git(
+        root,
+        &[
+            "-c",
+            "user.name=Packet28 Test",
+            "-c",
+            "user.email=packet28-test@example.invalid",
+            "commit",
+            "-m",
+            "initialize lifecycle fixture",
+        ],
+    );
 }
