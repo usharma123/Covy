@@ -309,11 +309,28 @@ pub(crate) fn authenticate_full_build_workspace(
 }
 
 fn git_metadata_present(root: &Path) -> std::result::Result<bool, String> {
-    match fs::symlink_metadata(root.join(".git")) {
+    let git_path = root.join(".git");
+    match fs::symlink_metadata(&git_path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             Err("repository Git metadata cannot be a symlink".to_string())
         }
-        Ok(metadata) if metadata.is_dir() || metadata.is_file() => Ok(true),
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(metadata) if metadata.is_dir() => match fs::symlink_metadata(git_path.join("HEAD")) {
+            Ok(head) if head.is_file() => Ok(true),
+            Ok(_) => Err("repository Git HEAD is not a regular file".to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let empty = fs::read_dir(&git_path)
+                    .map_err(|error| format!("failed to inspect repository Git metadata: {error}"))?
+                    .next()
+                    .is_none();
+                if empty {
+                    Ok(false)
+                } else {
+                    Err("repository Git metadata is missing HEAD".to_string())
+                }
+            }
+            Err(error) => Err(format!("failed to inspect repository Git HEAD: {error}")),
+        },
         Ok(_) => Err("repository Git metadata is not a file or directory".to_string()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(format!(
