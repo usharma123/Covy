@@ -81,6 +81,51 @@ regex incremental:         5979, 9163, 7712 µs
 The slowest observed incremental update remained faster than the fastest
 corresponding whole-rebuild observation.
 
+## BR-17 publication-fence revalidation
+
+Date: 2026-07-30
+
+The benchmark was rerun at baseline `43753c58` after the blind review found
+that the incremental writer reloaded, hashed, and decoded the complete
+published base and every segment while holding the publication lock. The
+benchmark also used `saturating_sub`, so a regression was printed as a
+`0.00%` reduction.
+
+Commit `9fc911d8` replaces that reload with a generation/digest comparison
+under the publication lock. The already authenticated in-memory generation is
+retained; immutable artifact metadata is checked, and only an artifact whose
+metadata changed is rehashed. Benchmark deltas are now signed
+`(after - before) / before` values, where a positive time delta is a
+regression.
+
+The exact release command under [Reproduce](#reproduce) was run three times
+before and after the change:
+
+| Revision/path | Invocation medians (µs) | Median (µs) | Delta versus paired legacy |
+| --- | --- | ---: | ---: |
+| `43753c58` whole snapshot | 6,506; 5,251; 5,466 | 5,466 | baseline |
+| `43753c58` incremental generation | 16,965; 15,732; 18,205 | 16,965 | +210.37% |
+| `9fc911d8` whole snapshot | 4,471; 5,068; 4,751 | 4,751 | baseline |
+| `9fc911d8` incremental generation | 2,073; 2,210; 2,314 | 2,210 | -53.48% |
+
+The incremental invocation median improved from 16,965 to 2,210 µs
+(-86.97%, or 7.68× faster). Each final run published 5,323 bytes versus
+3,490,797 bytes for the whole-snapshot model and reported the same bounded
+work:
+
+```text
+publication_metadata_bytes_decoded=315
+repository_artifact_bytes_decoded=0
+repository_artifacts_decoded=0
+repository_artifact_bytes_hashed=0
+repository_artifact_metadata_checks=6
+changed_paths_considered=1
+```
+
+The focused invariant seeds four retained segments and asserts zero
+repository-artifact decoding/hashing, five bounded metadata checks (base plus
+four segments), and exactly one considered changed path.
+
 ## Compaction cost
 
 The eighth segment publication compacts only live overlay entries and retains
