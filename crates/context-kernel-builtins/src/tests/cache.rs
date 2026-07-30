@@ -235,7 +235,9 @@ fn persistent_kernel_reports_background_filesystem_failure_on_flush() {
     let root = dir.path().join("root");
     std::fs::create_dir(&root).unwrap();
     let mut kernel = Kernel::with_persistence(PersistConfig::new(root.clone()));
-    std::fs::create_dir(root.join(".packet28/packet-cache-v3.wal")).unwrap();
+    let wal_path = root.join(".packet28/packet-cache-v3.wal");
+    std::fs::remove_file(&wal_path).unwrap();
+    std::fs::create_dir(&wal_path).unwrap();
     kernel.register_reducer("count.reducer", |_ctx, _packets| {
         Ok(ReducerResult {
             output_packets: vec![KernelPacket::from_value(json!({"ok": true}), None)],
