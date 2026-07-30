@@ -81,6 +81,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
     let config = DaemonRuntimeConfig::from_env()?;
     let daemon_log_path = log_path(&root);
     let listener = bind_daemon_listener(&root)?;
+    let runtime_files = RuntimeFileGuard::new(&root);
     let registry_instance_id = generate_daemon_registry_instance_id()?;
 
     let runtime = DaemonRuntimeInfo {
@@ -245,7 +246,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
     runtime.shutdown_timeout(remaining_until(shutdown_deadline));
 
     daemon_log("shutting down packet28d");
-    let cleanup_result = remove_runtime_files(&root).map_err(anyhow::Error::from);
+    let cleanup_result = runtime_files.cleanup();
     // The supervisor has joined uncancellable index work and waited for every
     // admitted blocking mutation before the task-store lease can be released.
     // Runtime-file cleanup is part of the same lifecycle ownership window.
@@ -253,6 +254,35 @@ pub fn serve(root: PathBuf) -> Result<()> {
     drop(daemon_instance_lease);
     record_runtime_result(&mut lifecycle_result, cleanup_result);
     lifecycle_result
+}
+
+struct RuntimeFileGuard<'a> {
+    root: &'a Path,
+    armed: bool,
+}
+
+impl<'a> RuntimeFileGuard<'a> {
+    fn new(root: &'a Path) -> Self {
+        Self { root, armed: true }
+    }
+
+    fn cleanup(mut self) -> Result<()> {
+        remove_runtime_files(self.root)?;
+        self.armed = false;
+        Ok(())
+    }
+}
+
+impl Drop for RuntimeFileGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Err(error) = remove_runtime_files(self.root) {
+                daemon_log(&format!(
+                    "failed to clean runtime files after startup failure: {error}"
+                ));
+            }
+        }
+    }
 }
 
 fn remove_stale_ready_marker(root: &Path) -> Result<()> {

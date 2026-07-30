@@ -3,7 +3,9 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use packet28_daemon_protocol::paths::ready_path;
+use packet28_daemon_protocol::paths::{
+    pid_path, ready_path, runtime_path, socket_path, workspace_socket_path,
+};
 
 #[test]
 fn daemon_rejects_primary_kernel_persistence_failure_before_readiness() {
@@ -15,7 +17,6 @@ fn daemon_rejects_primary_kernel_persistence_failure_before_readiness() {
     let mut daemon = Command::new(env!("CARGO_BIN_EXE_packet28d"))
         .args(["serve", "--root"])
         .arg(workspace.path())
-        .env("PACKET28D_FORCE_TCP", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -53,5 +54,18 @@ fn daemon_rejects_primary_kernel_persistence_failure_before_readiness() {
     assert!(
         !ready_path(workspace.path()).exists(),
         "daemon advertised readiness without persistent kernel ownership"
+    );
+    assert!(
+        !pid_path(workspace.path()).exists(),
+        "daemon leaked its pid file after startup failure"
+    );
+    assert!(
+        !runtime_path(workspace.path()).exists(),
+        "daemon leaked runtime discovery after startup failure"
+    );
+    assert!(
+        !socket_path(workspace.path()).exists()
+            && !workspace_socket_path(workspace.path()).exists(),
+        "daemon leaked socket discovery after startup failure"
     );
 }
