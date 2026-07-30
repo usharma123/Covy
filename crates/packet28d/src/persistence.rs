@@ -694,7 +694,7 @@ fn run_worker(
                     Some(target_revision),
                     true,
                 )
-                .and_then(|_| save_current_image(&state, &mut image));
+                .and_then(|_| save_current_image(&state, &mut image, true));
                 update_deadline_after_explicit_checkpoint(
                     &state,
                     &image,
@@ -722,7 +722,7 @@ fn run_worker(
                 )
                 .and_then(|_| {
                     if require_checkpoint {
-                        save_current_image(&state, &mut image)
+                        save_current_image(&state, &mut image, true)
                     } else {
                         Ok(())
                     }
@@ -774,7 +774,7 @@ fn run_worker(
                     Some(target_revision),
                     true,
                 )
-                .and_then(|_| save_current_image(&state, &mut image))
+                .and_then(|_| save_current_image(&state, &mut image, false))
                 .map(|_| *lock_unpoisoned(&state.metrics))
                 .map_err(|error| error.to_string());
                 // This acknowledgement is the worker's final operation.
@@ -797,7 +797,7 @@ fn service_deadline(
             *deadline = Some(Instant::now() + state.debounce);
         }
         Ok(false) if image.durable_revision > image.checkpoint_revision => {
-            if save_current_image(state, image).is_ok() {
+            if save_current_image(state, image, false).is_ok() {
                 *deadline = None;
             } else {
                 *deadline = Some(retry_at(state.debounce));
@@ -866,7 +866,7 @@ fn flush_on_disconnect(
 ) {
     let target_revision = lock_unpoisoned(&state.pending).next_revision;
     if append_pending(state, image, retry_delta, Some(target_revision), false).is_ok() {
-        let _ = save_current_image(state, image);
+        let _ = save_current_image(state, image, false);
     }
 }
 
@@ -949,7 +949,7 @@ fn append_pending(
                 ) && image.durable_revision > image.checkpoint_revision
                 {
                     *retry_delta = Some(pending_delta);
-                    if let Err(checkpoint_error) = save_current_image(state, image) {
+                    if let Err(checkpoint_error) = save_current_image(state, image, false) {
                         let message = checkpoint_error.to_string();
                         let mut pending = lock_unpoisoned(&state.pending);
                         pending.unsurfaced_error =
@@ -978,8 +978,12 @@ fn append_pending(
     }
 }
 
-fn save_current_image(state: &PersistenceState, image: &mut RegistryImage) -> Result<()> {
-    if image.checkpoint_revision == image.durable_revision {
+fn save_current_image(
+    state: &PersistenceState,
+    image: &mut RegistryImage,
+    force: bool,
+) -> Result<()> {
+    if !force && image.checkpoint_revision == image.durable_revision {
         return Ok(());
     }
     await_checkpoint_test_gate(state);
