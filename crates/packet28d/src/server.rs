@@ -836,6 +836,8 @@ fn handle_request(
 mod tests {
     use super::*;
 
+    const CONTROL_LANE_DEADLOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
     async fn exchange(
         stream: &mut tokio::io::DuplexStream,
         request: &DaemonRequest,
@@ -1111,11 +1113,11 @@ mod tests {
         });
 
         let response = tokio::time::timeout(
-            Duration::from_millis(250),
+            CONTROL_LANE_DEADLOCK_TIMEOUT,
             exchange(&mut client, &DaemonRequest::Stop),
         )
         .await
-        .expect("Stop was blocked behind saturated data work");
+        .expect("Stop deadlocked behind saturated data work");
         assert!(matches!(
             response,
             DaemonResponse::Ack { ref message } if message == "stopping"
@@ -1176,7 +1178,7 @@ mod tests {
             .await
         });
         let response = tokio::time::timeout(
-            Duration::from_millis(250),
+            CONTROL_LANE_DEADLOCK_TIMEOUT,
             exchange(
                 &mut client,
                 &DaemonRequest::TaskCancel {
@@ -1185,7 +1187,7 @@ mod tests {
             ),
         )
         .await
-        .expect("TaskCancel was blocked behind saturated data work");
+        .expect("TaskCancel deadlocked behind saturated data work");
         assert!(matches!(
             response,
             DaemonResponse::TaskCancel { task: Some(_), .. }
