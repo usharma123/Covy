@@ -10,6 +10,7 @@ use crate::model::{
     GENERATION_HIGH_WATER_FILE_NAME, MANIFEST_FILE_NAME, OVERLAY_STATE_FILE_NAME,
     PREVIOUS_MANIFEST_FILE_NAME, REGEX_DIR_NAME,
 };
+use crate::suffix::{resolve_capture_path_suffix, SuffixResolution};
 
 pub(crate) fn regex_index_dir(root: &Path) -> PathBuf {
     root.join(".packet28").join("index").join(REGEX_DIR_NAME)
@@ -198,22 +199,31 @@ pub(crate) fn resolve_requested_paths(
             Ok(WorkspacePathInspection {
                 kind: WorkspacePathKind::Missing,
                 ..
-            }) => {
-                let Some(candidate) = resolve_capture_path_suffix(root, &normalized) else {
+            }) => match resolve_capture_path_suffix(root, &normalized) {
+                SuffixResolution::Unique(candidate) => {
+                    diagnostics.push(format!(
+                        "resolved missing path '{}' to '{}'",
+                        original.trim(),
+                        candidate
+                    ));
+                    candidate
+                }
+                SuffixResolution::MissingOrAmbiguous => {
                     diagnostics.push(format!(
                         "path '{}' does not exist under daemon root {}",
                         original.trim(),
                         root.display()
                     ));
                     continue;
-                };
-                diagnostics.push(format!(
-                    "resolved missing path '{}' to '{}'",
-                    original.trim(),
-                    candidate
-                ));
-                candidate
-            }
+                }
+                SuffixResolution::Exhausted => {
+                    diagnostics.push(format!(
+                        "path '{}' was not resolved because the bounded workspace scan was exhausted",
+                        original.trim()
+                    ));
+                    continue;
+                }
+            },
             Ok(_) => {
                 diagnostics.push(format!("ignored unsafe path input: {}", original.trim()));
                 continue;
@@ -254,52 +264,4 @@ fn normalize_capture_path(root: &Path, text: &str) -> String {
         .replace('\\', "/")
         .trim_end_matches('/')
         .to_string()
-}
-
-fn resolve_capture_path_suffix(root: &Path, needle: &str) -> Option<String> {
-    let mut matches = BTreeSet::new();
-    collect_suffix_matches(root, root, needle, &mut matches);
-    (matches.len() == 1)
-        .then(|| matches.into_iter().next())
-        .flatten()
-}
-
-fn collect_suffix_matches(
-    root: &Path,
-    current: &Path,
-    needle: &str,
-    matches: &mut BTreeSet<String>,
-) {
-    let Ok(entries) = fs::read_dir(current) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-        if file_type.is_dir() {
-            collect_suffix_matches(root, &path, needle, matches);
-            if matches.len() > 1 {
-                return;
-            }
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        let Ok(stripped) = path.strip_prefix(root) else {
-            continue;
-        };
-        let normalized = stripped.to_string_lossy().replace('\\', "/");
-        if normalized == needle || normalized.ends_with(&format!("/{needle}")) {
-            matches.insert(normalized);
-            if matches.len() > 1 {
-                return;
-            }
-        }
-    }
 }

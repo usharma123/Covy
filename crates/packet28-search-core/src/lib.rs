@@ -61,6 +61,7 @@ mod publication;
 mod query;
 #[cfg(feature = "shared-repository-scan")]
 pub mod shared_scan;
+mod suffix;
 mod support;
 mod weights;
 mod workspace;

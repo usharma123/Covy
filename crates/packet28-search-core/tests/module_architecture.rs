@@ -81,7 +81,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
             "paths",
             ModulePolicy {
                 max_lines: 325,
-                allowed_dependencies: &["error", "model"],
+                allowed_dependencies: &["error", "model", "suffix"],
             },
         ),
         (
@@ -136,6 +136,13 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
             ModulePolicy {
                 max_lines: 150,
                 allowed_dependencies: &["error"],
+            },
+        ),
+        (
+            "suffix",
+            ModulePolicy {
+                max_lines: 250,
+                allowed_dependencies: &[],
             },
         ),
         (
