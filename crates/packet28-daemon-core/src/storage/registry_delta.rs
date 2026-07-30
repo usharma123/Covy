@@ -25,7 +25,12 @@ std::thread_local! {
 }
 
 /// Maximum encoded JSON payload accepted for one atomic registry delta.
-pub const MAX_REGISTRY_DELTA_FRAME_BYTES: usize = 16 * 1024 * 1024;
+///
+/// One transition may legitimately replace both registries at their existing
+/// public size ceilings. The extra MiB covers the delta envelope and keys, so
+/// adopting the WAL does not narrow the pre-existing checkpoint contract.
+pub const MAX_REGISTRY_DELTA_FRAME_BYTES: usize =
+    MAX_TASK_REGISTRY_BYTES + MAX_WATCH_REGISTRY_BYTES + 1024 * 1024;
 /// Maximum durable registry-delta WAL size before a checkpoint is required.
 pub const MAX_REGISTRY_DELTA_WAL_BYTES: usize = 256 * 1024 * 1024;
 
@@ -1566,6 +1571,15 @@ mod tests {
             watches: watch_records.into_iter().collect(),
         };
         save_task_watch_registry_checkpoint(root, &tasks, &watches).unwrap();
+    }
+
+    #[test]
+    fn frame_bound_preserves_the_existing_paired_registry_size_contract() {
+        assert!(
+            MAX_REGISTRY_DELTA_FRAME_BYTES
+                >= MAX_TASK_REGISTRY_BYTES.saturating_add(MAX_WATCH_REGISTRY_BYTES)
+        );
+        assert!(MAX_REGISTRY_DELTA_FRAME_BYTES < MAX_REGISTRY_DELTA_WAL_BYTES);
     }
 
     fn add_watch_delta(task_id: &str, existing: &[&str], added: &str) -> RegistryDeltaBatch {
