@@ -169,6 +169,10 @@ async fn serve_proxy_stdio_async(
         let permit = match inflight.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(tokio::sync::TryAcquireError::NoPermits) => {
+                if let Err(error) = forward_overload_client_responses(&upstreams, &request).await {
+                    serve_result = Err(error);
+                    break;
+                }
                 if let Some(response) = proxy_overload_response(&request) {
                     if let Err(error) = output.send(response, framing).await {
                         serve_result = Err(error);
@@ -313,18 +317,38 @@ fn is_client_response_message(message: &Value) -> bool {
 }
 
 fn proxy_overload_response(request: &Value) -> Option<Value> {
-    let has_response = request.as_array().map_or_else(
-        || request.get("id").is_some(),
-        |requests| requests.iter().any(|request| request.get("id").is_some()),
-    );
-    has_response.then(|| {
-        let response = mcp_error_response(Value::Null, -32000, "MCP proxy inflight limit reached");
-        if request.is_array() {
-            Value::Array(vec![response])
-        } else {
-            response
-        }
-    })
+    let overload = |id| mcp_error_response(id, -32000, "MCP proxy inflight limit reached");
+    let Some(requests) = request.as_array() else {
+        return request.get("id").cloned().map(overload);
+    };
+    let responses = requests
+        .iter()
+        .filter_map(|request| {
+            request
+                .get("method")
+                .and_then(Value::as_str)
+                .and(request.get("id"))
+                .cloned()
+                .map(overload)
+        })
+        .collect::<Vec<_>>();
+    (!responses.is_empty()).then_some(Value::Array(responses))
+}
+
+async fn forward_overload_client_responses(
+    upstreams: &UpstreamPool,
+    request: &Value,
+) -> Result<()> {
+    let Some(messages) = request.as_array() else {
+        return Ok(());
+    };
+    for message in messages
+        .iter()
+        .filter(|message| is_client_response_message(message))
+    {
+        let _ = upstreams.forward_client_response(message).await?;
+    }
+    Ok(())
 }
 
 async fn dispatch_proxy_message(
@@ -966,6 +990,28 @@ fn classify_tool_operation(name: &str, arguments: &Value) -> suite_packet_core::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_overload_preserves_each_request_id_and_skips_non_requests() {
+        let response = proxy_overload_response(&json!([
+            {"jsonrpc":"2.0","id":"first","method":"tools/list"},
+            {"jsonrpc":"2.0","method":"notifications/initialized"},
+            {"jsonrpc":"2.0","id":7,"method":"prompts/list"},
+            {"jsonrpc":"2.0","id":"client-response","result":{}}
+        ]))
+        .unwrap();
+        let responses = response.as_array().unwrap();
+        assert_eq!(
+            (
+                responses.len(),
+                responses[0]["id"].clone(),
+                responses[1]["id"].clone(),
+                responses[0]["error"]["code"].clone(),
+                responses[1]["error"]["code"].clone(),
+            ),
+            (2, json!("first"), json!(7), json!(-32000), json!(-32000))
+        );
+    }
 
     #[tokio::test]
     async fn proxy_batch_limit_plus_one_is_bounded_and_next_request_remains_responsive() {

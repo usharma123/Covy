@@ -704,3 +704,109 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
         .assert()
         .success();
 }
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_overload_preserves_single_and_batch_request_ids() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script_path = dir.path().join("saturated_mcp.py");
+    write_concurrent_tool_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "concurrent": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length",
+                    "timeout_ms": 5_000
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (mut server, _) = start_mcp_proxy_server_with_tool(
+        dir.path(),
+        &config_path,
+        "task-proxy-saturated",
+        "concurrent.echo",
+    );
+    for request_id in 0..64 {
+        write_mcp_message(
+            &mut server,
+            &json!({
+                "jsonrpc":"2.0",
+                "id":format!("occupied-{request_id}"),
+                "method":"tools/call",
+                "params":{
+                    "name":"concurrent.echo",
+                    "arguments":{"delay_ms":1_500,"value":"occupied"}
+                }
+            }),
+        );
+    }
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"saturated-single",
+            "method":"prompts/list"
+        }),
+    );
+    let single = read_until(&mut server, |message| message["id"] == "saturated-single");
+    assert_eq!(single["error"]["code"], -32000);
+
+    write_mcp_message(
+        &mut server,
+        &json!([
+            {"jsonrpc":"2.0","id":"batch-string","method":"prompts/list"},
+            {"jsonrpc":"2.0","method":"notifications/initialized"},
+            {"jsonrpc":"2.0","id":7,"method":"prompts/list"},
+            {"jsonrpc":"2.0","id":"client-response","result":{}}
+        ]),
+    );
+    let batch = read_until(&mut server, |message| {
+        message.as_array().is_some_and(|responses| {
+            responses
+                .first()
+                .is_some_and(|response| response["id"] == "batch-string")
+        })
+    });
+    let responses = batch.as_array().unwrap();
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["id"], "batch-string");
+    assert_eq!(responses[1]["id"], 7);
+    assert!(responses
+        .iter()
+        .all(|response| response["error"]["code"] == -32000));
+
+    let mut completed = [false; 64];
+    for _ in 0..completed.len() {
+        let response = read_next_mcp_response(&mut server);
+        let request_id = response["id"]
+            .as_str()
+            .and_then(|id| id.strip_prefix("occupied-"))
+            .and_then(|index| index.parse::<usize>().ok())
+            .filter(|index| *index < completed.len())
+            .unwrap_or_else(|| panic!("unexpected saturated-request response: {response}"));
+        assert!(
+            !completed[request_id],
+            "duplicate saturated-request response for occupied-{request_id}"
+        );
+        completed[request_id] = true;
+    }
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
