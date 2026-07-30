@@ -298,3 +298,49 @@ fn shared_scan_public_surface_prepares_and_publishes_a_generation() {
     .expect("search shared generation");
     assert_eq!(result.match_count, 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn incremental_update_rejects_a_missing_path_beneath_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/lib.rs"), "pub fn indexed() {}\n").unwrap();
+    symlink(outside.path(), root.path().join("alias")).unwrap();
+    let runtime = rebuild_full_index(root.path(), true).unwrap();
+
+    let error = update_overlay_index(
+        root.path(),
+        Some(&runtime),
+        &["alias/missing.rs".to_string()],
+    )
+    .expect_err("missing path beneath a symlink was accepted");
+
+    assert!(matches!(error, SearchError::InvalidChangedPath { .. }));
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_requested_path_does_not_search_through_a_symlinked_directory() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/lib.rs"), "pub fn indexed() {}\n").unwrap();
+    fs::write(outside.path().join("needle.rs"), "pub fn outside() {}\n").unwrap();
+    symlink(outside.path(), root.path().join("alias")).unwrap();
+    let runtime = rebuild_full_index(root.path(), true).unwrap();
+    let request = SearchRequest {
+        query: "indexed".to_string(),
+        fixed_string: true,
+        requested_paths: vec!["needle.rs".to_string()],
+        ..SearchRequest::default()
+    };
+
+    let result = indexed_search(root.path(), &runtime, &request).unwrap();
+
+    assert!(result.resolved_paths.is_empty());
+}

@@ -1,13 +1,14 @@
 //! Bounded Git workspace attestation for full builds, incremental updates, and queries.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path};
 use std::process::{Command, Output};
 
 use crate::error::{Result, SearchError};
 use crate::model::{RegexIndexManifest, MAX_INDEXED_FILE_BYTES};
+use crate::paths::{inspect_workspace_path, WorkspacePathInspection, WorkspacePathKind};
 
 const MAX_GIT_METADATA_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ATTESTED_WORKSPACE_ENTRIES: usize = 4_096;
@@ -212,25 +213,24 @@ fn attest_workspace_path(
     path: &str,
     budget: &mut u64,
 ) -> std::result::Result<WorkspacePathAttestation, String> {
-    let full_path = root.join(path);
-    let metadata = match fs::symlink_metadata(&full_path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
+    let inspection = inspect_workspace_path(root, Path::new(path))
+        .map_err(|error| format!("failed to inspect workspace path '{path}': {error}"))?;
+    let WorkspacePathInspection { full_path, kind } = inspection;
+    let metadata = match kind {
+        WorkspacePathKind::Symlink => {
             return Err(format!(
                 "workspace symlink '{path}' cannot be authenticated for indexed search"
             ))
         }
-        Ok(metadata) if metadata.is_file() => metadata,
-        Ok(_) => return Err(format!("workspace path '{path}' is not a regular file")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        WorkspacePathKind::File(metadata) => metadata,
+        WorkspacePathKind::Missing => {
             return Ok(WorkspacePathAttestation {
                 digest: "missing".to_string(),
                 indexable: false,
             })
         }
-        Err(error) => {
-            return Err(format!(
-                "failed to inspect workspace path '{path}': {error}"
-            ))
+        WorkspacePathKind::Directory | WorkspacePathKind::Other => {
+            return Err(format!("workspace path '{path}' is not a regular file"))
         }
     };
     if metadata.len() > MAX_INDEXED_FILE_BYTES as u64 {
