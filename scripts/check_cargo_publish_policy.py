@@ -402,17 +402,54 @@ def policy_errors(
                 errors.append(f"{name}: public package needs one to five categories")
 
         for dependency in package.get("dependencies", []):
-            if not isinstance(dependency, dict) or dependency.get("path") is None:
+            if not isinstance(dependency, dict):
                 continue
             dependency_name = dependency.get("name")
-            if not isinstance(dependency_name, str) or dependency_name not in packages:
+            dependency_path = dependency.get("path")
+            if not isinstance(dependency_name, str):
+                if dependency_path is not None:
+                    errors.append(
+                        f"{name}: path dependency {dependency_name!r} is outside the workspace"
+                    )
+                continue
+            if dependency_name not in packages:
+                if dependency_path is None:
+                    continue
                 errors.append(
                     f"{name}: path dependency {dependency_name!r} is outside the workspace"
                 )
                 continue
+
+            dependency_manifest = packages[dependency_name].get("manifest_path")
+            expected_path = (
+                Path(dependency_manifest).parent.resolve()
+                if isinstance(dependency_manifest, str)
+                else None
+            )
+            actual_path = (
+                Path(dependency_path).resolve()
+                if isinstance(dependency_path, str)
+                else None
+            )
+            if actual_path is None:
+                errors.append(
+                    f"{name}: internal dependency {dependency_name} must resolve "
+                    "through its workspace path"
+                )
+            elif expected_path is None or actual_path != expected_path:
+                errors.append(
+                    f"{name}: internal dependency {dependency_name} resolves to "
+                    f"{actual_path}, expected {expected_path}"
+                )
+
             requirement = dependency.get("req")
             dependency_version = packages[dependency_name].get("version")
-            if (
+            if requirement == "*":
+                errors.append(
+                    f"{name}: internal dependency {dependency_name} requirement "
+                    "'*' is unconstrained"
+                )
+            elif (
                 not isinstance(requirement, str)
                 or not isinstance(dependency_version, str)
                 or not requirement_allows(requirement, dependency_version)

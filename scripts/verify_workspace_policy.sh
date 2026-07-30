@@ -32,38 +32,6 @@ grep -Fqx 'missing-safety-doc = "deny"' Cargo.toml ||
 grep -Fqx 'undocumented-unsafe-blocks = "deny"' Cargo.toml ||
   fail "unsafe blocks must carry a local safety rationale"
 
-internal_dependencies=(
-  buildy-core
-  context-kernel-builtins
-  context-kernel-core
-  context-kernel-mechanism
-  context-memory-core
-  context-scheduler-core
-  contextq-core
-  covy-core
-  covy-ingest
-  diffy-core
-  guardy-core
-  mapy-core
-  packet28-daemon-core
-  packet28-reducer-core
-  packet28-search-core
-  stacky-core
-  suite-foundation-core
-  suite-ingest
-  suite-packet-core
-  suite-policy-core
-  suite-proxy-core
-  testy-cli-common
-  testy-core
-)
-
-for dependency in "${internal_dependencies[@]}"; do
-  expected="$dependency = { version = \"0.2.0\", path = \"crates/$dependency\" }"
-  grep -Fqx "$expected" Cargo.toml ||
-    fail "$dependency is not centralized in workspace dependencies"
-done
-
 if grep -En 'path[[:space:]]*=[[:space:]]*"\.\./' crates/*/Cargo.toml; then
   fail "member manifests must inherit internal workspace dependencies"
 fi
@@ -94,15 +62,28 @@ for manifest in crates/*/Cargo.toml; do
   ' "$manifest" || fail "$manifest does not inherit workspace lints"
 done
 
-metadata_member_count="$(
+read -r metadata_member_count internal_dependency_count < <(
   cargo metadata --locked --no-deps --format-version 1 |
     node -e '
       const fs = require("node:fs");
       const metadata = JSON.parse(fs.readFileSync(0, "utf8"));
-      process.stdout.write(String(metadata.workspace_members.length));
+      const members = new Set(metadata.workspace_members);
+      const packages = metadata.packages.filter((candidate) =>
+        members.has(candidate.id)
+      );
+      const names = new Set(packages.map((candidate) => candidate.name));
+      const internal = new Set();
+      for (const candidate of packages) {
+        for (const dependency of candidate.dependencies) {
+          if (names.has(dependency.name)) {
+            internal.add(dependency.name);
+          }
+        }
+      }
+      process.stdout.write(`${packages.length} ${internal.size}\n`);
     '
-)"
+)
 [[ "$member_count" -eq "$metadata_member_count" ]] ||
   fail "found $member_count manifests but Cargo reports $metadata_member_count workspace members"
 
-echo "workspace policy invariant passed ($member_count members, ${#internal_dependencies[@]} centralized internal dependencies)"
+echo "workspace policy invariant passed ($member_count members, $internal_dependency_count metadata-derived internal dependencies)"

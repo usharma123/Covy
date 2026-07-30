@@ -103,6 +103,43 @@ class CargoPublishPolicyTests(unittest.TestCase):
             [],
         )
 
+    def test_every_workspace_dependency_requires_local_path_and_bounded_version(self):
+        cargo_metadata = publish_policy.load_metadata(ROOT)
+        current_policy = publish_policy.load_policy(ROOT)
+        packages = publish_policy.workspace_packages(cargo_metadata)
+        locations = {}
+        for owner, candidate in packages.items():
+            for index, dependency in enumerate(candidate["dependencies"]):
+                dependency_name = dependency.get("name")
+                if dependency_name in packages:
+                    locations.setdefault(dependency_name, (owner, index))
+
+        self.assertIn("packet28-binary-codec", locations)
+        self.assertIn("packet28-daemon-protocol", locations)
+
+        for dependency_name, (owner, index) in sorted(locations.items()):
+            with self.subTest(dependency=dependency_name, mutation="missing-path"):
+                mutated = copy.deepcopy(cargo_metadata)
+                mutated_packages = publish_policy.workspace_packages(mutated)
+                mutated_packages[owner]["dependencies"][index]["path"] = None
+                errors = publish_policy.policy_errors(mutated, current_policy)
+                self.assertIn(
+                    f"{owner}: internal dependency {dependency_name} must resolve "
+                    "through its workspace path",
+                    errors,
+                )
+
+            with self.subTest(dependency=dependency_name, mutation="wildcard"):
+                mutated = copy.deepcopy(cargo_metadata)
+                mutated_packages = publish_policy.workspace_packages(mutated)
+                mutated_packages[owner]["dependencies"][index]["req"] = "*"
+                errors = publish_policy.policy_errors(mutated, current_policy)
+                self.assertIn(
+                    f"{owner}: internal dependency {dependency_name} requirement "
+                    "'*' is unconstrained",
+                    errors,
+                )
+
     def test_packaged_dashboard_fixtures_match_documentation_evidence(self):
         names = (
             "history.jsonl",
