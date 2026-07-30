@@ -782,16 +782,33 @@ def check_packet28d_source_boundaries(root: Path) -> list[str]:
                 f"application lifecycle: {path.relative_to(root)}"
             )
         forbidden_repository_rescans = (
-            "mapy_core::build_repo_map(",
-            "mapy_core::build_repo_query(",
-            "packet28_reducer_core::search(",
+            (
+                re.compile(r"\bbuild_repo_(?:map|query)\b"),
+                "mapy_core repository scan",
+            ),
+            (
+                re.compile(
+                    r"\bpacket28_reducer_core\s*::\s*"
+                    r"(?:search\b|\{[^}]*\bsearch\b)"
+                    r"|\buse\s+packet28_reducer_core\s+as\b",
+                    re.DOTALL,
+                ),
+                "packet28_reducer_core repository scan",
+            ),
+            (
+                re.compile(
+                    r"\b(?:indexed_search|guarded_indexed_search|"
+                    r"load_and_indexed_search|load_and_guarded_indexed_search)\b"
+                ),
+                "unbatched packet28_search_core query",
+            ),
         )
-        for literal in forbidden_repository_rescans:
-            if literal in source:
+        for pattern, label in forbidden_repository_rescans:
+            if pattern.search(source):
                 errors.append(
                     "packet28d broker repository consumers must use authenticated "
                     "daemon index runtimes, not rescan entrypoint "
-                    f"{literal!r}: {path.relative_to(root)}"
+                    f"{label!r}: {path.relative_to(root)}"
                 )
 
     broker_child_names = "|".join(map(re.escape, PACKET28D_BROKER_MODULES))

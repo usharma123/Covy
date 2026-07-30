@@ -763,14 +763,11 @@ fn requested_search_paths(
     ])
 }
 
-fn apply_search_candidate_results(
-    root: &Path,
-    runtime: &packet28_search_core::RegexIndexRuntime,
+fn search_request_for_candidate(
     requested_paths: &[String],
     candidate: &SearchCandidate,
-    files: &mut BTreeMap<String, ReducerSearchFile>,
-) {
-    let request = packet28_reducer_core::SearchRequest {
+) -> packet28_reducer_core::SearchRequest {
+    packet28_reducer_core::SearchRequest {
         query: candidate.term.clone(),
         requested_paths: requested_paths.to_vec(),
         fixed_string: true,
@@ -779,11 +776,15 @@ fn apply_search_candidate_results(
         context_lines: None,
         max_matches_per_file: Some(SEARCH_BROKER_MAX_MATCHES_PER_FILE),
         max_total_matches: Some(SEARCH_BROKER_MAX_TOTAL_MATCHES),
-    };
-    let Ok(search) = packet28_search_core::indexed_search(root, runtime, &request) else {
-        return;
-    };
-    for group in search.groups {
+    }
+}
+
+fn apply_search_candidate_result(
+    search: &packet28_reducer_core::SearchResult,
+    candidate: &SearchCandidate,
+    files: &mut BTreeMap<String, ReducerSearchFile>,
+) {
+    for group in &search.groups {
         let entry = files
             .entry(group.path.clone())
             .or_insert_with(|| ReducerSearchFile {
@@ -802,7 +803,7 @@ fn apply_search_candidate_results(
         ) {
             entry.symbols.insert(candidate.term.clone());
         }
-        for item in group.matches {
+        for item in &group.matches {
             let region = packet28_reducer_core::format_region(&item.path, item.line, item.line);
             entry.regions.insert(region.clone());
             if let Some(match_kind) = classify_search_candidate_match(candidate, &item.text) {
@@ -853,7 +854,7 @@ fn apply_search_candidate_results(
                 .all(|(line, _)| *line != item.line)
                 && entry.preview_matches.len() < 6
             {
-                entry.preview_matches.push((item.line, item.text));
+                entry.preview_matches.push((item.line, item.text.clone()));
             }
         }
     }
@@ -954,16 +955,34 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
             .then(|| guard.interactive_index.regex_runtime.clone())
             .flatten()
     });
-    if let (Some(runtime), Some(phase)) = (regex_runtime.as_ref(), plan.phases.first()) {
-        for candidate in &phase.candidates {
-            apply_search_candidate_results(
-                root,
-                runtime,
-                &requested_paths,
-                candidate,
-                &mut files_by_path,
-            );
+    let requests = plan
+        .phases
+        .iter()
+        .flat_map(|phase| {
+            phase
+                .candidates
+                .iter()
+                .map(|candidate| search_request_for_candidate(&requested_paths, candidate))
+        })
+        .collect::<Vec<_>>();
+    let authenticated_batch_results = regex_runtime.as_ref().and_then(|runtime| {
+        packet28_search_core::guarded_indexed_search_batch(root, runtime, &requests).ok()
+    });
+    let mut phase_result_offset = 0usize;
+    if let (Some(results), Some(phase)) =
+        (authenticated_batch_results.as_ref(), plan.phases.first())
+    {
+        for (candidate, result) in phase.candidates.iter().zip(
+            results
+                .iter()
+                .skip(phase_result_offset)
+                .take(phase.candidates.len()),
+        ) {
+            if let Some(result) = result {
+                apply_search_candidate_result(result, candidate, &mut files_by_path);
+            }
         }
+        phase_result_offset = phase_result_offset.saturating_add(phase.candidates.len());
     }
     let mut reducer_files =
         rank_reducer_search_files(files_by_path.into_values().collect(), snapshot, max_files);
@@ -984,15 +1003,16 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
             .into_iter()
             .map(|file| (file.path.clone(), file))
             .collect::<BTreeMap<_, _>>();
-        for candidate in &plan.phases[1].candidates {
-            if let Some(runtime) = regex_runtime.as_ref() {
-                apply_search_candidate_results(
-                    root,
-                    runtime,
-                    &requested_paths,
-                    candidate,
-                    &mut files_by_path,
-                );
+        if let Some(results) = authenticated_batch_results.as_ref() {
+            for (candidate, result) in plan.phases[1].candidates.iter().zip(
+                results
+                    .iter()
+                    .skip(phase_result_offset)
+                    .take(plan.phases[1].candidates.len()),
+            ) {
+                if let Some(result) = result {
+                    apply_search_candidate_result(result, candidate, &mut files_by_path);
+                }
             }
         }
         reducer_files =
@@ -1016,7 +1036,7 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
         #[cfg(test)]
         used_fallback,
         #[cfg(test)]
-        used_persisted_runtime: regex_runtime.is_some(),
+        used_persisted_runtime: authenticated_batch_results.is_some(),
     }
 }
 

@@ -50,6 +50,7 @@
 
 extern crate packet28_binary_codec as wincode;
 
+mod batch;
 mod error;
 mod generation;
 mod git_process;
@@ -67,6 +68,7 @@ mod support;
 mod weights;
 mod workspace;
 
+pub use crate::batch::guarded_indexed_search_batch;
 pub use crate::error::{Result, SearchError};
 pub use crate::generation::{
     clear_index, load_runtime, rebuild_full_index, rebuild_full_index_with_progress,

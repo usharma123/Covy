@@ -19,6 +19,7 @@ const EXPECTED_ROOT_EXPORTS: &[&str] = &[
     "clear_index",
     "guarded_fallback_reason",
     "guarded_indexed_search",
+    "guarded_indexed_search_batch",
     "indexed_search",
     "load_and_guarded_indexed_search",
     "load_and_indexed_search",
@@ -33,6 +34,13 @@ struct ModulePolicy {
 
 fn policies() -> BTreeMap<&'static str, ModulePolicy> {
     BTreeMap::from([
+        (
+            "batch",
+            ModulePolicy {
+                max_lines: 150,
+                allowed_dependencies: &["error", "model", "query"],
+            },
+        ),
         (
             "error",
             ModulePolicy {

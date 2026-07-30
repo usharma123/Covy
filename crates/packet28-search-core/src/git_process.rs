@@ -184,7 +184,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(
             root.join("src/lib.rs"),
-            "pub fn unique_attestation_needle() {}\n",
+            "pub fn unique_attestation_needle() {}\npub fn second_attestation_needle() {}\n",
         )
         .unwrap();
         fs::write(root.join(".gitignore"), ".packet28/\n").unwrap();
@@ -197,17 +197,15 @@ mod tests {
             &["commit", "--quiet", "--no-gpg-sign", "-m", "fixture"],
         );
         crate::generation::rebuild_full_index(root, true).unwrap();
+        let request = |query: &str| SearchRequest {
+            query: query.to_string(),
+            fixed_string: true,
+            ..SearchRequest::default()
+        };
         GIT_COMMAND_COUNT.store(0, Ordering::Relaxed);
 
-        crate::query::load_and_guarded_indexed_search(
-            root,
-            &SearchRequest {
-                query: "unique_attestation_needle".to_string(),
-                fixed_string: true,
-                ..SearchRequest::default()
-            },
-        )
-        .unwrap();
+        crate::query::load_and_guarded_indexed_search(root, &request("unique_attestation_needle"))
+            .unwrap();
 
         assert_eq!(GIT_COMMAND_COUNT.load(Ordering::Relaxed), 2);
         GIT_COMMAND_COUNT.store(0, Ordering::Relaxed);
@@ -221,5 +219,24 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, crate::SearchError::IndexNotReady { .. }));
         assert_eq!(GIT_COMMAND_COUNT.load(Ordering::Relaxed), 2);
+
+        let runtime = crate::generation::load_runtime(root).unwrap();
+        GIT_COMMAND_COUNT.store(0, Ordering::Relaxed);
+        let requests = [
+            request("unique_attestation_needle"),
+            request("second_attestation_needle"),
+            request("x"),
+        ];
+        let results = crate::guarded_indexed_search_batch(root, &runtime, &requests).unwrap();
+        assert_eq!(
+            results.iter().map(Option::is_some).collect::<Vec<_>>(),
+            [true, true, false],
+            "one-byte query must not verify every indexed file"
+        );
+        assert_eq!(
+            GIT_COMMAND_COUNT.load(Ordering::Relaxed),
+            2,
+            "the complete batch must perform one two-command attestation"
+        );
     }
 }

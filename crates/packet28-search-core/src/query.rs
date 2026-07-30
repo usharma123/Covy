@@ -160,7 +160,7 @@ pub fn indexed_search(
     runtime: &RegexIndexRuntime,
     request: &SearchRequest,
 ) -> Result<SearchResult> {
-    indexed_search_with_guard(root, runtime, request, false)
+    indexed_search_with_guard(root, runtime, request, false, true, None)
 }
 
 /// Executes an indexed search only when its candidate plan remains selective.
@@ -178,7 +178,7 @@ pub fn guarded_indexed_search(
     runtime: &RegexIndexRuntime,
     request: &SearchRequest,
 ) -> Result<SearchResult> {
-    indexed_search_with_guard(root, runtime, request, true)
+    indexed_search_with_guard(root, runtime, request, true, true, None)
 }
 
 /// Loads the persisted generation and executes [`indexed_search`] with one
@@ -209,11 +209,13 @@ pub fn load_and_guarded_indexed_search(
     guarded_indexed_search(root, &runtime, request)
 }
 
-fn indexed_search_with_guard(
+pub(crate) fn indexed_search_with_guard(
     root: &Path,
     runtime: &RegexIndexRuntime,
     request: &SearchRequest,
     enforce_guard: bool,
+    attest_workspace: bool,
+    max_verify_candidates: Option<usize>,
 ) -> Result<SearchResult> {
     let loaded = match runtime.loaded.as_ref() {
         Some(loaded) => loaded,
@@ -253,11 +255,15 @@ fn indexed_search_with_guard(
     let compiled = compile_request(request, loaded.as_ref())?;
     if enforce_guard {
         if let Some(reason) = compiled.must_fallback_reason.clone() {
-            ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+            if attest_workspace {
+                ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+            }
             return Err(SearchError::IndexNotReady { reason });
         }
         if matches!(compiled.plan, SearchPlan::All) {
-            ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+            if attest_workspace {
+                ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+            }
             return Err(SearchError::IndexNotReady {
                 reason: compiled.planner_fallback.clone().unwrap_or_else(|| {
                     "planner could not derive a selective index plan".to_string()
@@ -308,11 +314,17 @@ fn indexed_search_with_guard(
         &candidate_paths,
         &mut cache,
     );
-    if enforce_guard && should_fallback_to_rg(pruned_candidate_paths.len(), all_paths.len()) {
-        ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+    let candidate_set_is_too_broad = max_verify_candidates.map_or_else(
+        || should_fallback_to_rg(pruned_candidate_paths.len(), all_paths.len()),
+        |maximum| pruned_candidate_paths.len() > maximum,
+    );
+    if enforce_guard && candidate_set_is_too_broad {
+        if attest_workspace {
+            ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+        }
         return Err(SearchError::IndexNotReady {
             reason: format!(
-                "candidate set remained too broad for indexed verification ({}/{} files)",
+                "candidate set remained too broad for bounded indexed verification ({}/{} files)",
                 pruned_candidate_paths.len(),
                 all_paths.len()
             ),
@@ -330,7 +342,9 @@ fn indexed_search_with_guard(
             match verify_path(root, path, &compiled.verifier, request.max_matches_per_file) {
                 Ok(groups) => groups,
                 Err(error) => {
-                    ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+                    if attest_workspace {
+                        ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+                    }
                     return Err(error);
                 }
             };
@@ -394,11 +408,13 @@ fn indexed_search_with_guard(
         diagnostics,
         engine: Some(engine),
     };
-    ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+    if attest_workspace {
+        ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+    }
     Ok(result)
 }
 
-fn ensure_workspace_fresh(
+pub(crate) fn ensure_workspace_fresh(
     root: &Path,
     runtime: &RegexIndexRuntime,
     loaded: &LoadedIndex,

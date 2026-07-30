@@ -2777,23 +2777,32 @@ fn broker_map_and_query_consume_incrementally_updated_daemon_runtimes() {
 #[test]
 fn broker_corrupt_runtime_fallback_fails_closed_without_repository_rescan() {
     let fixture = IndexFixture::new(&[("src/a.rs", "pub fn indexed_symbol() -> usize { 1 }\n")]);
+    fs::write(
+        fixture.root.join(".packet28/index/mapy-v1/manifest.json"),
+        b"{",
+    )
+    .expect("corrupt persisted map manifest");
+    fs::write(
+        fixture.root.join(".packet28/index/regex-v1/manifest.json"),
+        b"{",
+    )
+    .expect("corrupt persisted regex manifest");
+    let repo_runtime =
+        mapy_core::load_repo_index_runtime(&fixture.root).expect("reload corrupt map runtime");
+    let regex_runtime =
+        packet28_search_core::load_runtime(&fixture.root).expect("reload corrupt regex runtime");
+    assert!(!repo_runtime.is_loaded());
+    assert!(!regex_runtime.is_loaded());
     {
         let mut guard = fixture.state.lock().expect("state");
-        guard
-            .interactive_index
-            .repo_runtime
-            .as_mut()
-            .expect("repo runtime")
-            .manifest
-            .last_error = Some("injected repository corruption".to_string());
-        guard
-            .interactive_index
-            .regex_runtime
-            .as_mut()
-            .expect("regex runtime")
-            .manifest
-            .last_error = Some("injected search corruption".to_string());
+        guard.interactive_index.repo_runtime = Some(repo_runtime);
+        guard.interactive_index.regex_runtime = Some(regex_runtime);
     }
+    fs::rename(
+        fixture.root.join("src"),
+        fixture.root.join("source-unavailable"),
+    )
+    .expect("make a repository rescan impossible");
 
     let map_error = crate::broker::testing::build_repo_map_envelope(
         &fixture.state,

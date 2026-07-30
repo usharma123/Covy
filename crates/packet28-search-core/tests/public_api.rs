@@ -6,10 +6,10 @@ use std::process::Command;
 
 use packet28_reducer_core::{SearchRequest, SearchResult};
 use packet28_search_core::{
-    clear_index, guarded_fallback_reason, guarded_indexed_search, indexed_search,
-    load_and_guarded_indexed_search, load_and_indexed_search, load_runtime, rebuild_full_index,
-    rebuild_full_index_with_progress, update_overlay_index, RegexIndexManifest, RegexIndexRuntime,
-    Result, SearchError,
+    clear_index, guarded_fallback_reason, guarded_indexed_search, guarded_indexed_search_batch,
+    indexed_search, load_and_guarded_indexed_search, load_and_indexed_search, load_runtime,
+    rebuild_full_index, rebuild_full_index_with_progress, update_overlay_index, RegexIndexManifest,
+    RegexIndexRuntime, Result, SearchError,
 };
 use tempfile::tempdir;
 
@@ -146,6 +146,8 @@ fn public_error_is_send_sync_and_static() {
 #[test]
 fn root_entrypoint_signatures_remain_source_compatible() {
     type ProgressRebuild = fn(&Path, bool, fn(usize, usize)) -> Result<RegexIndexRuntime>;
+    type BatchSearch =
+        fn(&Path, &RegexIndexRuntime, &[SearchRequest]) -> Result<Vec<Option<SearchResult>>>;
 
     let _: fn(&Path) -> Result<RegexIndexRuntime> = load_runtime;
     let _: fn(&Path, bool) -> Result<RegexIndexRuntime> = rebuild_full_index;
@@ -157,6 +159,7 @@ fn root_entrypoint_signatures_remain_source_compatible() {
         guarded_fallback_reason;
     let _: fn(&Path, &RegexIndexRuntime, &SearchRequest) -> Result<SearchResult> =
         guarded_indexed_search;
+    let _: BatchSearch = guarded_indexed_search_batch;
     let _: fn(&Path, &RegexIndexRuntime, &SearchRequest) -> Result<SearchResult> = indexed_search;
     let _: fn(&Path, &SearchRequest) -> Result<SearchResult> = load_and_guarded_indexed_search;
     let _: fn(&Path, &SearchRequest) -> Result<SearchResult> = load_and_indexed_search;

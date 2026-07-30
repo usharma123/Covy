@@ -676,6 +676,15 @@ class ArchitectureDependencyTests(unittest.TestCase):
             "fn rescan() { let _ = mapy_core::build_repo_map(Default::default()); }\n",
             "fn rescan() { let _ = mapy_core::build_repo_query(Default::default()); }\n",
             "fn rescan() { let _ = packet28_reducer_core::search(todo!(), todo!()); }\n",
+            "use mapy_core :: build_repo_map as rescan;\n",
+            "use mapy_core::{build_repo_query as rescan};\n",
+            "use packet28_reducer_core :: search as rescan;\n",
+            "use packet28_reducer_core::{SearchRequest, search as rescan};\n",
+            "use packet28_reducer_core as reducer;\nfn rescan() { reducer::search(todo!(), todo!()); }\n",
+            "fn rescan() { let _ = packet28_search_core::indexed_search(todo!(), todo!(), todo!()); }\n",
+            "use packet28_search_core :: guarded_indexed_search as query;\n",
+            "use packet28_search_core::{RegexIndexRuntime, load_and_indexed_search as query};\n",
+            "fn wrapper() { guarded_indexed_search(todo!(), todo!(), todo!()); }\n",
         )
         for broker_child_source in cases:
             with self.subTest(source=broker_child_source):
