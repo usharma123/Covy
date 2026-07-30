@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use context_kernel_core::{Kernel, KernelError, PersistConfig};
 
@@ -14,7 +14,19 @@ use context_kernel_core::{Kernel, KernelError, PersistConfig};
 /// competing WAL/checkpoint histories.
 pub(crate) struct PersistentKernelRegistry {
     capacity: usize,
-    kernels: Mutex<BTreeMap<PathBuf, Arc<Kernel>>>,
+    state: Mutex<PersistentKernelRegistryState>,
+    changed: Condvar,
+}
+
+struct PersistentKernelRegistryState {
+    kernels: BTreeMap<PathBuf, Arc<Kernel>>,
+    opening: BTreeSet<PathBuf>,
+}
+
+struct KernelOpening<'a> {
+    registry: &'a PersistentKernelRegistry,
+    root: PathBuf,
+    active: bool,
 }
 
 #[derive(Debug)]
@@ -78,25 +90,46 @@ impl PersistentKernelRegistry {
         kernels.insert(primary_root, primary);
         Ok(Self {
             capacity,
-            kernels: Mutex::new(kernels),
+            state: Mutex::new(PersistentKernelRegistryState {
+                kernels,
+                opening: BTreeSet::new(),
+            }),
+            changed: Condvar::new(),
         })
     }
 
     pub(crate) fn get(&self, root: &Path) -> Result<Arc<Kernel>, PersistentKernelRegistryError> {
         let root = canonical_root(root)?;
-        let mut kernels = self
-            .kernels
-            .lock()
-            .map_err(|_| PersistentKernelRegistryError::Poisoned)?;
-        if let Some(kernel) = kernels.get(&root) {
-            return Ok(kernel.clone());
-        }
-        if kernels.len() >= self.capacity {
-            return Err(PersistentKernelRegistryError::CapacityExceeded {
-                root,
-                capacity: self.capacity,
-            });
-        }
+        let opening = loop {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| PersistentKernelRegistryError::Poisoned)?;
+            if let Some(kernel) = state.kernels.get(&root) {
+                return Ok(kernel.clone());
+            }
+            if state.opening.contains(&root) {
+                drop(
+                    self.changed
+                        .wait(state)
+                        .map_err(|_| PersistentKernelRegistryError::Poisoned)?,
+                );
+                continue;
+            }
+            if state.kernels.len().saturating_add(state.opening.len()) >= self.capacity {
+                return Err(PersistentKernelRegistryError::CapacityExceeded {
+                    root,
+                    capacity: self.capacity,
+                });
+            }
+            state.opening.insert(root.clone());
+            break KernelOpening {
+                registry: self,
+                root: root.clone(),
+                active: true,
+            };
+        };
+
         let kernel = Arc::new(
             Kernel::try_with_v1_reducers_and_persistence(PersistConfig::new(root.clone()))
                 .map_err(|source| PersistentKernelRegistryError::Persistence {
@@ -104,23 +137,59 @@ impl PersistentKernelRegistry {
                     source,
                 })?,
         );
-        kernels.insert(root, kernel.clone());
-        Ok(kernel)
+        opening.publish(kernel)
     }
 
     pub(crate) fn kernels(&self) -> Result<Vec<Arc<Kernel>>, PersistentKernelRegistryError> {
-        self.kernels
+        self.state
             .lock()
-            .map(|kernels| kernels.values().cloned().collect())
+            .map(|state| state.kernels.values().cloned().collect())
             .map_err(|_| PersistentKernelRegistryError::Poisoned)
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.kernels
+        self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .kernels
             .len()
+    }
+}
+
+impl KernelOpening<'_> {
+    fn publish(
+        mut self,
+        kernel: Arc<Kernel>,
+    ) -> Result<Arc<Kernel>, PersistentKernelRegistryError> {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .map_err(|_| PersistentKernelRegistryError::Poisoned)?;
+        let removed = state.opening.remove(&self.root);
+        debug_assert!(removed, "kernel opening reservation disappeared");
+        state.kernels.insert(self.root.clone(), kernel.clone());
+        self.active = false;
+        drop(state);
+        self.registry.changed.notify_all();
+        Ok(kernel)
+    }
+}
+
+impl Drop for KernelOpening<'_> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.opening.remove(&self.root);
+        drop(state);
+        self.registry.changed.notify_all();
     }
 }
 
