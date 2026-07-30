@@ -699,6 +699,7 @@ pub(crate) fn load_context_manage_for_task(
     Ok(envelope.payload)
 }
 
+#[cfg(test)]
 pub(crate) fn metadata_mtime_secs(metadata: &fs::Metadata) -> u64 {
     metadata
         .modified()

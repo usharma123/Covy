@@ -6,7 +6,7 @@ use anyhow::Result;
 use packet28_daemon_protocol::broker::{BrokerAction, BrokerGetContextRequest};
 
 use super::search::{
-    build_reducer_search_evidence, classify_symbol_match, contains_identifier_term,
+    build_authenticated_search_evidence, classify_symbol_match, contains_identifier_term,
     looks_like_signature, CodeEvidenceSummary, EvidenceMatchKind,
 };
 use crate::planning::{merged_unique, merged_unique_many};
@@ -465,6 +465,7 @@ pub(crate) fn infer_scope_paths(
         .collect()
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ToolResultProvenance {
     pub(crate) regions: Vec<String>,
@@ -539,21 +540,6 @@ pub(crate) struct SearchExecutionArgs<'a> {
     pub(crate) action: BrokerAction,
     pub(crate) max_files: usize,
     pub(crate) max_evidence_lines: usize,
-}
-
-fn collect_tool_result_provenance(
-    snapshot: &suite_packet_core::AgentSnapshotPayload,
-    path: &str,
-) -> Vec<ToolResultProvenance> {
-    snapshot
-        .recent_tool_invocations
-        .iter()
-        .rev()
-        .filter(|invocation| invocation.paths.iter().any(|candidate| candidate == path))
-        .map(|invocation| ToolResultProvenance {
-            regions: invocation.regions.clone(),
-        })
-        .collect()
 }
 
 fn is_identifier_like_query(value: &str) -> bool {
@@ -917,23 +903,6 @@ fn freshness_rank_for_search_path(
     }
 }
 
-pub(crate) fn preferred_search_regions(file: &ReducerSearchFile) -> Vec<String> {
-    if !file.exact_full_symbol_definition_regions.is_empty() {
-        return file
-            .exact_full_symbol_definition_regions
-            .iter()
-            .cloned()
-            .collect();
-    }
-    if !file.exact_symbol_regions.is_empty() {
-        return file.exact_symbol_regions.iter().cloned().collect();
-    }
-    if !file.definition_regions.is_empty() {
-        return file.definition_regions.iter().cloned().collect();
-    }
-    file.regions.iter().cloned().collect()
-}
-
 pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> SearchExecution {
     let SearchExecutionArgs {
         state,
@@ -955,77 +924,75 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
             .then(|| guard.interactive_index.regex_runtime.clone())
             .flatten()
     });
-    let requests = plan
+    let primary_requests = plan
         .phases
-        .iter()
-        .flat_map(|phase| {
-            phase
-                .candidates
-                .iter()
-                .map(|candidate| search_request_for_candidate(&requested_paths, candidate))
-        })
+        .first()
+        .into_iter()
+        .flat_map(|phase| phase.candidates.iter())
+        .map(|candidate| search_request_for_candidate(&requested_paths, candidate))
+        .collect::<Vec<_>>();
+    let deferred_requests = plan
+        .phases
+        .get(1)
+        .into_iter()
+        .flat_map(|phase| phase.candidates.iter())
+        .map(|candidate| search_request_for_candidate(&requested_paths, candidate))
         .collect::<Vec<_>>();
     let authenticated_batch_results = regex_runtime.as_ref().and_then(|runtime| {
-        packet28_search_core::guarded_indexed_search_batch(root, runtime, &requests).ok()
+        packet28_search_core::broker_internal_guarded_indexed_search_staged_batch(
+            root,
+            runtime,
+            &primary_requests,
+            &deferred_requests,
+            |primary_results| {
+                if !uses_staged_search_planner(action) || plan.phases.get(1).is_none() {
+                    return false;
+                }
+                let Some(primary_phase) = plan.phases.first() else {
+                    return false;
+                };
+                let mut primary_files = BTreeMap::new();
+                apply_search_phase_results(primary_phase, primary_results, &mut primary_files);
+                let primary_files = rank_reducer_search_files(
+                    primary_files.into_values().collect(),
+                    snapshot,
+                    max_files,
+                );
+                let primary_evidence =
+                    build_authenticated_search_evidence(&primary_files, max_evidence_lines);
+                phase_results_are_weak(&primary_files, &primary_evidence)
+            },
+        )
+        .ok()
+        .filter(|_| daemon_regex_runtime_is_current(state, root, runtime))
     });
-    let mut phase_result_offset = 0usize;
     if let (Some(results), Some(phase)) =
         (authenticated_batch_results.as_ref(), plan.phases.first())
     {
-        for (candidate, result) in phase.candidates.iter().zip(
-            results
-                .iter()
-                .skip(phase_result_offset)
-                .take(phase.candidates.len()),
-        ) {
-            if let Some(result) = result {
-                apply_search_candidate_result(result, candidate, &mut files_by_path);
-            }
-        }
-        phase_result_offset = phase_result_offset.saturating_add(phase.candidates.len());
+        apply_search_phase_results(phase, &results.primary, &mut files_by_path);
     }
     let mut reducer_files =
         rank_reducer_search_files(files_by_path.into_values().collect(), snapshot, max_files);
-    let mut evidence_by_file = build_reducer_search_evidence(
-        state,
-        root,
-        snapshot,
-        request,
-        query_focus,
-        &reducer_files,
-        max_evidence_lines,
-    );
-    if uses_staged_search_planner(action)
-        && plan.phases.len() > 1
-        && phase_results_are_weak(&reducer_files, &evidence_by_file)
-    {
+    let mut evidence_by_file =
+        build_authenticated_search_evidence(&reducer_files, max_evidence_lines);
+    let deferred_selected = authenticated_batch_results
+        .as_ref()
+        .is_some_and(|results| results.deferred.is_some());
+    if deferred_selected {
         let mut files_by_path = reducer_files
             .into_iter()
             .map(|file| (file.path.clone(), file))
             .collect::<BTreeMap<_, _>>();
-        if let Some(results) = authenticated_batch_results.as_ref() {
-            for (candidate, result) in plan.phases[1].candidates.iter().zip(
-                results
-                    .iter()
-                    .skip(phase_result_offset)
-                    .take(plan.phases[1].candidates.len()),
-            ) {
-                if let Some(result) = result {
-                    apply_search_candidate_result(result, candidate, &mut files_by_path);
-                }
+        if let (Some(results), Some(phase)) =
+            (authenticated_batch_results.as_ref(), plan.phases.get(1))
+        {
+            if let Some(deferred) = results.deferred.as_deref() {
+                apply_search_phase_results(phase, deferred, &mut files_by_path);
             }
         }
         reducer_files =
             rank_reducer_search_files(files_by_path.into_values().collect(), snapshot, max_files);
-        evidence_by_file = build_reducer_search_evidence(
-            state,
-            root,
-            snapshot,
-            request,
-            query_focus,
-            &reducer_files,
-            max_evidence_lines,
-        );
+        evidence_by_file = build_authenticated_search_evidence(&reducer_files, max_evidence_lines);
         used_fallback = true;
     }
     #[cfg(not(test))]
@@ -1037,6 +1004,39 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
         used_fallback,
         #[cfg(test)]
         used_persisted_runtime: authenticated_batch_results.is_some(),
+    }
+}
+
+fn daemon_regex_runtime_is_current(
+    state: Option<&Arc<Mutex<DaemonState>>>,
+    root: &Path,
+    expected: &packet28_search_core::RegexIndexRuntime,
+) -> bool {
+    let Some(state) = state else {
+        return false;
+    };
+    let Ok(guard) = state.lock() else {
+        return false;
+    };
+    if guard.root != root || !guard.interactive_index.regex_is_query_ready() {
+        return false;
+    }
+    guard
+        .interactive_index
+        .regex_runtime
+        .as_ref()
+        .is_some_and(|current| current.manifest == expected.manifest)
+}
+
+fn apply_search_phase_results(
+    phase: &SearchPhase,
+    results: &[Option<packet28_reducer_core::SearchResult>],
+    files: &mut BTreeMap<String, ReducerSearchFile>,
+) {
+    for (candidate, result) in phase.candidates.iter().zip(results) {
+        if let Some(result) = result {
+            apply_search_candidate_result(result, candidate, files);
+        }
     }
 }
 
@@ -1061,11 +1061,4 @@ pub(crate) fn phase_results_are_weak(
             .is_some_and(CodeEvidenceSummary::has_quality_match)
     });
     no_definition_biased_hits || exact_hit_files < 2 || !has_quality_evidence
-}
-
-pub(crate) fn collect_tool_result_provenance_for_path(
-    snapshot: &suite_packet_core::AgentSnapshotPayload,
-    path: &str,
-) -> Vec<ToolResultProvenance> {
-    collect_tool_result_provenance(snapshot, path)
 }

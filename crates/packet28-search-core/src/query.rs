@@ -1,12 +1,10 @@
 //! Query path resolution, candidate planning, and source verification.
 
 use std::collections::{BTreeSet, HashMap};
-use std::fs;
 use std::path::Path;
 
 use packet28_reducer_core::{
-    infer_symbols_from_pattern, SearchEngineStats, SearchGroup, SearchMatch, SearchRequest,
-    SearchResult,
+    infer_symbols_from_pattern, SearchEngineStats, SearchGroup, SearchRequest, SearchResult,
 };
 use regex::RegexBuilder;
 use regex_syntax::hir::literal::{ExtractKind, Extractor, Seq};
@@ -215,7 +213,7 @@ pub(crate) fn indexed_search_with_guard(
     request: &SearchRequest,
     enforce_guard: bool,
     attest_workspace: bool,
-    max_verify_candidates: Option<usize>,
+    remaining_verify_candidates: Option<&mut usize>,
 ) -> Result<SearchResult> {
     let loaded = match runtime.loaded.as_ref() {
         Some(loaded) => loaded,
@@ -314,10 +312,12 @@ pub(crate) fn indexed_search_with_guard(
         &candidate_paths,
         &mut cache,
     );
-    let candidate_set_is_too_broad = max_verify_candidates.map_or_else(
-        || should_fallback_to_rg(pruned_candidate_paths.len(), all_paths.len()),
-        |maximum| pruned_candidate_paths.len() > maximum,
-    );
+    let candidate_set_is_too_broad = if let Some(remaining) = remaining_verify_candidates.as_deref()
+    {
+        pruned_candidate_paths.is_empty() || pruned_candidate_paths.len() > *remaining
+    } else {
+        should_fallback_to_rg(pruned_candidate_paths.len(), all_paths.len())
+    };
     if enforce_guard && candidate_set_is_too_broad {
         if attest_workspace {
             ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
@@ -330,6 +330,9 @@ pub(crate) fn indexed_search_with_guard(
             ),
         });
     }
+    if let Some(remaining) = remaining_verify_candidates {
+        *remaining -= pruned_candidate_paths.len();
+    }
 
     engine.candidates_examined = candidate_paths.len();
     engine.candidate_files = candidate_paths.len();
@@ -338,16 +341,21 @@ pub(crate) fn indexed_search_with_guard(
     let mut groups = Vec::new();
     let mut total_match_count = 0usize;
     for path in &pruned_candidate_paths {
-        let file_groups =
-            match verify_path(root, path, &compiled.verifier, request.max_matches_per_file) {
-                Ok(groups) => groups,
-                Err(error) => {
-                    if attest_workspace {
-                        ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
-                    }
-                    return Err(error);
+        let file_groups = match crate::candidate::verify_path(
+            root,
+            loaded.as_ref(),
+            path,
+            &compiled.verifier,
+            request.max_matches_per_file,
+        ) {
+            Ok(groups) => groups,
+            Err(error) => {
+                if attest_workspace {
+                    ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
                 }
-            };
+                return Err(error);
+            }
+        };
         if file_groups.is_empty() {
             continue;
         }
@@ -1143,95 +1151,6 @@ pub(crate) fn lookup_doc_ids(
     Ok(Some(decode_postings(&postings[start..end])?))
 }
 
-pub(crate) fn verify_path(
-    root: &Path,
-    path: &str,
-    verifier: &Verifier,
-    max_matches_per_file: Option<usize>,
-) -> Result<Vec<SearchMatch>> {
-    let bytes = fs::read(root.join(path)).with_context(|| {
-        format!(
-            "failed to read candidate file '{}'",
-            root.join(path).display()
-        )
-    })?;
-    match verifier {
-        Verifier::Regex {
-            regex,
-            whole_file_prefilter,
-        } => {
-            let text = String::from_utf8_lossy(&bytes);
-            if *whole_file_prefilter && !regex.is_match(text.as_ref()) {
-                return Ok(Vec::new());
-            }
-            collect_line_matches(path, &text, max_matches_per_file, |line| {
-                regex.is_match(line)
-            })
-        }
-        Verifier::FixedBytes {
-            needle,
-            case_insensitive,
-        } => {
-            if !contains_fixed_bytes(&bytes, needle, *case_insensitive) {
-                return Ok(Vec::new());
-            }
-            let text = String::from_utf8_lossy(&bytes);
-            let normalized_needle = case_insensitive.then(|| normalize_for_index(needle));
-            collect_line_matches(path, &text, max_matches_per_file, |line| {
-                if *case_insensitive {
-                    normalize_for_index(line.as_bytes())
-                        .windows(needle.len())
-                        .any(|window| window == normalized_needle.as_deref().unwrap_or_default())
-                } else {
-                    line.as_bytes()
-                        .windows(needle.len())
-                        .any(|window| window == needle.as_slice())
-                }
-            })
-        }
-    }
-}
-
-pub(crate) fn collect_line_matches<F>(
-    path: &str,
-    text: &str,
-    max_matches_per_file: Option<usize>,
-    mut predicate: F,
-) -> Result<Vec<SearchMatch>>
-where
-    F: FnMut(&str) -> bool,
-{
-    let mut matches = Vec::new();
-    for (idx, line) in text.lines().enumerate() {
-        if !predicate(line) {
-            continue;
-        }
-        matches.push(SearchMatch {
-            path: path.to_string(),
-            line: idx + 1,
-            text: line.to_string(),
-        });
-        if max_matches_per_file.is_some_and(|limit| matches.len() >= limit) {
-            break;
-        }
-    }
-    Ok(matches)
-}
-
-pub(crate) fn contains_fixed_bytes(bytes: &[u8], needle: &[u8], case_insensitive: bool) -> bool {
-    if needle.is_empty() || bytes.len() < needle.len() {
-        return false;
-    }
-    if case_insensitive {
-        let haystack = normalize_for_index(bytes);
-        let normalized_needle = normalize_for_index(needle);
-        haystack
-            .windows(normalized_needle.len())
-            .any(|window| window == normalized_needle.as_slice())
-    } else {
-        bytes.windows(needle.len()).any(|window| window == needle)
-    }
-}
 pub(crate) fn should_fallback_to_rg(candidate_count: usize, all_path_count: usize) -> bool {
     if candidate_count == 0 {
         return true;

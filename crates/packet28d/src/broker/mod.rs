@@ -36,10 +36,13 @@ pub(crate) mod testing {
         build_action_critic_lines, build_broker_sections, build_budget_preflight_section,
         confidence_payoff, confidence_risk, prune_sections_for_budget, render_brief,
     };
-    pub(crate) use super::search::{extract_code_evidence, EvidenceMatchKind};
+    pub(crate) use super::search::{
+        build_authenticated_search_evidence, extract_code_evidence, EvidenceMatchKind,
+    };
     pub(crate) use super::search_plan::{
         build_reducer_search_execution, derive_query_focus, expand_scope_paths, infer_scope_paths,
-        merge_query_focus_with_symbols, SearchExecution, SearchExecutionArgs, ToolResultProvenance,
+        merge_query_focus_with_symbols, ReducerSearchFile, SearchExecution, SearchExecutionArgs,
+        ToolResultProvenance,
     };
     pub(crate) use super::snapshot::{
         build_budget_notes_section, postprocess_selected_sections, render_checkpoint_context_lines,

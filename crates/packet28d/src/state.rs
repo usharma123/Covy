@@ -22,6 +22,13 @@ pub(crate) struct PendingWatchEvent {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "retained for test-only parity coverage of the superseded direct-evidence cache"
+    )
+)]
 pub(crate) struct CachedSourceFile {
     pub(crate) size: u64,
     pub(crate) mtime_secs: u64,

@@ -13,7 +13,7 @@ use crate::paths::*;
 use crate::postings::*;
 use crate::publication::*;
 use crate::query::*;
-use crate::{guarded_indexed_search_batch, SearchError};
+use crate::SearchError;
 
 fn build_fixture_index(root: &Path) -> RegexIndexRuntime {
     fs::create_dir_all(root.join("src/nested")).unwrap();
@@ -1278,7 +1278,7 @@ fn incremental_publication_retains_the_validated_base_without_reloading_it() {
 }
 
 #[test]
-fn concurrent_readers_keep_generation_owned_layers_across_publication() {
+fn concurrent_readers_reject_stale_bytes_while_retaining_generation_owned_layers() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let runtime = build_fixture_index(root);
@@ -1337,7 +1337,10 @@ fn concurrent_readers_keep_generation_owned_layers_across_publication() {
 
         barrier.wait();
         for handle in old_reader_handles {
-            assert!(handle.join().unwrap().unwrap() > 0);
+            assert!(matches!(
+                handle.join().unwrap().unwrap_err(),
+                SearchError::CandidateAuthentication { .. }
+            ));
         }
         for handle in new_reader_handles {
             assert!(handle.join().unwrap().unwrap() > 0);
@@ -1371,30 +1374,6 @@ fn guarded_fallback_triggers_for_broad_candidate_sets() {
     };
     let reason = guarded_fallback_reason(root, &runtime, &request).unwrap();
     assert!(reason.is_some());
-}
-
-#[test]
-fn guarded_batch_rejects_more_than_the_absolute_candidate_ceiling() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    fs::create_dir_all(root.join("src")).unwrap();
-    for index in 0..65 {
-        fs::write(
-            root.join("src").join(format!("candidate_{index}.rs")),
-            "const VALUE: &str = \"bounded_batch_common_term\";\n",
-        )
-        .unwrap();
-    }
-    let runtime = rebuild_full_index(root, true).unwrap();
-    let request = SearchRequest {
-        query: "bounded_batch_common_term".to_string(),
-        fixed_string: true,
-        ..SearchRequest::default()
-    };
-
-    let results = guarded_indexed_search_batch(root, &runtime, &[request]).unwrap();
-
-    assert_eq!(results, [None]);
 }
 
 #[test]

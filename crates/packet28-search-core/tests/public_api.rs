@@ -6,10 +6,12 @@ use std::process::Command;
 
 use packet28_reducer_core::{SearchRequest, SearchResult};
 use packet28_search_core::{
-    clear_index, guarded_fallback_reason, guarded_indexed_search, guarded_indexed_search_batch,
-    indexed_search, load_and_guarded_indexed_search, load_and_indexed_search, load_runtime,
-    rebuild_full_index, rebuild_full_index_with_progress, update_overlay_index, RegexIndexManifest,
-    RegexIndexRuntime, Result, SearchError,
+    broker_internal_guarded_indexed_search_staged_batch, clear_index, guarded_fallback_reason,
+    guarded_indexed_search, guarded_indexed_search_batch, indexed_search,
+    load_and_guarded_indexed_search, load_and_indexed_search, load_runtime, rebuild_full_index,
+    rebuild_full_index_with_progress, update_overlay_index,
+    BrokerInternalGuardedIndexedSearchBatch, RegexIndexManifest, RegexIndexRuntime, Result,
+    SearchError,
 };
 use tempfile::tempdir;
 
@@ -77,6 +79,47 @@ fn combined_guarded_search_preserves_the_planner_fallback_reason() {
         error,
         SearchError::IndexNotReady { reason } if reason == expected
     ));
+}
+
+#[test]
+fn broker_internal_staged_batch_is_available_for_the_trusted_integration() {
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+    let runtime = rebuild_full_index(root.path(), true).unwrap();
+    let request = SearchRequest {
+        query: "alpha".to_string(),
+        fixed_string: true,
+        ..SearchRequest::default()
+    };
+
+    let results: BrokerInternalGuardedIndexedSearchBatch =
+        broker_internal_guarded_indexed_search_staged_batch(
+            root.path(),
+            &runtime,
+            &[request],
+            &[],
+            |_| false,
+        )
+        .unwrap();
+
+    assert_eq!(results.primary.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_guarded_batch_still_attests_workspace_freshness() {
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    let source = root.path().join("src/lib.rs");
+    fs::write(&source, "pub fn original() {}\n").unwrap();
+    initialize_clean_git_fixture(root.path());
+    let runtime = rebuild_full_index(root.path(), true).unwrap();
+    fs::write(&source, "pub fn dirty() {}\n").unwrap();
+
+    let error = guarded_indexed_search_batch(root.path(), &runtime, &[]).unwrap_err();
+
+    assert!(matches!(error, SearchError::IndexNotReady { .. }));
 }
 
 #[test]

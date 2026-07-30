@@ -21,6 +21,14 @@ pub enum SearchError {
         reason: String,
     },
 
+    /// Candidate bytes or path identity did not match the active indexed document.
+    CandidateAuthentication {
+        /// Repository-relative candidate path.
+        path: String,
+        /// Authentication invariant that failed.
+        reason: String,
+    },
+
     /// A search request contained an empty or whitespace-only query.
     EmptyQuery,
 
@@ -117,6 +125,9 @@ impl fmt::Display for SearchError {
             Self::IndexNotReady { reason } => {
                 write!(formatter, "regex search index is not ready: {reason}")
             }
+            Self::CandidateAuthentication { path, reason } => {
+                write!(formatter, "indexed candidate '{path}' failed authentication: {reason}")
+            }
             Self::EmptyQuery => formatter.write_str("search query cannot be empty"),
             Self::InvalidRegexSyntax { query, source } => write!(
                 formatter,
@@ -163,6 +174,7 @@ impl Error for SearchError {
             Self::FailureProvenance { build, .. } => Some(build.as_ref()),
             Self::IndexNotLoaded
             | Self::IndexNotReady { .. }
+            | Self::CandidateAuthentication { .. }
             | Self::EmptyQuery
             | Self::CorruptIndex { .. }
             | Self::ConcurrentWriter { .. }

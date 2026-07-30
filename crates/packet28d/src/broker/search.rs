@@ -1,18 +1,26 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
+#[cfg(test)]
 use std::fs;
+#[cfg(test)]
 use std::io::Read;
+#[cfg(test)]
 use std::path::Path;
+#[cfg(test)]
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
 use anyhow::{Context, Result};
-use packet28_daemon_protocol::broker::BrokerGetContextRequest;
 
-use super::search_plan::{
-    collect_tool_result_provenance_for_path, preferred_search_regions, QueryFocus,
-    ReducerSearchFile, ToolResultProvenance,
-};
+use super::search_plan::ReducerSearchFile;
+#[cfg(test)]
+use super::search_plan::{QueryFocus, ToolResultProvenance};
+#[cfg(test)]
 use super::support::metadata_mtime_secs;
+#[cfg(test)]
 use crate::lock_err;
+#[cfg(test)]
 use crate::state::{CachedSourceFile, DaemonState};
 
 fn truncate_evidence_line(line: &str, max_len: usize) -> String {
@@ -39,6 +47,7 @@ pub(crate) enum EvidenceMatchKind {
 }
 
 impl EvidenceMatchKind {
+    #[cfg(test)]
     fn priority(self) -> u8 {
         match self {
             EvidenceMatchKind::DefinesSymbol => 6,
@@ -50,6 +59,7 @@ impl EvidenceMatchKind {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 struct CodeEvidenceMatch {
     line_no: usize,
@@ -68,6 +78,7 @@ pub(crate) struct CodeEvidenceSummary {
     #[cfg(test)]
     pub(crate) primary_match_symbol: Option<String>,
     pub(crate) primary_match_kind: Option<EvidenceMatchKind>,
+    #[cfg(test)]
     pub(crate) from_region_hint: bool,
     #[cfg(test)]
     pub(crate) from_tool_result_path: bool,
@@ -86,6 +97,59 @@ impl CodeEvidenceSummary {
     }
 }
 
+pub(crate) fn build_authenticated_search_evidence(
+    files: &[ReducerSearchFile],
+    max_lines: usize,
+) -> BTreeMap<String, CodeEvidenceSummary> {
+    files
+        .iter()
+        .map(|file| {
+            let primary_match_kind = if file.definition_hits > 0 {
+                Some(EvidenceMatchKind::DefinesSymbol)
+            } else if file.call_hits > 0 {
+                Some(EvidenceMatchKind::CallsSymbol)
+            } else if file.reference_hits > 0 {
+                Some(EvidenceMatchKind::ReferencesSymbol)
+            } else {
+                file.preview_matches.first().map(|(_, line)| {
+                    if looks_like_signature(line) {
+                        EvidenceMatchKind::Signature
+                    } else {
+                        EvidenceMatchKind::Fallback
+                    }
+                })
+            };
+            let rendered_lines = file
+                .preview_matches
+                .iter()
+                .take(max_lines)
+                .map(|(line, text)| {
+                    format!(
+                        "- {}:{} {}",
+                        file.path,
+                        line,
+                        truncate_evidence_line(text, 120)
+                    )
+                })
+                .collect();
+            let summary = CodeEvidenceSummary {
+                rendered_lines,
+                #[cfg(test)]
+                first_match_line: file.preview_matches.first().map(|(line, _)| *line),
+                #[cfg(test)]
+                primary_match_symbol: file.symbols.iter().next().cloned(),
+                primary_match_kind,
+                #[cfg(test)]
+                from_region_hint: false,
+                #[cfg(test)]
+                from_tool_result_path: false,
+            };
+            (file.path.clone(), summary)
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn build_code_evidence_summary(
     rendered_lines: Vec<String>,
     from_region_hint: bool,
@@ -149,6 +213,7 @@ pub(crate) fn looks_like_signature(line: &str) -> bool {
         || looks_like_java_method
 }
 
+#[cfg(test)]
 fn looks_like_low_signal_line(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.is_empty()
@@ -162,6 +227,7 @@ fn looks_like_low_signal_line(line: &str) -> bool {
         || trimmed.starts_with("package ")
 }
 
+#[cfg(test)]
 fn is_comment_reference_line(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.starts_with("/*")
@@ -218,6 +284,7 @@ fn looks_like_symbol_call(line: &str, symbol: &str) -> bool {
     false
 }
 
+#[cfg(test)]
 fn looks_like_type_declaration(line: &str) -> bool {
     let trimmed = line.trim_start();
     [
@@ -263,6 +330,7 @@ pub(crate) fn classify_symbol_match(line: &str, symbol: &str) -> EvidenceMatchKi
     }
 }
 
+#[cfg(test)]
 fn match_query_focus_line(line: &str, query_focus: &QueryFocus) -> Option<CodeEvidenceMatch> {
     if let Some(symbol) = query_focus
         .symbol_terms
@@ -310,6 +378,7 @@ fn match_query_focus_line(line: &str, query_focus: &QueryFocus) -> Option<CodeEv
     None
 }
 
+#[cfg(test)]
 fn collapse_evidence_windows(
     matches: &[CodeEvidenceMatch],
     total_lines: usize,
@@ -339,6 +408,7 @@ fn collapse_evidence_windows(
     collapsed
 }
 
+#[cfg(test)]
 fn parse_region_line_range(value: &str) -> Option<(usize, usize)> {
     let trimmed = value.trim().trim_start_matches('L');
     if trimmed.is_empty() {
@@ -360,6 +430,7 @@ fn parse_region_line_range(value: &str) -> Option<(usize, usize)> {
     Some((start.min(end), start.max(end)))
 }
 
+#[cfg(test)]
 fn parse_region_hint_for_path(region: &str, path: &str) -> Option<(usize, usize)> {
     let trimmed = region.trim();
     if trimmed.is_empty() {
@@ -377,60 +448,7 @@ fn parse_region_hint_for_path(region: &str, path: &str) -> Option<(usize, usize)
     parse_region_line_range(maybe_range)
 }
 
-pub(crate) fn build_reducer_search_evidence(
-    state: Option<&Arc<Mutex<DaemonState>>>,
-    root: &Path,
-    snapshot: &suite_packet_core::AgentSnapshotPayload,
-    request: &BrokerGetContextRequest,
-    query_focus: &QueryFocus,
-    reducer_files: &[ReducerSearchFile],
-    max_lines: usize,
-) -> BTreeMap<String, CodeEvidenceSummary> {
-    let candidate_paths = reducer_files
-        .iter()
-        .map(|file| file.path.clone())
-        .chain(
-            snapshot
-                .recent_tool_invocations
-                .iter()
-                .flat_map(|invocation| invocation.paths.iter().cloned()),
-        )
-        .chain(snapshot.focus_paths.iter().cloned())
-        .chain(snapshot.checkpoint_focus_paths.iter().cloned())
-        .chain(request.focus_paths.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    let search_file_map = reducer_files
-        .iter()
-        .map(|file| (file.path.clone(), file))
-        .collect::<BTreeMap<_, _>>();
-    candidate_paths
-        .iter()
-        .map(|path| {
-            let mut provenance = collect_tool_result_provenance_for_path(snapshot, path);
-            if let Some(file) = search_file_map.get(path) {
-                let preferred_regions = preferred_search_regions(file);
-                if !preferred_regions.is_empty() {
-                    provenance.push(ToolResultProvenance {
-                        regions: preferred_regions,
-                    });
-                }
-            }
-            (
-                path.clone(),
-                extract_code_evidence_cached(
-                    state,
-                    root,
-                    path,
-                    query_focus,
-                    provenance.as_slice(),
-                    3,
-                    max_lines,
-                ),
-            )
-        })
-        .collect()
-}
-
+#[cfg(test)]
 fn collect_region_hint_lines(
     provenance: &[ToolResultProvenance],
     path: &str,
@@ -449,6 +467,7 @@ fn collect_region_hint_lines(
     hinted
 }
 
+#[cfg(test)]
 fn collect_evidence_matches(
     lines: &[&str],
     query_focus: &QueryFocus,
@@ -538,6 +557,7 @@ pub(crate) fn extract_code_evidence(
     )
 }
 
+#[cfg(test)]
 fn extract_code_evidence_cached(
     state: Option<&Arc<Mutex<DaemonState>>>,
     root: &Path,
@@ -550,6 +570,25 @@ fn extract_code_evidence_cached(
     let Ok(lines) = load_source_file_lines(state, root, relative_path) else {
         return CodeEvidenceSummary::default();
     };
+    extract_code_evidence_from_lines(
+        &lines,
+        relative_path,
+        query_focus,
+        provenance,
+        max_windows,
+        max_lines,
+    )
+}
+
+#[cfg(test)]
+fn extract_code_evidence_from_lines(
+    lines: &[String],
+    relative_path: &str,
+    query_focus: &QueryFocus,
+    provenance: &[ToolResultProvenance],
+    max_windows: usize,
+    max_lines: usize,
+) -> CodeEvidenceSummary {
     let lines = lines.iter().map(String::as_str).collect::<Vec<_>>();
     let hint_lines = collect_region_hint_lines(provenance, relative_path, lines.len());
     let mut matches = if !hint_lines.is_empty() {
@@ -680,6 +719,7 @@ fn extract_code_evidence_cached(
     )
 }
 
+#[cfg(test)]
 fn load_source_file_lines(
     state: Option<&Arc<Mutex<DaemonState>>>,
     root: &Path,

@@ -206,7 +206,6 @@ mod tests {
 
         crate::query::load_and_guarded_indexed_search(root, &request("unique_attestation_needle"))
             .unwrap();
-
         assert_eq!(GIT_COMMAND_COUNT.load(Ordering::Relaxed), 2);
         GIT_COMMAND_COUNT.store(0, Ordering::Relaxed);
         let error = crate::query::load_and_guarded_indexed_search(
@@ -222,14 +221,23 @@ mod tests {
 
         let runtime = crate::generation::load_runtime(root).unwrap();
         GIT_COMMAND_COUNT.store(0, Ordering::Relaxed);
-        let requests = [
-            request("unique_attestation_needle"),
-            request("second_attestation_needle"),
-            request("x"),
-        ];
-        let results = crate::guarded_indexed_search_batch(root, &runtime, &requests).unwrap();
+        let primary = [request("unique_attestation_needle")];
+        let deferred = [request("second_attestation_needle"), request("x")];
+        let results = crate::broker_internal_guarded_indexed_search_staged_batch(
+            root,
+            &runtime,
+            &primary,
+            &deferred,
+            |_| true,
+        )
+        .unwrap();
         assert_eq!(
-            results.iter().map(Option::is_some).collect::<Vec<_>>(),
+            results
+                .primary
+                .iter()
+                .chain(results.deferred.as_ref().unwrap())
+                .map(Option::is_some)
+                .collect::<Vec<_>>(),
             [true, true, false],
             "one-byte query must not verify every indexed file"
         );

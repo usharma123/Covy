@@ -23,6 +23,7 @@ fs2 = "0.4"
 packet28-binary-codec.workspace = true
 packet28-state-fs.workspace = true
 ignore.workspace = true
+libc = "0.2"
 memmap2.workspace = true
 regex.workspace = true
 regex-syntax.workspace = true
