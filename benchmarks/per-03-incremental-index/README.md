@@ -130,7 +130,7 @@ incremental invocation median improved from 16,965 to 4,764 µs (-71.92%, or
 
 ### Final-base durable-state decision
 
-The current source snapshot `b30c02ab` was measured after extending the byte
+The current source snapshot `e3c6de30` was measured after extending the byte
 snapshot from `mapy-v1/` to the complete `.packet28/index/` publication scope.
 That correction includes the changed
 `.mapy-v1.generation-high-water.json` durability leaf. State publication
@@ -139,10 +139,10 @@ release invocations reported:
 
 | Revision/path | Invocation medians (µs) | Median (µs) | Delta versus paired legacy |
 | --- | --- | ---: | ---: |
-| current whole snapshot | 5,193; 5,190; 4,845 | 5,190 | baseline |
-| current incremental generation | 73,193; 69,686; 69,677 | 69,686 | +1,242.52% |
+| current whole snapshot | 4,987; 5,230; 4,904 | 4,987 | baseline |
+| current incremental generation | 68,220; 72,382; 71,133 | 71,133 | +1,326.37% |
 
-The per-invocation deltas were +1,309.31%, +1,242.52%, and +1,337.98%.
+The per-invocation deltas were +1,267.96%, +1,283.96%, and +1,350.29%.
 Therefore the elapsed-time decision gate fails on the durable state base.
 The whole-snapshot comparator uses a plain `fs::write`; the incremental
 transaction durably publishes the high-water mark, immutable segment,
