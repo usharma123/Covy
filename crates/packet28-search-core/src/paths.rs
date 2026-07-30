@@ -71,7 +71,10 @@ pub(crate) fn inspect_workspace_path(
     }
     for (index, component) in components.iter().enumerate() {
         let Component::Normal(name) = component else {
-            unreachable!("components were validated above");
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "workspace path is not repository-relative",
+            ));
         };
         full_path.push(name);
         let last = index + 1 == components.len();
@@ -116,7 +119,10 @@ pub(crate) fn inspect_workspace_path(
             Err(error) => return Err(error),
         }
     }
-    unreachable!("a non-empty path has a final component")
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "workspace path inspection ended without a final component",
+    ))
 }
 
 pub(crate) fn normalize_changed_paths(root: &Path, paths: &[String]) -> Result<Vec<String>> {
@@ -264,4 +270,33 @@ fn normalize_capture_path(root: &Path, text: &str) -> String {
         .replace('\\', "/")
         .trim_end_matches('/')
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn workspace_inspection_rejects_non_relative_components() {
+        let root = tempdir().unwrap();
+
+        for relative in [
+            Path::new(""),
+            Path::new("../escape"),
+            Path::new("/absolute"),
+        ] {
+            let error = inspect_workspace_path(root.path(), relative).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn workspace_inspection_returns_missing_without_a_panic_fallback() {
+        let root = tempdir().unwrap();
+
+        let inspection = inspect_workspace_path(root.path(), Path::new("missing.rs")).unwrap();
+
+        assert!(matches!(inspection.kind, WorkspacePathKind::Missing));
+    }
 }
