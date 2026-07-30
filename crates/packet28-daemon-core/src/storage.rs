@@ -65,7 +65,7 @@ pub use registry_delta::{
 #[cfg(unix)]
 pub(crate) use registry_delta::{
     load_retained_registry_snapshot_under_task_lock,
-    remove_retained_registry_records_under_task_lock,
+    remove_retained_registry_records_under_task_lock, REGISTRY_DELTA_WAL_FILE_NAME,
 };
 
 #[cfg(any(not(unix), test))]

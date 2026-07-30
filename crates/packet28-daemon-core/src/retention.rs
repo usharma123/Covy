@@ -2594,12 +2594,8 @@ fn read_authority_snapshots_from_daemon(
         OsStr::new(TASK_REGISTRY_FILE_NAME),
         MAX_TASK_REGISTRY_BYTES,
     );
-    let wal_name = crate::storage::registry_delta_wal_path(root)
-        .file_name()
-        .expect("registry WAL path has a file name")
-        .to_os_string();
     let (fallback_wal_file_bytes, fallback_wal_allocated_bytes) = daemon
-        .entry_storage_bytes(&wal_name)
+        .entry_storage_bytes(OsStr::new(crate::storage::REGISTRY_DELTA_WAL_FILE_NAME))
         .ok()
         .flatten()
         .unwrap_or_default();

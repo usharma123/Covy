@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use super::*;
 
-const REGISTRY_DELTA_WAL_FILE_NAME: &str = "task-watch-registry-delta-v1.wal";
+pub(crate) const REGISTRY_DELTA_WAL_FILE_NAME: &str = "task-watch-registry-delta-v1.wal";
 const WAL_MAGIC: [u8; 8] = *b"P28RDW01";
 const FRAME_MAGIC: [u8; 8] = *b"P28RDF01";
 const FRAME_FOOTER_MAGIC: [u8; 8] = *b"P28RDE01";
