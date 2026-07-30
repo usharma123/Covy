@@ -603,6 +603,7 @@ pub(crate) fn derive_agent_snapshot(
     events.sort_by(|a, b| {
         a.occurred_at_unix
             .cmp(&b.occurred_at_unix)
+            .then_with(|| decision_event_rank(a).cmp(&decision_event_rank(b)))
             .then_with(|| a.event_id.cmp(&b.event_id))
     });
 
@@ -975,6 +976,13 @@ pub(crate) fn derive_agent_snapshot(
         evidence_artifact_ids: evidence_artifact_ids.into_iter().collect(),
         last_successful_tool_by_kind: last_successful_tool_by_kind.into_values().collect(),
         latest_intention,
+    }
+}
+
+fn decision_event_rank(event: &suite_packet_core::AgentStateEventPayload) -> u8 {
+    match &event.data {
+        suite_packet_core::AgentStateEventData::DecisionSuperseded { .. } => 1,
+        _ => 0,
     }
 }
 

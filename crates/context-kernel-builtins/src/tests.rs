@@ -653,6 +653,30 @@ fn agenty_state_snapshot_derives_current_task_state() {
                 "step_id": "read_diff"
             }
         }),
+        json!({
+            "task_id": "task-a",
+            "event_id": "z-add",
+            "occurred_at_unix": 7,
+            "actor": "agent",
+            "kind": "decision_added",
+            "data": {
+                "type": "decision_added",
+                "decision_id": "d2",
+                "text": "Transient hypothesis",
+                "supersedes": null
+            }
+        }),
+        json!({
+            "task_id": "task-a",
+            "event_id": "a-supersede",
+            "occurred_at_unix": 7,
+            "actor": "agent",
+            "kind": "decision_superseded",
+            "data": {
+                "type": "decision_superseded",
+                "decision_id": "d2"
+            }
+        }),
     ];
 
     for event in events {
@@ -682,7 +706,7 @@ fn agenty_state_snapshot_derives_current_task_state() {
         serde_json::from_value(packet.body.clone()).unwrap();
 
     assert_eq!(envelope.payload.task_id, "task-a");
-    assert_eq!(envelope.payload.event_count, 6);
+    assert_eq!(envelope.payload.event_count, 8);
     assert_eq!(
         envelope.payload.focus_paths,
         vec!["src/time/StopWatch.java".to_string()]
