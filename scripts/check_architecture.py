@@ -96,8 +96,8 @@ PACKET28D_BROKER_ROOT_PORTS = frozenset(
         "daemon_log",
         "fence_task_namespace_admission",
         "lock_err",
-        "mark_state_dirty",
-        "persist_state",
+        "mark_task_dirty",
+        "persist_task",
         "resolve_root",
         "task_storage_id",
     }
