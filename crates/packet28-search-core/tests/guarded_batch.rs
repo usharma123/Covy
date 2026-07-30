@@ -1,10 +1,13 @@
 use std::fs;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Command;
 
 use packet28_reducer_core::SearchRequest;
 use packet28_search_core::{
-    broker_internal_guarded_indexed_search_staged_batch, guarded_indexed_search_batch,
-    rebuild_full_index, RegexIndexRuntime, SearchError,
+    broker_internal_guarded_indexed_search_batch, guarded_fallback_reason,
+    guarded_indexed_search_batch, rebuild_full_index, BrokerInternalGuardedIndexedSearchSession,
+    RegexIndexRuntime, SearchError,
 };
 
 fn build_fixture_index(root: &Path) -> RegexIndexRuntime {
@@ -15,6 +18,22 @@ fn build_fixture_index(root: &Path) -> RegexIndexRuntime {
     )
     .unwrap();
     rebuild_full_index(root, true).unwrap()
+}
+
+#[cfg(unix)]
+fn run_fixture_git(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .expect("run fixture Git command");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.first().copied().unwrap_or("command"),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -57,7 +76,7 @@ fn guarded_batch_rejects_more_than_the_absolute_candidate_ceiling() {
 }
 
 #[test]
-fn staged_batch_applies_one_cumulative_candidate_read_ceiling_across_phases() {
+fn broker_session_applies_one_cumulative_candidate_read_ceiling_across_batches() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     fs::create_dir_all(root.join("src")).unwrap();
@@ -75,57 +94,142 @@ fn staged_batch_applies_one_cumulative_candidate_read_ceiling_across_phases() {
         ..SearchRequest::default()
     };
 
-    let results = broker_internal_guarded_indexed_search_staged_batch(
+    let mut session = BrokerInternalGuardedIndexedSearchSession::new();
+    let primary = broker_internal_guarded_indexed_search_batch(
         root,
         &runtime,
         &[request("FIRST_BATCH_TERM")],
+        &mut session,
+    )
+    .unwrap();
+    let deferred = broker_internal_guarded_indexed_search_batch(
+        root,
+        &runtime,
         &[request("SECOND_BATCH_TERM")],
-        |_| true,
+        &mut session,
     )
     .unwrap();
 
     assert_eq!(
         (
-            results
-                .primary
-                .iter()
-                .map(Option::is_some)
-                .collect::<Vec<_>>(),
-            results
-                .deferred
-                .unwrap()
-                .iter()
-                .map(Option::is_some)
-                .collect::<Vec<_>>(),
+            primary.iter().map(Option::is_some).collect::<Vec<_>>(),
+            deferred.iter().map(Option::is_some).collect::<Vec<_>>(),
         ),
         (vec![true], vec![false])
     );
 }
 
 #[test]
-fn staged_batch_does_not_execute_an_unselected_deferred_request() {
+fn explicit_invalid_scope_returns_zero_even_when_the_plan_is_broad() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = build_fixture_index(dir.path());
-    let primary = SearchRequest {
+    let request = SearchRequest {
+        query: ".*".to_string(),
+        requested_paths: vec!["../outside.rs".to_string()],
+        ..SearchRequest::default()
+    };
+
+    let fallback = guarded_fallback_reason(dir.path(), &runtime, &request).unwrap();
+    let results = guarded_indexed_search_batch(dir.path(), &runtime, &[request]).unwrap();
+    let result = results[0]
+        .as_ref()
+        .expect("an explicitly empty scope is an authoritative empty result");
+
+    assert_eq!(fallback, None);
+    assert_eq!(result.match_count, 0);
+    assert!(result.paths.is_empty());
+    assert!(result.resolved_paths.is_empty());
+}
+
+#[test]
+fn invalid_regex_is_rejected_before_an_explicit_empty_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = build_fixture_index(dir.path());
+    let request = SearchRequest {
+        query: "(".to_string(),
+        requested_paths: vec!["../outside.rs".to_string()],
+        ..SearchRequest::default()
+    };
+
+    let error = guarded_fallback_reason(dir.path(), &runtime, &request).unwrap_err();
+
+    assert!(matches!(error, SearchError::InvalidRegexSyntax { .. }));
+}
+
+#[test]
+fn guarded_batch_bounds_requested_scope_resolution_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = build_fixture_index(dir.path());
+    let request = SearchRequest {
+        query: "Alpha".to_string(),
+        fixed_string: true,
+        requested_paths: (0..17).map(|index| format!("missing-{index}.rs")).collect(),
+        ..SearchRequest::default()
+    };
+
+    let error = guarded_indexed_search_batch(dir.path(), &runtime, &[request]).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            SearchError::IndexNotReady { ref reason }
+                if reason.contains("requested paths") && reason.contains("maximum is 16")
+        ),
+        "{error:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn broker_batch_returns_no_results_when_final_freshness_attestation_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
+    fs::write(root.join("src/unrelated.rs"), "pub struct Unrelated;\n").unwrap();
+    fs::write(root.join(".gitignore"), ".packet28/\n").unwrap();
+    run_fixture_git(root, &["init", "--quiet"]);
+    run_fixture_git(root, &["config", "user.name", "Packet28 Test"]);
+    run_fixture_git(root, &["config", "user.email", "packet28@example.invalid"]);
+    run_fixture_git(root, &["add", "."]);
+    run_fixture_git(
+        root,
+        &["commit", "--quiet", "--no-gpg-sign", "-m", "fixture"],
+    );
+    let runtime = rebuild_full_index(root, true).unwrap();
+    fs::write(
+        root.join("src/unrelated.rs"),
+        "pub struct DirtyUnrelated;\n",
+    )
+    .unwrap();
+    let request = SearchRequest {
         query: "Alpha".to_string(),
         fixed_string: true,
         ..SearchRequest::default()
     };
-    let invalid_deferred = SearchRequest {
-        query: "(".to_string(),
-        ..SearchRequest::default()
-    };
+    let mut session = BrokerInternalGuardedIndexedSearchSession::new();
 
-    let results = broker_internal_guarded_indexed_search_staged_batch(
-        dir.path(),
+    let error = broker_internal_guarded_indexed_search_batch(
+        root,
         &runtime,
-        &[primary],
-        &[invalid_deferred],
-        |_| false,
+        &[request.clone()],
+        &mut session,
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!((results.primary.len(), results.deferred), (1, None));
+    assert!(matches!(error, SearchError::IndexNotReady { .. }));
+    fs::write(root.join("src/unrelated.rs"), "pub struct Unrelated;\n").unwrap();
+    let reuse_error =
+        broker_internal_guarded_indexed_search_batch(root, &runtime, &[request], &mut session)
+            .unwrap_err();
+    assert!(
+        matches!(
+            reuse_error,
+            SearchError::IndexNotReady { ref reason }
+                if reason.contains("cannot be reused after a failed batch")
+        ),
+        "{reuse_error:?}"
+    );
 }
 
 #[test]

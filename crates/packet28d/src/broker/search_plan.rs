@@ -521,6 +521,11 @@ struct SearchPlan {
     phases: Vec<SearchPhase>,
 }
 
+struct AuthenticatedSearchBatches {
+    primary: Vec<Option<packet28_reducer_core::SearchResult>>,
+    deferred: Option<Vec<Option<packet28_reducer_core::SearchResult>>>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SearchExecution {
     pub(crate) files: Vec<ReducerSearchFile>,
@@ -939,20 +944,20 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
         .map(|candidate| search_request_for_candidate(&requested_paths, candidate))
         .collect::<Vec<_>>();
     let authenticated_batch_results = regex_runtime.as_ref().and_then(|runtime| {
-        packet28_search_core::broker_internal_guarded_indexed_search_staged_batch(
+        let mut session = packet28_search_core::BrokerInternalGuardedIndexedSearchSession::new();
+        let primary = packet28_search_core::broker_internal_guarded_indexed_search_batch(
             root,
             runtime,
             &primary_requests,
-            &deferred_requests,
-            |primary_results| {
-                if !uses_staged_search_planner(action) || plan.phases.get(1).is_none() {
-                    return false;
-                }
-                let Some(primary_phase) = plan.phases.first() else {
-                    return false;
-                };
+            &mut session,
+        )
+        .ok()?;
+        let deferred_selected =
+            if !uses_staged_search_planner(action) || plan.phases.get(1).is_none() {
+                false
+            } else if let Some(primary_phase) = plan.phases.first() {
                 let mut primary_files = BTreeMap::new();
-                apply_search_phase_results(primary_phase, primary_results, &mut primary_files);
+                apply_search_phase_results(primary_phase, &primary, &mut primary_files);
                 let primary_files = rank_reducer_search_files(
                     primary_files.into_values().collect(),
                     snapshot,
@@ -961,10 +966,24 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
                 let primary_evidence =
                     build_authenticated_search_evidence(&primary_files, max_evidence_lines);
                 phase_results_are_weak(&primary_files, &primary_evidence)
-            },
-        )
-        .ok()
-        .filter(|_| daemon_regex_runtime_is_current(state, root, runtime))
+            } else {
+                false
+            };
+        let deferred = if deferred_selected {
+            Some(
+                packet28_search_core::broker_internal_guarded_indexed_search_batch(
+                    root,
+                    runtime,
+                    &deferred_requests,
+                    &mut session,
+                )
+                .ok()?,
+            )
+        } else {
+            None
+        };
+        daemon_regex_runtime_is_current(state, root, runtime)
+            .then_some(AuthenticatedSearchBatches { primary, deferred })
     });
     if let (Some(results), Some(phase)) =
         (authenticated_batch_results.as_ref(), plan.phases.first())

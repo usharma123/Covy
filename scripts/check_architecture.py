@@ -89,6 +89,51 @@ PACKET28D_BROKER_MODULES = (
     "support",
 )
 
+PACKET28D_BROKER_ROOT_MODULES = frozenset({"index", "planning", "state"})
+PACKET28D_BROKER_ROOT_PORTS = frozenset(
+    {
+        "context_version_storage_id",
+        "daemon_log",
+        "fence_task_namespace_admission",
+        "lock_err",
+        "mark_state_dirty",
+        "persist_state",
+        "resolve_root",
+        "task_storage_id",
+    }
+)
+PACKET28D_BROKER_INDEX_PORTS = frozenset(
+    {
+        "build_index_status",
+        "enqueue_full_index_rebuild",
+        "enqueue_incremental_index_paths",
+    }
+)
+PACKET28D_BROKER_PLANNING_PORTS = frozenset(
+    {
+        "coverage_gap_for_path",
+        "current_deleted_paths",
+        "estimate_plan_step_tokens",
+        "find_candidate_test_paths",
+        "is_edit_like_action",
+        "is_read_like_action",
+        "merged_unique",
+        "merged_unique_many",
+        "normalize_plan_steps",
+        "test_step_covers_path",
+        "test_step_targets_mapped_tests",
+        "testmap_tests_for_path",
+    }
+)
+PACKET28D_BROKER_STATE_PORTS = frozenset(
+    {"CachedSourceFile", "DaemonState", "TaskGenerationId"}
+)
+PACKET28D_BROKER_MODULE_PORTS = {
+    "index": PACKET28D_BROKER_INDEX_PORTS,
+    "planning": PACKET28D_BROKER_PLANNING_PORTS,
+    "state": PACKET28D_BROKER_STATE_PORTS,
+}
+
 PACKET28D_MAIN_MAX_LINES = 80
 
 PACKET28D_PUBLIC_DOC_INVENTORY = (
@@ -656,6 +701,77 @@ def check_packet28d_runtime_documentation(root: Path) -> list[str]:
     return errors
 
 
+def mask_rust_comments_and_literals(source: str) -> str:
+    """Preserve Rust code tokens while masking comments and string literals."""
+    masked = list(source)
+    index = 0
+    length = len(source)
+
+    def hide(start: int, end: int) -> None:
+        for offset in range(start, end):
+            if masked[offset] != "\n":
+                masked[offset] = " "
+
+    while index < length:
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = length if end == -1 else end
+            hide(index, end)
+            index = end
+            continue
+        if source.startswith("/*", index):
+            depth = 1
+            end = index + 2
+            while end < length and depth:
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            hide(index, end)
+            index = end
+            continue
+        character = re.match(
+            r"(?:b)?'(?:\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]+\}|[^\r\n])|[^'\\\r\n])'",
+            source[index:],
+        )
+        if character is not None:
+            end = index + character.end()
+            hide(index, end)
+            index = end
+            continue
+        raw = re.match(r"(?:br|cr|r)(?P<hashes>#{0,255})\"", source[index:])
+        if raw is not None:
+            terminator = '"' + raw.group("hashes")
+            content_start = index + raw.end()
+            content_end = source.find(terminator, content_start)
+            end = length if content_end == -1 else content_end + len(terminator)
+            hide(index, end)
+            index = end
+            continue
+        prefix_bytes = 2 if source.startswith(('b"', 'c"'), index) else 1
+        if source[index] == '"' or prefix_bytes == 2:
+            end = index + prefix_bytes
+            escaped = False
+            while end < length:
+                char = source[end]
+                end += 1
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    break
+            hide(index, end)
+            index = end
+            continue
+        index += 1
+    return "".join(masked)
+
+
 def check_packet28d_source_boundaries(root: Path) -> list[str]:
     """Keep daemon composition in the library and broker coupling explicit."""
     source_root = root / "crates" / "packet28d" / "src"
@@ -765,9 +881,11 @@ def check_packet28d_source_boundaries(root: Path) -> list[str]:
         r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\b[^;]*\*[^;]*;",
         re.MULTILINE,
     )
-    for path in sorted(broker_root.glob("*.rs")):
+    for path in sorted(broker_root.rglob("*.rs")):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = mask_rust_comments_and_literals(
+                path.read_text(encoding="utf-8")
+            )
         except OSError as error:
             errors.append(f"cannot read {path.relative_to(root)}: {error}")
             continue
@@ -781,26 +899,169 @@ def check_packet28d_source_boundaries(root: Path) -> list[str]:
                 "packet28d broker implementation must not depend on the "
                 f"application lifecycle: {path.relative_to(root)}"
             )
+        allowed_root_ports = (
+            PACKET28D_BROKER_ROOT_MODULES | PACKET28D_BROKER_ROOT_PORTS
+        )
+        direct_root_route = re.compile(
+            r"\bcrate\s*::\s*(?P<port>[A-Za-z_]\w*)"
+        )
+        for route in direct_root_route.finditer(source):
+            if route.group("port") not in allowed_root_ports:
+                errors.append(
+                    "packet28d broker modules may consume the crate root only "
+                    "through reviewed ports, not "
+                    f"{route.group('port')!r}: {path.relative_to(root)}"
+                )
+        grouped_root_route = re.compile(
+            r"\buse\s+crate\s*::\s*\{(?P<ports>[^}]*)\}\s*;",
+            re.DOTALL,
+        )
+        for route in grouped_root_route.finditer(source):
+            ports = [
+                port.strip()
+                for port in route.group("ports").split(",")
+                if port.strip()
+            ]
+            forbidden = [
+                port for port in ports if port not in PACKET28D_BROKER_ROOT_PORTS
+            ]
+            if forbidden:
+                errors.append(
+                    "packet28d broker modules may consume grouped crate-root "
+                    f"ports only from the reviewed allowlist, not {forbidden!r}: "
+                    f"{path.relative_to(root)}"
+                )
+        if re.search(
+            r"\b(?:use\s+crate|extern\s+crate\s+self)\s+as\b",
+            source,
+        ) or re.search(
+            r"\buse\s*\{[^{}]*\bcrate\s+as\s+\w+[^{}]*\}\s*;",
+            source,
+            re.DOTALL,
+        ):
+            errors.append(
+                "packet28d broker modules must not alias the packet28d crate "
+                f"owner: {path.relative_to(root)}"
+            )
+        for module, allowed_ports in PACKET28D_BROKER_MODULE_PORTS.items():
+            direct_module_route = re.compile(
+                rf"\bcrate\s*::\s*{re.escape(module)}\s*::\s*"
+                r"(?P<port>[A-Za-z_]\w*)"
+            )
+            for route in direct_module_route.finditer(source):
+                if route.group("port") not in allowed_ports:
+                    errors.append(
+                        f"packet28d broker modules may consume crate::{module} "
+                        "only through reviewed ports, not "
+                        f"{route.group('port')!r}: {path.relative_to(root)}"
+                    )
+            grouped_module_route = re.compile(
+                rf"\buse\s+crate\s*::\s*{re.escape(module)}\s*::\s*"
+                r"\{(?P<ports>[^}]*)\}\s*;",
+                re.DOTALL,
+            )
+            for route in grouped_module_route.finditer(source):
+                ports = [
+                    port.strip()
+                    for port in route.group("ports").split(",")
+                    if port.strip()
+                ]
+                forbidden = [port for port in ports if port not in allowed_ports]
+                if forbidden:
+                    errors.append(
+                        "packet28d broker modules may consume grouped "
+                        f"crate::{module} ports only from the reviewed allowlist, "
+                        f"not {forbidden!r}: {path.relative_to(root)}"
+                    )
+            if re.search(
+                rf"\buse\s+crate\s*::\s*{re.escape(module)}"
+                r"\s*(?:;|\s+as\b)",
+                source,
+            ) or re.search(
+                rf"\buse\s*\{{[^{{}}]*\bcrate\s*::\s*{re.escape(module)}\b"
+                r"\s*(?:as\s+\w+\s*)?(?=,|\})[^{}]*\}\s*;",
+                source,
+                re.DOTALL,
+            ):
+                errors.append(
+                    f"packet28d broker modules must not import the crate::{module} "
+                    f"owner module: {path.relative_to(root)}"
+                )
+        forbidden_mapy_entrypoints = (
+            "build_repo_map",
+            "build_repo_query",
+            "build_repo_map_from_index",
+            "build_repo_index",
+            "build_repo_index_with_progress",
+            "update_repo_index",
+            "rebuild_repo_index_runtime",
+            "rebuild_repo_index_runtime_with_progress",
+            "update_repo_index_runtime",
+            "load_repo_index_runtime",
+            "clear_repo_index_runtime",
+            "RepoIndexScanSession",
+            "PreparedRepoIndexRuntime",
+        )
+        forbidden_search_entrypoints = (
+            "guarded_fallback_reason",
+            "indexed_search",
+            "guarded_indexed_search",
+            "guarded_indexed_search_batch",
+            "load_and_indexed_search",
+            "load_and_guarded_indexed_search",
+            "load_runtime",
+            "rebuild_full_index",
+            "rebuild_full_index_with_progress",
+            "update_overlay_index",
+            "clear_index",
+            "RegexIndexScanSession",
+            "PreparedRegexIndexRuntime",
+        )
         forbidden_repository_rescans = (
             (
-                re.compile(r"\bbuild_repo_(?:map|query)\b"),
-                "mapy_core repository scan",
+                re.compile(
+                    r"\bmapy_core\s*::\s*(?:"
+                    rf"(?:{'|'.join(map(re.escape, forbidden_mapy_entrypoints))})\b"
+                    r"|shared_scan\b|\{[^}]*\b(?:"
+                    rf"{'|'.join(map(re.escape, forbidden_mapy_entrypoints))}"
+                    r"|shared_scan)\b)"
+                    r"|\b(?:use|extern\s+crate)\s+(?:::)?mapy_core\s+as\b"
+                    r"|\buse\s+(?:::)?mapy_core\s*::\s*\{[^}]*\bself\b"
+                    r"(?:\s+as\s+\w+)?"
+                    r"|\buse\s*\{[^{}]*(?<![\w:])(?:::)?mapy_core\s+as\b"
+                    r"[^{}]*\}\s*;",
+                    re.DOTALL,
+                ),
+                "mapy_core repository scan or runtime ownership",
             ),
             (
                 re.compile(
                     r"\bpacket28_reducer_core\s*::\s*"
                     r"(?:search\b|\{[^}]*\bsearch\b)"
-                    r"|\buse\s+packet28_reducer_core\s+as\b",
+                    r"|\b(?:use|extern\s+crate)\s+(?:::)?packet28_reducer_core\s+as\b"
+                    r"|\buse\s+(?:::)?packet28_reducer_core\s*::\s*\{[^}]*\bself\b"
+                    r"(?:\s+as\s+\w+)?"
+                    r"|\buse\s*\{[^{}]*(?<![\w:])(?:::)?packet28_reducer_core"
+                    r"\s+as\b[^{}]*\}\s*;",
                     re.DOTALL,
                 ),
                 "packet28_reducer_core repository scan",
             ),
             (
                 re.compile(
-                    r"\b(?:indexed_search|guarded_indexed_search|"
-                    r"load_and_indexed_search|load_and_guarded_indexed_search)\b"
+                    r"\bpacket28_search_core\s*::\s*(?:"
+                    rf"(?:{'|'.join(map(re.escape, forbidden_search_entrypoints))})\b"
+                    r"|shared_scan\b|\{[^}]*\b(?:"
+                    rf"{'|'.join(map(re.escape, forbidden_search_entrypoints))}"
+                    r"|shared_scan)\b)"
+                    r"|\b(?:use|extern\s+crate)\s+(?:::)?packet28_search_core\s+as\b"
+                    r"|\buse\s+(?:::)?packet28_search_core\s*::\s*\{[^}]*\bself\b"
+                    r"(?:\s+as\s+\w+)?"
+                    r"|\buse\s*\{[^{}]*(?<![\w:])(?:::)?packet28_search_core"
+                    r"\s+as\b[^{}]*\}\s*;",
+                    re.DOTALL,
                 ),
-                "unbatched packet28_search_core query",
+                "packet28_search_core query or runtime ownership bypass",
             ),
         )
         for pattern, label in forbidden_repository_rescans:

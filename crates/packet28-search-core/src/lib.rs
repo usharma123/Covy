@@ -70,8 +70,8 @@ mod weights;
 mod workspace;
 
 pub use crate::batch::{
-    broker_internal_guarded_indexed_search_staged_batch, guarded_indexed_search_batch,
-    BrokerInternalGuardedIndexedSearchBatch,
+    broker_internal_guarded_indexed_search_batch, guarded_indexed_search_batch,
+    BrokerInternalGuardedIndexedSearchSession,
 };
 pub use crate::error::{Result, SearchError};
 pub use crate::generation::{

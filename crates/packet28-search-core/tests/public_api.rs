@@ -6,11 +6,11 @@ use std::process::Command;
 
 use packet28_reducer_core::{SearchRequest, SearchResult};
 use packet28_search_core::{
-    broker_internal_guarded_indexed_search_staged_batch, clear_index, guarded_fallback_reason,
+    broker_internal_guarded_indexed_search_batch, clear_index, guarded_fallback_reason,
     guarded_indexed_search, guarded_indexed_search_batch, indexed_search,
     load_and_guarded_indexed_search, load_and_indexed_search, load_runtime, rebuild_full_index,
     rebuild_full_index_with_progress, update_overlay_index,
-    BrokerInternalGuardedIndexedSearchBatch, RegexIndexManifest, RegexIndexRuntime, Result,
+    BrokerInternalGuardedIndexedSearchSession, RegexIndexManifest, RegexIndexRuntime, Result,
     SearchError,
 };
 use tempfile::tempdir;
@@ -82,7 +82,7 @@ fn combined_guarded_search_preserves_the_planner_fallback_reason() {
 }
 
 #[test]
-fn broker_internal_staged_batch_is_available_for_the_trusted_integration() {
+fn broker_internal_attested_batch_is_available_for_the_trusted_integration() {
     let root = tempdir().unwrap();
     fs::create_dir_all(root.path().join("src")).unwrap();
     fs::write(root.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
@@ -93,17 +93,16 @@ fn broker_internal_staged_batch_is_available_for_the_trusted_integration() {
         ..SearchRequest::default()
     };
 
-    let results: BrokerInternalGuardedIndexedSearchBatch =
-        broker_internal_guarded_indexed_search_staged_batch(
-            root.path(),
-            &runtime,
-            &[request],
-            &[],
-            |_| false,
-        )
-        .unwrap();
+    let mut session = BrokerInternalGuardedIndexedSearchSession::new();
+    let results = broker_internal_guarded_indexed_search_batch(
+        root.path(),
+        &runtime,
+        &[request],
+        &mut session,
+    )
+    .unwrap();
 
-    assert_eq!(results.primary.len(), 1);
+    assert_eq!(results.len(), 1);
 }
 
 #[cfg(unix)]
@@ -448,6 +447,43 @@ fn missing_requested_path_does_not_search_through_a_symlinked_directory() {
     let result = indexed_search(root.path(), &runtime, &request).unwrap();
 
     assert!(result.resolved_paths.is_empty());
+    assert_eq!(result.match_count, 0);
+    assert!(result.paths.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn absolute_requested_child_resolves_under_a_relative_repository_root() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    let source = root.path().join("src/lib.rs");
+    fs::write(&source, "pub fn CanonicalChildNeedle() {}\n").unwrap();
+    let anchor = tempfile::Builder::new()
+        .prefix(".packet28-relative-root-")
+        .tempdir_in(".")
+        .unwrap();
+    let linked_root = anchor.path().join("root");
+    symlink(root.path(), &linked_root).unwrap();
+    let current = std::env::current_dir().unwrap();
+    let relative_root = linked_root.strip_prefix(&current).unwrap_or(&linked_root);
+    assert!(!relative_root.is_absolute());
+    let runtime = rebuild_full_index(relative_root, true).unwrap();
+    let request = SearchRequest {
+        query: "CanonicalChildNeedle".to_string(),
+        fixed_string: true,
+        requested_paths: vec![fs::canonicalize(source)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()],
+        ..SearchRequest::default()
+    };
+
+    let result = indexed_search(relative_root, &runtime, &request).unwrap();
+
+    assert_eq!(result.resolved_paths, ["src/lib.rs"]);
+    assert_eq!(result.match_count, 1);
 }
 
 #[cfg(unix)]

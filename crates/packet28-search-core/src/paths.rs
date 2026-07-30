@@ -249,22 +249,36 @@ pub(crate) fn resolve_requested_paths(
     (resolved, diagnostics)
 }
 
+pub(crate) fn requested_path_is_repository_root(root: &Path, requested_path: &str) -> bool {
+    let trimmed = requested_path.trim();
+    let path = Path::new(trimmed);
+    matches!(trimmed, "." | "./")
+        || (path.is_absolute()
+            && (path
+                .strip_prefix(root)
+                .is_ok_and(|relative| relative.as_os_str().is_empty())
+                || fs::canonicalize(root).is_ok_and(|canonical_root| path == canonical_root)))
+}
+
 fn normalize_capture_path(root: &Path, text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.contains('\n') || matches!(trimmed, "." | "./") {
         return String::new();
     }
     let path = PathBuf::from(trimmed);
-    if path.is_absolute() {
-        if let Ok(stripped) = path.strip_prefix(root) {
-            return stripped
-                .to_string_lossy()
-                .replace('\\', "/")
-                .trim_end_matches('/')
-                .to_string();
-        }
-    }
-    trimmed
+    let absolute = path.is_absolute();
+    let canonical_root = absolute.then(|| fs::canonicalize(root).ok()).flatten();
+    let canonical_relative = absolute.then(|| {
+        path.strip_prefix(root).ok().or_else(|| {
+            canonical_root
+                .as_deref()
+                .and_then(|root| path.strip_prefix(root).ok())
+        })
+    });
+    canonical_relative
+        .flatten()
+        .unwrap_or(&path)
+        .to_string_lossy()
         .trim_start_matches("./")
         .trim_start_matches('/')
         .replace('\\', "/")
@@ -276,11 +290,9 @@ fn normalize_capture_path(root: &Path, text: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
     #[test]
     fn workspace_inspection_rejects_non_relative_components() {
         let root = tempdir().unwrap();
-
         for relative in [
             Path::new(""),
             Path::new("../escape"),
@@ -294,9 +306,20 @@ mod tests {
     #[test]
     fn workspace_inspection_returns_missing_without_a_panic_fallback() {
         let root = tempdir().unwrap();
-
         let inspection = inspect_workspace_path(root.path(), Path::new("missing.rs")).unwrap();
-
         assert!(matches!(inspection.kind, WorkspacePathKind::Missing));
+    }
+
+    #[test]
+    fn requested_root_aliases_do_not_hide_invalid_absolute_or_parent_paths() {
+        let root = tempdir().unwrap();
+        let is_root = requested_path_is_repository_root;
+        assert!(is_root(root.path(), "."));
+        assert!(is_root(root.path(), &root.path().to_string_lossy()));
+        assert!(!is_root(root.path(), "/"));
+        assert!(!is_root(root.path(), "../escape"));
+        assert!(!is_root(Path::new("repo"), "repo"));
+        let current = std::env::current_dir().unwrap();
+        assert!(is_root(Path::new("."), &current.to_string_lossy()));
     }
 }

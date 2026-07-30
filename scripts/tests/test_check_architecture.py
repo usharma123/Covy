@@ -675,16 +675,52 @@ class ArchitectureDependencyTests(unittest.TestCase):
         cases = (
             "fn rescan() { let _ = mapy_core::build_repo_map(Default::default()); }\n",
             "fn rescan() { let _ = mapy_core::build_repo_query(Default::default()); }\n",
+            "fn rescan() { let _ = mapy_core::build_repo_map_from_index(todo!(), todo!()); }\n",
+            "fn rescan() { let _ = mapy_core::build_repo_index(todo!(), true); }\n",
+            "use mapy_core::build_repo_index_with_progress as rescan;\n",
+            "fn rescan() { let _ = mapy_core::update_repo_index(todo!(), todo!(), todo!(), true); }\n",
+            "fn rescan() { let _ = mapy_core::rebuild_repo_index_runtime(todo!(), true); }\n",
+            "use mapy_core::rebuild_repo_index_runtime_with_progress as rescan;\n",
+            "fn rescan() { let _ = mapy_core::update_repo_index_runtime(todo!(), todo!(), todo!(), true); }\n",
+            "fn rescan() { let _ = mapy_core::load_repo_index_runtime(todo!()); }\n",
+            "fn rescan() { let _ = mapy_core::clear_repo_index_runtime(todo!()); }\n",
+            "use mapy_core::shared_scan::RepoIndexScanSession;\n",
+            "use mapy_core::{shared_scan as scan, RepoIndexRuntime};\n",
+            "use mapy_core::PreparedRepoIndexRuntime as Prepared;\n",
             "fn rescan() { let _ = packet28_reducer_core::search(todo!(), todo!()); }\n",
             "use mapy_core :: build_repo_map as rescan;\n",
             "use mapy_core::{build_repo_query as rescan};\n",
+            "use mapy_core::{self as mapy, RepoIndexRuntime};\n",
+            "use mapy_core as mapy;\n",
+            "use ::mapy_core as mapy;\n",
             "use packet28_reducer_core :: search as rescan;\n",
             "use packet28_reducer_core::{SearchRequest, search as rescan};\n",
             "use packet28_reducer_core as reducer;\nfn rescan() { reducer::search(todo!(), todo!()); }\n",
+            "use ::packet28_reducer_core as reducer;\n",
+            "use packet28_reducer_core::{self as reducer, SearchRequest};\n",
+            "use {packet28_reducer_core as reducer};\nfn rescan() { reducer::search(todo!(), todo!()); }\n",
+            "use {mapy_core as mapy};\nfn rescan() { mapy::build_repo_map(Default::default()); }\n",
             "fn rescan() { let _ = packet28_search_core::indexed_search(todo!(), todo!(), todo!()); }\n",
             "use packet28_search_core :: guarded_indexed_search as query;\n",
+            "use packet28_search_core::guarded_indexed_search;\nfn wrapper() { guarded_indexed_search(todo!(), todo!(), todo!()); }\n",
+            "use packet28_search_core::guarded_fallback_reason as route;\n",
+            "use packet28_search_core::guarded_indexed_search_batch as batch;\n",
             "use packet28_search_core::{RegexIndexRuntime, load_and_indexed_search as query};\n",
-            "fn wrapper() { guarded_indexed_search(todo!(), todo!(), todo!()); }\n",
+            "use packet28_search_core::load_and_guarded_indexed_search as query;\n",
+            "use packet28_search_core::load_runtime as load;\n",
+            "use packet28_search_core::rebuild_full_index as rebuild;\n",
+            "use packet28_search_core::rebuild_full_index_with_progress as rebuild;\n",
+            "use packet28_search_core::update_overlay_index as update;\n",
+            "use packet28_search_core::clear_index as clear;\n",
+            "use packet28_search_core::shared_scan::RegexIndexScanSession;\n",
+            "use packet28_search_core::shared_scan::PreparedRegexIndexRuntime;\n",
+            "use packet28_search_core::{shared_scan as scan, RegexIndexRuntime};\n",
+            "use packet28_search_core::{self as search, RegexIndexRuntime};\n",
+            "use packet28_search_core as search;\n",
+            "use ::packet28_search_core as search;\n",
+            "use {packet28_search_core as search};\nfn query() { search::indexed_search(todo!(), todo!(), todo!()); }\n",
+            "const QUOTE: char = '\"';\nfn query() { packet28_search_core::indexed_search(todo!(), todo!(), todo!()); }\n",
+            "const BYTE_QUOTE: u8 = b'\"';\nfn query() { packet28_search_core::indexed_search(todo!(), todo!(), todo!()); }\n",
         )
         for broker_child_source in cases:
             with self.subTest(source=broker_child_source):
@@ -705,6 +741,151 @@ class ArchitectureDependencyTests(unittest.TestCase):
                     "daemon index runtimes",
                     result.stderr,
                 )
+
+    def test_packet28d_broker_nested_module_rejects_repository_ownership(self) -> None:
+        cases = (
+            "fn bypass() { let _ = packet28_search_core::indexed_search(todo!(), todo!(), todo!()); }\n",
+            "fn bypass() { let _ = mapy_core::shared_scan::RepoIndexScanSession::begin(todo!(), true, todo!()); }\n",
+        )
+        for nested_source in cases:
+            with self.subTest(source=nested_source):
+                fixture = metadata({})
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    write_kernel_sources(root, "")
+                    write_packet28d_sources(root)
+                    broker = root / "crates" / "packet28d" / "src" / "broker"
+                    (broker / "search.rs").write_text(
+                        "mod raw;\n", encoding="utf-8"
+                    )
+                    nested = broker / "search"
+                    nested.mkdir()
+                    (nested / "raw.rs").write_text(
+                        nested_source, encoding="utf-8"
+                    )
+
+                    result = self.run_checker(fixture, source_root=root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "packet28d broker repository consumers must use authenticated "
+                    "daemon index runtimes",
+                    result.stderr,
+                )
+                self.assertIn(
+                    "crates/packet28d/src/broker/search/raw.rs",
+                    result.stderr,
+                )
+
+    def test_packet28d_broker_rejects_repository_owner_wrapper_routes(self) -> None:
+        cases = (
+            "use crate::shared_repository_scan::rebuild_full_indexes_with_shared_scan as rescan;\n",
+            "use crate::runtime_files::load_index_runtime_files as load;\n",
+            "use crate::index::daemon_packet28_search as query;\n",
+            "use crate::index::run_index_worker as own;\n",
+            "use crate::index::{build_index_status, daemon_packet28_search};\n",
+            "use crate::index as index_owner;\n",
+            "use crate::state::raw_query;\n",
+            "use crate::planning::{merged_unique, raw_map};\n",
+            "use crate as daemon_owner;\n",
+            "extern crate self as daemon_owner;\n",
+            "use {crate::index as owner};\nfn query() { owner::daemon_packet28_search(todo!()); }\n",
+            "use {crate::planning as owner};\nfn map() { owner::raw_map(todo!()); }\n",
+            "use {crate::state as owner};\nfn query() { owner::raw_query(todo!()); }\n",
+            "use {crate as daemon_owner};\n",
+        )
+        for broker_child_source in cases:
+            with self.subTest(source=broker_child_source):
+                fixture = metadata({})
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    write_kernel_sources(root, "")
+                    write_packet28d_sources(
+                        root,
+                        broker_child_source=broker_child_source,
+                    )
+
+                    result = self.run_checker(fixture, source_root=root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("packet28d broker modules", result.stderr)
+
+    def test_packet28d_broker_rejects_crate_root_reexport_aliases(self) -> None:
+        cases = (
+            (
+                "pub(crate) use packet28_search_core::indexed_search as raw_query;\n",
+                "use crate::raw_query;\n",
+            ),
+            (
+                "pub(crate) use mapy_core::build_repo_map as raw_map;\n",
+                "use crate::raw_map;\n",
+            ),
+        )
+        for reexport, broker_child_source in cases:
+            with self.subTest(reexport=reexport):
+                fixture = metadata({})
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    write_kernel_sources(root, "")
+                    write_packet28d_sources(
+                        root,
+                        broker_child_source=broker_child_source,
+                    )
+                    library = root / "crates" / "packet28d" / "src" / "lib.rs"
+                    library.write_text(
+                        library.read_text(encoding="utf-8") + reexport,
+                        encoding="utf-8",
+                    )
+
+                    result = self.run_checker(fixture, source_root=root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("reviewed ports", result.stderr)
+
+    def test_packet28d_broker_repository_guard_ignores_lexical_decoys(self) -> None:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "")
+            write_packet28d_sources(
+                root,
+                broker_child_source=(
+                    "// packet28_search_core::guarded_indexed_search_batch\n"
+                    'const NOTE: &str = "mapy_core::build_repo_map";\n'
+                    'const RAW: &str = r#"RegexIndexScanSession"#;\n'
+                    "fn guarded_indexed_search_batch() {}\n"
+                ),
+            )
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_packet28d_broker_child_allows_authenticated_runtime_consumers(self) -> None:
+        fixture = metadata({})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_kernel_sources(root, "")
+            write_packet28d_sources(
+                root,
+                broker_child_source=(
+                    "use mapy_core::{build_repo_map_from_runtime, RepoIndexRuntime};\n"
+                    "use packet28_search_core::{"
+                    "broker_internal_guarded_indexed_search_batch, "
+                    "BrokerInternalGuardedIndexedSearchSession};\n"
+                    "fn consume() {\n"
+                    "  let _: RepoIndexRuntime = todo!();\n"
+                    "  let _ = build_repo_map_from_runtime(todo!(), todo!());\n"
+                    "  let mut session = BrokerInternalGuardedIndexedSearchSession::new();\n"
+                    "  let _ = broker_internal_guarded_indexed_search_batch("
+                    "todo!(), todo!(), todo!(), &mut session);\n"
+                    "}\n"
+                ),
+            )
+
+            result = self.run_checker(fixture, source_root=root)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_packet28d_entrypoint_rejects_runtime_ownership(self) -> None:
         fixture = metadata({})

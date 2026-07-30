@@ -18,13 +18,45 @@ use crate::model::{
     MAX_INDEX_VERIFY_NUMERATOR, MAX_LITERAL_COVER, MIN_GRAM_BYTES, POSITION_BUCKET_COUNT,
     SHORT_GRAM_BYTES,
 };
-use crate::paths::resolve_requested_paths;
+use crate::paths::{requested_path_is_repository_root, resolve_requested_paths};
 use crate::postings::{
     build_covering_candidates, build_covering_hashes, checked_posting_bounds, decode_postings,
     hash_bytes, lookup_posting_range, normalize_for_index,
 };
 use crate::support::ResultContext;
 use crate::workspace::workspace_freshness_reason;
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedRequestScope {
+    requested: bool,
+    pub(crate) resolved_paths: Vec<String>,
+    diagnostics: Vec<String>,
+}
+
+impl ResolvedRequestScope {
+    fn requested_filter(&self) -> Option<BTreeSet<String>> {
+        requested_filter_set(&self.resolved_paths, self.requested)
+    }
+
+    fn is_explicitly_empty(&self) -> bool {
+        self.requested && self.resolved_paths.is_empty()
+    }
+}
+
+pub(crate) fn resolve_request_scope(
+    root: &Path,
+    requested_paths: &[String],
+) -> ResolvedRequestScope {
+    let (resolved_paths, diagnostics) = resolve_requested_paths(root, requested_paths);
+    ResolvedRequestScope {
+        requested: !requested_paths.is_empty()
+            && !requested_paths
+                .iter()
+                .any(|path| requested_path_is_repository_root(root, path)),
+        resolved_paths,
+        diagnostics,
+    }
+}
 
 impl LoadedIndex {
     pub(super) fn all_indexed_paths(
@@ -95,6 +127,10 @@ pub fn guarded_fallback_reason(
         return Ok(Some(reason));
     }
     let compiled = compile_request(request, loaded.as_ref())?;
+    let scope = resolve_request_scope(root, &request.requested_paths);
+    if scope.is_explicitly_empty() {
+        return Ok(None);
+    }
     if let Some(reason) = compiled.must_fallback_reason.clone() {
         return Ok(Some(reason));
     }
@@ -103,8 +139,7 @@ pub fn guarded_fallback_reason(
             "planner could not derive a selective index plan".to_string()
         })));
     }
-    let (resolved_paths, _) = resolve_requested_paths(root, &request.requested_paths);
-    let requested_filter = requested_filter_set(&resolved_paths);
+    let requested_filter = scope.requested_filter();
     let all_paths = loaded.all_indexed_paths(requested_filter.as_ref());
     let mut engine = SearchEngineStats {
         engine: "indexed_regex".to_string(),
@@ -215,6 +250,46 @@ pub(crate) fn indexed_search_with_guard(
     attest_workspace: bool,
     remaining_verify_candidates: Option<&mut usize>,
 ) -> Result<SearchResult> {
+    indexed_search_with_optional_scope(
+        root,
+        runtime,
+        request,
+        enforce_guard,
+        attest_workspace,
+        remaining_verify_candidates,
+        None,
+    )
+}
+
+pub(crate) fn indexed_search_with_resolved_scope(
+    root: &Path,
+    runtime: &RegexIndexRuntime,
+    request: &SearchRequest,
+    enforce_guard: bool,
+    attest_workspace: bool,
+    remaining_verify_candidates: Option<&mut usize>,
+    scope: &ResolvedRequestScope,
+) -> Result<SearchResult> {
+    indexed_search_with_optional_scope(
+        root,
+        runtime,
+        request,
+        enforce_guard,
+        attest_workspace,
+        remaining_verify_candidates,
+        Some(scope),
+    )
+}
+
+fn indexed_search_with_optional_scope(
+    root: &Path,
+    runtime: &RegexIndexRuntime,
+    request: &SearchRequest,
+    enforce_guard: bool,
+    attest_workspace: bool,
+    remaining_verify_candidates: Option<&mut usize>,
+    resolved_scope: Option<&ResolvedRequestScope>,
+) -> Result<SearchResult> {
     let loaded = match runtime.loaded.as_ref() {
         Some(loaded) => loaded,
         None => {
@@ -251,7 +326,15 @@ pub(crate) fn indexed_search_with_guard(
     }
 
     let compiled = compile_request(request, loaded.as_ref())?;
-    if enforce_guard {
+    let owned_scope;
+    let scope = match resolved_scope {
+        Some(scope) => scope,
+        None => {
+            owned_scope = resolve_request_scope(root, &request.requested_paths);
+            &owned_scope
+        }
+    };
+    if enforce_guard && !scope.is_explicitly_empty() {
         if let Some(reason) = compiled.must_fallback_reason.clone() {
             if attest_workspace {
                 ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
@@ -269,8 +352,8 @@ pub(crate) fn indexed_search_with_guard(
             });
         }
     }
-    let (resolved_paths, mut diagnostics) = resolve_requested_paths(root, &request.requested_paths);
-    let requested_filter = requested_filter_set(&resolved_paths);
+    let requested_filter = scope.requested_filter();
+    let mut diagnostics = scope.diagnostics.clone();
     let mut engine = SearchEngineStats {
         engine: "indexed_regex".to_string(),
         index_generation: Some(runtime.manifest.generation),
@@ -312,8 +395,9 @@ pub(crate) fn indexed_search_with_guard(
         &candidate_paths,
         &mut cache,
     );
-    let candidate_set_is_too_broad = if let Some(remaining) = remaining_verify_candidates.as_deref()
-    {
+    let candidate_set_is_too_broad = if scope.is_explicitly_empty() {
+        false
+    } else if let Some(remaining) = remaining_verify_candidates.as_deref() {
         pruned_candidate_paths.is_empty() || pruned_candidate_paths.len() > *remaining
     } else {
         should_fallback_to_rg(pruned_candidate_paths.len(), all_paths.len())
@@ -404,7 +488,7 @@ pub(crate) fn indexed_search_with_guard(
     let result = SearchResult {
         query: query.to_string(),
         requested_paths: request.requested_paths.clone(),
-        resolved_paths,
+        resolved_paths: scope.resolved_paths.clone(),
         match_count: total_match_count,
         returned_match_count,
         truncated: total_match_count > returned_match_count,
@@ -1387,8 +1471,8 @@ pub(crate) fn lookup_posting_entry(
         .clone()?;
     entries.into_iter().find(|entry| entry.doc_id == doc_id)
 }
-pub(crate) fn requested_filter_set(paths: &[String]) -> Option<BTreeSet<String>> {
-    (!paths.is_empty()).then(|| paths.iter().cloned().collect())
+pub(crate) fn requested_filter_set(paths: &[String], requested: bool) -> Option<BTreeSet<String>> {
+    requested.then(|| paths.iter().cloned().collect())
 }
 
 pub(crate) fn overlay_posting_count(loaded: &LoadedIndex, hash: u64) -> u32 {

@@ -179,6 +179,8 @@ mod tests {
     fn guarded_query_runs_one_workspace_attestation() {
         use packet28_reducer_core::SearchRequest;
 
+        use crate::broker_internal_guarded_indexed_search_batch as run_batch;
+
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         fs::create_dir_all(root.join("src")).unwrap();
@@ -223,19 +225,13 @@ mod tests {
         GIT_COMMAND_COUNT.store(0, Ordering::Relaxed);
         let primary = [request("unique_attestation_needle")];
         let deferred = [request("second_attestation_needle"), request("x")];
-        let results = crate::broker_internal_guarded_indexed_search_staged_batch(
-            root,
-            &runtime,
-            &primary,
-            &deferred,
-            |_| true,
-        )
-        .unwrap();
+        let mut session = crate::BrokerInternalGuardedIndexedSearchSession::new();
+        let primary_results = run_batch(root, &runtime, &primary, &mut session).unwrap();
+        let deferred_results = run_batch(root, &runtime, &deferred, &mut session).unwrap();
         assert_eq!(
-            results
-                .primary
+            primary_results
                 .iter()
-                .chain(results.deferred.as_ref().unwrap())
+                .chain(&deferred_results)
                 .map(Option::is_some)
                 .collect::<Vec<_>>(),
             [true, true, false],
@@ -243,8 +239,8 @@ mod tests {
         );
         assert_eq!(
             GIT_COMMAND_COUNT.load(Ordering::Relaxed),
-            2,
-            "the complete batch must perform one two-command attestation"
+            4,
+            "each exposed result batch must perform one two-command attestation"
         );
     }
 }

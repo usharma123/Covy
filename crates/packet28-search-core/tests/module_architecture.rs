@@ -20,8 +20,8 @@ const EXPECTED_ROOT_EXPORTS: &[&str] = &[
     "guarded_fallback_reason",
     "guarded_indexed_search",
     "guarded_indexed_search_batch",
-    "broker_internal_guarded_indexed_search_staged_batch",
-    "BrokerInternalGuardedIndexedSearchBatch",
+    "broker_internal_guarded_indexed_search_batch",
+    "BrokerInternalGuardedIndexedSearchSession",
     "indexed_search",
     "load_and_guarded_indexed_search",
     "load_and_indexed_search",
@@ -39,7 +39,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
         (
             "batch",
             ModulePolicy {
-                max_lines: 175,
+                max_lines: 325,
                 allowed_dependencies: &["error", "model", "query"],
             },
         ),

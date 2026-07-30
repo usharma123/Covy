@@ -146,7 +146,7 @@ fn expand_scope_paths_pulls_adjacent_role_files() {
 }
 
 #[test]
-fn exact_symbol_query_returns_definition_first_without_fallback() {
+fn strong_primary_definition_skips_the_deferred_search_stage() {
     let temp_dir = tempfile::tempdir().unwrap();
     let root = temp_dir.path();
     write_search_fixture(
