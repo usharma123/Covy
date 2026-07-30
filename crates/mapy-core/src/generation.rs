@@ -8,9 +8,10 @@
 //! operation.
 //!
 //! Publication is process-crash atomic on filesystems that provide atomic
-//! same-directory rename: artifacts are written to flushed temporary files and
-//! the manifest is renamed last. Files and parent directories are not
-//! `fsync`ed, so this module does not claim power-loss durability.
+//! same-directory rename: generation identities are persistently reserved
+//! before create-once artifacts are written, and the manifest is renamed last.
+//! Files and parent directories are not `fsync`ed, so this module does not claim
+//! power-loss durability.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -29,10 +30,12 @@ use crate::{
 };
 
 const REPO_INDEX_RUNTIME_SCHEMA_VERSION: u32 = 1;
+const REPO_INDEX_GENERATION_HIGH_WATER_SCHEMA_VERSION: u32 = 1;
 const REPO_INDEX_DIR_NAME: &str = "mapy-v1";
 const REPO_INDEX_MANIFEST_FILE: &str = "manifest.json";
 const REPO_INDEX_PREVIOUS_MANIFEST_FILE: &str = "manifest.previous.json";
 const REPO_INDEX_WRITER_LOCK_FILE: &str = ".mapy-v1.writer.lock";
+const REPO_INDEX_GENERATION_HIGH_WATER_FILE: &str = ".mapy-v1.generation-high-water.json";
 const REPO_INDEX_COMPACTION_SEGMENTS: usize = 8;
 const REPO_INDEX_SEGMENT_VERSION: u32 = 1;
 
@@ -127,14 +130,14 @@ impl RepoIndexRuntime {
     /// This operation intentionally clones visible entries and should be kept
     /// off incremental publication paths.
     pub fn materialize_snapshot(&self) -> Option<RepoIndexSnapshot> {
-        self.generation.as_ref()?;
+        let generation = self.generation.as_ref()?;
         let mut files = BTreeMap::new();
         self.for_each_file(|entry| {
             files.insert(entry.path.clone(), entry.clone());
         });
         Some(RepoIndexSnapshot {
             version: MAP_CACHE_VERSION,
-            include_tests: self.manifest.include_tests,
+            include_tests: generation.base.include_tests,
             files,
         })
     }
@@ -260,8 +263,9 @@ impl Drop for PreparedRepoIndexRuntime {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RepoIndexGeneration {
+    publication_identity: PublicationIdentity,
     base: Arc<RepoIndexSnapshot>,
     base_file: String,
     base_digest: String,
@@ -292,6 +296,19 @@ struct RepoIndexGenerationRecord {
     segment_files: Vec<String>,
     segment_digests: Vec<String>,
     manifest: RepoIndexRuntimeManifest,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepoIndexGenerationHighWater {
+    schema_version: u32,
+    generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PublicationIdentity {
+    generation: u64,
+    generation_record_digest: String,
 }
 
 /// Builds and manifest-last publishes a new immutable base generation.
@@ -340,12 +357,12 @@ fn publish_rebuilt_runtime(
     include_tests: bool,
     snapshot: RepoIndexSnapshot,
 ) -> Result<RepoIndexRuntime, CovyError> {
-    let previous = load_published_manifest(root).ok();
-    let generation = next_generation(previous.as_ref(), None);
+    let previous = load_recovery_manifest(root)?;
+    let generation = reserve_generation(root)?;
     let base_file = base_file_name(generation);
     let base_bytes = wincode::serialize(&snapshot)
         .map_err(|error| cache_error(format!("failed to encode repository base: {error}")))?;
-    write_atomic(repo_index_dir(root).join(&base_file), &base_bytes)?;
+    write_immutable(repo_index_dir(root).join(&base_file), &base_bytes)?;
     let base_digest = artifact_digest(&base_bytes);
 
     let mut manifest = RepoIndexRuntimeManifest {
@@ -386,12 +403,12 @@ pub(crate) fn prepare_repo_index_runtime_with_writer(
 ) -> Result<PreparedRepoIndexRuntime, CovyError> {
     let previous_current_bytes = read_optional_file(&manifest_path(root))?;
     let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
-    let previous = load_published_manifest(root).ok();
-    let generation = next_generation(previous.as_ref(), None);
+    let previous = load_recovery_manifest(root)?;
+    let generation = reserve_generation(root)?;
     let base_file = base_file_name(generation);
     let base_bytes = wincode::serialize(&snapshot)
         .map_err(|error| cache_error(format!("failed to encode repository base: {error}")))?;
-    write_atomic(repo_index_dir(root).join(&base_file), &base_bytes)?;
+    write_immutable(repo_index_dir(root).join(&base_file), &base_bytes)?;
     let base_digest = artifact_digest(&base_bytes);
     let mut manifest = RepoIndexRuntimeManifest {
         schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
@@ -433,7 +450,9 @@ pub(crate) fn prepare_repo_index_runtime_with_writer(
 /// Removes every persisted repository-index generation.
 ///
 /// Existing [`RepoIndexRuntime`] handles remain readable because they own their
-/// immutable generation data independently of the on-disk artifacts.
+/// immutable generation data independently of the on-disk artifacts. Durable
+/// generation fencing remains beside the writer lock so a later rebuild cannot
+/// reuse an identity owned by one of those handles.
 ///
 /// # Errors
 ///
@@ -441,6 +460,7 @@ pub(crate) fn prepare_repo_index_runtime_with_writer(
 /// removed.
 pub fn clear_repo_index_runtime(root: &Path) -> Result<(), CovyError> {
     let _writer = acquire_writer_lock(root)?;
+    ensure_generation_high_water(root)?;
     let path = repo_index_dir(root);
     if path.exists() {
         fs::remove_dir_all(&path).map_err(|error| {
@@ -475,7 +495,8 @@ pub fn update_repo_index_runtime(
         .generation
         .as_ref()
         .ok_or_else(|| cache_error("repository index runtime is not loaded"))?;
-    if changed_paths.is_empty() {
+    let policy_changed = loaded.base.include_tests != include_tests;
+    if changed_paths.is_empty() && !policy_changed {
         return Ok((
             current.clone(),
             RepoIndexUpdateSummary {
@@ -486,8 +507,27 @@ pub fn update_repo_index_runtime(
         ));
     }
     let normalized = normalize_changed_paths(root, changed_paths)?;
-    if current.manifest.include_tests != include_tests {
-        let rebuilt = rebuild_repo_index_runtime(root, include_tests)?;
+    let _writer = acquire_writer_lock(root)?;
+    let published = load_published_manifest(root)?;
+    let published_runtime = load_generation(root, &published)?;
+    let published_identity = &published_runtime
+        .generation
+        .as_ref()
+        .ok_or_else(|| cache_error("published repository generation is absent after loading"))?
+        .publication_identity;
+    let current_identity = &loaded.publication_identity;
+    if published_identity != current_identity {
+        return Err(cache_error(format!(
+            "repository index generation conflict: caller has {}@{}, published generation is {}@{}",
+            current_identity.generation,
+            current_identity.generation_record_digest,
+            published_identity.generation,
+            published_identity.generation_record_digest
+        )));
+    }
+    if policy_changed {
+        let snapshot = build_repo_index_with_progress(root, include_tests, |_, _| {})?;
+        let rebuilt = publish_rebuilt_runtime(root, include_tests, snapshot)?;
         return Ok((
             rebuilt,
             RepoIndexUpdateSummary {
@@ -497,15 +537,7 @@ pub fn update_repo_index_runtime(
             },
         ));
     }
-    let _writer = acquire_writer_lock(root)?;
-    let published = load_published_manifest(root)?;
-    if published.generation != current.manifest.generation {
-        return Err(cache_error(format!(
-            "repository index generation conflict: caller has {}, published generation is {}",
-            current.manifest.generation, published.generation
-        )));
-    }
-    let generation = published.generation.saturating_add(1);
+    let generation = reserve_generation(root)?;
     let mut segment = RepoIndexSegment {
         version: REPO_INDEX_SEGMENT_VERSION,
         generation,
@@ -586,6 +618,7 @@ pub fn update_repo_index_runtime(
     let runtime = RepoIndexRuntime {
         manifest: manifest.clone(),
         generation: Some(Arc::new(RepoIndexGeneration {
+            publication_identity: publication_identity(&manifest)?,
             base: Arc::clone(&loaded.base),
             base_file: loaded.base_file.clone(),
             base_digest: loaded.base_digest.clone(),
@@ -596,8 +629,8 @@ pub fn update_repo_index_runtime(
         })),
     };
     validate_runtime(&runtime)?;
-    publish_manifest(root, Some(&current.manifest), &manifest)?;
-    let _ = prune_generation_artifacts(root, &record, Some(&current.manifest));
+    publish_manifest(root, Some(&published), &manifest)?;
+    let _ = prune_generation_artifacts(root, &record, Some(&published));
     Ok((
         runtime,
         RepoIndexUpdateSummary {
@@ -626,6 +659,16 @@ pub fn load_repo_index_runtime(root: &Path) -> Result<RepoIndexRuntime, CovyErro
         }
     };
     if current.schema_version == 0 {
+        let current_exists = manifest_path(root).exists();
+        let previous_exists = previous_manifest_path(root).exists();
+        let recovered = recover_previous(
+            root,
+            None,
+            cache_error("repository index current manifest is missing or schema-zero"),
+        )?;
+        if recovered.is_loaded() || current_exists || previous_exists {
+            return Ok(recovered);
+        }
         return Ok(RepoIndexRuntime {
             manifest: RepoIndexRuntimeManifest {
                 status: "missing".to_string(),
@@ -670,6 +713,88 @@ fn load_generation(
     root: &Path,
     expected_manifest: &RepoIndexRuntimeManifest,
 ) -> Result<RepoIndexRuntime, CovyError> {
+    let record = load_authenticated_generation_record(root, expected_manifest)?;
+    validate_artifact_name(&record.base_file)?;
+    let base_path = repo_index_dir(root).join(&record.base_file);
+    let base_raw = fs::read(&base_path).map_err(|error| {
+        cache_error(format!(
+            "failed to read repository base '{}': {error}",
+            base_path.display()
+        ))
+    })?;
+    verify_artifact_digest(&base_path, &base_raw, &record.base_digest)?;
+    let base = wincode::deserialize::<RepoIndexSnapshot>(&base_raw).map_err(|error| {
+        cache_error(format!(
+            "failed to decode repository base '{}': {error}",
+            base_path.display()
+        ))
+    })?;
+    validate_base(&base, expected_manifest.include_tests)?;
+
+    let record_path =
+        repo_index_dir(root).join(generation_record_file_name(expected_manifest.generation));
+    let mut segments = Vec::with_capacity(record.segment_files.len());
+    let mut latest_by_path = BTreeMap::new();
+    let mut previous_generation = None;
+    let mut unique_files = BTreeSet::new();
+    for (file_name, expected_digest) in record.segment_files.iter().zip(&record.segment_digests) {
+        validate_artifact_name(file_name)?;
+        if !unique_files.insert(file_name) {
+            return Err(cache_error(format!(
+                "generation record '{}' references duplicate segment '{file_name}'",
+                record_path.display()
+            )));
+        }
+        let path = repo_index_dir(root).join(file_name);
+        let raw = fs::read(&path).map_err(|error| {
+            cache_error(format!(
+                "failed to read repository segment '{}': {error}",
+                path.display()
+            ))
+        })?;
+        verify_artifact_digest(&path, &raw, expected_digest)?;
+        let segment = wincode::deserialize::<RepoIndexSegment>(&raw).map_err(|error| {
+            cache_error(format!(
+                "failed to decode repository segment '{}': {error}",
+                path.display()
+            ))
+        })?;
+        validate_segment(&segment)?;
+        if previous_generation.is_some_and(|previous| segment.generation <= previous)
+            || segment.generation > expected_manifest.generation
+        {
+            return Err(cache_error(format!(
+                "generation record '{}' has non-increasing or future segment generation {}",
+                record_path.display(),
+                segment.generation
+            )));
+        }
+        previous_generation = Some(segment.generation);
+        apply_segment_resolution(&segment, &mut latest_by_path);
+        segments.push(Arc::new(segment));
+    }
+    let generation = RepoIndexGeneration {
+        publication_identity: publication_identity(expected_manifest)?,
+        base: Arc::new(base),
+        base_file: record.base_file,
+        base_digest: record.base_digest,
+        segments,
+        segment_files: record.segment_files,
+        segment_digests: record.segment_digests,
+        latest_by_path,
+    };
+    let runtime = RepoIndexRuntime {
+        manifest: expected_manifest.clone(),
+        generation: Some(Arc::new(generation)),
+    };
+    validate_runtime(&runtime)?;
+    Ok(runtime)
+}
+
+fn load_authenticated_generation_record(
+    root: &Path,
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<RepoIndexGenerationRecord, CovyError> {
     validate_manifest(expected_manifest)?;
     let record_path =
         repo_index_dir(root).join(generation_record_file_name(expected_manifest.generation));
@@ -713,78 +838,7 @@ fn load_generation(
             record_path.display()
         )));
     }
-    validate_artifact_name(&record.base_file)?;
-    let base_path = repo_index_dir(root).join(&record.base_file);
-    let base_raw = fs::read(&base_path).map_err(|error| {
-        cache_error(format!(
-            "failed to read repository base '{}': {error}",
-            base_path.display()
-        ))
-    })?;
-    verify_artifact_digest(&base_path, &base_raw, &record.base_digest)?;
-    let base = wincode::deserialize::<RepoIndexSnapshot>(&base_raw).map_err(|error| {
-        cache_error(format!(
-            "failed to decode repository base '{}': {error}",
-            base_path.display()
-        ))
-    })?;
-    validate_base(&base, expected_manifest.include_tests)?;
-
-    let mut segments = Vec::with_capacity(record.segment_files.len());
-    let mut latest_by_path = BTreeMap::new();
-    let mut previous_generation = None;
-    let mut unique_files = BTreeSet::new();
-    for (file_name, expected_digest) in record.segment_files.iter().zip(&record.segment_digests) {
-        validate_artifact_name(file_name)?;
-        if !unique_files.insert(file_name) {
-            return Err(cache_error(format!(
-                "generation record '{}' references duplicate segment '{file_name}'",
-                record_path.display()
-            )));
-        }
-        let path = repo_index_dir(root).join(file_name);
-        let raw = fs::read(&path).map_err(|error| {
-            cache_error(format!(
-                "failed to read repository segment '{}': {error}",
-                path.display()
-            ))
-        })?;
-        verify_artifact_digest(&path, &raw, expected_digest)?;
-        let segment = wincode::deserialize::<RepoIndexSegment>(&raw).map_err(|error| {
-            cache_error(format!(
-                "failed to decode repository segment '{}': {error}",
-                path.display()
-            ))
-        })?;
-        validate_segment(&segment)?;
-        if previous_generation.is_some_and(|previous| segment.generation <= previous)
-            || segment.generation > expected_manifest.generation
-        {
-            return Err(cache_error(format!(
-                "generation record '{}' has non-increasing or future segment generation {}",
-                record_path.display(),
-                segment.generation
-            )));
-        }
-        previous_generation = Some(segment.generation);
-        apply_segment_resolution(&segment, &mut latest_by_path);
-        segments.push(Arc::new(segment));
-    }
-    let generation = RepoIndexGeneration {
-        base: Arc::new(base),
-        base_file: record.base_file,
-        base_digest: record.base_digest,
-        segments,
-        segment_files: record.segment_files,
-        segment_digests: record.segment_digests,
-        latest_by_path,
-    };
-    let runtime = RepoIndexRuntime {
-        manifest: expected_manifest.clone(),
-        generation: Some(Arc::new(generation)),
-    };
-    validate_runtime(&runtime)?;
-    Ok(runtime)
+    Ok(record)
 }
 
 fn validate_manifest(manifest: &RepoIndexRuntimeManifest) -> Result<(), CovyError> {
@@ -859,6 +913,11 @@ fn validate_runtime(runtime: &RepoIndexRuntime) -> Result<(), CovyError> {
             runtime.manifest.segment_count,
             loaded.segments.len()
         )));
+    }
+    if loaded.base.include_tests != runtime.manifest.include_tests {
+        return Err(cache_error(
+            "repository manifest include-tests policy does not match its loaded base",
+        ));
     }
     if loaded.segments.len() != loaded.segment_files.len()
         || loaded.segments.len() != loaded.segment_digests.len()
@@ -1023,7 +1082,7 @@ fn persist_segment(
 ) -> Result<String, CovyError> {
     let encoded = wincode::serialize(segment)
         .map_err(|error| cache_error(format!("failed to encode repository segment: {error}")))?;
-    write_atomic(repo_index_dir(root).join(file_name), &encoded)?;
+    write_immutable(repo_index_dir(root).join(file_name), &encoded)?;
     let decoded = wincode::deserialize::<RepoIndexSegment>(&encoded)
         .map_err(|error| cache_error(format!("failed to validate repository segment: {error}")))?;
     validate_segment(&decoded)?;
@@ -1039,7 +1098,7 @@ fn persist_generation_record(
             "failed to encode repository generation record: {error}"
         ))
     })?;
-    write_atomic(
+    write_immutable(
         repo_index_dir(root).join(generation_record_file_name(record.generation)),
         &encoded,
     )
@@ -1067,6 +1126,22 @@ fn generation_record_digest(record: &RepoIndexGenerationRecord) -> Result<String
     Ok(artifact_digest(&encoded))
 }
 
+fn publication_identity(
+    manifest: &RepoIndexRuntimeManifest,
+) -> Result<PublicationIdentity, CovyError> {
+    validate_manifest(manifest)?;
+    let generation_record_digest = manifest.generation_record_digest.clone().ok_or_else(|| {
+        cache_error(format!(
+            "published repository generation {} does not authenticate its generation record",
+            manifest.generation
+        ))
+    })?;
+    Ok(PublicationIdentity {
+        generation: manifest.generation,
+        generation_record_digest,
+    })
+}
+
 fn publish_manifest(
     root: &Path,
     previous: Option<&RepoIndexRuntimeManifest>,
@@ -1090,6 +1165,13 @@ fn durable_manifest(manifest: &RepoIndexRuntimeManifest) -> RepoIndexRuntimeMani
     durable.recovered_from_generation = None;
     durable.last_error = None;
     durable
+}
+
+fn load_recovery_manifest(root: &Path) -> Result<Option<RepoIndexRuntimeManifest>, CovyError> {
+    let runtime = load_repo_index_runtime(root)?;
+    Ok(runtime
+        .is_loaded()
+        .then(|| durable_manifest(&runtime.manifest)))
 }
 
 fn load_published_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
@@ -1119,14 +1201,167 @@ fn load_manifest_path(path: &Path) -> Result<RepoIndexRuntimeManifest, CovyError
     })
 }
 
-fn next_generation(
-    persisted: Option<&RepoIndexRuntimeManifest>,
-    loaded_generation: Option<u64>,
-) -> u64 {
-    persisted
-        .map_or(0, |manifest| manifest.generation)
-        .max(loaded_generation.unwrap_or_default())
-        .saturating_add(1)
+fn reserve_generation(root: &Path) -> Result<u64, CovyError> {
+    let observed = discover_generation_high_water(root)?;
+    let current = match load_generation_high_water(root)? {
+        Some(stored) if stored < observed => {
+            return Err(cache_error(format!(
+                "repository generation high-water {} trails observed generation {observed}",
+                stored
+            )));
+        }
+        Some(stored) => stored,
+        None => observed,
+    };
+    let next = current
+        .checked_add(1)
+        .ok_or_else(|| cache_error("repository generation high-water is exhausted at u64::MAX"))?;
+    persist_generation_high_water(root, next)?;
+    Ok(next)
+}
+
+fn ensure_generation_high_water(root: &Path) -> Result<u64, CovyError> {
+    let observed = discover_generation_high_water(root)?;
+    match load_generation_high_water(root)? {
+        Some(stored) if stored < observed => Err(cache_error(format!(
+            "repository generation high-water {} trails observed generation {observed}",
+            stored
+        ))),
+        Some(stored) => Ok(stored),
+        None => {
+            persist_generation_high_water(root, observed)?;
+            Ok(observed)
+        }
+    }
+}
+
+fn load_generation_high_water(root: &Path) -> Result<Option<u64>, CovyError> {
+    let path = generation_high_water_path(root);
+    let raw = match fs::read(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to read repository generation high-water '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    let high_water =
+        serde_json::from_slice::<RepoIndexGenerationHighWater>(&raw).map_err(|error| {
+            cache_error(format!(
+                "failed to decode repository generation high-water '{}': {error}",
+                path.display()
+            ))
+        })?;
+    if high_water.schema_version != REPO_INDEX_GENERATION_HIGH_WATER_SCHEMA_VERSION {
+        return Err(cache_error(format!(
+            "repository generation high-water '{}' has schema {}, expected {}",
+            path.display(),
+            high_water.schema_version,
+            REPO_INDEX_GENERATION_HIGH_WATER_SCHEMA_VERSION
+        )));
+    }
+    Ok(Some(high_water.generation))
+}
+
+fn persist_generation_high_water(root: &Path, generation: u64) -> Result<(), CovyError> {
+    let encoded = serde_json::to_vec_pretty(&RepoIndexGenerationHighWater {
+        schema_version: REPO_INDEX_GENERATION_HIGH_WATER_SCHEMA_VERSION,
+        generation,
+    })
+    .map_err(|error| {
+        cache_error(format!(
+            "failed to encode repository generation high-water: {error}"
+        ))
+    })?;
+    write_atomic(generation_high_water_path(root), &encoded)
+}
+
+fn discover_generation_high_water(root: &Path) -> Result<u64, CovyError> {
+    let mut generation = 0;
+    for path in [manifest_path(root), previous_manifest_path(root)] {
+        match fs::read(&path) {
+            Ok(raw) => {
+                if let Ok(manifest) = serde_json::from_slice::<RepoIndexRuntimeManifest>(&raw) {
+                    generation = generation.max(manifest.generation);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(cache_error(format!(
+                    "failed to inspect repository manifest '{}': {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    let directory = repo_index_dir(root);
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(generation),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to inspect repository index directory '{}': {error}",
+                directory.display()
+            )));
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            cache_error(format!(
+                "failed to inspect repository index entry in '{}': {error}",
+                directory.display()
+            ))
+        })?;
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if let Some(observed) = managed_artifact_generation(&name)? {
+            generation = generation.max(observed);
+        }
+    }
+    Ok(generation)
+}
+
+fn managed_artifact_generation(name: &str) -> Result<Option<u64>, CovyError> {
+    let digits = if let Some(digits) = name
+        .strip_prefix("generation-")
+        .and_then(|name| name.strip_suffix(".json"))
+    {
+        Some(digits)
+    } else if let Some(digits) = name
+        .strip_prefix("base-")
+        .and_then(|name| name.strip_suffix(".bin"))
+    {
+        Some(digits)
+    } else if let Some(segment) = name
+        .strip_prefix("segment-")
+        .and_then(|name| name.strip_suffix(".bin"))
+    {
+        Some(segment.strip_suffix("-compacted").unwrap_or(segment))
+    } else {
+        None
+    };
+    let Some(digits) = digits else {
+        return Ok(None);
+    };
+    if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(cache_error(format!(
+            "repository generation artifact '{name}' has an invalid generation"
+        )));
+    }
+    let generation = digits.parse::<u64>().map_err(|error| {
+        cache_error(format!(
+            "repository generation artifact '{name}' has an invalid generation: {error}"
+        ))
+    })?;
+    if generation == 0 {
+        return Err(cache_error(format!(
+            "repository generation artifact '{name}' uses reserved generation zero"
+        )));
+    }
+    Ok(Some(generation))
 }
 
 pub(crate) struct GenerationWriterLock(File);
@@ -1138,7 +1373,7 @@ impl Drop for GenerationWriterLock {
 }
 
 pub(crate) fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock, CovyError> {
-    let parent = root.join(".packet28").join("index");
+    let parent = repo_index_parent(root);
     fs::create_dir_all(&parent).map_err(|error| {
         cache_error(format!(
             "failed to create repository index parent '{}': {error}",
@@ -1281,32 +1516,103 @@ fn is_managed_generation_artifact(name: &str) -> bool {
         || (name.starts_with('.') && name.ends_with(".tmp"))
 }
 
-fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
+fn write_immutable(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
     let parent = path
         .parent()
-        .ok_or_else(|| cache_error(format!("artifact '{}' has no parent", path.display())))?;
-    fs::create_dir_all(parent).map_err(|error| {
+        .ok_or_else(|| cache_error(format!("artifact '{}' has no parent", path.display())))?
+        .to_path_buf();
+    fs::create_dir_all(&parent).map_err(|error| {
         cache_error(format!(
             "failed to create repository index directory '{}': {error}",
             parent.display()
         ))
     })?;
-    let nonce = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
-    let tmp = parent.join(format!(
-        ".{}.{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("artifact"),
-        std::process::id(),
-        nonce
-    ));
-    let result = (|| -> Result<(), CovyError> {
-        let mut file = File::create(&tmp).map_err(|error| {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
             cache_error(format!(
-                "failed to create temporary artifact '{}': {error}",
-                tmp.display()
+                "failed to create immutable repository artifact '{}': {error}",
+                path.display()
             ))
         })?;
+    let result = (|| -> Result<(), CovyError> {
+        file.write_all(bytes).map_err(|error| {
+            cache_error(format!(
+                "failed to write immutable repository artifact '{}': {error}",
+                path.display()
+            ))
+        })?;
+        file.flush().map_err(|error| {
+            cache_error(format!(
+                "failed to flush immutable repository artifact '{}': {error}",
+                path.display()
+            ))
+        })
+    })();
+    drop(file);
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| cache_error(format!("artifact '{}' has no parent", path.display())))?
+        .to_path_buf();
+    fs::create_dir_all(&parent).map_err(|error| {
+        cache_error(format!(
+            "failed to create repository index directory '{}': {error}",
+            parent.display()
+        ))
+    })?;
+    let target_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact")
+        .to_string();
+    let temporary_paths = (0..128).map(|_| {
+        let nonce = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
+        parent.join(format!(".{target_name}.{}.{nonce}.tmp", std::process::id()))
+    });
+    write_atomic_with_temporary_paths(path, bytes, temporary_paths)
+}
+
+fn write_atomic_with_temporary_paths(
+    path: PathBuf,
+    bytes: &[u8],
+    temporary_paths: impl IntoIterator<Item = PathBuf>,
+) -> Result<(), CovyError> {
+    let mut created = None;
+    for temporary_path in temporary_paths {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
+        {
+            Ok(file) => {
+                created = Some((temporary_path, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(cache_error(format!(
+                    "failed to create temporary artifact '{}': {error}",
+                    temporary_path.display()
+                )));
+            }
+        }
+    }
+    let (tmp, mut file) = created.ok_or_else(|| {
+        cache_error(format!(
+            "temporary namespace exhausted while publishing repository artifact '{}'",
+            path.display()
+        ))
+    })?;
+    let result = (|| -> Result<(), CovyError> {
         file.write_all(bytes).map_err(|error| {
             cache_error(format!(
                 "failed to write temporary artifact '{}': {error}",
@@ -1343,10 +1649,16 @@ fn validate_artifact_name(name: &str) -> Result<(), CovyError> {
     Ok(())
 }
 
+fn repo_index_parent(root: &Path) -> PathBuf {
+    root.join(".packet28").join("index")
+}
+
 fn repo_index_dir(root: &Path) -> PathBuf {
-    root.join(".packet28")
-        .join("index")
-        .join(REPO_INDEX_DIR_NAME)
+    repo_index_parent(root).join(REPO_INDEX_DIR_NAME)
+}
+
+fn generation_high_water_path(root: &Path) -> PathBuf {
+    repo_index_parent(root).join(REPO_INDEX_GENERATION_HIGH_WATER_FILE)
 }
 
 fn manifest_path(root: &Path) -> PathBuf {
@@ -1408,6 +1720,23 @@ mod tests {
         serde_json::from_slice(&raw).expect("decode record")
     }
 
+    fn generation_artifact_snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
+        let directory = repo_index_dir(root);
+        if !directory.exists() {
+            return BTreeMap::new();
+        }
+        fs::read_dir(directory)
+            .expect("generation directory")
+            .map(|entry| {
+                let entry = entry.expect("generation entry");
+                (
+                    entry.file_name().to_string_lossy().to_string(),
+                    fs::read(entry.path()).expect("generation artifact"),
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn incremental_update_and_delete_match_legacy_snapshot() {
         let dir = fixture();
@@ -1467,6 +1796,369 @@ mod tests {
         let reloaded = load_repo_index_runtime(dir.path()).expect("reload");
         assert!(!reloaded.is_loaded());
         assert_eq!(reloaded.manifest.status, "missing");
+    }
+
+    #[test]
+    fn corrupt_manifest_repair_never_reuses_an_identity_or_accepts_its_stale_handle() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = rebuild_repo_index_runtime(root, true).expect("first");
+        let first_record =
+            load_generation_record(root, stale.manifest.generation).expect("first record");
+        let first_record_path =
+            repo_index_dir(root).join(generation_record_file_name(stale.manifest.generation));
+        let first_base_path = repo_index_dir(root).join(&first_record.base_file);
+        let first_record_bytes = fs::read(&first_record_path).expect("first record bytes");
+        let first_base_bytes = fs::read(&first_base_path).expect("first base bytes");
+        fs::write(root.join("src/a.rs"), "pub fn second() {}\n").expect("second contents");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        fs::remove_file(generation_high_water_path(root)).expect("simulate legacy allocator");
+        fs::write(manifest_path(root), b"{").expect("corrupt current manifest");
+
+        let recovered = load_repo_index_runtime(root).expect("recover first");
+        fs::write(root.join("src/c.rs"), "pub struct Repaired;\n").expect("repair contents");
+        let repaired = rebuild_repo_index_runtime(root, true).expect("repair");
+
+        assert_eq!(recovered.manifest.generation, stale.manifest.generation);
+        assert!(repaired.manifest.generation > second.manifest.generation);
+        assert_eq!(
+            fs::read(first_record_path).expect("retained first record"),
+            first_record_bytes
+        );
+        assert_eq!(
+            fs::read(first_base_path).expect("retained first base"),
+            first_base_bytes
+        );
+
+        fs::write(root.join("src/d.rs"), "pub struct StaleWriter;\n").expect("stale path");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before conflict");
+        let error = update_repo_index_runtime(root, &stale, &[String::from("src/d.rs")], true)
+            .expect_err("stale writer must conflict");
+
+        assert!(error.to_string().contains("generation conflict"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after conflict"),
+            counter_before
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load repaired")
+                .manifest
+                .generation,
+            repaired.manifest.generation
+        );
+    }
+
+    #[test]
+    fn missing_or_schema_zero_current_retains_the_authenticated_previous_generation() {
+        for current_bytes in [None, Some(b"{}".as_slice())] {
+            let dir = fixture();
+            let root = dir.path();
+            let first = rebuild_repo_index_runtime(root, true).expect("first");
+            fs::write(root.join("src/c.rs"), "pub struct Second;\n").expect("second file");
+            let second = rebuild_repo_index_runtime(root, true).expect("second");
+            match current_bytes {
+                Some(bytes) => fs::write(manifest_path(root), bytes).expect("schema-zero current"),
+                None => fs::remove_file(manifest_path(root)).expect("missing current"),
+            }
+
+            let recovered = load_repo_index_runtime(root).expect("recover previous");
+            assert_eq!(recovered.manifest.generation, first.manifest.generation);
+            let repaired = rebuild_repo_index_runtime(root, true).expect("repair");
+            assert!(repaired.manifest.generation > second.manifest.generation);
+            let repaired_record = current_record(root);
+            fs::write(
+                repo_index_dir(root).join(repaired_record.base_file),
+                b"corrupt repair",
+            )
+            .expect("corrupt repair artifact");
+
+            assert_eq!(
+                load_repo_index_runtime(root)
+                    .expect("recover retained previous")
+                    .manifest
+                    .generation,
+                first.manifest.generation
+            );
+        }
+    }
+
+    #[test]
+    fn clear_migrates_legacy_fencing_and_rejects_a_pre_clear_handle() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::remove_file(generation_high_water_path(root)).expect("simulate legacy allocator");
+
+        clear_repo_index_runtime(root).expect("clear");
+
+        assert_eq!(
+            load_generation_high_water(root).expect("migrated high-water"),
+            Some(stale.manifest.generation)
+        );
+        assert!(stale.file("src/a.rs").is_some());
+        let rebuilt = rebuild_repo_index_runtime(root, true).expect("rebuild");
+        assert!(rebuilt.manifest.generation > stale.manifest.generation);
+
+        fs::write(root.join("src/a.rs"), "pub fn stale_after_clear() {}\n").expect("change");
+        let error = update_repo_index_runtime(root, &stale, &[String::from("src/a.rs")], true)
+            .expect_err("pre-clear writer must conflict");
+        assert!(error.to_string().contains("generation conflict"));
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load rebuilt")
+                .manifest
+                .generation,
+            rebuilt.manifest.generation
+        );
+    }
+
+    #[test]
+    fn clear_fails_closed_when_generation_fencing_is_corrupt() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        fs::write(generation_high_water_path(root), b"{").expect("corrupt high-water");
+        let before = generation_artifact_snapshot(root);
+
+        let error = clear_repo_index_runtime(root).expect_err("strict high-water");
+
+        assert!(error.to_string().contains("generation high-water"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn writer_compare_and_swap_uses_the_private_authenticated_identity() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let mut stale = current.clone();
+        Arc::make_mut(stale.generation.as_mut().expect("loaded generation"))
+            .publication_identity
+            .generation_record_digest = "stale-publication".to_string();
+        stale.manifest = current.manifest.clone();
+        fs::write(root.join("src/a.rs"), "pub fn attempted() {}\n").expect("change");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before conflict");
+
+        let error = update_repo_index_runtime(root, &stale, &[String::from("src/a.rs")], true)
+            .expect_err("identity mismatch");
+
+        assert!(error.to_string().contains("generation conflict"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after conflict"),
+            counter_before
+        );
+    }
+
+    #[test]
+    fn mutable_manifest_policy_cannot_bypass_the_private_loaded_base_policy() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let mut mutated = current.clone();
+        mutated.manifest.include_tests = false;
+        assert!(
+            mutated
+                .materialize_snapshot()
+                .expect("private snapshot")
+                .include_tests
+        );
+
+        let rebuilt = update_repo_index_runtime(root, &mutated, &[], false)
+            .expect("policy rebuild")
+            .0;
+
+        assert!(rebuilt.manifest.generation > current.manifest.generation);
+        assert!(!rebuilt.manifest.include_tests);
+        assert!(!current.shares_base_with(&rebuilt));
+        let reloaded = load_repo_index_runtime(root).expect("reload rebuilt policy");
+        assert!(reloaded.is_loaded());
+        assert!(!reloaded.manifest.include_tests);
+
+        let mut stale = current;
+        stale.manifest.include_tests = false;
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before stale policy change");
+        let error = update_repo_index_runtime(root, &stale, &[], false)
+            .expect_err("stale policy change must conflict");
+        assert!(error.to_string().contains("generation conflict"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after stale policy change"),
+            counter_before
+        );
+    }
+
+    #[test]
+    fn generation_high_water_reserves_max_once_then_exhausts_without_artifact_writes() {
+        let dir = fixture();
+        let root = dir.path();
+        persist_generation_high_water(root, u64::MAX - 1).expect("seed high-water");
+        let _writer = acquire_writer_lock(root).expect("writer");
+
+        assert_eq!(reserve_generation(root).expect("reserve max"), u64::MAX);
+        let counter_at_max = fs::read(generation_high_water_path(root)).expect("counter at max");
+        let error = reserve_generation(root).expect_err("generation exhaustion");
+
+        assert!(error.to_string().contains("exhausted"));
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after exhaustion"),
+            counter_at_max
+        );
+        assert!(!repo_index_dir(root).exists());
+    }
+
+    #[test]
+    fn rebuild_at_generation_max_fails_before_creating_generation_artifacts() {
+        let dir = fixture();
+        let root = dir.path();
+        persist_generation_high_water(root, u64::MAX).expect("seed max");
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before rebuild");
+
+        let error = rebuild_repo_index_runtime(root, true).expect_err("generation exhaustion");
+
+        assert!(error.to_string().contains("exhausted"));
+        assert!(!repo_index_dir(root).exists());
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after rebuild"),
+            counter_before
+        );
+    }
+
+    #[test]
+    fn update_at_generation_max_preserves_the_published_generation() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        persist_generation_high_water(root, u64::MAX).expect("seed max");
+        fs::write(root.join("src/a.rs"), "pub fn overflow_attempt() {}\n").expect("change");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before update");
+
+        let error = update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+            .expect_err("generation exhaustion");
+
+        assert!(error.to_string().contains("exhausted"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after update"),
+            counter_before
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn update_does_not_discard_recovery_when_the_published_artifact_is_corrupt() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(root.join("src/c.rs"), "pub struct Second;\n").expect("second file");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        let second_record = current_record(root);
+        fs::write(
+            repo_index_dir(root).join(second_record.base_file),
+            b"corrupt second base",
+        )
+        .expect("corrupt current base");
+        fs::write(root.join("src/d.rs"), "pub struct Attempt;\n").expect("update path");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before update");
+
+        let error = update_repo_index_runtime(root, &second, &[String::from("src/d.rs")], true)
+            .expect_err("corrupt published generation");
+
+        assert!(error.to_string().contains("digest validation"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after update"),
+            counter_before
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("recover first")
+                .manifest
+                .generation,
+            first.manifest.generation
+        );
+    }
+
+    #[test]
+    fn corrupt_generation_high_water_fails_closed_without_touching_the_index() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        fs::write(generation_high_water_path(root), b"{").expect("corrupt high-water");
+        let before = generation_artifact_snapshot(root);
+
+        let error = rebuild_repo_index_runtime(root, true).expect_err("strict high-water");
+
+        assert!(error.to_string().contains("generation high-water"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn immutable_artifact_write_refuses_to_replace_existing_bytes() {
+        let dir = fixture();
+        let path = repo_index_dir(dir.path()).join(base_file_name(1));
+        fs::create_dir_all(path.parent().expect("artifact parent")).expect("create parent");
+        fs::write(&path, b"retained generation").expect("sentinel");
+
+        let error = write_immutable(path.clone(), b"replacement").expect_err("collision");
+
+        assert!(error.to_string().contains("immutable repository artifact"));
+        assert_eq!(
+            fs::read(path).expect("retained bytes"),
+            b"retained generation"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_skips_a_precreated_temporary_symlink_without_following_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("manifest.json");
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"sentinel").expect("outside sentinel");
+        let collision = dir.path().join(".manifest.collision.tmp");
+        std::os::unix::fs::symlink(&outside, &collision).expect("temporary symlink");
+        let owned = dir.path().join(".manifest.owned.tmp");
+
+        write_atomic_with_temporary_paths(target.clone(), b"published", [collision.clone(), owned])
+            .expect("atomic write");
+
+        assert_eq!(fs::read(outside).expect("outside bytes"), b"sentinel");
+        assert!(collision.is_symlink());
+        assert_eq!(fs::read(target).expect("published bytes"), b"published");
     }
 
     #[test]
@@ -1603,6 +2295,42 @@ mod tests {
         );
         assert_eq!(recovered.manifest.generation, first.manifest.generation);
         assert!(recovered.file("src/c.rs").is_none());
+    }
+
+    #[test]
+    fn repair_retains_the_authenticated_recovery_generation_instead_of_corrupt_current() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(root.join("src/c.rs"), "pub struct CorruptCurrent;\n").expect("second file");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        let second_record = current_record(root);
+        fs::write(
+            repo_index_dir(root).join(second_record.base_file),
+            b"corrupt second base",
+        )
+        .expect("corrupt second");
+        let recovered = load_repo_index_runtime(root).expect("recover first");
+        assert_eq!(recovered.manifest.generation, first.manifest.generation);
+
+        fs::write(root.join("src/d.rs"), "pub struct Repair;\n").expect("repair file");
+        let repaired = rebuild_repo_index_runtime(root, true).expect("repair");
+        assert!(repaired.manifest.generation > second.manifest.generation);
+        let repaired_record = current_record(root);
+        fs::write(
+            repo_index_dir(root).join(repaired_record.base_file),
+            b"corrupt repaired base",
+        )
+        .expect("corrupt repaired");
+
+        let recovered_again = load_repo_index_runtime(root).expect("recover retained first");
+
+        assert_eq!(
+            recovered_again.manifest.generation,
+            first.manifest.generation
+        );
+        assert!(recovered_again.file("src/c.rs").is_none());
+        assert!(recovered_again.file("src/d.rs").is_none());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use super::*;
 #[cfg(unix)]
 use crate::runtime_files_unix::{
-    create_directory_at, open_directory_at, open_directory_path, open_file_at, open_lock_file_at,
-    remove_directory_tree_at, remove_file_at, remove_file_if_exists_at, rename_file_at,
+    create_directory_at, link_file_at, open_directory_at, open_directory_path, open_file_at,
+    open_lock_file_at, read_directory_names, remove_directory_tree_at, remove_file_at,
+    remove_file_if_exists_at, remove_retained_directory_tree_at, rename_file_at,
 };
 #[cfg(unix)]
 use fs2::FileExt;
@@ -15,6 +16,11 @@ const MAX_INDEX_CLEAR_STATE_BYTES: u64 = 128;
 const INDEX_CLEAR_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
 const INDEX_CLEAR_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 const MAPY_WRITER_LOCK_FILE: &str = ".mapy-v1.writer.lock";
+const MAPY_GENERATION_HIGH_WATER_FILE: &str = ".mapy-v1.generation-high-water.json";
+const MAPY_GENERATION_HIGH_WATER_SCHEMA_VERSION: u32 = 1;
+const MAPY_MANIFEST_FILE: &str = "manifest.json";
+const MAPY_PREVIOUS_MANIFEST_FILE: &str = "manifest.previous.json";
+const MAX_MAPY_GENERATION_METADATA_BYTES: u64 = 64 * 1024;
 const REGEX_WRITER_LOCK_FILE: &str = ".regex-v1.writer.lock";
 static INDEX_CLEAR_STATE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static INDEX_CLEAR_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -31,6 +37,20 @@ enum PersistedIndexClearPhase {
 struct PersistedIndexClearState {
     revision: u64,
     phase: PersistedIndexClearPhase,
+}
+
+#[cfg(unix)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedMapyGenerationHighWater {
+    schema_version: u32,
+    generation: u64,
+}
+
+#[cfg(unix)]
+enum ClearDirectoryBinding {
+    ResolveAtRemoval,
+    Retained(Option<fs::File>),
 }
 
 pub(crate) fn default_index_manifest(root: &Path) -> DaemonIndexManifest {
@@ -146,6 +166,7 @@ pub(crate) fn clear_index_files(root: &Path) -> Result<()> {
             "mapy-v1",
             MAPY_WRITER_LOCK_FILE,
             "repository index",
+            ensure_mapy_generation_high_water,
             || Ok(()),
             true,
         )
@@ -171,6 +192,7 @@ pub(crate) fn clear_regex_index_files(root: &Path) -> Result<()> {
             "regex-v1",
             REGEX_WRITER_LOCK_FILE,
             "regex index",
+            |_| Ok(ClearDirectoryBinding::ResolveAtRemoval),
             || Ok(()),
             false,
         )
@@ -188,6 +210,7 @@ fn clear_index_engine_directory(
     directory_name: &str,
     writer_lock_name: &str,
     description: &str,
+    before_remove: impl FnOnce(&RetainedIndexDirectory) -> Result<ClearDirectoryBinding>,
     after_open: impl FnOnce() -> Result<()>,
     remove_legacy_snapshot: bool,
 ) -> Result<()> {
@@ -222,16 +245,22 @@ fn clear_index_engine_directory(
     directory
         .validate_binding()
         .with_context(|| format!("{} parent binding changed before clear", description))?;
+    let binding = before_remove(&directory)?;
     after_open()?;
-    directory
-        .remove_directory_tree(directory_name)
-        .with_context(|| {
-            format!(
-                "failed to remove {} directory beneath retained '{}'",
-                description,
-                directory.path.display()
-            )
-        })?;
+    let removal = match binding {
+        ClearDirectoryBinding::ResolveAtRemoval => directory.remove_directory_tree(directory_name),
+        ClearDirectoryBinding::Retained(Some(expected)) => {
+            directory.remove_retained_directory_tree(directory_name, &expected)
+        }
+        ClearDirectoryBinding::Retained(None) => directory.ensure_directory_absent(directory_name),
+    };
+    removal.with_context(|| {
+        format!(
+            "failed to remove {} directory beneath retained '{}'",
+            description,
+            directory.path.display()
+        )
+    })?;
     if remove_legacy_snapshot {
         let legacy_path = index_snapshot_path(root);
         let legacy_name = legacy_path
@@ -252,6 +281,331 @@ fn clear_index_engine_directory(
         .with_context(|| format!("{} parent binding changed during clear", description))
 }
 
+#[cfg(unix)]
+fn ensure_mapy_generation_high_water(
+    directory: &RetainedIndexDirectory,
+) -> Result<ClearDirectoryBinding> {
+    ensure_mapy_generation_high_water_with_hook(directory, |_| Ok(()))
+}
+
+#[cfg(unix)]
+fn ensure_mapy_generation_high_water_with_hook(
+    directory: &RetainedIndexDirectory,
+    before_publish: impl FnOnce(&Path) -> Result<()>,
+) -> Result<ClearDirectoryBinding> {
+    let (observed, retained_mapy) = discover_mapy_generation_high_water(directory)?;
+    let path = directory.path.join(MAPY_GENERATION_HIGH_WATER_FILE);
+    let existing = read_optional_file_at(
+        &directory.directory,
+        MAPY_GENERATION_HIGH_WATER_FILE,
+        &path,
+        MAX_MAPY_GENERATION_METADATA_BYTES,
+    )?;
+    if let Some(raw) = existing {
+        validate_mapy_generation_high_water(&path, &raw, observed)?;
+        return Ok(ClearDirectoryBinding::Retained(retained_mapy));
+    }
+
+    persist_mapy_generation_high_water_with_hook(directory, observed, before_publish)?;
+    Ok(ClearDirectoryBinding::Retained(retained_mapy))
+}
+
+#[cfg(unix)]
+fn validate_mapy_generation_high_water(path: &Path, raw: &[u8], observed: u64) -> Result<()> {
+    let high_water =
+        serde_json::from_slice::<PersistedMapyGenerationHighWater>(raw).with_context(|| {
+            format!(
+                "failed to decode repository generation high-water '{}'",
+                path.display()
+            )
+        })?;
+    if high_water.schema_version != MAPY_GENERATION_HIGH_WATER_SCHEMA_VERSION {
+        return Err(anyhow!(
+            "repository generation high-water '{}' has schema {}, expected {}",
+            path.display(),
+            high_water.schema_version,
+            MAPY_GENERATION_HIGH_WATER_SCHEMA_VERSION
+        ));
+    }
+    if high_water.generation < observed {
+        return Err(anyhow!(
+            "repository generation high-water {} trails observed generation {observed}",
+            high_water.generation
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn discover_mapy_generation_high_water(
+    directory: &RetainedIndexDirectory,
+) -> Result<(u64, Option<fs::File>)> {
+    let mapy_directory = match open_directory_at(&directory.directory, "mapy-v1") {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, None)),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to retain repository index directory '{}'",
+                    directory.path.join("mapy-v1").display()
+                )
+            });
+        }
+    };
+    let mapy_path = directory.path.join("mapy-v1");
+    let mut generation = 0;
+    for name in [MAPY_MANIFEST_FILE, MAPY_PREVIOUS_MANIFEST_FILE] {
+        if let Some(raw) = read_optional_file_at(
+            &mapy_directory,
+            name,
+            &mapy_path.join(name),
+            MAX_MAPY_GENERATION_METADATA_BYTES,
+        )? {
+            if let Ok(manifest) =
+                serde_json::from_slice::<mapy_core::RepoIndexRuntimeManifest>(&raw)
+            {
+                generation = generation.max(manifest.generation);
+            }
+        }
+    }
+    for name in read_directory_names(&mapy_directory).with_context(|| {
+        format!(
+            "failed to inspect repository index directory '{}'",
+            mapy_path.display()
+        )
+    })? {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if let Some(observed) = mapy_managed_artifact_generation(name)? {
+            generation = generation.max(observed);
+        }
+    }
+    let current = open_directory_at(&directory.directory, "mapy-v1").with_context(|| {
+        format!(
+            "repository index directory binding changed while fencing '{}'",
+            mapy_path.display()
+        )
+    })?;
+    ensure_same_object(&mapy_directory, &current).with_context(|| {
+        format!(
+            "repository index directory binding changed while fencing '{}'",
+            mapy_path.display()
+        )
+    })?;
+    directory
+        .validate_binding()
+        .context("repository index parent binding changed while fencing")?;
+    Ok((generation, Some(mapy_directory)))
+}
+
+#[cfg(unix)]
+fn mapy_managed_artifact_generation(name: &str) -> Result<Option<u64>> {
+    let digits = if let Some(digits) = name
+        .strip_prefix("generation-")
+        .and_then(|name| name.strip_suffix(".json"))
+    {
+        Some(digits)
+    } else if let Some(digits) = name
+        .strip_prefix("base-")
+        .and_then(|name| name.strip_suffix(".bin"))
+    {
+        Some(digits)
+    } else if let Some(segment) = name
+        .strip_prefix("segment-")
+        .and_then(|name| name.strip_suffix(".bin"))
+    {
+        Some(segment.strip_suffix("-compacted").unwrap_or(segment))
+    } else {
+        None
+    };
+    let Some(digits) = digits else {
+        return Ok(None);
+    };
+    if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(anyhow!(
+            "repository generation artifact '{name}' has an invalid generation"
+        ));
+    }
+    let generation = digits.parse::<u64>().with_context(|| {
+        format!("repository generation artifact '{name}' has an invalid generation")
+    })?;
+    if generation == 0 {
+        return Err(anyhow!(
+            "repository generation artifact '{name}' uses reserved generation zero"
+        ));
+    }
+    Ok(Some(generation))
+}
+
+#[cfg(unix)]
+fn read_optional_file_at(
+    directory: &fs::File,
+    name: &str,
+    path: &Path,
+    max_bytes: u64,
+) -> Result<Option<Vec<u8>>> {
+    let mut file = match open_file_at(
+        directory,
+        name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+    ) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to open retained file '{}'", path.display()));
+        }
+    };
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to inspect retained file '{}'", path.display()))?;
+    if !metadata.file_type().is_file() || metadata.len() > max_bytes {
+        return Err(anyhow!(
+            "retained file '{}' is not a bounded regular file",
+            path.display()
+        ));
+    }
+    let mut raw = Vec::new();
+    Read::by_ref(&mut file)
+        .take(max_bytes + 1)
+        .read_to_end(&mut raw)
+        .with_context(|| format!("failed to read retained file '{}'", path.display()))?;
+    if raw.len() as u64 > max_bytes {
+        return Err(anyhow!(
+            "retained file '{}' exceeds {max_bytes} bytes",
+            path.display()
+        ));
+    }
+    let current = open_file_at(
+        directory,
+        name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+    )
+    .with_context(|| format!("retained file binding changed for '{}'", path.display()))?;
+    ensure_same_object(&file, &current)
+        .with_context(|| format!("retained file binding changed for '{}'", path.display()))?;
+    Ok(Some(raw))
+}
+
+#[cfg(unix)]
+fn persist_mapy_generation_high_water_with_hook(
+    directory: &RetainedIndexDirectory,
+    generation: u64,
+    before_publish: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(&PersistedMapyGenerationHighWater {
+        schema_version: MAPY_GENERATION_HIGH_WATER_SCHEMA_VERSION,
+        generation,
+    })
+    .context("failed to encode repository generation high-water")?;
+    let mut created = None;
+    for _ in 0..128 {
+        let nonce = INDEX_CLEAR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let name = format!(
+            ".{MAPY_GENERATION_HIGH_WATER_FILE}.{}.mapy-{nonce:016x}.tmp",
+            std::process::id()
+        );
+        match directory.create_file(&name) {
+            Ok(file) => {
+                created = Some((name, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to create repository generation high-water temporary file '{}'",
+                        directory.path.join(name).display()
+                    )
+                });
+            }
+        }
+    }
+    let (temporary_name, mut file) =
+        created.ok_or_else(|| anyhow!("repository generation high-water namespace exhausted"))?;
+    let result = (|| {
+        file.write_all(&bytes).with_context(|| {
+            format!(
+                "failed to write repository generation high-water '{}'",
+                directory.path.join(&temporary_name).display()
+            )
+        })?;
+        file.sync_all().with_context(|| {
+            format!(
+                "failed to sync repository generation high-water '{}'",
+                directory.path.join(&temporary_name).display()
+            )
+        })?;
+        before_publish(&directory.path.join(&temporary_name))?;
+        match directory.link_file(&temporary_name, MAPY_GENERATION_HIGH_WATER_FILE) {
+            Ok(()) => {
+                let published = directory
+                    .open_file(MAPY_GENERATION_HIGH_WATER_FILE)
+                    .with_context(|| {
+                        format!(
+                            "failed to retain published repository generation high-water '{}'",
+                            directory
+                                .path
+                                .join(MAPY_GENERATION_HIGH_WATER_FILE)
+                                .display()
+                        )
+                    })?;
+                ensure_same_object(&file, &published).with_context(|| {
+                    format!(
+                        "repository generation high-water publication binding changed for '{}'",
+                        directory
+                            .path
+                            .join(MAPY_GENERATION_HIGH_WATER_FILE)
+                            .display()
+                    )
+                })?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let path = directory.path.join(MAPY_GENERATION_HIGH_WATER_FILE);
+                let raw = read_optional_file_at(
+                    &directory.directory,
+                    MAPY_GENERATION_HIGH_WATER_FILE,
+                    &path,
+                    MAX_MAPY_GENERATION_METADATA_BYTES,
+                )?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "concurrently published repository generation high-water '{}' disappeared",
+                        path.display()
+                    )
+                })?;
+                validate_mapy_generation_high_water(&path, &raw, generation)?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to publish repository generation high-water '{}'",
+                        directory
+                            .path
+                            .join(MAPY_GENERATION_HIGH_WATER_FILE)
+                            .display()
+                    )
+                });
+            }
+        }
+        directory.directory.sync_all().with_context(|| {
+            format!(
+                "failed to sync repository generation high-water parent '{}'",
+                directory.path.display()
+            )
+        })?;
+        directory.validate_binding().with_context(|| {
+            format!(
+                "repository generation high-water parent changed while publishing '{}'",
+                directory.path.display()
+            )
+        })
+    })();
+    directory.remove_file_if_owned(&temporary_name, &file);
+    result
+}
+
 #[cfg(all(test, unix))]
 pub(crate) fn clear_index_files_with_binding_hook_for_test(
     root: &Path,
@@ -262,7 +616,24 @@ pub(crate) fn clear_index_files_with_binding_hook_for_test(
         "mapy-v1",
         MAPY_WRITER_LOCK_FILE,
         "repository index",
+        ensure_mapy_generation_high_water,
         after_open,
+        true,
+    )
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn clear_index_files_with_generation_fence_hook_for_test(
+    root: &Path,
+    before_publish: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    clear_index_engine_directory(
+        root,
+        "mapy-v1",
+        MAPY_WRITER_LOCK_FILE,
+        "repository index",
+        |directory| ensure_mapy_generation_high_water_with_hook(directory, before_publish),
+        || Ok(()),
         true,
     )
 }
@@ -954,8 +1325,21 @@ impl RetainedIndexDirectory {
         rename_file_at(&self.directory, source, destination)
     }
 
+    fn link_file(&self, source: &str, destination: &str) -> std::io::Result<()> {
+        link_file_at(&self.directory, source, destination)
+    }
+
     fn remove_file(&self, name: &str) {
         remove_file_at(&self.directory, name);
+    }
+
+    fn remove_file_if_owned(&self, name: &str, expected: &fs::File) {
+        let Ok(current) = self.open_file(name) else {
+            return;
+        };
+        if ensure_same_object(expected, &current).is_ok() {
+            self.remove_file(name);
+        }
     }
 
     fn remove_file_if_exists(&self, name: &str) -> std::io::Result<()> {
@@ -964,6 +1348,25 @@ impl RetainedIndexDirectory {
 
     fn remove_directory_tree(&self, name: &str) -> std::io::Result<()> {
         remove_directory_tree_at(&self.directory, name)
+    }
+
+    fn remove_retained_directory_tree(
+        &self,
+        name: &str,
+        expected: &fs::File,
+    ) -> std::io::Result<()> {
+        remove_retained_directory_tree_at(&self.directory, name, expected)
+    }
+
+    fn ensure_directory_absent(&self, name: &str) -> std::io::Result<()> {
+        match open_directory_at(&self.directory, name) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("directory '{name}' appeared after its generation fence"),
+            )),
+            Err(error) => Err(error),
+        }
     }
 
     fn open_lock_file(&self, name: &str) -> std::io::Result<fs::File> {

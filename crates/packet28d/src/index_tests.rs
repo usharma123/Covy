@@ -1911,6 +1911,147 @@ fn retained_repository_clear_never_follows_a_replaced_index_parent() {
 
 #[cfg(unix)]
 #[test]
+fn repository_clear_fence_never_writes_through_a_symlinked_index_parent() {
+    let fixture = IndexFixture::new(&[("src/a.rs", "pub fn alpha() {}\n")]);
+    let outside = tempfile::tempdir().expect("create outside directory");
+    let outside_sentinel = outside.path().join("do-not-write");
+    fs::write(&outside_sentinel, b"outside").expect("write outside sentinel");
+    let index = index_dir(&fixture.root);
+    let retained = index.with_file_name("index-retained-before-clear");
+    fs::rename(&index, &retained).expect("retain real index directory");
+    std::os::unix::fs::symlink(outside.path(), &index)
+        .expect("replace index directory with outside symlink");
+
+    let failure = clear_index_files(&fixture.root)
+        .expect_err("symlinked index parent unexpectedly cleared successfully");
+
+    assert!(
+        failure
+            .to_string()
+            .contains("retain repository index parent"),
+        "clear failed for an unrelated reason: {failure:#}"
+    );
+    assert_eq!(
+        fs::read(&outside_sentinel).expect("outside sentinel"),
+        b"outside"
+    );
+    assert!(
+        !outside
+            .path()
+            .join(".mapy-v1.generation-high-water.json")
+            .exists(),
+        "generation fence wrote through the replacement symlink"
+    );
+    fs::remove_file(&index).expect("remove replacement symlink");
+    fs::rename(&retained, &index).expect("restore retained index directory");
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_clear_rejects_a_substituted_generation_fence_temporary_file() {
+    let fixture = IndexFixture::new(&[("src/a.rs", "pub fn alpha() {}\n")]);
+    let mapy = fixture.root.join(".packet28/index/mapy-v1");
+    let manifest_path = mapy.join("manifest.json");
+    let manifest_before = fs::read(&manifest_path).expect("read repository manifest");
+    let high_water = fixture
+        .root
+        .join(".packet28/index/.mapy-v1.generation-high-water.json");
+    fs::remove_file(&high_water).expect("simulate a pre-upgrade generation fence");
+
+    let failure =
+        clear_index_files_with_generation_fence_hook_for_test(&fixture.root, |temporary| {
+            fs::remove_file(temporary).context("unlink owned generation fence temporary file")?;
+            fs::write(temporary, br#"{"schema_version":1,"generation":0}"#)
+                .context("substitute generation fence temporary file")
+        })
+        .expect_err("substituted generation fence unexpectedly cleared the repository index");
+
+    assert!(
+        failure.to_string().contains("publication binding changed"),
+        "clear failed for an unrelated reason: {failure:#}"
+    );
+    assert_eq!(
+        fs::read(&manifest_path).expect("repository manifest survived failed clear"),
+        manifest_before,
+        "failed fencing deleted or rewrote the live repository publication"
+    );
+    assert!(
+        mapy.exists(),
+        "failed fencing deleted the retained repository index"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_clear_never_lowers_a_concurrently_published_generation_fence() {
+    let fixture = IndexFixture::new(&[("src/a.rs", "pub fn alpha() {}\n")]);
+    let current = fixture.repo_runtime().manifest.generation;
+    let high_water = fixture
+        .root
+        .join(".packet28/index/.mapy-v1.generation-high-water.json");
+    fs::remove_file(&high_water).expect("simulate a pre-upgrade generation fence");
+    let concurrent = current.checked_add(1).expect("next concurrent generation");
+
+    clear_index_files_with_generation_fence_hook_for_test(&fixture.root, |temporary| {
+        let destination = temporary
+            .parent()
+            .expect("generation fence temporary has a parent")
+            .join(".mapy-v1.generation-high-water.json");
+        fs::write(
+            destination,
+            format!(r#"{{"schema_version":1,"generation":{concurrent}}}"#),
+        )
+        .context("publish a concurrent higher generation fence")
+    })
+    .expect("clear around a concurrent higher generation fence");
+
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&high_water).expect("read concurrent generation fence"))
+            .expect("decode concurrent generation fence");
+    assert_eq!(stored["generation"].as_u64(), Some(concurrent));
+    let rebuilt =
+        mapy_core::rebuild_repo_index_runtime(&fixture.root, true).expect("rebuild after clear");
+    assert!(
+        rebuilt.manifest.generation > concurrent,
+        "clear lowered the concurrent generation fence and reused its identity"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_clear_never_deletes_a_mapy_directory_swapped_after_fencing() {
+    let fixture = IndexFixture::new(&[("src/a.rs", "pub fn alpha() {}\n")]);
+    let current = fixture.repo_runtime();
+    let index = index_dir(&fixture.root);
+    let mapy = index.join("mapy-v1");
+    let retained = index.join("mapy-v1-retained-during-clear");
+    let replacement_generation = current.manifest.generation + 1;
+    let replacement_record = format!("generation-{replacement_generation:020}.json");
+
+    let failure = clear_index_files_with_binding_hook_for_test(&fixture.root, || {
+        fs::rename(&mapy, &retained).context("retain fenced mapy directory")?;
+        fs::create_dir(&mapy).context("create replacement mapy directory")?;
+        fs::write(mapy.join(&replacement_record), b"replacement")
+            .context("write replacement generation")
+    })
+    .expect_err("swapped mapy directory unexpectedly cleared successfully");
+
+    assert!(
+        failure
+            .to_string()
+            .contains("failed to remove repository index directory"),
+        "clear failed for an unrelated reason: {failure:#}"
+    );
+    assert_eq!(
+        fs::read(mapy.join(&replacement_record)).expect("replacement generation"),
+        b"replacement"
+    );
+    fs::remove_dir_all(&mapy).expect("remove replacement mapy directory");
+    fs::rename(&retained, &mapy).expect("restore fenced mapy directory");
+}
+
+#[cfg(unix)]
+#[test]
 fn index_clear_parent_swap_cannot_redirect_the_second_engine_delete() {
     let fixture = IndexFixture::new(&[("src/a.rs", "pub fn alpha() {}\n")]);
     let outside = tempfile::tempdir().expect("create outside directory");
@@ -2329,6 +2470,58 @@ fn daemon_clear_removes_generations_and_preserves_owned_readers() {
     assert!(!fixture.root.join(".packet28/index/regex-v1").exists());
     assert!(!index_snapshot_path(&fixture.root).exists());
     assert!(reader.file("src/a.rs").is_some());
+}
+
+#[test]
+fn daemon_clear_migrates_legacy_mapy_generation_fencing() {
+    let fixture = IndexFixture::new(&[
+        ("src/a.rs", "pub fn alpha() -> usize { 1 }\n"),
+        ("src/b.rs", "pub fn beta() -> usize { 2 }\n"),
+    ]);
+    fs::write(
+        fixture.root.join("src/c.rs"),
+        "pub struct PreUpgradeCurrent;\n",
+    )
+    .expect("write pre-upgrade current");
+    let stale =
+        mapy_core::rebuild_repo_index_runtime(&fixture.root, true).expect("pre-upgrade current");
+    fs::write(
+        fixture.root.join(".packet28/index/mapy-v1/manifest.json"),
+        b"{",
+    )
+    .expect("corrupt pre-upgrade manifest");
+    let high_water_path = fixture
+        .root
+        .join(".packet28/index/.mapy-v1.generation-high-water.json");
+    fs::remove_file(&high_water_path).expect("simulate a pre-upgrade mapy index");
+
+    clear_index_files(&fixture.root).expect("clear repository index");
+
+    assert!(!fixture.root.join(".packet28/index/mapy-v1").exists());
+    let high_water: serde_json::Value =
+        serde_json::from_slice(&fs::read(&high_water_path).expect("migrated high-water"))
+            .expect("decode migrated high-water");
+    assert_eq!(
+        high_water["generation"].as_u64(),
+        Some(stale.manifest.generation)
+    );
+
+    let rebuilt =
+        mapy_core::rebuild_repo_index_runtime(&fixture.root, true).expect("post-clear rebuild");
+    assert!(rebuilt.manifest.generation > stale.manifest.generation);
+    fs::write(
+        fixture.root.join("src/a.rs"),
+        "pub fn stale_after_clear() {}\n",
+    )
+    .expect("change source");
+    let error = mapy_core::update_repo_index_runtime(
+        &fixture.root,
+        &stale,
+        &[String::from("src/a.rs")],
+        true,
+    )
+    .expect_err("pre-clear runtime must not publish");
+    assert!(error.to_string().contains("generation conflict"));
 }
 
 #[test]

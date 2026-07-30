@@ -156,6 +156,7 @@ impl RepoIndexScanSession {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
 
     use super::*;
@@ -170,6 +171,20 @@ mod tests {
             session.ingest(relative_path, &metadata, &bytes).unwrap();
         }
         session.prepare().unwrap()
+    }
+
+    fn generation_artifact_snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
+        let directory = root.join(".packet28").join("index").join("mapy-v1");
+        fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().to_string_lossy().to_string(),
+                    fs::read(entry.path()).unwrap(),
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -222,6 +237,74 @@ mod tests {
         assert_eq!(
             load_repo_index_runtime(root).unwrap().manifest.generation,
             standard.manifest.generation
+        );
+    }
+
+    #[test]
+    fn dropping_prepared_repair_preserves_the_retained_recovery_generation() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), b"pub struct First;\n").unwrap();
+        let paths = vec!["src/lib.rs".to_string()];
+        let first = rebuild_repo_index_runtime(root, true).unwrap();
+        fs::write(root.join("src/lib.rs"), b"pub struct Second;\n").unwrap();
+        let second = rebuild_repo_index_runtime(root, true).unwrap();
+        let index_parent = root.join(".packet28").join("index");
+        let index_dir = index_parent.join("mapy-v1");
+        let first_base = index_dir.join(format!("base-{:020}.bin", first.manifest.generation));
+        let first_record =
+            index_dir.join(format!("generation-{:020}.json", first.manifest.generation));
+        let first_base_bytes = fs::read(&first_base).unwrap();
+        let first_record_bytes = fs::read(&first_record).unwrap();
+        fs::remove_file(index_parent.join(".mapy-v1.generation-high-water.json")).unwrap();
+        fs::write(index_dir.join("manifest.json"), b"{").unwrap();
+
+        let mut prepared = prepare_shared(root, &paths);
+        assert!(prepared.manifest().generation > second.manifest.generation);
+        prepared.publish().unwrap();
+        drop(prepared);
+
+        assert_eq!(fs::read(first_base).unwrap(), first_base_bytes);
+        assert_eq!(fs::read(first_record).unwrap(), first_record_bytes);
+        assert_eq!(
+            load_repo_index_runtime(root).unwrap().manifest.generation,
+            first.manifest.generation
+        );
+    }
+
+    #[test]
+    fn shared_prepare_at_generation_max_writes_no_generation_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), b"pub struct Current;\n").unwrap();
+        let paths = vec!["src/lib.rs".to_string()];
+        let current = rebuild_repo_index_runtime(root, true).unwrap();
+        let high_water_path = root
+            .join(".packet28")
+            .join("index")
+            .join(".mapy-v1.generation-high-water.json");
+        fs::write(
+            &high_water_path,
+            format!("{{\"schema_version\":1,\"generation\":{}}}", u64::MAX),
+        )
+        .unwrap();
+        let before = generation_artifact_snapshot(root);
+        let counter_before = fs::read(&high_water_path).unwrap();
+        let mut session = RepoIndexScanSession::begin(root, true, &paths).unwrap();
+        let metadata = fs::metadata(root.join("src/lib.rs")).unwrap();
+        let bytes = fs::read(root.join("src/lib.rs")).unwrap();
+        session.ingest("src/lib.rs", &metadata, &bytes).unwrap();
+
+        let error = session.prepare().err().expect("generation exhaustion");
+
+        assert!(error.to_string().contains("exhausted"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(fs::read(high_water_path).unwrap(), counter_before);
+        assert_eq!(
+            load_repo_index_runtime(root).unwrap().manifest.generation,
+            current.manifest.generation
         );
     }
 
