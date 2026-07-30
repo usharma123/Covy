@@ -913,6 +913,76 @@ fn daemon_startup_checkpoints_replayed_authority_before_readiness() {
 }
 
 #[test]
+fn delayed_launch_flush_cannot_overwrite_a_newer_task_revision() {
+    let state = super::support::daemon_test_state();
+    let task_id = "delayed-launch";
+    super::support::insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: task_id.to_string(),
+            ..TaskRecord::default()
+        },
+    );
+
+    let (persistence, launch_revision) = {
+        let mut guard = state.lock().unwrap();
+        guard.tasks.tasks.get_mut(task_id).unwrap().latest_agent_pid = Some(41);
+        let revision = mark_task_dirty(&guard, task_id).unwrap();
+        (guard.persistence.clone(), revision)
+    };
+    let (release_launch_flush, wait_for_launch_flush) = std::sync::mpsc::sync_channel(1);
+    let delayed_persistence = persistence.clone();
+    let delayed_flush = thread::spawn(move || {
+        wait_for_launch_flush
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        delayed_persistence.flush_through(launch_revision)
+    });
+
+    let newer_revision = {
+        let mut guard = state.lock().unwrap();
+        guard.tasks.tasks.get_mut(task_id).unwrap().last_error = Some("newer mutation".to_string());
+        mark_task_dirty(&guard, task_id).unwrap()
+    };
+    assert!(newer_revision > launch_revision);
+    release_launch_flush.send(()).unwrap();
+    delayed_flush.join().unwrap().unwrap();
+    persistence.flush_through(newer_revision).unwrap();
+
+    let root = super::support::daemon_test_root(&state);
+    let replayed = load_task_watch_registry_with_deltas(&root).unwrap();
+    let task = &replayed.tasks.tasks[task_id];
+    assert_eq!(task.latest_agent_pid, Some(41));
+    assert_eq!(task.last_error.as_deref(), Some("newer mutation"));
+    super::support::shutdown_test_persistence(&state);
+}
+
+#[test]
+fn launch_stages_its_owned_task_record_before_waiting_for_durability() {
+    let source = include_str!("../launch.rs");
+    let ownership_start = source.find("let ownership_result =").unwrap();
+    let ownership_end = source[ownership_start..]
+        .find("if let Err(error) = ownership_result")
+        .map(|offset| ownership_start + offset)
+        .unwrap();
+    let ownership = &source[ownership_start..ownership_end];
+    let stage = ownership
+        .find("let revision = mark_task_dirty(&guard, &bootstrap.task_id)?;")
+        .unwrap();
+    let lock_release = ownership
+        .find("(guard.persistence.clone(), revision)")
+        .unwrap();
+    let durability_wait = ownership
+        .find("persistence.flush_through(revision)")
+        .unwrap();
+
+    assert!(stage < lock_release);
+    assert!(lock_release < durability_wait);
+    assert!(!ownership.contains("guard.tasks.clone()"));
+    assert!(!ownership.contains("guard.watches.clone()"));
+}
+
+#[test]
 fn packet28d_persistence_io_has_one_source_owner() {
     fn visit(source_root: &Path, path: &Path, violations: &mut Vec<String>) {
         for entry in std::fs::read_dir(path).unwrap() {

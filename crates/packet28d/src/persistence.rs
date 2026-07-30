@@ -1076,7 +1076,8 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use packet28_daemon_core::storage::{
-        ensure_daemon_dir, load_task_registry, load_task_watch_registry_with_deltas,
+        ensure_daemon_dir, load_task_events, load_task_registry,
+        load_task_watch_registry_with_deltas,
     };
     use packet28_daemon_core::task_store_lease::acquire_daemon_task_store_lease;
     use packet28_daemon_protocol::task::{TaskRecord, WatchRegistration};
@@ -1320,6 +1321,92 @@ mod tests {
         assert!(replayed_watch.active);
         assert_eq!(replayed_watch.last_event_at_unix, Some(99));
         assert_eq!(replayed_watch.last_error.as_deref(), Some("transient"));
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    struct EventFailBackend;
+
+    impl PersistenceBackend for EventFailBackend {
+        fn append_delta(
+            &self,
+            root: &Path,
+            revisions: RegistryRevisionRange,
+            delta: &RegistryDelta,
+        ) -> Result<u64> {
+            FilesystemBackend.append_delta(root, revisions, delta)
+        }
+
+        fn save_checkpoint(
+            &self,
+            root: &Path,
+            tasks: &TaskRegistry,
+            watches: &WatchRegistry,
+            revision: RegistryRevision,
+        ) -> Result<()> {
+            FilesystemBackend.save_checkpoint(root, tasks, watches, revision)
+        }
+
+        fn append_event(
+            &self,
+            _root: &Path,
+            _task_id: &str,
+            _event: &DaemonEvent,
+        ) -> Result<DaemonEventFrame> {
+            anyhow::bail!("injected event append failure")
+        }
+    }
+
+    #[test]
+    fn failed_event_after_causal_delta_keeps_the_registry_delta_replayable() {
+        let root = tempfile::tempdir().unwrap();
+        let task = task_record_with_watch("event-crash", "initial", "event-crash-watch");
+        let mut initial_watch = watch_record("event-crash", "event-crash-watch");
+        initial_watch.active = false;
+        let (initial_owner, initial_handle) = owner(root.path(), Duration::from_secs(60));
+        initial_handle
+            .stage(
+                RegistryDelta::default()
+                    .upsert_task(task)
+                    .upsert_watch(initial_watch),
+            )
+            .unwrap();
+        initial_handle.checkpoint_current().unwrap();
+        initial_owner.shutdown(Duration::from_secs(5)).unwrap();
+
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
+        let (owner, handle) = PersistenceOwner::start_with_backend(
+            root.path().to_path_buf(),
+            Some(lease),
+            Duration::from_secs(60),
+            loaded.tasks,
+            loaded.watches,
+            RegistryRecoveryRevisions {
+                checkpoint: loaded.checkpoint_revision,
+                replayed: loaded.replayed_revision,
+            },
+            Arc::new(EventFailBackend),
+        )
+        .unwrap();
+
+        let mut updated_watch = watch_record("event-crash", "event-crash-watch");
+        updated_watch.active = true;
+        updated_watch.last_event_at_unix = Some(73);
+        let revision = handle
+            .stage(RegistryDelta::default().upsert_watch(updated_watch))
+            .unwrap();
+        let error = handle
+            .append_event("event-crash", event(1), revision, false)
+            .unwrap_err();
+        assert!(error.to_string().contains("injected event append failure"));
+
+        let replayed = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        assert_eq!(replayed.replayed_revision, RegistryRevision::new(2));
+        assert!(replayed.watches.watches[0].active);
+        assert_eq!(replayed.watches.watches[0].last_event_at_unix, Some(73));
+        assert!(load_task_events(root.path(), "event-crash")
+            .unwrap()
+            .is_empty());
         owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 
