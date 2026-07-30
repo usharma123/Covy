@@ -270,9 +270,8 @@ fn recall_memories_vector(
         if dimensions == 0 || embedding.is_empty() {
             continue;
         }
-        let query_embedding = query_embeddings
-            .entry(dimensions)
-            .or_insert_with(|| deterministic_embedding(input.query, dimensions));
+        let query_embedding =
+            query_embedding_for_dimension(&mut query_embeddings, input.query, dimensions);
         let score = cosine_similarity(query_embedding, &embedding);
         if score > 0.0 {
             record.recall_score = Some(score);
@@ -295,6 +294,16 @@ fn recall_memories_vector(
     });
     records.truncate(limit.max(1));
     Ok(records)
+}
+
+fn query_embedding_for_dimension<'a>(
+    query_embeddings: &'a mut HashMap<usize, Vec<f64>>,
+    query: &str,
+    dimensions: usize,
+) -> &'a [f64] {
+    query_embeddings
+        .entry(dimensions)
+        .or_insert_with(|| deterministic_embedding(query, dimensions))
 }
 
 pub(crate) fn list_memories(limit: usize) -> Result<Vec<MemoryRecord>> {
@@ -1202,17 +1211,9 @@ mod tests {
     #[test]
     fn query_embeddings_are_reused_per_dimension() {
         let mut embeddings = HashMap::<usize, Vec<f64>>::new();
-        let first = embeddings
-            .entry(16)
-            .or_insert_with(|| deterministic_embedding("query", 16))
-            .as_ptr();
-        let second = embeddings
-            .entry(16)
-            .or_insert_with(|| deterministic_embedding("query", 16))
-            .as_ptr();
-        embeddings
-            .entry(32)
-            .or_insert_with(|| deterministic_embedding("query", 32));
+        let first = query_embedding_for_dimension(&mut embeddings, "query", 16).as_ptr();
+        let second = query_embedding_for_dimension(&mut embeddings, "query", 16).as_ptr();
+        query_embedding_for_dimension(&mut embeddings, "query", 32);
 
         assert_eq!(first, second);
         assert_eq!(embeddings.len(), 2);
