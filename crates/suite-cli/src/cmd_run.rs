@@ -541,10 +541,8 @@ fn run_macos_swap(root: &std::path::Path, argv: &[String]) -> Result<i32> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn run_macos_swap(_root: &std::path::Path, _argv: &[String]) -> Result<i32> {
-    Err(anyhow!(
-        "Packet28 run --backend macos-swap is only available on macOS"
-    ))
+fn run_macos_swap(root: &std::path::Path, argv: &[String]) -> Result<i32> {
+    crate::cmd_macos_swap::launch_macos_swap(root, argv, RuntimeBackend::MacosSwap.as_env_value())
 }
 
 fn run_linux_oci(root: &std::path::Path, argv: &[String]) -> Result<i32> {

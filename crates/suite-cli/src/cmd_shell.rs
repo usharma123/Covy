@@ -48,7 +48,11 @@ pub(crate) fn launch_linux_preload(
     crate::cmd_daemon::ensure_daemon(root)?;
     let shim_path = resolve_shim_library()?;
     let mut command = build_command(argv)?;
-    command.env("LD_PRELOAD", merge_ld_preload(&shim_path)?);
+    let existing_ld_preload = std::env::var("LD_PRELOAD").ok();
+    command.env(
+        "LD_PRELOAD",
+        merge_ld_preload(&shim_path, existing_ld_preload.as_deref())?,
+    );
     command.env("PACKET28_DAEMON_ROOT", root);
     command.env("PACKET28_RUNTIME_BACKEND", runtime_backend);
     command.env("PACKET28_AGENT_FAMILY", detect_agent_family(argv));
@@ -74,12 +78,15 @@ pub(crate) fn build_command(argv: &[String]) -> Result<Command> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn merge_ld_preload(shim_path: &Path) -> Result<String> {
+pub(crate) fn merge_ld_preload(
+    shim_path: &Path,
+    existing_ld_preload: Option<&str>,
+) -> Result<String> {
     let shim = shim_path
         .to_str()
         .ok_or_else(|| anyhow!("shim library path is not valid UTF-8"))?;
-    let merged = match std::env::var("LD_PRELOAD") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{shim}:{existing}"),
+    let merged = match existing_ld_preload {
+        Some(existing) if !existing.trim().is_empty() => format!("{shim}:{existing}"),
         _ => shim.to_string(),
     };
     Ok(merged)
@@ -147,13 +154,7 @@ mod tests {
     #[test]
     fn merges_existing_ld_preload() {
         let path = PathBuf::from("/tmp/libcontext_instruct_shim.so");
-        unsafe {
-            std::env::set_var("LD_PRELOAD", "/tmp/other.so");
-        }
-        let merged = merge_ld_preload(&path).unwrap();
+        let merged = merge_ld_preload(&path, Some("/tmp/other.so")).unwrap();
         assert!(merged.starts_with("/tmp/libcontext_instruct_shim.so:/tmp/other.so"));
-        unsafe {
-            std::env::remove_var("LD_PRELOAD");
-        }
     }
 }
