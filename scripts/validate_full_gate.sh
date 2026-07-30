@@ -74,6 +74,7 @@ run_cmd python3 scripts/check_architecture_audit_ledger.py
 run_cmd python3 scripts/check_instruction_claims.py
 run_cmd python3 scripts/check_rust_hazards.py
 run_cmd python3 scripts/check_test_harness.py
+run_cmd python3 benchmarks/asy-04-runtime-starvation/verify.py
 run_cmd python3 scripts/verify_ci_policy.py
 run_cmd python3 scripts/verify_tooling.py
 run_cmd python3 scripts/verify_readme_stats.py --check

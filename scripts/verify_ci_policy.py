@@ -636,6 +636,20 @@ def direct_minimum_gate_errors(full_gate: str) -> list[str]:
     ]
 
 
+def runtime_starvation_evidence_gate_errors(full_gate: str) -> list[str]:
+    """Return violations of the checked-in ASY-04 evidence gate."""
+
+    expected = (
+        "run_cmd python3 "
+        "benchmarks/asy-04-runtime-starvation/verify.py"
+    )
+    if expected in full_gate:
+        return []
+    return [
+        "canonical gate does not verify the runtime-starvation evidence"
+    ]
+
+
 def verify_workflow_wiring(errors: list[str]) -> None:
     build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
     release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
@@ -665,6 +679,7 @@ def verify_workflow_wiring(errors: list[str]) -> None:
         errors.append("canonical gate does not run the Rust hazard-policy checker")
     if "run_cmd python3 scripts/check_test_harness.py" not in full_gate:
         errors.append("canonical gate does not run the test-harness policy checker")
+    errors.extend(runtime_starvation_evidence_gate_errors(full_gate))
     errors.extend(direct_minimum_gate_errors(full_gate))
     if "run_cmd cargo deny --locked check" not in full_gate:
         errors.append("canonical gate does not run cargo-deny against the lockfile")

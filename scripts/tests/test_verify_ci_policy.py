@@ -89,6 +89,31 @@ class CanonicalGatePolicyTests(unittest.TestCase):
             [],
         )
 
+    def test_repository_gate_verifies_runtime_starvation_evidence(self) -> None:
+        self.assertEqual(
+            verify_ci_policy.runtime_starvation_evidence_gate_errors(
+                self.full_gate
+            ),
+            [],
+        )
+
+    def test_policy_rejects_gate_without_runtime_starvation_evidence(
+        self,
+    ) -> None:
+        unsafe = self.full_gate.replace(
+            "run_cmd python3 "
+            "benchmarks/asy-04-runtime-starvation/verify.py\n",
+            "",
+            1,
+        )
+        self.assertEqual(
+            verify_ci_policy.runtime_starvation_evidence_gate_errors(unsafe),
+            [
+                "canonical gate does not verify the "
+                "runtime-starvation evidence"
+            ],
+        )
+
     def test_policy_rejects_gate_without_direct_minimum_graph(self) -> None:
         unsafe = self.full_gate.replace(
             "run_cmd python3 scripts/validate_direct_minimum.py\n",
