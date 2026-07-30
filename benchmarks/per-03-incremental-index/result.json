@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-30",
+  "source": {
+    "snapshot_commit": "bf157e1628f7f80d25f444080d31a2fbcaa3f030",
+    "snapshot_tree": "897cc8e3634ab3f5cb0807e71d5fcd587fcbb7ac",
+    "files": {
+      "crates/mapy-core/examples/per03_incremental_index.rs": "ec9f288c8b7161d7344171940d5565bc736c88ae1f4fc4211e45c725c63cf4b6",
+      "crates/mapy-core/src/generation.rs": "88729ec25083274106696785195bfc404f3cf42f81af6eac5c579637c13165af",
+      "crates/packet28-state-fs/src/lib.rs": "eda392e61ddc26547b400318ecd1416827044d11c531f3d5c82666b67a77157c",
+      "crates/packet28-state-fs/src/platform.rs": "151d657da92fc381676e8ac0e42e1a1a8eb96245b3bf83db4669f68d0474bc23",
+      "crates/packet28-state-fs/src/platform_fallback.rs": "ce77b6fd64b58b5167210bb29e56823ff00108604ba837fd76f76806c0ea28f0",
+      "crates/packet28-search-core/src/generation.rs": "a5705da3e8adda41a43b4ebbb76549bc061ee9444fc155b9ef9eb1fc1b74f430",
+      "crates/packet28-search-core/src/layer.rs": "95178bdc21b6030f14afca64939c2982179514424da40861da6887b0fc9cd4f5",
+      "crates/packet28-search-core/src/publication.rs": "3fb4292669185c03e3ebb46d50144d92c87465ddac5b7459575741a20b384065"
+    }
+  },
+  "environment": {
+    "os": "Darwin 24.6.0",
+    "arch": "arm64",
+    "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+    "cargo": "cargo 1.93.1 (083ac5135 2025-12-15)"
+  },
+  "invocations": [
+    {
+      "mapy_whole_snapshot_us": 5057,
+      "mapy_incremental_us": 72799,
+      "mapy_compaction_us": 61535,
+      "regex_full_overlay_us": 375404,
+      "regex_incremental_us": 115233,
+      "regex_compaction_us": 416567
+    },
+    {
+      "mapy_whole_snapshot_us": 5187,
+      "mapy_incremental_us": 67587,
+      "mapy_compaction_us": 75531,
+      "regex_full_overlay_us": 389313,
+      "regex_incremental_us": 125802,
+      "regex_compaction_us": 384180
+    },
+    {
+      "mapy_whole_snapshot_us": 6116,
+      "mapy_incremental_us": 54406,
+      "mapy_compaction_us": 67746,
+      "regex_full_overlay_us": 418017,
+      "regex_incremental_us": 126504,
+      "regex_compaction_us": 402451
+    }
+  ],
+  "published_bytes": {
+    "mapy_whole_snapshot": 3490797,
+    "mapy_incremental": 5367,
+    "mapy_compaction": 328862,
+    "regex_full_overlay": 226270,
+    "regex_incremental": 27960,
+    "regex_compaction": 223531
+  },
+  "mapy_incremental_work": {
+    "publication_metadata_bytes_decoded": 2711,
+    "repository_artifact_bytes_decoded": 3439,
+    "repository_artifacts_decoded": 1,
+    "repository_artifact_bytes_hashed": 6878,
+    "repository_artifact_metadata_checks": 42,
+    "changed_paths_considered": 1
+  },
+  "decision": {
+    "mapy_architecture": "retain_bounded_durable_publication",
+    "mapy_byte_gate": "pass",
+    "mapy_elapsed_time_gate": "fail",
+    "mapy_latency_claim": "rejected",
+    "regex_architecture": "retain",
+    "regex_byte_gate": "pass",
+    "regex_elapsed_time_gate": "pass",
+    "durability_coalescing": "not_adopted_without_power_loss_equivalence_evidence"
+  }
+}

@@ -114,6 +114,31 @@ class CanonicalGatePolicyTests(unittest.TestCase):
             ],
         )
 
+    def test_repository_gate_verifies_incremental_index_evidence(self) -> None:
+        self.assertEqual(
+            verify_ci_policy.incremental_index_evidence_gate_errors(
+                self.full_gate
+            ),
+            [],
+        )
+
+    def test_policy_rejects_gate_without_incremental_index_evidence(
+        self,
+    ) -> None:
+        unsafe = self.full_gate.replace(
+            "run_cmd python3 "
+            "benchmarks/per-03-incremental-index/verify.py\n",
+            "",
+            1,
+        )
+        self.assertEqual(
+            verify_ci_policy.incremental_index_evidence_gate_errors(unsafe),
+            [
+                "canonical gate does not verify the "
+                "incremental-index evidence"
+            ],
+        )
+
     def test_policy_rejects_gate_without_direct_minimum_graph(self) -> None:
         unsafe = self.full_gate.replace(
             "run_cmd python3 scripts/validate_direct_minimum.py\n",

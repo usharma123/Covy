@@ -650,6 +650,20 @@ def runtime_starvation_evidence_gate_errors(full_gate: str) -> list[str]:
     ]
 
 
+def incremental_index_evidence_gate_errors(full_gate: str) -> list[str]:
+    """Return violations of the checked-in PER-03 evidence gate."""
+
+    expected = (
+        "run_cmd python3 "
+        "benchmarks/per-03-incremental-index/verify.py"
+    )
+    if expected in full_gate:
+        return []
+    return [
+        "canonical gate does not verify the incremental-index evidence"
+    ]
+
+
 def verify_workflow_wiring(errors: list[str]) -> None:
     build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
     release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
@@ -680,6 +694,7 @@ def verify_workflow_wiring(errors: list[str]) -> None:
     if "run_cmd python3 scripts/check_test_harness.py" not in full_gate:
         errors.append("canonical gate does not run the test-harness policy checker")
     errors.extend(runtime_starvation_evidence_gate_errors(full_gate))
+    errors.extend(incremental_index_evidence_gate_errors(full_gate))
     errors.extend(direct_minimum_gate_errors(full_gate))
     if "run_cmd cargo deny --locked check" not in full_gate:
         errors.append("canonical gate does not run cargo-deny against the lockfile")
