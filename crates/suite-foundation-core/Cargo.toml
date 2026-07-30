@@ -19,14 +19,11 @@ blake3.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 packet28-binary-codec.workspace = true
 glob.workspace = true
 ignore.workspace = true
-tracing.workspace = true
-regex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

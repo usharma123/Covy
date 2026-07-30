@@ -144,17 +144,13 @@ dependencies = [
 name = "covy-ingest"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "blake3",
  "covy-core",
  "quick-xml",
  "rayon",
  "regex",
- "roaring",
  "serde",
  "serde_json",
- "thiserror",
- "tracing",
 ]
 
 [[package]]
@@ -272,13 +268,11 @@ dependencies = [
 name = "diffy-core"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "blake3",
  "colored",
  "comfy-table",
  "glob",
  "roaring",
- "serde",
  "serde_json",
  "suite-foundation-core",
  "suite-packet-core",
@@ -344,6 +338,16 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
 
 [[package]]
 name = "generic-array"
@@ -508,7 +512,6 @@ name = "packet28-binary-codec"
 version = "0.2.63"
 dependencies = [
  "wincode",
- "wincode-derive",
 ]
 
 [[package]]
@@ -530,7 +533,6 @@ dependencies = [
  "libfuzzer-sys",
  "packet28-daemon-protocol",
  "packet28-search-core",
- "serde_json",
  "tempfile",
 ]
 
@@ -554,6 +556,7 @@ version = "0.2.63"
 dependencies = [
  "anyhow",
  "blake3",
+ "fs2",
  "ignore",
  "memmap2",
  "packet28-binary-codec",
@@ -825,15 +828,12 @@ dependencies = [
  "glob",
  "ignore",
  "packet28-binary-codec",
- "regex",
  "roaring",
  "serde",
- "serde_json",
  "suite-packet-core",
  "thiserror",
  "toml",
  "toml_edit",
- "tracing",
 ]
 
 [[package]]

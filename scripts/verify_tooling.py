@@ -36,6 +36,7 @@ EXPECTED_RECIPES = {
         "cargo doc --workspace --all-features --no-deps --locked",
     ),
     "deny": ("cargo deny --locked check",),
+    "deps": ("python3 scripts/check_direct_dependencies.py",),
     "fast": ("scripts/validate_refactor_batch.sh",),
     "ci": ("scripts/validate_full_gate.sh",),
     "msrv": (

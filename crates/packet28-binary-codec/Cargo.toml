@@ -14,4 +14,3 @@ workspace = true
 
 [dependencies]
 wincode-impl.workspace = true
-wincode-derive-impl.workspace = true

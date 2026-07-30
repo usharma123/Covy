@@ -20,7 +20,6 @@ thiserror.workspace = true
 covy-ingest.workspace = true
 diffy-core.workspace = true
 testy-core.workspace = true
-suite-foundation-core.workspace = true
 suite-packet-core.workspace = true
 
 [dev-dependencies]

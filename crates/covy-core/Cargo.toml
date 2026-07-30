@@ -20,4 +20,3 @@ testy-core.workspace = true
 
 [dev-dependencies]
 roaring.workspace = true
-tempfile.workspace = true

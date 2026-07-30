@@ -469,7 +469,6 @@ dependencies = [
  "diffy-core",
  "glob",
  "predicates",
- "quick-xml",
  "roaring",
  "serde",
  "serde_json",
@@ -479,7 +478,6 @@ dependencies = [
  "testy-cli-common",
  "testy-core",
  "toml",
- "toml_edit",
  "tracing",
  "tracing-subscriber",
  "ureq",
@@ -493,7 +491,6 @@ dependencies = [
  "roaring",
  "suite-foundation-core",
  "suite-packet-core",
- "tempfile",
  "testy-core",
 ]
 
@@ -501,19 +498,15 @@ dependencies = [
 name = "covy-ingest"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "blake3",
  "covy-core",
  "criterion",
  "quick-xml",
  "rayon",
  "regex",
- "roaring",
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
- "tracing",
 ]
 
 [[package]]
@@ -703,13 +696,11 @@ dependencies = [
 name = "diffy-core"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "blake3",
  "colored",
  "comfy-table",
  "glob",
  "roaring",
- "serde",
  "serde_json",
  "suite-foundation-core",
  "suite-packet-core",
@@ -1434,7 +1425,6 @@ name = "packet28-binary-codec"
 version = "0.2.63"
 dependencies = [
  "wincode",
- "wincode-derive",
 ]
 
 [[package]]
@@ -1526,7 +1516,6 @@ dependencies = [
  "covy-ingest",
  "diffy-core",
  "fs2",
- "glob",
  "ignore",
  "libc",
  "mapy-core",
@@ -2060,7 +2049,6 @@ dependencies = [
  "context-kernel-core",
  "context-memory-core",
  "contextq-core",
- "covy-ingest",
  "diffy-core",
  "glob",
  "guardy-core",
@@ -2071,7 +2059,6 @@ dependencies = [
  "packet28-reducer-core",
  "predicates",
  "regex",
- "roaring",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2082,7 +2069,6 @@ dependencies = [
  "suite-foundation-core",
  "suite-ingest",
  "suite-packet-core",
- "suite-policy-core",
  "suite-proxy-core",
  "tempfile",
  "testy-cli-common",
@@ -2101,16 +2087,13 @@ dependencies = [
  "glob",
  "ignore",
  "packet28-binary-codec",
- "regex",
  "roaring",
  "serde",
- "serde_json",
  "suite-packet-core",
  "tempfile",
  "thiserror",
  "toml",
  "toml_edit",
- "tracing",
 ]
 
 [[package]]
@@ -2142,7 +2125,6 @@ dependencies = [
  "glob",
  "regex",
  "serde",
- "serde_json",
  "suite-packet-core",
  "yaml_serde",
 ]
@@ -2155,7 +2137,6 @@ dependencies = [
  "serde",
  "serde_json",
  "suite-packet-core",
- "tempfile",
 ]
 
 [[package]]
@@ -2222,7 +2203,6 @@ dependencies = [
  "diffy-core",
  "serde",
  "serde_json",
- "suite-foundation-core",
  "suite-packet-core",
  "tempfile",
  "testy-core",

@@ -28,6 +28,9 @@ docs:
 deny:
     cargo deny --locked check
 
+deps:
+    python3 scripts/check_direct_dependencies.py
+
 fast:
     scripts/validate_refactor_batch.sh
 

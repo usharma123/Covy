@@ -32,7 +32,6 @@ diffy-core.workspace = true
 suite-foundation-core.workspace = true
 covy-ingest.workspace = true
 mapy-core.workspace = true
-glob.workspace = true
 ignore.workspace = true
 notify.workspace = true
 packet28-daemon-core.workspace = true

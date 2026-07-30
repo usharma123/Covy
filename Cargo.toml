@@ -52,7 +52,6 @@ yaml_serde = "0.10.4"
 toml = "0.8"
 toml_edit = "0.22"
 wincode-impl = { package = "wincode", version = "=0.4.2", features = ["derive"] }
-wincode-derive-impl = { package = "wincode-derive", version = "=0.4.1" }
 regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
