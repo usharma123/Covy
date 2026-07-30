@@ -528,6 +528,7 @@ async fn handle_proxy_method(
                 guard.upstream_tools_loaded = false;
             }
             invalidate_resource_catalog(session)?;
+            let mut resource_list_changed = false;
             for upstream in upstreams.values() {
                 let request = json!({
                     "jsonrpc":"2.0",
@@ -543,11 +544,18 @@ async fn handle_proxy_method(
                         "error": response["error"].clone()
                     }));
                 }
+                resource_list_changed |=
+                    response["result"]["capabilities"]["resources"]["listChanged"].as_bool()
+                        == Some(true);
+            }
+            let mut result = handle_local_method(root, session, method, params).await?;
+            if resource_list_changed {
+                result["capabilities"]["resources"]["listChanged"] = Value::Bool(true);
             }
             Ok(json!({
                 "jsonrpc":"2.0",
                 "id": id,
-                "result": handle_local_method(root, session, method, params).await?,
+                "result": result,
             }))
         }
         "tools/list" => {
@@ -600,6 +608,9 @@ async fn handle_proxy_method(
             "id":id,
             "result": handle_local_method(root, session, method, Value::Null).await?,
         })),
+        "resources/subscribe" | "resources/unsubscribe" => Err(anyhow!(
+            "MCP proxy does not advertise resource subscriptions; method '{method}' is unsupported"
+        )),
         "prompts/get" => {
             let name = params
                 .get("name")

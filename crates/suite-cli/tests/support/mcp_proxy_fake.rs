@@ -193,6 +193,74 @@ while True:
     .unwrap();
 }
 
+pub fn write_dynamic_resource_server(path: &Path) {
+    fs::write(
+        path,
+        r#"import json, sys
+
+def read_message():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, value = line.decode("utf-8").split(":", 1)
+        headers[name.lower().strip()] = value.strip()
+    length = int(headers.get("content-length", "0"))
+    return json.loads(sys.stdin.buffer.read(length))
+
+def write_message(value):
+    body = json.dumps(value).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+changed = False
+while True:
+    message = read_message()
+    if message is None:
+        break
+    msg_id = message.get("id")
+    if msg_id is None:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"resources": {"listChanged": True, "subscribe": True}},
+            "serverInfo": {"name": "dynamic-resources", "version": "1"}
+        }
+    elif method == "tools/list":
+        result = {"tools": []}
+    elif method == "resources/list":
+        uri = "dynamic://new" if changed else "dynamic://old"
+        result = {"resources": [{"uri": uri, "name": uri}]}
+    elif method == "resources/templates/list":
+        result = {"resourceTemplates": []}
+    elif method == "resources/read":
+        uri = message.get("params", {}).get("uri", "")
+        expected = "dynamic://new" if changed else "dynamic://old"
+        if uri != expected:
+            write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32001, "message": f"stale resource route for {uri}"}})
+            continue
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": uri}]}})
+        if not changed:
+            changed = True
+            write_message({"jsonrpc": "2.0", "method": "notifications/resources/list_changed", "params": {}})
+        continue
+    elif method in ("resources/subscribe", "resources/unsubscribe"):
+        result = {"upstreamWasReached": True}
+    else:
+        write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": "unknown method"}})
+        continue
+    write_message({"jsonrpc": "2.0", "id": msg_id, "result": result})
+"#,
+    )
+    .unwrap();
+}
+
 pub fn write_compact_read_server(path: &Path) {
     fs::write(
         path,

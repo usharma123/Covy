@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{timeout_at, Instant};
 
 use super::config::McpProxyConfig;
+use super::proxy_catalog::invalidate_resource_catalog;
 use super::transport::{
     read_message_async, render_command_preview, write_message_async, McpMessageFraming,
     MAX_MCP_BATCH_MESSAGES, MAX_MCP_MESSAGE_BYTES,
@@ -1489,6 +1490,15 @@ async fn read_upstream(
             }
         }
         if let Some(forwarded) = dispatch.forwarded {
+            if contains_resource_list_changed(&forwarded) {
+                if let Err(error) = invalidate_resource_catalog(&session) {
+                    client.set_exit_reason(format!(
+                        "failed to invalidate resource catalog for upstream '{}': {error}",
+                        client.name
+                    ));
+                    return;
+                }
+            }
             let framing = session
                 .lock()
                 .ok()
@@ -1516,6 +1526,19 @@ async fn read_upstream(
         "upstream '{}' exited before completing pending requests",
         client.name
     ));
+}
+
+fn contains_resource_list_changed(payload: &Value) -> bool {
+    fn is_list_changed_notification(message: &Value) -> bool {
+        message.get("id").is_none()
+            && message.get("method").and_then(Value::as_str)
+                == Some("notifications/resources/list_changed")
+    }
+
+    payload.as_array().map_or_else(
+        || is_list_changed_notification(payload),
+        |messages| messages.iter().any(is_list_changed_notification),
+    )
 }
 
 async fn expire_reverse_requests(client: Arc<UpstreamClient>, mut shutdown: watch::Receiver<bool>) {
@@ -1752,6 +1775,30 @@ while True:
             request_key(&json!(1)).unwrap(),
             request_key(&json!("1")).unwrap()
         );
+    }
+
+    #[test]
+    fn resource_list_changed_detection_accepts_notifications_in_singletons_and_batches() {
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/resources/list_changed",
+            "params": {"upstream": "alpha"}
+        });
+
+        assert!(contains_resource_list_changed(&notification));
+        assert!(contains_resource_list_changed(&json!([
+            {"jsonrpc":"2.0","method":"notifications/message"},
+            notification
+        ])));
+    }
+
+    #[test]
+    fn resource_list_changed_detection_ignores_same_named_requests() {
+        assert!(!contains_resource_list_changed(&json!({
+            "jsonrpc": "2.0",
+            "id": "server-request",
+            "method": "notifications/resources/list_changed"
+        })));
     }
 
     fn reverse_request(id: Value) -> Value {

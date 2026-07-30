@@ -18,8 +18,9 @@ mod process_harness;
 
 use mcp_proxy_fake::{
     write_bidirectional_server, write_colliding_tool_server, write_compact_read_server,
-    write_concurrent_tool_server, write_cyclic_resource_server, write_newline_only_server,
-    write_paginated_resource_server, write_slow_initialize_server, write_upstream_batch_server,
+    write_concurrent_tool_server, write_cyclic_resource_server, write_dynamic_resource_server,
+    write_newline_only_server, write_paginated_resource_server, write_slow_initialize_server,
+    write_upstream_batch_server,
 };
 use packet28_daemon_protocol::context_store::{ContextStoreGetRequest, ContextStoreListRequest};
 use process_harness::McpHarness;
@@ -740,6 +741,170 @@ fn test_mcp_proxy_exhausts_upstream_resource_pages_and_pages_stable_downstream_s
             "paginated resource"
         );
     }
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_invalidates_dynamic_resource_routes_and_rejects_unadvertised_subscriptions() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script = dir.path().join("dynamic_resources.py");
+    write_dynamic_resource_server(&script);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "dynamic": {
+                    "command": "python3",
+                    "args": ["-u", script.to_str().unwrap()],
+                    "framing": "content_length"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut server =
+        start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-dynamic-resources");
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"initialize-dynamic",
+            "method":"initialize",
+            "params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1"}}
+        }),
+    );
+    let initialized = read_until(&mut server, |message| message["id"] == "initialize-dynamic");
+    assert_eq!(
+        initialized["result"]["capabilities"]["resources"]["listChanged"],
+        true
+    );
+    assert!(
+        initialized["result"]["capabilities"]["resources"]
+            .get("subscribe")
+            .is_none(),
+        "proxy must not advertise subscriptions it does not route"
+    );
+
+    for (id, method) in [
+        (json!("subscribe-original-id"), "resources/subscribe"),
+        (json!(41), "resources/unsubscribe"),
+    ] {
+        write_mcp_message(
+            &mut server,
+            &json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":method,
+                "params":{"uri":"dynamic://old"}
+            }),
+        );
+        let response = read_until(&mut server, |message| message["id"] == id);
+        assert_eq!(response["id"], id);
+        assert_eq!(response["error"]["code"], -32000);
+        assert_eq!(
+            response["error"]["message"],
+            format!(
+                "MCP proxy does not advertise resource subscriptions; method '{method}' is unsupported"
+            )
+        );
+        assert!(response.get("result").is_none());
+    }
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"list-old",
+            "method":"resources/list",
+            "params":{}
+        }),
+    );
+    let old_catalog = read_until(&mut server, |message| message["id"] == "list-old");
+    assert!(old_catalog["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|resource| resource["uri"] == "dynamic://old"));
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"read-old",
+            "method":"resources/read",
+            "params":{"uri":"dynamic://old"}
+        }),
+    );
+    let mut old_read = None;
+    let mut saw_list_changed = false;
+    let deadline = Instant::now() + MCP_RESPONSE_TIMEOUT;
+    while old_read.is_none() || !saw_list_changed {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "timed out waiting for old read response and list_changed notification"
+        );
+        let message = server
+            .receive(remaining)
+            .unwrap_or_else(|error| panic!("failed to read dynamic-resource message: {error}"));
+        if message["id"] == "read-old" {
+            old_read = Some(message);
+        } else if message["method"] == "notifications/resources/list_changed" {
+            assert_eq!(message["params"]["upstream"], "dynamic");
+            saw_list_changed = true;
+        }
+    }
+    assert_eq!(
+        old_read.unwrap()["result"]["contents"][0]["text"],
+        "dynamic://old"
+    );
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"list-new",
+            "method":"resources/list",
+            "params":{}
+        }),
+    );
+    let new_catalog = read_until(&mut server, |message| message["id"] == "list-new");
+    assert!(new_catalog["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|resource| resource["uri"] == "dynamic://new"));
+    assert!(!new_catalog["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|resource| resource["uri"] == "dynamic://old"));
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"read-new",
+            "method":"resources/read",
+            "params":{"uri":"dynamic://new"}
+        }),
+    );
+    let new_read = read_until(&mut server, |message| message["id"] == "read-new");
+    assert_eq!(new_read["id"], "read-new");
+    assert_eq!(new_read["result"]["contents"][0]["text"], "dynamic://new");
 
     stop_mcp_server(server);
     suite_cmd()
