@@ -4,13 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path};
-use std::process::{Command, Output};
 
 use crate::error::{Result, SearchError};
+use crate::git_process::run_git;
 use crate::model::{RegexIndexManifest, MAX_INDEXED_FILE_BYTES};
 use crate::paths::{inspect_workspace_path, WorkspacePathInspection, WorkspacePathKind};
 
-const MAX_GIT_METADATA_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ATTESTED_WORKSPACE_ENTRIES: usize = 4_096;
 const MAX_ATTESTED_WORKSPACE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -130,30 +129,6 @@ pub(crate) fn git_workspace_snapshot(
         entries,
         reported,
     })
-}
-
-fn run_git(root: &Path, args: &[&str]) -> std::result::Result<Output, String> {
-    let output = Command::new("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .map_err(|error| format!("failed to run git {}: {error}", args[0]))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git {} failed: {}",
-            args[0],
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    if output.stdout.len().saturating_add(output.stderr.len()) > MAX_GIT_METADATA_BYTES {
-        return Err(format!(
-            "git {} output exceeds the bounded workspace metadata limit",
-            args[0]
-        ));
-    }
-    Ok(output)
 }
 
 fn validate_index_flags(

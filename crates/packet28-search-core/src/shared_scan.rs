@@ -14,9 +14,10 @@ use crate::error::{Result, SearchError};
 #[cfg(test)]
 use crate::generation::rebuild_full_index;
 use crate::generation::{
-    current_git_commit, durable_manifest, load_published_runtime, load_runtime,
-    overlay_state_digest, prune_generation_artifacts, publish_manifest, validate_generation_record,
+    durable_manifest, load_published_runtime, load_runtime, overlay_state_digest,
+    prune_generation_artifacts, publish_manifest, validate_generation_record,
 };
+use crate::git_process::current_git_commit;
 use crate::layer::{build_layer, IndexedDocument};
 use crate::model::{
     LayerFiles, LoadedIndex, OverlayState, RegexGenerationRecord, RegexIndexManifest,

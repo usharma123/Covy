@@ -52,6 +52,7 @@ extern crate packet28_binary_codec as wincode;
 
 mod error;
 mod generation;
+mod git_process;
 mod layer;
 mod model;
 mod paths;

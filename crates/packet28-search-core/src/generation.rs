@@ -3,10 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 
 use crate::error::{Result, SearchError};
+use crate::git_process::current_git_commit;
 use crate::layer::{
     artifact_digest, build_layer, index_document, load_layer, populate_layer_digests,
     scan_documents_with_progress, validate_layer_file_names, write_atomic, IndexedDocument,
@@ -1006,19 +1006,4 @@ pub(crate) fn collect_live_overlay_documents(
     }
     docs.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(docs)
-}
-
-pub(crate) fn current_git_commit(root: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .arg("rev-parse")
-        .arg("HEAD")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!value.is_empty()).then_some(value)
 }
