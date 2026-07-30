@@ -694,7 +694,13 @@ def check_packet28d_source_boundaries(root: Path) -> list[str]:
             f"{path.relative_to(root)}"
         )
 
-    wildcard_import = re.compile(r"^\s*use\s+(?:crate|super)::\*\s*;", re.MULTILINE)
+    # Rust permits globs at any depth of a grouped use tree, for example
+    # `use super::{context as imported_context, *};`. Broker children must
+    # name every dependency explicitly, regardless of the use-tree root.
+    wildcard_import = re.compile(
+        r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?use\b[^;]*\*[^;]*;",
+        re.MULTILINE,
+    )
     for path in sorted(broker_root.glob("*.rs")):
         try:
             source = path.read_text(encoding="utf-8")

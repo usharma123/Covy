@@ -557,20 +557,32 @@ class ArchitectureDependencyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_packet28d_broker_child_rejects_wildcard_import(self) -> None:
-        fixture = metadata({})
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            write_kernel_sources(root, "")
-            write_packet28d_sources(root, broker_child_source="use super::*;\n")
-
-            result = self.run_checker(fixture, source_root=root)
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            "packet28d broker modules must use explicit imports: "
-            "crates/packet28d/src/broker/context.rs",
-            result.stderr,
+        cases = (
+            "use super::*;\n",
+            "use super::{context as imported_context, *};\n",
+            "use crate::broker::{\n    context,\n    *,\n};\n",
+            "use std::prelude::rust_2021::*;\n",
+            "pub(crate) use super::{context, *};\n",
         )
+        for broker_child_source in cases:
+            with self.subTest(source=broker_child_source):
+                fixture = metadata({})
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    write_kernel_sources(root, "")
+                    write_packet28d_sources(
+                        root,
+                        broker_child_source=broker_child_source,
+                    )
+
+                    result = self.run_checker(fixture, source_root=root)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "packet28d broker modules must use explicit imports: "
+                    "crates/packet28d/src/broker/context.rs",
+                    result.stderr,
+                )
 
     def test_packet28d_entrypoint_rejects_runtime_ownership(self) -> None:
         fixture = metadata({})
