@@ -1,831 +1,227 @@
 # Packet28
 
-Packet28 is a context engineering layer for AI agents and CI systems. It reduces raw development artifacts — coverage reports, diffs, build logs, stack traces, test results, repo structure — into bounded, machine-readable packets that fit within agent context windows. It persists, indexes, and recalls those packets across tasks, and manages token budgets so agents spend context on reasoning instead of exploration.
+Packet28 is a local context runtime for coding agents. It turns noisy developer
+artifacts—search results, coverage reports, diffs, build logs, stack traces,
+test maps, and repository structure—into bounded packets that are cheap to
+inspect, persist, recall, and hand to the next worker.
 
-## The Problem
+It can run as a CLI, an MCP server or proxy, and a workspace daemon. The goal is
+simple: let agents spend their context on decisions and edits instead of
+repeatedly rediscovering the repository.
 
-An AI agent asked to "fix the coverage regression in AuthService" will typically:
+## What Packet28 does
 
-1. Read config files to find coverage report paths
-2. Grep for source files matching "AuthService"
-3. Read the coverage XML (often megabytes, may not fit in context)
-4. Read the git diff to understand what changed
-5. Read test files to see what's covered
+- Reduces large tool outputs into typed `suite.packet.v1` envelopes with
+  provenance and budget estimates.
+- Maintains indexed search, packet recall, task state, watches, and durable
+  handoffs under the workspace-local `.packet28/` directory.
+- Integrates with Claude Code, Codex, Cursor, and Windsurf through generated MCP,
+  hook, and instruction configuration.
+- Preserves full artifacts behind handles when a compact response is not enough.
+- Provides coverage, diff, test-impact, diagnostics, repository-map, and policy
+  commands for agents and CI.
 
-This costs 10-20 tool calls and 5-50K tokens of raw content before the agent starts working. Most of that content is redundant, unstructured, and immediately stale.
+Packet28 is local-first. Agent processes and local tools talk to a daemon bound
+to an authenticated Unix socket when available, with a capability-authenticated
+loopback fallback.
 
-## The Solution
+## Install
+
+The packaged binaries support macOS and Linux on x64 and arm64.
 
 ```bash
-Packet28 mcp serve --root .
+npm install --global packet28
+packet28 --version
 ```
 
-Packet28 keeps the live turn cheap and moves thicker memory assembly out of the worker loop:
-
-- Claude `PreToolUse` hooks rewrite supported Bash commands through Packet28 reducers, and fallback hooks capture native tool activity into compact persisted packets
-- MCP is reduced to semantic control-plane tools like `packet28.write_intention` and handoff/context inspection
-- `packet28.prepare_handoff` assembles a denoised handoff packet after threshold or stop boundaries
-- The daemon or wrapper relaunches a fresh worker from that handoff packet instead of expanding the current session forever
-
-This keeps Packet28 useful as both a context broker and a reducer layer: small in-turn packets, explicit persistence, and compressed cross-turn memory.
-
-## Architecture
-
-Packet28 is a Rust workspace of 34 crates organized into four layers:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Agent Surface                            │
-│  packet28-agent wrapper · agent-prompt generator · MCP surface  │
-├─────────────────────────────────────────────────────────────────┤
-│                     CLI + Daemon Layer                          │
-│  Packet28 CLI · packet28d daemon · task/watch/stream protocol   │
-├─────────────────────────────────────────────────────────────────┤
-│                    Context Runtime Layer                        │
-│  kernel · scheduler · memory/recall · assembly · correlation    │
-│  policy/guard · agent state                                     │
-├─────────────────────────────────────────────────────────────────┤
-│                       Reducer Layer                             │
-│  diffy · covy · testy · stacky · buildy · mapy · proxy          │
-├─────────────────────────────────────────────────────────────────┤
-│                     Shared Contracts                            │
-│  EnvelopeV1 · BudgetCost · FileRef/SymbolRef · Provenance       │
-│  suite-packet-core · suite-foundation-core                      │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Layer 1: Shared Contracts
-
-Every reducer output is wrapped in the same envelope:
-
-```json
-{
-  "schema_version": "suite.packet.v1",
-  "packet_type": "suite.<domain>.<action>.v1",
-  "packet": {
-    "version": "1",
-    "tool": "...",
-    "kind": "...",
-    "hash": "...",
-    "summary": "...",
-    "files": [{ "path": "...", "relevance": 0.75 }],
-    "symbols": [{ "name": "...", "kind": "method", "relevance": 0.6 }],
-    "budget_cost": {
-      "est_tokens": 800,
-      "est_bytes": 3200,
-      "runtime_ms": 12,
-      "tool_calls": 1
-    },
-    "provenance": {
-      "inputs": ["src/auth.rs"],
-      "git_base": "origin/main",
-      "git_head": "HEAD",
-      "generated_at_unix": 1709000000
-    },
-    "payload": {}
-  }
-}
-```
-
-`EnvelopeV1<T>` is the universal packet type. Every packet carries:
-
-- **`budget_cost`**: Token and byte estimates so consumers know the cost before reading the payload
-- **`files` and `symbols`**: Structured references that enable cross-packet correlation
-- **`provenance`**: Git refs and input paths for reproducibility
-- **`hash`**: Canonical blake3 hash for deduplication and cache keying
-
-| Crate | Purpose |
-| --- | --- |
-| `suite-packet-core` | `EnvelopeV1`, `BudgetCost`, `FileRef`, `SymbolRef`, `Provenance`, packet type constants, agent state event types |
-| `suite-foundation-core` | `CovyConfig` (covy.toml), gate config, path mapping, snapshot/cache primitives |
-| `covy-core` | Coverage data model shared between ingestion and analysis |
-
-### Layer 2: Reducers
-
-Each reducer takes a raw artifact and produces a bounded `EnvelopeV1` packet:
-
-| Crate | Input | Output | What It Does |
-| --- | --- | --- | --- |
-| `covy-ingest` | JaCoCo XML, LCOV, Cobertura, gocov, llvm-cov | Normalized coverage model | Parses coverage reports into a unified format with path normalization |
-| `diffy-core` | Git diff + coverage data | `suite.diff.analyze.v1` | Runs diff analysis against a quality gate: changed/total/new coverage, issue counts, violations |
-| `testy-core` | Testmap + git diff | `suite.test.impact.v1` | Computes impacted tests from file changes using a prebuilt test-to-file map |
-| `stacky-core` | Log text / stack traces | `suite.stack.slice.v1` | Deduplicates failures by fingerprint, extracts frames, limits to N worst |
-| `buildy-core` | Compiler / linter output | `suite.build.reduce.v1` | Groups diagnostics by root cause and severity, deduplicates by fingerprint |
-| `mapy-core` | Repository root + focus hints | `suite.map.repo.v1` | Builds a ranked repo map: files by centrality, symbols by relevance, import edges. Uses tree-sitter for symbol extraction |
-| `suite-proxy-core` | Shell command + output limits | `suite.proxy.run.v1` | Executes a command safely, deduplicates output lines, enforces output caps |
-| `suite-ingest` | Coverage/diagnostics file paths | Ingested models | Thin wrapper dispatching to `covy-ingest` format parsers |
-
-```mermaid
-flowchart LR
-  subgraph Inputs["Raw Artifacts"]
-    COV["Coverage XML/LCOV"]
-    DIFF["Git diff"]
-    LOG["Build log"]
-    STACK["Stack trace"]
-    REPO["Source tree"]
-    CMD["Shell command"]
-    TMAP["Testmap"]
-  end
-
-  subgraph Reducers["Reducer Layer"]
-    COVY["covy-ingest"]
-    DIFFY["diffy-core"]
-    TESTY["testy-core"]
-    STACKY["stacky-core"]
-    BUILDY["buildy-core"]
-    MAPY["mapy-core"]
-    PROXY["suite-proxy-core"]
-  end
-
-  COV --> COVY
-  COV & DIFF --> DIFFY
-  TMAP & DIFF --> TESTY
-  STACK --> STACKY
-  LOG --> BUILDY
-  REPO --> MAPY
-  CMD --> PROXY
-
-  COVY & DIFFY & TESTY & STACKY & BUILDY & MAPY & PROXY --> ENV["EnvelopeV1 packets"]
-```
-
-### Layer 3: Context Runtime
-
-The runtime layer manages execution, caching, recall, assembly, correlation, scheduling, and policy enforcement.
-
-```mermaid
-flowchart TD
-  REQ["KernelRequest\n(target + reducer_input)"] --> KERNEL["context-kernel-core"]
-
-  KERNEL --> SCHED["context-scheduler-core\nDAG scheduling + budget enforcement"]
-  KERNEL --> REDUCER["Registered reducer\n(diffy, stacky, mapy, etc.)"]
-  KERNEL --> CACHE["context-memory-core\nPacketCache + BM25 recall index"]
-  KERNEL --> POLICY["guardy-core + suite-policy-core\nPolicy evaluation"]
-
-  REDUCER --> PACKET["EnvelopeV1 output packet"]
-  PACKET --> CACHE
-  PACKET --> ASSEMBLY["contextq-core\nassemble / correlate / manage"]
-
-  CACHE --> RECALL["BM25 recall\n+ path/symbol/test indexes"]
-  ASSEMBLY --> FINAL["Bounded context packet\nor correlation insights"]
-```
-
-#### Kernel (`context-kernel-core`)
-
-The kernel is the central dispatch. It receives a `KernelRequest` with a `target` string and routes to a registered reducer:
-
-| Target | Reducer |
-| --- | --- |
-| `diffy.analyze` | Diff analysis against quality gate |
-| `testy.impact` | Test impact from diff + testmap |
-| `stacky.slice` | Stack trace deduplication |
-| `buildy.reduce` | Build diagnostic reduction |
-| `mapy.repo` | Repo structure mapping |
-| `proxy.run` | Safe command execution |
-| `contextq.assemble` | Merge packets into bounded context |
-| `contextq.correlate` | Synthesize insights across packets |
-| `contextq.manage` | Budget-aware context guidance |
-| `governed.assemble` | Policy-constrained assembly |
-| `guardy.check` | Guard policy evaluation |
-| `agenty.state.write` | Append agent state event |
-| `agenty.state.snapshot` | Read agent state snapshot |
-
-The kernel supports two execution modes:
-
-- **Single request**: `execute(request)` — runs one reducer, optionally caches the result
-- **Sequence**: `execute_sequence(steps)` — runs a DAG of steps with dependency ordering, budget enforcement, and reactive replanning via `ScheduleMutation` (cancel/replace/append steps based on prior results)
-
-#### Memory and Recall (`context-memory-core`)
-
-Packets are checkpointed in `.packet28/packet-cache-v3.bin` using a
-length-delimited, BLAKE3-authenticated frame around the versioned Packet28
-binary codec. A matching `.packet28/packet-cache-v3.backup.bin` baseline is
-made durable before the primary checkpoint and WAL reset. Checksummed
-dirty-entry deltas are staged in `.packet28/packet-cache-v3.wal` between
-debounced checkpoints, while `.packet28/packet-cache-v3.lock` serializes
-cross-process WAL sequence and checkpoint changes. The lock state also binds
-the root's TTL policy so another process cannot checkpoint the same cache with
-a different retention window. Persistent mutations are encoded and measured
-before live publication: malformed keys and entries that cannot fit a bounded
-WAL frame are rejected, while coalesced deltas are split into ordered frames.
-
-Unauthenticated legacy raw V3 checkpoint payloads are deliberately rejected:
-cache state is disposable, and accepting a structurally decodable but
-unverified payload would make silent result corruption possible. V1/V2
-migration remains available only when no current V3 WAL exists. A corrupt or
-gapped WAL remains fail-closed when an existing checkpoint artifact cannot be
-authenticated. A root with no checkpoint artifacts is instead treated as an
-empty trusted baseline: its valid WAL prefix is retained, a torn tail is
-trimmed, and an authenticated V3 checkpoint is bootstrapped before new writes.
-Long-lived callers should invoke the kernel's bounded cache-persistence
-shutdown API; dropping an owner is non-blocking and does not wait indefinitely
-on filesystem coordination.
-
-The cache maintains six indexes:
-
-| Index | Key | Value | Used For |
-| --- | --- | --- | --- |
-| `recall_postings` | Term | (cache_key, term_frequency) | BM25 full-text search |
-| `file_ref_index` | Canonical path | Cache keys | Path-based lookup |
-| `basename_alias_index` | Filename only | Canonical paths | Cross-reducer path normalization |
-| `symbol_index` | Symbol name | Cache keys | Symbol-based lookup |
-| `test_index` | Test name | Cache keys | Test-based lookup |
-| `task_index` | Task ID | Cache keys | Per-task scoping |
-
-Recall uses BM25 scoring (k1=1.5, b=0.75) plus structured field matching. A query like "coverage gap in AuthService" matches both text terms and the symbol index. Results are ranked by a weighted combination of BM25 score, path/symbol match bonuses, and recency.
-
-```rust
-RecallOptions {
-    limit: 8,
-    scope: TaskFirst,       // Task-scoped entries first, then global
-    path_filters: ["src/auth.rs"],
-    symbol_filters: ["AuthService"],
-    since_unix: Some(week_ago),
-}
-```
-
-Recall returns `RecallHit` with score, summary, matched paths/symbols, match reasons, budget estimate, and associated task IDs.
-
-#### Assembly and Correlation (`contextq-core`)
-
-- **Assemble**: Merges multiple reducer packets into one bounded context packet. Extracts sections and refs from each input, ranks by relevance, truncates to fit `budget_tokens` and `budget_bytes`. Output: `AssembledPayload` with sections, refs, and truncation metadata.
-- **Correlate**: Finds relationships across packets using four rules:
-  - `shared_file`: Packets reference the same file path (with basename normalization)
-  - `shared_symbol`: Packets reference the same symbol
-  - `shared_test`: Packets reference the same test
-  - `map_edge_connects`: A repo map edge connects files from different packets
-- **Manage**: Produces budget-aware guidance: working set size, eviction candidates, recommendations for which packets to keep or drop.
-
-#### Scheduler (`context-scheduler-core`)
-
-Topological DAG scheduler with budget enforcement. Takes a set of steps with dependencies and estimated costs, orders them, and stops when budget is exhausted. Supports reactive mutations: cancel, replace, or append steps mid-sequence based on reducer outputs.
-
-#### Policy and Guard (`guardy-core`, `suite-policy-core`)
-
-Optional governance via `context.yaml`:
-
-```yaml
-version: 1
-policy:
-  tools:
-    allowlist: [Packet28, git]
-  reducers:
-    allowlist: [diffy.analyze, mapy.repo, stacky.slice]
-  paths:
-    include: ["src/**"]
-    exclude: ["**/*.secret"]
-  budgets:
-    token_cap: 10000
-    runtime_ms_cap: 5000
-  redaction:
-    forbidden_patterns: ["SECRET_KEY_\\w+"]
-  human_review:
-    required: false
-    on_policy_violation: true
-```
-
-Guard evaluates packets against policy and reports violations. Governed assembly applies policy constraints during context assembly.
-
-### Layer 4: CLI, Daemon, and Agent Surface
-
-#### Packet28 CLI (`suite-cli`)
-
-The umbrella CLI exposes all domains through a consistent interface:
-
-```
-Packet28 cover check          Coverage quality gate
-Packet28 diff analyze         Diff analysis against gate
-Packet28 test impact          Impacted tests from diff
-Packet28 test shard           Test shard planning
-Packet28 test map             Build testmap artifacts
-Packet28 stack slice          Stack trace reduction
-Packet28 build reduce         Build diagnostic reduction
-Packet28 map repo             Repo structure mapping
-Packet28 proxy run            Safe command execution
-Packet28 gain                 Aggregate estimated token savings
-Packet28 context assemble     Merge packets into bounded context
-Packet28 context correlate    Cross-packet insight synthesis
-Packet28 context manage       Budget-aware context guidance
-Packet28 context state        Agent state append/snapshot
-Packet28 context store        List/get/prune/stats on persisted packets
-Packet28 context recall       BM25 + structured recall query
-Packet28 guard validate       Validate policy config
-Packet28 guard check          Evaluate packet against policy
-Packet28 packet fetch         Retrieve persisted artifact by handle
-Packet28 agent-prompt         Generate agent instruction fragments
-Packet28 mcp serve|proxy      Expose Packet28 as an MCP server or proxy upstream MCP servers
-Packet28 daemon               Daemon lifecycle and task management
-Packet28 setup                Configure Claude/Cursor/Codex/Windsurf integration files
-Packet28 init --agent windsurf --yes --root .
-Packet28 init --mode all --yes --root .
-Packet28 doctor --agent windsurf --root .
-Packet28 mcp smoke-test --from-config windsurf
-Packet28 rewrite --json "git status --short"
-Packet28 run --root . git status --short
-Packet28 memory store "Important local project fact"
-Packet28 wakeup --query project --json
-Packet28 feedback record "subject" "correction"
-Packet28 graph inspect
-Packet28 dashboard --root .
-```
-
-Reducer, packet, and context commands emit `suite.packet.v1` JSON wrappers. Three output profiles:
-
-- `--json` or `--json=compact`: Bounded compact payload
-- `--json=full`: Complete payload with all fields
-- `--json=handle`: Compact output + persisted artifact handle for later `packet fetch`
-
-Exit codes: `0` success/passing, `1` domain failure, `2+` runtime/config
-error. The standalone `packet28d` binary uses exit status `2` for argument
-parsing and every top-level startup, runtime, persistence, or cleanup failure.
-
-#### Daemon (`packet28d`)
-
-A local framed daemon that prefers Unix sockets and can fall back to a
-workspace-local Unix endpoint or loopback TCP. It provides persistent state,
-file watching, task streaming, and command routing for long-running agent
-workflows. See the authoritative
-[daemon runtime contract](docs/daemon-runtime.md).
-
-```mermaid
-flowchart TD
-  AGENT["Agent / CI"] -->|"DaemonRequest"| SOCK["runtime.json endpoint\nUnix or loopback TCP"]
-  SOCK --> DAEMON["packet28d"]
-
-  DAEMON --> KERNEL["Kernel execution"]
-  DAEMON --> WATCH["File watchers\n(notify crate)"]
-  DAEMON --> TASKS["Task registry\nwith step DAGs"]
-  DAEMON --> STREAM["Event streaming\nper-step lifecycle"]
-  DAEMON --> CACHE["Persistent PacketCache\nwith recall indexes"]
-
-  WATCH -->|"file changed"| DEBOUNCE["Debounce coalescing\n(PendingWatchEvent)"]
-  DEBOUNCE -->|"flush"| REPLAN["Reactive replan\nrefresh task context"]
-  REPLAN --> STREAM
-
-  STREAM -->|"TaskSubscribe"| AGENT
-```
-
-**Daemon protocol** (`packet28-daemon-protocol`; authenticated endpoint clients
-live in `packet28-daemon-client`, while persistence and recovery live in
-`packet28-daemon-core`):
-
-| Request | Response | Purpose |
-| --- | --- | --- |
-| `Execute` | `Execute` | Run single kernel request |
-| `ExecuteSequence` | `ExecuteSequence` | Submit multi-step task with watches |
-| `TaskStatus` | `TaskStatus` | Query task state |
-| `TaskListPage` (registry V1) | `TaskListPage` (registry V1) | Retrieve revision-fenced, bounded task pages in task-ID order |
-| `TaskCancel` | `TaskCancel` | Generation-fence work, remove watches, reap process groups, quiesce, and persist cancellation |
-| `TaskSubscribe` | `TaskSubscribeAck` + streaming events | Live per-step lifecycle events |
-| `WatchList` / `WatchRemove` | Watch metadata | Manage file watchers |
-| `WatchListPage` (registry V1) | `WatchListPage` (registry V1) | Retrieve revision-fenced, optionally task-filtered watch pages |
-| `CoverCheck` | `CoverCheck` | Direct cover check (no kernel overhead) |
-| `ContextRecall` | `ContextRecall` | Recall from daemon's persistent cache |
-| `ContextStore*` | Store metadata | List/get/prune/stats on cache |
-| `Status` / `Stop` | `Status` / `Ack` | Legacy exhaustive status / lifecycle control |
-| `Status` (registry V1) | `Status` (registry V1) | Bounded liveness metadata, registry counts, and a pagination revision |
-
-Registry V1 is an additive envelope in the protocol crate's `registry`
-module. Its wire tags are `registry_status_v1`, `task_list_page_v1`, and
-`watch_list_page_v1`; every page after the first echoes the returned
-`snapshot_revision`. That token combines a random daemon-instance identifier
-with a monotonic mutation counter, so an intervening mutation or restart fails
-explicitly instead of mixing snapshots. The frozen legacy `Status` shape remains
-exhaustive when it fits its bounded response and otherwise returns an explicit
-error directing callers to registry V1.
-
-Watch kinds: `File` (glob pattern), `Git` (ref changes), `TestReport` (test result files).
-
-Daemon persistence:
-- `.packet28/daemon/packet28d.sock` — Workspace-local Unix fallback
-- `.packet28/daemon/runtime.json` — PID, startup/readiness time, selected Unix or TCP endpoint
-- `.packet28/daemon/packet28d.log` — Daemon logs
-- `.packet28/daemon/watch-registry-v1.json` — Active watches
-- `.packet28/daemon/task-registry-v1.json` — Task state
-- `.packet28/daemon/task-watch-checkpoint-v1.json` — Committed task/watch generation and digests
-- `.packet28/daemon/tasks/<id>/events.jsonl` — Per-task event log
-- `.packet28/packet-cache-v3.bin` — Persistent packet-cache checkpoint with indexes
-- `.packet28/packet-cache-v3.backup.bin` — Authenticated checkpoint recovery baseline
-- `.packet28/packet-cache-v3.wal` — Checksummed dirty-entry deltas between checkpoints
-- `.packet28/packet-cache-v3.lock` — Cross-process sequence/checkpoint coordination
-
-The `--via-daemon` flag on any Packet28 command routes execution through the daemon instead of running locally. The daemon auto-starts if not running.
-
-#### Agent Surface
-
-Three entry points for agent integration:
-
-**`Packet28 setup`** is the fastest way to wire Packet28 into a local agent runtime:
-
-```bash
-Packet28 setup --runtime all --yes
-Packet28 init --agent windsurf --yes --root .
-```
-
-It updates runtime config where supported (`.mcp.json`, `.cursor/mcp.json`, `~/.codex/config.toml`, `~/.codeium/windsurf/mcp_config.json`), installs repo-local hooks for Claude/Cursor/Codex/Windsurf, writes runtime instruction fragments, and verifies the daemon plus regex trigram index state. Existing JSON/TOML config is preserved: setup refuses to overwrite invalid config so users can fix the file explicitly instead of silently losing configuration.
-
-Packet28's MCP surface includes:
-
-- Tools for slim reducer search, region reads, state writes, handoff assembly, and stored artifact fetches
-- Agent health checks such as `packet28.agent_status`, which reports setup health, active task state, hook config presence, and safe reducer-cache policy
-- Compatibility tools for command reduction, rewrite planning, handoff, and doctor checks: `packet28.reduce`, `packet28.rewrite`, `packet28.handoff`, and `packet28.doctor`
-- Local memory, feedback, and graph tools: `packet28.memory_store`, `packet28.memory_recall`, `packet28.memory_list`, `packet28.feedback_record`, `packet28.feedback_search`, `packet28.feedback_stats`, and `packet28.graph_inspect`
-- Prompt entry points such as `packet28.start_task`, `packet28.continue_task`, and `packet28.summarize_current_context`
-- Task resources plus ergonomic current-task aliases like `packet28://current/task` and `packet28://current/brief`
-
-**`Packet28 agent-prompt`** generates instruction fragments for agent config files:
-
-```bash
-Packet28 agent-prompt --format claude    # CLAUDE.md fragment
-Packet28 agent-prompt --format agents    # AGENTS.md fragment
-Packet28 agent-prompt --format cursor    # Cursor rule fragment
-```
-
-Output tells the agent how to use Packet28's slim reducer loop and checkpointed handoff flow before broad file reads, while still falling back to direct reads for trivial edits or broker failures.
-
-**`packet28-agent`** is a wrapper binary that bootstraps a delegated agent runtime from a checkpointed handoff:
-
-```bash
-packet28-agent \
-  --task "investigate flaky parser test" \
-  -- codex exec "review the failure"
-```
-
-The wrapper:
-1. Resolves a stable task ID from `--task`
-2. Waits for or fetches a checkpointed handoff packet
-3. Persists it to `.packet28/agent/latest-bootstrap.json`
-4. Exports `PACKET28_*` environment variables for the bootstrap packet, state snapshot, broker tools, MCP command, and repo root
-5. Executes the delegated command, propagating its exit code
-
-#### Handoff Flow
-
-The reducer-plus-handoff loop is the primary agent entry point.
-
-```mermaid
-flowchart LR
-  WORKER["Worker agent turn"] --> REDUCERS["Slim reducers\nsearch/read/tool packets"]
-  REDUCERS --> STATE["hooks -> daemon\npersisted slim packets"]
-  WORKER --> INTENT["write_intention\nsemantic objective only"]
-  INTENT --> STATE
-  STATE --> HANDOFF["prepare_handoff\ncompressed context packet"]
-  HANDOFF --> RELAUNCH["daemon/wrapper\nfresh worker relaunch"]
-  RELAUNCH --> WORKER
-```
-
-Operationally:
-
-1. Runtime hooks keep reducer traffic out of the visible MCP loop.
-2. The worker writes intent only when the objective or next step changes materially.
-3. The daemon assembles a denoised handoff packet after threshold or stop boundaries.
-4. A fresh worker resumes from that handoff packet instead of growing the original session indefinitely.
-
-## Binaries
-
-| Binary | Package | Purpose |
-| --- | --- | --- |
-| `Packet28` | `suite-cli` | Umbrella CLI for all domains |
-| `packet28-agent` | `suite-cli` | Wrapper that relaunches delegated agents from checkpointed handoff packets |
-| `packet28d` | `packet28d` | Local daemon for persistent state and file watching |
-| `p28` | `packet28-search-cli` | Indexed repository search CLI |
-| `covy` | `covy-cli` | Legacy coverage CLI: check, ingest, report, diff, testmap, impact, shard, merge |
-| `diffy` | `diffy-cli` | Diff-focused gate analysis |
-| `testy` | `testy-cli` | Test impact and sharding |
-
-## Crate Map
-
-| Group | Crates |
-| --- | --- |
-| Shared contracts | `suite-packet-core`, `suite-foundation-core`, `covy-core` |
-| Reducers | `covy-ingest`, `diffy-core`, `testy-core`, `stacky-core`, `buildy-core`, `mapy-core`, `suite-proxy-core`, `suite-ingest` |
-| Context runtime | `context-kernel-core`, `context-memory-core`, `context-scheduler-core`, `contextq-core` |
-| Governance | `guardy-core`, `suite-policy-core` |
-| CLI + daemon | `suite-cli`, `packet28-daemon-protocol`, `packet28-daemon-client`, `packet28-daemon-core`, `packet28d`, `packet28-reducer-core` |
-| Legacy CLIs | `covy-cli`, `diffy-cli`, `testy-cli`, `testy-cli-common` |
-
-```mermaid
-flowchart TD
-  subgraph Surface["Agent Surface"]
-    PA["packet28-agent"]
-    P28["Packet28 CLI"]
-    PROMPT["agent-prompt"]
-  end
-
-  subgraph Daemon["Daemon"]
-    D["packet28d"]
-    DP["packet28-daemon-protocol"]
-    DCL["packet28-daemon-client"]
-    DC["packet28-daemon-core"]
-  end
-
-  subgraph Runtime["Context Runtime"]
-    K["context-kernel-core"]
-    M["context-memory-core"]
-    S["context-scheduler-core"]
-    CQ["contextq-core"]
-    G["guardy-core"]
-    POL["suite-policy-core"]
-  end
-
-  subgraph Reducers["Reducers"]
-    DIF["diffy-core"]
-    TES["testy-core"]
-    STA["stacky-core"]
-    BUI["buildy-core"]
-    MAP["mapy-core"]
-    PRX["suite-proxy-core"]
-    ING["suite-ingest"]
-  end
-
-  subgraph Shared["Contracts"]
-    PKT["suite-packet-core"]
-    FND["suite-foundation-core"]
-    COV["covy-core"]
-  end
-
-  PA --> P28
-  P28 --> K
-  P28 --> DP
-  P28 --> DCL
-  P28 --> DC
-  DCL --> DP
-  D --> DP
-  D --> DC
-  D --> K
-  D --> M
-  DC --> DP
-
-  K --> S
-  K --> M
-  K --> CQ
-  K --> G
-  K --> DIF
-  K --> TES
-  K --> STA
-  K --> BUI
-  K --> MAP
-  K --> PRX
-  K --> ING
-
-  CQ --> PKT
-  G --> FND
-  POL --> PKT
-  M --> PKT
-  S --> PKT
-
-  DIF --> FND
-  TES --> FND
-  STA --> PKT
-  BUI --> PKT
-  MAP --> PKT
-  PRX --> PKT
-  ING --> PKT
-  FND --> PKT
-  ING --> COV
-```
-
-## Persistence
-
-All persistent state lives under `.packet28/` at the workspace root:
-
-```
-.packet28/
-├── packet-cache-v3.bin          Packet-cache checkpoint with BM25 + ref indexes
-├── packet-cache-v3.backup.bin   Authenticated checkpoint recovery baseline
-├── packet-cache-v3.wal          Checksummed dirty-entry deltas
-├── packet-cache-v3.lock         Cross-process sequence/checkpoint coordination
-├── artifacts/                   Full packet artifacts for --json=handle
-├── agent/
-│   └── latest-bootstrap.json    Last handoff bootstrap from packet28-agent
-└── daemon/
-    ├── packet28d.sock           Workspace-local Unix fallback
-    ├── runtime.json             Daemon PID, readiness, selected endpoint
-    ├── packet28d.log            Daemon log
-    ├── watch-registry-v1.json   Active file watches
-    ├── task-registry-v1.json    Task state
-    ├── task-watch-checkpoint-v1.json
-    │                            Committed task/watch generation and digests
-    └── tasks/
-        └── <task-id>/
-            └── events.jsonl     Per-task event log
-```
-
-Coverage state from the legacy `covy` CLI lives under `.covy/state/`.
-
-## Installation
-
-Build from source:
-
-```bash
-cargo build --locked --release -p suite-cli -p packet28d
-```
-
-Or install the npm wrapper binaries:
-
-```bash
-npm install -g packet28
-```
-
-The npm package installs:
-
-- `packet28` for the main CLI
-- `packet28-mcp` for `Packet28 mcp serve`
-- `p28` for instant indexed regex search
-
-## Quick Start
-
-Run the setup wizard. This is the `npx nia-wizard` style path: one command,
-auto-detect local agent runtimes, review the plan, preserve existing config,
-write MCP/hooks/instruction files, start the daemon, build indexes, and print
-verification commands.
+To try the setup flow without a global install:
 
 ```bash
 npx packet28@latest
 ```
 
-For CI or scripted installs, skip prompts with `--yes`:
+To build from source, install the pinned Rust toolchain and build the two main
+packages:
 
 ```bash
-npx packet28@latest setup --runtime all --yes
+rustup show
+cargo build --release --locked -p suite-cli -p packet28d
+./target/release/Packet28 --version
 ```
 
-Run Packet28 as an MCP server:
+The npm package exposes `packet28`, `packet28-agent`, `packet28-mcp`, and `p28`.
+Source builds also include the `Packet28` umbrella CLI and `packet28d`.
+
+## First run
+
+Configure every detected agent runtime, start the daemon, build the local
+indexes, and verify the integration:
 
 ```bash
-./target/release/Packet28 mcp serve --root .
-# or, if installed via npm:
+packet28 setup --runtime all --yes
+packet28 doctor --root .
+```
+
+Run Packet28 as a native MCP server:
+
+```bash
 packet28-mcp --root .
 ```
 
-Prefer Packet28 as an MCP proxy when you want upstream tool usage to become part of the next Packet28 brief:
+Or proxy upstream MCP servers so their tool activity becomes part of the next
+Packet28 brief:
 
 ```bash
-./target/release/Packet28 mcp proxy --root . --upstream-config .mcp.proxy.json
+packet28 mcp proxy --root . --upstream-config .mcp.proxy.json
 ```
 
-Example reducer-plus-handoff loop:
+See [Getting started](docs/getting-started.md) for runtime-specific setup,
+configuration, and a guided first task.
 
-1. Install runtime hooks with `Packet28 setup --runtime all --yes`.
-2. Let hooks persist reducer packets into the daemon automatically during the turn.
-3. Use normal shell/search/read tools; reducer-runner cache validity includes workspace fingerprints, so out-of-band edits do not replay stale command results.
-4. Call `packet28.write_intention` only for semantic objective changes.
-5. Call `packet28.agent_status` or `packet28.validate_tool_outcome` when an agent needs health or result confidence; no manual MCP JSON-RPC wrapper is required after setup.
-6. Call `packet28.prepare_handoff` only for explicit bootstrap or inspection.
-7. Relaunch a fresh worker from the handoff packet through `packet28-agent` or `Packet28 daemon task launch-agent`.
+## The agent loop
 
-Run the local hook benchmark suite:
+Packet28 keeps routine tool traffic small and moves durable context assembly to
+explicit boundaries:
 
-```bash
-python3 scripts/benchmark_hook_suite.py --root .
-python3 scripts/benchmark_hook_suite.py --root . --derive-gh-repo
+1. Hooks and MCP tools capture search, read, command, and reducer results as
+   compact packets.
+2. `packet28.write_intention` records a meaningful objective or next-step
+   change.
+3. The daemon persists task state and relevant artifacts outside the active
+   worker's context.
+4. `packet28.prepare_handoff` produces a bounded brief for inspection or a fresh
+   worker.
+5. `packet28-agent` can relaunch delegated work from that checkpoint.
+
+Direct tools remain the right choice for trivial edits. Packet28 is most useful
+when the task spans many artifacts, multiple turns, or repeated repository
+exploration.
+
+## Common commands
+
+| Goal | Command |
+| --- | --- |
+| Check integration health | `packet28 doctor --root .` |
+| Start or inspect the daemon | `packet28 daemon start --root .` / `packet28 daemon status --root . --json` |
+| Search the workspace index | `p28 "symbol or pattern"` |
+| Recall persisted context | `packet28 context recall --root . --query "what changed" --json` |
+| Inspect coverage changes | `packet28 cover check --coverage coverage/lcov.info --base main --head HEAD --json` |
+| Analyze a diff | `packet28 diff analyze --coverage coverage/lcov.info --base main --head HEAD --json` |
+| Reduce diagnostics | `packet28 build reduce --input build.log --json` |
+| Reduce a stack trace | `packet28 stack slice --input crash.log --json` |
+| Map a repository area | `packet28 map repo --repo-root . --focus-symbol AuthService --json` |
+| Inspect local state | `packet28 daemon storage inspect --root . --json --pretty` |
+| Preview retention | `packet28 daemon storage cleanup --root . --max-age-seconds 604800` |
+
+Run `packet28 --help` or `packet28 <command> --help` for the complete CLI.
+
+## Architecture
+
+Packet28 is a Rust workspace of 34 crates organized into four layers:
+
+```text
+agent and CI surfaces
+        │
+        ▼
+CLI, MCP, daemon, and authenticated protocol
+        │
+        ▼
+context kernel, scheduling, memory, policy, and search
+        │
+        ▼
+reducers and shared packet/storage contracts
 ```
 
-The suite writes per-case JSON plus a `summary.json` under `.packet28/benchmarks/...`. CI also runs the suite and uploads the artifact bundle through the `Hook Benchmark Suite` workflow.
-CI validates the results against conservative regression thresholds with `scripts/validate_hook_benchmarks.py` and publishes both the benchmark table and validation report into the workflow summary.
+The important boundaries are intentionally narrow:
 
-Token-reduction claims are benchmark-scoped. The 90%+ target applies to eligible broad hook reductions and slim agentic context, where raw command output is large enough for compaction to matter. The CI gate currently checks a weighted hook-suite reduction of at least 85%, an agentic slim-context reduction of at least 90%, and an agentic context-with-optional-artifacts reduction of at least 50%. Tiny exact greps can be larger after Packet28 adds summary and file:line context; those cases are still validated for correctness and actionable regions, but they are not counted as savings evidence.
+- shared crates own wire types, packet schemas, filesystem authority, and
+  portable invariants;
+- reducers transform one artifact family without owning orchestration;
+- the context kernel composes reducers, budgets, cache, recall, and policy;
+- the daemon owns lifecycle, persistence, watches, task execution, and the
+  Tokio orchestration boundary;
+- CLIs and MCP adapters translate user requests and present typed failures.
 
-Generate agent instructions directly:
+The compatibility facade, daemon protocol, persistence owner, and runtime
+dependency rules are mechanically checked. Read [Architecture](docs/architecture.md)
+for data flow, crate ownership, extension rules, and migration guidance.
 
-```bash
-./target/release/Packet28 agent-prompt --format claude >> CLAUDE.md
-```
+## State and safety
 
-Use the wrapper to launch an agent from a checkpointed handoff:
+Packet28 stores workspace-local state under `.packet28/`. Important durable
+state is checksummed, versioned, and written through authenticated filesystem
+capabilities. Daemon task/watch registries use checkpoint plus WAL recovery;
+cache corruption fails closed or falls back to an authenticated baseline.
 
-```bash
-./target/release/packet28-agent \
-  --task "investigate flaky parser test" \
-  -- codex exec "review the failure"
-```
+Retention is always a dry run unless `--apply` is provided. Active, malformed,
+aliased, symlinked, or concurrently changing state is protected instead of
+deleted. Stop `packet28d` before applying a reviewed cleanup plan.
 
-Run individual reducers:
-
-```bash
-# Coverage gate
-./target/release/Packet28 cover check \
-  --coverage report.xml --base HEAD~1 --head HEAD --json
-
-# Diff analysis
-./target/release/Packet28 diff analyze \
-  --coverage report.xml --base HEAD~1 --head HEAD --json
-
-# Repo map focused on a symbol
-./target/release/Packet28 map repo \
-  --repo-root . --focus-symbol AuthService --json
-
-# Stack trace reduction
-./target/release/Packet28 stack slice --input crash.log --json
-
-# Build diagnostic reduction
-./target/release/Packet28 build reduce --input build.log --json
-
-# Test impact
-./target/release/Packet28 test impact \
-  --base main --head HEAD --testmap .covy/state/testmap.bin --json
-```
-
-Recall prior context:
-
-```bash
-./target/release/Packet28 context recall \
-  --root . --query "coverage gap AuthService" --limit 5 --json
-```
-
-Start the daemon for persistent state and file watching:
-
-```bash
-./target/release/Packet28 daemon start --root .
-./target/release/Packet28 daemon status --root . --json
-```
-
-Route commands through the daemon:
-
-```bash
-./target/release/Packet28 diff analyze \
-  --coverage report.xml --base HEAD~1 --head HEAD \
-  --via-daemon --json
-```
-
-Assemble multiple packets into a bounded context:
-
-```bash
-./target/release/Packet28 context assemble \
-  --packet cover.json --packet diff.json --packet map.json \
-  --budget-tokens 5000 --json
-```
+Read [Operations](docs/operations.md), the
+[daemon runtime contract](docs/daemon-runtime.md), and
+[task-store retention](docs/task-store-retention.md) before automating daemon
+or storage maintenance.
 
 ## Configuration
 
-`covy.toml` is the shared config entry point:
+`covy.toml` is the project configuration entry point for coverage ingestion,
+diff refs, quality gates, path mapping, cache, impact, shard, and merge policy.
+Start from [covy.toml.example](covy.toml.example).
 
-```toml
-[project]
-name = "my-project"
+`context.yaml` is optional and constrains tools, reducers, paths, budgets,
+redaction, and human-review behavior. Runtime setup preserves existing valid
+agent configuration and refuses to replace malformed JSON or TOML.
 
-[ingest]
-report_paths = ["target/site/jacoco/jacoco.xml"]
-strip_prefixes = ["src/main/java/"]
+Instruction files have two modes:
 
-[diff]
-base = "origin/main"
-head = "HEAD"
+- a stable prefix containing long-lived repository rules; and
+- an adaptive broker brief containing task-specific state.
 
-[gate]
-fail_under_total = 80.0
-fail_under_changed = 90.0
+Keeping those concerns separate improves prompt-cache stability without
+pretending that local cache hits prove provider-side cost or instruction
+adherence. See [Instruction rendering modes](docs/instruction-rendering-modes.md).
 
-[gate.issues]
-max_new_errors = 0
-max_new_warnings = 5
+## Documentation
+
+- [Documentation map](docs/README.md)
+- [Getting started](docs/getting-started.md)
+- [Architecture](docs/architecture.md)
+- [Operations](docs/operations.md)
+- [Development and validation](docs/development.md)
+- [Contributing](CONTRIBUTING.md)
+- [Release package verification](docs/release-package-verification.md)
+- [Architecture-audit remediation ledger](docs/architecture-audit-remediation-20260728.md)
+
+## Development
+
+The fastest focused gate is:
+
+```bash
+scripts/validate_refactor_batch.sh
 ```
 
-Optional governance via `context.yaml` for policy-constrained execution. The current machine-readable reference material lives in `schemas/` and `scripts/ci/`.
-
-## Reference Artifacts
-
-| Artifact | Path |
-| --- | --- |
-| Packet wrapper schema | `schemas/packet-wrapper/suite.packet.v1.schema.json` |
-| Packet type schemas | `schemas/packet-types/` |
-| Snapshot fixtures for compact/full/handle profiles | `schemas/snapshots/` |
-| GitHub Actions example | `scripts/ci/github-actions.yml` |
-| GitLab CI example | `scripts/ci/gitlab-ci.yml` |
-| Benchmark notes | `scripts/benchmark_packet28.md` |
-| Agent search benchmark harness | `scripts/benchmark_agent_search.md` |
-| Hook rewrite benchmark | `scripts/benchmark_hook_rewrite.py` |
-| Hook rewrite suite | `scripts/benchmark_hook_suite.py` |
-| Hook benchmark validator | `scripts/validate_hook_benchmarks.py` |
-
-Repository-local MCP config example: `.mcp.json`.
-
-## Validation
-
-Use `scripts/validate_refactor_batch.sh` for fast, package-focused iteration.
-The canonical pre-commit and release gate is:
+The canonical local/CI gate is:
 
 ```bash
 scripts/validate_full_gate.sh
 ```
 
-It requires the checksum-pinned `cargo-deny` 0.20.2 binary that CI installs via
-`scripts/install_cargo_deny.sh`. Use `--list` to inspect the gate without
-executing it. The bounded process/MCP fixture boundary and its mechanically
-checked exceptions are documented in
-[`docs/integration-test-harness.md`](docs/integration-test-harness.md). CI also
-runs the declared minimum toolchain separately:
+It verifies the locked dependency graph, formatting, workspace check/build,
+strict Clippy, all-feature tests and doctests, strict rustdoc, architecture
+rules, supply-chain policy, direct-minimum dependencies, packaging, and
+repository-maintained experiments. The exact MSRV path is:
 
 ```bash
 rustup run 1.88.0 scripts/validate_full_gate.sh --msrv
 ```
 
-Release automation adds `--release-tag vX.Y.Z`, which rejects mismatches among
-the tag, Cargo version, npm manifests, platform dependency versions, and release
-notes before any package is published.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing public APIs, protocol
+types, persistence, FFI, or release automation.
 
-## Project Stats
+## Project stats
 
 <!-- BEGIN GENERATED PROJECT STATS -->
-- 260,886 lines across 677 Rust files
+- 270,111 lines across 681 Rust files
 - 34 crates in the workspace
 - 8 Cargo binary targets (including one internal generator)
 <!-- END GENERATED PROJECT STATS -->
