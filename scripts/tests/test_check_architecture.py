@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_architecture.py"
 REQUIRED_PACKAGES = (
     "packet28-daemon-protocol",
+    "packet28-daemon-client",
     "context-instruct-shim",
     "packet28-daemon-core",
     "suite-packet-core",
@@ -285,13 +286,16 @@ class ArchitectureDependencyTests(unittest.TestCase):
                     ("context-kernel-core", "build"),
                 ],
                 "context-instruct-shim": [
+                    ("packet28-daemon-client", None),
+                ],
+                "packet28-daemon-client": [
                     ("packet28-daemon-protocol", None),
                 ],
                 "packet28-daemon-core": [
                     ("packet28-daemon-protocol", None),
                 ],
                 "packet28-search-cli": [
-                    ("packet28-daemon-protocol", None),
+                    ("packet28-daemon-client", None),
                 ],
             }
         )
@@ -320,6 +324,31 @@ class ArchitectureDependencyTests(unittest.TestCase):
         )
         self.assertIn(
             "packet28-daemon-protocol -> packet28-daemon-core",
+            result.stderr,
+        )
+
+    def test_daemon_client_must_not_reach_daemon_runtime(self) -> None:
+        fixture = metadata(
+            {
+                "packet28-daemon-client": [
+                    ("packet28-daemon-protocol", None),
+                    ("adapter-bridge", None),
+                ],
+                "adapter-bridge": [("packet28-daemon-core", None)],
+            },
+            additional_packages=("adapter-bridge",),
+        )
+
+        result = self.run_checker(fixture)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "packet28-daemon-client reaches forbidden normal dependency "
+            "packet28-daemon-core",
+            result.stderr,
+        )
+        self.assertIn(
+            "packet28-daemon-client -> adapter-bridge -> packet28-daemon-core",
             result.stderr,
         )
 

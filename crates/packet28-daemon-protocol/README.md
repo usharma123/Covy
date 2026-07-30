@@ -25,6 +25,11 @@ before binding. Clients must authenticate the connected server UID before
 sending a frame and must never fall back to sending ordinary requests on a TCP
 connection when the capability is absent.
 
+Use `packet28-daemon-client` when a process needs authenticated runtime
+discovery or a ready-to-use daemon connection. This protocol crate
+intentionally keeps filesystem trust checks and socket operations outside the
+wire contract.
+
 ## Migrating from `packet28-daemon-core`
 
 Existing root imports continue to compile through daemon-core's unconditional

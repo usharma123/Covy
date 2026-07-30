@@ -10,6 +10,7 @@ public documentation inventory.
 | Owner | Responsibility | Must not own |
 | --- | --- | --- |
 | `packet28-daemon-protocol` | Wire DTOs, request/response tags, bounded JSON framing, and deterministic endpoint paths. | Runtime, storage, kernels, memory, search, or Tokio orchestration. |
+| `packet28-daemon-client` | Authenticated runtime discovery, Unix server-credential verification, and the TCP capability prelude. | Daemon runtime, persistence, kernels, memory, search, or Tokio orchestration. |
 | `packet28-daemon-core` | Typed storage errors, task/event persistence, integrity, leases, trust checks, recovery, and retention. | The server lifecycle or new wire contracts. Its root re-exports are a frozen `0.2.x` compatibility facade. |
 | `packet28d::application` | One daemon instance: recovery, state construction, Tokio ownership, listeners, workers, cancellation, joining, and final cleanup. | CLI parsing or broker implementation details. |
 | `packet28d::broker` | Context, handoff, write-state, search, rendering, limits, snapshots, and a small explicit crate-internal facade. | Application lifecycle ownership or parent-prelude wildcard imports. |
@@ -172,6 +173,8 @@ either a Unix path or `tcp://127.0.0.1:<port>`. The conventional socket path is
 not authoritative when fallback transport is active. Runtime discovery is
 published as an authenticated owner-only regular file. A TCP runtime also
 contains `transport_auth`, a redacted-in-debug 256-bit per-instance capability.
+The suite CLI, `p28`, and the Linux and macOS instruction shims all follow this
+same discovery and authentication contract.
 Capability-bearing metadata is rejected if any group or other permission bit
 is present, including read-only exposure; legacy secret-free Unix metadata may
 remain owner-readable with conventional `0644` permissions.
@@ -192,7 +195,8 @@ after its queued frames drain and resumes from its last sequence with
 `TaskSubscribe.after_seq`. Watch overflow is coalesced for the current
 generation and reported on the next trigger before conservative replanning.
 
-`packet28-daemon-protocol` is the preferred client dependency.
+`packet28-daemon-client` is the preferred connection dependency;
+`packet28-daemon-protocol` remains the implementation-free wire dependency.
 `packet28-daemon-core` retains an explicit, frozen root facade through the
 `0.2.x` line for source compatibility; new protocol items are not added there.
 Protocol framing returns `FrameError`, daemon storage returns

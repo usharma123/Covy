@@ -87,9 +87,11 @@ runtime path has been benchmarked or revalidated.
 ### Daemon and tests
 
 - `crates/packet28-daemon-protocol` owns implementation-free wire DTOs,
-  framing, and endpoint paths. `crates/packet28-daemon-core` owns typed storage,
-  integrity, leases, recovery, and retention plus a frozen `0.2.x`
-  compatibility facade.
+  framing, and endpoint paths. `crates/packet28-daemon-client` owns
+  authenticated endpoint discovery, Unix server-credential checks, and the TCP
+  capability prelude without depending on runtime implementations.
+  `crates/packet28-daemon-core` owns typed storage, integrity, leases, recovery,
+  and retention plus a frozen `0.2.x` compatibility facade.
 - `crates/packet28d/src/application.rs` owns the server lifecycle and
   `packet28d::serve`; `src/main.rs` is only the CLI/exit adapter. Broker
   context, handoff, search, rendering, limits, snapshots, and writes live under

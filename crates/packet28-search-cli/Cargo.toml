@@ -19,10 +19,14 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+packet28-daemon-client.workspace = true
 packet28-daemon-protocol.workspace = true
 packet28-reducer-core.workspace = true
 packet28-search-core.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 assert_cmd.workspace = true

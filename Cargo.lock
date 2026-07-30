@@ -337,7 +337,9 @@ name = "context-instruct-shim"
 version = "0.2.63"
 dependencies = [
  "libc",
+ "packet28-daemon-client",
  "packet28-daemon-protocol",
+ "serde_json",
  "sha2",
 ]
 
@@ -1431,6 +1433,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "packet28-daemon-client"
+version = "0.2.63"
+dependencies = [
+ "libc",
+ "packet28-daemon-protocol",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "packet28-daemon-core"
 version = "0.2.63"
 dependencies = [
@@ -1482,6 +1495,8 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "libc",
+ "packet28-daemon-client",
  "packet28-daemon-protocol",
  "packet28-reducer-core",
  "packet28-search-core",
@@ -2060,6 +2075,7 @@ dependencies = [
  "guardy-core",
  "libc",
  "mapy-core",
+ "packet28-daemon-client",
  "packet28-daemon-core",
  "packet28-daemon-protocol",
  "packet28-reducer-core",

@@ -31,6 +31,7 @@ suite-proxy-core.workspace = true
 suite-ingest.workspace = true
 suite-foundation-core.workspace = true
 suite-packet-core.workspace = true
+packet28-daemon-client.workspace = true
 packet28-daemon-core.workspace = true
 packet28-daemon-protocol.workspace = true
 packet28-reducer-core.workspace = true

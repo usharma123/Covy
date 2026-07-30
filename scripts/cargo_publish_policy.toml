@@ -29,6 +29,7 @@ packages = [
   "guardy-core",
   "mapy-core",
   "packet28-binary-codec",
+  "packet28-daemon-client",
   "packet28-daemon-core",
   "packet28-daemon-protocol",
   "packet28-reducer-core",

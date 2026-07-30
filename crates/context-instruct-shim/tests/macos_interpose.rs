@@ -1,20 +1,21 @@
 #![cfg(target_os = "macos")]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use packet28_daemon_protocol::frame::{read_frame, write_frame};
 use packet28_daemon_protocol::message::{
     ContextBackendKind, ContextResolveOutcome, ContextResolveResponse, ContextSourceKind,
-    DaemonRequest, DaemonResponse, InstructionRenderMode,
+    DaemonRequest, DaemonResponse, DaemonRuntimeInfo, InstructionRenderMode,
 };
-use packet28_daemon_protocol::paths::socket_path;
+use packet28_daemon_protocol::paths::{runtime_path, workspace_socket_path};
 
 static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -22,12 +23,8 @@ struct TestDir(PathBuf);
 
 impl TestDir {
     fn new() -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "context-instruct-shim-macos-{}-{nonce}-{}",
+            "p28im-{}-{}",
             std::process::id(),
             TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
@@ -121,11 +118,20 @@ fn spawn_rewrite_server(
     PathBuf,
     thread::JoinHandle<Result<usize, String>>,
 ) {
-    let socket = socket_path(root);
+    let socket = workspace_socket_path(root);
     fs::create_dir_all(socket.parent().expect("socket has parent"))
         .expect("create daemon socket parent");
     let _ = fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).expect("bind rewrite server");
+    let runtime = DaemonRuntimeInfo {
+        socket_path: socket.to_string_lossy().to_string(),
+        ..DaemonRuntimeInfo::default()
+    };
+    let runtime_path = runtime_path(root);
+    fs::write(&runtime_path, serde_json::to_vec(&runtime).unwrap())
+        .expect("write daemon runtime endpoint");
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o600))
+        .expect("secure daemon runtime endpoint");
     listener
         .set_nonblocking(true)
         .expect("make rewrite server nonblocking");

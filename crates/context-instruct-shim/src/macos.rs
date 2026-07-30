@@ -4,7 +4,6 @@ use std::fs;
 use std::io::{BufReader, BufWriter};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -15,7 +14,7 @@ use packet28_daemon_protocol::{
         ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextResolveResponse,
         ContextSourceKind, DaemonRequest, DaemonResponse, InstructionFileResolveOutcome,
     },
-    paths::{resolve_workspace_root, socket_path},
+    paths::resolve_workspace_root,
 };
 use sha2::{Digest, Sha256};
 
@@ -238,18 +237,17 @@ fn resolve_instruction_file(
     content: &str,
     content_sha256: &str,
 ) -> Option<ContextResolveResponse> {
-    let socket = socket_path(root);
-    if !socket.exists() {
-        debug_log(&format!(
-            "p28 passthrough path={} reason=daemon_socket_missing",
-            root.join(relative_path).display()
-        ));
-        return None;
-    }
-    let stream = UnixStream::connect(&socket).ok()?;
     let timeout = Duration::from_millis(50);
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
+    let stream = match packet28_daemon_client::transport::connect(root, timeout) {
+        Ok(stream) => stream,
+        Err(error) => {
+            debug_log(&format!(
+                "p28 passthrough path={} reason={error}",
+                root.join(relative_path).display()
+            ));
+            return None;
+        }
+    };
     let reader_stream = stream.try_clone().ok()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(reader_stream);

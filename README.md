@@ -31,7 +31,7 @@ This keeps Packet28 useful as both a context broker and a reducer layer: small i
 
 ## Architecture
 
-Packet28 is a Rust workspace of 30 crates organized into four layers:
+Packet28 is a Rust workspace of 33 crates organized into four layers:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -362,8 +362,9 @@ flowchart TD
   STREAM -->|"TaskSubscribe"| AGENT
 ```
 
-**Daemon protocol** (`packet28-daemon-protocol`; persistence and recovery live
-in `packet28-daemon-core`):
+**Daemon protocol** (`packet28-daemon-protocol`; authenticated endpoint clients
+live in `packet28-daemon-client`, while persistence and recovery live in
+`packet28-daemon-core`):
 
 | Request | Response | Purpose |
 | --- | --- | --- |
@@ -483,7 +484,7 @@ Operationally:
 | Reducers | `covy-ingest`, `diffy-core`, `testy-core`, `stacky-core`, `buildy-core`, `mapy-core`, `suite-proxy-core`, `suite-ingest` |
 | Context runtime | `context-kernel-core`, `context-memory-core`, `context-scheduler-core`, `contextq-core` |
 | Governance | `guardy-core`, `suite-policy-core` |
-| CLI + daemon | `suite-cli`, `packet28-daemon-protocol`, `packet28-daemon-core`, `packet28d`, `packet28-reducer-core` |
+| CLI + daemon | `suite-cli`, `packet28-daemon-protocol`, `packet28-daemon-client`, `packet28-daemon-core`, `packet28d`, `packet28-reducer-core` |
 | Legacy CLIs | `covy-cli`, `diffy-cli`, `testy-cli`, `testy-cli-common` |
 
 ```mermaid
@@ -497,6 +498,7 @@ flowchart TD
   subgraph Daemon["Daemon"]
     D["packet28d"]
     DP["packet28-daemon-protocol"]
+    DCL["packet28-daemon-client"]
     DC["packet28-daemon-core"]
   end
 
@@ -528,7 +530,9 @@ flowchart TD
   PA --> P28
   P28 --> K
   P28 --> DP
+  P28 --> DCL
   P28 --> DC
+  DCL --> DP
   D --> DP
   D --> DC
   D --> K
@@ -804,7 +808,7 @@ notes before any package is published.
 ## Project Stats
 
 <!-- BEGIN GENERATED PROJECT STATS -->
-- 162,326 lines across 578 Rust files
-- 30 crates in the workspace
+- 249,121 lines across 660 Rust files
+- 33 crates in the workspace
 - 8 Cargo binary targets (including one internal generator)
 <!-- END GENERATED PROJECT STATS -->

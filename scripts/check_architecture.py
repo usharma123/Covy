@@ -391,10 +391,23 @@ def architecture_rules(graph: CargoMetadataGraph) -> tuple[ArchitectureRule, ...
         "packet28-search-core",
         *graph.workspace_cli_packages(),
     }
+    client_forbidden = {
+        "packet28-daemon-core",
+        "packet28d",
+        "context-kernel-core",
+        "context-memory-core",
+        "packet28-reducer-core",
+        "packet28-search-core",
+        *graph.workspace_cli_packages(),
+    }
     return (
         ArchitectureRule(
             source="packet28-daemon-protocol",
             forbidden=frozenset(protocol_forbidden),
+        ),
+        ArchitectureRule(
+            source="packet28-daemon-client",
+            forbidden=frozenset(client_forbidden),
         ),
         *BASE_RULES,
     )

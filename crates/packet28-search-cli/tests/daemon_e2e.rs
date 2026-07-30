@@ -3,7 +3,12 @@ mod support;
 #[path = "support/daemon.rs"]
 mod daemon_support;
 
-use daemon_support::{cli_with_daemon_env, start_daemon, stop_daemon};
+use daemon_support::{
+    cli_with_daemon_env, start_daemon, start_daemon_forced_tcp, start_daemon_workspace_fallback,
+    stop_daemon,
+};
+use packet28_daemon_protocol::message::DaemonRuntimeInfo;
+use packet28_daemon_protocol::paths::{runtime_path, workspace_socket_path};
 use std::fs;
 
 use predicates::prelude::*;
@@ -23,6 +28,79 @@ fn p28_supports_daemon_transport_for_subtree_roots() {
         .success();
 
     let daemon = start_daemon(workspace);
+
+    cli()
+        .current_dir(&subtree)
+        .args([
+            "Alpha",
+            "--fixed-strings",
+            "--transport",
+            "daemon",
+            "--stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"))
+        .stderr(predicate::str::contains("transport=daemon"))
+        .stderr(predicate::str::contains("backend=indexed_regex"));
+
+    drop(daemon);
+}
+
+#[test]
+fn p28_uses_authenticated_forced_tcp_runtime_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    fs::create_dir_all(workspace.join(".git")).unwrap();
+    let subtree = workspace.join("crates/search-sample");
+    write_fixture(&subtree);
+
+    cli()
+        .args(["debug", "build", workspace.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let daemon = start_daemon_forced_tcp(workspace);
+
+    cli()
+        .current_dir(&subtree)
+        .args([
+            "Alpha",
+            "--fixed-strings",
+            "--transport",
+            "daemon",
+            "--stats",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:1:pub struct Alpha;"))
+        .stderr(predicate::str::contains("transport=daemon"))
+        .stderr(predicate::str::contains("backend=indexed_regex"));
+
+    drop(daemon);
+}
+
+#[test]
+fn p28_uses_authoritative_workspace_socket_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path();
+    fs::create_dir_all(workspace.join(".git")).unwrap();
+    let subtree = workspace.join("crates/search-sample");
+    write_fixture(&subtree);
+
+    cli()
+        .args(["debug", "build", workspace.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let daemon = start_daemon_workspace_fallback(workspace);
+    let runtime: DaemonRuntimeInfo =
+        serde_json::from_slice(&fs::read(runtime_path(workspace)).unwrap()).unwrap();
+    let canonical_workspace = workspace.canonicalize().unwrap();
+    assert_eq!(
+        runtime.socket_path,
+        workspace_socket_path(&canonical_workspace).to_string_lossy()
+    );
 
     cli()
         .current_dir(&subtree)

@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+#[cfg(unix)]
+use packet28_daemon_client::transport::{DaemonEndpoint, DaemonStream};
 use packet28_daemon_core::storage::read_runtime_info;
 use packet28_daemon_protocol::{
     commands::{
@@ -17,26 +19,16 @@ use packet28_daemon_protocol::{
     frame::{read_frame, write_frame},
     message::{
         ContextResolveRequest, ContextResolveResponse, DaemonRequest, DaemonResponse, DaemonStatus,
-        DaemonTransportAuth,
     },
-    paths::{
-        log_path, ready_path, resolve_workspace_root, runtime_path, socket_path,
-        workspace_socket_path,
-    },
+    paths::{log_path, ready_path, resolve_workspace_root, socket_path, workspace_socket_path},
 };
 
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::io::{BufReader, BufWriter, Read, Write};
-#[cfg(unix)]
-use std::net::TcpStream;
-#[cfg(unix)]
-use std::os::fd::AsRawFd as _;
+use std::io::{BufReader, BufWriter};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::process::{Command, Stdio};
 #[cfg(unix)]
@@ -48,60 +40,10 @@ use std::time::{Duration, Instant};
 const DAEMON_SOCKET_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(unix)]
-#[derive(Clone)]
-struct DaemonEndpoint {
-    address: String,
-    transport_auth: Option<DaemonTransportAuth>,
-}
-
-#[cfg(unix)]
 pub struct PersistentDaemonClient {
     root: PathBuf,
     reader: BufReader<DaemonStream>,
     writer: BufWriter<DaemonStream>,
-}
-
-#[cfg(unix)]
-pub(crate) enum DaemonStream {
-    Unix(UnixStream),
-    Tcp(TcpStream),
-}
-
-#[cfg(unix)]
-impl DaemonStream {
-    fn try_clone(&self) -> std::io::Result<Self> {
-        match self {
-            DaemonStream::Unix(stream) => stream.try_clone().map(DaemonStream::Unix),
-            DaemonStream::Tcp(stream) => stream.try_clone().map(DaemonStream::Tcp),
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Read for DaemonStream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            DaemonStream::Unix(stream) => stream.read(buf),
-            DaemonStream::Tcp(stream) => stream.read(buf),
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Write for DaemonStream {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self {
-            DaemonStream::Unix(stream) => stream.write(buf),
-            DaemonStream::Tcp(stream) => stream.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            DaemonStream::Unix(stream) => stream.flush(),
-            DaemonStream::Tcp(stream) => stream.flush(),
-        }
-    }
 }
 
 pub fn via_daemon_env_enabled() -> bool {
@@ -498,117 +440,6 @@ fn daemon_status_existing(root: &Path) -> Result<DaemonStatus> {
 }
 
 #[cfg(unix)]
-fn connect_daemon_socket(socket: &Path) -> Result<DaemonStream> {
-    let stream = UnixStream::connect(socket)
-        .with_context(|| format!("failed to connect to '{}'", socket.display()))?;
-    verify_unix_server_peer(&stream, effective_uid()).with_context(|| {
-        format!(
-            "failed to authenticate Unix daemon endpoint '{}'",
-            socket.display()
-        )
-    })?;
-    stream
-        .set_read_timeout(Some(DAEMON_SOCKET_TIMEOUT))
-        .with_context(|| {
-            format!(
-                "failed to configure read timeout for '{}'",
-                socket.display()
-            )
-        })?;
-    stream
-        .set_write_timeout(Some(DAEMON_SOCKET_TIMEOUT))
-        .with_context(|| {
-            format!(
-                "failed to configure write timeout for '{}'",
-                socket.display()
-            )
-        })?;
-    Ok(DaemonStream::Unix(stream))
-}
-
-#[cfg(unix)]
-fn verify_unix_server_peer(stream: &UnixStream, expected_uid: u32) -> Result<()> {
-    let peer_uid = unix_peer_uid(stream)?;
-    if peer_uid != expected_uid {
-        anyhow::bail!(
-            "Unix daemon peer uid {peer_uid} does not match client effective uid {expected_uid}"
-        );
-    }
-    Ok(())
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
-    let mut credentials = std::mem::MaybeUninit::<libc::ucred>::uninit();
-    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: `credentials` and `length` point to writable storage of the
-    // declared sizes, and `stream` owns a live connected Unix socket.
-    let result = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            credentials.as_mut_ptr().cast(),
-            &mut length,
-        )
-    };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if length as usize != std::mem::size_of::<libc::ucred>() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Unix peer credential response had an unexpected size",
-        ));
-    }
-    // SAFETY: a successful `getsockopt(SO_PEERCRED)` initialized the complete
-    // `ucred` value after the exact returned length was validated.
-    Ok(unsafe { credentials.assume_init() }.uid)
-}
-
-#[cfg(any(
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "dragonfly"
-))]
-fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
-    let mut uid = 0;
-    let mut gid = 0;
-    // SAFETY: `uid` and `gid` are valid writable outputs and `stream` owns a
-    // live connected Unix socket for the duration of the call.
-    let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
-    if result == 0 {
-        Ok(uid)
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_vendor = "apple",
-    target_os = "freebsd",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "dragonfly"
-)))]
-fn unix_peer_uid(_stream: &UnixStream) -> std::io::Result<u32> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "Unix peer credential verification is unavailable on this platform",
-    ))
-}
-
-#[cfg(unix)]
-fn effective_uid() -> u32 {
-    // SAFETY: `geteuid` has no preconditions and does not retain pointers.
-    unsafe { libc::geteuid() }
-}
-
-#[cfg(unix)]
 fn stop_daemon_if_running(root: &Path) -> Result<()> {
     let endpoint = daemon_endpoint(root)?;
     if !endpoint_may_have_stale_socket(&endpoint) {
@@ -655,112 +486,26 @@ fn wait_for_daemon_shutdown(root: &Path, timeout: Duration) -> Result<()> {
     }
     Err(anyhow!(
         "packet28d did not stop; socket still reachable at '{}'",
-        daemon_endpoint(root)?.address
+        daemon_endpoint(root)?.address()
     ))
 }
 
 #[cfg(unix)]
 fn daemon_endpoint(root: &Path) -> Result<DaemonEndpoint> {
-    match read_runtime_info(root) {
-        Ok(runtime) if !runtime.socket_path.is_empty() => {
-            if runtime.socket_path.starts_with("tcp://") && runtime.transport_auth.is_none() {
-                anyhow::bail!(
-                    "refusing legacy unauthenticated daemon TCP endpoint '{}'; stop that daemon \
-                     with its matching Packet28 version and start it again",
-                    runtime.socket_path
-                );
-            }
-            Ok(DaemonEndpoint {
-                address: runtime.socket_path,
-                transport_auth: runtime.transport_auth,
-            })
-        }
-        Ok(_) => Ok(default_daemon_endpoint(root)),
-        Err(error) => match std::fs::symlink_metadata(runtime_path(root)) {
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                Ok(default_daemon_endpoint(root))
-            }
-            _ => Err(anyhow!(
-                "failed to authenticate daemon runtime discovery '{}': {error}",
-                runtime_path(root).display()
-            )),
-        },
-    }
-}
-
-#[cfg(unix)]
-fn default_daemon_endpoint(root: &Path) -> DaemonEndpoint {
-    DaemonEndpoint {
-        address: socket_path(root).to_string_lossy().to_string(),
-        transport_auth: None,
-    }
+    Ok(packet28_daemon_client::transport::discover_endpoint(root)?)
 }
 
 #[cfg(unix)]
 fn endpoint_may_have_stale_socket(endpoint: &DaemonEndpoint) -> bool {
-    endpoint
-        .address
-        .strip_prefix("tcp://")
-        .map(|_| true)
-        .unwrap_or_else(|| Path::new(&endpoint.address).exists())
+    packet28_daemon_client::transport::endpoint_may_have_stale_socket(endpoint)
 }
 
 #[cfg(unix)]
 fn connect_daemon_endpoint(endpoint: &DaemonEndpoint) -> Result<DaemonStream> {
-    if let Some(addr) = endpoint.address.strip_prefix("tcp://") {
-        let auth = endpoint.transport_auth.as_ref().ok_or_else(|| {
-            anyhow!(
-                "daemon TCP endpoint '{}' has no owner capability",
-                endpoint.address
-            )
-        })?;
-        let stream = TcpStream::connect(addr).with_context(|| {
-            format!(
-                "failed to connect to daemon endpoint '{}'",
-                endpoint.address
-            )
-        })?;
-        stream
-            .set_read_timeout(Some(DAEMON_SOCKET_TIMEOUT))
-            .with_context(|| {
-                format!(
-                    "failed to configure read timeout for '{}'",
-                    endpoint.address
-                )
-            })?;
-        stream
-            .set_write_timeout(Some(DAEMON_SOCKET_TIMEOUT))
-            .with_context(|| {
-                format!(
-                    "failed to configure write timeout for '{}'",
-                    endpoint.address
-                )
-            })?;
-        let mut stream = stream;
-        write_frame(&mut stream, auth).with_context(|| {
-            format!(
-                "failed to write authentication prelude to '{}'",
-                endpoint.address
-            )
-        })?;
-        match read_frame(&mut stream).with_context(|| {
-            format!(
-                "failed to read authentication response from '{}'",
-                endpoint.address
-            )
-        })? {
-            DaemonResponse::Ack { message } if message == "authenticated" => {}
-            DaemonResponse::Error { message } => return Err(anyhow!(message)),
-            response => {
-                return Err(anyhow!(
-                    "unexpected daemon authentication response from '{}': {response:?}",
-                    endpoint.address
-                ));
-            }
-        }
-        return Ok(DaemonStream::Tcp(stream));
-    }
-    connect_daemon_socket(Path::new(&endpoint.address))
+    Ok(packet28_daemon_client::transport::connect_endpoint(
+        endpoint,
+        DAEMON_SOCKET_TIMEOUT,
+    )?)
 }
 
 #[cfg(unix)]
@@ -803,6 +548,10 @@ fn ensure_executable(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use packet28_daemon_protocol::paths::runtime_path;
+    #[cfg(unix)]
+    use std::io::Write as _;
 
     #[test]
     fn protocol_mismatch_errors_are_detected() {
@@ -833,8 +582,7 @@ mod tests {
         .unwrap();
 
         let error = daemon_endpoint(root.path())
-            .err()
-            .expect("legacy unauthenticated TCP discovery unexpectedly succeeded");
+            .expect_err("legacy unauthenticated TCP discovery unexpectedly succeeded");
 
         assert!(error
             .to_string()
@@ -851,45 +599,13 @@ mod tests {
         std::fs::create_dir_all(runtime.parent().unwrap()).unwrap();
         symlink(root.path().join("missing-runtime-target"), &runtime).unwrap();
 
-        let error = daemon_endpoint(root.path())
-            .err()
-            .expect("unauthenticated runtime symlink unexpectedly fell back to a Unix endpoint");
+        let error = daemon_endpoint(root.path()).expect_err(
+            "unauthenticated runtime symlink unexpectedly fell back to a Unix endpoint",
+        );
 
         assert!(error
             .to_string()
-            .contains("failed to authenticate daemon runtime discovery"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn unix_daemon_peer_authentication_accepts_the_effective_user() {
-        use std::os::unix::net::UnixListener;
-
-        let directory = tempfile::tempdir().unwrap();
-        let socket = directory.path().join("daemon.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        let stream = UnixStream::connect(&socket).unwrap();
-        let _accepted = listener.accept().unwrap();
-
-        verify_unix_server_peer(&stream, effective_uid()).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn unix_daemon_peer_authentication_rejects_substituted_owner() {
-        use std::os::unix::net::UnixListener;
-
-        let directory = tempfile::tempdir().unwrap();
-        let socket = directory.path().join("daemon.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        let stream = UnixStream::connect(&socket).unwrap();
-        let _accepted = listener.accept().unwrap();
-
-        let error = verify_unix_server_peer(&stream, effective_uid() ^ 1).unwrap_err();
-
-        assert!(error
-            .to_string()
-            .contains("does not match client effective uid"));
+            .contains("failed to read authenticated daemon runtime metadata"));
     }
 
     #[cfg(unix)]

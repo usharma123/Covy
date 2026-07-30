@@ -19,11 +19,11 @@ use packet28_daemon_protocol::index::{
     DaemonIndexState, DaemonIndexStatusRequest, DaemonIndexStatusResponse,
 };
 use packet28_daemon_protocol::message::{
-    DaemonRequest, DaemonResponse, DaemonRuntimeInfo, Packet28SearchGuardResponse,
+    DaemonRequest, DaemonResponse, Packet28SearchGuardResponse,
     Packet28SearchRequest as DaemonPacket28SearchRequest,
 };
 use packet28_daemon_protocol::paths::{
-    log_path, ready_path, resolve_workspace_root, runtime_path, socket_path,
+    log_path, ready_path, resolve_workspace_root, socket_path, workspace_socket_path,
 };
 use packet28_reducer_core::{parse_region_for_path, SearchRequest, SearchResult};
 use packet28_reducer_core::{SearchEngineStats, SearchGroup, SearchMatch};
@@ -31,9 +31,6 @@ use packet28_search_core::{
     guarded_fallback_reason, load_and_guarded_indexed_search, load_and_indexed_search,
     load_runtime, rebuild_full_index, SearchError as IndexSearchError,
 };
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
-
 #[cfg(unix)]
 const DAEMON_SOCKET_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -961,7 +958,7 @@ fn send_daemon_search(
     request: SearchRequest,
     force_indexed: bool,
 ) -> Result<SearchResult> {
-    let mut stream = connect_daemon_socket(&socket_path(root))?;
+    let mut stream = packet28_daemon_client::transport::connect(root, DAEMON_SOCKET_TIMEOUT)?;
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(&mut stream);
     let mut reader = BufReader::new(reader_stream);
@@ -994,7 +991,7 @@ fn send_daemon_search(
 
 #[cfg(unix)]
 fn send_daemon_guard(root: &Path, request: SearchRequest) -> Result<Packet28SearchGuardResponse> {
-    let mut stream = connect_daemon_socket(&socket_path(root))?;
+    let mut stream = packet28_daemon_client::transport::connect(root, DAEMON_SOCKET_TIMEOUT)?;
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(&mut stream);
     let mut reader = BufReader::new(reader_stream);
@@ -1023,7 +1020,7 @@ fn send_daemon_guard(_root: &Path, _request: SearchRequest) -> Result<Packet28Se
 
 #[cfg(unix)]
 fn send_daemon_index_status(root: &Path) -> Result<DaemonIndexStatusResponse> {
-    let mut stream = connect_daemon_socket(&socket_path(root))?;
+    let mut stream = packet28_daemon_client::transport::connect(root, DAEMON_SOCKET_TIMEOUT)?;
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(&mut stream);
     let mut reader = BufReader::new(reader_stream);
@@ -1252,7 +1249,11 @@ fn ensure_daemon(root: &Path) -> Result<()> {
     if daemon_status_existing(&root).is_ok() {
         return Ok(());
     }
-    if socket_path(&root).exists() && connect_daemon_socket(&socket_path(&root)).is_err() {
+    let endpoint = packet28_daemon_client::transport::discover_endpoint(&root)?;
+    if packet28_daemon_client::transport::endpoint_may_have_stale_socket(&endpoint)
+        && packet28_daemon_client::transport::connect_endpoint(&endpoint, DAEMON_SOCKET_TIMEOUT)
+            .is_err()
+    {
         cleanup_unreachable_runtime_files(&root)?;
     }
     start_daemon(&root)?;
@@ -1299,7 +1300,9 @@ fn wait_for_daemon(root: &Path, timeout: Duration) -> Result<()> {
         }
         thread::sleep(Duration::from_millis(10));
     }
-    if let Ok(runtime) = read_runtime_info(root) {
+    if let Ok(Some(runtime)) =
+        packet28_daemon_client::runtime_discovery::read_runtime_info_if_present(root)
+    {
         return Err(anyhow!(
             "packet28d did not become ready; runtime file exists for pid {} at {} (log: {})",
             runtime.pid,
@@ -1322,7 +1325,7 @@ fn daemon_status_existing(root: &Path) -> Result<()> {
 
 #[cfg(unix)]
 fn send_request_existing_daemon(root: &Path, request: &DaemonRequest) -> Result<DaemonResponse> {
-    let stream = connect_daemon_socket(&socket_path(root))?;
+    let stream = packet28_daemon_client::transport::connect(root, DAEMON_SOCKET_TIMEOUT)?;
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(reader_stream);
@@ -1330,39 +1333,13 @@ fn send_request_existing_daemon(root: &Path, request: &DaemonRequest) -> Result<
     Ok(read_frame(&mut reader)?)
 }
 
-fn read_runtime_info(root: &Path) -> Result<DaemonRuntimeInfo> {
-    let path = runtime_path(root);
-    let raw = std::fs::read(&path)
-        .with_context(|| format!("failed to read runtime file '{}'", path.display()))?;
-    Ok(serde_json::from_slice(&raw)?)
-}
-
-#[cfg(unix)]
-fn connect_daemon_socket(socket: &Path) -> Result<UnixStream> {
-    let stream = UnixStream::connect(socket)
-        .with_context(|| format!("failed to connect to '{}'", socket.display()))?;
-    stream
-        .set_read_timeout(Some(DAEMON_SOCKET_TIMEOUT))
-        .with_context(|| {
-            format!(
-                "failed to configure read timeout for '{}'",
-                socket.display()
-            )
-        })?;
-    stream
-        .set_write_timeout(Some(DAEMON_SOCKET_TIMEOUT))
-        .with_context(|| {
-            format!(
-                "failed to configure write timeout for '{}'",
-                socket.display()
-            )
-        })?;
-    Ok(stream)
-}
-
 #[cfg(unix)]
 fn cleanup_unreachable_runtime_files(root: &Path) -> Result<()> {
-    for path in [socket_path(root), ready_path(root)] {
+    for path in [
+        socket_path(root),
+        workspace_socket_path(root),
+        ready_path(root),
+    ] {
         if path.exists() {
             std::fs::remove_file(&path).with_context(|| {
                 format!("failed to remove stale runtime file '{}'", path.display())
