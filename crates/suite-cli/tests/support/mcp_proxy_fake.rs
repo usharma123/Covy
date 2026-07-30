@@ -281,8 +281,17 @@ while True:
     if message is None:
         break
     if isinstance(message, list):
-        if message and all(item.get("error", {}).get("code") == -32600 for item in message):
+        if (
+            len(message) == 1
+            and message[0].get("id") == "server-batch-roots"
+            and "result" in message[0]
+        ):
+            diagnostic("reverse-array", len(message))
+            write_message([])
+        elif message and all(item.get("error", {}).get("code") == -32600 for item in message):
             diagnostic("invalid", len(message))
+        else:
+            raise RuntimeError(f"unexpected response batch: {message!r}")
         continue
 
     method = message.get("method")
@@ -318,7 +327,7 @@ while True:
             }
         ])
     elif method is None and msg_id == "server-batch-roots":
-        write_message([])
+        raise RuntimeError("reverse batch response arrived as a singleton")
     elif method is None and msg_id is None and message.get("error", {}).get("code") == -32600:
         diagnostic("empty", 1)
         write_message([

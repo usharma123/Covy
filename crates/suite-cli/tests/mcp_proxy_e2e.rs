@@ -229,6 +229,14 @@ fn test_mcp_proxy_routes_mixed_upstream_batch_and_diagnoses_invalid_batches() {
             "result":{"roots":[]}
         }),
     );
+    let reverse_array_diagnostic = read_until(&mut server, |message| {
+        message["params"]["data"]["diagnostic"] == "reverse-array"
+    });
+    assert_eq!(
+        reverse_array_diagnostic["params"]["upstream"],
+        "upstream-batch"
+    );
+    assert_eq!(reverse_array_diagnostic["params"]["data"]["count"], 1);
     let empty_diagnostic = read_until(&mut server, |message| {
         message["params"]["data"]["diagnostic"] == "empty"
     });

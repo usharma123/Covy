@@ -16,6 +16,7 @@ use tokio::time::{timeout_at, Instant};
 use super::config::McpProxyConfig;
 use super::transport::{
     read_message_async, render_command_preview, write_message_async, McpMessageFraming,
+    MAX_MCP_MESSAGE_BYTES,
 };
 use super::McpSessionState;
 
@@ -23,6 +24,7 @@ const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 30_000;
 const MAX_UPSTREAM_INFLIGHT: usize = 32;
 const MAX_UPSTREAM_REVERSE_REQUESTS: usize = 64;
 const MAX_UPSTREAM_REVERSE_ID_BYTES: usize = 64 * 1024;
+const MAX_UPSTREAM_BATCH_MESSAGES: usize = 1_024;
 const JSON_RPC_SERVER_ERROR: i64 = -32000;
 pub(super) const MAX_PROXY_OUTPUT_MESSAGES: usize = 64;
 
@@ -32,12 +34,54 @@ struct ReverseRequestEntry {
     original_id: Value,
     original_id_bytes: usize,
     deadline: Instant,
+    batch_member: Option<ReverseBatchMember>,
+}
+
+#[derive(Clone, Copy)]
+struct ReverseBatchMember {
+    group_id: u64,
+    position: usize,
+}
+
+struct ReverseBatchSlot {
+    response: Value,
+    accounted_bytes: usize,
+}
+
+struct ReverseBatchGroup {
+    outstanding: usize,
+    expected_responses: usize,
+    responses: BTreeMap<usize, ReverseBatchSlot>,
+    response_bytes: usize,
+    sealed: bool,
+}
+
+enum ReverseBatchPlannedResponse {
+    Pending(Value),
+    Immediate(Value),
+}
+
+#[derive(Default)]
+struct ReverseBatchPlan {
+    responses: BTreeMap<usize, ReverseBatchPlannedResponse>,
+}
+
+struct ReverseBatchAdmission {
+    group_id: u64,
+    proxy_ids: BTreeMap<usize, Value>,
+}
+
+struct ReverseBatchRejection {
+    reason: String,
+    response: Value,
 }
 
 #[derive(Default)]
 struct ReverseRequestState {
     pending: HashMap<String, ReverseRequestEntry>,
+    batch_groups: HashMap<u64, ReverseBatchGroup>,
     original_id_bytes: usize,
+    batch_response_bytes: usize,
     closed: bool,
 }
 
@@ -46,13 +90,21 @@ enum ReverseRequestDispatch {
     Reply(Value),
 }
 
+enum ReverseRequestCompletion {
+    NotOwned,
+    Handled(Option<Value>),
+}
+
 struct ReverseRequestTracker {
     upstream_name: String,
     proxy_id_prefix: String,
     timeout: Duration,
     max_pending: usize,
     max_original_id_bytes: usize,
+    max_batch_groups: usize,
+    max_batch_response_bytes: usize,
     next_id: AtomicU64,
+    next_batch_id: AtomicU64,
     state: AsyncMutex<ReverseRequestState>,
     changed: Notify,
 }
@@ -73,16 +125,189 @@ impl ReverseRequestTracker {
         max_pending: usize,
         max_original_id_bytes: usize,
     ) -> Self {
+        Self::with_resource_limits(
+            upstream_name,
+            timeout,
+            max_pending,
+            max_original_id_bytes,
+            max_pending.max(1),
+            max_original_id_bytes,
+        )
+    }
+
+    fn with_resource_limits(
+        upstream_name: &str,
+        timeout: Duration,
+        max_pending: usize,
+        max_original_id_bytes: usize,
+        max_batch_groups: usize,
+        max_batch_response_bytes: usize,
+    ) -> Self {
         Self {
             upstream_name: upstream_name.to_string(),
             proxy_id_prefix: format!("packet28-upstream:{upstream_name}:"),
             timeout,
             max_pending,
             max_original_id_bytes,
+            max_batch_groups,
+            max_batch_response_bytes,
             next_id: AtomicU64::new(0),
+            next_batch_id: AtomicU64::new(0),
             state: AsyncMutex::new(ReverseRequestState::default()),
             changed: Notify::new(),
         }
+    }
+
+    async fn admit_batch(
+        &self,
+        plan: ReverseBatchPlan,
+    ) -> Result<std::result::Result<ReverseBatchAdmission, ReverseBatchRejection>> {
+        let expected_responses = plan.responses.len();
+        let mut responses = BTreeMap::new();
+        let mut pending = Vec::new();
+        let mut response_bytes = usize::from(expected_responses > 0) * 2;
+        for (position, planned) in plan.responses {
+            let (response, accounted_bytes) = match planned {
+                ReverseBatchPlannedResponse::Pending(original_id) => {
+                    let original_id_bytes = request_key(&original_id)?.len();
+                    pending.push((position, original_id.clone(), original_id_bytes));
+                    let fallback = self.batch_fallback_response(original_id.clone());
+                    let fallback_bytes = serialized_value_bytes(&fallback)?;
+                    let timeout_bytes =
+                        serialized_value_bytes(&self.timeout_response(original_id))?;
+                    (fallback, fallback_bytes.max(timeout_bytes))
+                }
+                ReverseBatchPlannedResponse::Immediate(response) => {
+                    let response_bytes = serialized_value_bytes(&response)?;
+                    (response, response_bytes)
+                }
+            };
+            let separator_bytes = usize::from(!responses.is_empty());
+            response_bytes = response_bytes
+                .checked_add(separator_bytes)
+                .and_then(|total| total.checked_add(accounted_bytes))
+                .ok_or_else(|| anyhow!("upstream reverse batch response byte count overflowed"))?;
+            responses.insert(
+                position,
+                ReverseBatchSlot {
+                    response,
+                    accounted_bytes,
+                },
+            );
+        }
+        let group = ReverseBatchGroup {
+            outstanding: pending.len(),
+            expected_responses,
+            responses,
+            response_bytes,
+            sealed: false,
+        };
+
+        let mut state = self.state.lock().await;
+        let pending_total = state.pending.len().checked_add(pending.len());
+        let original_id_total = pending
+            .iter()
+            .try_fold(state.original_id_bytes, |total, (_, _, bytes)| {
+                total.checked_add(*bytes)
+            });
+        let batch_response_total = state.batch_response_bytes.checked_add(group.response_bytes);
+        let rejection = if state.closed {
+            Some(format!(
+                "upstream '{}' reverse request tracker is closed",
+                self.upstream_name
+            ))
+        } else if state.batch_groups.len() >= self.max_batch_groups {
+            Some(format!(
+                "upstream '{}' reverse batch group limit reached ({} active)",
+                self.upstream_name, self.max_batch_groups
+            ))
+        } else if pending_total.is_none_or(|total| total > self.max_pending) {
+            Some(format!(
+                "upstream '{}' reverse request limit reached ({} pending)",
+                self.upstream_name, self.max_pending
+            ))
+        } else if original_id_total.is_none_or(|total| total > self.max_original_id_bytes) {
+            Some(format!(
+                "upstream '{}' reverse request id budget exceeded ({} bytes)",
+                self.upstream_name, self.max_original_id_bytes
+            ))
+        } else if group.response_bytes > self.max_batch_response_bytes
+            || group.response_bytes > MAX_MCP_MESSAGE_BYTES
+            || batch_response_total.is_none_or(|total| total > self.max_batch_response_bytes)
+        {
+            Some(format!(
+                "upstream '{}' reverse batch response budget exceeded ({} bytes)",
+                self.upstream_name, self.max_batch_response_bytes
+            ))
+        } else {
+            None
+        };
+        if let Some(reason) = rejection {
+            return Ok(Err(ReverseBatchRejection {
+                reason,
+                response: Self::batch_group_response(group),
+            }));
+        }
+
+        let sequence = self.next_batch_id.fetch_add(1, Ordering::Relaxed);
+        let group_id = sequence.wrapping_add(1);
+        if state.batch_groups.contains_key(&group_id) {
+            return Ok(Err(ReverseBatchRejection {
+                reason: format!(
+                    "upstream '{}' reverse batch group id space exhausted",
+                    self.upstream_name
+                ),
+                response: Self::batch_group_response(group),
+            }));
+        }
+
+        let mut prepared_pending = Vec::with_capacity(pending.len());
+        let mut proxy_ids = BTreeMap::new();
+        for (position, original_id, original_id_bytes) in pending {
+            let sequence = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let proxy_id = Value::String(format!(
+                "{}{}",
+                self.proxy_id_prefix,
+                sequence.wrapping_add(1)
+            ));
+            let proxy_key = request_key(&proxy_id)?;
+            if state.pending.contains_key(&proxy_key) {
+                return Ok(Err(ReverseBatchRejection {
+                    reason: format!(
+                        "upstream '{}' reverse request id space exhausted",
+                        self.upstream_name
+                    ),
+                    response: Self::batch_group_response(group),
+                }));
+            }
+            proxy_ids.insert(position, proxy_id);
+            prepared_pending.push((position, proxy_key, original_id, original_id_bytes));
+        }
+
+        let deadline = Instant::now() + self.timeout;
+        let original_id_total = original_id_total
+            .ok_or_else(|| anyhow!("reverse request id byte accounting overflowed"))?;
+        let batch_response_total = batch_response_total
+            .ok_or_else(|| anyhow!("reverse batch response byte accounting overflowed"))?;
+        for (position, proxy_key, original_id, original_id_bytes) in prepared_pending {
+            state.pending.insert(
+                proxy_key,
+                ReverseRequestEntry {
+                    original_id,
+                    original_id_bytes,
+                    deadline,
+                    batch_member: Some(ReverseBatchMember { group_id, position }),
+                },
+            );
+        }
+        state.original_id_bytes = original_id_total;
+        state.batch_response_bytes = batch_response_total;
+        state.batch_groups.insert(group_id, group);
+        self.changed.notify_one();
+        Ok(Ok(ReverseBatchAdmission {
+            group_id,
+            proxy_ids,
+        }))
     }
 
     async fn namespace(&self, mut request: Value) -> Result<ReverseRequestDispatch> {
@@ -126,6 +351,7 @@ impl ReverseRequestTracker {
                                 original_id: original_id.clone(),
                                 original_id_bytes,
                                 deadline,
+                                batch_member: None,
                             },
                         );
                         None
@@ -154,25 +380,51 @@ impl ReverseRequestTracker {
         Ok(ReverseRequestDispatch::Forward(request))
     }
 
-    async fn take(&self, proxy_id: &Value) -> Result<Option<Value>> {
-        let proxy_key = request_key(proxy_id)?;
-        let original_id = {
-            let mut state = self.state.lock().await;
-            let entry = state.pending.remove(&proxy_key);
-            if let Some(entry) = &entry {
-                state.original_id_bytes = state
-                    .original_id_bytes
-                    .saturating_sub(entry.original_id_bytes);
-            }
-            entry.map(|entry| entry.original_id)
+    async fn seal_batch(&self, group_id: u64) -> Result<Option<Value>> {
+        let mut state = self.state.lock().await;
+        let Some(group) = state.batch_groups.get_mut(&group_id) else {
+            return Ok(None);
         };
-        if original_id.is_some() {
-            self.changed.notify_one();
-        }
-        Ok(original_id)
+        group.sealed = true;
+        self.take_ready_batch(&mut state, group_id)
     }
 
-    async fn wait_for_expired(&self) -> Vec<Value> {
+    async fn complete_response(
+        &self,
+        proxy_id: &Value,
+        mut response: Value,
+    ) -> Result<ReverseRequestCompletion> {
+        if !self.owns_proxy_id(proxy_id) {
+            return Ok(ReverseRequestCompletion::NotOwned);
+        }
+        if !response.is_object() {
+            return Err(anyhow!("downstream MCP response must be an object"));
+        }
+        let proxy_key = request_key(proxy_id)?;
+        let delivery = {
+            let mut state = self.state.lock().await;
+            let Some(entry) = state.pending.remove(&proxy_key) else {
+                return Ok(ReverseRequestCompletion::Handled(None));
+            };
+            state.original_id_bytes = state
+                .original_id_bytes
+                .checked_sub(entry.original_id_bytes)
+                .ok_or_else(|| anyhow!("reverse request id byte accounting underflowed"))?;
+            response
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("downstream MCP response must be an object"))?
+                .insert("id".to_string(), entry.original_id);
+            if let Some(member) = entry.batch_member {
+                self.complete_batch_member(&mut state, member, response)?
+            } else {
+                Some(response)
+            }
+        };
+        self.changed.notify_one();
+        Ok(ReverseRequestCompletion::Handled(delivery))
+    }
+
+    async fn wait_for_expired(&self) -> Result<Vec<Value>> {
         loop {
             let changed = self.changed.notified();
             let next_deadline = {
@@ -183,9 +435,9 @@ impl ReverseRequestTracker {
                 Some(deadline) => {
                     tokio::select! {
                         () = tokio::time::sleep_until(deadline) => {
-                            let expired = self.expire(Instant::now()).await;
+                            let expired = self.expire(Instant::now()).await?;
                             if !expired.is_empty() {
-                                return expired;
+                                return Ok(expired);
                             }
                         }
                         () = changed => {}
@@ -196,29 +448,41 @@ impl ReverseRequestTracker {
         }
     }
 
-    async fn expire(&self, now: Instant) -> Vec<Value> {
-        let expired = {
+    async fn expire(&self, now: Instant) -> Result<Vec<Value>> {
+        let (deliveries, removed_any) = {
             let mut state = self.state.lock().await;
             let keys = state
                 .pending
                 .iter()
                 .filter_map(|(key, entry)| (entry.deadline <= now).then_some(key.clone()))
                 .collect::<Vec<_>>();
-            let mut expired = Vec::with_capacity(keys.len());
+            let mut deliveries = Vec::with_capacity(keys.len());
+            let mut removed_any = false;
             for key in keys {
                 if let Some(entry) = state.pending.remove(&key) {
+                    removed_any = true;
                     state.original_id_bytes = state
                         .original_id_bytes
-                        .saturating_sub(entry.original_id_bytes);
-                    expired.push(entry.original_id);
+                        .checked_sub(entry.original_id_bytes)
+                        .ok_or_else(|| anyhow!("reverse request id byte accounting underflowed"))?;
+                    let response = self.timeout_response(entry.original_id);
+                    if let Some(member) = entry.batch_member {
+                        if let Some(delivery) =
+                            self.complete_batch_member(&mut state, member, response)?
+                        {
+                            deliveries.push(delivery);
+                        }
+                    } else {
+                        deliveries.push(response);
+                    }
                 }
             }
-            expired
+            (deliveries, removed_any)
         };
-        if !expired.is_empty() {
+        if removed_any {
             self.changed.notify_one();
         }
-        expired
+        Ok(deliveries)
     }
 
     async fn drain(&self) -> Vec<Value> {
@@ -226,6 +490,8 @@ impl ReverseRequestTracker {
             let mut state = self.state.lock().await;
             state.closed = true;
             state.original_id_bytes = 0;
+            state.batch_response_bytes = 0;
+            state.batch_groups.clear();
             std::mem::take(&mut state.pending)
                 .into_values()
                 .map(|entry| entry.original_id)
@@ -233,6 +499,157 @@ impl ReverseRequestTracker {
         };
         self.changed.notify_one();
         drained
+    }
+
+    async fn abort_batch(&self, group_id: u64) -> Result<()> {
+        let mut state = self.state.lock().await;
+        let keys = state
+            .pending
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .batch_member
+                    .is_some_and(|member| member.group_id == group_id)
+                    .then_some(key.clone())
+            })
+            .collect::<Vec<_>>();
+        for key in keys {
+            if let Some(entry) = state.pending.remove(&key) {
+                state.original_id_bytes = state
+                    .original_id_bytes
+                    .checked_sub(entry.original_id_bytes)
+                    .ok_or_else(|| anyhow!("reverse request id byte accounting underflowed"))?;
+            }
+        }
+        if let Some(group) = state.batch_groups.remove(&group_id) {
+            state.batch_response_bytes = state
+                .batch_response_bytes
+                .checked_sub(group.response_bytes)
+                .ok_or_else(|| anyhow!("reverse batch response byte accounting underflowed"))?;
+        }
+        self.changed.notify_one();
+        Ok(())
+    }
+
+    fn complete_batch_member(
+        &self,
+        state: &mut ReverseRequestState,
+        member: ReverseBatchMember,
+        response: Value,
+    ) -> Result<Option<Value>> {
+        let outstanding = state
+            .batch_groups
+            .get(&member.group_id)
+            .ok_or_else(|| anyhow!("reverse batch response group disappeared"))?
+            .outstanding
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("reverse batch outstanding count underflowed"))?;
+        self.replace_batch_response(state, member, response)?;
+        if let Some(group) = state.batch_groups.get_mut(&member.group_id) {
+            group.outstanding = outstanding;
+        }
+        self.take_ready_batch(state, member.group_id)
+    }
+
+    fn replace_batch_response(
+        &self,
+        state: &mut ReverseRequestState,
+        member: ReverseBatchMember,
+        response: Value,
+    ) -> Result<()> {
+        let response_bytes = serialized_value_bytes(&response)?;
+        let (previous_bytes, current_group_bytes) = {
+            let group = state
+                .batch_groups
+                .get(&member.group_id)
+                .ok_or_else(|| anyhow!("reverse batch response group disappeared"))?;
+            let slot = group
+                .responses
+                .get(&member.position)
+                .ok_or_else(|| anyhow!("reverse batch response slot disappeared"))?;
+            (slot.accounted_bytes, group.response_bytes)
+        };
+        let group_total = current_group_bytes
+            .checked_sub(previous_bytes)
+            .ok_or_else(|| anyhow!("reverse batch group byte accounting underflowed"))?
+            .checked_add(response_bytes)
+            .ok_or_else(|| anyhow!("reverse batch group byte accounting overflowed"))?;
+        let global_total = state
+            .batch_response_bytes
+            .checked_sub(previous_bytes)
+            .ok_or_else(|| anyhow!("reverse batch response byte accounting underflowed"))?
+            .checked_add(response_bytes)
+            .ok_or_else(|| anyhow!("reverse batch response byte accounting overflowed"))?;
+        if group_total <= self.max_batch_response_bytes
+            && group_total <= MAX_MCP_MESSAGE_BYTES
+            && global_total <= self.max_batch_response_bytes
+        {
+            let group = state
+                .batch_groups
+                .get_mut(&member.group_id)
+                .ok_or_else(|| anyhow!("reverse batch response group disappeared"))?;
+            let slot = group
+                .responses
+                .get_mut(&member.position)
+                .ok_or_else(|| anyhow!("reverse batch response slot disappeared"))?;
+            slot.response = response;
+            slot.accounted_bytes = response_bytes;
+            group.response_bytes = group_total;
+            state.batch_response_bytes = global_total;
+        }
+        Ok(())
+    }
+
+    fn take_ready_batch(
+        &self,
+        state: &mut ReverseRequestState,
+        group_id: u64,
+    ) -> Result<Option<Value>> {
+        let Some(group) = state.batch_groups.get(&group_id) else {
+            return Ok(None);
+        };
+        let ready = group.sealed && group.outstanding == 0;
+        if !ready {
+            return Ok(None);
+        }
+        if group.responses.len() != group.expected_responses {
+            return Err(anyhow!(
+                "reverse batch response group resolved with {} of {} slots",
+                group.responses.len(),
+                group.expected_responses
+            ));
+        }
+        let response_bytes = group.response_bytes;
+        state.batch_response_bytes = state
+            .batch_response_bytes
+            .checked_sub(response_bytes)
+            .ok_or_else(|| anyhow!("reverse batch response byte accounting underflowed"))?;
+        let group = state
+            .batch_groups
+            .remove(&group_id)
+            .ok_or_else(|| anyhow!("reverse batch response group disappeared"))?;
+        Ok(Some(Self::batch_group_response(group)))
+    }
+
+    fn batch_group_response(group: ReverseBatchGroup) -> Value {
+        Value::Array(
+            group
+                .responses
+                .into_values()
+                .map(|slot| slot.response)
+                .collect(),
+        )
+    }
+
+    fn batch_fallback_response(&self, original_id: Value) -> Value {
+        super::mcp_error_response(
+            original_id,
+            JSON_RPC_SERVER_ERROR,
+            &format!(
+                "upstream '{}' reverse batch response exceeded proxy limits",
+                self.upstream_name
+            ),
+        )
     }
 
     fn timeout_response(&self, original_id: Value) -> Value {
@@ -265,6 +682,16 @@ impl ReverseRequestTracker {
     }
 
     #[cfg(test)]
+    async fn batch_group_len(&self) -> usize {
+        self.state.lock().await.batch_groups.len()
+    }
+
+    #[cfg(test)]
+    async fn batch_response_bytes(&self) -> usize {
+        self.state.lock().await.batch_response_bytes
+    }
+
+    #[cfg(test)]
     async fn is_closed(&self) -> bool {
         self.state.lock().await.closed
     }
@@ -274,6 +701,20 @@ enum UpstreamMessageDispatch {
     Routed,
     Forward(Value),
     Reply(Value),
+}
+
+enum ClassifiedUpstreamMessage {
+    Response {
+        message: Value,
+        id: Value,
+    },
+    ReverseRequest(Value),
+    Notification(Value),
+    Invalid {
+        response: Option<Value>,
+        pending_response_id: Option<Value>,
+        reason: &'static str,
+    },
 }
 
 struct UpstreamPayloadDispatch {
@@ -469,41 +910,140 @@ impl UpstreamClient {
                 )),
             });
         }
+        if messages.len() > MAX_UPSTREAM_BATCH_MESSAGES {
+            return Ok(UpstreamPayloadDispatch {
+                forwarded: None,
+                reply: Some(Value::Array(vec![super::mcp_error_response(
+                    Value::Null,
+                    JSON_RPC_SERVER_ERROR,
+                    &format!(
+                        "upstream JSON-RPC batch member limit exceeded ({MAX_UPSTREAM_BATCH_MESSAGES})"
+                    ),
+                )])),
+            });
+        }
 
-        let mut forwarded = Vec::new();
-        let mut replies = Vec::new();
-        for message in messages {
-            match self.dispatch_upstream_message(message).await? {
-                UpstreamMessageDispatch::Routed => {}
-                UpstreamMessageDispatch::Forward(message) => forwarded.push(message),
-                UpstreamMessageDispatch::Reply(response) => replies.push(response),
+        let mut classified = messages
+            .into_iter()
+            .map(Self::classify_upstream_message)
+            .collect::<Vec<_>>();
+        let mut plan = ReverseBatchPlan::default();
+        for (position, message) in classified.iter_mut().enumerate() {
+            match message {
+                ClassifiedUpstreamMessage::ReverseRequest(request) => {
+                    let original_id = request
+                        .get("id")
+                        .cloned()
+                        .ok_or_else(|| anyhow!("upstream server request is missing id"))?;
+                    plan.responses
+                        .insert(position, ReverseBatchPlannedResponse::Pending(original_id));
+                }
+                ClassifiedUpstreamMessage::Invalid { response, .. } => {
+                    let response = response
+                        .take()
+                        .ok_or_else(|| anyhow!("upstream batch error response disappeared"))?;
+                    plan.responses
+                        .insert(position, ReverseBatchPlannedResponse::Immediate(response));
+                }
+                ClassifiedUpstreamMessage::Response { .. }
+                | ClassifiedUpstreamMessage::Notification(_) => {}
             }
         }
+
+        if plan.responses.is_empty() {
+            let forwarded = self.route_classified_batch(classified, None)?;
+            return Ok(UpstreamPayloadDispatch {
+                forwarded: (!forwarded.is_empty()).then_some(Value::Array(forwarded)),
+                reply: None,
+            });
+        }
+
+        let (forwarded, reply) = match self.reverse_requests.admit_batch(plan).await? {
+            Ok(admission) => {
+                let forwarded =
+                    match self.route_classified_batch(classified, Some(&admission.proxy_ids)) {
+                        Ok(forwarded) => forwarded,
+                        Err(error) => {
+                            self.reverse_requests
+                                .abort_batch(admission.group_id)
+                                .await?;
+                            return Err(error);
+                        }
+                    };
+                let reply = self.reverse_requests.seal_batch(admission.group_id).await?;
+                (forwarded, reply)
+            }
+            Err(rejection) => {
+                let forwarded = self.route_classified_batch(classified, None)?;
+                if serialized_value_bytes(&rejection.response)? > MAX_MCP_MESSAGE_BYTES {
+                    return Err(anyhow!(
+                        "{}; rejected response array exceeds the MCP transport limit",
+                        rejection.reason
+                    ));
+                }
+                (forwarded, Some(rejection.response))
+            }
+        };
         Ok(UpstreamPayloadDispatch {
             forwarded: (!forwarded.is_empty()).then_some(Value::Array(forwarded)),
-            reply: (!replies.is_empty()).then_some(Value::Array(replies)),
+            reply,
         })
     }
 
     async fn dispatch_upstream_message(&self, message: Value) -> Result<UpstreamMessageDispatch> {
+        match Self::classify_upstream_message(message) {
+            ClassifiedUpstreamMessage::Response { message, id } => {
+                self.route_upstream_response(message, &id)
+            }
+            ClassifiedUpstreamMessage::ReverseRequest(request) => {
+                Ok(match self.reverse_requests.namespace(request).await? {
+                    ReverseRequestDispatch::Forward(request) => {
+                        UpstreamMessageDispatch::Forward(request)
+                    }
+                    ReverseRequestDispatch::Reply(response) => {
+                        UpstreamMessageDispatch::Reply(response)
+                    }
+                })
+            }
+            ClassifiedUpstreamMessage::Notification(notification) => Ok(
+                UpstreamMessageDispatch::Forward(self.augment_notification(notification)),
+            ),
+            ClassifiedUpstreamMessage::Invalid {
+                response,
+                pending_response_id,
+                reason,
+            } => {
+                self.fail_invalid_pending_response(pending_response_id.as_ref(), reason)?;
+                Ok(UpstreamMessageDispatch::Reply(response.ok_or_else(
+                    || anyhow!("upstream error response disappeared"),
+                )?))
+            }
+        }
+    }
+
+    fn classify_upstream_message(message: Value) -> ClassifiedUpstreamMessage {
         let Some(object) = message.as_object() else {
-            return Ok(UpstreamMessageDispatch::Reply(super::mcp_error_response(
-                Value::Null,
-                -32600,
-                "JSON-RPC upstream message must be an object",
-            )));
+            return ClassifiedUpstreamMessage::Invalid {
+                response: Some(super::mcp_error_response(
+                    Value::Null,
+                    -32600,
+                    "JSON-RPC upstream message must be an object",
+                )),
+                pending_response_id: None,
+                reason: "JSON-RPC upstream message must be an object",
+            };
         };
         let is_response = !object.contains_key("method");
 
         if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-            return self.invalid_upstream_message(
+            return Self::classify_invalid_upstream_message(
                 object,
                 is_response,
                 "upstream JSON-RPC message must declare jsonrpc \"2.0\"",
             );
         }
         if object.get("id").is_some_and(|id| !is_valid_json_rpc_id(id)) {
-            return self.invalid_upstream_message(
+            return Self::classify_invalid_upstream_message(
                 object,
                 is_response,
                 "upstream JSON-RPC id must be a string, number, or null",
@@ -513,7 +1053,7 @@ impl UpstreamClient {
             .get("params")
             .is_some_and(|params| !params.is_object() && !params.is_array())
         {
-            return self.invalid_upstream_message(
+            return Self::classify_invalid_upstream_message(
                 object,
                 is_response,
                 "upstream JSON-RPC params must be an object or array",
@@ -522,14 +1062,14 @@ impl UpstreamClient {
 
         if is_response {
             let Some(id) = object.get("id") else {
-                return self.invalid_upstream_message(
+                return Self::classify_invalid_upstream_message(
                     object,
                     true,
                     "upstream JSON-RPC message is missing method and id",
                 );
             };
             if object.contains_key("result") == object.contains_key("error") {
-                return self.invalid_upstream_message(
+                return Self::classify_invalid_upstream_message(
                     object,
                     true,
                     "upstream JSON-RPC response must contain exactly one of result or error",
@@ -539,28 +1079,25 @@ impl UpstreamClient {
                 .get("error")
                 .is_some_and(|error| !is_valid_json_rpc_error(error))
             {
-                return self.invalid_upstream_message(
+                return Self::classify_invalid_upstream_message(
                     object,
                     true,
                     "upstream JSON-RPC error must contain an integer code and string message",
                 );
             }
-            let sender = self.take_pending_response(id)?;
-            if let Some(sender) = sender {
-                let _ = sender.send(Ok(message));
-            }
-            return Ok(UpstreamMessageDispatch::Routed);
+            let id = id.clone();
+            return ClassifiedUpstreamMessage::Response { message, id };
         }
 
         if !object.get("method").is_some_and(Value::is_string) {
-            return self.invalid_upstream_message(
+            return Self::classify_invalid_upstream_message(
                 object,
                 false,
                 "upstream JSON-RPC method must be a string",
             );
         }
         if object.contains_key("result") || object.contains_key("error") {
-            return self.invalid_upstream_message(
+            return Self::classify_invalid_upstream_message(
                 object,
                 false,
                 "upstream JSON-RPC request must not contain result or error",
@@ -568,15 +1105,66 @@ impl UpstreamClient {
         }
 
         if object.get("id").is_some() {
-            return Ok(match self.reverse_requests.namespace(message).await? {
-                ReverseRequestDispatch::Forward(request) => {
-                    UpstreamMessageDispatch::Forward(request)
-                }
-                ReverseRequestDispatch::Reply(response) => UpstreamMessageDispatch::Reply(response),
-            });
+            return ClassifiedUpstreamMessage::ReverseRequest(message);
         }
 
-        let mut notification = message;
+        ClassifiedUpstreamMessage::Notification(message)
+    }
+
+    fn classify_invalid_upstream_message(
+        object: &serde_json::Map<String, Value>,
+        is_response: bool,
+        reason: &'static str,
+    ) -> ClassifiedUpstreamMessage {
+        let id = object.get("id");
+        let diagnostic_id = id
+            .filter(|id| is_valid_json_rpc_id(id))
+            .cloned()
+            .unwrap_or(Value::Null);
+        ClassifiedUpstreamMessage::Invalid {
+            response: Some(super::mcp_error_response(diagnostic_id, -32600, reason)),
+            pending_response_id: is_response.then(|| id.cloned()).flatten(),
+            reason,
+        }
+    }
+
+    fn route_classified_batch(
+        &self,
+        messages: Vec<ClassifiedUpstreamMessage>,
+        proxy_ids: Option<&BTreeMap<usize, Value>>,
+    ) -> Result<Vec<Value>> {
+        let mut forwarded = Vec::new();
+        for (position, message) in messages.into_iter().enumerate() {
+            match message {
+                ClassifiedUpstreamMessage::Response { message, id } => {
+                    let _ = self.route_upstream_response(message, &id)?;
+                }
+                ClassifiedUpstreamMessage::ReverseRequest(mut request) => {
+                    let Some(proxy_id) = proxy_ids.and_then(|ids| ids.get(&position)) else {
+                        continue;
+                    };
+                    request
+                        .as_object_mut()
+                        .ok_or_else(|| anyhow!("upstream server request must be an object"))?
+                        .insert("id".to_string(), proxy_id.clone());
+                    forwarded.push(request);
+                }
+                ClassifiedUpstreamMessage::Notification(notification) => {
+                    forwarded.push(self.augment_notification(notification));
+                }
+                ClassifiedUpstreamMessage::Invalid {
+                    pending_response_id,
+                    reason,
+                    ..
+                } => {
+                    self.fail_invalid_pending_response(pending_response_id.as_ref(), reason)?;
+                }
+            }
+        }
+        Ok(forwarded)
+    }
+
+    fn augment_notification(&self, mut notification: Value) -> Value {
         if let Some(params) = notification
             .get_mut("params")
             .and_then(Value::as_object_mut)
@@ -585,37 +1173,32 @@ impl UpstreamClient {
                 .entry("upstream".to_string())
                 .or_insert_with(|| Value::String(self.name.clone()));
         }
-        Ok(UpstreamMessageDispatch::Forward(notification))
+        notification
     }
 
-    fn invalid_upstream_message(
+    fn route_upstream_response(
         &self,
-        object: &serde_json::Map<String, Value>,
-        is_response: bool,
-        message: &str,
+        message: Value,
+        id: &Value,
     ) -> Result<UpstreamMessageDispatch> {
-        let id = object.get("id");
-        if is_response {
-            if let Some(sender) = id
-                .map(|id| self.take_pending_response(id))
-                .transpose()?
-                .flatten()
-            {
-                let _ = sender.send(Err(format!(
-                    "invalid response from upstream '{}': {message}",
-                    self.name
-                )));
-            }
+        if let Some(sender) = self.take_pending_response(id)? {
+            let _ = sender.send(Ok(message));
         }
-        let diagnostic_id = id
-            .filter(|id| is_valid_json_rpc_id(id))
-            .cloned()
-            .unwrap_or(Value::Null);
-        Ok(UpstreamMessageDispatch::Reply(super::mcp_error_response(
-            diagnostic_id,
-            -32600,
-            message,
-        )))
+        Ok(UpstreamMessageDispatch::Routed)
+    }
+
+    fn fail_invalid_pending_response(&self, id: Option<&Value>, reason: &str) -> Result<()> {
+        if let Some(sender) = id
+            .map(|id| self.take_pending_response(id))
+            .transpose()?
+            .flatten()
+        {
+            let _ = sender.send(Err(format!(
+                "invalid response from upstream '{}': {reason}",
+                self.name
+            )));
+        }
+        Ok(())
     }
 
     fn take_pending_response(&self, id: &Value) -> Result<Option<oneshot::Sender<PendingReply>>> {
@@ -630,21 +1213,22 @@ impl UpstreamClient {
         let Some(proxy_id) = response.get("id") else {
             return Ok(false);
         };
-        let original_id = self.reverse_requests.take(proxy_id).await?;
-        let Some(original_id) = original_id else {
-            return Ok(self.reverse_requests.owns_proxy_id(proxy_id));
+        let delivery = match self
+            .reverse_requests
+            .complete_response(proxy_id, response.clone())
+            .await?
+        {
+            ReverseRequestCompletion::NotOwned => return Ok(false),
+            ReverseRequestCompletion::Handled(delivery) => delivery,
         };
-        let mut forwarded = response.clone();
-        forwarded
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("downstream MCP response must be an object"))?
-            .insert("id".to_string(), original_id);
-        if let Err(error) = self.send_message(&forwarded).await {
-            self.set_exit_reason(format!(
-                "failed to forward reverse response to upstream '{}': {error}",
-                self.name
-            ));
-            let _ = self.reverse_requests.drain().await;
+        if let Some(delivery) = delivery {
+            if let Err(error) = self.send_message(&delivery).await {
+                self.set_exit_reason(format!(
+                    "failed to forward reverse response to upstream '{}': {error}",
+                    self.name
+                ));
+                let _ = self.reverse_requests.drain().await;
+            }
         }
         Ok(true)
     }
@@ -896,10 +1480,20 @@ async fn read_upstream(
 async fn expire_reverse_requests(client: Arc<UpstreamClient>, mut shutdown: watch::Receiver<bool>) {
     loop {
         tokio::select! {
-            expired = client.reverse_requests.wait_for_expired() => {
-                for original_id in expired {
-                    let response = client.reverse_requests.timeout_response(original_id);
-                    if let Err(error) = client.send_message(&response).await {
+            result = client.reverse_requests.wait_for_expired() => {
+                let deliveries = match result {
+                    Ok(deliveries) => deliveries,
+                    Err(error) => {
+                        client.set_exit_reason(format!(
+                            "failed to expire reverse request for upstream '{}': {error}",
+                            client.name
+                        ));
+                        let _ = client.reverse_requests.drain().await;
+                        return;
+                    }
+                };
+                for delivery in deliveries {
+                    if let Err(error) = client.send_message(&delivery).await {
                         client.set_exit_reason(format!(
                             "failed to expire reverse request for upstream '{}': {error}",
                             client.name
@@ -946,6 +1540,12 @@ fn render_exit_reason(name: &str, status: std::io::Result<ExitStatus>) -> String
 
 fn request_key(id: &Value) -> Result<String> {
     serde_json::to_string(id).context("failed to serialize upstream request id")
+}
+
+fn serialized_value_bytes(value: &Value) -> Result<usize> {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .context("failed to serialize upstream JSON-RPC value")
 }
 
 fn is_valid_json_rpc_id(id: &Value) -> bool {
@@ -1052,12 +1652,23 @@ while True:
         break
     if message.get("method") == "test/reverse":
         params = message.get("params", {})
-        write_message({
+        reverse_request = {
             "jsonrpc": "2.0",
             "id": params.get("id", "server-reverse"),
             "method": "roots/list",
             "params": {}
-        })
+        }
+        if params.get("batch"):
+            write_message([
+                reverse_request,
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/message",
+                    "params": {"data": {"batched": True}}
+                }
+            ])
+        else:
+            write_message(reverse_request)
         if params.get("exit"):
             os._exit(17)
         if params.get("close_stdin"):
@@ -1114,6 +1725,25 @@ while True:
             ReverseRequestDispatch::Reply(response) => {
                 panic!("expected forwarded reverse request, got {response}")
             }
+        }
+    }
+
+    async fn admitted_batch(
+        tracker: &ReverseRequestTracker,
+        plan: ReverseBatchPlan,
+    ) -> ReverseBatchAdmission {
+        match tracker.admit_batch(plan).await.unwrap() {
+            Ok(admission) => admission,
+            Err(rejection) => panic!("batch admission rejected: {}", rejection.reason),
+        }
+    }
+
+    fn pending_batch_plan(members: impl IntoIterator<Item = (usize, Value)>) -> ReverseBatchPlan {
+        ReverseBatchPlan {
+            responses: members
+                .into_iter()
+                .map(|(position, id)| (position, ReverseBatchPlannedResponse::Pending(id)))
+                .collect(),
         }
     }
 
@@ -1194,21 +1824,15 @@ while True:
         tokio::time::advance(Duration::from_millis(4_999)).await;
         assert!(!waiter.is_finished());
         tokio::time::advance(Duration::from_millis(1)).await;
-        let expired = waiter.await.unwrap();
-        let timeout = tracker.timeout_response(expired[0].clone());
+        let deliveries = waiter.await.unwrap().unwrap();
         assert_eq!(
             (
-                expired,
-                timeout["id"].clone(),
-                timeout["error"]["code"].clone(),
+                deliveries.len(),
+                deliveries[0]["id"].clone(),
+                deliveries[0]["error"]["code"].clone(),
                 tracker.len().await,
             ),
-            (
-                vec![json!("deadline")],
-                json!("deadline"),
-                json!(JSON_RPC_SERVER_ERROR),
-                0,
-            )
+            (1, json!("deadline"), json!(JSON_RPC_SERVER_ERROR), 0,)
         );
     }
 
@@ -1228,11 +1852,21 @@ while True:
         );
         let barrier = Arc::new(tokio::sync::Barrier::new(3));
 
-        let take_tracker = tracker.clone();
-        let take_barrier = barrier.clone();
-        let take = tokio::spawn(async move {
-            take_barrier.wait().await;
-            take_tracker.take(&proxy_id).await.unwrap()
+        let response_tracker = tracker.clone();
+        let response_barrier = barrier.clone();
+        let response = tokio::spawn(async move {
+            response_barrier.wait().await;
+            response_tracker
+                .complete_response(
+                    &proxy_id,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": proxy_id,
+                        "result": {"roots": []}
+                    }),
+                )
+                .await
+                .unwrap()
         });
         let expire_tracker = tracker.clone();
         let expire_barrier = barrier.clone();
@@ -1242,11 +1876,16 @@ while True:
         });
         barrier.wait().await;
 
-        let taken = take.await.unwrap();
-        let expired = expire.await.unwrap();
+        let response = response.await.unwrap();
+        let expired = expire.await.unwrap().unwrap();
+        let response_deliveries = match response {
+            ReverseRequestCompletion::Handled(Some(_)) => 1,
+            ReverseRequestCompletion::Handled(None) => 0,
+            ReverseRequestCompletion::NotOwned => panic!("proxy response id was not owned"),
+        };
         assert_eq!(
             (
-                usize::from(taken.is_some()) + expired.len(),
+                response_deliveries + expired.len(),
                 tracker.len().await,
                 tracker.original_id_bytes().await,
             ),
@@ -1266,7 +1905,17 @@ while True:
         );
 
         let drained = tracker.drain().await;
-        let late = tracker.take(&proxy_id).await.unwrap();
+        let late = tracker
+            .complete_response(
+                &proxy_id,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": proxy_id,
+                    "result": {"roots": []}
+                }),
+            )
+            .await
+            .unwrap();
         let after_close = tracker
             .namespace(reverse_request(json!("after-close")))
             .await
@@ -1277,7 +1926,7 @@ while True:
         assert_eq!(
             (
                 drained,
-                late,
+                matches!(late, ReverseRequestCompletion::Handled(None)),
                 tracker.owns_proxy_id(&proxy_id),
                 tracker.len().await,
                 tracker.original_id_bytes().await,
@@ -1286,7 +1935,7 @@ while True:
             ),
             (
                 vec![json!("original")],
-                None,
+                true,
                 true,
                 0,
                 0,
@@ -1339,6 +1988,584 @@ while True:
                 tracker.original_id_bytes().await,
             ),
             (true, true, 0, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn reverse_batch_completion_before_seal_emits_one_ordered_array() {
+        let tracker =
+            ReverseRequestTracker::with_limits("batch", Duration::from_secs(30), 4, 8_192);
+        let mut plan = pending_batch_plan([(1, json!("first")), (3, json!("second"))]);
+        plan.responses.insert(
+            0,
+            ReverseBatchPlannedResponse::Immediate(super::super::mcp_error_response(
+                json!("invalid"),
+                -32600,
+                "invalid member",
+            )),
+        );
+        let admission = admitted_batch(&tracker, plan).await;
+        let second_proxy_id = admission.proxy_ids[&3].clone();
+        let first_proxy_id = admission.proxy_ids[&1].clone();
+
+        let second = tracker
+            .complete_response(
+                &second_proxy_id,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": second_proxy_id,
+                    "result": {"order": 2}
+                }),
+            )
+            .await
+            .unwrap();
+        let first = tracker
+            .complete_response(
+                &first_proxy_id,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": first_proxy_id,
+                    "result": {"order": 1}
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            (second, first),
+            (
+                ReverseRequestCompletion::Handled(None),
+                ReverseRequestCompletion::Handled(None)
+            )
+        ));
+
+        let delivery = tracker
+            .seal_batch(admission.group_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let responses = delivery.as_array().unwrap();
+        assert_eq!(
+            (
+                responses
+                    .iter()
+                    .map(|response| response["id"].clone())
+                    .collect::<Vec<_>>(),
+                responses[1]["result"]["order"].clone(),
+                responses[2]["result"]["order"].clone(),
+                tracker.len().await,
+                tracker.batch_group_len().await,
+                tracker.batch_response_bytes().await,
+            ),
+            (
+                vec![json!("invalid"), json!("first"), json!("second")],
+                json!(1),
+                json!(2),
+                0,
+                0,
+                0,
+            )
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reverse_batch_timeout_waits_and_preserves_immediate_response_order() {
+        let tracker = Arc::new(ReverseRequestTracker::with_limits(
+            "batch-timeout",
+            Duration::from_secs(5),
+            2,
+            8_192,
+        ));
+        let mut plan = pending_batch_plan([(2, json!("timeout"))]);
+        plan.responses.insert(
+            0,
+            ReverseBatchPlannedResponse::Immediate(super::super::mcp_error_response(
+                json!("invalid"),
+                -32600,
+                "invalid member",
+            )),
+        );
+        let admission = admitted_batch(&tracker, plan).await;
+        assert!(tracker
+            .seal_batch(admission.group_id)
+            .await
+            .unwrap()
+            .is_none());
+        let waiter_tracker = tracker.clone();
+        let waiter = tokio::spawn(async move { waiter_tracker.wait_for_expired().await });
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+        let deliveries = waiter.await.unwrap().unwrap();
+        let responses = deliveries[0].as_array().unwrap();
+        assert_eq!(
+            (
+                deliveries.len(),
+                responses.len(),
+                responses[0]["id"].clone(),
+                responses[1]["id"].clone(),
+                responses[1]["error"]["code"].clone(),
+                tracker.batch_group_len().await,
+            ),
+            (
+                1,
+                2,
+                json!("invalid"),
+                json!("timeout"),
+                json!(JSON_RPC_SERVER_ERROR),
+                0,
+            )
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reverse_batch_last_response_and_timeout_race_emits_once() {
+        let tracker = Arc::new(ReverseRequestTracker::with_limits(
+            "batch-race",
+            Duration::ZERO,
+            2,
+            8_192,
+        ));
+        let admission =
+            admitted_batch(&tracker, pending_batch_plan([(0, json!("original"))])).await;
+        assert!(tracker
+            .seal_batch(admission.group_id)
+            .await
+            .unwrap()
+            .is_none());
+        let proxy_id = admission.proxy_ids[&0].clone();
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+
+        let response_tracker = tracker.clone();
+        let response_barrier = barrier.clone();
+        let response_proxy_id = proxy_id.clone();
+        let response = tokio::spawn(async move {
+            response_barrier.wait().await;
+            response_tracker
+                .complete_response(
+                    &response_proxy_id,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": response_proxy_id,
+                        "result": {"roots": []}
+                    }),
+                )
+                .await
+                .unwrap()
+        });
+        let expiry_tracker = tracker.clone();
+        let expiry_barrier = barrier.clone();
+        let expiry = tokio::spawn(async move {
+            expiry_barrier.wait().await;
+            expiry_tracker.expire(Instant::now()).await.unwrap()
+        });
+        barrier.wait().await;
+
+        let response = response.await.unwrap();
+        let expired = expiry.await.unwrap();
+        let response_delivery = match response {
+            ReverseRequestCompletion::Handled(delivery) => delivery,
+            ReverseRequestCompletion::NotOwned => panic!("batch response id was not owned"),
+        };
+        assert_eq!(
+            (
+                usize::from(response_delivery.is_some()) + expired.len(),
+                response_delivery
+                    .as_ref()
+                    .or_else(|| expired.first())
+                    .is_some_and(Value::is_array),
+                tracker.len().await,
+                tracker.batch_group_len().await,
+                tracker.batch_response_bytes().await,
+            ),
+            (1, true, 0, 0, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn reverse_batch_groups_complete_without_cross_group_responses() {
+        let tracker =
+            ReverseRequestTracker::with_limits("interleave", Duration::from_secs(30), 4, 8_192);
+        let first = admitted_batch(
+            &tracker,
+            pending_batch_plan([(0, json!("a-1")), (1, json!("a-2"))]),
+        )
+        .await;
+        let second = admitted_batch(&tracker, pending_batch_plan([(0, json!("b-1"))])).await;
+        assert!(tracker.seal_batch(first.group_id).await.unwrap().is_none());
+        assert!(tracker.seal_batch(second.group_id).await.unwrap().is_none());
+
+        let first_partial = tracker
+            .complete_response(
+                &first.proxy_ids[&0],
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": first.proxy_ids[&0],
+                    "result": {}
+                }),
+            )
+            .await
+            .unwrap();
+        let second_delivery = tracker
+            .complete_response(
+                &second.proxy_ids[&0],
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": second.proxy_ids[&0],
+                    "result": {}
+                }),
+            )
+            .await
+            .unwrap();
+        let first_delivery = tracker
+            .complete_response(
+                &first.proxy_ids[&1],
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": first.proxy_ids[&1],
+                    "result": {}
+                }),
+            )
+            .await
+            .unwrap();
+
+        let ids = |completion: ReverseRequestCompletion| match completion {
+            ReverseRequestCompletion::Handled(Some(delivery)) => delivery
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|response| response["id"].clone())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            (
+                matches!(first_partial, ReverseRequestCompletion::Handled(None)),
+                ids(second_delivery),
+                ids(first_delivery),
+                tracker.batch_group_len().await,
+            ),
+            (
+                true,
+                vec![json!("b-1")],
+                vec![json!("a-1"), json!("a-2")],
+                0,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn reverse_batch_limits_reject_atomically_and_oversized_result_keeps_same_id_fallback() {
+        let sizing_tracker = ReverseRequestTracker::with_resource_limits(
+            "bounded-batch",
+            Duration::from_secs(30),
+            4,
+            8_192,
+            1,
+            8_192,
+        );
+        let fallback = sizing_tracker.batch_fallback_response(json!("oversized-result"));
+        let timeout = sizing_tracker.timeout_response(json!("oversized-result"));
+        let exact_response_bytes = 2 + serialized_value_bytes(&fallback)
+            .unwrap()
+            .max(serialized_value_bytes(&timeout).unwrap());
+        let response_budget_rejection = match ReverseRequestTracker::with_resource_limits(
+            "bounded-batch",
+            Duration::from_secs(30),
+            4,
+            8_192,
+            1,
+            exact_response_bytes - 1,
+        )
+        .admit_batch(pending_batch_plan([(0, json!("oversized-result"))]))
+        .await
+        .unwrap()
+        {
+            Ok(_) => panic!("response byte limit + 1 was admitted"),
+            Err(rejection) => rejection,
+        };
+        assert_eq!(
+            (
+                response_budget_rejection.response[0]["id"].clone(),
+                response_budget_rejection.response[0]["error"]["code"].clone(),
+            ),
+            (json!("oversized-result"), json!(JSON_RPC_SERVER_ERROR))
+        );
+        let tracker = ReverseRequestTracker::with_resource_limits(
+            "bounded-batch",
+            Duration::from_secs(30),
+            4,
+            8_192,
+            1,
+            exact_response_bytes,
+        );
+        let admission = admitted_batch(
+            &tracker,
+            pending_batch_plan([(0, json!("oversized-result"))]),
+        )
+        .await;
+        assert!(tracker
+            .seal_batch(admission.group_id)
+            .await
+            .unwrap()
+            .is_none());
+
+        let group_rejection = match tracker
+            .admit_batch(pending_batch_plan([(0, json!("rejected-group"))]))
+            .await
+            .unwrap()
+        {
+            Ok(_) => panic!("group limit + 1 was admitted"),
+            Err(rejection) => rejection,
+        };
+        assert_eq!(
+            (
+                group_rejection.response[0]["id"].clone(),
+                group_rejection.response[0]["error"]["code"].clone(),
+                tracker.len().await,
+                tracker.batch_group_len().await,
+            ),
+            (json!("rejected-group"), json!(JSON_RPC_SERVER_ERROR), 1, 1,)
+        );
+
+        let proxy_id = admission.proxy_ids[&0].clone();
+        let completion = tracker
+            .complete_response(
+                &proxy_id,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": proxy_id,
+                    "result": {"oversized": "x".repeat(exact_response_bytes)}
+                }),
+            )
+            .await
+            .unwrap();
+        let ReverseRequestCompletion::Handled(Some(delivery)) = completion else {
+            panic!("oversized final response did not resolve the batch")
+        };
+        assert_eq!(
+            (
+                delivery[0]["id"].clone(),
+                delivery[0]["error"]["code"].clone(),
+                tracker.len().await,
+                tracker.batch_group_len().await,
+                tracker.batch_response_bytes().await,
+            ),
+            (
+                json!("oversized-result"),
+                json!(JSON_RPC_SERVER_ERROR),
+                0,
+                0,
+                0,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn reverse_batch_exact_reserved_boundary_preserves_timeout_response() {
+        let sizing_tracker = ReverseRequestTracker::with_resource_limits(
+            "timeout-boundary",
+            Duration::ZERO,
+            1,
+            8_192,
+            1,
+            8_192,
+        );
+        let original_id = json!("deadline");
+        let fallback = sizing_tracker.batch_fallback_response(original_id.clone());
+        let timeout = sizing_tracker.timeout_response(original_id.clone());
+        let exact_response_bytes = 2 + serialized_value_bytes(&fallback)
+            .unwrap()
+            .max(serialized_value_bytes(&timeout).unwrap());
+        let tracker = ReverseRequestTracker::with_resource_limits(
+            "timeout-boundary",
+            Duration::ZERO,
+            1,
+            8_192,
+            1,
+            exact_response_bytes,
+        );
+        let admission =
+            admitted_batch(&tracker, pending_batch_plan([(0, original_id.clone())])).await;
+        assert_eq!(tracker.batch_response_bytes().await, exact_response_bytes);
+        assert!(tracker
+            .seal_batch(admission.group_id)
+            .await
+            .unwrap()
+            .is_none());
+
+        let deliveries = tracker.expire(Instant::now()).await.unwrap();
+
+        assert_eq!(deliveries.len(), 1);
+        let responses = deliveries[0].as_array().unwrap();
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0]["id"], original_id);
+        assert_eq!(responses[0]["error"]["code"], JSON_RPC_SERVER_ERROR);
+        assert!(responses[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("timed out"));
+        assert_eq!(
+            (
+                tracker.len().await,
+                tracker.batch_group_len().await,
+                tracker.batch_response_bytes().await,
+            ),
+            (0, 0, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn reverse_batch_pending_and_id_limits_reject_every_request_atomically() {
+        let pending_tracker = ReverseRequestTracker::with_resource_limits(
+            "batch-pending",
+            Duration::from_secs(30),
+            1,
+            8_192,
+            2,
+            8_192,
+        );
+        let pending_rejection = match pending_tracker
+            .admit_batch(pending_batch_plan([
+                (0, json!("first")),
+                (1, json!("second")),
+            ]))
+            .await
+            .unwrap()
+        {
+            Ok(_) => panic!("pending limit + 1 batch was partially admitted"),
+            Err(rejection) => rejection,
+        };
+        assert_eq!(
+            (
+                pending_rejection
+                    .response
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|response| response["id"].clone())
+                    .collect::<Vec<_>>(),
+                pending_tracker.len().await,
+                pending_tracker.batch_group_len().await,
+                pending_tracker.original_id_bytes().await,
+                pending_tracker.batch_response_bytes().await,
+            ),
+            (vec![json!("first"), json!("second")], 0, 0, 0, 0)
+        );
+
+        let exact_id_bytes = request_key(&json!("exact-id")).unwrap().len();
+        let exact_tracker = ReverseRequestTracker::with_resource_limits(
+            "batch-id",
+            Duration::from_secs(30),
+            1,
+            exact_id_bytes,
+            1,
+            8_192,
+        );
+        let _exact =
+            admitted_batch(&exact_tracker, pending_batch_plan([(0, json!("exact-id"))])).await;
+        assert_eq!(exact_tracker.original_id_bytes().await, exact_id_bytes);
+        exact_tracker.drain().await;
+
+        let id_rejection = match ReverseRequestTracker::with_resource_limits(
+            "batch-id",
+            Duration::from_secs(30),
+            1,
+            exact_id_bytes - 1,
+            1,
+            8_192,
+        )
+        .admit_batch(pending_batch_plan([(0, json!("exact-id"))]))
+        .await
+        .unwrap()
+        {
+            Ok(_) => panic!("id byte limit + 1 batch was admitted"),
+            Err(rejection) => rejection,
+        };
+        assert_eq!(
+            (
+                id_rejection.response[0]["id"].clone(),
+                id_rejection.response[0]["error"]["code"].clone(),
+            ),
+            (json!("exact-id"), json!(JSON_RPC_SERVER_ERROR))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reverse_batch_completion_and_drain_race_clears_group_and_consumes_late_response() {
+        let tracker = Arc::new(ReverseRequestTracker::with_limits(
+            "batch-drain",
+            Duration::from_secs(30),
+            2,
+            8_192,
+        ));
+        let admission =
+            admitted_batch(&tracker, pending_batch_plan([(0, json!("original"))])).await;
+        assert!(tracker
+            .seal_batch(admission.group_id)
+            .await
+            .unwrap()
+            .is_none());
+        let proxy_id = admission.proxy_ids[&0].clone();
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+
+        let response_tracker = tracker.clone();
+        let response_barrier = barrier.clone();
+        let response_proxy_id = proxy_id.clone();
+        let response = tokio::spawn(async move {
+            response_barrier.wait().await;
+            response_tracker
+                .complete_response(
+                    &response_proxy_id,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": response_proxy_id,
+                        "result": {}
+                    }),
+                )
+                .await
+                .unwrap()
+        });
+        let drain_tracker = tracker.clone();
+        let drain_barrier = barrier.clone();
+        let drain = tokio::spawn(async move {
+            drain_barrier.wait().await;
+            drain_tracker.drain().await
+        });
+        barrier.wait().await;
+
+        let response = response.await.unwrap();
+        let drained = drain.await.unwrap();
+        let handled = matches!(
+            response,
+            ReverseRequestCompletion::Handled(Some(_)) | ReverseRequestCompletion::Handled(None)
+        );
+        let original_accounted_once = usize::from(!drained.is_empty())
+            + usize::from(matches!(
+                response,
+                ReverseRequestCompletion::Handled(Some(_))
+            ));
+        let late = tracker
+            .complete_response(
+                &proxy_id,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": proxy_id,
+                    "result": {}
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                handled,
+                original_accounted_once,
+                matches!(late, ReverseRequestCompletion::Handled(None)),
+                tracker.len().await,
+                tracker.batch_group_len().await,
+                tracker.original_id_bytes().await,
+                tracker.batch_response_bytes().await,
+            ),
+            (true, 1, true, 0, 0, 0, 0)
         );
     }
 
@@ -1445,6 +2672,68 @@ while True:
                 }
             }
         })
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(unix)]
+    async fn upstream_batch_member_limit_plus_one_returns_one_bounded_array() {
+        let (_directory, client, _output) = test_client(1_000).await;
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {}
+        });
+        let dispatch = client
+            .dispatch_upstream_payload(Value::Array(vec![
+                notification;
+                MAX_UPSTREAM_BATCH_MESSAGES + 1
+            ]))
+            .await
+            .unwrap();
+        let response = dispatch.reply.unwrap();
+        assert_eq!(
+            (
+                dispatch.forwarded,
+                response.as_array().unwrap().len(),
+                response[0]["id"].clone(),
+                response[0]["error"]["code"].clone(),
+                client.reverse_requests.batch_group_len().await,
+            ),
+            (None, 1, Value::Null, json!(JSON_RPC_SERVER_ERROR), 0)
+        );
+        client.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(unix)]
+    async fn response_and_notification_only_upstream_batch_emits_no_response_array() {
+        let (_directory, client, _output) = test_client(1_000).await;
+        let dispatch = client
+            .dispatch_upstream_payload(json!([
+                {
+                    "jsonrpc": "2.0",
+                    "id": "unknown-response",
+                    "result": {}
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/message",
+                    "params": {"data": {"kind": "only-forwarded-member"}}
+                }
+            ]))
+            .await
+            .unwrap();
+        let forwarded = dispatch.forwarded.unwrap();
+        assert_eq!(
+            (
+                dispatch.reply,
+                forwarded.as_array().unwrap().len(),
+                forwarded[0]["method"].clone(),
+                client.reverse_requests.batch_group_len().await,
+            ),
+            (None, 1, json!("notifications/message"), 0,)
+        );
+        client.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1666,10 +2955,17 @@ while True:
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[cfg(unix)]
-    async fn explicit_shutdown_drains_reverse_request_and_consumes_late_response() {
+    async fn explicit_shutdown_drains_reverse_batch_and_consumes_late_response() {
         let (_directory, client, mut output) = reverse_test_client(1_000).await;
         client
-            .send_message(&trigger_reverse_request(false))
+            .send_message(&json!({
+                "jsonrpc": "2.0",
+                "method": "test/reverse",
+                "params": {
+                    "id": "server-reverse",
+                    "batch": true
+                }
+            }))
             .await
             .unwrap();
         let forwarded = tokio::time::timeout(Duration::from_secs(1), output.recv())
@@ -1677,8 +2973,9 @@ while True:
             .unwrap()
             .unwrap()
             .value;
-        let proxy_id = forwarded["id"].clone();
+        let proxy_id = forwarded[0]["id"].clone();
         assert_eq!(client.reverse_requests.len().await, 1);
+        assert_eq!(client.reverse_requests.batch_group_len().await, 1);
 
         client.shutdown().await;
         let late_was_consumed = client
@@ -1692,10 +2989,12 @@ while True:
         assert_eq!(
             (
                 client.reverse_requests.len().await,
+                client.reverse_requests.batch_group_len().await,
+                client.reverse_requests.batch_response_bytes().await,
                 late_was_consumed,
                 client.is_reaped(),
             ),
-            (0, true, true)
+            (0, 0, 0, true, true)
         );
     }
 
@@ -1709,6 +3008,7 @@ while True:
                 "method": "test/reverse",
                 "params": {
                     "id": "server-reverse",
+                    "batch": true,
                     "close_stdin": true
                 }
             }))
@@ -1730,7 +3030,7 @@ while True:
             Duration::from_secs(2),
             client.forward_client_response(&json!({
                 "jsonrpc": "2.0",
-                "id": forwarded["id"],
+                "id": forwarded[0]["id"],
                 "result": {"roots": []}
             })),
         )
