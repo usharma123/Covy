@@ -604,6 +604,7 @@ fn path_is_map_traversable(path: &Path, root: &Path) -> bool {
 mod tests {
     use std::collections::BTreeMap;
     use std::process::Command;
+    use std::time::{Duration, UNIX_EPOCH};
 
     use super::*;
     use packet28_reducer_core::SearchRequest;
@@ -649,11 +650,7 @@ mod tests {
         fs::write(root.join("src/empty.rs"), b"").unwrap();
         fs::write(root.join("src/nul.rs"), b"pub fn before() {}\0after\n").unwrap();
         fs::write(root.join("src/invalid.rs"), [0xff, 0xfe, b'a']).unwrap();
-        fs::write(
-            root.join(".gitignore"),
-            b".packet28/\nignored.rs\nsrc/lib-link.rs\n",
-        )
-        .unwrap();
+        fs::write(root.join(".gitignore"), b"ignored.rs\n.packet28/\n").unwrap();
         fs::write(root.join("ignored.rs"), b"pub fn ignored_symbol() {}\n").unwrap();
         fs::write(
             root.join("src/regex_oversize.rs"),
@@ -679,25 +676,47 @@ mod tests {
             )
             .unwrap();
         }
-        #[cfg(unix)]
-        std::os::unix::fs::symlink("lib.rs", root.join("src/lib-link.rs")).unwrap();
+        set_fixture_mtimes(root);
+        fixture_git(root, &["init", "--quiet"]);
+        fixture_git(root, &["config", "user.name", "Packet28 Test"]);
+        fixture_git(root, &["config", "user.email", "packet28@example.invalid"]);
+        fixture_git(root, &["add", "."]);
+        fixture_git(
+            root,
+            &["commit", "--quiet", "--no-gpg-sign", "-m", "fixture"],
+        );
+    }
 
-        let git = |args: &[&str]| {
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(root)
-                .args(args)
-                .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
-                .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?} failed with {status}");
-        };
-        git(&["init", "--quiet"]);
-        git(&["config", "user.email", "packet28-tests@example.invalid"]);
-        git(&["config", "user.name", "Packet28 Tests"]);
-        git(&["add", "."]);
-        git(&["commit", "--quiet", "--message", "fixture"]);
+    fn set_fixture_mtimes(path: &Path) {
+        let modified = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        for entry in fs::read_dir(path).expect("read fixture directory") {
+            let entry = entry.expect("read fixture entry");
+            let file_type = entry.file_type().expect("read fixture entry type");
+            if file_type.is_dir() {
+                set_fixture_mtimes(&entry.path());
+            } else if file_type.is_file() {
+                fs::File::open(entry.path())
+                    .expect("open fixture file")
+                    .set_modified(modified)
+                    .expect("set fixture file mtime");
+            }
+        }
+    }
+
+    fn fixture_git(root: &Path, arguments: &[&str]) {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(root)
+            .env("GIT_AUTHOR_DATE", "2023-11-14T22:13:20Z")
+            .env("GIT_COMMITTER_DATE", "2023-11-14T22:13:20Z")
+            .output()
+            .expect("run fixture git");
+        let rendered_arguments = arguments.join(" ");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "git {rendered_arguments} failed: {stderr}"
+        );
     }
 
     fn manifest_bytes(root: &Path, engine: &str) -> BTreeMap<String, Vec<u8>> {
