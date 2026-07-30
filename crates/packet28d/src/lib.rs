@@ -115,6 +115,7 @@ use crate::instruction_files::resolve_instruction_file;
 use crate::launch::task_launch_agent;
 #[cfg(test)]
 use crate::persistence::PersistenceOwner;
+use crate::persistence::RegistryDelta;
 #[cfg(test)]
 use crate::runtime::{BlockingPool, DaemonRuntimeConfig, ShutdownSignal, StateChangeSignal};
 use crate::runtime_files::{default_index_manifest, save_index_manifest_file};
@@ -142,15 +143,46 @@ const INTERACTIVE_INDEX_SCHEMA_VERSION: u32 = 2;
 const INDEX_BATCH_DEBOUNCE_MS: u64 = 150;
 const TASK_PERSISTENCE_DEBOUNCE_MS: u64 = 20;
 
-fn persist_state(state: &DaemonState) -> Result<()> {
-    mark_state_dirty(state).map(|_| ())
+fn persist_task(state: &DaemonState, task_id: &str) -> Result<()> {
+    mark_task_dirty(state, task_id).map(|_| ())
 }
 
-fn mark_state_dirty(state: &DaemonState) -> Result<u64> {
-    state.persistence.checkpoint_async(
-        Arc::new(state.tasks.clone()),
-        Arc::new(state.watches.clone()),
-    )
+fn mark_task_dirty(state: &DaemonState, task_id: &str) -> Result<u64> {
+    let task = state
+        .tasks
+        .tasks
+        .get(task_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("cannot persist missing task '{task_id}'"))?;
+    state
+        .persistence
+        .stage(RegistryDelta::default().upsert_task(task))
+}
+
+fn persist_watch(state: &DaemonState, watch_id: &str) -> Result<()> {
+    let watch = state
+        .watches
+        .watches
+        .iter()
+        .find(|watch| watch.watch_id == watch_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("cannot persist missing watch '{watch_id}'"))?;
+    state
+        .persistence
+        .stage(RegistryDelta::default().upsert_watch(watch))
+        .map(|_| ())
+}
+
+#[cfg(test)]
+fn persist_state_for_test(state: &DaemonState) -> Result<()> {
+    let mut delta = RegistryDelta::default();
+    for task in state.tasks.tasks.values().cloned() {
+        delta = delta.upsert_task(task);
+    }
+    for watch in state.watches.watches.iter().cloned() {
+        delta = delta.upsert_watch(watch);
+    }
+    state.persistence.stage(delta).map(|_| ())
 }
 
 fn flush_persistence(state: &Arc<Mutex<DaemonState>>) -> Result<()> {
@@ -167,7 +199,7 @@ fn fence_task_namespace_admission(state: &Arc<Mutex<DaemonState>>, task_id: &str
         if guard.persistence.task_is_durably_admitted(task_id) {
             None
         } else {
-            let revision = mark_state_dirty(&guard)?;
+            let revision = mark_task_dirty(&guard, task_id)?;
             Some((guard.persistence.clone(), revision))
         }
     };
@@ -180,7 +212,7 @@ fn fence_task_namespace_admission(state: &Arc<Mutex<DaemonState>>, task_id: &str
 fn reconcile_task_event_high_waters(
     tasks: &mut TaskRegistry,
     event_tails: &BTreeMap<String, Option<u64>>,
-) -> Result<bool> {
+) -> Result<BTreeSet<String>> {
     if tasks.tasks.len() != event_tails.len() {
         anyhow::bail!(
             "task registry/event-tail snapshot cardinality mismatch: {} tasks, {} tails",
@@ -188,7 +220,7 @@ fn reconcile_task_event_high_waters(
             event_tails.len()
         );
     }
-    let mut changed = false;
+    let mut changed_task_ids = BTreeSet::new();
     for (task_id, task) in &mut tasks.tasks {
         let durable_sequence = *event_tails
             .get(task_id)
@@ -212,17 +244,19 @@ fn reconcile_task_event_high_waters(
             }
             Some(durable_sequence) if task.last_event_seq < durable_sequence => {
                 task.last_event_seq = durable_sequence;
-                changed = true;
+                changed_task_ids.insert(task_id.clone());
             }
             Some(_) => {}
         }
     }
-    Ok(changed)
+    Ok(changed_task_ids)
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct TaskRestartReconciliation {
     changed_tasks: usize,
+    changed_task_ids: BTreeSet<String>,
+    removed_watch_ids: BTreeSet<String>,
     replan_task_ids: Vec<String>,
 }
 
@@ -294,6 +328,7 @@ fn reconcile_interrupted_task_lifecycles(
             TaskLifecycle::Idle => {
                 if interrupted_agent_pid.is_some() {
                     reconciliation.changed_tasks += 1;
+                    reconciliation.changed_task_ids.insert(task_id.clone());
                 }
                 continue;
             }
@@ -303,16 +338,24 @@ fn reconcile_interrupted_task_lifecycles(
                 }
                 let removed_watch_ids = std::mem::take(&mut task.watch_ids);
                 watches.watches.retain(|watch| {
-                    !removed_watch_ids
+                    let removed = removed_watch_ids
                         .iter()
-                        .any(|watch_id| watch_id == &watch.watch_id)
+                        .any(|watch_id| watch_id == &watch.watch_id);
+                    if removed {
+                        reconciliation
+                            .removed_watch_ids
+                            .insert(watch.watch_id.clone());
+                    }
+                    !removed
                 });
                 reconciliation.changed_tasks += 1;
+                reconciliation.changed_task_ids.insert(task_id.clone());
                 continue;
             }
             TaskLifecycle::ReplanPending => {
                 if interrupted_agent_pid.is_some() {
                     reconciliation.changed_tasks += 1;
+                    reconciliation.changed_task_ids.insert(task_id.clone());
                 }
                 reconciliation.replan_task_ids.push(task_id.clone());
                 continue;
@@ -320,9 +363,15 @@ fn reconcile_interrupted_task_lifecycles(
             TaskLifecycle::Cancelling { .. } => {
                 let removed_watch_ids = std::mem::take(&mut task.watch_ids);
                 watches.watches.retain(|watch| {
-                    !removed_watch_ids
+                    let removed = removed_watch_ids
                         .iter()
-                        .any(|watch_id| watch_id == &watch.watch_id)
+                        .any(|watch_id| watch_id == &watch.watch_id);
+                    if removed {
+                        reconciliation
+                            .removed_watch_ids
+                            .insert(watch.watch_id.clone());
+                    }
+                    !removed
                 });
                 task.lifecycle.complete_cancel()?;
                 task.last_completed_at_unix = Some(recovered_at_unix);
@@ -359,6 +408,7 @@ fn reconcile_interrupted_task_lifecycles(
             _ => evidence,
         });
         reconciliation.changed_tasks += 1;
+        reconciliation.changed_task_ids.insert(task_id.clone());
     }
     Ok(reconciliation)
 }

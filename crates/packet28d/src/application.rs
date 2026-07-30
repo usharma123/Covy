@@ -118,7 +118,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
     let (mut tasks, mut watches, event_tails) =
         load_task_watch_registry_checkpoint_with_event_tails(&root)?;
     preflight_restart_recovery(&tasks)?;
-    let _event_high_waters_changed = reconcile_task_event_high_waters(&mut tasks, &event_tails)?;
+    let event_high_water_changes = reconcile_task_event_high_waters(&mut tasks, &event_tails)?;
     let restart_reconciliation =
         reconcile_interrupted_task_lifecycles(&mut tasks, &mut watches, now_unix())?;
     let (persistence_owner, persistence) = PersistenceOwner::start(
@@ -126,6 +126,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
         task_store_lease.clone(),
         Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
         &tasks,
+        &watches,
     )?;
     if restart_reconciliation.changed_tasks > 0 {
         daemon_log(&format!(
@@ -139,7 +140,23 @@ pub fn serve(root: PathBuf) -> Result<()> {
             restart_reconciliation.replan_task_ids.len()
         ));
     }
-    persistence.checkpoint(Arc::new(tasks.clone()), Arc::new(watches.clone()))?;
+    let mut startup_delta = crate::persistence::RegistryDelta::default();
+    for task_id in event_high_water_changes
+        .iter()
+        .chain(&restart_reconciliation.changed_task_ids)
+    {
+        let task = tasks
+            .tasks
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("startup reconciliation lost changed task '{task_id}'"))?;
+        startup_delta = startup_delta.upsert_task(task);
+    }
+    for watch_id in &restart_reconciliation.removed_watch_ids {
+        startup_delta = startup_delta.remove_watch(watch_id.clone());
+    }
+    persistence.stage_and_flush(startup_delta)?;
+    persistence.checkpoint_current()?;
     let manifest = load_index_manifest_file(&root);
     let interactive_index = load_index_runtime_files(&root, manifest);
     let (index_tx, index_rx) = IndexIngress::new();

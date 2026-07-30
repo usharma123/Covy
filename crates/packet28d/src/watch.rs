@@ -265,6 +265,11 @@ pub(crate) fn register_task_and_watches(
             ..TaskRecord::default()
         };
         guard.tasks.tasks.insert(spec.task_id.clone(), task.clone());
+        let mut delta = RegistryDelta::default().upsert_task(task);
+        for registration in registrations.iter().cloned() {
+            delta = delta.upsert_watch(registration);
+        }
+        guard.persistence.stage(delta)?;
         generation
     };
 
@@ -275,11 +280,6 @@ pub(crate) fn register_task_and_watches(
                 watch_tx.clone(),
                 registration.watch_id.clone(),
             )?;
-        }
-
-        {
-            let guard = state.lock().map_err(lock_err)?;
-            persist_state(&guard)?;
         }
 
         let guard = state.lock().map_err(lock_err)?;
@@ -430,7 +430,7 @@ where
                 .get(task_id)
                 .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?;
             if task.lifecycle == TaskLifecycle::ReplanPending {
-                if let Err(error) = persist_state(&guard) {
+                if let Err(error) = persist_task(&guard, task_id) {
                     guard.shutdown.request();
                     return Err(error.context("failed to persist queued task replan"));
                 }
@@ -505,7 +505,7 @@ where
             task.lifecycle = running_lifecycle;
             task.last_started_at_unix = Some(now_unix());
             task.last_error = None;
-            if let Err(error) = persist_state(&guard) {
+            if let Err(error) = persist_task(&guard, task_id) {
                 if durable_replan_claim {
                     guard.shutdown.request();
                 }
@@ -587,7 +587,7 @@ where
             if rerun {
                 task.last_replan_at_unix = Some(now_unix());
             }
-            if let Err(error) = persist_state(&guard) {
+            if let Err(error) = persist_task(&guard, task_id) {
                 if rerun {
                     // The active invocation can no longer publish ownership of
                     // its queued rerun. Force process-level recovery instead
@@ -793,7 +793,7 @@ pub(crate) fn cancel_task(
             .ok_or_else(|| anyhow!("task '{task_id}' disappeared before cancellation"))?;
         task.lifecycle.request_cancel();
         let watch_ids = task.watch_ids.clone();
-        persist_state(&guard)?;
+        persist_task(&guard, task_id)?;
         (generation, watch_ids)
     };
     for watch_id in &watch_ids {
@@ -926,15 +926,25 @@ fn rollback_failed_task_admission_inner(
             .remove(task_id)
             .map(|task| task.last_event_seq)
             .unwrap_or_default();
+        let mut delta = RegistryDelta::default();
         if let Some(mut replaced_task) = replaced_task {
             replaced_task.last_event_seq = replaced_task.last_event_seq.max(failed_high_water);
-            guard.tasks.tasks.insert(task_id.to_string(), replaced_task);
+            guard
+                .tasks
+                .tasks
+                .insert(task_id.to_string(), replaced_task.clone());
+            delta = delta.upsert_task(replaced_task);
+        } else {
+            delta = delta.remove_task(task_id);
+        }
+        for watch_id in watch_ids {
+            delta = delta.remove_watch(watch_id);
         }
         guard.subscribers.remove(task_id);
         guard
             .task_generations
             .remove_if_current(task_id, expected_generation);
-        persist_state(&guard)?;
+        guard.persistence.stage(delta)?;
         guard.changes.notify();
     }
     persistence
@@ -955,10 +965,16 @@ pub(crate) fn remove_watch(
         .iter()
         .position(|watch| watch.watch_id == watch_id)
         .map(|index| guard.watches.watches.remove(index));
-    for task in guard.tasks.tasks.values_mut() {
+    let Some(removed_watch) = removed.as_ref() else {
+        return Ok(None);
+    };
+    let task_id = removed_watch.spec.task_id.clone();
+    let mut delta = RegistryDelta::default().remove_watch(watch_id);
+    if let Some(task) = guard.tasks.tasks.get_mut(&task_id) {
         task.watch_ids.retain(|candidate| candidate != watch_id);
+        delta = delta.upsert_task(task.clone());
     }
-    persist_state(&guard)?;
+    guard.persistence.stage(delta)?;
     Ok(removed)
 }
 
@@ -1065,7 +1081,7 @@ pub(crate) fn install_watch(
     watch.active = true;
     watch.last_error = None;
     guard.watcher_handles.insert(watch_id.clone(), watcher);
-    persist_state(&guard)?;
+    persist_watch(&guard, &watch_id)?;
     daemon_log(&format!(
         "installed watch watch_id={watch_id} task_id={} kind={:?}",
         spec.task_id, spec.kind
@@ -1197,7 +1213,7 @@ fn process_watch_event(
             watch.last_event_at_unix = Some(now_unix());
             watch.last_error = error_message.clone();
         }
-        persist_state(&guard)?;
+        persist_watch(&guard, &message.watch_id)?;
     }
 
     if let Some(error) = error_message {
@@ -1253,7 +1269,7 @@ fn process_watch_event(
             .ok_or_else(|| anyhow!("unknown task '{task_id}'"))?
             .lifecycle
             .request_replan()?;
-        persist_state(&guard)?;
+        persist_task(&guard, &task_id)?;
         should_start
     };
     flush_persistence(&state)

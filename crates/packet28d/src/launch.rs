@@ -269,7 +269,7 @@ pub(crate) fn spawn_owned_child_waiter(
                             if let Some(error) = error_text.clone() {
                                 task.last_error = Some(error);
                             }
-                            let _ = persist_state(&guard);
+                            let _ = persist_task(&guard, &task_id);
                         }
                     }
                 }
@@ -459,7 +459,7 @@ pub(crate) fn task_launch_agent(
                 )
             }
         })?;
-        persist_state(&guard)?;
+        persist_task(&guard, &request.task_id)?;
         (
             guard.root.clone(),
             generation,
@@ -611,7 +611,7 @@ pub(crate) fn task_launch_agent(
         );
     }
     let ownership_result = (|| -> Result<()> {
-        let (persistence, tasks, watches) = {
+        let (persistence, revision) = {
             let mut guard = state.lock().map_err(lock_err)?;
             if !guard
                 .task_generations
@@ -642,13 +642,10 @@ pub(crate) fn task_launch_agent(
             task.latest_agent_context_version = Some(bootstrap.response.context_version.clone());
             task.latest_agent_handoff_artifact_id = bootstrap.handoff_artifact_id.clone();
             task.latest_agent_handoff_checkpoint_id = bootstrap.handoff_checkpoint_id.clone();
-            (
-                guard.persistence.clone(),
-                Arc::new(guard.tasks.clone()),
-                Arc::new(guard.watches.clone()),
-            )
+            let revision = mark_task_dirty(&guard, &bootstrap.task_id)?;
+            (guard.persistence.clone(), revision)
         };
-        persistence.checkpoint(tasks, watches)
+        persistence.flush_through(revision)
     })();
     if let Err(error) = ownership_result {
         let reap_result = terminate_and_reap_child(&mut child, owned_process);
@@ -709,7 +706,7 @@ pub(crate) fn task_launch_agent(
                         task.latest_agent_completed_at_unix = Some(now_unix());
                         task.latest_agent_exit_code = None;
                         task.last_error = Some(error.to_string());
-                        let _ = persist_state(&guard);
+                        let _ = persist_task(&guard, &bootstrap.task_id);
                     }
                 }
             }

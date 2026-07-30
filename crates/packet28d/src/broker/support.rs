@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 
 use crate::index::build_index_status;
 use crate::state::{DaemonState, TaskGenerationId};
-use crate::{daemon_log, lock_err, mark_state_dirty, persist_state, resolve_root};
+use crate::{daemon_log, lock_err, mark_task_dirty, persist_task, resolve_root};
 
 const DEFAULT_CONTEXT_MANAGE_BUDGET_TOKENS: u64 = 5_000;
 const DEFAULT_CONTEXT_MANAGE_BUDGET_BYTES: usize = 32_000;
@@ -241,7 +241,7 @@ fn emit_task_event_ordered(
             .tasks
             .get(task_id)
             .is_some_and(|task| task.last_event_seq == 0)
-            .then(|| mark_state_dirty(&guard))
+            .then(|| mark_task_dirty(&guard, task_id))
             .transpose()?;
         (activity_lease, required_revision, lock_acquired.elapsed())
     };
@@ -273,7 +273,7 @@ fn emit_task_event_ordered(
         );
     }
     task.last_event_seq = frame.seq;
-    persist_state(&guard)?;
+    persist_task(&guard, task_id)?;
     publish_task_event_to_subscribers(&mut guard, task_id, &frame);
     guard.changes.notify();
     let publication_lock_hold = lock_acquired.elapsed();
@@ -339,7 +339,7 @@ pub(crate) fn complete_task_cancellation_for_generation(
             );
         }
         let required_revision = (task.last_event_seq == 0)
-            .then(|| mark_state_dirty(&guard))
+            .then(|| mark_task_dirty(&guard, task_id))
             .transpose()?;
         (required_revision, lock_acquired.elapsed())
     };
@@ -382,7 +382,7 @@ pub(crate) fn complete_task_cancellation_for_generation(
     task.last_completed_at_unix = Some(frame.event.occurred_at_unix);
     task.lifecycle.complete_cancel()?;
     let terminal_task = task.clone();
-    let checkpoint_result = persist_state(&guard);
+    let checkpoint_result = persist_task(&guard, task_id);
     publish_task_event_to_subscribers(&mut guard, task_id, &frame);
     guard.subscribers.remove(task_id);
     guard
@@ -466,7 +466,7 @@ pub(crate) fn refresh_task_context_summary_for_generation(
         task.changed_since_checkpoint_symbols =
             envelope.payload.changed_symbols_since_checkpoint.len();
     }
-    persist_state(&guard)?;
+    persist_task(&guard, task_id)?;
     Ok(Some(summary))
 }
 
@@ -516,7 +516,7 @@ pub(crate) fn bump_context_version(
     let task = ensure_task_record_mut(&mut guard.tasks, task_id);
     let version = next_context_version(task.latest_context_version.as_deref());
     task.latest_context_version = Some(version.clone());
-    persist_state(&guard)?;
+    persist_task(&guard, task_id)?;
     Ok(version)
 }
 
@@ -528,7 +528,7 @@ pub(crate) fn set_context_reason(
     let mut guard = state.lock().map_err(lock_err)?;
     let task = ensure_task_record_mut(&mut guard.tasks, task_id);
     task.latest_context_reason = Some(reason.into());
-    persist_state(&guard)?;
+    persist_task(&guard, task_id)?;
     Ok(())
 }
 
@@ -549,7 +549,7 @@ pub(crate) fn set_context_reason_for_generation(
         return Ok(false);
     };
     task.latest_context_reason = Some(reason.into());
-    persist_state(&guard)?;
+    persist_task(&guard, task_id)?;
     Ok(true)
 }
 
@@ -559,7 +559,7 @@ pub(crate) fn current_context_version(
 ) -> Result<String> {
     let mut guard = state.lock().map_err(lock_err)?;
     let version = ensure_context_version(ensure_task_record_mut(&mut guard.tasks, task_id));
-    persist_state(&guard)?;
+    persist_task(&guard, task_id)?;
     Ok(version)
 }
 
@@ -619,7 +619,7 @@ pub(crate) fn update_broker_link_state(
         _ => {}
     }
     if changed {
-        persist_state(&guard)?;
+        persist_task(&guard, &request.task_id)?;
     }
     Ok(())
 }

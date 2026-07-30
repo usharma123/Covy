@@ -41,7 +41,7 @@ use crate::planning::{
     testmap_tests_for_path,
 };
 use crate::state::DaemonState;
-use crate::{daemon_log, lock_err, persist_state};
+use crate::{daemon_log, lock_err, persist_task};
 
 pub(crate) fn compute_broker_response(
     state: &Arc<Mutex<DaemonState>>,
@@ -369,7 +369,7 @@ pub(crate) fn broker_get_context(
         session_request.since_version = None;
         session_request.persist_artifacts = Some(true);
         task.latest_broker_request = Some(session_request);
-        persist_state(&guard)?;
+        persist_task(&guard, &request.task_id)?;
     }
     let _ = set_context_reason(&state, &request.task_id, "get_context");
     let mut response = compute_broker_response(&state, &request)?;

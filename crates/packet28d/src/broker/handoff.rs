@@ -25,7 +25,7 @@ use super::support::{
 };
 use crate::state::DaemonState;
 use crate::{
-    context_version_storage_id, fence_task_namespace_admission, lock_err, persist_state,
+    context_version_storage_id, fence_task_namespace_admission, lock_err, persist_task,
     task_storage_id,
 };
 
@@ -290,7 +290,7 @@ pub(crate) fn mark_handoff_consumed(
     handoff.resume_count = handoff.resume_count.saturating_add(1);
     handoff.consumed_at_unix_ms = Some(now_unix_millis());
     let updated = handoff.clone();
-    persist_state(&guard)?;
+    persist_task(&guard, task_id)?;
     Ok(Some(updated))
 }
 
@@ -575,7 +575,7 @@ pub(crate) fn write_broker_artifacts(
             "event_path": task_event_log_path(&root, &storage_id).to_string_lossy().to_string(),
             "supports_push": true,
         });
-        persist_state(&guard)?;
+        persist_task(&guard, task_id)?;
         fs::write(&state_json_path, serde_json::to_vec_pretty(&state_value)?)
             .with_context(|| format!("failed to write '{}'", state_json_path.display()))?;
     }
@@ -845,7 +845,7 @@ pub(crate) fn broker_prepare_handoff(
         let mut guard = state.lock().map_err(lock_err)?;
         let task = ensure_task_record_mut(&mut guard.tasks, &request.task_id);
         promote_new_ready_handoff(task, handoff.clone());
-        persist_state(&guard)?;
+        persist_task(&guard, &request.task_id)?;
     }
     let context = if matches!(
         get_request

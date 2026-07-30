@@ -84,7 +84,7 @@ fn failed_run_retains_ownership_and_executes_one_durable_rerun() {
             guard.tasks.tasks["failed-rerun"].lifecycle,
             TaskLifecycle::RunningReplanPending
         );
-        persist_state(&guard).unwrap();
+        persist_state_for_test(&guard).unwrap();
     }
     flush_persistence(&state).unwrap();
     release_tx.send(()).unwrap();
@@ -188,7 +188,7 @@ fn failed_event_append_does_not_abandon_owned_rerun() {
             .lifecycle
             .request_replan()
             .unwrap());
-        persist_state(&guard).unwrap();
+        persist_state_for_test(&guard).unwrap();
     }
     flush_persistence(&state).unwrap();
     fs::rename(&event_path, &saved_event_path).unwrap();

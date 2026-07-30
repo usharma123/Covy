@@ -38,7 +38,10 @@ fn startup_reconciliation_advances_a_registry_lagging_the_durable_event_log() {
     assert_eq!(frame.seq, 1);
 
     let (mut loaded, tails) = load_task_registry_with_event_tails(root.path()).unwrap();
-    assert!(reconcile_task_event_high_waters(&mut loaded, &tails).unwrap());
+    assert_eq!(
+        reconcile_task_event_high_waters(&mut loaded, &tails).unwrap(),
+        BTreeSet::from(["replay".to_string()])
+    );
     assert_eq!(loaded.tasks["replay"].last_event_seq, 1);
 }
 
@@ -417,7 +420,7 @@ fn durable_replan_claim_keeps_ownership_when_another_replan_arrives_during_its_b
             guard.tasks.tasks[task_id].lifecycle,
             TaskLifecycle::RunningReplanPending
         );
-        persist_state(&guard).unwrap();
+        persist_state_for_test(&guard).unwrap();
     }
     release_claim.send(()).unwrap();
 
@@ -520,7 +523,7 @@ fn successful_run_postprocessing_failure_does_not_abandon_owned_rerun() {
                         .lifecycle
                         .request_replan()
                         .unwrap());
-                    persist_state(&guard).unwrap();
+                    persist_state_for_test(&guard).unwrap();
                 }
                 flush_persistence(&executor_state).unwrap();
                 fs::rename(&event_path, &saved_event_path).unwrap();
@@ -620,7 +623,7 @@ fn completed_rerun_checkpoint_failure_requests_process_recovery() {
             .lifecycle
             .request_replan()
             .unwrap());
-        persist_state(&guard).unwrap();
+        persist_state_for_test(&guard).unwrap();
         guard.persistence.clone()
     };
     persistence.flush().unwrap();
@@ -717,7 +720,7 @@ fn watch_checkpoint_boundary_releases_the_daemon_state_mutex() {
             active: true,
             ..WatchRegistration::default()
         });
-        persist_state(&guard).unwrap();
+        persist_state_for_test(&guard).unwrap();
     }
 
     checkpoint_reached
@@ -776,7 +779,7 @@ fn concurrent_task_and_watch_mutations_coalesce_to_one_exact_checkpoint() {
                 active: true,
                 ..WatchRegistration::default()
             });
-            persist_state(&guard).unwrap();
+            persist_state_for_test(&guard).unwrap();
         }));
     }
     start.wait();
@@ -798,7 +801,7 @@ fn concurrent_task_and_watch_mutations_coalesce_to_one_exact_checkpoint() {
         serde_json::to_value(&guard.watches).unwrap()
     );
     let metrics = guard.persistence.metrics();
-    assert!(metrics.checkpoints_written < metrics.snapshots_submitted);
+    assert!(metrics.checkpoints_written < metrics.deltas_submitted);
     drop(guard);
     super::support::shutdown_test_persistence(&state);
 }
@@ -1067,7 +1070,7 @@ fn run_owned_persistence_sample(fixture: &TaskRegistry) -> PersistenceBenchmarkS
     {
         let mut guard = state.lock().unwrap();
         guard.tasks = fixture.clone();
-        persist_state(&guard).unwrap();
+        persist_state_for_test(&guard).unwrap();
     }
     flush_persistence(&state).unwrap();
     emit_task_event(

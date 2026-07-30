@@ -138,7 +138,7 @@ fn failed_admission_rollback_quiesces_and_removes_runtime_and_durable_state() {
                 sender: subscriber,
             }],
         );
-        persist_state(&guard).unwrap();
+        persist_state_for_test(&guard).unwrap();
     }
     let (watch_tx, _watch_rx) = WatchIngress::new(1);
     install_watch(state.clone(), watch_tx, watch_id.to_string()).unwrap();

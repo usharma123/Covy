@@ -126,7 +126,7 @@ async fn processor_failure_is_fatal_bounded_and_detached_work_retains_its_lease(
                             ..TaskRecord::default()
                         },
                     );
-                    persist_state(&guard)?;
+                    persist_state_for_test(&guard)?;
                 }
                 flush_persistence(&mutation_state)?;
                 Ok(())

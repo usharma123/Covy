@@ -121,7 +121,7 @@ fn prepare_handoff_only_resumes_recorded_handoff_artifacts() {
         let task = guard.tasks.tasks.get_mut("task-resume-guard").unwrap();
         task.latest_context_version = Some("ctx-1".to_string());
         task.latest_handoff_artifact_id = Some("handoff-1".to_string());
-        persist_state(&guard).unwrap();
+        persist_state_for_test(&guard).unwrap();
     }
 
     let response = broker_prepare_handoff(

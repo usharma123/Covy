@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -10,15 +10,17 @@ use packet28_daemon_core::storage::{append_next_task_event, save_task_watch_regi
 use packet28_daemon_core::task_store_lease::TaskStoreLease;
 use packet28_daemon_protocol::message::{DaemonEvent, DaemonEventFrame};
 use packet28_daemon_protocol::paths::{task_registry_path, watch_registry_path};
-use packet28_daemon_protocol::task::{TaskRegistry, WatchRegistry};
+use packet28_daemon_protocol::task::{TaskRecord, TaskRegistry, WatchRegistration, WatchRegistry};
 
 const COMMAND_CAPACITY: usize = 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PersistenceMetrics {
-    pub(crate) snapshots_submitted: u64,
-    pub(crate) snapshots_coalesced: u64,
+    pub(crate) deltas_submitted: u64,
+    pub(crate) deltas_coalesced: u64,
     pub(crate) wakeups_coalesced: u64,
+    pub(crate) wal_batches_appended: u64,
+    pub(crate) wal_bytes_appended: u64,
     pub(crate) checkpoints_written: u64,
     pub(crate) checkpoint_bytes_written: u64,
     pub(crate) events_submitted: u64,
@@ -30,13 +32,154 @@ pub(crate) struct PersistenceMetrics {
     pub(crate) max_event_state_lock_nanos: u64,
     pub(crate) barriers_completed: u64,
     pub(crate) failures: u64,
-    pub(crate) max_pending_snapshots: u64,
+    pub(crate) max_pending_batches: u64,
+    pub(crate) max_pending_task_keys: u64,
+    pub(crate) max_pending_watch_keys: u64,
 }
 
-struct PendingSnapshot {
-    revision: u64,
-    tasks: Arc<TaskRegistry>,
-    watches: Arc<WatchRegistry>,
+/// One atomic registry mutation staged while the daemon state lock is held.
+///
+/// The batch owns only records whose keys changed. Later changes to the same
+/// key replace earlier pending values; distinct keys accumulate until the
+/// persistence owner appends one contiguous revision range.
+#[derive(Debug, Default)]
+pub(crate) struct RegistryDelta {
+    task_upserts: BTreeMap<String, TaskRecord>,
+    task_removals: BTreeSet<String>,
+    watch_upserts: BTreeMap<String, WatchRegistration>,
+    watch_upsert_order: Vec<String>,
+    watch_removals: BTreeSet<String>,
+}
+
+impl RegistryDelta {
+    pub(crate) fn upsert_task(mut self, task: TaskRecord) -> Self {
+        self.task_removals.remove(&task.task_id);
+        self.task_upserts.insert(task.task_id.clone(), task);
+        self
+    }
+
+    pub(crate) fn remove_task(mut self, task_id: impl Into<String>) -> Self {
+        let task_id = task_id.into();
+        self.task_upserts.remove(&task_id);
+        self.task_removals.insert(task_id);
+        self
+    }
+
+    pub(crate) fn upsert_watch(mut self, watch: WatchRegistration) -> Self {
+        let watch_id = watch.watch_id.clone();
+        if !self.watch_upserts.contains_key(&watch_id) {
+            self.watch_upsert_order.push(watch_id.clone());
+        }
+        // An overlapping removal is intentional: applying removals before
+        // upserts preserves remove-then-reinsert ordering.
+        self.watch_upserts.insert(watch_id, watch);
+        self
+    }
+
+    pub(crate) fn remove_watch(mut self, watch_id: impl Into<String>) -> Self {
+        let watch_id = watch_id.into();
+        self.watch_upserts.remove(&watch_id);
+        self.watch_upsert_order
+            .retain(|candidate| candidate != &watch_id);
+        self.watch_removals.insert(watch_id);
+        self
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.task_upserts.is_empty()
+            && self.task_removals.is_empty()
+            && self.watch_upserts.is_empty()
+            && self.watch_removals.is_empty()
+    }
+
+    fn task_key_count(&self) -> usize {
+        self.task_upserts
+            .len()
+            .saturating_add(self.task_removals.len())
+    }
+
+    fn watch_key_count(&self) -> usize {
+        self.watch_upserts
+            .len()
+            .saturating_add(self.watch_removals.len())
+    }
+
+    fn merge_later(&mut self, later: Self) {
+        for task_id in later.task_removals {
+            self.task_upserts.remove(&task_id);
+            self.task_removals.insert(task_id);
+        }
+        for (task_id, task) in later.task_upserts {
+            self.task_removals.remove(&task_id);
+            self.task_upserts.insert(task_id, task);
+        }
+        for watch_id in &later.watch_removals {
+            self.watch_upserts.remove(watch_id);
+            self.watch_upsert_order
+                .retain(|candidate| candidate != watch_id);
+            self.watch_removals.insert(watch_id.clone());
+        }
+        for watch_id in later.watch_upsert_order {
+            let watch = later
+                .watch_upserts
+                .get(&watch_id)
+                .expect("watch upsert order references a present record")
+                .clone();
+            let reinsertion =
+                self.watch_removals.contains(&watch_id) || later.watch_removals.contains(&watch_id);
+            if reinsertion {
+                self.watch_upserts.remove(&watch_id);
+                self.watch_upsert_order
+                    .retain(|candidate| candidate != &watch_id);
+                self.watch_removals.insert(watch_id.clone());
+            }
+            if !self.watch_upserts.contains_key(&watch_id) {
+                self.watch_upsert_order.push(watch_id.clone());
+            }
+            self.watch_upserts.insert(watch_id, watch);
+        }
+    }
+
+    fn apply_to(&self, tasks: &mut TaskRegistry, watches: &mut WatchRegistry) {
+        for task_id in &self.task_removals {
+            tasks.tasks.remove(task_id);
+        }
+        for (task_id, task) in &self.task_upserts {
+            tasks.tasks.insert(task_id.clone(), task.clone());
+        }
+        for watch_id in &self.watch_removals {
+            watches.watches.retain(|watch| watch.watch_id != *watch_id);
+        }
+        for watch_id in &self.watch_upsert_order {
+            let replacement = self
+                .watch_upserts
+                .get(watch_id)
+                .expect("watch upsert order references a present record");
+            if let Some(existing) = watches
+                .watches
+                .iter_mut()
+                .find(|watch| watch.watch_id == *watch_id)
+            {
+                existing.clone_from(replacement);
+            } else {
+                watches.watches.push(replacement.clone());
+            }
+        }
+    }
+}
+
+struct PendingDelta {
+    first_revision: u64,
+    last_revision: u64,
+    delta: RegistryDelta,
+}
+
+impl PendingDelta {
+    fn merge_later(&mut self, revision: u64, delta: RegistryDelta) {
+        debug_assert_eq!(revision, self.last_revision.saturating_add(1));
+        self.last_revision = revision;
+        self.delta.merge_later(delta);
+    }
 }
 
 #[derive(Default)]
@@ -44,9 +187,14 @@ struct PendingState {
     next_revision: u64,
     durable_revision: u64,
     durable_task_ids: BTreeSet<String>,
-    snapshot: Option<PendingSnapshot>,
+    delta: Option<PendingDelta>,
     last_error: Option<String>,
     unsurfaced_error: Option<String>,
+}
+
+struct RegistryImage {
+    tasks: TaskRegistry,
+    watches: WatchRegistry,
 }
 
 trait PersistenceBackend: Send + Sync {
@@ -117,6 +265,10 @@ enum PersistenceCommand {
         target_revision: u64,
         reply: UnitReply,
     },
+    Checkpoint {
+        target_revision: u64,
+        reply: UnitReply,
+    },
     AppendEvent {
         required_revision: Option<u64>,
         task_id: String,
@@ -146,12 +298,14 @@ impl PersistenceOwner {
         task_store_lease: TaskStoreLease,
         debounce: Duration,
         durable_tasks: &TaskRegistry,
+        durable_watches: &WatchRegistry,
     ) -> Result<(Self, PersistenceHandle)> {
         Self::start_with_backend(
             root,
             Some(task_store_lease),
             debounce,
-            durable_tasks.tasks.keys().cloned().collect(),
+            durable_tasks.clone(),
+            durable_watches.clone(),
             Arc::new(FilesystemBackend),
         )
     }
@@ -165,7 +319,8 @@ impl PersistenceOwner {
             root,
             None,
             debounce,
-            BTreeSet::new(),
+            TaskRegistry::default(),
+            WatchRegistry::default(),
             Arc::new(FilesystemBackend),
         )
     }
@@ -174,10 +329,12 @@ impl PersistenceOwner {
         root: PathBuf,
         task_store_lease: Option<TaskStoreLease>,
         debounce: Duration,
-        durable_task_ids: BTreeSet<String>,
+        durable_tasks: TaskRegistry,
+        durable_watches: WatchRegistry,
         backend: Arc<dyn PersistenceBackend>,
     ) -> Result<(Self, PersistenceHandle)> {
         let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
+        let durable_task_ids = durable_tasks.tasks.keys().cloned().collect();
         let state = Arc::new(PersistenceState {
             root,
             debounce,
@@ -196,7 +353,17 @@ impl PersistenceOwner {
         let worker_state = state.clone();
         let worker = thread::Builder::new()
             .name("packet28d-persistence".to_string())
-            .spawn(move || run_worker(worker_state, receiver, task_store_lease))
+            .spawn(move || {
+                run_worker(
+                    worker_state,
+                    receiver,
+                    task_store_lease,
+                    RegistryImage {
+                        tasks: durable_tasks,
+                        watches: durable_watches,
+                    },
+                );
+            })
             .context("failed to start daemon persistence owner")?;
         let handle = PersistenceHandle { state, sender };
         Ok((
@@ -268,12 +435,11 @@ impl Drop for PersistenceOwner {
 }
 
 impl PersistenceHandle {
-    pub(crate) fn checkpoint_async(
-        &self,
-        tasks: Arc<TaskRegistry>,
-        watches: Arc<WatchRegistry>,
-    ) -> Result<u64> {
+    pub(crate) fn stage(&self, delta: RegistryDelta) -> Result<u64> {
         self.ensure_accepting()?;
+        if delta.is_empty() {
+            return Ok(self.latest_revision());
+        }
         let revision = {
             let mut pending = lock_unpoisoned(&self.state.pending);
             self.ensure_accepting()?;
@@ -282,18 +448,33 @@ impl PersistenceHandle {
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("daemon persistence revision exhausted"))?;
             let revision = pending.next_revision;
-            let coalesced = pending.snapshot.is_some();
-            pending.snapshot = Some(PendingSnapshot {
-                revision,
-                tasks,
-                watches,
-            });
-            let mut metrics = lock_unpoisoned(&self.state.metrics);
-            metrics.snapshots_submitted = metrics.snapshots_submitted.saturating_add(1);
-            if coalesced {
-                metrics.snapshots_coalesced = metrics.snapshots_coalesced.saturating_add(1);
+            let coalesced = pending.delta.is_some();
+            match pending.delta.as_mut() {
+                Some(pending_delta) => pending_delta.merge_later(revision, delta),
+                None => {
+                    pending.delta = Some(PendingDelta {
+                        first_revision: revision,
+                        last_revision: revision,
+                        delta,
+                    });
+                }
             }
-            metrics.max_pending_snapshots = 1;
+            let staged = pending
+                .delta
+                .as_ref()
+                .expect("pending delta exists after staging");
+            let pending_task_keys =
+                u64::try_from(staged.delta.task_key_count()).unwrap_or(u64::MAX);
+            let pending_watch_keys =
+                u64::try_from(staged.delta.watch_key_count()).unwrap_or(u64::MAX);
+            let mut metrics = lock_unpoisoned(&self.state.metrics);
+            metrics.deltas_submitted = metrics.deltas_submitted.saturating_add(1);
+            if coalesced {
+                metrics.deltas_coalesced = metrics.deltas_coalesced.saturating_add(1);
+            }
+            metrics.max_pending_batches = 1;
+            metrics.max_pending_task_keys = metrics.max_pending_task_keys.max(pending_task_keys);
+            metrics.max_pending_watch_keys = metrics.max_pending_watch_keys.max(pending_watch_keys);
             revision
         };
         match self.sender.try_send(PersistenceCommand::Wake) {
@@ -309,12 +490,8 @@ impl PersistenceHandle {
         Ok(revision)
     }
 
-    pub(crate) fn checkpoint(
-        &self,
-        tasks: Arc<TaskRegistry>,
-        watches: Arc<WatchRegistry>,
-    ) -> Result<()> {
-        let revision = self.checkpoint_async(tasks, watches)?;
+    pub(crate) fn stage_and_flush(&self, delta: RegistryDelta) -> Result<()> {
+        let revision = self.stage(delta)?;
         self.barrier(revision)
     }
 
@@ -322,6 +499,28 @@ impl PersistenceHandle {
         let target_revision = self.latest_revision();
         self.barrier(target_revision)?;
         Ok(self.metrics())
+    }
+
+    pub(crate) fn flush_through(&self, revision: u64) -> Result<()> {
+        self.barrier(revision)
+    }
+
+    pub(crate) fn checkpoint_current(&self) -> Result<()> {
+        self.ensure_accepting()?;
+        let target_revision = self.latest_revision();
+        let (reply, completion) = mpsc::sync_channel(1);
+        self.sender
+            .send(PersistenceCommand::Checkpoint {
+                target_revision,
+                reply,
+            })
+            .map_err(|_| anyhow!("daemon persistence worker is stopped"))?;
+        completion
+            .recv()
+            .map_err(|_| {
+                anyhow!("daemon persistence worker stopped before checkpoint acknowledgement")
+            })?
+            .map_err(anyhow::Error::msg)
     }
 
     pub(crate) fn append_event(
@@ -446,6 +645,7 @@ fn run_worker(
     state: Arc<PersistenceState>,
     receiver: Receiver<PersistenceCommand>,
     _task_store_lease: Option<TaskStoreLease>,
+    mut image: RegistryImage,
 ) {
     let mut next = None;
     loop {
@@ -454,7 +654,7 @@ fn run_worker(
             None => match receiver.recv() {
                 Ok(command) => command,
                 Err(_) => {
-                    let _ = persist_pending(&state, None, false);
+                    let _ = persist_pending(&state, &mut image, None, false);
                     return;
                 }
             },
@@ -463,10 +663,10 @@ fn run_worker(
             PersistenceCommand::Wake => match command_after_debounce(&receiver, state.debounce) {
                 DebounceOutcome::Command(command) => next = Some(command),
                 DebounceOutcome::Elapsed => {
-                    let _ = persist_pending(&state, None, false);
+                    let _ = persist_pending(&state, &mut image, None, false);
                 }
                 DebounceOutcome::Disconnected => {
-                    let _ = persist_pending(&state, None, false);
+                    let _ = persist_pending(&state, &mut image, None, false);
                     return;
                 }
             },
@@ -474,11 +674,19 @@ fn run_worker(
                 target_revision,
                 reply,
             } => {
-                let result = persist_pending(&state, Some(target_revision), true);
+                let result = persist_pending(&state, &mut image, Some(target_revision), true);
                 if result.is_ok() {
                     let mut metrics = lock_unpoisoned(&state.metrics);
                     metrics.barriers_completed = metrics.barriers_completed.saturating_add(1);
                 }
+                let _ = reply.send(result.map_err(|error| error.to_string()));
+            }
+            PersistenceCommand::Checkpoint {
+                target_revision,
+                reply,
+            } => {
+                let result = persist_pending(&state, &mut image, Some(target_revision), true)
+                    .and_then(|()| save_current_image(&state, &image));
                 let _ = reply.send(result.map_err(|error| error.to_string()));
             }
             PersistenceCommand::AppendEvent {
@@ -490,7 +698,7 @@ fn run_worker(
                 let result = required_revision
                     .map_or_else(
                         || Ok(()),
-                        |revision| persist_pending(&state, Some(revision), true),
+                        |revision| persist_pending(&state, &mut image, Some(revision), true),
                     )
                     .and_then(|()| {
                         {
@@ -524,7 +732,7 @@ fn run_worker(
                 target_revision,
                 reply,
             } => {
-                let result = persist_pending(&state, Some(target_revision), true)
+                let result = persist_pending(&state, &mut image, Some(target_revision), true)
                     .map(|()| *lock_unpoisoned(&state.metrics))
                     .map_err(|error| error.to_string());
                 // This acknowledgement is the worker's final operation.
@@ -559,19 +767,20 @@ fn command_after_debounce(
 
 fn persist_pending(
     state: &PersistenceState,
+    image: &mut RegistryImage,
     required_revision: Option<u64>,
     surface_prior_error: bool,
 ) -> Result<()> {
     loop {
-        let snapshot = {
+        let pending_delta = {
             let mut pending = lock_unpoisoned(&state.pending);
             if required_revision.is_some_and(|required| pending.durable_revision >= required) {
                 pending.last_error = None;
                 return take_prior_error(&mut pending, surface_prior_error);
             }
-            pending.snapshot.take()
+            pending.delta.take()
         };
-        let Some(snapshot) = snapshot else {
+        let Some(pending_delta) = pending_delta else {
             let mut pending = lock_unpoisoned(&state.pending);
             return match required_revision {
                 Some(required) if pending.durable_revision < required => Err(anyhow!(
@@ -583,15 +792,24 @@ fn persist_pending(
             };
         };
         await_checkpoint_test_gate(state);
+        pending_delta
+            .delta
+            .apply_to(&mut image.tasks, &mut image.watches);
         match state
             .backend
-            .save_checkpoint(&state.root, &snapshot.tasks, &snapshot.watches)
+            .save_checkpoint(&state.root, &image.tasks, &image.watches)
         {
             Ok(()) => {
                 {
                     let mut pending = lock_unpoisoned(&state.pending);
-                    pending.durable_revision = pending.durable_revision.max(snapshot.revision);
-                    pending.durable_task_ids = snapshot.tasks.tasks.keys().cloned().collect();
+                    pending.durable_revision =
+                        pending.durable_revision.max(pending_delta.last_revision);
+                    for task_id in &pending_delta.delta.task_removals {
+                        pending.durable_task_ids.remove(task_id);
+                    }
+                    for task_id in pending_delta.delta.task_upserts.keys() {
+                        pending.durable_task_ids.insert(task_id.clone());
+                    }
                     pending.last_error = None;
                 }
                 let mut metrics = lock_unpoisoned(&state.metrics);
@@ -612,8 +830,17 @@ fn persist_pending(
                 let message = error.to_string();
                 {
                     let mut pending = lock_unpoisoned(&state.pending);
-                    if pending.snapshot.is_none() {
-                        pending.snapshot = Some(snapshot);
+                    if let Some(later) = pending.delta.take() {
+                        let mut failed = pending_delta;
+                        debug_assert_eq!(
+                            failed.last_revision.saturating_add(1),
+                            later.first_revision
+                        );
+                        failed.last_revision = later.last_revision;
+                        failed.delta.merge_later(later.delta);
+                        pending.delta = Some(failed);
+                    } else {
+                        pending.delta = Some(pending_delta);
                     }
                     pending.last_error = Some(message.clone());
                     pending.unsurfaced_error = Some(message.clone());
@@ -627,6 +854,27 @@ fn persist_pending(
             }
         }
     }
+}
+
+fn save_current_image(state: &PersistenceState, image: &RegistryImage) -> Result<()> {
+    await_checkpoint_test_gate(state);
+    state
+        .backend
+        .save_checkpoint(&state.root, &image.tasks, &image.watches)?;
+    let mut metrics = lock_unpoisoned(&state.metrics);
+    metrics.checkpoints_written = metrics.checkpoints_written.saturating_add(1);
+    let checkpoint_bytes = [
+        task_registry_path(&state.root),
+        watch_registry_path(&state.root),
+    ]
+    .into_iter()
+    .filter_map(|path| std::fs::metadata(path).ok())
+    .map(|metadata| metadata.len())
+    .sum::<u64>();
+    metrics.checkpoint_bytes_written = metrics
+        .checkpoint_bytes_written
+        .saturating_add(checkpoint_bytes);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -698,7 +946,6 @@ mod tests {
     use packet28_daemon_core::task_store_lease::acquire_daemon_task_store_lease;
     use packet28_daemon_protocol::task::{TaskRecord, WatchRegistration};
     use serde_json::json;
-    use std::collections::BTreeMap;
     use std::fs;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -710,49 +957,34 @@ mod tests {
             lease,
             debounce,
             &TaskRegistry::default(),
+            &WatchRegistry::default(),
         )
         .unwrap()
     }
 
-    fn task_registry(task_id: &str, marker: &str) -> Arc<TaskRegistry> {
-        let mut tasks = BTreeMap::new();
-        tasks.insert(
-            task_id.to_string(),
-            TaskRecord {
+    fn task_record(task_id: &str, marker: &str) -> TaskRecord {
+        TaskRecord {
+            task_id: task_id.to_string(),
+            last_error: Some(marker.to_string()),
+            ..TaskRecord::default()
+        }
+    }
+
+    fn task_record_with_watch(task_id: &str, task_marker: &str, watch_id: &str) -> TaskRecord {
+        let mut task = task_record(task_id, task_marker);
+        task.watch_ids.push(watch_id.to_string());
+        task
+    }
+
+    fn watch_record(task_id: &str, marker: &str) -> WatchRegistration {
+        WatchRegistration {
+            watch_id: marker.to_string(),
+            spec: packet28_daemon_protocol::commands::WatchSpec {
                 task_id: task_id.to_string(),
-                last_error: Some(marker.to_string()),
-                ..TaskRecord::default()
+                ..packet28_daemon_protocol::commands::WatchSpec::default()
             },
-        );
-        Arc::new(TaskRegistry { tasks })
-    }
-
-    fn task_registry_with_watch(
-        task_id: &str,
-        task_marker: &str,
-        watch_id: &str,
-    ) -> Arc<TaskRegistry> {
-        let mut registry = (*task_registry(task_id, task_marker)).clone();
-        registry
-            .tasks
-            .get_mut(task_id)
-            .unwrap()
-            .watch_ids
-            .push(watch_id.to_string());
-        Arc::new(registry)
-    }
-
-    fn watch_registry(task_id: &str, marker: &str) -> Arc<WatchRegistry> {
-        Arc::new(WatchRegistry {
-            watches: vec![WatchRegistration {
-                watch_id: marker.to_string(),
-                spec: packet28_daemon_protocol::commands::WatchSpec {
-                    task_id: task_id.to_string(),
-                    ..packet28_daemon_protocol::commands::WatchSpec::default()
-                },
-                ..WatchRegistration::default()
-            }],
-        })
+            ..WatchRegistration::default()
+        }
     }
 
     fn event(ordinal: u64) -> DaemonEvent {
@@ -776,12 +1008,17 @@ mod tests {
         let (owner, handle) = owner(root.path(), Duration::from_secs(1));
         for ordinal in 0..32 {
             let watch_id = format!("watch-{ordinal}");
-            handle
-                .checkpoint_async(
-                    task_registry_with_watch("coalesced", &format!("task-{ordinal}"), &watch_id),
-                    watch_registry("coalesced", &watch_id),
-                )
-                .unwrap();
+            let mut delta = RegistryDelta::default()
+                .upsert_task(task_record_with_watch(
+                    "coalesced",
+                    &format!("task-{ordinal}"),
+                    &watch_id,
+                ))
+                .upsert_watch(watch_record("coalesced", &watch_id));
+            if ordinal > 0 {
+                delta = delta.remove_watch(format!("watch-{}", ordinal - 1));
+            }
+            handle.stage(delta).unwrap();
         }
         let metrics = handle.flush().unwrap();
         assert_eq!(
@@ -792,9 +1029,9 @@ mod tests {
             load_watch_registry(root.path()).unwrap().watches[0].watch_id,
             "watch-31"
         );
-        assert_eq!(metrics.max_pending_snapshots, 1);
-        assert!(metrics.snapshots_coalesced > 0);
-        assert!(metrics.checkpoints_written < metrics.snapshots_submitted);
+        assert_eq!(metrics.max_pending_batches, 1);
+        assert!(metrics.deltas_coalesced > 0);
+        assert!(metrics.checkpoints_written < metrics.deltas_submitted);
         owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 
@@ -804,9 +1041,8 @@ mod tests {
         let (owner, handle) = owner(root.path(), Duration::from_secs(1));
 
         handle
-            .checkpoint(
-                task_registry("barrier-generation", "durable"),
-                Arc::new(WatchRegistry::default()),
+            .stage_and_flush(
+                RegistryDelta::default().upsert_task(task_record("barrier-generation", "durable")),
             )
             .unwrap();
 
@@ -822,9 +1058,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (owner, handle) = owner(root.path(), Duration::from_secs(1));
         handle
-            .checkpoint_async(
-                task_registry("shutdown-generation", "durable"),
-                Arc::new(WatchRegistry::default()),
+            .stage(
+                RegistryDelta::default().upsert_task(task_record("shutdown-generation", "durable")),
             )
             .unwrap();
 
@@ -845,10 +1080,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (owner, handle) = owner(root.path(), Duration::from_secs(1));
         let revision = handle
-            .checkpoint_async(
-                task_registry("artifact-owner", "admitted"),
-                Arc::new(WatchRegistry::default()),
-            )
+            .stage(RegistryDelta::default().upsert_task(task_record("artifact-owner", "admitted")))
             .unwrap();
 
         handle
@@ -869,9 +1101,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (owner, handle) = owner(root.path(), Duration::from_millis(20));
         handle
-            .checkpoint(
-                task_registry("concurrent", "admitted"),
-                Arc::new(WatchRegistry::default()),
+            .stage_and_flush(
+                RegistryDelta::default().upsert_task(task_record("concurrent", "admitted")),
             )
             .unwrap();
         let mut workers = Vec::new();
@@ -939,15 +1170,13 @@ mod tests {
             root.path().to_path_buf(),
             Some(lease),
             Duration::ZERO,
-            BTreeSet::new(),
+            TaskRegistry::default(),
+            WatchRegistry::default(),
             backend,
         )
         .unwrap();
         let error = handle
-            .checkpoint(
-                task_registry("retry", "latest"),
-                Arc::new(WatchRegistry::default()),
-            )
+            .stage_and_flush(RegistryDelta::default().upsert_task(task_record("retry", "latest")))
             .unwrap_err();
         assert!(error.to_string().contains("injected checkpoint failure"));
         let metrics = handle.flush().unwrap();
@@ -1020,15 +1249,13 @@ mod tests {
             root.path().to_path_buf(),
             Some(lease),
             Duration::ZERO,
-            BTreeSet::new(),
+            TaskRegistry::default(),
+            WatchRegistry::default(),
             backend,
         )
         .unwrap();
         handle
-            .checkpoint_async(
-                task_registry("blocked", "pending"),
-                Arc::new(WatchRegistry::default()),
-            )
+            .stage(RegistryDelta::default().upsert_task(task_record("blocked", "pending")))
             .unwrap();
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let started = Instant::now();

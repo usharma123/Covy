@@ -76,7 +76,7 @@ fn hook_task_additional_context(
         task.latest_hook_bootstrap_at_unix = Some(now_unix());
         task.latest_hook_session_id = session_id.map(ToOwned::to_owned);
         task.latest_agent_handoff_artifact_id = latest_handoff_artifact_id;
-        persist_state(&guard)?;
+        persist_task(&guard, task_id)?;
     }
     Ok(brief.filter(|value| !value.trim().is_empty()))
 }
@@ -106,7 +106,7 @@ fn maybe_prepare_handoff_from_hooks(
         task.latest_hook_boundary_kind = Some(format!("{boundary_kind:?}").to_ascii_lowercase());
         task.hook_soft_threshold_tokens = config
             .threshold_tokens_for_level_with_budget(ThresholdLevel::Prepare, effective_budget);
-        persist_state(&guard)?;
+        persist_task(&guard, task_id)?;
     }
     let status = broker_task_status(
         state.clone(),
@@ -179,7 +179,7 @@ fn maybe_prepare_handoff_from_hooks(
             task.hook_threshold_exceeded = false;
             task.hook_window_est_tokens = 0;
             task.hook_window_est_bytes = 0;
-            persist_state(&guard)?;
+            persist_task(&guard, task_id)?;
 
             // Auto-relaunch: when daemon-managed and at a stop boundary with
             // handoff ready, queue a fresh worker launch.
@@ -466,7 +466,7 @@ pub(crate) fn hook_ingest(
         if let Some(lifecycle) = request.lifecycle_event.as_ref() {
             apply_lifecycle_event(task, lifecycle);
         }
-        persist_state(&guard)?;
+        persist_task(&guard, task_id)?;
     }
 
     let host_budget = request.host_context_budget_tokens;
@@ -507,7 +507,7 @@ pub(crate) fn hook_ingest(
             if let Some(kind) = packet_kind(packet) {
                 task.latest_hook_command_kind = Some(kind.to_string());
             }
-            persist_state(&guard)?;
+            persist_task(&guard, task_id)?;
         }
 
         if !cache_hit {
@@ -590,7 +590,7 @@ pub(crate) fn hook_ingest(
                     task.hook_window_est_bytes.saturating_add(packet.est_bytes);
                 // Use graduated threshold: exceeded at Prepare level or above.
                 task.hook_threshold_exceeded = task.hook_window_est_tokens >= prepare_threshold;
-                persist_state(&guard)?;
+                persist_task(&guard, task_id)?;
             }
         }
     }

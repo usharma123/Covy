@@ -1619,7 +1619,7 @@ mod tests {
                     ..TaskRecord::default()
                 },
             );
-            persist_state(&guard).unwrap();
+            persist_state_for_test(&guard).unwrap();
         }
         let first = handle_registry_request_v1(
             state.clone(),
@@ -1641,7 +1641,7 @@ mod tests {
             let mut guard = state.lock().unwrap();
             guard.tasks.tasks.get_mut("task-a").unwrap().last_error = Some("after".to_string());
             assert_eq!(guard.tasks.tasks.len(), 1);
-            persist_state(&guard).unwrap();
+            persist_state_for_test(&guard).unwrap();
         }
         let error = handle_registry_request_v1(
             state.clone(),
