@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import re
 import subprocess
 import unittest
 from unittest import mock
@@ -38,14 +39,19 @@ class ArchitectureAuditLedgerTests(unittest.TestCase):
     ) -> str:
         commit = commit if commit is not None else cls.FINAL_COMMIT
         tree = tree if tree is not None else cls.FINAL_TREE
-        completed = cls.ledger_text.replace(
-            "| Integration commit | `PENDING — generated after the patch lands` |",
+        completed = re.sub(
+            r"^\| Integration commit \| `[^`]+` \|$",
             f"| Integration commit | `{commit}` |",
-            1,
-        ).replace(
-            "| Integration tree | `PENDING — generated after the patch lands` |",
+            cls.ledger_text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        completed = re.sub(
+            r"^\| Integration tree \| `[^`]+` \|$",
             f"| Integration tree | `{tree}` |",
-            1,
+            completed,
+            count=1,
+            flags=re.MULTILINE,
         )
         final_gate = "\n".join(
             [
