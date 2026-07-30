@@ -127,45 +127,57 @@ incremental invocation median improved from 16,965 to 4,764 µs (-71.92%, or
 
 ### Final-base durable-state revalidation
 
-The rebased stack was then measured on final base `aaae2c7f`, where state
-publication synchronizes temporary files and parent directories. Three exact,
-uncontended release invocations reported:
+The current BR-17 repair worktree was measured after extending the byte
+snapshot from `mapy-v1/` to the complete `.packet28/index/` publication scope.
+That correction includes the changed
+`.mapy-v1.generation-high-water.json` durability leaf. State publication
+synchronizes temporary files and parent directories. Three exact, uncontended
+release invocations reported:
 
 | Revision/path | Invocation medians (µs) | Median (µs) | Delta versus paired legacy |
 | --- | --- | ---: | ---: |
-| final-base whole snapshot | 5,120; 4,446; 4,585 | 4,585 | baseline |
-| final-base incremental generation | 50,960; 50,378; 52,537 | 50,960 | +1,011.45% |
+| current whole snapshot | 5,583; 4,815; 4,627 | 4,815 | baseline |
+| current incremental generation | 74,416; 77,221; 63,556 | 74,416 | +1,445.50% |
 
-The per-invocation deltas were +895.25%, +1,032.92%, and +1,045.81%; the
-incremental path was 9.95–11.46× slower than the non-durable whole-snapshot
-comparator. Therefore the decoded-work defect is closed, but the elapsed-time
-decision gate is not re-established on the final base. A follow-up experiment
-must coalesce durability barriers without weakening descriptor anchoring,
-write-before-manifest ordering, or publication authentication before this
-objective can move from partial to done.
+The per-invocation deltas were +1,232.70%, +1,503.49%, and +1,273.60%.
+Therefore the elapsed-time decision gate is not re-established on the durable
+state base. A follow-up experiment must coalesce durability barriers without
+weakening descriptor anchoring, write-before-manifest ordering, writer-lease
+authentication, or publication authentication before this objective can move
+from partial to done.
 
-Each final-base run still published 5,323 bytes versus 3,490,797 bytes for the
-whole-snapshot model and reported the same bounded work:
+Each run published 5,367 bytes across the complete durable publication scope
+versus 3,490,797 bytes for the whole-snapshot model, a 99.85% reduction. The
+additional 44 bytes versus the prior 5,323-byte claim are the changed
+generation high-water file that the old `mapy-v1/`-only snapshot omitted. Each
+run reported the same work:
 
 ```text
 publication_metadata_bytes_decoded=2711
-repository_artifact_bytes_decoded=0
-repository_artifacts_decoded=0
-repository_artifact_bytes_hashed=0
-repository_artifact_metadata_checks=21
+repository_artifact_bytes_decoded=3439
+repository_artifacts_decoded=1
+repository_artifact_bytes_hashed=6878
+repository_artifact_metadata_checks=42
 changed_paths_considered=1
 ```
 
-The focused invariant seeds four retained segments and asserts zero
-repository-artifact decoding, 18 bounded metadata checks across initial
-pinning and two complete revalidation passes (base plus the retained and new
-segments), and exactly one considered changed path. It also asserts zero
-retained-artifact hashing on the Unix stable-identity fast path. Dedicated
-regressions cover bounded canonical generation records, same-size base
-corruption with restored mtime, current/previous manifest-output replacement,
-policy-scan prestate mutation, and prepared publication mutation. Every case
-fails closed with exact manifest preservation or rollback and without pruning
-authenticated recovery artifacts.
+The focused invariant seeds four retained segments, measures the new segment's
+persisted byte length independently, and asserts exactly one decoded artifact,
+exactly that many decoded bytes, and exactly twice that many hashed bytes on
+the Unix stable-identity path (new digest plus persisted-byte authentication).
+It also asserts that the segment is smaller than the retained base, so the
+bounded-work claim cannot pass merely because both instrumentation and the
+expected value are zero. The policy-change regression independently asserts
+one full-base decode and two full-base hashes.
+
+Dedicated regressions cover detached writer-lock replacement before current,
+after current, and after previous publication, guarded prepared rollback,
+guarded pruning, guarded clear, bounded canonical generation records,
+same-size base corruption with restored mtime, current/previous
+manifest-output replacement, policy-scan prestate mutation, public manifest
+policy/count/identity tampering, and prepared publication mutation. Detached
+writers fail without publishing, rolling back, pruning, or clearing over the
+successor generation.
 
 ## Compaction cost
 
@@ -174,13 +186,15 @@ the immutable base generation.
 
 | Path | Median compaction (µs) | Published bytes |
 | --- | ---: | ---: |
-| Mapy | 10,848 | 328,522 |
+| Mapy | 85,320 | 328,862 |
 | Regex | 307,572 | 222,954 |
 
-Mapy compaction observations were 10,848, 25,525, and 5,705 µs. Regex
-observations were 301,916, 348,383, and 307,572 µs. The regex compaction cost is
-approximately one former full-overlay update, but occurs once per eight segment
-publications; ordinary updates retain the measured incremental behavior.
+Current Mapy compaction observations were 83,872, 85,320, and 89,717 µs; the
+published-byte scope includes the generation high-water leaf. The historical
+regex observations were 301,916, 348,383, and 307,572 µs. The regex compaction
+cost is approximately one former full-overlay update, but occurs once per eight
+segment publications; ordinary updates retain the measured incremental
+behavior.
 
 ## Daemon adoption
 
@@ -208,12 +222,12 @@ The three benchmark invocations reported 29,536, 44,033, and 29,767 µs. All
 three published 27,048 bytes for the measured update and reported
 `legacy_snapshot_written=false`.
 
-On final base `aaae2c7f`, three exact debug-profile invocations reported
-293,447, 298,521, and 282,387 µs (median 293,447 µs). All three published
-27,966 bytes, retained a 1,410,899-byte initial generation, and reported
-`legacy_snapshot_written=false`. The final-base artifact-size reduction is
-98.02%; the debug elapsed time is recorded for reproducibility and is not the
-release wall-clock decision gate.
+On the current BR-17 repair worktree, three exact debug-profile invocations
+reported 319,263, 336,050, and 338,329 µs (median 336,050 µs). All three
+published 27,966 bytes, retained a 1,410,899-byte initial generation, and
+reported `legacy_snapshot_written=false`. The current artifact-size reduction
+is 98.02%; the debug elapsed time is recorded for reproducibility and is not
+the release wall-clock decision gate.
 
 ## Integrity and ownership validation
 
