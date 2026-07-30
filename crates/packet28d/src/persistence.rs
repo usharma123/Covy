@@ -9,6 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use packet28_daemon_core::storage::{
     append_next_task_event_with_authority, append_task_watch_registry_delta_with_authority,
     load_registry_admission_authority, registry_delta_wal_path,
+    remove_failed_initial_task_storage_with_authority,
     save_task_watch_registry_checkpoint_at_revision_with_authority, RegistryAdmissionAuthority,
     RegistryDeltaBatch, RegistryRevision, RegistryRevisionRange,
 };
@@ -120,6 +121,15 @@ trait PersistenceBackend: Send + Sync {
         task_id: &str,
         event: &DaemonEvent,
     ) -> Result<DaemonEventFrame>;
+
+    fn remove_failed_initial_task_storage(
+        &self,
+        _root: &Path,
+        _authority: Option<&RegistryAdmissionAuthority>,
+        _task_id: &str,
+    ) -> Result<()> {
+        anyhow::bail!("persistence backend does not support failed-initial-task cleanup")
+    }
 }
 
 struct FilesystemBackend;
@@ -175,6 +185,19 @@ impl PersistenceBackend for FilesystemBackend {
             root, authority, task_id, event,
         )?)
     }
+
+    fn remove_failed_initial_task_storage(
+        &self,
+        root: &Path,
+        authority: Option<&RegistryAdmissionAuthority>,
+        task_id: &str,
+    ) -> Result<()> {
+        let authority = authority
+            .ok_or_else(|| anyhow!("filesystem persistence requires registry authority"))?;
+        Ok(remove_failed_initial_task_storage_with_authority(
+            root, authority, task_id,
+        )?)
+    }
 }
 
 struct PersistenceState {
@@ -217,6 +240,10 @@ enum PersistenceCommand {
         task_id: String,
         event: DaemonEvent,
         reply: EventReply,
+    },
+    RemoveFailedInitialTaskStorage {
+        task_id: String,
+        reply: UnitReply,
     },
     Shutdown {
         target_revision: u64,
@@ -561,6 +588,25 @@ impl PersistenceHandle {
             .map_err(anyhow::Error::msg)
     }
 
+    pub(crate) fn cleanup_failed_initial_task_storage(&self, task_id: &str) -> Result<()> {
+        self.ensure_accepting()?;
+        let (reply, completion) = mpsc::sync_channel(1);
+        self.sender
+            .send(PersistenceCommand::RemoveFailedInitialTaskStorage {
+                task_id: task_id.to_string(),
+                reply,
+            })
+            .map_err(|_| anyhow!("daemon persistence worker is stopped"))?;
+        completion
+            .recv()
+            .map_err(|_| {
+                anyhow!(
+                    "daemon persistence worker stopped before failed-task cleanup acknowledgement"
+                )
+            })?
+            .map_err(anyhow::Error::msg)
+    }
+
     pub(crate) fn event_guard(&self) -> MutexGuard<'_, ()> {
         lock_unpoisoned(&self.state.event_lane)
     }
@@ -805,6 +851,17 @@ fn run_worker(
                     &mut deadline,
                 );
                 let _ = reply.send(result.map_err(|error| error.to_string()));
+            }
+            PersistenceCommand::RemoveFailedInitialTaskStorage { task_id, reply } => {
+                let result = state
+                    .backend
+                    .remove_failed_initial_task_storage(
+                        &state.root,
+                        image.authority.as_ref(),
+                        &task_id,
+                    )
+                    .map_err(|error| error.to_string());
+                let _ = reply.send(result);
             }
             PersistenceCommand::Shutdown {
                 target_revision,
@@ -1338,6 +1395,30 @@ mod tests {
         assert_eq!(metrics.max_pending_batches, 1);
         assert!(metrics.deltas_coalesced > 0);
         assert!(metrics.checkpoints_written < metrics.deltas_submitted);
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn owner_serializes_failed_initial_cleanup_with_event_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, handle) = owner(root.path(), Duration::from_secs(60));
+        handle
+            .stage_and_flush(
+                RegistryDelta::default().upsert_task(task_record("cleanup", "admitted")),
+            )
+            .unwrap();
+        handle.checkpoint_current().unwrap();
+        let frame = handle
+            .append_event("cleanup", event(1), handle.latest_revision(), false)
+            .unwrap();
+        assert_eq!(frame.seq, 1);
+        assert_eq!(load_task_events(root.path(), "cleanup").unwrap().len(), 1);
+
+        handle
+            .cleanup_failed_initial_task_storage("cleanup")
+            .unwrap();
+
+        assert!(load_task_events(root.path(), "cleanup").unwrap().is_empty());
         owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 

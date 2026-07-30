@@ -2965,15 +2965,42 @@ pub fn validate_task_storage_identifier(root: &Path, task_id: &str) -> Result<()
 /// lease, registry lock, capability validation, or exact removal fails.
 pub fn remove_failed_initial_task_storage(root: &Path, task_id: &str) -> Result<()> {
     let task_id = checked_task_storage_id(root, task_id)?;
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
-    with_exclusively_registered_task_storage_id(root, &task_id, || {
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
+    remove_failed_initial_task_storage_admitted(root, &task_id)
+}
+
+/// Removes failed-initial-task storage while retaining daemon registry authority.
+///
+/// This is the daemon-owner counterpart to
+/// [`remove_failed_initial_task_storage`]. The caller must serialize this
+/// operation with event publication through the persistence owner.
+///
+/// # Errors
+///
+/// Returns an invalid-registry error when `task_id` is absent from the
+/// authenticated authority, an I/O permission error when `authority` belongs
+/// to another root, or the cleanup errors documented by
+/// [`remove_failed_initial_task_storage`].
+pub fn remove_failed_initial_task_storage_with_authority(
+    root: &Path,
+    authority: &RegistryAdmissionAuthority,
+    task_id: &str,
+) -> Result<()> {
+    let task_id = checked_task_storage_id(root, task_id)?;
+    authority.require_task(root, &task_id)?;
+    remove_failed_initial_task_storage_admitted(root, &task_id)
+}
+
+fn remove_failed_initial_task_storage_admitted(root: &Path, task_id: &TaskStorageId) -> Result<()> {
+    with_exclusively_registered_task_storage_id(root, task_id, || {
         #[cfg(unix)]
         {
-            remove_failed_initial_task_storage_anchored(root, &task_id)
+            remove_failed_initial_task_storage_anchored(root, task_id)
         }
         #[cfg(not(unix))]
         {
-            remove_failed_initial_task_storage_portable(root, &task_id)
+            remove_failed_initial_task_storage_portable(root, task_id)
         }
     })
 }
@@ -5002,6 +5029,63 @@ mod tests {
             .unwrap()
             .tasks
             .contains_key("retry"));
+    }
+
+    #[test]
+    fn registry_authority_excludes_failed_initial_cleanup_during_event_append() {
+        let root = tempdir().unwrap();
+        admit_task(root.path(), "retry");
+        append_next_task_event(
+            root.path(),
+            "retry",
+            &DaemonEvent {
+                kind: "before-authority".to_string(),
+                occurred_at_unix: 1,
+                data: serde_json::Value::Null,
+            },
+        )
+        .unwrap();
+        let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
+        let authority = load_registry_admission_authority(root.path(), lease).unwrap();
+        let root_path = root.path().to_path_buf();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let cleanup = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            finished_tx
+                .send(remove_failed_initial_task_storage(&root_path, "retry"))
+                .unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        let appended = append_next_task_event_with_authority(
+            root.path(),
+            &authority,
+            "retry",
+            &DaemonEvent {
+                kind: "while-authority-held".to_string(),
+                occurred_at_unix: 2,
+                data: serde_json::Value::Null,
+            },
+        )
+        .unwrap();
+        assert_eq!(appended.seq, 2);
+        assert!(matches!(
+            finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        drop(authority);
+        finished_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        cleanup.join().unwrap();
+        assert!(!task_event_path(root.path(), "retry").exists());
     }
 
     #[test]

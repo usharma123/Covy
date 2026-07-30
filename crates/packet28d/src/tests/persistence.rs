@@ -1017,6 +1017,8 @@ fn packet28d_persistence_io_has_one_source_owner() {
                 "append_next_task_event_with_authority(",
                 "append_task_watch_registry_delta_with_authority(",
                 "append_task_event(",
+                "remove_failed_initial_task_storage(",
+                "remove_failed_initial_task_storage_with_authority(",
             ] {
                 if source.contains(forbidden) {
                     violations.push(format!(
