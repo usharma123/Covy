@@ -215,7 +215,11 @@ def write_packet28d_sources(
     core.mkdir(parents=True)
     (core / "lib.rs").write_text(
         "//! ```\n"
-        "//! save_task_registry((), &TaskRegistry::default());\n"
+        "//! save_task_watch_registry_checkpoint(\n"
+        "//!     (),\n"
+        "//!     &TaskRegistry::default(),\n"
+        "//!     &WatchRegistry::default(),\n"
+        "//! );\n"
         "//! load_task_registry(());\n"
         "//! ```\n"
         "//! ```compile_fail\n"

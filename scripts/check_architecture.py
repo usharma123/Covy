@@ -129,7 +129,12 @@ PACKET28D_DOCTEST_ANCHORS = (
     (
         "daemon-core-storage-runnable", "crates/packet28-daemon-core/src/lib.rs",
         "runnable", "//! ```",
-        ("save_task_registry(", "load_task_registry(", "TaskRegistry::default()"),
+        (
+            "save_task_watch_registry_checkpoint(",
+            "load_task_registry(",
+            "TaskRegistry::default()",
+            "WatchRegistry::default()",
+        ),
     ),
     (
         "daemon-core-error-source-chain-runnable", "crates/packet28-daemon-core/src/error.rs",
