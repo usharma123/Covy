@@ -1087,7 +1087,7 @@ mod tests {
     use packet28_daemon_protocol::task::{TaskRecord, WatchRegistration};
     use serde_json::json;
     use std::fs;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     fn owner(root: &Path, debounce: Duration) -> (PersistenceOwner, PersistenceHandle) {
         ensure_daemon_dir(root).unwrap();
@@ -1261,6 +1261,118 @@ mod tests {
         assert_eq!(metrics.max_pending_batches, 1);
         assert!(metrics.deltas_coalesced > 0);
         assert!(metrics.checkpoints_written < metrics.deltas_submitted);
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    struct GateOnceFilesystemBackend {
+        block_next: AtomicBool,
+        started: Mutex<Option<SyncSender<()>>>,
+        release: Mutex<Receiver<()>>,
+    }
+
+    impl PersistenceBackend for GateOnceFilesystemBackend {
+        fn append_delta(
+            &self,
+            root: &Path,
+            revisions: RegistryRevisionRange,
+            delta: &RegistryDelta,
+        ) -> Result<u64> {
+            if self.block_next.swap(false, Ordering::AcqRel) {
+                if let Some(started) = lock_unpoisoned(&self.started).take() {
+                    let _ = started.send(());
+                }
+                let _ = lock_unpoisoned(&self.release).recv();
+            }
+            FilesystemBackend.append_delta(root, revisions, delta)
+        }
+
+        fn save_checkpoint(
+            &self,
+            root: &Path,
+            tasks: &TaskRegistry,
+            watches: &WatchRegistry,
+            revision: RegistryRevision,
+        ) -> Result<()> {
+            FilesystemBackend.save_checkpoint(root, tasks, watches, revision)
+        }
+
+        fn append_event(
+            &self,
+            root: &Path,
+            task_id: &str,
+            event: &DaemonEvent,
+        ) -> Result<DaemonEventFrame> {
+            FilesystemBackend.append_event(root, task_id, event)
+        }
+    }
+
+    #[test]
+    fn owner_coalesces_remove_then_repeated_watch_upsert_without_wedging() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let backend = Arc::new(GateOnceFilesystemBackend {
+            block_next: AtomicBool::new(false),
+            started: Mutex::new(Some(started_tx)),
+            release: Mutex::new(release_rx),
+        });
+        let (owner, handle) = PersistenceOwner::start_with_backend(
+            root.path().to_path_buf(),
+            Some(lease),
+            Duration::from_secs(60),
+            TaskRegistry::default(),
+            WatchRegistry::default(),
+            RegistryRecoveryRevisions {
+                checkpoint: RegistryRevision::ZERO,
+                replayed: RegistryRevision::ZERO,
+            },
+            backend.clone(),
+        )
+        .unwrap();
+        handle
+            .stage(
+                RegistryDelta::default()
+                    .upsert_task(task_record_with_watch("coalesced", "initial", "watch"))
+                    .upsert_watch(watch_record("coalesced", "watch")),
+            )
+            .unwrap();
+        handle.checkpoint_current().unwrap();
+
+        backend.block_next.store(true, Ordering::Release);
+        handle
+            .stage(RegistryDelta::default().upsert_task(task_record_with_watch(
+                "coalesced",
+                "blocked",
+                "watch",
+            )))
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        handle
+            .stage(RegistryDelta::default().remove_watch("watch"))
+            .unwrap();
+        let mut first = watch_record("coalesced", "watch");
+        first.last_error = Some("first".to_string());
+        handle
+            .stage(RegistryDelta::default().upsert_watch(first))
+            .unwrap();
+        let mut latest = watch_record("coalesced", "watch");
+        latest.last_error = Some("latest".to_string());
+        handle
+            .stage(RegistryDelta::default().upsert_watch(latest))
+            .unwrap();
+        release_tx.send(()).unwrap();
+
+        let metrics = handle.flush().unwrap();
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        assert_eq!(loaded.watches.watches.len(), 1);
+        assert_eq!(loaded.watches.watches[0].watch_id, "watch");
+        assert_eq!(
+            loaded.watches.watches[0].last_error.as_deref(),
+            Some("latest")
+        );
+        assert_eq!(metrics.failures, 0);
         owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 

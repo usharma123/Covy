@@ -272,20 +272,22 @@ impl RegistryDeltaBatch {
     ) -> std::result::Result<(), RegistryDeltaValidationError> {
         self.validate()?;
         later.validate()?;
+        let mut merged = self.clone();
 
         for task_id in later.task_removals {
-            self.task_upserts.remove(&task_id);
-            self.task_removals.insert(task_id);
+            merged.task_upserts.remove(&task_id);
+            merged.task_removals.insert(task_id);
         }
         for (task_id, task) in later.task_upserts {
-            self.task_removals.remove(&task_id);
-            self.task_upserts.insert(task_id, task);
+            merged.task_removals.remove(&task_id);
+            merged.task_upserts.insert(task_id, task);
         }
         for watch_id in &later.watch_removals {
-            self.watch_upserts.remove(watch_id);
-            self.watch_upsert_order
+            merged.watch_upserts.remove(watch_id);
+            merged
+                .watch_upsert_order
                 .retain(|candidate| candidate != watch_id);
-            self.watch_removals.insert(watch_id.clone());
+            merged.watch_removals.insert(watch_id.clone());
         }
         for watch_id in &later.watch_upsert_order {
             let watch = later
@@ -294,22 +296,25 @@ impl RegistryDeltaBatch {
                 .expect("validated watch upsert order")
                 .clone();
             let later_reinserts = later.watch_removals.contains(watch_id);
-            let already_upserted = self.watch_upserts.contains_key(watch_id);
-            let already_removed = self.watch_removals.contains(watch_id);
+            let already_upserted = merged.watch_upserts.contains_key(watch_id);
+            let already_removed = merged.watch_removals.contains(watch_id);
             if later_reinserts {
-                self.watch_removals.insert(watch_id.clone());
-                self.watch_upsert_order
+                merged.watch_removals.insert(watch_id.clone());
+                merged
+                    .watch_upsert_order
                     .retain(|candidate| candidate != watch_id);
-                self.watch_upsert_order.push(watch_id.clone());
-            } else if already_removed {
+                merged.watch_upsert_order.push(watch_id.clone());
+            } else if already_removed && !already_upserted {
                 // An earlier removal followed by this later upsert is a
                 // reinsertion, so retain the removal marker and append last.
-                self.watch_upsert_order.push(watch_id.clone());
+                merged.watch_upsert_order.push(watch_id.clone());
             } else if !already_upserted {
-                self.watch_upsert_order.push(watch_id.clone());
+                merged.watch_upsert_order.push(watch_id.clone());
             }
-            self.watch_upserts.insert(watch_id.clone(), watch);
+            merged.watch_upserts.insert(watch_id.clone(), watch);
         }
+        merged.validate()?;
+        *self = merged;
         Ok(())
     }
 
@@ -1682,6 +1687,29 @@ mod tests {
             BTreeSet::from(["watch".to_string()])
         );
         assert_eq!(remove_then_upsert.watch_upsert_order, vec!["watch"]);
+    }
+
+    #[test]
+    fn merge_keeps_one_order_entry_across_remove_then_repeated_upsert() {
+        let mut first_upsert = watch("watch", "task");
+        first_upsert.last_error = Some("first".to_string());
+        let mut latest_upsert = watch("watch", "task");
+        latest_upsert.last_error = Some("latest".to_string());
+        let mut merged = RegistryDeltaBatch::default().remove_watch("watch");
+
+        merged
+            .merge_later_wins(RegistryDeltaBatch::default().upsert_watch(first_upsert))
+            .unwrap();
+        merged
+            .merge_later_wins(RegistryDeltaBatch::default().upsert_watch(latest_upsert))
+            .unwrap();
+
+        merged.validate().unwrap();
+        assert_eq!(merged.watch_upsert_order, vec!["watch"]);
+        assert_eq!(
+            merged.watch_upserts["watch"].last_error.as_deref(),
+            Some("latest")
+        );
     }
 
     #[test]
