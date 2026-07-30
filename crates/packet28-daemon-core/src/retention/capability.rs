@@ -54,11 +54,16 @@ fn stable_device_id(device: rfs::Dev) -> u64 {
     device.stable_device_id()
 }
 
-fn widen_filesystem_value<T>(value: T) -> u64
+fn filesystem_value_u64<T>(value: T) -> io::Result<u64>
 where
-    u64: From<T>,
+    T: TryInto<u64>,
 {
-    u64::from(value)
+    value.try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "filesystem metadata contains a negative unsigned value",
+        )
+    })
 }
 
 fn widen_filesystem_mode<T>(mode: T) -> u32
@@ -3461,7 +3466,7 @@ fn capability_entry_metadata(stat: &rfs::Stat) -> io::Result<CapabilityEntryMeta
         allocated_bytes,
         modified_unix_seconds: stat.st_mtime,
         modified_subsec_nanos: u32::try_from(stat.st_mtime_nsec).unwrap_or(0),
-        link_count: widen_filesystem_value(stat.st_nlink),
+        link_count: filesystem_value_u64(stat.st_nlink)?,
     })
 }
 
@@ -3609,9 +3614,10 @@ fn validate_owned_regular_link_count(
         ));
     }
     let effective_uid = rustix::process::geteuid().as_raw();
+    let actual_links = filesystem_value_u64(stat.st_nlink)?;
     if stat.st_uid != effective_uid
         || stable_device_id(stat.st_dev) != expected_device
-        || widen_filesystem_value(stat.st_nlink) != expected_links
+        || actual_links != expected_links
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -3993,6 +3999,16 @@ mod tests {
     const INITIALIZER_KILL_ROOT_ENV: &str = "PACKET28_CAPABILITY_INIT_KILL_ROOT";
     const NAMESPACE_CASE_ENV: &str = "PACKET28_CAPABILITY_NAMESPACE_CASE";
     const NAMESPACE_ROOT_ENV: &str = "PACKET28_CAPABILITY_NAMESPACE_ROOT";
+
+    #[test]
+    fn filesystem_value_conversion_accepts_unsigned_and_rejects_negative_counts() {
+        assert_eq!(filesystem_value_u64(7_u64).unwrap(), 7);
+        assert_eq!(filesystem_value_u64(7_i16).unwrap(), 7);
+        assert_eq!(
+            filesystem_value_u64(-1_i16).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
 
     #[cfg(target_os = "linux")]
     fn set_test_access_acl(file: &fs::File) {
