@@ -1063,6 +1063,15 @@ mod tests {
             ),
             (2, json!("first"), json!(7), json!(-32000), json!(-32000))
         );
+        assert!(proxy_overload_response(
+            &json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+        )
+        .is_none());
+        assert!(proxy_overload_response(&json!([
+            {"jsonrpc":"2.0","method":"notifications/initialized"},
+            {"jsonrpc":"2.0","id":"client-response","result":{}}
+        ]))
+        .is_none());
     }
 
     #[tokio::test]
