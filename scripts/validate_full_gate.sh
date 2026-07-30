@@ -5,10 +5,10 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/validate_full_gate.sh [--list] [--msrv] [--release-tag TAG]
 
-Runs the canonical repository gate. The default mode verifies repository policy,
-formatting, locked workspace check/build, strict Clippy, all tests and doctests,
-strict rustdoc, cargo-deny policy, offline npm package dry-runs, and Cargo
-package assembly.
+Runs the canonical repository gate. The default mode fetches the locked
+dependency graph, then verifies repository policy, formatting, locked workspace
+check/build, strict Clippy, all tests and doctests, strict rustdoc, cargo-deny
+policy, offline npm package dry-runs, and Cargo package assembly.
 
 Pass --msrv to run the policy checks and locked workspace check intended for the
 exact minimum supported Rust toolchain.
@@ -66,6 +66,10 @@ run_cmd() {
   fi
 }
 
+# Workspace policy intentionally resolves metadata offline. Bootstrap the exact
+# locked graph first so the same invariant holds on a clean runner and a warm
+# developer machine.
+run_cmd cargo fetch --locked
 run_cmd scripts/verify_workspace_policy.sh
 run_cmd python3 scripts/check_direct_dependencies.py
 run_cmd python3 scripts/check_architecture.py

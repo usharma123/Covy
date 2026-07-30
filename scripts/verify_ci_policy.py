@@ -636,6 +636,25 @@ def direct_minimum_gate_errors(full_gate: str) -> list[str]:
     ]
 
 
+def clean_runner_bootstrap_errors(full_gate: str) -> list[str]:
+    """Require a locked dependency fetch before the first offline Cargo check."""
+
+    fetch = "run_cmd cargo fetch --locked"
+    offline_policy = "run_cmd scripts/verify_workspace_policy.sh"
+    fetch_index = full_gate.find(fetch)
+    policy_index = full_gate.find(offline_policy)
+    if fetch_index < 0:
+        return [
+            "canonical gate does not fetch the locked graph for clean runners"
+        ]
+    if policy_index < 0 or fetch_index > policy_index:
+        return [
+            "canonical gate does not fetch the locked graph before offline "
+            "workspace policy"
+        ]
+    return []
+
+
 def runtime_starvation_evidence_gate_errors(full_gate: str) -> list[str]:
     """Return violations of the checked-in ASY-04 evidence gate."""
 
@@ -696,6 +715,7 @@ def verify_workflow_wiring(errors: list[str]) -> None:
     errors.extend(runtime_starvation_evidence_gate_errors(full_gate))
     errors.extend(incremental_index_evidence_gate_errors(full_gate))
     errors.extend(direct_minimum_gate_errors(full_gate))
+    errors.extend(clean_runner_bootstrap_errors(full_gate))
     if "run_cmd cargo deny --locked check" not in full_gate:
         errors.append("canonical gate does not run cargo-deny against the lockfile")
 

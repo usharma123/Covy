@@ -89,6 +89,46 @@ class CanonicalGatePolicyTests(unittest.TestCase):
             [],
         )
 
+    def test_repository_gate_fetches_locked_graph_before_offline_policy(
+        self,
+    ) -> None:
+        self.assertEqual(
+            verify_ci_policy.clean_runner_bootstrap_errors(self.full_gate),
+            [],
+        )
+
+    def test_policy_rejects_offline_policy_before_locked_fetch(self) -> None:
+        unsafe = self.full_gate.replace(
+            "run_cmd cargo fetch --locked\n",
+            "",
+            1,
+        )
+
+        self.assertEqual(
+            verify_ci_policy.clean_runner_bootstrap_errors(unsafe),
+            [
+                "canonical gate does not fetch the locked graph for clean "
+                "runners"
+            ],
+        )
+
+    def test_policy_rejects_locked_fetch_after_offline_policy(self) -> None:
+        unsafe = self.full_gate.replace(
+            "run_cmd cargo fetch --locked\n"
+            "run_cmd scripts/verify_workspace_policy.sh\n",
+            "run_cmd scripts/verify_workspace_policy.sh\n"
+            "run_cmd cargo fetch --locked\n",
+            1,
+        )
+
+        self.assertEqual(
+            verify_ci_policy.clean_runner_bootstrap_errors(unsafe),
+            [
+                "canonical gate does not fetch the locked graph before "
+                "offline workspace policy"
+            ],
+        )
+
     def test_repository_gate_verifies_runtime_starvation_evidence(self) -> None:
         self.assertEqual(
             verify_ci_policy.runtime_starvation_evidence_gate_errors(
