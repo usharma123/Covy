@@ -14,12 +14,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static HOOK_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-fn load_hook_runtime_config(root: &Path) -> HookRuntimeConfig {
+fn load_hook_runtime_config(root: &Path) -> Result<HookRuntimeConfig> {
     let path = hook_runtime_config_path(root);
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<HookRuntimeConfig>(&raw).ok())
-        .unwrap_or_default()
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(HookRuntimeConfig::default());
+        }
+        Err(source) => {
+            return Err(source).with_context(|| {
+                format!("failed to read hook runtime config '{}'", path.display())
+            });
+        }
+    };
+    serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse hook runtime config '{}'", path.display()))
 }
 
 fn store_hook_artifact(root: &Path, task_id: &str, prefix: &str, value: &Value) -> Result<String> {
@@ -87,11 +96,8 @@ fn maybe_prepare_handoff_from_hooks(
     task_id: &str,
     boundary_kind: HookBoundaryKind,
     host_budget: Option<u64>,
+    config: &HookRuntimeConfig,
 ) -> Result<HookIngestResponse> {
-    let config = {
-        let root = state.lock().map_err(lock_err)?.root.clone();
-        load_hook_runtime_config(&root)
-    };
     let effective_budget = config.effective_budget(host_budget);
     if boundary_kind != HookBoundaryKind::None {
         let mut guard = state.lock().map_err(lock_err)?;
@@ -438,7 +444,7 @@ pub(crate) fn hook_ingest(
         anyhow::bail!("hook ingest requires task_id");
     }
     let root = state.lock().map_err(lock_err)?.root.clone();
-    let config = load_hook_runtime_config(&root);
+    let config = load_hook_runtime_config(&root)?;
     if !config.hooks_enabled {
         return Ok(HookIngestResponse {
             task_id: task_id.to_string(),
@@ -472,7 +478,13 @@ pub(crate) fn hook_ingest(
             task_id: task_id.to_string(),
             accepted: true,
             additional_context,
-            ..maybe_prepare_handoff_from_hooks(state, task_id, HookBoundaryKind::None, host_budget)?
+            ..maybe_prepare_handoff_from_hooks(
+                state,
+                task_id,
+                HookBoundaryKind::None,
+                host_budget,
+                &config,
+            )?
         });
     }
 
@@ -583,8 +595,13 @@ pub(crate) fn hook_ingest(
         }
     }
 
-    let mut response =
-        maybe_prepare_handoff_from_hooks(state, task_id, request.boundary_kind, host_budget)?;
+    let mut response = maybe_prepare_handoff_from_hooks(
+        state,
+        task_id,
+        request.boundary_kind,
+        host_budget,
+        &config,
+    )?;
     response.cache_hit = cache_hit;
     Ok(response)
 }

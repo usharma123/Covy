@@ -85,6 +85,135 @@ fn packet(summary: &str) -> packet28_daemon_protocol::hooks::HookReducerPacket {
     }
 }
 
+fn prepare_handoff_from_hooks(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    boundary_kind: HookBoundaryKind,
+    host_budget: Option<u64>,
+) -> Result<HookIngestResponse> {
+    let root = state.lock().map_err(lock_err)?.root.clone();
+    let config = load_hook_runtime_config(&root)?;
+    maybe_prepare_handoff_from_hooks(state, task_id, boundary_kind, host_budget, &config)
+}
+
+#[test]
+fn missing_hook_runtime_config_keeps_ingest_enabled_by_default() {
+    let state = test_state();
+
+    let response = hook_ingest(
+        state,
+        HookIngestRequest {
+            task_id: "task-missing-config".to_string(),
+            ..HookIngestRequest::default()
+        },
+    )
+    .unwrap();
+
+    assert!(response.accepted);
+}
+
+#[test]
+fn malformed_hook_runtime_config_rejects_ingest_without_state_or_byte_mutation() {
+    let state = test_state();
+    let root = state.lock().unwrap().root.clone();
+    let config_path = hook_runtime_config_path(&root);
+    let original = b"{\"hooks_enabled\": tru".to_vec();
+    fs::write(&config_path, &original).unwrap();
+    let before = serde_json::to_value(&state.lock().unwrap().tasks).unwrap();
+    let task_id = "task-malformed-config";
+
+    let error = hook_ingest(
+        state.clone(),
+        HookIngestRequest {
+            task_id: task_id.to_string(),
+            reducer_packet: Some(packet("must not be ingested")),
+            ..HookIngestRequest::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to parse hook runtime config"),
+        "{error:#}"
+    );
+    assert_eq!(
+        serde_json::to_value(&state.lock().unwrap().tasks).unwrap(),
+        before
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
+    let storage_id = TaskStorageId::try_from(task_id).unwrap();
+    assert!(!task_artifact_dir(&root, &storage_id).exists());
+}
+
+#[test]
+fn unreadable_hook_runtime_config_rejects_ingest_without_state_mutation() {
+    let state = test_state();
+    let root = state.lock().unwrap().root.clone();
+    let config_path = hook_runtime_config_path(&root);
+    fs::create_dir(&config_path).unwrap();
+    let marker_path = config_path.join("preserve.bin");
+    let original = vec![0x00, 0xff, 0x7f];
+    fs::write(&marker_path, &original).unwrap();
+    let before = serde_json::to_value(&state.lock().unwrap().tasks).unwrap();
+
+    let error = hook_ingest(
+        state.clone(),
+        HookIngestRequest {
+            task_id: "task-unreadable-config".to_string(),
+            reducer_packet: Some(packet("must not be ingested")),
+            ..HookIngestRequest::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read hook runtime config"),
+        "{error:#}"
+    );
+    assert_eq!(
+        serde_json::to_value(&state.lock().unwrap().tasks).unwrap(),
+        before
+    );
+    assert_eq!(fs::read(marker_path).unwrap(), original);
+    assert!(config_path.is_dir());
+}
+
+#[test]
+fn invalid_utf8_hook_runtime_config_rejects_handoff_without_state_or_byte_mutation() {
+    let state = test_state();
+    let root = state.lock().unwrap().root.clone();
+    let task_id = "task-invalid-utf8-handoff";
+    {
+        let mut guard = state.lock().unwrap();
+        let task = ensure_task_record_mut(&mut guard.tasks, task_id);
+        task.hook_window_est_tokens = 10;
+        task.hook_window_est_bytes = 40;
+    }
+    let before = serde_json::to_value(&state.lock().unwrap().tasks).unwrap();
+    let config_path = hook_runtime_config_path(&root);
+    let original = vec![b'{', b'}', 0xff];
+    fs::write(&config_path, &original).unwrap();
+
+    let error = prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None)
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read hook runtime config"),
+        "{error:#}"
+    );
+    assert_eq!(
+        serde_json::to_value(&state.lock().unwrap().tasks).unwrap(),
+        before
+    );
+    assert_eq!(fs::read(config_path).unwrap(), original);
+}
+
 #[test]
 fn duplicate_cached_packet_does_not_grow_hook_window() {
     let state = test_state();
@@ -556,7 +685,7 @@ fn successful_handoff_preparation_clears_hook_window() {
     )
     .unwrap();
 
-    let response = maybe_prepare_handoff_from_hooks(
+    let response = prepare_handoff_from_hooks(
         state.clone(),
         "task-handoff-reset",
         HookBoundaryKind::Stop,
@@ -662,7 +791,7 @@ fn threshold_accumulation_triggers_exceeded_without_stop_boundary() {
     assert!(task.hook_threshold_exceeded);
 
     // Without intention, stop should be blocked.
-    let response = maybe_prepare_handoff_from_hooks(
+    let response = prepare_handoff_from_hooks(
         state.clone(),
         "task-threshold",
         HookBoundaryKind::Stop,
@@ -686,7 +815,7 @@ fn threshold_accumulation_triggers_exceeded_without_stop_boundary() {
     .unwrap();
 
     // Now at Stop boundary with intention → handoff should be ready.
-    let response = maybe_prepare_handoff_from_hooks(
+    let response = prepare_handoff_from_hooks(
         state.clone(),
         "task-threshold",
         HookBoundaryKind::Stop,
@@ -844,13 +973,9 @@ fn relaunch_requested_when_daemon_managed_with_command() {
     .unwrap();
 
     // Stop boundary should trigger handoff + relaunch.
-    let response = maybe_prepare_handoff_from_hooks(
-        state.clone(),
-        "task-relaunch",
-        HookBoundaryKind::Stop,
-        None,
-    )
-    .unwrap();
+    let response =
+        prepare_handoff_from_hooks(state.clone(), "task-relaunch", HookBoundaryKind::Stop, None)
+            .unwrap();
     assert!(response.handoff_ready);
     assert!(response.relaunch_requested);
     assert_eq!(
@@ -928,8 +1053,7 @@ fn e2e_hook_threshold_handoff_cycle() {
 
     // Phase 2: Stop without intention → blocked.
     let blocked =
-        maybe_prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None)
-            .unwrap();
+        prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None).unwrap();
     assert!(blocked.block_stop);
     assert!(!blocked.handoff_ready);
 
@@ -948,8 +1072,7 @@ fn e2e_hook_threshold_handoff_cycle() {
 
     // Phase 4: Stop with intention → handoff fires, relaunch queued.
     let handoff =
-        maybe_prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None)
-            .unwrap();
+        prepare_handoff_from_hooks(state.clone(), task_id, HookBoundaryKind::Stop, None).unwrap();
     assert!(handoff.handoff_ready);
     assert!(handoff.relaunch_requested);
     assert_eq!(
@@ -1013,7 +1136,7 @@ fn relaunch_not_requested_when_host_managed() {
     )
     .unwrap();
 
-    let response = maybe_prepare_handoff_from_hooks(
+    let response = prepare_handoff_from_hooks(
         state.clone(),
         "task-host-managed",
         HookBoundaryKind::Stop,
