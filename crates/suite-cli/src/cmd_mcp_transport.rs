@@ -1,6 +1,7 @@
 use super::*;
 
 pub(crate) const MAX_MCP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_MCP_BATCH_MESSAGES: usize = 1_024;
 const MAX_MCP_HEADER_BYTES: usize = 64 * 1024;
 
 pub(crate) fn render_command_preview(command: &str, args: &[String]) -> String {

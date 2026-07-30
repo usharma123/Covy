@@ -259,6 +259,13 @@ async fn dispatch_proxy_payload(
             "empty JSON-RPC batch",
         )));
     }
+    if requests.len() > MAX_MCP_BATCH_MESSAGES {
+        return Ok(Some(Value::Array(vec![mcp_error_response(
+            Value::Null,
+            -32000,
+            &format!("JSON-RPC batch member limit exceeded ({MAX_MCP_BATCH_MESSAGES})"),
+        )])));
+    }
     let mut responses = Vec::new();
     for request in requests {
         if let Some(response) =
@@ -903,5 +910,57 @@ fn classify_tool_operation(name: &str, arguments: &Value) -> suite_packet_core::
         suite_packet_core::ToolOperationKind::Fetch
     } else {
         suite_packet_core::ToolOperationKind::Generic
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn proxy_batch_limit_plus_one_is_bounded_and_next_request_remains_responsive() {
+        let root = tempfile::tempdir().unwrap();
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let config = McpProxyConfig::default();
+        let (output, _receiver) = proxy_output_channel();
+        let upstreams = spawn_upstream_clients(root.path(), &config, output, session.clone())
+            .await
+            .unwrap();
+        let oversized = Value::Array(vec![
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"});
+            MAX_MCP_BATCH_MESSAGES + 1
+        ]);
+
+        let rejection = dispatch_proxy_payload(
+            root.path(),
+            &session,
+            &upstreams,
+            &ProxyCatalog::default(),
+            oversized,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let responses = rejection.as_array().unwrap();
+        assert_eq!(
+            (
+                responses.len(),
+                responses[0]["id"].clone(),
+                responses[0]["error"]["code"].clone(),
+            ),
+            (1, Value::Null, json!(-32000))
+        );
+
+        let next = dispatch_proxy_payload(
+            root.path(),
+            &session,
+            &upstreams,
+            &ProxyCatalog::default(),
+            json!({"jsonrpc":"2.0","id":"next","method":"prompts/list"}),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(next["id"], "next");
     }
 }

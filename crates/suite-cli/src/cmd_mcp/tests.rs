@@ -56,6 +56,40 @@ async fn local_server_rejects_empty_and_invalid_batches() {
     .is_none());
 }
 
+#[tokio::test]
+async fn local_batch_limit_plus_one_is_bounded_and_next_request_remains_responsive() {
+    let root = tempfile::tempdir().unwrap();
+    let session = Arc::new(Mutex::new(McpSessionState::default()));
+    let oversized = Value::Array(vec![
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"});
+        MAX_MCP_BATCH_MESSAGES + 1
+    ]);
+
+    let rejection = dispatch_local_payload(root.path(), &session, oversized)
+        .await
+        .unwrap()
+        .unwrap();
+    let responses = rejection.as_array().unwrap();
+    assert_eq!(
+        (
+            responses.len(),
+            responses[0]["id"].clone(),
+            responses[0]["error"]["code"].clone(),
+        ),
+        (1, Value::Null, json!(-32000))
+    );
+
+    let next = dispatch_local_payload(
+        root.path(),
+        &session,
+        json!({"jsonrpc":"2.0","id":"next","method":"tools/list"}),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(next["id"], "next");
+}
+
 fn task_version_json_path(root: &Path, task_id: &str, context_version: &str) -> PathBuf {
     validated_task_version_json_path(root, task_id, context_version).unwrap()
 }

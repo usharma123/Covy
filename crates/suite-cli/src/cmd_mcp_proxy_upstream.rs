@@ -16,7 +16,7 @@ use tokio::time::{timeout_at, Instant};
 use super::config::McpProxyConfig;
 use super::transport::{
     read_message_async, render_command_preview, write_message_async, McpMessageFraming,
-    MAX_MCP_MESSAGE_BYTES,
+    MAX_MCP_BATCH_MESSAGES, MAX_MCP_MESSAGE_BYTES,
 };
 use super::McpSessionState;
 
@@ -24,7 +24,6 @@ const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 30_000;
 const MAX_UPSTREAM_INFLIGHT: usize = 32;
 const MAX_UPSTREAM_REVERSE_REQUESTS: usize = 64;
 const MAX_UPSTREAM_REVERSE_ID_BYTES: usize = 64 * 1024;
-const MAX_UPSTREAM_BATCH_MESSAGES: usize = 1_024;
 const JSON_RPC_SERVER_ERROR: i64 = -32000;
 pub(super) const MAX_PROXY_OUTPUT_MESSAGES: usize = 64;
 
@@ -911,14 +910,14 @@ impl UpstreamClient {
                 )),
             });
         }
-        if messages.len() > MAX_UPSTREAM_BATCH_MESSAGES {
+        if messages.len() > MAX_MCP_BATCH_MESSAGES {
             return Ok(UpstreamPayloadDispatch {
                 forwarded: None,
                 reply: Some(Value::Array(vec![super::mcp_error_response(
                     Value::Null,
                     JSON_RPC_SERVER_ERROR,
                     &format!(
-                        "upstream JSON-RPC batch member limit exceeded ({MAX_UPSTREAM_BATCH_MESSAGES})"
+                        "upstream JSON-RPC batch member limit exceeded ({MAX_MCP_BATCH_MESSAGES})"
                     ),
                 )])),
             });
@@ -2688,10 +2687,7 @@ while True:
             "params": {}
         });
         let dispatch = client
-            .dispatch_upstream_payload(Value::Array(vec![
-                notification;
-                MAX_UPSTREAM_BATCH_MESSAGES + 1
-            ]))
+            .dispatch_upstream_payload(Value::Array(vec![notification; MAX_MCP_BATCH_MESSAGES + 1]))
             .await
             .unwrap();
         let response = dispatch.reply.unwrap();

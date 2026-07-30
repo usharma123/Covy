@@ -76,7 +76,9 @@ use crate::cmd_mcp::support::{
     store_tool_artifact, summarize_json_value, track_task,
 };
 use crate::cmd_mcp::tool_catalog::{canonical_tool_name, tools_list_payload};
-use crate::cmd_mcp::transport::{read_message_async, write_message_async, McpMessageFraming};
+use crate::cmd_mcp::transport::{
+    read_message_async, write_message_async, McpMessageFraming, MAX_MCP_BATCH_MESSAGES,
+};
 
 const MCP_PROTOCOL_VERSION_2024_11_05: &str = "2024-11-05";
 const MCP_PROTOCOL_VERSION_2025_03_26: &str = "2025-03-26";
@@ -323,6 +325,13 @@ async fn dispatch_local_payload(
             -32600,
             "empty JSON-RPC batch",
         ))),
+        Value::Array(requests) if requests.len() > MAX_MCP_BATCH_MESSAGES => {
+            Ok(Some(Value::Array(vec![mcp_error_response(
+                Value::Null,
+                -32000,
+                &format!("JSON-RPC batch member limit exceeded ({MAX_MCP_BATCH_MESSAGES})"),
+            )])))
+        }
         Value::Array(requests) => {
             let mut responses = Vec::new();
             for request in requests {
