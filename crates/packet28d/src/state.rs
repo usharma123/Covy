@@ -54,6 +54,20 @@ impl InteractiveIndexRuntime {
         })
     }
 
+    pub(crate) fn repo_is_query_ready(&self) -> bool {
+        self.repo_is_current()
+            && self.manifest.status == DaemonIndexState::Ready
+            && self.manifest.dirty_paths.is_empty()
+            && self.manifest.queued_paths.is_empty()
+    }
+
+    pub(crate) fn regex_is_query_ready(&self) -> bool {
+        self.regex_is_current()
+            && self.manifest.status == DaemonIndexState::Ready
+            && self.manifest.dirty_paths.is_empty()
+            && self.manifest.queued_paths.is_empty()
+    }
+
     pub(crate) fn needs_rebuild(&self) -> bool {
         !self.repo_is_current()
             || !self.regex_is_current()

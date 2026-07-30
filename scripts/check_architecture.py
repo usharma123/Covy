@@ -781,6 +781,18 @@ def check_packet28d_source_boundaries(root: Path) -> list[str]:
                 "packet28d broker implementation must not depend on the "
                 f"application lifecycle: {path.relative_to(root)}"
             )
+        forbidden_repository_rescans = (
+            "mapy_core::build_repo_map(",
+            "mapy_core::build_repo_query(",
+            "packet28_reducer_core::search(",
+        )
+        for literal in forbidden_repository_rescans:
+            if literal in source:
+                errors.append(
+                    "packet28d broker repository consumers must use authenticated "
+                    "daemon index runtimes, not rescan entrypoint "
+                    f"{literal!r}: {path.relative_to(root)}"
+                )
 
     broker_child_names = "|".join(map(re.escape, PACKET28D_BROKER_MODULES))
     direct_child_route = re.compile(

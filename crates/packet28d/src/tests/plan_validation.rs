@@ -53,6 +53,7 @@ fn validate_plan_requires_testmap_mapped_gate_for_uncovered_edits() {
     .unwrap();
     write_test_coverage_state(&root, "src/alpha.rs", false);
     write_testmap_state(&root, "src/alpha.rs", &["tests/alpha_test.rs"]);
+    refresh_test_repo_runtime(&state);
 
     let response = broker_validate_plan(
         state,
@@ -114,6 +115,7 @@ fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
         .unwrap();
         write_test_coverage_state(&root, "src/alpha.rs", false);
         write_testmap_state(&root, "src/alpha.rs", &["tests/alpha_test.rs"]);
+        refresh_test_repo_runtime(&state);
 
         let response = broker_validate_plan(
             state,
@@ -174,6 +176,7 @@ fn validate_plan_warns_when_testmap_has_no_mapping_for_uncovered_edit() {
     .unwrap();
     write_test_coverage_state(&root, "src/alpha.rs", false);
     write_testmap_state(&root, "src/beta.rs", &["tests/beta_test.rs"]);
+    refresh_test_repo_runtime(&state);
 
     let response = broker_validate_plan(
         state,
@@ -231,6 +234,7 @@ fn validate_plan_warns_when_cached_testmap_is_stale() {
     .unwrap();
     write_test_coverage_state(&root, "src/alpha.rs", false);
     write_testmap_state_with_generated_at(&root, "src/alpha.rs", &["tests/alpha_test.rs"], 1);
+    refresh_test_repo_runtime(&state);
 
     let response = broker_validate_plan(
         state,
@@ -285,6 +289,7 @@ fn validate_plan_warns_when_edit_relies_on_stale_evidence_after_checkpoint() {
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
+    refresh_test_repo_runtime(&state);
 
     let response = broker_validate_plan(
         state,

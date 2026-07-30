@@ -59,6 +59,17 @@ pub(crate) fn daemon_test_root(state: &Arc<Mutex<DaemonState>>) -> PathBuf {
     state.lock().unwrap().root.clone()
 }
 
+pub(crate) fn refresh_test_repo_runtime(state: &Arc<Mutex<DaemonState>>) {
+    let root = daemon_test_root(state);
+    let repo_runtime =
+        mapy_core::rebuild_repo_index_runtime(&root, true).expect("build persisted map runtime");
+    let mut guard = state.lock().expect("map state");
+    guard.interactive_index.repo_runtime = Some(repo_runtime);
+    guard.interactive_index.manifest.status = DaemonIndexState::Ready;
+    guard.interactive_index.manifest.dirty_paths.clear();
+    guard.interactive_index.manifest.queued_paths.clear();
+}
+
 pub(crate) fn insert_admitted_task_record(state: &Arc<Mutex<DaemonState>>, record: TaskRecord) {
     let mut guard = state.lock().unwrap();
     guard.tasks.tasks.insert(record.task_id.clone(), record);
@@ -212,6 +223,15 @@ pub(super) fn run_search_execution_for_query_with_snapshot(
     action: BrokerAction,
     snapshot: &suite_packet_core::AgentSnapshotPayload,
 ) -> SearchExecution {
+    let regex_runtime = packet28_search_core::rebuild_full_index(root, true)
+        .expect("build persisted search runtime");
+    let state = daemon_test_state();
+    {
+        let mut guard = state.lock().expect("search state");
+        guard.root = root.to_path_buf();
+        guard.interactive_index.regex_runtime = Some(regex_runtime);
+        guard.interactive_index.manifest.status = DaemonIndexState::Ready;
+    }
     let request = BrokerGetContextRequest {
         task_id: "task-search".to_string(),
         action: Some(action),
@@ -220,7 +240,7 @@ pub(super) fn run_search_execution_for_query_with_snapshot(
     };
     let query_focus = derive_query_focus(Some(query));
     build_reducer_search_execution(SearchExecutionArgs {
-        state: None,
+        state: Some(&state),
         root,
         snapshot,
         request: &request,

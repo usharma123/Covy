@@ -465,6 +465,7 @@ pub(crate) fn broker_validate_plan(
         .flat_map(|step| step.symbols.iter().cloned())
         .collect::<Vec<_>>();
     let repo_map = mapy_core::expand_repo_map_payload(&build_repo_map_envelope(
+        &state,
         &root,
         &focus_paths,
         &focus_symbols,
@@ -830,6 +831,7 @@ pub(crate) fn broker_decompose(
     let root = state.lock().map_err(lock_err)?.root.clone();
     let snapshot = load_agent_snapshot_for_task(&state, &request.task_id)?;
     let repo_map = build_repo_map_envelope(
+        &state,
         &root,
         &merged_unique(&snapshot.focus_paths, &request.scope_paths),
         &merged_unique(&snapshot.focus_symbols, &request.scope_symbols),

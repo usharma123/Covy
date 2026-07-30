@@ -2714,6 +2714,126 @@ fn daemon_incremental_publication_benchmark() {
     assert!(!index_snapshot_path(&fixture.root).exists());
 }
 
+#[test]
+fn broker_map_and_query_consume_incrementally_updated_daemon_runtimes() {
+    let fixture = IndexFixture::new(&[("src/a.rs", "pub fn original_symbol() -> usize { 1 }\n")]);
+    fs::write(
+        fixture.root.join("src/a.rs"),
+        "pub fn incremental_symbol() -> usize { 2 }\n",
+    )
+    .expect("incremental edit");
+    fixture.update(&["src/a.rs"]);
+
+    let map = crate::broker::testing::build_repo_map_envelope(
+        &fixture.state,
+        &fixture.root,
+        &[],
+        &[String::from("incremental_symbol")],
+        8,
+        16,
+    )
+    .expect("broker runtime map");
+    let rich_map = mapy_core::expand_repo_map_payload(&map);
+    assert!(rich_map
+        .symbols_ranked
+        .iter()
+        .any(|symbol| symbol.name == "incremental_symbol" && symbol.file == "src/a.rs"));
+
+    let snapshot = suite_packet_core::AgentSnapshotPayload::default();
+    let request = BrokerGetContextRequest {
+        task_id: "task-index-runtime-query".to_string(),
+        action: Some(BrokerAction::Inspect),
+        query: Some("Where is incremental_symbol defined?".to_string()),
+        ..BrokerGetContextRequest::default()
+    };
+    let query_focus = crate::broker::testing::derive_query_focus(request.query.as_deref());
+    let execution = crate::broker::testing::build_reducer_search_execution(
+        crate::broker::testing::SearchExecutionArgs {
+            state: Some(&fixture.state),
+            root: &fixture.root,
+            snapshot: &snapshot,
+            request: &request,
+            query_focus: &query_focus,
+            action: BrokerAction::Inspect,
+            max_files: 8,
+            max_evidence_lines: 8,
+        },
+    );
+
+    assert!(execution.used_persisted_runtime);
+    assert_eq!(
+        execution.files.first().map(|file| file.path.as_str()),
+        Some("src/a.rs")
+    );
+    assert!(execution
+        .evidence_by_file
+        .get("src/a.rs")
+        .is_some_and(|evidence| evidence
+            .rendered_lines
+            .iter()
+            .any(|line| line.contains("incremental_symbol"))));
+}
+
+#[test]
+fn broker_corrupt_runtime_fallback_fails_closed_without_repository_rescan() {
+    let fixture = IndexFixture::new(&[("src/a.rs", "pub fn indexed_symbol() -> usize { 1 }\n")]);
+    {
+        let mut guard = fixture.state.lock().expect("state");
+        guard
+            .interactive_index
+            .repo_runtime
+            .as_mut()
+            .expect("repo runtime")
+            .manifest
+            .last_error = Some("injected repository corruption".to_string());
+        guard
+            .interactive_index
+            .regex_runtime
+            .as_mut()
+            .expect("regex runtime")
+            .manifest
+            .last_error = Some("injected search corruption".to_string());
+    }
+
+    let map_error = crate::broker::testing::build_repo_map_envelope(
+        &fixture.state,
+        &fixture.root,
+        &[],
+        &[String::from("indexed_symbol")],
+        8,
+        16,
+    )
+    .expect_err("corrupt map runtime must not fall back to a scan");
+    assert!(map_error
+        .to_string()
+        .contains("authenticated daemon repository map runtime is not current"));
+
+    let snapshot = suite_packet_core::AgentSnapshotPayload::default();
+    let request = BrokerGetContextRequest {
+        task_id: "task-corrupt-index-runtime".to_string(),
+        action: Some(BrokerAction::Inspect),
+        query: Some("Where is indexed_symbol defined?".to_string()),
+        ..BrokerGetContextRequest::default()
+    };
+    let query_focus = crate::broker::testing::derive_query_focus(request.query.as_deref());
+    let execution = crate::broker::testing::build_reducer_search_execution(
+        crate::broker::testing::SearchExecutionArgs {
+            state: Some(&fixture.state),
+            root: &fixture.root,
+            snapshot: &snapshot,
+            request: &request,
+            query_focus: &query_focus,
+            action: BrokerAction::Inspect,
+            max_files: 8,
+            max_evidence_lines: 8,
+        },
+    );
+
+    assert!(!execution.used_persisted_runtime);
+    assert!(execution.files.is_empty());
+    assert!(execution.evidence_by_file.is_empty());
+}
+
 fn fail_clear_between_engines(state: &Arc<Mutex<DaemonState>>, batch: &IndexWorkBatch) {
     let clear_epoch = batch.clear_epoch.expect("clear epoch");
     let failure = perform_index_clear_with_hook(

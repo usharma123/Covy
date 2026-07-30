@@ -46,7 +46,7 @@ pub(crate) mod testing {
         render_task_memory_lines,
     };
     pub(crate) use super::support::{
-        broker_default_budget_tokens, emit_task_event, emit_task_event_for_generation,
-        inherit_broker_request_defaults, now_unix_millis,
+        broker_default_budget_tokens, build_repo_map_envelope, emit_task_event,
+        emit_task_event_for_generation, inherit_broker_request_defaults, now_unix_millis,
     };
 }

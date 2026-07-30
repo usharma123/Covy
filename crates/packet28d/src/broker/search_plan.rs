@@ -526,6 +526,8 @@ pub(crate) struct SearchExecution {
     pub(crate) evidence_by_file: BTreeMap<String, CodeEvidenceSummary>,
     #[cfg(test)]
     pub(crate) used_fallback: bool,
+    #[cfg(test)]
+    pub(crate) used_persisted_runtime: bool,
 }
 
 pub(crate) struct SearchExecutionArgs<'a> {
@@ -763,24 +765,22 @@ fn requested_search_paths(
 
 fn apply_search_candidate_results(
     root: &Path,
+    runtime: &packet28_search_core::RegexIndexRuntime,
     requested_paths: &[String],
     candidate: &SearchCandidate,
     files: &mut BTreeMap<String, ReducerSearchFile>,
 ) {
-    let search = packet28_reducer_core::search(
-        root,
-        &packet28_reducer_core::SearchRequest {
-            query: candidate.term.clone(),
-            requested_paths: requested_paths.to_vec(),
-            fixed_string: true,
-            case_sensitive: Some(candidate.case_sensitive),
-            whole_word: candidate.whole_word,
-            context_lines: None,
-            max_matches_per_file: Some(SEARCH_BROKER_MAX_MATCHES_PER_FILE),
-            max_total_matches: Some(SEARCH_BROKER_MAX_TOTAL_MATCHES),
-        },
-    );
-    let Ok(search) = search else {
+    let request = packet28_reducer_core::SearchRequest {
+        query: candidate.term.clone(),
+        requested_paths: requested_paths.to_vec(),
+        fixed_string: true,
+        case_sensitive: Some(candidate.case_sensitive),
+        whole_word: candidate.whole_word,
+        context_lines: None,
+        max_matches_per_file: Some(SEARCH_BROKER_MAX_MATCHES_PER_FILE),
+        max_total_matches: Some(SEARCH_BROKER_MAX_TOTAL_MATCHES),
+    };
+    let Ok(search) = packet28_search_core::indexed_search(root, runtime, &request) else {
         return;
     };
     for group in search.groups {
@@ -948,9 +948,21 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
     let plan = build_search_plan(query_focus);
     let mut files_by_path = BTreeMap::<String, ReducerSearchFile>::new();
     let mut used_fallback = false;
-    if let Some(phase) = plan.phases.first() {
+    let regex_runtime = state.and_then(|state| {
+        let guard = state.lock().ok()?;
+        (guard.root == root && guard.interactive_index.regex_is_query_ready())
+            .then(|| guard.interactive_index.regex_runtime.clone())
+            .flatten()
+    });
+    if let (Some(runtime), Some(phase)) = (regex_runtime.as_ref(), plan.phases.first()) {
         for candidate in &phase.candidates {
-            apply_search_candidate_results(root, &requested_paths, candidate, &mut files_by_path);
+            apply_search_candidate_results(
+                root,
+                runtime,
+                &requested_paths,
+                candidate,
+                &mut files_by_path,
+            );
         }
     }
     let mut reducer_files =
@@ -973,7 +985,15 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
             .map(|file| (file.path.clone(), file))
             .collect::<BTreeMap<_, _>>();
         for candidate in &plan.phases[1].candidates {
-            apply_search_candidate_results(root, &requested_paths, candidate, &mut files_by_path);
+            if let Some(runtime) = regex_runtime.as_ref() {
+                apply_search_candidate_results(
+                    root,
+                    runtime,
+                    &requested_paths,
+                    candidate,
+                    &mut files_by_path,
+                );
+            }
         }
         reducer_files =
             rank_reducer_search_files(files_by_path.into_values().collect(), snapshot, max_files);
@@ -995,6 +1015,8 @@ pub(crate) fn build_reducer_search_execution(args: SearchExecutionArgs<'_>) -> S
         evidence_by_file,
         #[cfg(test)]
         used_fallback,
+        #[cfg(test)]
+        used_persisted_runtime: regex_runtime.is_some(),
     }
 }
 

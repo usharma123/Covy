@@ -709,20 +709,42 @@ pub(crate) fn metadata_mtime_secs(metadata: &fs::Metadata) -> u64 {
 }
 
 pub(crate) fn build_repo_map_envelope(
+    state: &Arc<Mutex<DaemonState>>,
     root: &Path,
     focus_paths: &[String],
     focus_symbols: &[String],
     max_files: usize,
     max_symbols: usize,
 ) -> Result<suite_packet_core::EnvelopeV1<mapy_core::RepoMapPayload>> {
-    mapy_core::build_repo_map(mapy_core::RepoMapRequest {
-        repo_root: root.to_string_lossy().to_string(),
-        focus_paths: focus_paths.to_vec(),
-        focus_symbols: focus_symbols.to_vec(),
-        max_files,
-        max_symbols,
-        include_tests: true,
-    })
+    let runtime = {
+        let guard = state.lock().map_err(lock_err)?;
+        if guard.root != root {
+            anyhow::bail!(
+                "broker repository map root '{}' does not match daemon root '{}'",
+                root.display(),
+                guard.root.display()
+            );
+        }
+        if !guard.interactive_index.repo_is_query_ready() {
+            anyhow::bail!("authenticated daemon repository map runtime is not current");
+        }
+        guard
+            .interactive_index
+            .repo_runtime
+            .clone()
+            .ok_or_else(|| anyhow!("authenticated daemon repository map runtime is unavailable"))?
+    };
+    mapy_core::build_repo_map_from_runtime(
+        mapy_core::RepoMapRequest {
+            repo_root: root.to_string_lossy().to_string(),
+            focus_paths: focus_paths.to_vec(),
+            focus_symbols: focus_symbols.to_vec(),
+            max_files,
+            max_symbols,
+            include_tests: true,
+        },
+        &runtime,
+    )
     .map_err(|source| anyhow!(source.to_string()))
 }
 
