@@ -3659,22 +3659,31 @@ fn validate_owned_regular_read_snapshot(
             ),
         ));
     }
-    if stat.st_nlink > 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "{kind} has {} links; expected an anchored snapshot with at most one: {}",
-                stat.st_nlink,
-                Path::new(name).display()
-            ),
-        ));
-    }
+    validate_authenticated_link_count(stat.st_nlink, name, kind)?;
     if stable_device_id(stat.st_dev) != expected_device {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
                 "{kind} is on device {}; expected device {expected_device}: {}",
                 stat.st_dev,
+                Path::new(name).display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_authenticated_link_count<T>(link_count: T, name: &OsStr, kind: &str) -> io::Result<()>
+where
+    T: TryInto<u64>,
+{
+    let link_count = filesystem_value_u64(link_count)?;
+    if link_count > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{kind} has {} links; expected an anchored snapshot with at most one: {}",
+                link_count,
                 Path::new(name).display()
             ),
         ));
@@ -4001,11 +4010,22 @@ mod tests {
     const NAMESPACE_ROOT_ENV: &str = "PACKET28_CAPABILITY_NAMESPACE_ROOT";
 
     #[test]
-    fn filesystem_value_conversion_accepts_unsigned_and_rejects_negative_counts() {
+    fn authenticated_link_count_accepts_unsigned_and_rejects_negative_counts() {
+        let name = OsStr::new("authority.json");
         assert_eq!(filesystem_value_u64(7_u64).unwrap(), 7);
         assert_eq!(filesystem_value_u64(7_i16).unwrap(), 7);
         assert_eq!(
-            filesystem_value_u64(-1_i16).unwrap_err().kind(),
+            validate_authenticated_link_count(-1_i16, name, "capability managed file")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(validate_authenticated_link_count(0_u64, name, "capability managed file").is_ok());
+        assert!(validate_authenticated_link_count(1_u16, name, "capability managed file").is_ok());
+        assert_eq!(
+            validate_authenticated_link_count(2_u64, name, "capability managed file")
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::InvalidData
         );
     }
