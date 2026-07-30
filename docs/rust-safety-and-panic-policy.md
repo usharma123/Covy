@@ -121,7 +121,7 @@ and requires a reason on each expectation.
   reason, are checked for fulfillment, and are reconciled against an exact
   reviewed inventory. Production `#[allow]` overrides are rejected.
 - The same checker inventories unsafe syntax. Its reviewed allowlist currently
-  contains 25 files: 14 production OS/FFI/mmap adapters and eleven
+  contains 24 files: 14 production OS/FFI/mmap adapters and ten
   test/benchmark instrumentation files. A new unsafe-bearing file or stale
   allowlist entry fails the gate until the architectural inventory is
   reconciled explicitly.

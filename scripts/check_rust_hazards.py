@@ -57,7 +57,6 @@ ALLOWED_UNSAFE_FILES = {
     "crates/suite-cli/src/cmd_mcp_artifact_io.rs": (
         "descriptor-relative MCP artifact filesystem adapter"
     ),
-    "crates/suite-cli/src/cmd_shell.rs": "Unix pre-exec process-group setup",
     "crates/suite-cli/tests/daemon_lifecycle_e2e.rs": "Unix daemon liveness probe",
     "crates/suite-cli/tests/process_harness_e2e.rs": "Unix process-harness probes",
     "crates/suite-cli/tests/runtime_backend_macos_e2e.rs": "macOS signal regression test",
