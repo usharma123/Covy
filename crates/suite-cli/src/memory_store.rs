@@ -261,6 +261,7 @@ fn recall_memories_vector(
         },
     )?;
     let mut by_id = HashMap::<i64, MemoryRecord>::new();
+    let mut query_embeddings = HashMap::<usize, Vec<f64>>::new();
     for row in rows {
         let (mut record, dimensions, embedding_json) = row?;
         let Ok(embedding) = serde_json::from_str::<Vec<f64>>(&embedding_json) else {
@@ -269,8 +270,10 @@ fn recall_memories_vector(
         if dimensions == 0 || embedding.is_empty() {
             continue;
         }
-        let query_embedding = deterministic_embedding(input.query, dimensions);
-        let score = cosine_similarity(&query_embedding, &embedding);
+        let query_embedding = query_embeddings
+            .entry(dimensions)
+            .or_insert_with(|| deterministic_embedding(input.query, dimensions));
+        let score = cosine_similarity(query_embedding, &embedding);
         if score > 0.0 {
             record.recall_score = Some(score);
             by_id
@@ -1194,6 +1197,27 @@ mod tests {
             created_at_unix_ms: 1,
             updated_at_unix_ms: 1,
         }
+    }
+
+    #[test]
+    fn query_embeddings_are_reused_per_dimension() {
+        let mut embeddings = HashMap::<usize, Vec<f64>>::new();
+        let first = embeddings
+            .entry(16)
+            .or_insert_with(|| deterministic_embedding("query", 16))
+            .as_ptr();
+        let second = embeddings
+            .entry(16)
+            .or_insert_with(|| deterministic_embedding("query", 16))
+            .as_ptr();
+        embeddings
+            .entry(32)
+            .or_insert_with(|| deterministic_embedding("query", 32));
+
+        assert_eq!(first, second);
+        assert_eq!(embeddings.len(), 2);
+        assert_eq!(embeddings[&16].len(), 16);
+        assert_eq!(embeddings[&32].len(), 32);
     }
 
     #[test]
