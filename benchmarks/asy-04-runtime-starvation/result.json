@@ -2,9 +2,9 @@
   "schema_version": 1,
   "captured_at": "2026-07-30",
   "source": {
-    "integration_tree": "cf9485939d22d64008e39623d0234bfeb0f8e455",
+    "integration_tree": "01e2a49083aa7e4d260cc57ee65f00c322b50b69",
     "files": {
-      "crates/packet28d/src/runtime.rs": "50147a9fad9398a40747e3984d9ba19ec32d219aa0cf6d1c0b60fadd6a9a8efe"
+      "crates/packet28d/src/runtime.rs": "4c044ac355acf77b543e1a146786bb2b89ffe2337503d207786d6c689d8a33df"
     }
   },
   "environment": {
@@ -17,15 +17,15 @@
   "timer_delay_us": 1000,
   "blocking_duration_us": 10000,
   "direct_sync": {
-    "p50_lateness_us": 14012,
-    "p95_lateness_us": 14103,
-    "max_lateness_us": 14192
+    "p50_lateness_us": 11469,
+    "p95_lateness_us": 11544,
+    "max_lateness_us": 11580
   },
   "blocking_pool": {
-    "p50_lateness_us": 2030,
-    "p95_lateness_us": 2083,
-    "max_lateness_us": 2089
+    "p50_lateness_us": 1539,
+    "p95_lateness_us": 1593,
+    "max_lateness_us": 1740
   },
-  "p95_lateness_reduction_percent": 85.230092888037,
-  "p95_lateness_improvement": 6.770523283725
+  "p95_lateness_reduction_percent": 86.20062370062371,
+  "p95_lateness_improvement": 7.246704331450094
 }
