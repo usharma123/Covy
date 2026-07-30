@@ -466,9 +466,48 @@ pub struct LoadedTaskWatchRegistry {
     pub replayed_revision: RegistryRevision,
 }
 
+/// Compact proof of the daemon's current durable task-registry authority.
+///
+/// The token borrows the in-memory registry image and daemon lifecycle lease
+/// that own `current_revision`. It lets the single persistence owner validate
+/// new task namespace admission without decoding the full checkpoint for
+/// every WAL append.
+#[derive(Debug)]
+pub struct RegistryDeltaAdmission<'registry> {
+    root: &'registry Path,
+    current_tasks: &'registry TaskRegistry,
+    lease: &'registry crate::task_store_lease::TaskStoreLease,
+    current_revision: RegistryRevision,
+}
+
 /// Returns the diagnostic path of the task/watch registry delta WAL.
 pub fn registry_delta_wal_path(root: &Path) -> PathBuf {
     daemon_dir(root).join(REGISTRY_DELTA_WAL_FILE_NAME)
+}
+
+/// Admits a WAL append from the daemon's current durable registry image.
+///
+/// `current_revision` must be the replayed revision represented by
+/// `current_tasks`. The returned token remains valid only while that image and
+/// the matching daemon lifecycle lease are retained by the persistence owner.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] when `lease` does not own the requested
+/// daemon task-store namespace.
+pub fn admit_registry_delta_from_registry<'registry>(
+    root: &'registry Path,
+    current_tasks: &'registry TaskRegistry,
+    lease: &'registry crate::task_store_lease::TaskStoreLease,
+    current_revision: RegistryRevision,
+) -> Result<RegistryDeltaAdmission<'registry>> {
+    require_daemon_lifecycle_lease(root, lease)?;
+    Ok(RegistryDeltaAdmission {
+        root,
+        current_tasks,
+        lease,
+        current_revision,
+    })
 }
 
 /// Appends and synchronizes one atomic task/watch registry delta.
@@ -486,6 +525,140 @@ pub fn append_task_watch_registry_delta(
     revisions: RegistryRevisionRange,
     batch: &RegistryDeltaBatch,
 ) -> Result<()> {
+    let prepared = prepare_registry_delta(root, revisions, batch)?;
+    let _writer_lease = acquire_task_store_writer_lease(root)?;
+
+    #[cfg(unix)]
+    {
+        with_anchored_task_registry_lock(
+            root,
+            RegistryLockMode::Exclusive,
+            || Ok(()),
+            |daemon| {
+                let current = load_under_task_lock_anchored(root, daemon)?;
+                validate_registry_delta_namespace_admission(root, &current.tasks, batch)?;
+                append_under_task_lock(
+                    root,
+                    revisions,
+                    &prepared.header,
+                    &prepared.payload,
+                    &prepared.footer,
+                    || Ok(current.checkpoint_revision),
+                )
+            },
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let task_path = task_registry_path(root);
+        with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
+            let current = load_under_task_lock_portable(root)?;
+            validate_registry_delta_namespace_admission(root, &current.tasks, batch)?;
+            append_under_task_lock(
+                root,
+                revisions,
+                &prepared.header,
+                &prepared.payload,
+                &prepared.footer,
+                || Ok(current.checkpoint_revision),
+            )
+        })
+    }
+}
+
+/// Appends a registry delta using the daemon's compact in-memory admission.
+///
+/// This preserves the same locking, WAL continuity, and namespace checks as
+/// [`append_task_watch_registry_delta`] while avoiding a full checkpoint and
+/// WAL replay on the daemon's hot path.
+///
+/// # Errors
+///
+/// Returns lease, revision, namespace-admission, batch, size, corruption,
+/// locking, and synchronization errors without appending an unauthorized
+/// frame.
+pub fn append_task_watch_registry_delta_with_admission(
+    admission: RegistryDeltaAdmission<'_>,
+    revisions: RegistryRevisionRange,
+    batch: &RegistryDeltaBatch,
+) -> Result<()> {
+    require_daemon_lifecycle_lease(admission.root, admission.lease)?;
+    let prepared = prepare_registry_delta(admission.root, revisions, batch)?;
+    let expected_first = admission.current_revision.checked_next().ok_or_else(|| {
+        invalid_wal(
+            &registry_delta_wal_path(admission.root),
+            "registry revision is exhausted",
+        )
+    })?;
+    if revisions.first != expected_first {
+        return Err(DaemonCoreError::RegistryDeltaRevisionMismatch {
+            path: registry_delta_wal_path(admission.root),
+            expected_first: expected_first.get(),
+            actual_first: revisions.first.get(),
+            actual_last: revisions.last.get(),
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        with_anchored_task_registry_lock(
+            admission.root,
+            RegistryLockMode::Exclusive,
+            || Ok(()),
+            |_daemon| {
+                validate_registry_delta_namespace_admission(
+                    admission.root,
+                    admission.current_tasks,
+                    batch,
+                )?;
+                append_under_task_lock(
+                    admission.root,
+                    revisions,
+                    &prepared.header,
+                    &prepared.payload,
+                    &prepared.footer,
+                    || Ok(admission.current_revision),
+                )
+            },
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let task_path = task_registry_path(admission.root);
+        with_registry_lock(
+            admission.root,
+            &task_path,
+            RegistryLockMode::Exclusive,
+            || {
+                validate_registry_delta_namespace_admission(
+                    admission.root,
+                    admission.current_tasks,
+                    batch,
+                )?;
+                append_under_task_lock(
+                    admission.root,
+                    revisions,
+                    &prepared.header,
+                    &prepared.payload,
+                    &prepared.footer,
+                    || Ok(admission.current_revision),
+                )
+            },
+        )
+    }
+}
+
+struct PreparedRegistryDelta {
+    payload: Vec<u8>,
+    header: [u8; FRAME_HEADER_BYTES],
+    footer: [u8; FRAME_FOOTER_BYTES],
+}
+
+fn prepare_registry_delta(
+    root: &Path,
+    revisions: RegistryRevisionRange,
+    batch: &RegistryDeltaBatch,
+) -> Result<PreparedRegistryDelta> {
     revisions
         .validate()
         .map_err(|error| invalid_batch(root, error))?;
@@ -503,42 +676,37 @@ pub fn append_task_watch_registry_delta(
             max_bytes: MAX_REGISTRY_DELTA_FRAME_BYTES as u64,
         });
     }
-    let frame_header = encode_frame_header(revisions, &payload);
-    let frame_footer = encode_frame_footer(&frame_header, payload.len());
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let header = encode_frame_header(revisions, &payload);
+    let footer = encode_frame_footer(&header, payload.len());
+    Ok(PreparedRegistryDelta {
+        payload,
+        header,
+        footer,
+    })
+}
 
-    #[cfg(unix)]
-    {
-        with_anchored_task_registry_lock(
-            root,
-            RegistryLockMode::Exclusive,
-            || Ok(()),
-            |daemon| {
-                append_under_task_lock(
-                    root,
-                    revisions,
-                    &frame_header,
-                    &payload,
-                    &frame_footer,
-                    || checkpoint_revision_anchored(root, daemon),
-                )
-            },
-        )
+fn validate_registry_delta_namespace_admission(
+    root: &Path,
+    current_tasks: &TaskRegistry,
+    batch: &RegistryDeltaBatch,
+) -> Result<()> {
+    let new_tasks = batch
+        .task_upserts
+        .iter()
+        .filter(|(task_id, _)| !current_tasks.tasks.contains_key(*task_id))
+        .map(|(task_id, task)| (task_id.clone(), task.clone()))
+        .collect();
+    let new_registry = TaskRegistry { tasks: new_tasks };
+    if new_registry.tasks.is_empty() {
+        return Ok(());
     }
-    #[cfg(not(unix))]
-    {
-        let task_path = task_registry_path(root);
-        with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
-            append_under_task_lock(
-                root,
-                revisions,
-                &frame_header,
-                &payload,
-                &frame_footer,
-                || checkpoint_revision_portable(root),
-            )
-        })
-    }
+    validate_task_registry_namespace_bindings(
+        root,
+        &new_registry,
+        None,
+        None,
+        &task_registry_path(root),
+    )
 }
 
 /// Loads one committed checkpoint and replays every newer valid WAL frame.
@@ -653,8 +821,8 @@ pub fn save_task_watch_registry_checkpoint_at_revision(
             RegistryLockMode::Exclusive,
             || Ok(()),
             |daemon| {
-                let loaded = load_under_task_lock_anchored(root, daemon)?;
-                validate_checkpoint_candidate(root, &loaded, tasks, watches, revision)?;
+                let authority = load_under_task_lock_anchored_with_admissions(root, daemon)?;
+                validate_checkpoint_candidate(root, &authority.loaded, tasks, watches, revision)?;
                 save_task_watch_registry_checkpoint_anchored(
                     root,
                     daemon,
@@ -662,6 +830,7 @@ pub fn save_task_watch_registry_checkpoint_at_revision(
                     watches,
                     task_bytes,
                     Some(revision.get()),
+                    Some(&authority.wal_admitted_task_ids),
                 )?;
                 reset_wal(root, revision)
             },
@@ -670,14 +839,15 @@ pub fn save_task_watch_registry_checkpoint_at_revision(
     #[cfg(not(unix))]
     {
         with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
-            let loaded = load_under_task_lock_portable(root)?;
-            validate_checkpoint_candidate(root, &loaded, tasks, watches, revision)?;
+            let authority = load_under_task_lock_portable_with_admissions(root)?;
+            validate_checkpoint_candidate(root, &authority.loaded, tasks, watches, revision)?;
             save_task_watch_registry_checkpoint_portable(
                 root,
                 tasks,
                 watches,
                 task_bytes,
                 Some(revision.get()),
+                Some(&authority.wal_admitted_task_ids),
             )?;
             reset_wal(root, revision)
         })
@@ -685,27 +855,21 @@ pub fn save_task_watch_registry_checkpoint_at_revision(
 }
 
 #[cfg(unix)]
-fn checkpoint_revision_anchored(root: &Path, daemon: &CapabilityDir) -> Result<RegistryRevision> {
-    let loaded =
-        load_task_watch_registry_checkpoint_with_delta_revision_under_task_lock(root, daemon)?;
-    Ok(RegistryRevision::new(loaded.applied_delta_revision))
-}
-
-#[cfg(not(unix))]
-fn checkpoint_revision_portable(root: &Path) -> Result<RegistryRevision> {
-    let loaded =
-        load_task_watch_registry_checkpoint_with_delta_revision_portable_under_task_lock(root)?;
-    Ok(RegistryRevision::new(loaded.applied_delta_revision))
-}
-
-#[cfg(unix)]
 fn load_under_task_lock_anchored(
     root: &Path,
     daemon: &CapabilityDir,
 ) -> Result<LoadedTaskWatchRegistry> {
+    Ok(load_under_task_lock_anchored_with_admissions(root, daemon)?.loaded)
+}
+
+#[cfg(unix)]
+fn load_under_task_lock_anchored_with_admissions(
+    root: &Path,
+    daemon: &CapabilityDir,
+) -> Result<LoadedRegistryAuthority> {
     let loaded =
         load_task_watch_registry_checkpoint_with_delta_revision_under_task_lock(root, daemon)?;
-    replay_wal(
+    replay_wal_with_admissions(
         root,
         loaded.tasks,
         loaded.watches,
@@ -715,9 +879,14 @@ fn load_under_task_lock_anchored(
 
 #[cfg(not(unix))]
 fn load_under_task_lock_portable(root: &Path) -> Result<LoadedTaskWatchRegistry> {
+    Ok(load_under_task_lock_portable_with_admissions(root)?.loaded)
+}
+
+#[cfg(not(unix))]
+fn load_under_task_lock_portable_with_admissions(root: &Path) -> Result<LoadedRegistryAuthority> {
     let loaded =
         load_task_watch_registry_checkpoint_with_delta_revision_portable_under_task_lock(root)?;
-    replay_wal(
+    replay_wal_with_admissions(
         root,
         loaded.tasks,
         loaded.watches,
@@ -725,23 +894,32 @@ fn load_under_task_lock_portable(root: &Path) -> Result<LoadedTaskWatchRegistry>
     )
 }
 
-fn replay_wal(
+struct LoadedRegistryAuthority {
+    loaded: LoadedTaskWatchRegistry,
+    wal_admitted_task_ids: BTreeSet<String>,
+}
+
+fn replay_wal_with_admissions(
     root: &Path,
     mut tasks: TaskRegistry,
     mut watches: WatchRegistry,
     checkpoint_revision: RegistryRevision,
-) -> Result<LoadedTaskWatchRegistry> {
+) -> Result<LoadedRegistryAuthority> {
+    let checkpoint_task_ids = tasks.tasks.keys().cloned().collect::<BTreeSet<_>>();
     let path = registry_delta_wal_path(root);
     let state = open_daemon_state(root)?;
     let Some(mut wal) = state
         .open_existing(REGISTRY_DELTA_WAL_FILE_NAME, FileAccess::ReadWrite)
         .map_err(|source| wal_io("failed to open registry delta WAL", &path, source))?
     else {
-        return Ok(LoadedTaskWatchRegistry {
-            tasks,
-            watches,
-            checkpoint_revision,
-            replayed_revision: checkpoint_revision,
+        return Ok(LoadedRegistryAuthority {
+            loaded: LoadedTaskWatchRegistry {
+                tasks,
+                watches,
+                checkpoint_revision,
+                replayed_revision: checkpoint_revision,
+            },
+            wal_admitted_task_ids: BTreeSet::new(),
         });
     };
 
@@ -790,11 +968,20 @@ fn replay_wal(
         // retained or externally archived before the reset header appeared.
         replayed_revision = checkpoint_revision;
     }
-    Ok(LoadedTaskWatchRegistry {
-        tasks,
-        watches,
-        checkpoint_revision,
-        replayed_revision,
+    let wal_admitted_task_ids = tasks
+        .tasks
+        .keys()
+        .filter(|task_id| !checkpoint_task_ids.contains(*task_id))
+        .cloned()
+        .collect();
+    Ok(LoadedRegistryAuthority {
+        loaded: LoadedTaskWatchRegistry {
+            tasks,
+            watches,
+            checkpoint_revision,
+            replayed_revision,
+        },
+        wal_admitted_task_ids,
     })
 }
 
@@ -1857,6 +2044,149 @@ mod tests {
             vec!["one", "two"]
         );
         assert_eq!(tails, BTreeMap::from([("task".to_string(), None)]));
+    }
+
+    #[test]
+    fn wal_append_rejects_new_task_that_would_adopt_a_managed_entry() {
+        for (event_namespace, alias_spelling) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let root = tempdir().unwrap();
+            checkpoint(root.path(), [], []);
+            let expected_name = if event_namespace {
+                "new-task.events.jsonl"
+            } else {
+                "new-task"
+            };
+            let actual_name = if alias_spelling {
+                if event_namespace {
+                    "NEW-TASK.events.jsonl"
+                } else {
+                    "NEW-TASK"
+                }
+            } else {
+                expected_name
+            };
+            let namespace = if event_namespace {
+                task_events_dir(root.path())
+            } else {
+                task_artifacts_dir(root.path())
+            };
+            fs::create_dir_all(&namespace).unwrap();
+            let managed = namespace.join(actual_name);
+            if event_namespace {
+                fs::write(&managed, b"event-before\n").unwrap();
+            } else {
+                fs::create_dir(&managed).unwrap();
+            }
+            let wal_path = registry_delta_wal_path(root.path());
+            assert!(!wal_path.exists());
+            let delta = RegistryDeltaBatch::default().upsert_task(task("new-task", &[]));
+
+            let error = append_task_watch_registry_delta(
+                root.path(),
+                RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+                &delta,
+            )
+            .unwrap_err();
+
+            assert!(matches!(error, DaemonCoreError::InvalidTaskRegistry { .. }));
+            assert!(!wal_path.exists());
+            assert!(managed.exists());
+        }
+    }
+
+    #[test]
+    fn admitted_wal_append_rejects_new_task_that_would_adopt_a_managed_entry() {
+        let root = tempdir().unwrap();
+        checkpoint(root.path(), [], []);
+        let managed = task_events_dir(root.path()).join("new-task.events.jsonl");
+        fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        fs::write(&managed, b"event-before\n").unwrap();
+        let current = TaskRegistry::default();
+        let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
+        let admission = admit_registry_delta_from_registry(
+            root.path(),
+            &current,
+            &lease,
+            RegistryRevision::ZERO,
+        )
+        .unwrap();
+        let delta = RegistryDeltaBatch::default().upsert_task(task("new-task", &[]));
+        let wal_path = registry_delta_wal_path(root.path());
+
+        let error = append_task_watch_registry_delta_with_admission(
+            admission,
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &delta,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::InvalidTaskRegistry { .. }));
+        assert!(!wal_path.exists());
+        assert_eq!(fs::read(managed).unwrap(), b"event-before\n");
+    }
+
+    #[test]
+    fn wal_append_allows_an_existing_task_to_reuse_its_managed_entries() {
+        let root = tempdir().unwrap();
+        checkpoint(root.path(), [task("existing", &[])], []);
+        let artifact = task_artifacts_dir(root.path()).join("existing");
+        let events = task_events_dir(root.path()).join("existing.events.jsonl");
+        fs::create_dir_all(&artifact).unwrap();
+        fs::create_dir_all(events.parent().unwrap()).unwrap();
+        fs::write(&events, b"existing\n").unwrap();
+        let mut updated = task("existing", &[]);
+        updated.last_event_seq = 7;
+
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &RegistryDeltaBatch::default().upsert_task(updated),
+        )
+        .unwrap();
+
+        assert!(registry_delta_wal_path(root.path()).exists());
+        assert!(artifact.exists());
+        assert_eq!(fs::read(events).unwrap(), b"existing\n");
+    }
+
+    #[test]
+    fn registry_delta_admission_requires_a_daemon_lifecycle_lease() {
+        let root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let current = TaskRegistry::default();
+        let writer = acquire_task_store_writer_lease(root.path()).unwrap();
+
+        let error = admit_registry_delta_from_registry(
+            root.path(),
+            &current,
+            &writer,
+            RegistryRevision::ZERO,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::Io { .. }));
+    }
+
+    #[test]
+    fn registry_delta_admission_rejects_a_lease_for_another_root() {
+        let root = tempdir().unwrap();
+        let other = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        ensure_daemon_dir(other.path()).unwrap();
+        let current = TaskRegistry::default();
+        let lease = crate::task_store_lease::acquire_daemon_task_store_lease(other.path()).unwrap();
+
+        let error = admit_registry_delta_from_registry(
+            root.path(),
+            &current,
+            &lease,
+            RegistryRevision::ZERO,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::Io { .. }));
     }
 
     #[test]

@@ -52,11 +52,12 @@ use event_tail::{
     task_event_log_tail_sequence_admitted_with_observer,
 };
 pub use registry_delta::{
-    append_task_watch_registry_delta, load_task_watch_registry_with_deltas,
+    admit_registry_delta_from_registry, append_task_watch_registry_delta,
+    append_task_watch_registry_delta_with_admission, load_task_watch_registry_with_deltas,
     load_task_watch_registry_with_deltas_and_event_tails, registry_delta_wal_path,
-    save_task_watch_registry_checkpoint_at_revision, LoadedTaskWatchRegistry, RegistryDeltaBatch,
-    RegistryDeltaValidationError, RegistryRevision, RegistryRevisionRange,
-    MAX_REGISTRY_DELTA_FRAME_BYTES, MAX_REGISTRY_DELTA_WAL_BYTES,
+    save_task_watch_registry_checkpoint_at_revision, LoadedTaskWatchRegistry,
+    RegistryDeltaAdmission, RegistryDeltaBatch, RegistryDeltaValidationError, RegistryRevision,
+    RegistryRevisionRange, MAX_REGISTRY_DELTA_FRAME_BYTES, MAX_REGISTRY_DELTA_WAL_BYTES,
 };
 
 #[cfg(any(not(unix), test))]
@@ -1227,7 +1228,7 @@ pub fn save_task_watch_registry_checkpoint(
             || Ok(()),
             |daemon| {
                 save_task_watch_registry_checkpoint_anchored(
-                    root, daemon, tasks, watches, task_bytes, None,
+                    root, daemon, tasks, watches, task_bytes, None, None,
                 )
             },
         )
@@ -1235,7 +1236,9 @@ pub fn save_task_watch_registry_checkpoint(
     #[cfg(not(unix))]
     {
         with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
-            save_task_watch_registry_checkpoint_portable(root, tasks, watches, task_bytes, None)
+            save_task_watch_registry_checkpoint_portable(
+                root, tasks, watches, task_bytes, None, None,
+            )
         })
     }
 }
@@ -1264,6 +1267,7 @@ fn save_task_registry_portable(root: &Path, registry: &TaskRegistry) -> Result<(
             registry,
             existing.as_deref(),
             bytes,
+            None,
         )?;
         write_atomically(&path, &bytes)
     })
@@ -1311,6 +1315,7 @@ fn save_task_registry_with_observers(
                 registry,
                 existing.as_deref(),
                 bytes,
+                None,
             )?;
             write_anchored_task_registry(daemon, &path, &bytes, after_temp_sync)
         },
@@ -1384,6 +1389,7 @@ pub(crate) fn save_task_watch_registry_checkpoint_anchored(
     watches: &WatchRegistry,
     task_bytes: Vec<u8>,
     target_delta_revision: Option<u64>,
+    wal_admitted_task_ids: Option<&BTreeSet<String>>,
 ) -> Result<()> {
     let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
@@ -1400,6 +1406,7 @@ pub(crate) fn save_task_watch_registry_checkpoint_anchored(
             tasks,
             resolved.tasks.as_deref(),
             task_bytes,
+            wal_admitted_task_ids,
         )?;
         let canonical_recovery = resolved.canonical_recovery();
         let applied_delta_revision = resolved.applied_delta_revision();
@@ -1496,6 +1503,7 @@ pub(crate) fn save_task_watch_registry_checkpoint_portable(
     watches: &WatchRegistry,
     task_bytes: Vec<u8>,
     target_delta_revision: Option<u64>,
+    wal_admitted_task_ids: Option<&BTreeSet<String>>,
 ) -> Result<()> {
     let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
@@ -1511,6 +1519,7 @@ pub(crate) fn save_task_watch_registry_checkpoint_portable(
             tasks,
             resolved.tasks.as_deref(),
             task_bytes,
+            wal_admitted_task_ids,
         )?;
         let canonical_recovery = resolved.canonical_recovery();
         let applied_delta_revision = resolved.applied_delta_revision();
@@ -1653,9 +1662,16 @@ fn encode_task_registry_preserving_existing(
     registry: &TaskRegistry,
     existing_raw: Option<&[u8]>,
     new_registry_bytes: Vec<u8>,
+    wal_admitted_task_ids: Option<&BTreeSet<String>>,
 ) -> Result<Vec<u8>> {
     let Some(existing_raw) = existing_raw else {
-        validate_task_registry_namespace_bindings(root, registry, None, path)?;
+        validate_task_registry_namespace_bindings(
+            root,
+            registry,
+            None,
+            wal_admitted_task_ids,
+            path,
+        )?;
         return Ok(new_registry_bytes);
     };
     // A present authority must be strict and supported before it can influence
@@ -1663,7 +1679,13 @@ fn encode_task_registry_preserving_existing(
     // legacy-ambiguous state into a newly trusted registry.
     let existing_registry = decode_task_registry(path, existing_raw)?;
     let _ = registry_checkpoint_generation(path, existing_raw, AuthorityJsonProfile::TaskRegistry)?;
-    validate_task_registry_namespace_bindings(root, registry, Some(&existing_registry), path)?;
+    validate_task_registry_namespace_bindings(
+        root,
+        registry,
+        Some(&existing_registry),
+        wal_admitted_task_ids,
+        path,
+    )?;
     let mut root =
         decode_json_value_without_duplicate_keys(existing_raw, AuthorityJsonProfile::TaskRegistry)
             .map_err(|error| {
@@ -2191,15 +2213,40 @@ fn reject_standalone_registry_write(
     })
 }
 
+fn require_daemon_lifecycle_lease(
+    root: &Path,
+    lease: &crate::task_store_lease::TaskStoreLease,
+) -> Result<()> {
+    if lease.role() == crate::task_store_lease::LeaseRole::DaemonLifecycle
+        && lease.matches_root_argument(root)
+    {
+        #[cfg(unix)]
+        lease.validate_namespace_attachment()?;
+        return Ok(());
+    }
+    Err(DaemonCoreError::io(
+        "daemon admission requires the matching daemon task-store lease",
+        root,
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "task-store lease does not own this daemon lifecycle",
+        ),
+    ))
+}
+
 fn validate_task_registry_namespace_bindings(
     root: &Path,
     registry: &TaskRegistry,
     existing_registry: Option<&TaskRegistry>,
+    wal_admitted_task_ids: Option<&BTreeSet<String>>,
     registry_path: &Path,
 ) -> Result<()> {
-    let existing_task_ids = existing_registry
+    let mut existing_task_ids = existing_registry
         .map(|existing| existing.tasks.keys().cloned().collect::<BTreeSet<_>>())
         .unwrap_or_default();
+    if let Some(wal_admitted_task_ids) = wal_admitted_task_ids {
+        existing_task_ids.extend(wal_admitted_task_ids.iter().cloned());
+    }
     let expected_artifacts = registry
         .tasks
         .keys()
