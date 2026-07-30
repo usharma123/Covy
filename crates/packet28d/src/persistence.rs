@@ -125,7 +125,7 @@ trait PersistenceBackend: Send + Sync {
     fn remove_failed_initial_task_storage(
         &self,
         _root: &Path,
-        _authority: Option<&RegistryAdmissionAuthority>,
+        _authority: Option<&mut RegistryAdmissionAuthority>,
         _task_id: &str,
     ) -> Result<()> {
         anyhow::bail!("persistence backend does not support failed-initial-task cleanup")
@@ -189,7 +189,7 @@ impl PersistenceBackend for FilesystemBackend {
     fn remove_failed_initial_task_storage(
         &self,
         root: &Path,
-        authority: Option<&RegistryAdmissionAuthority>,
+        authority: Option<&mut RegistryAdmissionAuthority>,
         task_id: &str,
     ) -> Result<()> {
         let authority = authority
@@ -857,7 +857,7 @@ fn run_worker(
                     .backend
                     .remove_failed_initial_task_storage(
                         &state.root,
-                        image.authority.as_ref(),
+                        image.authority.as_mut(),
                         &task_id,
                     )
                     .map_err(|error| error.to_string());

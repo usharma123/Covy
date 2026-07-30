@@ -2973,8 +2973,10 @@ pub fn remove_failed_initial_task_storage(root: &Path, task_id: &str) -> Result<
 /// Removes failed-initial-task storage while retaining daemon registry authority.
 ///
 /// This is the daemon-owner counterpart to
-/// [`remove_failed_initial_task_storage`]. The caller must serialize this
-/// operation with event publication through the persistence owner.
+/// [`remove_failed_initial_task_storage`]. Its mutable authority borrow
+/// mechanically excludes concurrent authority-based event publication. The
+/// caller must also serialize the operation with queued event publication
+/// through the persistence owner.
 ///
 /// # Errors
 ///
@@ -2984,7 +2986,7 @@ pub fn remove_failed_initial_task_storage(root: &Path, task_id: &str) -> Result<
 /// [`remove_failed_initial_task_storage`].
 pub fn remove_failed_initial_task_storage_with_authority(
     root: &Path,
-    authority: &RegistryAdmissionAuthority,
+    authority: &mut RegistryAdmissionAuthority,
     task_id: &str,
 ) -> Result<()> {
     let task_id = checked_task_storage_id(root, task_id)?;
@@ -5086,6 +5088,13 @@ mod tests {
             .unwrap();
         cleanup.join().unwrap();
         assert!(!task_event_path(root.path(), "retry").exists());
+    }
+
+    #[test]
+    fn authority_cleanup_requires_exclusive_authority_borrow() {
+        let cleanup: fn(&Path, &mut RegistryAdmissionAuthority, &str) -> Result<()> =
+            remove_failed_initial_task_storage_with_authority;
+        let _ = cleanup;
     }
 
     #[test]
