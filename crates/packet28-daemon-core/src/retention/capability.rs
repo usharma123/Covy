@@ -258,6 +258,13 @@ struct AuthenticatedReadDescriptor {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthenticatedReadEntryIdentity {
+    Missing,
+    Retry,
+    Present(FileIdentity),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CapabilityEntryKind {
     Symlink,
     RegularFile,
@@ -1097,9 +1104,13 @@ impl CapabilityDir {
 
     fn open_read_file_once(&self, name: &OsStr) -> io::Result<Option<AuthenticatedReadFile>> {
         self.validate_mutation_authority()?;
-        let expected = self
-            .authenticated_read_entry_identity(name)?
-            .ok_or_else(|| authenticated_read_not_found_error(name))?;
+        let expected = match self.authenticated_read_entry_identity(name)? {
+            AuthenticatedReadEntryIdentity::Missing => {
+                return Err(authenticated_read_not_found_error(name));
+            }
+            AuthenticatedReadEntryIdentity::Retry => return Ok(None),
+            AuthenticatedReadEntryIdentity::Present(identity) => identity,
+        };
         #[cfg(test)]
         maybe_swap_preflight_to_fifo(&self.display_path, name)?;
         let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
@@ -1117,7 +1128,10 @@ impl CapabilityDir {
             "capability managed file",
         )?;
         let current = self.authenticated_read_entry_identity(name)?;
-        if !descriptor.attached || descriptor.identity != expected || current != Some(expected) {
+        if !descriptor.attached
+            || descriptor.identity != expected
+            || current != AuthenticatedReadEntryIdentity::Present(expected)
+        {
             return Ok(None);
         }
         Ok(Some(AuthenticatedReadFile {
@@ -1126,10 +1140,15 @@ impl CapabilityDir {
         }))
     }
 
-    fn authenticated_read_entry_identity(&self, name: &OsStr) -> io::Result<Option<FileIdentity>> {
+    fn authenticated_read_entry_identity(
+        &self,
+        name: &OsStr,
+    ) -> io::Result<AuthenticatedReadEntryIdentity> {
         let stat = match rfs::statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(stat) => stat,
-            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(rustix::io::Errno::NOENT) => {
+                return Ok(AuthenticatedReadEntryIdentity::Missing);
+            }
             Err(source) => return Err(source.into()),
         };
         authenticated_read_entry_identity_from_stat(&stat, name, self.identity.device)
@@ -1148,7 +1167,9 @@ impl CapabilityDir {
             "capability managed file",
         )?;
         let current = self.authenticated_read_entry_identity(name)?;
-        Ok(descriptor.attached && descriptor.identity == expected && current == Some(expected))
+        Ok(descriptor.attached
+            && descriptor.identity == expected
+            && current == AuthenticatedReadEntryIdentity::Present(expected))
     }
 
     pub(super) fn authenticate_regular_file(
@@ -2796,7 +2817,16 @@ fn open_new_directory_permission_handle(parent: &OwnedFd, name: &OsStr) -> io::R
     rfs::openat(parent, name, DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)
 }
 
-#[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn set_new_directory_owner_access(fd: &OwnedFd) -> io::Result<()> {
+    let proc_path = PathBuf::from(format!(
+        "/proc/self/fd/{}",
+        std::os::fd::AsRawFd::as_raw_fd(fd)
+    ));
+    rfs::chmodat(rfs::CWD, &proc_path, Mode::RWXU, AtFlags::empty()).map_err(io::Error::from)
+}
+
+#[cfg(target_os = "freebsd")]
 fn set_new_directory_owner_access(fd: &OwnedFd) -> io::Result<()> {
     rfs::chmodat(fd, OsStr::new("."), Mode::RWXU, AtFlags::empty()).map_err(io::Error::from)
 }
@@ -3741,17 +3771,19 @@ fn authenticated_read_entry_identity_from_stat(
     stat: &rfs::Stat,
     name: &OsStr,
     expected_device: u64,
-) -> io::Result<Option<FileIdentity>> {
+) -> io::Result<AuthenticatedReadEntryIdentity> {
     validate_owned_regular_read_snapshot(stat, name, expected_device, "capability managed file")?;
     // Darwin may report the old inode with zero links when `fstatat` races an
     // atomic replacement. This is the path-side equivalent of an already-open
     // descriptor becoming detached: retry it, but continue to reject hard
     // links and every other failed authentication above.
     if stat.st_nlink == 0 {
-        return Ok(None);
+        return Ok(AuthenticatedReadEntryIdentity::Retry);
     }
     validate_authenticated_read_mode(stat, name)?;
-    Ok(Some(identity_from_stat(stat)))
+    Ok(AuthenticatedReadEntryIdentity::Present(identity_from_stat(
+        stat,
+    )))
 }
 
 fn authenticate_read_descriptor(
@@ -5963,7 +5995,7 @@ mod tests {
             authenticated_read_entry_identity_from_stat(&stat, name, stable_device_id(stat.st_dev))
                 .unwrap();
 
-        assert_eq!(identity, None);
+        assert_eq!(identity, AuthenticatedReadEntryIdentity::Retry);
     }
 
     #[test]

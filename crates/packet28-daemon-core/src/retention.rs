@@ -7346,10 +7346,24 @@ fn push_issue(issues: &mut Vec<TaskStoreIssue>, kind: &str, path: &Path, message
         issues,
         TaskStoreIssue {
             kind: kind.to_string(),
-            path: path.display().to_string(),
+            path: diagnostic_path(path),
             message,
         },
     );
+}
+
+fn diagnostic_path(path: &Path) -> String {
+    let display = path.display().to_string();
+    #[cfg(unix)]
+    if path.to_str().is_none() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        return format!(
+            "{display} [raw-path-digest:{}]",
+            blake3::hash(path.as_os_str().as_bytes())
+        );
+    }
+    display
 }
 
 fn push_owned_issue(issues: &mut Vec<TaskStoreIssue>, issue: TaskStoreIssue) {
@@ -12861,6 +12875,7 @@ mod tests {
         let mut snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
         let mut plan = build_plan(&snapshot, RetentionOptions::dry_run(Some(1), None).apply());
         let task_dir = task_artifact_dir(root.path(), "raced");
+        let old_directory = fs::File::open(&task_dir).unwrap();
         fs::remove_dir_all(&task_dir).unwrap();
         write_artifact(root.path(), "raced", b"new", 10);
         let (lease, admission) = acquire_retention_guards(root.path());
@@ -12869,6 +12884,7 @@ mod tests {
 
         assert_eq!(plan.actions[0].outcome, RetentionOutcome::Skipped);
         assert_eq!(fs::read(task_dir.join("payload.bin")).unwrap(), b"new");
+        drop(old_directory);
     }
 
     #[cfg(unix)]
