@@ -127,6 +127,35 @@ fn test_mcp_proxy_defaults_upstream_initialize_tool_and_reverse_calls_to_newline
         1
     );
 
+    write_mcp_message(
+        &mut server,
+        &json!([{
+            "jsonrpc":"2.0",
+            "id":4,
+            "method":"tools/call",
+            "params":{"name":"newline.echo","arguments":{}}
+        }]),
+    );
+    let batched_roots_request =
+        read_until(&mut server, |message| message["method"] == "roots/list");
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":batched_roots_request["id"],
+            "result":{"roots":[]}
+        }),
+    );
+    let batched_tool_response = read_until(&mut server, |message| {
+        message
+            .as_array()
+            .is_some_and(|responses| responses.iter().any(|response| response["id"] == json!(4)))
+    });
+    assert_eq!(
+        batched_tool_response[0]["result"]["structuredContent"]["root_count"],
+        0
+    );
+
     stop_mcp_server(server);
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

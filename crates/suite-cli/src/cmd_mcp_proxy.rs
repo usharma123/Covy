@@ -122,7 +122,7 @@ async fn serve_proxy_stdio_async(
         if let Ok(mut guard) = session.lock() {
             guard.framing = Some(framing);
         }
-        if request.is_array() {
+        if request.is_array() && is_client_response_payload(&request) {
             let response =
                 dispatch_proxy_payload(&root, &session, &upstreams, &catalog, request).await;
             let response = match response {
@@ -142,8 +142,8 @@ async fn serve_proxy_stdio_async(
         }
 
         let method = request.get("method").and_then(Value::as_str);
-        let process_inline =
-            method.is_none() || request.get("id").is_none() || method == Some("initialize");
+        let process_inline = !request.is_array()
+            && (method.is_none() || request.get("id").is_none() || method == Some("initialize"));
         if process_inline {
             let response =
                 dispatch_proxy_message(&root, &session, &upstreams, &catalog, request).await;
@@ -164,10 +164,20 @@ async fn serve_proxy_stdio_async(
         }
 
         // Initialization above remains the ordering barrier. Normal client
-        // requests continue concurrently, bounded by the shared inflight limit.
-        let permit = match inflight.clone().acquire_owned().await {
+        // requests and request batches continue concurrently so the sole stdin
+        // reader remains available for upstream reverse-request responses.
+        let permit = match inflight.clone().try_acquire_owned() {
             Ok(permit) => permit,
-            Err(_) => {
+            Err(tokio::sync::TryAcquireError::NoPermits) => {
+                if let Some(response) = proxy_overload_response(&request) {
+                    if let Err(error) = output.send(response, framing).await {
+                        serve_result = Err(error);
+                        break;
+                    }
+                }
+                continue;
+            }
+            Err(tokio::sync::TryAcquireError::Closed) => {
                 serve_result = Err(anyhow!("MCP proxy request queue closed"));
                 break;
             }
@@ -179,9 +189,12 @@ async fn serve_proxy_stdio_async(
         let output = output.clone();
         requests.spawn(async move {
             let _permit = permit;
-            if let Some(response) =
+            let response = if request.is_array() {
+                dispatch_proxy_payload(&root, &session, &upstreams, &catalog, request).await?
+            } else {
                 dispatch_proxy_message(&root, &session, &upstreams, &catalog, request).await?
-            {
+            };
+            if let Some(response) = response {
                 output.send(response, framing).await?;
             }
             Ok(())
@@ -266,8 +279,18 @@ async fn dispatch_proxy_payload(
             &format!("JSON-RPC batch member limit exceeded ({MAX_MCP_BATCH_MESSAGES})"),
         )])));
     }
-    let mut responses = Vec::new();
+    let mut pending_requests = Vec::with_capacity(requests.len());
     for request in requests {
+        if is_client_response_message(&request)
+            && upstreams.forward_client_response(&request).await?
+        {
+            continue;
+        }
+        pending_requests.push(request);
+    }
+
+    let mut responses = Vec::new();
+    for request in pending_requests {
         if let Some(response) =
             dispatch_proxy_message(root, session, upstreams, catalog, request).await?
         {
@@ -275,6 +298,33 @@ async fn dispatch_proxy_payload(
         }
     }
     Ok((!responses.is_empty()).then_some(Value::Array(responses)))
+}
+
+fn is_client_response_payload(payload: &Value) -> bool {
+    payload.as_array().is_some_and(|messages| {
+        !messages.is_empty() && messages.iter().all(is_client_response_message)
+    })
+}
+
+fn is_client_response_message(message: &Value) -> bool {
+    message
+        .as_object()
+        .is_some_and(|object| object.contains_key("id") && !object.contains_key("method"))
+}
+
+fn proxy_overload_response(request: &Value) -> Option<Value> {
+    let has_response = request.as_array().map_or_else(
+        || request.get("id").is_some(),
+        |requests| requests.iter().any(|request| request.get("id").is_some()),
+    );
+    has_response.then(|| {
+        let response = mcp_error_response(Value::Null, -32000, "MCP proxy inflight limit reached");
+        if request.is_array() {
+            Value::Array(vec![response])
+        } else {
+            response
+        }
+    })
 }
 
 async fn dispatch_proxy_message(
