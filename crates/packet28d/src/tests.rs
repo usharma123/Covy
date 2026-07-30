@@ -17,6 +17,7 @@ mod handoff;
 mod instruction_resolution;
 mod persistence;
 mod plan_validation;
+mod replan;
 mod search;
 pub(crate) mod support;
 mod transport_runtime;

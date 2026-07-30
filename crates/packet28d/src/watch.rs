@@ -645,6 +645,32 @@ where
                 }
                 return Ok(Some(response));
             }
+            Err(err) if rerun => {
+                let emitted = emit_task_event_for_generation(
+                    state.clone(),
+                    task_id,
+                    generation.id(),
+                    "task_failed",
+                    json!({"task_id": task_id, "error": err.to_string()}),
+                );
+                match emitted {
+                    Ok(true) if !generation.is_cancelled() => {}
+                    Ok(_) => {
+                        return Err(context_kernel_core::KernelError::SequenceCancelled {
+                            task_id: Some(task_id.to_string()),
+                        }
+                        .into());
+                    }
+                    Err(error) if !generation.is_cancelled() => {
+                        daemon_log(&format!(
+                            "failed to persist task_failed before owned rerun task_id={task_id}: \
+                             {error:#}"
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
+                continue;
+            }
             Err(err) => {
                 let _ = emit_task_event_for_generation(
                     state.clone(),
