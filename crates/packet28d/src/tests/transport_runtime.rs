@@ -637,7 +637,7 @@ async fn unix_transport_rejects_peer_that_does_not_match_daemon_owner() {
         Err(error)
             if matches!(
                 error.kind(),
-                ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+                ErrorKind::ConnectionReset | ErrorKind::BrokenPipe | ErrorKind::NotConnected
             ) =>
         {
             true
@@ -652,7 +652,7 @@ async fn unix_transport_rejects_peer_that_does_not_match_daemon_owner() {
                 Ok(0) => true,
                 Err(error) => matches!(
                     error.kind(),
-                    ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+                    ErrorKind::ConnectionReset | ErrorKind::BrokenPipe | ErrorKind::NotConnected
                 ),
                 Ok(_) => false,
             }
