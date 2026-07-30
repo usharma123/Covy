@@ -8,7 +8,7 @@ mod process_harness;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 use process_harness::{HarnessLimits, McpHarness};
@@ -88,6 +88,66 @@ fn workspace_packet28_version() -> String {
         .as_str()
         .unwrap()
         .to_string()
+}
+
+#[test]
+#[cfg(unix)]
+fn test_idle_mcp_session_releases_task_store_for_retention() {
+    use packet28_daemon_core::task_store_lease::try_acquire_task_store_retention_lease;
+
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    let mut server = start_mcp_server(dir.path());
+
+    write_mcp_message_newline(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{
+                "protocolVersion":"2025-03-26",
+                "capabilities":{},
+                "clientInfo":{"name":"retention-test","version":"1"}
+            }
+        }),
+    );
+    assert_eq!(read_mcp_message_newline(&mut server)["id"], 1);
+
+    let stop = mcp_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        stop.status.success(),
+        "daemon stop failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&stop.stdout),
+        String::from_utf8_lossy(&stop.stderr)
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let retention = loop {
+        if let Some(retention) = try_acquire_task_store_retention_lease(dir.path()).unwrap() {
+            break retention;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "idle MCP session retained the task-store writer lease"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    drop(retention);
+
+    write_mcp_message_newline(
+        &mut server,
+        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    );
+    assert_eq!(read_mcp_message_newline(&mut server)["id"], 2);
+
+    server
+        .finish(MCP_SHUTDOWN_TIMEOUT)
+        .unwrap_or_else(|error| panic!("failed to stop newline MCP server: {error}"));
 }
 
 #[test]

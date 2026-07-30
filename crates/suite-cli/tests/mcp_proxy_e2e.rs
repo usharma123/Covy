@@ -67,6 +67,8 @@ fn read_until(
 #[test]
 #[cfg(unix)]
 fn test_mcp_proxy_defaults_upstream_initialize_tool_and_reverse_calls_to_newline_json() {
+    use packet28_daemon_core::task_store_lease::try_acquire_task_store_retention_lease;
+
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();
     init_repo(dir.path());
@@ -156,11 +158,30 @@ fn test_mcp_proxy_defaults_upstream_initialize_tool_and_reverse_calls_to_newline
         0
     );
 
-    stop_mcp_server(server);
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
         .assert()
         .success();
+    let retention_deadline = Instant::now() + Duration::from_secs(5);
+    let retention = loop {
+        if let Some(retention) = try_acquire_task_store_retention_lease(dir.path()).unwrap() {
+            break retention;
+        }
+        assert!(
+            Instant::now() < retention_deadline,
+            "idle MCP proxy session retained the task-store writer lease"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    drop(retention);
+
+    write_mcp_message(
+        &mut server,
+        &json!({"jsonrpc":"2.0","id":5,"method":"prompts/list"}),
+    );
+    assert_eq!(read_mcp_message_for_id(&mut server, 5)["id"], 5);
+
+    stop_mcp_server(server);
 }
 
 #[test]

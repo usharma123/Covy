@@ -10,7 +10,6 @@ use clap::{Args, Subcommand, ValueEnum};
 use packet28_daemon_core::storage::{
     load_task_events, load_task_events_from_offset, task_event_log_len,
 };
-use packet28_daemon_core::task_store_lease::acquire_task_store_writer_lease;
 use packet28_daemon_protocol::broker::{
     BrokerAction, BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
     BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
@@ -234,7 +233,6 @@ pub fn run(args: McpArgs) -> Result<i32> {
 fn run_serve(args: McpServeArgs) -> Result<i32> {
     let root = crate::broker_client::resolve_root(&args.root);
     crate::broker_client::ensure_daemon(&root)?;
-    let _writer_lease = acquire_task_store_writer_lease(&root)?;
     serve_stdio(root, args.toolset)?;
     Ok(0)
 }
@@ -242,7 +240,6 @@ fn run_serve(args: McpServeArgs) -> Result<i32> {
 fn run_proxy(args: McpProxyArgs) -> Result<i32> {
     let root = crate::broker_client::resolve_root(&args.root);
     crate::broker_client::ensure_daemon(&root)?;
-    let _writer_lease = acquire_task_store_writer_lease(&root)?;
     let config_path = crate::cmd_common::resolve_path_from_cwd(
         &args.upstream_config,
         &crate::cmd_common::caller_cwd()?,
