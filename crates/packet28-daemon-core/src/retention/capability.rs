@@ -1622,7 +1622,7 @@ impl CapabilityDir {
         Err(unique_name_attempts_exhausted("append-file initializer"))
     }
 
-    fn open_existing_append_file(&self, name: &OsStr) -> io::Result<Option<File>> {
+    pub(super) fn open_existing_append_file(&self, name: &OsStr) -> io::Result<Option<File>> {
         let preflight = match rfs::statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(stat) => stat,
             Err(rustix::io::Errno::NOENT) => return Ok(None),

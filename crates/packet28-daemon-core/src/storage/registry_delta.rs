@@ -1,8 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(unix)]
+use std::ffi::OsStr;
+#[cfg(unix)]
+use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 
 use packet28_daemon_protocol::task::{TaskRecord, TaskRegistry, WatchRegistration, WatchRegistry};
+#[cfg(not(unix))]
 use packet28_state_fs::{FileAccess, StateDir, StateFile};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -622,8 +627,13 @@ pub fn load_registry_admission_authority(
     lease: crate::task_store_lease::TaskStoreLease,
 ) -> Result<RegistryAdmissionAuthority> {
     require_daemon_lifecycle_lease(root, &lease)?;
+    #[cfg(unix)]
+    let daemon = lease.daemon_capability()?;
     let registry_authority_lease =
         crate::task_store_lease::acquire_daemon_registry_authority(&lease)?;
+    #[cfg(unix)]
+    let loaded = load_task_watch_registry_with_deltas_under_admission(root, &daemon)?;
+    #[cfg(not(unix))]
     let loaded = load_task_watch_registry_with_deltas_under_admission(root)?;
     Ok(RegistryAdmissionAuthority {
         root: root.to_path_buf(),
@@ -656,16 +666,19 @@ pub fn append_task_watch_registry_delta(
 
     #[cfg(unix)]
     {
+        let retained_daemon = writer_lease.daemon_capability()?;
         with_anchored_task_registry_lock(
             root,
             RegistryLockMode::Exclusive,
             || Ok(()),
-            |daemon| {
-                let current = load_under_task_lock_anchored(root, daemon)?;
+            |locked_daemon| {
+                validate_retained_registry_daemon(root, locked_daemon, &retained_daemon)?;
+                let current = load_under_task_lock_anchored(root, &retained_daemon)?;
                 validate_registry_delta_namespace_admission(root, &current.tasks, batch)?;
                 prepare_registry_delta_candidate(root, &current.tasks, &current.watches, batch)?;
                 append_under_task_lock(
                     root,
+                    &retained_daemon,
                     revisions,
                     &prepared.header,
                     &prepared.payload,
@@ -733,11 +746,13 @@ pub fn append_task_watch_registry_delta_with_authority(
 
     #[cfg(unix)]
     let candidate = {
+        let retained_daemon = authority.lease.daemon_capability()?;
         with_anchored_task_registry_lock(
             root,
             RegistryLockMode::Exclusive,
             || Ok(()),
-            |_daemon| {
+            |locked_daemon| {
+                validate_retained_registry_daemon(root, locked_daemon, &retained_daemon)?;
                 validate_registry_delta_namespace_admission(root, &authority.tasks, batch)?;
                 let candidate = prepare_registry_delta_candidate(
                     root,
@@ -747,6 +762,7 @@ pub fn append_task_watch_registry_delta_with_authority(
                 )?;
                 append_under_task_lock(
                     root,
+                    &retained_daemon,
                     revisions,
                     &prepared.header,
                     &prepared.payload,
@@ -899,6 +915,32 @@ fn invalid_registry_authority_root(root: &Path) -> DaemonCoreError {
     )
 }
 
+#[cfg(unix)]
+fn validate_retained_registry_daemon(
+    root: &Path,
+    locked: &CapabilityDir,
+    retained: &CapabilityDir,
+) -> Result<()> {
+    retained
+        .validate_display_path_attachment()
+        .map_err(|source| DaemonCoreError::StorageMutationAuthorityLost {
+            operation: "registry-delta retained daemon validation",
+            path: daemon_dir(root),
+            source,
+        })?;
+    if locked.identity() != retained.identity() {
+        return Err(DaemonCoreError::StorageMutationAuthorityLost {
+            operation: "registry-delta retained daemon validation",
+            path: daemon_dir(root),
+            source: std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "task-registry lock and retained daemon authority name different directories",
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Loads one committed checkpoint and replays every newer valid WAL frame.
 ///
 /// A crash-torn final frame is truncated and synchronized under the exclusive
@@ -911,29 +953,40 @@ fn invalid_registry_authority_root(root: &Path) -> DaemonCoreError {
 /// [`load_task_watch_registry_checkpoint_with_event_tails`], plus typed WAL
 /// corruption, size, path-safety, and repair errors.
 pub fn load_task_watch_registry_with_deltas(root: &Path) -> Result<LoadedTaskWatchRegistry> {
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    #[cfg(unix)]
+    {
+        let daemon = writer_lease.daemon_capability()?;
+        load_task_watch_registry_with_deltas_under_admission(root, &daemon)
+    }
+    #[cfg(not(unix))]
     load_task_watch_registry_with_deltas_under_admission(root)
 }
 
+#[cfg(unix)]
+fn load_task_watch_registry_with_deltas_under_admission(
+    root: &Path,
+    retained_daemon: &CapabilityDir,
+) -> Result<LoadedTaskWatchRegistry> {
+    with_anchored_task_registry_lock(
+        root,
+        RegistryLockMode::Exclusive,
+        || Ok(()),
+        |locked_daemon| {
+            validate_retained_registry_daemon(root, locked_daemon, retained_daemon)?;
+            load_under_task_lock_anchored(root, retained_daemon)
+        },
+    )
+}
+
+#[cfg(not(unix))]
 fn load_task_watch_registry_with_deltas_under_admission(
     root: &Path,
 ) -> Result<LoadedTaskWatchRegistry> {
-    #[cfg(unix)]
-    {
-        with_anchored_task_registry_lock(
-            root,
-            RegistryLockMode::Exclusive,
-            || Ok(()),
-            |daemon| load_under_task_lock_anchored(root, daemon),
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        let task_path = task_registry_path(root);
-        with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
-            load_under_task_lock_portable(root)
-        })
-    }
+    let task_path = task_registry_path(root);
+    with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
+        load_under_task_lock_portable(root)
+    })
 }
 
 /// Loads checkpoint-plus-WAL registry authority and authenticated event tails
@@ -949,12 +1002,14 @@ pub fn load_task_watch_registry_with_deltas_and_event_tails(
     let writer_lease = acquire_task_store_writer_lease(root)?;
     #[cfg(unix)]
     {
+        let retained_daemon = writer_lease.daemon_capability()?;
         with_anchored_task_registry_lock(
             root,
             RegistryLockMode::Exclusive,
             || Ok(()),
-            |daemon| {
-                let loaded = load_under_task_lock_anchored(root, daemon)?;
+            |locked_daemon| {
+                validate_retained_registry_daemon(root, locked_daemon, &retained_daemon)?;
+                let loaded = load_under_task_lock_anchored(root, &retained_daemon)?;
                 let mut tails = BTreeMap::new();
                 for task_id in loaded.tasks.tasks.keys() {
                     let storage_id = checked_task_storage_id(root, task_id)?;
@@ -1010,8 +1065,16 @@ pub fn save_task_watch_registry_checkpoint_at_revision(
     let _ = encode_watch_registry(&watch_path, watches, None)?;
     let writer_lease = acquire_task_store_writer_lease(root)?;
     let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
+    #[cfg(unix)]
+    let daemon = writer_lease.daemon_capability()?;
     save_task_watch_registry_checkpoint_at_revision_under_admission(
-        root, tasks, watches, revision, task_bytes,
+        root,
+        tasks,
+        watches,
+        revision,
+        task_bytes,
+        #[cfg(unix)]
+        &daemon,
     )
 }
 
@@ -1043,8 +1106,16 @@ pub fn save_task_watch_registry_checkpoint_at_revision_with_authority(
     let watch_path = watch_registry_path(root);
     let task_bytes = encode_task_registry(&task_path, tasks)?;
     let _ = encode_watch_registry(&watch_path, watches, None)?;
+    #[cfg(unix)]
+    let daemon = authority.lease().daemon_capability()?;
     save_task_watch_registry_checkpoint_at_revision_under_admission(
-        root, tasks, watches, revision, task_bytes,
+        root,
+        tasks,
+        watches,
+        revision,
+        task_bytes,
+        #[cfg(unix)]
+        &daemon,
     )
 }
 
@@ -1054,6 +1125,7 @@ fn save_task_watch_registry_checkpoint_at_revision_under_admission(
     watches: &WatchRegistry,
     revision: RegistryRevision,
     task_bytes: Vec<u8>,
+    #[cfg(unix)] retained_daemon: &CapabilityDir,
 ) -> Result<()> {
     #[cfg(unix)]
     {
@@ -1061,19 +1133,21 @@ fn save_task_watch_registry_checkpoint_at_revision_under_admission(
             root,
             RegistryLockMode::Exclusive,
             || Ok(()),
-            |daemon| {
-                let authority = load_under_task_lock_anchored_with_admissions(root, daemon)?;
+            |locked_daemon| {
+                validate_retained_registry_daemon(root, locked_daemon, retained_daemon)?;
+                let authority =
+                    load_under_task_lock_anchored_with_admissions(root, retained_daemon)?;
                 validate_checkpoint_candidate(root, &authority.loaded, tasks, watches, revision)?;
                 save_task_watch_registry_checkpoint_anchored(
                     root,
-                    daemon,
+                    retained_daemon,
                     tasks,
                     watches,
                     task_bytes,
                     Some(revision.get()),
                     Some(&authority.wal_admitted_task_ids),
                 )?;
-                reset_wal(root, revision)
+                reset_wal(root, retained_daemon, revision)
             },
         )
     }
@@ -1110,8 +1184,10 @@ fn load_under_task_lock_anchored_with_admissions(
 ) -> Result<LoadedRegistryAuthority> {
     let loaded =
         load_task_watch_registry_checkpoint_with_delta_revision_under_task_lock(root, daemon)?;
+    let wal = open_anchored_registry_wal(daemon, root)?;
     replay_wal_with_admissions(
         root,
+        wal,
         loaded.tasks,
         loaded.watches,
         RegistryRevision::new(loaded.applied_delta_revision),
@@ -1127,8 +1203,14 @@ fn load_under_task_lock_portable(root: &Path) -> Result<LoadedTaskWatchRegistry>
 fn load_under_task_lock_portable_with_admissions(root: &Path) -> Result<LoadedRegistryAuthority> {
     let loaded =
         load_task_watch_registry_checkpoint_with_delta_revision_portable_under_task_lock(root)?;
+    let path = registry_delta_wal_path(root);
+    let state = open_daemon_state(root)?;
+    let wal = state
+        .open_existing(REGISTRY_DELTA_WAL_FILE_NAME, FileAccess::ReadWrite)
+        .map_err(|source| wal_io("failed to open registry delta WAL", &path, source))?;
     replay_wal_with_admissions(
         root,
+        wal,
         loaded.tasks,
         loaded.watches,
         RegistryRevision::new(loaded.applied_delta_revision),
@@ -1140,19 +1222,16 @@ struct LoadedRegistryAuthority {
     wal_admitted_task_ids: BTreeSet<String>,
 }
 
-fn replay_wal_with_admissions(
+fn replay_wal_with_admissions<W: RegistryWalFile>(
     root: &Path,
+    wal: Option<W>,
     mut tasks: TaskRegistry,
     mut watches: WatchRegistry,
     checkpoint_revision: RegistryRevision,
 ) -> Result<LoadedRegistryAuthority> {
     let checkpoint_task_ids = tasks.tasks.keys().cloned().collect::<BTreeSet<_>>();
     let path = registry_delta_wal_path(root);
-    let state = open_daemon_state(root)?;
-    let Some(mut wal) = state
-        .open_existing(REGISTRY_DELTA_WAL_FILE_NAME, FileAccess::ReadWrite)
-        .map_err(|source| wal_io("failed to open registry delta WAL", &path, source))?
-    else {
+    let Some(mut wal) = wal else {
         return Ok(LoadedRegistryAuthority {
             loaded: LoadedTaskWatchRegistry {
                 tasks,
@@ -1228,52 +1307,15 @@ fn replay_wal_with_admissions(
     })
 }
 
-fn append_under_task_lock(
+fn append_to_wal(
     root: &Path,
+    mut wal: impl RegistryWalFile,
     revisions: RegistryRevisionRange,
     frame_header: &[u8; FRAME_HEADER_BYTES],
     payload: &[u8],
     frame_footer: &[u8; FRAME_FOOTER_BYTES],
-    checkpoint_revision: impl FnOnce() -> Result<RegistryRevision>,
 ) -> Result<()> {
     let path = registry_delta_wal_path(root);
-    let state = open_daemon_state(root)?;
-    let mut wal = match state
-        .open_existing(REGISTRY_DELTA_WAL_FILE_NAME, FileAccess::ReadWrite)
-        .map_err(|source| wal_io("failed to open registry delta WAL", &path, source))?
-    {
-        Some(wal) => wal,
-        None => {
-            let checkpoint_revision = checkpoint_revision()?;
-            state
-                .write_atomic(
-                    REGISTRY_DELTA_WAL_FILE_NAME,
-                    &encode_wal_header(checkpoint_revision),
-                )
-                .map_err(|source| {
-                    wal_io("failed to initialize registry delta WAL", &path, source)
-                })?;
-            state
-                .open_existing(REGISTRY_DELTA_WAL_FILE_NAME, FileAccess::ReadWrite)
-                .map_err(|source| {
-                    wal_io(
-                        "failed to reopen initialized registry delta WAL",
-                        &path,
-                        source,
-                    )
-                })?
-                .ok_or_else(|| {
-                    wal_io(
-                        "failed to reopen initialized registry delta WAL",
-                        &path,
-                        std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "initialized WAL is missing",
-                        ),
-                    )
-                })?
-        }
-    };
     let inspection = inspect_wal_tail(&mut wal, &path)?;
     if let Some(last_frame) = inspection.last_frame {
         verify_last_frame_payload(&mut wal, &path, last_frame)?;
@@ -1357,6 +1399,163 @@ fn append_under_task_lock(
         })
 }
 
+#[cfg(unix)]
+fn append_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+    revisions: RegistryRevisionRange,
+    frame_header: &[u8; FRAME_HEADER_BYTES],
+    payload: &[u8],
+    frame_footer: &[u8; FRAME_FOOTER_BYTES],
+    checkpoint_revision: impl FnOnce() -> Result<RegistryRevision>,
+) -> Result<()> {
+    let wal = match open_anchored_registry_wal(daemon, root)? {
+        Some(wal) => wal,
+        None => {
+            initialize_anchored_registry_wal(daemon, root, checkpoint_revision()?)?;
+            open_anchored_registry_wal(daemon, root)?.ok_or_else(|| {
+                wal_io(
+                    "failed to reopen initialized registry delta WAL",
+                    registry_delta_wal_path(root),
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "initialized WAL is missing"),
+                )
+            })?
+        }
+    };
+    append_to_wal(root, wal, revisions, frame_header, payload, frame_footer)
+}
+
+#[cfg(not(unix))]
+fn append_under_task_lock(
+    root: &Path,
+    revisions: RegistryRevisionRange,
+    frame_header: &[u8; FRAME_HEADER_BYTES],
+    payload: &[u8],
+    frame_footer: &[u8; FRAME_FOOTER_BYTES],
+    checkpoint_revision: impl FnOnce() -> Result<RegistryRevision>,
+) -> Result<()> {
+    let path = registry_delta_wal_path(root);
+    let state = open_daemon_state(root)?;
+    let wal = match state
+        .open_existing(REGISTRY_DELTA_WAL_FILE_NAME, FileAccess::ReadWrite)
+        .map_err(|source| wal_io("failed to open registry delta WAL", &path, source))?
+    {
+        Some(wal) => wal,
+        None => {
+            state
+                .write_atomic(
+                    REGISTRY_DELTA_WAL_FILE_NAME,
+                    &encode_wal_header(checkpoint_revision()?),
+                )
+                .map_err(|source| {
+                    wal_io("failed to initialize registry delta WAL", &path, source)
+                })?;
+            state
+                .open_existing(REGISTRY_DELTA_WAL_FILE_NAME, FileAccess::ReadWrite)
+                .map_err(|source| {
+                    wal_io(
+                        "failed to reopen initialized registry delta WAL",
+                        &path,
+                        source,
+                    )
+                })?
+                .ok_or_else(|| {
+                    wal_io(
+                        "failed to reopen initialized registry delta WAL",
+                        &path,
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "initialized WAL is missing",
+                        ),
+                    )
+                })?
+        }
+    };
+    append_to_wal(root, wal, revisions, frame_header, payload, frame_footer)
+}
+
+#[cfg(unix)]
+fn open_anchored_registry_wal<'a>(
+    daemon: &'a CapabilityDir,
+    root: &Path,
+) -> Result<Option<AnchoredRegistryWal<'a>>> {
+    let name = OsStr::new(REGISTRY_DELTA_WAL_FILE_NAME);
+    let path = registry_delta_wal_path(root);
+    let Some(metadata) = daemon
+        .entry_metadata(name)
+        .map_err(|source| wal_io("failed to inspect registry delta WAL", &path, source))?
+    else {
+        return Ok(None);
+    };
+    let Some(file) = daemon
+        .open_existing_append_file(name)
+        .map_err(|source| wal_io("failed to open registry delta WAL", &path, source))?
+    else {
+        return Err(wal_io(
+            "failed to open registry delta WAL",
+            path,
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "registry delta WAL disappeared during authenticated open",
+            ),
+        ));
+    };
+    let wal = AnchoredRegistryWal {
+        daemon,
+        file,
+        identity: metadata.identity,
+    };
+    wal.validate_attachment()
+        .map_err(|source| DaemonCoreError::StorageMutationAuthorityLost {
+            operation: "registry-delta WAL open",
+            path,
+            source,
+        })?;
+    Ok(Some(wal))
+}
+
+#[cfg(unix)]
+fn initialize_anchored_registry_wal(
+    daemon: &CapabilityDir,
+    root: &Path,
+    revision: RegistryRevision,
+) -> Result<()> {
+    let path = registry_delta_wal_path(root);
+    daemon
+        .write_json_atomically(
+            OsStr::new(REGISTRY_DELTA_WAL_FILE_NAME),
+            &encode_wal_header(revision),
+            ".registry-delta-wal-write",
+        )
+        .map_err(|error| {
+            wal_io(
+                "failed to initialize registry delta WAL",
+                path,
+                error.source,
+            )
+        })
+}
+
+#[cfg(unix)]
+fn reset_wal(root: &Path, daemon: &CapabilityDir, revision: RegistryRevision) -> Result<()> {
+    let path = registry_delta_wal_path(root);
+    let _authenticated_existing_wal = open_anchored_registry_wal(daemon, root)?;
+    daemon
+        .write_json_atomically(
+            OsStr::new(REGISTRY_DELTA_WAL_FILE_NAME),
+            &encode_wal_header(revision),
+            ".registry-delta-wal-write",
+        )
+        .map_err(|error| {
+            wal_io(
+                "failed to reset committed registry delta WAL",
+                path,
+                error.source,
+            )
+        })
+}
+
+#[cfg(not(unix))]
 fn reset_wal(root: &Path, revision: RegistryRevision) -> Result<()> {
     let path = registry_delta_wal_path(root);
     let state = open_daemon_state(root)?;
@@ -1429,10 +1628,59 @@ fn validate_checkpoint_candidate(
     Ok(())
 }
 
+#[cfg(not(unix))]
 fn open_daemon_state(root: &Path) -> Result<StateDir> {
     let path = daemon_dir(root);
     StateDir::open(root, &[".packet28", "daemon"], true)
         .map_err(|source| wal_io("failed to open registry delta WAL directory", path, source))
+}
+
+trait RegistryWalFile {
+    fn file_mut(&mut self) -> &mut std::fs::File;
+    fn len(&self) -> std::io::Result<u64>;
+    fn validate_attachment(&self) -> std::io::Result<()>;
+}
+
+#[cfg(not(unix))]
+impl RegistryWalFile for StateFile {
+    fn file_mut(&mut self) -> &mut std::fs::File {
+        StateFile::file_mut(self)
+    }
+
+    fn len(&self) -> std::io::Result<u64> {
+        StateFile::len(self)
+    }
+
+    fn validate_attachment(&self) -> std::io::Result<()> {
+        StateFile::validate_attachment(self)
+    }
+}
+
+#[cfg(unix)]
+struct AnchoredRegistryWal<'a> {
+    daemon: &'a CapabilityDir,
+    file: File,
+    identity: crate::retention::FileIdentity,
+}
+
+#[cfg(unix)]
+impl RegistryWalFile for AnchoredRegistryWal<'_> {
+    fn file_mut(&mut self) -> &mut File {
+        &mut self.file
+    }
+
+    fn len(&self) -> std::io::Result<u64> {
+        Ok(self.file.metadata()?.len())
+    }
+
+    fn validate_attachment(&self) -> std::io::Result<()> {
+        self.daemon.validate_display_path_attachment()?;
+        self.daemon.authenticate_regular_file_with_link_count(
+            std::ffi::OsStr::new(REGISTRY_DELTA_WAL_FILE_NAME),
+            self.identity,
+            1,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1452,7 +1700,7 @@ struct FrameTail {
 }
 
 fn scan_wal(
-    wal: &mut StateFile,
+    wal: &mut impl RegistryWalFile,
     path: &Path,
     repair_torn_suffix: bool,
     mut visit: impl FnMut(RegistryRevisionRange, RegistryDeltaBatch) -> Result<()>,
@@ -1477,7 +1725,8 @@ fn scan_wal(
         .seek(SeekFrom::Start(0))
         .map_err(|source| wal_io("failed to seek registry delta WAL", path, source))?;
     let mut wal_header = [0_u8; WAL_HEADER_BYTES];
-    wal.read_exact(&mut wal_header)
+    wal.file_mut()
+        .read_exact(&mut wal_header)
         .map_err(|source| wal_io("failed to read registry delta WAL header", path, source))?;
     let base_revision = decode_wal_header(path, &wal_header)?;
     let mut last_revision = base_revision;
@@ -1505,7 +1754,8 @@ fn scan_wal(
             .seek(SeekFrom::Start(offset))
             .map_err(|source| wal_io("failed to seek registry delta frame", path, source))?;
         let mut frame_header = [0_u8; FRAME_HEADER_BYTES];
-        wal.read_exact(&mut frame_header)
+        wal.file_mut()
+            .read_exact(&mut frame_header)
             .map_err(|source| wal_io("failed to read registry delta frame header", path, source))?;
         let decoded = decode_frame_header(path, offset, &frame_header)?;
         let frame_len = (FRAME_HEADER_BYTES as u64)
@@ -1565,7 +1815,8 @@ fn scan_wal(
             )
         })?;
         payload.resize(payload_len, 0);
-        wal.read_exact(&mut payload)
+        wal.file_mut()
+            .read_exact(&mut payload)
             .map_err(|source| wal_io("failed to read registry delta frame", path, source))?;
         if blake3::hash(&payload).as_bytes() != &decoded.payload_checksum {
             return Err(invalid_wal(
@@ -1586,7 +1837,8 @@ fn scan_wal(
             )
         })?;
         let mut footer = [0_u8; FRAME_FOOTER_BYTES];
-        wal.read_exact(&mut footer)
+        wal.file_mut()
+            .read_exact(&mut footer)
             .map_err(|source| wal_io("failed to read registry delta frame footer", path, source))?;
         decode_frame_footer(path, offset, frame_len, &decoded, &frame_header, &footer)?;
         visit(decoded.revisions, batch)?;
@@ -1613,7 +1865,7 @@ fn scan_wal(
 }
 
 fn payload_len_authenticated_by_final_footer(
-    wal: &mut StateFile,
+    wal: &mut impl RegistryWalFile,
     path: &Path,
     frame_offset: u64,
     file_len: u64,
@@ -1634,7 +1886,7 @@ fn payload_len_authenticated_by_final_footer(
             )
         })?;
     let mut footer = [0_u8; FRAME_FOOTER_BYTES];
-    wal.read_exact(&mut footer).map_err(|source| {
+    wal.file_mut().read_exact(&mut footer).map_err(|source| {
         wal_io(
             "failed to read final registry delta frame footer",
             path,
@@ -1656,7 +1908,7 @@ fn payload_len_authenticated_by_final_footer(
 }
 
 fn repair_or_reject_torn_suffix(
-    wal: &mut StateFile,
+    wal: &mut impl RegistryWalFile,
     path: &Path,
     repair: bool,
     complete_len: u64,
@@ -1691,7 +1943,7 @@ fn repair_or_reject_torn_suffix(
     })
 }
 
-fn inspect_wal_tail(wal: &mut StateFile, path: &Path) -> Result<WalInspection> {
+fn inspect_wal_tail(wal: &mut impl RegistryWalFile, path: &Path) -> Result<WalInspection> {
     let file_len = wal
         .len()
         .map_err(|source| wal_io("failed to inspect registry delta WAL", path, source))?;
@@ -1712,7 +1964,8 @@ fn inspect_wal_tail(wal: &mut StateFile, path: &Path) -> Result<WalInspection> {
         .seek(SeekFrom::Start(0))
         .map_err(|source| wal_io("failed to seek registry delta WAL", path, source))?;
     let mut wal_header = [0_u8; WAL_HEADER_BYTES];
-    wal.read_exact(&mut wal_header)
+    wal.file_mut()
+        .read_exact(&mut wal_header)
         .map_err(|source| wal_io("failed to read registry delta WAL header", path, source))?;
     record_fast_tail_read(WAL_HEADER_BYTES);
     let base_revision = decode_wal_header(path, &wal_header)?;
@@ -1732,7 +1985,8 @@ fn inspect_wal_tail(wal: &mut StateFile, path: &Path) -> Result<WalInspection> {
         .seek(SeekFrom::Start(file_len - FRAME_FOOTER_BYTES as u64))
         .map_err(|source| wal_io("failed to seek registry delta WAL footer", path, source))?;
     let mut footer = [0_u8; FRAME_FOOTER_BYTES];
-    wal.read_exact(&mut footer)
+    wal.file_mut()
+        .read_exact(&mut footer)
         .map_err(|source| wal_io("failed to read registry delta WAL footer", path, source))?;
     record_fast_tail_read(FRAME_FOOTER_BYTES);
     let Some(frame_len) = frame_length_from_footer(&footer) else {
@@ -1748,7 +2002,8 @@ fn inspect_wal_tail(wal: &mut StateFile, path: &Path) -> Result<WalInspection> {
         .seek(SeekFrom::Start(frame_offset))
         .map_err(|source| wal_io("failed to seek final registry delta frame", path, source))?;
     let mut frame_header = [0_u8; FRAME_HEADER_BYTES];
-    wal.read_exact(&mut frame_header)
+    wal.file_mut()
+        .read_exact(&mut frame_header)
         .map_err(|source| wal_io("failed to read final registry delta frame", path, source))?;
     record_fast_tail_read(FRAME_HEADER_BYTES);
     let decoded = match decode_frame_header(path, frame_offset, &frame_header) {
@@ -1788,7 +2043,11 @@ fn inspect_wal_tail(wal: &mut StateFile, path: &Path) -> Result<WalInspection> {
     })
 }
 
-fn verify_last_frame_payload(wal: &mut StateFile, path: &Path, tail: FrameTail) -> Result<()> {
+fn verify_last_frame_payload(
+    wal: &mut impl RegistryWalFile,
+    path: &Path,
+    tail: FrameTail,
+) -> Result<()> {
     wal.file_mut()
         .seek(SeekFrom::Start(
             tail.offset
@@ -1799,7 +2058,8 @@ fn verify_last_frame_payload(wal: &mut StateFile, path: &Path, tail: FrameTail) 
     let payload_len = usize::try_from(tail.payload_len)
         .map_err(|_| invalid_wal(path, "final registry delta payload does not fit memory"))?;
     let mut payload = vec![0_u8; payload_len];
-    wal.read_exact(&mut payload)
+    wal.file_mut()
+        .read_exact(&mut payload)
         .map_err(|source| wal_io("failed to read final registry delta payload", path, source))?;
     record_fast_tail_read(payload_len);
     if blake3::hash(&payload).as_bytes() != &tail.payload_checksum {
@@ -2058,6 +2318,10 @@ fn record_apply_watch_scan() {
 mod tests {
     use std::fs::{self, OpenOptions};
     use std::io::{Seek as _, SeekFrom, Write as _};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+    #[cfg(target_vendor = "apple")]
+    use std::process::Command;
     use std::sync::{mpsc, Arc, Barrier};
     use std::time::Duration;
 
@@ -3168,5 +3432,135 @@ mod tests {
 
         assert!(matches!(error, DaemonCoreError::Io { .. }));
         assert_eq!(fs::read(victim_path).unwrap(), b"victim");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_with_non_owner_write_authority_is_rejected_without_mutation() {
+        let root = tempdir().unwrap();
+        checkpoint(root.path(), [], []);
+        let batch = RegistryDeltaBatch::default();
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &batch,
+        )
+        .unwrap();
+        let path = registry_delta_wal_path(root.path());
+        let before = fs::read(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
+
+        let error = append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(2)).unwrap(),
+            &batch,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::Io { .. }));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o660
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hard_linked_wal_is_rejected_without_append_or_reset() {
+        let root = tempdir().unwrap();
+        checkpoint(root.path(), [], []);
+        let batch = RegistryDeltaBatch::default();
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &batch,
+        )
+        .unwrap();
+        let path = registry_delta_wal_path(root.path());
+        let alias = root.path().join("wal-alias");
+        fs::hard_link(&path, &alias).unwrap();
+        let before = fs::read(&path).unwrap();
+
+        let append_error = append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(2)).unwrap(),
+            &batch,
+        )
+        .unwrap_err();
+        assert!(matches!(append_error, DaemonCoreError::Io { .. }));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read(&alias).unwrap(), before);
+
+        let lease = acquire_task_store_writer_lease(root.path()).unwrap();
+        let daemon = lease.daemon_capability().unwrap();
+        let reset_error = reset_wal(root.path(), &daemon, RegistryRevision::new(1)).unwrap_err();
+        assert!(matches!(reset_error, DaemonCoreError::Io { .. }));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read(alias).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_retained_daemon_never_authorizes_a_replacement_namespace() {
+        let root = tempdir().unwrap();
+        checkpoint(root.path(), [], []);
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &RegistryDeltaBatch::default(),
+        )
+        .unwrap();
+        let lease = acquire_task_store_writer_lease(root.path()).unwrap();
+        let retained = lease.daemon_capability().unwrap();
+        let daemon_path = daemon_dir(root.path());
+        let detached_path = root.path().join(".packet28/detached-daemon");
+        fs::rename(&daemon_path, &detached_path).unwrap();
+        fs::create_dir(&daemon_path).unwrap();
+        fs::set_permissions(&daemon_path, fs::Permissions::from_mode(0o700)).unwrap();
+        let replacement = CapabilityDir::open(&daemon_path).unwrap();
+
+        let error =
+            validate_retained_registry_daemon(root.path(), &replacement, &retained).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::StorageMutationAuthorityLost { .. }
+        ));
+        assert!(!registry_delta_wal_path(root.path()).exists());
+        assert!(detached_path.join(REGISTRY_DELTA_WAL_FILE_NAME).is_file());
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn wal_with_extended_acl_is_rejected_without_mutation() {
+        let root = tempdir().unwrap();
+        checkpoint(root.path(), [], []);
+        let batch = RegistryDeltaBatch::default();
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &batch,
+        )
+        .unwrap();
+        let path = registry_delta_wal_path(root.path());
+        let before = fs::read(&path).unwrap();
+        assert!(Command::new("chmod")
+            .arg("+a")
+            .arg("everyone allow read")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
+
+        let error = append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(2)).unwrap(),
+            &batch,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::Io { .. }));
+        assert_eq!(fs::read(path).unwrap(), before);
     }
 }
