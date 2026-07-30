@@ -544,10 +544,10 @@ fn begin_daemon_shutdown(state: &Arc<Mutex<DaemonState>>) -> DaemonShutdownStart
             guard.index_tx.send(IndexCommand::Shutdown),
         )
     };
-    if cancelled_generations > 0 {
+    if !cancelled_generations.is_empty() {
         daemon_log(&format!(
             "requested cancellation for {} active task generation(s)",
-            cancelled_generations
+            cancelled_generations.len()
         ));
     }
     match fs::remove_file(ready_path(&root)) {
@@ -562,6 +562,11 @@ fn begin_daemon_shutdown(state: &Arc<Mutex<DaemonState>>) -> DaemonShutdownStart
             );
         }
     }
+    record_runtime_result(
+        &mut result,
+        crate::launch::terminate_generations_processes(&cancelled_generations)
+            .context("failed to terminate delegated task processes during daemon shutdown"),
+    );
     DaemonShutdownStart { result }
 }
 

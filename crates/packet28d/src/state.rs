@@ -310,11 +310,12 @@ impl TaskGenerationRegistry {
         true
     }
 
-    pub(crate) fn request_cancel_all(&self) -> usize {
-        for token in self.active.values() {
+    pub(crate) fn request_cancel_all(&self) -> Vec<TaskGenerationToken> {
+        let generations = self.active.values().cloned().collect::<Vec<_>>();
+        for token in &generations {
             token.request_cancel();
         }
-        self.active.len()
+        generations
     }
 }
 

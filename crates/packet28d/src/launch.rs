@@ -140,37 +140,49 @@ fn terminate_and_reap_child(child: &mut Child, process: OwnedChildProcess) -> Re
 }
 
 pub(crate) fn terminate_generation_processes(generation: &TaskGenerationToken) -> Result<()> {
-    for process in generation.children() {
-        if let Err(error) = signal_process_group(process, libc::SIGTERM) {
-            daemon_log(&format!(
-                "failed to terminate task child pid={} error={error:#}",
-                process.pid
-            ));
-        }
-    }
-    if generation.wait_for_children(CHILD_TERMINATION_GRACE) {
+    terminate_generations_processes(std::slice::from_ref(generation))
+}
+
+pub(crate) fn terminate_generations_processes(generations: &[TaskGenerationToken]) -> Result<()> {
+    signal_generation_processes(generations, libc::SIGTERM, "terminate");
+    if wait_for_generation_children(generations, CHILD_TERMINATION_GRACE) {
         return Ok(());
     }
 
-    for process in generation.children() {
-        if let Err(error) = signal_process_group(process, libc::SIGKILL) {
-            daemon_log(&format!(
-                "failed to kill task child pid={} error={error:#}",
-                process.pid
-            ));
-        }
-    }
-    if generation.wait_for_children(CHILD_REAP_TIMEOUT) {
+    signal_generation_processes(generations, libc::SIGKILL, "kill");
+    if wait_for_generation_children(generations, CHILD_REAP_TIMEOUT) {
         return Ok(());
     }
 
-    let remaining = generation
-        .children()
-        .into_iter()
+    let remaining = generations
+        .iter()
+        .flat_map(TaskGenerationToken::children)
         .map(|process| process.pid.to_string())
         .collect::<Vec<_>>()
         .join(", ");
     anyhow::bail!("timed out reaping cancelled task child processes: {remaining}")
+}
+
+fn signal_generation_processes(generations: &[TaskGenerationToken], signal: i32, action: &str) {
+    for process in generations.iter().flat_map(TaskGenerationToken::children) {
+        if let Err(error) = signal_process_group(process, signal) {
+            daemon_log(&format!(
+                "failed to {action} task child pid={} error={error:#}",
+                process.pid
+            ));
+        }
+    }
+}
+
+fn wait_for_generation_children(generations: &[TaskGenerationToken], timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    for generation in generations {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !generation.wait_for_children(remaining) {
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn spawn_owned_child_waiter(
