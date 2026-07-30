@@ -6,13 +6,15 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-#[cfg(test)]
-use packet28_daemon_core::storage::append_task_watch_registry_delta;
 use packet28_daemon_core::storage::{
     append_next_task_event_with_authority, append_task_watch_registry_delta_with_authority,
     load_registry_admission_authority, registry_delta_wal_path,
-    save_task_watch_registry_checkpoint_at_revision, RegistryAdmissionAuthority,
+    save_task_watch_registry_checkpoint_at_revision_with_authority, RegistryAdmissionAuthority,
     RegistryDeltaBatch, RegistryRevision, RegistryRevisionRange,
+};
+#[cfg(test)]
+use packet28_daemon_core::storage::{
+    append_task_watch_registry_delta, save_task_watch_registry_checkpoint_at_revision,
 };
 use packet28_daemon_core::task_store_lease::TaskStoreLease;
 use packet28_daemon_core::DaemonCoreError;
@@ -105,6 +107,7 @@ trait PersistenceBackend: Send + Sync {
     fn save_checkpoint(
         &self,
         root: &Path,
+        authority: Option<&RegistryAdmissionAuthority>,
         tasks: &TaskRegistry,
         watches: &WatchRegistry,
         revision: RegistryRevision,
@@ -145,13 +148,18 @@ impl PersistenceBackend for FilesystemBackend {
     fn save_checkpoint(
         &self,
         root: &Path,
+        authority: Option<&RegistryAdmissionAuthority>,
         tasks: &TaskRegistry,
         watches: &WatchRegistry,
         revision: RegistryRevision,
     ) -> Result<()> {
-        Ok(save_task_watch_registry_checkpoint_at_revision(
-            root, tasks, watches, revision,
-        )?)
+        let authority = authority
+            .ok_or_else(|| anyhow!("filesystem persistence requires registry authority"))?;
+        Ok(
+            save_task_watch_registry_checkpoint_at_revision_with_authority(
+                root, authority, tasks, watches, revision,
+            )?,
+        )
     }
 
     fn append_event(
@@ -1026,6 +1034,7 @@ fn save_current_image(
     await_checkpoint_test_gate(state);
     if let Err(error) = state.backend.save_checkpoint(
         &state.root,
+        image.authority.as_ref(),
         &image.tasks,
         &image.watches,
         RegistryRevision::new(image.durable_revision),
@@ -1358,11 +1367,12 @@ mod tests {
         fn save_checkpoint(
             &self,
             root: &Path,
+            authority: Option<&RegistryAdmissionAuthority>,
             tasks: &TaskRegistry,
             watches: &WatchRegistry,
             revision: RegistryRevision,
         ) -> Result<()> {
-            FilesystemBackend.save_checkpoint(root, tasks, watches, revision)
+            FilesystemBackend.save_checkpoint(root, authority, tasks, watches, revision)
         }
 
         fn append_event(
@@ -1532,11 +1542,12 @@ mod tests {
         fn save_checkpoint(
             &self,
             root: &Path,
+            authority: Option<&RegistryAdmissionAuthority>,
             tasks: &TaskRegistry,
             watches: &WatchRegistry,
             revision: RegistryRevision,
         ) -> Result<()> {
-            FilesystemBackend.save_checkpoint(root, tasks, watches, revision)
+            FilesystemBackend.save_checkpoint(root, authority, tasks, watches, revision)
         }
 
         fn append_event(
@@ -1703,6 +1714,7 @@ mod tests {
         fn save_checkpoint(
             &self,
             _root: &Path,
+            _authority: Option<&RegistryAdmissionAuthority>,
             _tasks: &TaskRegistry,
             _watches: &WatchRegistry,
             _revision: RegistryRevision,
@@ -1775,6 +1787,7 @@ mod tests {
         fn save_checkpoint(
             &self,
             root: &Path,
+            authority: Option<&RegistryAdmissionAuthority>,
             tasks: &TaskRegistry,
             watches: &WatchRegistry,
             revision: RegistryRevision,
@@ -1782,7 +1795,7 @@ mod tests {
             if self.failures_remaining.swap(0, Ordering::AcqRel) > 0 {
                 anyhow::bail!("injected checkpoint failure");
             }
-            FilesystemBackend.save_checkpoint(root, tasks, watches, revision)
+            FilesystemBackend.save_checkpoint(root, authority, tasks, watches, revision)
         }
 
         fn append_event(
@@ -1890,6 +1903,7 @@ mod tests {
         fn save_checkpoint(
             &self,
             _root: &Path,
+            _authority: Option<&RegistryAdmissionAuthority>,
             _tasks: &TaskRegistry,
             _watches: &WatchRegistry,
             _revision: RegistryRevision,

@@ -469,6 +469,7 @@ pub struct RegistryAdmissionAuthority {
     task_ids: BTreeSet<String>,
     revision: RegistryRevision,
     lease: crate::task_store_lease::TaskStoreLease,
+    _registry_authority_lease: crate::task_store_lease::TaskStoreLease,
 }
 
 impl RegistryAdmissionAuthority {
@@ -547,12 +548,15 @@ pub fn load_registry_admission_authority(
     lease: crate::task_store_lease::TaskStoreLease,
 ) -> Result<RegistryAdmissionAuthority> {
     require_daemon_lifecycle_lease(root, &lease)?;
-    let loaded = load_task_watch_registry_with_deltas(root)?;
+    let registry_authority_lease =
+        crate::task_store_lease::acquire_daemon_registry_authority(&lease)?;
+    let loaded = load_task_watch_registry_with_deltas_under_admission(root)?;
     Ok(RegistryAdmissionAuthority {
         root: root.to_path_buf(),
         task_ids: loaded.tasks.tasks.keys().cloned().collect(),
         revision: loaded.replayed_revision,
         lease,
+        _registry_authority_lease: registry_authority_lease,
     })
 }
 
@@ -572,7 +576,8 @@ pub fn append_task_watch_registry_delta(
     batch: &RegistryDeltaBatch,
 ) -> Result<()> {
     let prepared = prepare_registry_delta(root, revisions, batch)?;
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
 
     #[cfg(unix)]
     {
@@ -789,6 +794,12 @@ fn invalid_registry_authority_root(root: &Path) -> DaemonCoreError {
 /// corruption, size, path-safety, and repair errors.
 pub fn load_task_watch_registry_with_deltas(root: &Path) -> Result<LoadedTaskWatchRegistry> {
     let _writer_lease = acquire_task_store_writer_lease(root)?;
+    load_task_watch_registry_with_deltas_under_admission(root)
+}
+
+fn load_task_watch_registry_with_deltas_under_admission(
+    root: &Path,
+) -> Result<LoadedTaskWatchRegistry> {
     #[cfg(unix)]
     {
         with_anchored_task_registry_lock(
@@ -879,8 +890,53 @@ pub fn save_task_watch_registry_checkpoint_at_revision(
     let watch_path = watch_registry_path(root);
     let task_bytes = encode_task_registry(&task_path, tasks)?;
     let _ = encode_watch_registry(&watch_path, watches, None)?;
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
+    save_task_watch_registry_checkpoint_at_revision_under_admission(
+        root, tasks, watches, revision, task_bytes,
+    )
+}
 
+/// Commits a full checkpoint while retaining daemon registry authority.
+///
+/// This is the daemon-owner counterpart to
+/// [`save_task_watch_registry_checkpoint_at_revision`]. The authority's
+/// exclusive admission lease prevents supported external writers from
+/// replacing checkpoint or WAL membership between its authenticated load and
+/// this publication.
+///
+/// # Errors
+///
+/// Returns an I/O permission error when `authority` belongs to another root.
+/// Other errors match [`save_task_watch_registry_checkpoint_at_revision`].
+pub fn save_task_watch_registry_checkpoint_at_revision_with_authority(
+    root: &Path,
+    authority: &RegistryAdmissionAuthority,
+    tasks: &TaskRegistry,
+    watches: &WatchRegistry,
+    revision: RegistryRevision,
+) -> Result<()> {
+    if !authority.matches_root(root) {
+        return Err(invalid_registry_authority_root(root));
+    }
+    require_daemon_lifecycle_lease(root, authority.lease())?;
+    validate_task_watch_registry_relationships(root, tasks, watches)?;
+    let task_path = task_registry_path(root);
+    let watch_path = watch_registry_path(root);
+    let task_bytes = encode_task_registry(&task_path, tasks)?;
+    let _ = encode_watch_registry(&watch_path, watches, None)?;
+    save_task_watch_registry_checkpoint_at_revision_under_admission(
+        root, tasks, watches, revision, task_bytes,
+    )
+}
+
+fn save_task_watch_registry_checkpoint_at_revision_under_admission(
+    root: &Path,
+    tasks: &TaskRegistry,
+    watches: &WatchRegistry,
+    revision: RegistryRevision,
+    task_bytes: Vec<u8>,
+) -> Result<()> {
     #[cfg(unix)]
     {
         with_anchored_task_registry_lock(
@@ -1805,7 +1861,8 @@ fn record_apply_watch_scan() {
 mod tests {
     use std::fs::{self, OpenOptions};
     use std::io::{Seek as _, SeekFrom, Write as _};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{mpsc, Arc, Barrier};
+    use std::time::Duration;
 
     use packet28_daemon_protocol::commands::WatchSpec;
     use tempfile::tempdir;
@@ -2277,6 +2334,65 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn registry_authority_excludes_supported_replacement_writers_until_drop() {
+        let root = tempdir().unwrap();
+        checkpoint(root.path(), [task("existing", &[])], []);
+        let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
+        let mut authority = load_registry_admission_authority(root.path(), lease).unwrap();
+        let root_path = root.path().to_path_buf();
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            finished_tx
+                .send(save_task_registry(&root_path, &TaskRegistry::default()))
+                .unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        let frame = append_next_task_event_with_authority(
+            root.path(),
+            &authority,
+            "existing",
+            &DaemonEvent {
+                kind: "authority-held".to_string(),
+                occurred_at_unix: 1,
+                data: serde_json::Value::Null,
+            },
+        )
+        .unwrap();
+        assert_eq!(frame.seq, 1);
+        let mut updated = task("existing", &[]);
+        updated.last_event_seq = 1;
+        append_task_watch_registry_delta_with_authority(
+            root.path(),
+            &mut authority,
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &RegistryDeltaBatch::default().upsert_task(updated),
+        )
+        .unwrap();
+        assert!(matches!(
+            finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        drop(authority);
+        let writer_result = finished_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            writer_result,
+            Err(DaemonCoreError::RegistryCheckpointRequired { .. })
+        ));
+        writer.join().unwrap();
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        assert_eq!(loaded.tasks.tasks["existing"].last_event_seq, 1);
+        assert_eq!(loaded.replayed_revision, RegistryRevision::new(1));
     }
 
     #[test]

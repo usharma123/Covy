@@ -32,6 +32,7 @@ use crate::{DaemonCoreError, Result};
 
 const TASK_STORE_LIFECYCLE_LOCK_FILE_NAME: &str = ".task-store-lifecycle.lock";
 const DAEMON_INSTANCE_LOCK_FILE_NAME: &str = ".daemon-instance.lock";
+const REGISTRY_AUTHORITY_LOCK_FILE_NAME: &str = ".registry-authority.lock";
 
 #[cfg(test)]
 std::thread_local! {
@@ -95,6 +96,8 @@ pub(crate) enum LeaseRole {
     Recovery,
     Retention,
     RetentionInstanceGate,
+    RegistryWriter,
+    RegistryAuthority,
 }
 
 #[derive(Debug)]
@@ -270,6 +273,30 @@ pub fn acquire_daemon_task_store_lease(root: &Path) -> Result<TaskStoreLease> {
         )
     })?;
     validated_lease(root, opened, LeaseRole::DaemonLifecycle)
+}
+
+pub(crate) fn acquire_registry_writer_admission(writer: &TaskStoreLease) -> Result<TaskStoreLease> {
+    require_lease_role(writer, LeaseRole::Writer)?;
+    let path = daemon_dir(writer.workspace_root()).join(REGISTRY_AUTHORITY_LOCK_FILE_NAME);
+    let opened = open_persistent_daemon_lock(writer.workspace_root(), &path)?;
+    FileExt::lock_shared(&opened.file).map_err(|source| {
+        DaemonCoreError::io("failed to acquire registry writer admission", &path, source)
+    })?;
+    validated_lease(writer.workspace_root(), opened, LeaseRole::RegistryWriter)
+}
+
+pub(crate) fn acquire_daemon_registry_authority(daemon: &TaskStoreLease) -> Result<TaskStoreLease> {
+    require_lease_role(daemon, LeaseRole::DaemonLifecycle)?;
+    let path = daemon_dir(daemon.workspace_root()).join(REGISTRY_AUTHORITY_LOCK_FILE_NAME);
+    let opened = open_persistent_daemon_lock(daemon.workspace_root(), &path)?;
+    FileExt::lock_exclusive(&opened.file).map_err(|source| {
+        DaemonCoreError::io("failed to acquire daemon registry authority", &path, source)
+    })?;
+    validated_lease(
+        daemon.workspace_root(),
+        opened,
+        LeaseRole::RegistryAuthority,
+    )
 }
 
 /// Acquires exclusive ownership of the daemon instance for a workspace.

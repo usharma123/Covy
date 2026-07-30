@@ -187,6 +187,7 @@ pub fn append_next_task_event(
     preflight_task_event(root, &task_id, event)?;
 
     let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
     with_registered_task_storage_id(root, &task_id, || {
         #[cfg(unix)]
         {

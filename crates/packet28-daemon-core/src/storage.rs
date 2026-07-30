@@ -34,7 +34,7 @@ use crate::capability::{
     sync_file_barrier, CapabilityDir, ACTIVE_TASK_WRITE_TEMP_PREFIX,
     TASK_REGISTRY_WRITE_TEMP_PREFIX,
 };
-use crate::task_store_lease::acquire_task_store_writer_lease;
+use crate::task_store_lease::{acquire_registry_writer_admission, acquire_task_store_writer_lease};
 use crate::{DaemonCoreError, Result};
 
 mod checkpoint;
@@ -55,7 +55,8 @@ pub use registry_delta::{
     append_task_watch_registry_delta, append_task_watch_registry_delta_with_authority,
     load_registry_admission_authority, load_task_watch_registry_with_deltas,
     load_task_watch_registry_with_deltas_and_event_tails, registry_delta_wal_path,
-    save_task_watch_registry_checkpoint_at_revision, LoadedTaskWatchRegistry,
+    save_task_watch_registry_checkpoint_at_revision,
+    save_task_watch_registry_checkpoint_at_revision_with_authority, LoadedTaskWatchRegistry,
     RegistryAdmissionAuthority, RegistryDeltaBatch, RegistryDeltaValidationError, RegistryRevision,
     RegistryRevisionRange, MAX_REGISTRY_DELTA_FRAME_BYTES, MAX_REGISTRY_DELTA_WAL_BYTES,
 };
@@ -975,7 +976,8 @@ pub fn load_watch_registry(root: &Path) -> Result<WatchRegistry> {
 pub fn save_watch_registry(root: &Path, registry: &WatchRegistry) -> Result<()> {
     let path = watch_registry_path(root);
     let _ = encode_watch_registry(&path, registry, None)?;
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
     #[cfg(unix)]
     {
         with_anchored_task_registry_lock(
@@ -1218,7 +1220,8 @@ pub fn save_task_watch_registry_checkpoint(
     let watch_path = watch_registry_path(root);
     let task_bytes = encode_task_registry(&task_path, tasks)?;
     let _ = encode_watch_registry(&watch_path, watches, None)?;
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
 
     #[cfg(unix)]
     {
@@ -1247,7 +1250,8 @@ pub fn save_task_watch_registry_checkpoint(
 fn save_task_registry_portable(root: &Path, registry: &TaskRegistry) -> Result<()> {
     let path = task_registry_path(root);
     let bytes = encode_task_registry(&path, registry)?;
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
     with_registry_lock(root, &path, RegistryLockMode::Exclusive, || {
         let existing = read_task_registry_portable(&path)?;
         let task_generation = existing
@@ -1291,7 +1295,8 @@ fn save_task_registry_with_observers(
 ) -> Result<()> {
     let path = task_registry_path(root);
     let bytes = encode_task_registry(&path, registry)?;
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
     with_anchored_task_registry_lock(
         root,
         RegistryLockMode::Exclusive,
@@ -3195,7 +3200,8 @@ pub fn append_task_event_for(
     let path = task_event_log_path(root, task_id);
     let bytes = encode_task_event_frame(root, task_id, frame)?;
 
-    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    let writer_lease = acquire_task_store_writer_lease(root)?;
+    let _registry_admission = acquire_registry_writer_admission(&writer_lease)?;
     let file_name = event_log_file_name(task_id);
     with_registered_task_storage_id(root, task_id, || {
         #[cfg(unix)]
