@@ -17,6 +17,41 @@ fi
 git ls-files --error-unmatch -- Cargo.lock >/dev/null 2>&1 ||
   fail "Cargo.lock is not tracked"
 
+cargo_workspace_count=0
+while IFS= read -r manifest; do
+  lock_file="${manifest%Cargo.toml}Cargo.lock"
+  [[ -f "$lock_file" ]] ||
+    fail "$manifest defines a Cargo workspace without $lock_file"
+  git ls-files --error-unmatch -- "$lock_file" >/dev/null 2>&1 ||
+    fail "$lock_file is not tracked"
+  cargo metadata \
+    --locked \
+    --offline \
+    --manifest-path "$manifest" \
+    --format-version 1 >/dev/null
+  cargo_workspace_count=$((cargo_workspace_count + 1))
+done < <(
+  git ls-files '*Cargo.toml' |
+    python3 -c '
+import pathlib
+import sys
+import tomllib
+
+for raw_path in sys.stdin:
+    path = pathlib.Path(raw_path.strip())
+    if not path.name:
+        continue
+    if path.parts[:2] == ("scripts", "fixtures"):
+        continue
+    with path.open("rb") as manifest_file:
+        manifest = tomllib.load(manifest_file)
+    if isinstance(manifest.get("workspace"), dict):
+        print(path.as_posix())
+'
+)
+[[ "$cargo_workspace_count" -gt 0 ]] ||
+  fail "no tracked Cargo workspaces were discovered"
+
 python3 scripts/check_cargo_publish_policy.py
 
 grep -Fqx 'rust-version = "1.88.0"' Cargo.toml ||
@@ -86,4 +121,4 @@ read -r metadata_member_count internal_dependency_count < <(
 [[ "$member_count" -eq "$metadata_member_count" ]] ||
   fail "found $member_count manifests but Cargo reports $metadata_member_count workspace members"
 
-echo "workspace policy invariant passed ($member_count members, $internal_dependency_count metadata-derived internal dependencies)"
+echo "workspace policy invariant passed ($member_count members, $internal_dependency_count metadata-derived internal dependencies, $cargo_workspace_count locked Cargo workspaces)"

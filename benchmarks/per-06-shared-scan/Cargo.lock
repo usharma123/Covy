@@ -236,13 +236,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
-name = "context-kernel-core"
+name = "context-kernel-builtins"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "buildy-core",
+ "context-kernel-mechanism",
  "context-memory-core",
- "context-scheduler-core",
  "contextq-core",
  "covy-ingest",
  "diffy-core",
@@ -260,6 +259,24 @@ dependencies = [
  "suite-proxy-core",
  "testy-cli-common",
  "testy-core",
+]
+
+[[package]]
+name = "context-kernel-core"
+version = "0.2.63"
+dependencies = [
+ "context-kernel-builtins",
+]
+
+[[package]]
+name = "context-kernel-mechanism"
+version = "0.2.63"
+dependencies = [
+ "context-memory-core",
+ "context-scheduler-core",
+ "serde",
+ "serde_json",
+ "suite-packet-core",
  "thiserror",
 ]
 
@@ -269,11 +286,14 @@ version = "0.2.63"
 dependencies = [
  "blake3",
  "fs2",
+ "libc",
  "packet28-binary-codec",
  "serde",
  "serde_json",
  "suite-packet-core",
  "thiserror",
+ "winapi-util",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -308,17 +328,13 @@ dependencies = [
 name = "covy-ingest"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "blake3",
  "covy-core",
  "quick-xml",
  "rayon",
  "regex",
- "roaring",
  "serde",
  "serde_json",
- "thiserror",
- "tracing",
 ]
 
 [[package]]
@@ -427,13 +443,11 @@ dependencies = [
 name = "diffy-core"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "blake3",
  "colored",
  "comfy-table",
  "glob",
  "roaring",
- "serde",
  "serde_json",
  "suite-foundation-core",
  "suite-packet-core",
@@ -800,7 +814,6 @@ name = "packet28-binary-codec"
 version = "0.2.63"
 dependencies = [
  "wincode",
- "wincode-derive",
 ]
 
 [[package]]
@@ -809,10 +822,14 @@ version = "0.2.63"
 dependencies = [
  "blake3",
  "fs2",
+ "libc",
  "packet28-daemon-protocol",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror",
+ "unicode-casefold",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -820,6 +837,7 @@ name = "packet28-daemon-protocol"
 version = "0.2.63"
 dependencies = [
  "blake3",
+ "constant_time_eq",
  "serde",
  "serde_json",
  "suite-packet-core",
@@ -884,7 +902,7 @@ dependencies = [
  "context-memory-core",
  "covy-ingest",
  "diffy-core",
- "glob",
+ "fs2",
  "ignore",
  "libc",
  "mapy-core",
@@ -1206,15 +1224,12 @@ dependencies = [
  "glob",
  "ignore",
  "packet28-binary-codec",
- "regex",
  "roaring",
  "serde",
- "serde_json",
  "suite-packet-core",
  "thiserror",
  "toml",
  "toml_edit",
- "tracing",
 ]
 
 [[package]]
@@ -1238,7 +1253,6 @@ dependencies = [
  "glob",
  "regex",
  "serde",
- "serde_json",
  "suite-packet-core",
  "yaml_serde",
 ]
@@ -1292,15 +1306,14 @@ dependencies = [
 name = "testy-cli-common"
 version = "0.2.63"
 dependencies = [
- "anyhow",
  "clap",
  "covy-ingest",
  "diffy-core",
  "serde",
  "serde_json",
- "suite-foundation-core",
  "suite-packet-core",
  "testy-core",
+ "thiserror",
 ]
 
 [[package]]
@@ -1337,6 +1350,21 @@ dependencies = [
  "quote",
  "syn 3.0.3",
 ]
+
+[[package]]
+name = "tinyvec"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
+dependencies = [
+ "tinyvec_macros",
+]
+
+[[package]]
+name = "tinyvec_macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
@@ -1534,10 +1562,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
+name = "unicode-casefold"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f66b1c8f8caa2ab31dc6d3f35386f16efdab89668f93411e565ac368908e8f"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"
