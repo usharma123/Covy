@@ -215,12 +215,31 @@ pub struct RepoIndexSnapshot {
     pub files: BTreeMap<String, RepoIndexFileEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct RepoIndexUpdateWork {
+    /// Bytes decoded from the publication manifest while fencing this update.
+    pub publication_metadata_bytes_decoded: usize,
+    /// Repository-sized base/segment bytes decoded while fencing this update.
+    pub repository_artifact_bytes_decoded: usize,
+    /// Repository-sized base/segment artifacts decoded while fencing this update.
+    pub repository_artifacts_decoded: usize,
+    /// Repository-sized artifact bytes re-hashed after a metadata change.
+    pub repository_artifact_bytes_hashed: usize,
+    /// Constant-size filesystem metadata checks performed for retained artifacts.
+    pub repository_artifact_metadata_checks: usize,
+    /// Normalized changed paths considered by this update.
+    pub changed_paths_considered: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct RepoIndexUpdateSummary {
     pub indexed_files: usize,
     pub removed_files: usize,
     pub changed_paths: Vec<String>,
+    /// Bounded work performed while publishing the update.
+    pub work: RepoIndexUpdateWork,
 }
 
 #[derive(

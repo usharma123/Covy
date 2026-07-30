@@ -12,13 +12,13 @@ use crate::scan::{
 use crate::types::{
     FocusHit, FocusHitRich, IndexedSymbolDef, RankedFile, RankedFileRich, RankedSymbol,
     RankedSymbolRich, RepoEdge, RepoEdgeRich, RepoIndexFileEntry, RepoIndexSnapshot,
-    RepoIndexUpdateSummary, RepoMapPayload, RepoMapPayloadRich, RepoMapRequest, RepoQueryMatch,
-    RepoQueryMatchRich, RepoQueryPayload, RepoQueryPayloadRich, RepoQueryRequest,
-    TruncationSummary,
+    RepoIndexUpdateSummary, RepoIndexUpdateWork, RepoMapPayload, RepoMapPayloadRich,
+    RepoMapRequest, RepoQueryMatch, RepoQueryMatchRich, RepoQueryPayload, RepoQueryPayloadRich,
+    RepoQueryRequest, TruncationSummary,
 };
 use crate::{
     collect_syntax_candidates, detect_source_language, parse_source_language_name,
-    resolve_import_leaf, SourceLanguage,
+    resolve_import_leaf, RepoIndexRuntime, SourceLanguage,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -363,21 +363,55 @@ pub fn build_repo_map_from_index(
         .files
         .values()
         .filter(|entry| snapshot.include_tests || !entry.is_test)
-        .map(|entry| FileScan {
-            path: entry.path.clone(),
-            size: entry.size,
-            symbols: entry
-                .symbols
-                .iter()
-                .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
-                .collect(),
-            symbol_defs: entry.symbols.clone(),
-            imports: entry.imports.clone(),
-            token_lines: entry.token_lines.clone(),
-            mtime_secs: entry.mtime_secs,
-        })
+        .map(file_scan_from_index_entry)
         .collect::<Vec<_>>();
     build_repo_map_from_scans(req, scans)
+}
+
+/// Builds a repository map from an authenticated incremental runtime without
+/// walking or rereading the repository.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Cache`] when `runtime` is not loaded or was built
+/// without tests while `req` requires test files.
+pub fn build_repo_map_from_runtime(
+    req: RepoMapRequest,
+    runtime: &RepoIndexRuntime,
+) -> Result<EnvelopeV1<RepoMapPayload>, CovyError> {
+    if !runtime.is_loaded() {
+        return Err(CovyError::Cache(
+            "repository index runtime is not loaded".to_string(),
+        ));
+    }
+    if req.include_tests && !runtime.manifest.include_tests {
+        return Err(CovyError::Cache(
+            "repository index runtime does not include test files".to_string(),
+        ));
+    }
+    let mut scans = Vec::with_capacity(runtime.manifest.total_files);
+    runtime.for_each_file(|entry| {
+        if req.include_tests || !entry.is_test {
+            scans.push(file_scan_from_index_entry(entry));
+        }
+    });
+    build_repo_map_from_scans(req, scans)
+}
+
+fn file_scan_from_index_entry(entry: &RepoIndexFileEntry) -> FileScan {
+    FileScan {
+        path: entry.path.clone(),
+        size: entry.size,
+        symbols: entry
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
+            .collect(),
+        symbol_defs: entry.symbols.clone(),
+        imports: entry.imports.clone(),
+        token_lines: entry.token_lines.clone(),
+        mtime_secs: entry.mtime_secs,
+    }
 }
 
 fn build_repo_map_from_scans(
@@ -758,10 +792,15 @@ pub fn update_repo_index(
             }
         }
     }
+    let changed_paths = changed.into_iter().collect::<Vec<_>>();
     Ok(RepoIndexUpdateSummary {
         indexed_files,
         removed_files,
-        changed_paths: changed.into_iter().collect(),
+        work: RepoIndexUpdateWork {
+            changed_paths_considered: changed_paths.len(),
+            ..RepoIndexUpdateWork::default()
+        },
+        changed_paths,
     })
 }
 

@@ -41,14 +41,14 @@ fn main() -> AnyResult<()> {
     print_measurement("regex_incremental", regex_incremental);
     print_measurement("regex_compaction", regex_compaction);
     println!(
-        "mapy_time_reduction_pct={:.2} mapy_bytes_reduction_pct={:.2}",
-        reduction(mapy_legacy.elapsed, mapy_incremental.elapsed),
-        byte_reduction(mapy_legacy.bytes, mapy_incremental.bytes)
+        "mapy_time_delta_pct={:+.2} mapy_bytes_delta_pct={:+.2}",
+        duration_delta(mapy_legacy.elapsed, mapy_incremental.elapsed),
+        signed_delta(mapy_legacy.bytes, mapy_incremental.bytes)
     );
     println!(
-        "regex_time_reduction_pct={:.2} regex_bytes_reduction_pct={:.2}",
-        reduction(regex_legacy.elapsed, regex_incremental.elapsed),
-        byte_reduction(regex_legacy.bytes, regex_incremental.bytes)
+        "regex_time_delta_pct={:+.2} regex_bytes_delta_pct={:+.2}",
+        duration_delta(regex_legacy.elapsed, regex_incremental.elapsed),
+        signed_delta(regex_legacy.bytes, regex_incremental.bytes)
     );
     Ok(())
 }
@@ -84,6 +84,7 @@ fn measure_mapy_compaction(fixture: &BenchmarkFixture) -> AnyResult<Measurement>
     Ok(Measurement {
         elapsed,
         bytes: changed_file_bytes(&before, &after),
+        work: None,
     })
 }
 
@@ -93,6 +94,17 @@ type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 struct Measurement {
     elapsed: Duration,
     bytes: u64,
+    work: Option<UpdateWork>,
+}
+
+#[derive(Clone, Copy)]
+struct UpdateWork {
+    publication_metadata_bytes_decoded: usize,
+    repository_artifact_bytes_decoded: usize,
+    repository_artifacts_decoded: usize,
+    repository_artifact_bytes_hashed: usize,
+    repository_artifact_metadata_checks: usize,
+    changed_paths_considered: usize,
 }
 
 fn measure_mapy_pair(fixture: &BenchmarkFixture) -> AnyResult<(Measurement, Measurement)> {
@@ -110,6 +122,7 @@ fn measure_mapy_pair(fixture: &BenchmarkFixture) -> AnyResult<(Measurement, Meas
     let mut incremental_samples = Vec::with_capacity(MEASURED_UPDATES);
     let mut legacy_bytes = 0;
     let mut incremental_bytes = 0;
+    let mut incremental_work = None;
 
     for revision in 0..MEASURED_UPDATES {
         fixture.write_source(0, 200 + revision)?;
@@ -134,13 +147,21 @@ fn measure_mapy_pair(fixture: &BenchmarkFixture) -> AnyResult<(Measurement, Meas
 
         let before = snapshot_tree(&fixture.mapy_index_dir())?;
         let incremental_started = Instant::now();
-        incremental = update_repo_index_runtime(
+        let (next_incremental, summary) = update_repo_index_runtime(
             &fixture.root,
             &incremental,
             std::slice::from_ref(&target),
             true,
-        )?
-        .0;
+        )?;
+        incremental = next_incremental;
+        incremental_work = Some(UpdateWork {
+            publication_metadata_bytes_decoded: summary.work.publication_metadata_bytes_decoded,
+            repository_artifact_bytes_decoded: summary.work.repository_artifact_bytes_decoded,
+            repository_artifacts_decoded: summary.work.repository_artifacts_decoded,
+            repository_artifact_bytes_hashed: summary.work.repository_artifact_bytes_hashed,
+            repository_artifact_metadata_checks: summary.work.repository_artifact_metadata_checks,
+            changed_paths_considered: summary.work.changed_paths_considered,
+        });
         incremental_samples.push(incremental_started.elapsed());
         let after = snapshot_tree(&fixture.mapy_index_dir())?;
         incremental_bytes = changed_file_bytes(&before, &after);
@@ -150,10 +171,12 @@ fn measure_mapy_pair(fixture: &BenchmarkFixture) -> AnyResult<(Measurement, Meas
         Measurement {
             elapsed: median(legacy_samples),
             bytes: legacy_bytes,
+            work: None,
         },
         Measurement {
             elapsed: median(incremental_samples),
             bytes: incremental_bytes,
+            work: incremental_work,
         },
     ))
 }
@@ -183,6 +206,7 @@ fn measure_regex_full_overlay_model(fixture: &BenchmarkFixture) -> AnyResult<Mea
     Ok(Measurement {
         elapsed: median(samples),
         bytes: changed_bytes,
+        work: None,
     })
 }
 
@@ -210,6 +234,7 @@ fn measure_regex_incremental(fixture: &BenchmarkFixture) -> AnyResult<Measuremen
     Ok(Measurement {
         elapsed: median(samples),
         bytes: changed_bytes,
+        work: None,
     })
 }
 
@@ -239,6 +264,7 @@ fn measure_regex_compaction(fixture: &BenchmarkFixture) -> AnyResult<Measurement
     Ok(Measurement {
         elapsed,
         bytes: changed_file_bytes(&before, &after),
+        work: None,
     })
 }
 
@@ -288,15 +314,17 @@ fn median(mut samples: Vec<Duration>) -> Duration {
     samples[samples.len() / 2]
 }
 
-fn reduction(before: Duration, after: Duration) -> f64 {
-    byte_reduction(before.as_nanos() as u64, after.as_nanos() as u64)
+fn duration_delta(before: Duration, after: Duration) -> f64 {
+    signed_delta(before.as_nanos(), after.as_nanos())
 }
 
-fn byte_reduction(before: u64, after: u64) -> f64 {
+fn signed_delta(before: impl Into<u128>, after: impl Into<u128>) -> f64 {
+    let before = before.into();
+    let after = after.into();
     if before == 0 {
         return 0.0;
     }
-    ((before.saturating_sub(after)) as f64 / before as f64) * 100.0
+    ((after as f64 - before as f64) / before as f64) * 100.0
 }
 
 fn print_measurement(label: &str, measurement: Measurement) {
@@ -305,6 +333,22 @@ fn print_measurement(label: &str, measurement: Measurement) {
         measurement.elapsed.as_micros(),
         measurement.bytes
     );
+    if let Some(work) = measurement.work {
+        println!(
+            "{label}_publication_metadata_bytes_decoded={} \
+             {label}_repository_artifact_bytes_decoded={} \
+             {label}_repository_artifacts_decoded={} \
+             {label}_repository_artifact_bytes_hashed={} \
+             {label}_repository_artifact_metadata_checks={} \
+             {label}_changed_paths_considered={}",
+            work.publication_metadata_bytes_decoded,
+            work.repository_artifact_bytes_decoded,
+            work.repository_artifacts_decoded,
+            work.repository_artifact_bytes_hashed,
+            work.repository_artifact_metadata_checks,
+            work.changed_paths_considered,
+        );
+    }
 }
 
 struct BenchmarkFixture {
