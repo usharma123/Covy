@@ -1506,14 +1506,7 @@ pub(crate) fn daemon_packet28_search(
         }
         return live_search_with_reason(&root, &request, reason);
     };
-    if let Some(reason) = packet28_search_core::guarded_fallback_reason(&root, &runtime, &request)?
-    {
-        if force_indexed {
-            return Err(DaemonIndexSearchNotReady { reason }.into());
-        }
-        return live_search_with_reason(&root, &request, reason);
-    }
-    match packet28_search_core::indexed_search(&root, &runtime, &request) {
+    match packet28_search_core::guarded_indexed_search(&root, &runtime, &request) {
         Ok(result) => Ok(result),
         Err(packet28_search_core::SearchError::IndexNotReady { reason }) => {
             if force_indexed {

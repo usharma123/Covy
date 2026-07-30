@@ -30,5 +30,10 @@ serde_json.workspace = true
 packet28-reducer-core.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 syn = { version = "2.0.116", features = ["full", "visit"] }
 tempfile.workspace = true
+
+[[bench]]
+name = "query_attestation"
+harness = false

@@ -3,14 +3,20 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_GIT_METADATA_BYTES: usize = 32 * 1024 * 1024;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(5);
+#[cfg(test)]
+static GIT_COMMAND_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn run_git(root: &Path, args: &[&str]) -> std::result::Result<Output, String> {
+    #[cfg(test)]
+    GIT_COMMAND_COUNT.fetch_add(1, Ordering::Relaxed);
     let operation = args.first().copied().unwrap_or("command");
     let label = format!("git {operation}");
     let mut command = Command::new("git");
@@ -111,6 +117,23 @@ fn join_reader(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::fs;
+
+    #[cfg(unix)]
+    fn fixture_git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[cfg(unix)]
     #[test]
@@ -149,5 +172,54 @@ mod tests {
         .expect_err("oversized subprocess output unexpectedly succeeded");
 
         assert!(error.contains("output exceeds"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guarded_query_runs_one_workspace_attestation() {
+        use packet28_reducer_core::SearchRequest;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn unique_attestation_needle() {}\n",
+        )
+        .unwrap();
+        fs::write(root.join(".gitignore"), ".packet28/\n").unwrap();
+        fixture_git(root, &["init", "--quiet"]);
+        fixture_git(root, &["config", "user.name", "Packet28 Test"]);
+        fixture_git(root, &["config", "user.email", "packet28@example.invalid"]);
+        fixture_git(root, &["add", "."]);
+        fixture_git(
+            root,
+            &["commit", "--quiet", "--no-gpg-sign", "-m", "fixture"],
+        );
+        crate::generation::rebuild_full_index(root, true).unwrap();
+        GIT_COMMAND_COUNT.store(0, Ordering::Relaxed);
+
+        crate::query::load_and_guarded_indexed_search(
+            root,
+            &SearchRequest {
+                query: "unique_attestation_needle".to_string(),
+                fixed_string: true,
+                ..SearchRequest::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(GIT_COMMAND_COUNT.load(Ordering::Relaxed), 2);
+        GIT_COMMAND_COUNT.store(0, Ordering::Relaxed);
+        let error = crate::query::load_and_guarded_indexed_search(
+            root,
+            &SearchRequest {
+                query: ".+".to_string(),
+                ..SearchRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, crate::SearchError::IndexNotReady { .. }));
+        assert_eq!(GIT_COMMAND_COUNT.load(Ordering::Relaxed), 2);
     }
 }

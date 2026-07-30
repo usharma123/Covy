@@ -6,7 +6,8 @@ use std::process::Command;
 
 use packet28_reducer_core::{SearchRequest, SearchResult};
 use packet28_search_core::{
-    clear_index, guarded_fallback_reason, indexed_search, load_runtime, rebuild_full_index,
+    clear_index, guarded_fallback_reason, guarded_indexed_search, indexed_search,
+    load_and_guarded_indexed_search, load_and_indexed_search, load_runtime, rebuild_full_index,
     rebuild_full_index_with_progress, update_overlay_index, RegexIndexManifest, RegexIndexRuntime,
     Result, SearchError,
 };
@@ -53,6 +54,29 @@ fn public_result_exposes_the_typed_index_unavailable_variant() {
     let error = indexed_search(root.path(), &runtime, &request).unwrap_err();
 
     assert!(matches!(error, SearchError::IndexNotLoaded), "{error:?}");
+}
+
+#[test]
+fn combined_guarded_search_preserves_the_planner_fallback_reason() {
+    let root = tempdir().unwrap();
+    fs::create_dir_all(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+    let runtime = rebuild_full_index(root.path(), true).unwrap();
+    let request = SearchRequest {
+        query: "a".to_string(),
+        fixed_string: true,
+        ..SearchRequest::default()
+    };
+    let expected = guarded_fallback_reason(root.path(), &runtime, &request)
+        .unwrap()
+        .expect("weak request should fall back");
+
+    let error = guarded_indexed_search(root.path(), &runtime, &request).unwrap_err();
+
+    assert!(matches!(
+        error,
+        SearchError::IndexNotReady { reason } if reason == expected
+    ));
 }
 
 #[test]
@@ -131,7 +155,11 @@ fn root_entrypoint_signatures_remain_source_compatible() {
     let _: fn(&Path) -> Result<()> = clear_index;
     let _: fn(&Path, &RegexIndexRuntime, &SearchRequest) -> Result<Option<String>> =
         guarded_fallback_reason;
+    let _: fn(&Path, &RegexIndexRuntime, &SearchRequest) -> Result<SearchResult> =
+        guarded_indexed_search;
     let _: fn(&Path, &RegexIndexRuntime, &SearchRequest) -> Result<SearchResult> = indexed_search;
+    let _: fn(&Path, &SearchRequest) -> Result<SearchResult> = load_and_guarded_indexed_search;
+    let _: fn(&Path, &SearchRequest) -> Result<SearchResult> = load_and_indexed_search;
 
     fn assert_runtime_contract<T: Clone + Default + Send + Sync + 'static>() {}
     assert_runtime_contract::<RegexIndexRuntime>();

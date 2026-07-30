@@ -18,7 +18,10 @@ const EXPECTED_ROOT_EXPORTS: &[&str] = &[
     "update_overlay_index",
     "clear_index",
     "guarded_fallback_reason",
+    "guarded_indexed_search",
     "indexed_search",
+    "load_and_guarded_indexed_search",
+    "load_and_indexed_search",
     "shared_scan",
 ];
 
@@ -40,7 +43,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
         (
             "generation",
             ModulePolicy {
-                max_lines: 1_025,
+                max_lines: 1_050,
                 allowed_dependencies: &[
                     "error",
                     "layer",
@@ -56,7 +59,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
         (
             "git_process",
             ModulePolicy {
-                max_lines: 175,
+                max_lines: 250,
                 allowed_dependencies: &[],
             },
         ),
@@ -101,6 +104,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
                 max_lines: 1_500,
                 allowed_dependencies: &[
                     "error",
+                    "generation",
                     "model",
                     "paths",
                     "postings",
@@ -486,11 +490,11 @@ fn source_parser_handles_grouped_paths_and_ignores_lexical_decoys() {
 fn source_parser_rejects_wildcards_root_shortcuts_and_forbidden_edges() {
     let known = policies().keys().copied().collect::<BTreeSet<_>>();
     let file = syn::parse_file(
-        "use std::prelude::*; use crate::RegexIndexRuntime; use crate::generation::load_runtime;",
+        "use std::prelude::*; use crate::RegexIndexRuntime; use crate::publication::load_generation_record;",
     )
     .expect("fixture syntax");
     let facts = source_facts("query", &file, &known);
-    assert_eq!(facts.dependencies, BTreeSet::from(["generation".into()]));
+    assert_eq!(facts.dependencies, BTreeSet::from(["publication".into()]));
     assert_eq!(facts.errors.len(), 2);
     assert!(!facts.dependencies.is_subset(
         &policies()["query"]

@@ -44,9 +44,17 @@ use crate::workspace;
 /// The current loader converts artifact validation failures into an unloaded
 /// [`RegexIndexRuntime`]; it does not otherwise return an error.
 pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
+    load_runtime_with_freshness(root, true)
+}
+
+pub(crate) fn load_runtime_for_query(root: &Path) -> Result<RegexIndexRuntime> {
+    load_runtime_with_freshness(root, false)
+}
+
+fn load_runtime_with_freshness(root: &Path, verify_workspace: bool) -> Result<RegexIndexRuntime> {
     let manifest = match load_manifest_strict(root) {
         Ok(manifest) => manifest,
-        Err(error) => return recover_previous_runtime(root, None, error),
+        Err(error) => return recover_previous_runtime(root, None, error, verify_workspace),
     };
     if manifest.schema_version == 0 {
         if previous_manifest_path(root).exists() {
@@ -54,6 +62,7 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
                 root,
                 Some(manifest),
                 SearchError::corrupt("current regex manifest is missing or has schema zero"),
+                verify_workspace,
             );
         }
         return Ok(RegexIndexRuntime {
@@ -62,15 +71,16 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
             publication_fingerprint: None,
         });
     }
-    match load_runtime_from_manifest(root, manifest.clone()) {
+    match load_runtime_from_manifest(root, manifest.clone(), verify_workspace) {
         Ok(runtime) => Ok(runtime),
-        Err(error) => recover_previous_runtime(root, Some(manifest), error),
+        Err(error) => recover_previous_runtime(root, Some(manifest), error, verify_workspace),
     }
 }
 
 pub(crate) fn load_runtime_from_manifest(
     root: &Path,
     mut manifest: RegexIndexManifest,
+    verify_workspace: bool,
 ) -> Result<RegexIndexRuntime> {
     if manifest.schema_version != REGEX_INDEX_SCHEMA_VERSION
         || manifest.weight_table_version != WEIGHT_TABLE_VERSION
@@ -113,13 +123,17 @@ pub(crate) fn load_runtime_from_manifest(
     } else {
         load_legacy_generation(root, manifest)?
     };
-    let freshness_reason = runtime.loaded.as_ref().and_then(|loaded| {
-        workspace::workspace_freshness_reason(
-            root,
-            &runtime.manifest,
-            &loaded.overlay_state.workspace_entries,
-        )
-    });
+    let freshness_reason = verify_workspace
+        .then(|| {
+            runtime.loaded.as_ref().and_then(|loaded| {
+                workspace::workspace_freshness_reason(
+                    root,
+                    &runtime.manifest,
+                    &loaded.overlay_state.workspace_entries,
+                )
+            })
+        })
+        .flatten();
     if let Some(reason) = freshness_reason {
         mark_manifest_unloaded(&mut runtime.manifest, "stale", reason);
         runtime.loaded = None;
@@ -977,12 +991,13 @@ pub(crate) fn recover_previous_runtime(
     root: &Path,
     failed_manifest: Option<RegexIndexManifest>,
     error: SearchError,
+    verify_workspace: bool,
 ) -> Result<RegexIndexRuntime> {
     let failed_generation = failed_manifest
         .as_ref()
         .map_or(0, |manifest| manifest.generation);
     if let Ok(previous) = load_manifest_file(&previous_manifest_path(root)) {
-        if let Ok(mut runtime) = load_runtime_from_manifest(root, previous) {
+        if let Ok(mut runtime) = load_runtime_from_manifest(root, previous, verify_workspace) {
             let reason = format!(
                 "recovered generation {} after rejecting generation {}: {error:#}",
                 runtime.manifest.generation, failed_generation

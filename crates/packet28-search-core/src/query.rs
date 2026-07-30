@@ -160,40 +160,113 @@ pub fn indexed_search(
     runtime: &RegexIndexRuntime,
     request: &SearchRequest,
 ) -> Result<SearchResult> {
+    indexed_search_with_guard(root, runtime, request, false)
+}
+
+/// Executes an indexed search only when its candidate plan remains selective.
+///
+/// This combines guarded routing and indexed verification so successful
+/// queries perform one final workspace freshness attestation.
+///
+/// # Errors
+///
+/// Returns the same failures as [`indexed_search`]. A query that should use the
+/// legacy engine returns [`SearchError::IndexNotReady`] with its fallback
+/// reason.
+pub fn guarded_indexed_search(
+    root: &Path,
+    runtime: &RegexIndexRuntime,
+    request: &SearchRequest,
+) -> Result<SearchResult> {
+    indexed_search_with_guard(root, runtime, request, true)
+}
+
+/// Loads the persisted generation and executes [`indexed_search`] with one
+/// final workspace freshness attestation.
+///
+/// # Errors
+///
+/// Returns the same typed loading and query failures as [`indexed_search`].
+pub fn load_and_indexed_search(root: &Path, request: &SearchRequest) -> Result<SearchResult> {
+    let runtime = crate::generation::load_runtime_for_query(root)?;
+    indexed_search(root, &runtime, request)
+}
+
+/// Loads the persisted generation and executes [`guarded_indexed_search`] with
+/// one workspace freshness attestation.
+///
+/// The runtime with deferred freshness validation is never exposed to callers.
+///
+/// # Errors
+///
+/// Returns the same typed loading and query failures as
+/// [`guarded_indexed_search`].
+pub fn load_and_guarded_indexed_search(
+    root: &Path,
+    request: &SearchRequest,
+) -> Result<SearchResult> {
+    let runtime = crate::generation::load_runtime_for_query(root)?;
+    guarded_indexed_search(root, &runtime, request)
+}
+
+fn indexed_search_with_guard(
+    root: &Path,
+    runtime: &RegexIndexRuntime,
+    request: &SearchRequest,
+    enforce_guard: bool,
+) -> Result<SearchResult> {
     let loaded = match runtime.loaded.as_ref() {
         Some(loaded) => loaded,
         None => {
-            let Some(reason) = runtime
+            let reason = runtime
                 .manifest
                 .stale_reason
                 .clone()
-                .or_else(|| runtime.manifest.last_error.clone())
-            else {
+                .or_else(|| runtime.manifest.last_error.clone());
+            if !enforce_guard && reason.is_none() {
                 return Err(SearchError::IndexNotLoaded);
-            };
-            return Err(SearchError::IndexNotReady { reason });
+            }
+            return Err(SearchError::IndexNotReady {
+                reason: reason.unwrap_or_else(|| "regex search index is not ready".to_string()),
+            });
         }
     };
     if runtime.manifest.status != "ready" {
         return Err(SearchError::IndexNotReady {
-            reason: format!("regex index status is '{}'", runtime.manifest.status),
+            reason: if enforce_guard {
+                runtime
+                    .manifest
+                    .stale_reason
+                    .clone()
+                    .or_else(|| runtime.manifest.last_error.clone())
+                    .unwrap_or_else(|| "regex search index is not ready".to_string())
+            } else {
+                format!("regex index status is '{}'", runtime.manifest.status)
+            },
         });
-    }
-    if let Some(reason) = workspace_freshness_reason(
-        root,
-        &runtime.manifest,
-        &loaded.overlay_state.workspace_entries,
-    ) {
-        return Err(SearchError::IndexNotReady { reason });
     }
     let query = request.query.trim();
     if query.is_empty() {
         return Err(SearchError::EmptyQuery);
     }
 
+    let compiled = compile_request(request, loaded.as_ref())?;
+    if enforce_guard {
+        if let Some(reason) = compiled.must_fallback_reason.clone() {
+            ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+            return Err(SearchError::IndexNotReady { reason });
+        }
+        if matches!(compiled.plan, SearchPlan::All) {
+            ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+            return Err(SearchError::IndexNotReady {
+                reason: compiled.planner_fallback.clone().unwrap_or_else(|| {
+                    "planner could not derive a selective index plan".to_string()
+                }),
+            });
+        }
+    }
     let (resolved_paths, mut diagnostics) = resolve_requested_paths(root, &request.requested_paths);
     let requested_filter = requested_filter_set(&resolved_paths);
-    let compiled = compile_request(request, loaded.as_ref())?;
     let mut engine = SearchEngineStats {
         engine: "indexed_regex".to_string(),
         index_generation: Some(runtime.manifest.generation),
@@ -235,6 +308,16 @@ pub fn indexed_search(
         &candidate_paths,
         &mut cache,
     );
+    if enforce_guard && should_fallback_to_rg(pruned_candidate_paths.len(), all_paths.len()) {
+        ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+        return Err(SearchError::IndexNotReady {
+            reason: format!(
+                "candidate set remained too broad for indexed verification ({}/{} files)",
+                pruned_candidate_paths.len(),
+                all_paths.len()
+            ),
+        });
+    }
 
     engine.candidates_examined = candidate_paths.len();
     engine.candidate_files = candidate_paths.len();
@@ -244,7 +327,13 @@ pub fn indexed_search(
     let mut total_match_count = 0usize;
     for path in &pruned_candidate_paths {
         let file_groups =
-            verify_path(root, path, &compiled.verifier, request.max_matches_per_file)?;
+            match verify_path(root, path, &compiled.verifier, request.max_matches_per_file) {
+                Ok(groups) => groups,
+                Err(error) => {
+                    ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+                    return Err(error);
+                }
+            };
         if file_groups.is_empty() {
             continue;
         }
@@ -305,6 +394,15 @@ pub fn indexed_search(
         diagnostics,
         engine: Some(engine),
     };
+    ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
+    Ok(result)
+}
+
+fn ensure_workspace_fresh(
+    root: &Path,
+    runtime: &RegexIndexRuntime,
+    loaded: &LoadedIndex,
+) -> Result<()> {
     if let Some(reason) = workspace_freshness_reason(
         root,
         &runtime.manifest,
@@ -312,7 +410,7 @@ pub fn indexed_search(
     ) {
         return Err(SearchError::IndexNotReady { reason });
     }
-    Ok(result)
+    Ok(())
 }
 
 pub(crate) fn build_verifier(request: &SearchRequest, query: &str) -> Result<Verifier> {

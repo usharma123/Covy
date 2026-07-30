@@ -71,7 +71,10 @@ pub use crate::generation::{
     update_overlay_index,
 };
 pub use crate::model::{RegexIndexManifest, RegexIndexRuntime};
-pub use crate::query::{guarded_fallback_reason, indexed_search};
+pub use crate::query::{
+    guarded_fallback_reason, guarded_indexed_search, indexed_search,
+    load_and_guarded_indexed_search, load_and_indexed_search,
+};
 
 #[cfg(test)]
 mod tests;
