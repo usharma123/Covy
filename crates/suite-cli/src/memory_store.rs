@@ -423,10 +423,6 @@ pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord
 pub(crate) fn forget_memory(id: i64) -> Result<usize> {
     let mut store = LocalMemoryStore::open_default()?;
     store.transaction(|conn| {
-        conn.execute(
-            "DELETE FROM memory_chunks WHERE memory_id = ?1",
-            params![id],
-        )?;
         conn.execute("DELETE FROM memories WHERE id = ?1", params![id])
             .map_err(Into::into)
     })
@@ -436,10 +432,6 @@ pub(crate) fn forget_memories_by_topic(topic: &str) -> Result<usize> {
     let mut store = LocalMemoryStore::open_default()?;
     let topic = normalize_non_empty(Some(topic), "general");
     store.transaction(|conn| {
-        conn.execute(
-            "DELETE FROM memory_chunks WHERE memory_id IN (SELECT id FROM memories WHERE topic = ?1)",
-            params![topic],
-        )?;
         conn.execute("DELETE FROM memories WHERE topic = ?1", params![topic])
             .map_err(Into::into)
     })
@@ -595,12 +587,9 @@ pub(crate) fn prune_memories(threshold: f64, dry_run: bool) -> Result<MemoryPrun
         0
     } else {
         store.transaction(|tx| {
-            let mut delete_chunks =
-                tx.prepare_cached("DELETE FROM memory_chunks WHERE memory_id = ?1")?;
             let mut delete_memory = tx.prepare_cached("DELETE FROM memories WHERE id = ?1")?;
             let mut deleted = 0;
             for id in &candidate_ids {
-                delete_chunks.execute(params![id])?;
                 deleted += delete_memory.execute(params![id])?;
             }
             Ok(deleted)
@@ -703,11 +692,8 @@ fn consolidate_memories_with_store(
             },
         )?;
         if !keep_originals {
-            let mut delete_chunks =
-                tx.prepare_cached("DELETE FROM memory_chunks WHERE memory_id = ?1")?;
             let mut delete_memory = tx.prepare_cached("DELETE FROM memories WHERE id = ?1")?;
             for id in &source_ids {
-                delete_chunks.execute(params![id])?;
                 delete_memory.execute(params![id])?;
             }
         }

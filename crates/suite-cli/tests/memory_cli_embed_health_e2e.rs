@@ -134,4 +134,18 @@ fn test_memory_cli_consolidate_embed_health_and_forget_topic() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"deleted\":1"));
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM memory_chunks", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM memory_embeddings", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
 }

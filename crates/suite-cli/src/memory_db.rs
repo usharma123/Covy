@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
-pub(crate) const CURRENT_MEMORY_SCHEMA_VERSION: u32 = 2;
+pub(crate) const CURRENT_MEMORY_SCHEMA_VERSION: u32 = 3;
 
 static CONNECTIONS_OPENED: AtomicU64 = AtomicU64::new(0);
 
@@ -149,6 +149,7 @@ fn apply_migration(conn: &Connection, version: u32) -> Result<()> {
     match version {
         1 => initialize_legacy_schema(conn),
         2 => add_query_indexes(conn),
+        3 => enforce_memory_dependent_lifecycle(conn),
         _ => anyhow::bail!("missing local memory migration for schema version {version}"),
     }
 }
@@ -522,6 +523,35 @@ fn add_query_indexes(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn enforce_memory_dependent_lifecycle(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        DELETE FROM memory_chunks
+        WHERE NOT EXISTS (
+            SELECT 1 FROM memories WHERE memories.id = memory_chunks.memory_id
+        );
+        DELETE FROM memory_embeddings
+        WHERE NOT EXISTS (
+            SELECT 1 FROM memories WHERE memories.id = memory_embeddings.memory_id
+        );
+
+        CREATE TRIGGER IF NOT EXISTS memories_dependents_ad
+        AFTER DELETE ON memories
+        BEGIN
+            DELETE FROM memory_chunks WHERE memory_id = old.id;
+            DELETE FROM memory_embeddings WHERE memory_id = old.id;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS memories_embedding_inputs_au
+        AFTER UPDATE OF content, tags, topic, keywords, project, source, raw_excerpt ON memories
+        BEGIN
+            DELETE FROM memory_embeddings WHERE memory_id = old.id;
+        END;
+        ",
+    )?;
+    Ok(())
+}
+
 pub(crate) fn fts_match_query(query: &str) -> Option<String> {
     let terms: Vec<String> = query
         .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
@@ -689,6 +719,82 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn memory_dependents_are_schema_owned_and_updates_invalidate_embeddings() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LocalMemoryStore::open_path(temp.path().join("memory.db")).unwrap();
+        store
+            .execute(
+                "INSERT INTO memories
+                 (id, content, topic, importance, weight, created_at_unix_ms, updated_at_unix_ms)
+                 VALUES (7, 'before', 'general', 'medium', 1.0, 1, 1)",
+                [],
+            )
+            .unwrap();
+        store
+            .execute(
+                "INSERT INTO memory_chunks (memory_id, chunk_index, content)
+                 VALUES (7, 0, 'before')",
+                [],
+            )
+            .unwrap();
+        let insert_embedding = || {
+            store
+                .execute(
+                    "INSERT INTO memory_embeddings
+                     (memory_id, model, dimensions, embedding_json, created_at_unix_ms)
+                     VALUES (7, 'test', 8, '[]', 1)",
+                    [],
+                )
+                .unwrap();
+        };
+        insert_embedding();
+
+        store
+            .execute(
+                "UPDATE memories SET content = 'after', updated_at_unix_ms = 2 WHERE id = 7",
+                [],
+            )
+            .unwrap();
+        assert_eq!(table_count(&store, "memory_embeddings").unwrap(), 0);
+        assert_eq!(table_count(&store, "memory_chunks").unwrap(), 1);
+
+        insert_embedding();
+        store
+            .execute("DELETE FROM memories WHERE id = 7", [])
+            .unwrap();
+        assert_eq!(table_count(&store, "memory_chunks").unwrap(), 0);
+        assert_eq!(table_count(&store, "memory_embeddings").unwrap(), 0);
+    }
+
+    #[test]
+    fn dependent_lifecycle_migration_removes_existing_orphans() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("memory-v2.db");
+        create_database_at_version(&path, 2);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO memory_chunks (memory_id, chunk_index, content)
+             VALUES (99, 0, 'orphan')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_embeddings
+             (memory_id, model, dimensions, embedding_json, created_at_unix_ms)
+             VALUES (99, 'test', 8, '[]', 1)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = LocalMemoryStore::open_path(&path).unwrap();
+
+        assert_eq!(store.metrics().migrations_applied, 1);
+        assert_eq!(table_count(&store, "memory_chunks").unwrap(), 0);
+        assert_eq!(table_count(&store, "memory_embeddings").unwrap(), 0);
     }
 
     #[test]
