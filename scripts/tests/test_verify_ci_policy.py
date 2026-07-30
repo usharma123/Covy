@@ -83,6 +83,26 @@ class CanonicalGatePolicyTests(unittest.TestCase):
             [],
         )
 
+    def test_repository_gate_compiles_the_direct_minimum_graph(self) -> None:
+        self.assertEqual(
+            verify_ci_policy.direct_minimum_gate_errors(self.full_gate),
+            [],
+        )
+
+    def test_policy_rejects_gate_without_direct_minimum_graph(self) -> None:
+        unsafe = self.full_gate.replace(
+            "run_cmd python3 scripts/validate_direct_minimum.py\n",
+            "",
+            1,
+        )
+        self.assertEqual(
+            verify_ci_policy.direct_minimum_gate_errors(unsafe),
+            [
+                "canonical gate does not compile the committed "
+                "direct-minimum graph"
+            ],
+        )
+
     def test_rejects_release_gate_without_strict_ledger_finalization(
         self,
     ) -> None:

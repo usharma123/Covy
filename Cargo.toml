@@ -43,19 +43,19 @@ testy-core = { version = "0.2.0", path = "crates/testy-core" }
 
 # Core
 roaring = "0.10"
-blake3 = "1"
+blake3 = "1.4.0"
 constant_time_eq = "0.4"
 sha2 = "0.10"
 thiserror = "2"
-anyhow = "1"
+anyhow = "1.0.47"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 yaml_serde = "0.10.4"
 toml = "0.8"
-toml_edit = "0.22"
+toml_edit = "0.22.7"
 wincode-impl = { package = "wincode", version = "=0.4.2", features = ["derive"] }
 regex = "1"
-tracing = "0.1"
+tracing = "0.1.29"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1.48", features = ["io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 rayon = "1"
@@ -66,7 +66,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 quick-xml = { version = "0.41", features = ["serialize"] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4.3.4", features = ["derive"] }
 colored = "3"
 comfy-table = "7"
 glob = "0.3"
@@ -76,14 +76,14 @@ notify = "8"
 ureq = { version = "3", features = ["json"] }
 
 # FS
-ignore = "0.4"
+ignore = "0.4.15"
 memmap2 = "0.9"
 regex-syntax = "0.8"
 
 # Dev
 tempfile = "3"
-assert_cmd = "2"
-predicates = "3"
+assert_cmd = "2.1.0"
+predicates = "3.0.1"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [workspace.lints.rust]

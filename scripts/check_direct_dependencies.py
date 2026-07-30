@@ -257,7 +257,7 @@ def audit(root: Path) -> AuditResult:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="validate Packet28's direct-minimum Cargo dependency graph"
+        description="validate Packet28's direct Cargo dependency usage"
     )
     parser.add_argument(
         "--root",

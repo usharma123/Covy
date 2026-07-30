@@ -626,6 +626,16 @@ def audit_finalization_wiring_errors(full_gate: str) -> list[str]:
     ]
 
 
+def direct_minimum_gate_errors(full_gate: str) -> list[str]:
+    """Return violations of the alternate direct-minimum graph gate."""
+
+    if "run_cmd python3 scripts/validate_direct_minimum.py" in full_gate:
+        return []
+    return [
+        "canonical gate does not compile the committed direct-minimum graph"
+    ]
+
+
 def verify_workflow_wiring(errors: list[str]) -> None:
     build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
     release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
@@ -655,6 +665,7 @@ def verify_workflow_wiring(errors: list[str]) -> None:
         errors.append("canonical gate does not run the Rust hazard-policy checker")
     if "run_cmd python3 scripts/check_test_harness.py" not in full_gate:
         errors.append("canonical gate does not run the test-harness policy checker")
+    errors.extend(direct_minimum_gate_errors(full_gate))
     if "run_cmd cargo deny --locked check" not in full_gate:
         errors.append("canonical gate does not run cargo-deny against the lockfile")
 

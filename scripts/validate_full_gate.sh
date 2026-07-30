@@ -94,6 +94,8 @@ if [[ "$msrv_only" == true ]]; then
   exit 0
 fi
 
+run_cmd python3 scripts/validate_direct_minimum.py
+
 # `cargo fmt` does not resolve dependencies and does not accept `--locked`.
 run_cmd cargo fmt --all -- --check
 run_cmd cargo check --workspace --all-targets --all-features --locked

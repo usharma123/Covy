@@ -1,0 +1,8 @@
+format = 1
+toolchain = "nightly-2026-07-27"
+manifest-sha256 = "5cd069b2fb408b166e0aabce35665663cf9d55d4214155218ead23b4bd242c52"
+
+[[transitive-pins]]
+package = "wincode-derive"
+version = "0.4.1"
+reason = "wincode 0.4.2 accepts newer derive releases whose generated code requires a newer runtime API"

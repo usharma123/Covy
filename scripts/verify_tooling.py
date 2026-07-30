@@ -37,6 +37,7 @@ EXPECTED_RECIPES = {
     ),
     "deny": ("cargo deny --locked check",),
     "deps": ("python3 scripts/check_direct_dependencies.py",),
+    "deps-min": ("python3 scripts/validate_direct_minimum.py",),
     "fast": ("scripts/validate_refactor_batch.sh",),
     "ci": ("scripts/validate_full_gate.sh",),
     "msrv": (
