@@ -2905,6 +2905,23 @@ while True:
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[cfg(unix)]
+    async fn restores_numeric_client_id_after_namespaced_upstream_round_trip() {
+        let (_directory, client, _output) = test_client(1_000).await;
+
+        let response = client
+            .send_request(&request(json!(7), 0, "numeric"))
+            .await
+            .unwrap();
+
+        assert_eq!(response["id"], 7);
+        assert!(response["result"]["wire_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("packet28-proxy-request:test:")));
+        client.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(unix)]
     async fn discards_late_response_after_timeout_without_poisoning_next_request() {
         let (_directory, client, _output) = test_client(300).await;
         let timed_out = client
