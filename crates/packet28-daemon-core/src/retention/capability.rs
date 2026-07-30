@@ -1091,14 +1091,7 @@ impl CapabilityDir {
             Err(rustix::io::Errno::NOENT) => return Ok(None),
             Err(source) => return Err(source.into()),
         };
-        validate_owned_single_link_regular(
-            &stat,
-            name,
-            self.identity.device,
-            "capability managed file",
-        )?;
-        validate_authenticated_read_mode(&stat, name)?;
-        Ok(Some(identity_from_stat(&stat)))
+        authenticated_read_entry_identity_from_stat(&stat, name, self.identity.device)
     }
 
     fn read_file_is_still_attached(
@@ -3661,6 +3654,23 @@ fn validate_authenticated_read_mode(stat: &rfs::Stat, name: &OsStr) -> io::Resul
     Ok(mode)
 }
 
+fn authenticated_read_entry_identity_from_stat(
+    stat: &rfs::Stat,
+    name: &OsStr,
+    expected_device: u64,
+) -> io::Result<Option<FileIdentity>> {
+    validate_owned_regular_read_snapshot(stat, name, expected_device, "capability managed file")?;
+    // Darwin may report the old inode with zero links when `fstatat` races an
+    // atomic replacement. This is the path-side equivalent of an already-open
+    // descriptor becoming detached: retry it, but continue to reject hard
+    // links and every other failed authentication above.
+    if stat.st_nlink == 0 {
+        return Ok(None);
+    }
+    validate_authenticated_read_mode(stat, name)?;
+    Ok(Some(identity_from_stat(stat)))
+}
+
 fn authenticate_read_descriptor(
     fd: impl AsFd,
     name: &OsStr,
@@ -5799,6 +5809,24 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(fs::metadata(linked_source).unwrap().nlink(), 2);
+    }
+
+    #[test]
+    fn authenticated_reader_retries_a_zero_link_entry_snapshot() {
+        let root = tempdir().unwrap();
+        let name = OsStr::new("authority.json");
+        let authority = root.path().join(name);
+        fs::write(&authority, b"trusted").unwrap();
+        fs::set_permissions(&authority, fs::Permissions::from_mode(0o600)).unwrap();
+        let file = fs::File::open(&authority).unwrap();
+        fs::remove_file(&authority).unwrap();
+        let stat = rfs::fstat(&file).unwrap();
+        assert_eq!(stat.st_nlink, 0);
+
+        let identity =
+            authenticated_read_entry_identity_from_stat(&stat, name, stat.st_dev as u64).unwrap();
+
+        assert_eq!(identity, None);
     }
 
     #[test]
