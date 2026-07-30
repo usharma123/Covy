@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-30",
+  "source": {
+    "integration_tree": "cf9485939d22d64008e39623d0234bfeb0f8e455",
+    "files": {
+      "crates/packet28d/src/runtime.rs": "50147a9fad9398a40747e3984d9ba19ec32d219aa0cf6d1c0b60fadd6a9a8efe"
+    }
+  },
+  "environment": {
+    "os": "Darwin 24.6.0",
+    "arch": "arm64",
+    "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+    "cargo": "cargo 1.93.1 (083ac5135 2025-12-15)"
+  },
+  "iterations": 32,
+  "timer_delay_us": 1000,
+  "blocking_duration_us": 10000,
+  "direct_sync": {
+    "p50_lateness_us": 14012,
+    "p95_lateness_us": 14103,
+    "max_lateness_us": 14192
+  },
+  "blocking_pool": {
+    "p50_lateness_us": 2030,
+    "p95_lateness_us": 2083,
+    "max_lateness_us": 2089
+  },
+  "p95_lateness_reduction_percent": 85.230092888037,
+  "p95_lateness_improvement": 6.770523283725
+}

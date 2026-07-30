@@ -29,6 +29,9 @@ What it does:
 
 ## Focused experiments
 
+- [`asy-04-runtime-starvation/`](asy-04-runtime-starvation/) records the
+  release-mode timer-lateness boundary for synchronous work on a Tokio worker
+  versus the daemon's bounded blocking pool.
 - [`per-01-task-persistence/`](per-01-task-persistence/) contains the
   full-registry-checkpoint-under-lock versus owned, coalesced daemon task
   persistence comparison.
