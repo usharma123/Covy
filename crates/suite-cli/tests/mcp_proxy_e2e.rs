@@ -1,7 +1,3 @@
-#[expect(
-    dead_code,
-    reason = "shared lifecycle fixtures support native and proxy MCP test binaries"
-)]
 #[cfg(unix)]
 #[path = "support/mcp_lifecycle.rs"]
 mod mcp_lifecycle;
@@ -32,16 +28,15 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 #[cfg(unix)]
-use mcp_lifecycle::{
-    corrupt_task_event_log, large_response_batch, read_content_length_message,
-    small_buffered_stdout_pair, wait_for_child, wait_for_file, wait_for_stdout_backpressure,
-    write_content_length_message,
-};
+use mcp_lifecycle::{corrupt_task_event_log, large_response_batch, wait_for_file};
 use mcp_proxy::{
     close_mcp_stdin, ensure_packet28d_built, init_repo, initialize_mcp_session,
     read_mcp_message_for_id, start_mcp_proxy_server, start_mcp_proxy_server_with_tool,
     stop_mcp_server, suite_cmd, write_mcp_message, write_repo_fixture,
 };
+#[cfg(unix)]
+use process_harness::BackpressuredMcpHarness;
+use process_harness::HarnessLimits;
 
 const MCP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -1548,10 +1543,6 @@ fn test_mcp_proxy_exits_when_poller_fails_during_upstream_tool_call() {
 #[test]
 #[cfg(unix)]
 fn test_mcp_proxy_fatal_poller_cleanup_aborts_backpressured_stdout() {
-    use std::io::{BufReader, BufWriter, Read as _};
-    use std::os::fd::OwnedFd;
-    use std::process::{Command, Stdio};
-
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();
     init_repo(dir.path());
@@ -1576,65 +1567,53 @@ fn test_mcp_proxy_fatal_poller_cleanup_aborts_backpressured_stdout() {
     .unwrap();
 
     let task_id = "task-proxy-poller-failed-with-blocked-stdout";
-    let (child_stdout, parent_stdout) = small_buffered_stdout_pair();
-    let child_stdout: OwnedFd = child_stdout.into();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_Packet28"));
-    command
-        .current_dir(dir.path())
-        .args([
-            "mcp",
-            "proxy",
-            "--root",
-            dir.path().to_str().unwrap(),
-            "--upstream-config",
-            config_path.to_str().unwrap(),
-            "--task-id",
-            task_id,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::from(child_stdout))
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().unwrap();
-    let mut stdin = BufWriter::new(child.stdin.take().unwrap());
-    let mut stdout = BufReader::new(parent_stdout);
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command.current_dir(dir.path()).args([
+        "mcp",
+        "proxy",
+        "--root",
+        dir.path().to_str().unwrap(),
+        "--upstream-config",
+        config_path.to_str().unwrap(),
+        "--task-id",
+        task_id,
+    ]);
+    let mut server =
+        BackpressuredMcpHarness::spawn(&mut command, HarnessLimits::default()).unwrap();
 
-    write_content_length_message(
-        &mut stdin,
-        &json!({
-            "jsonrpc":"2.0",
-            "id":1,
-            "method":"initialize",
-            "params":{
-                "protocolVersion":"2025-03-26",
-                "capabilities":{},
-                "clientInfo":{"name":"stdout-backpressure-test","version":"1"}
-            }
-        }),
-    );
-    assert_eq!(read_content_length_message(&mut stdout)["id"], 1);
+    server
+        .send_value(
+            &json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "method":"initialize",
+                "params":{
+                    "protocolVersion":"2025-03-26",
+                    "capabilities":{},
+                    "clientInfo":{"name":"stdout-backpressure-test","version":"1"}
+                }
+            }),
+            MCP_RESPONSE_TIMEOUT,
+        )
+        .unwrap();
+    assert_eq!(server.receive(MCP_RESPONSE_TIMEOUT).unwrap()["id"], 1);
 
     let batch = large_response_batch();
-    let response_lower_bound = write_content_length_message(&mut stdin, &batch);
-    wait_for_stdout_backpressure(
-        stdout.get_ref(),
-        response_lower_bound,
-        Duration::from_secs(3),
-    );
+    let response_lower_bound = server.send_value(&batch, MCP_RESPONSE_TIMEOUT).unwrap();
+    server
+        .wait_for_stdout_backpressure(response_lower_bound, Duration::from_secs(3))
+        .unwrap();
     assert!(
-        child.try_wait().unwrap().is_none(),
+        server.is_running().unwrap(),
         "proxy exited before the poller failure was injected"
     );
     corrupt_task_event_log(dir.path(), task_id);
 
-    let status = wait_for_child(&mut child, Duration::from_secs(4));
-    assert!(!status.success());
-    let mut stderr = String::new();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut stderr)
-        .unwrap();
+    let output = server
+        .wait(Duration::from_secs(4))
+        .unwrap_or_else(|error| panic!("failed to wait for proxy MCP failure: {error}"));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("MCP notification event-log read failed"),
         "unexpected proxy failure: {stderr}"

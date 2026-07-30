@@ -88,12 +88,13 @@ local `SAFETY` contract; transport tests cover authenticated Unix operation,
 forced TCP, workspace fallback, wrong-owner rejection, and runtime-entry
 replacement and special-file failures.
 
-MCP notification-poller lifecycle tests use one reviewed Unix-only socket
-probe. The fixture calls `setsockopt`, `getsockopt`, and `ioctl(FIONREAD)` to
-create and observe deterministic pipe pressure while verifying cancellation
-and join behavior. Each call is confined to the test helper, owns its socket
-descriptor for the duration of the call, and documents the pointer-lifetime
-contract at the unsafe boundary. No MCP production path requires unsafe Rust.
+The shared process harness owns one reviewed Unix-only socket probe for MCP
+notification-poller lifecycle tests. It calls `setsockopt`, `getsockopt`, and
+`ioctl(FIONREAD)` to create and observe deterministic pipe pressure while
+verifying cancellation and join behavior. Each call remains inside the
+bounded child-process owner, owns its socket descriptor for the duration of
+the call, and documents the pointer-lifetime contract at the unsafe boundary.
+No MCP production path requires unsafe Rust.
 
 Persistence path-safety tests add two reviewed Unix-only probes while the
 production state-filesystem API remains safe Rust. Context-memory subprocess
@@ -120,7 +121,7 @@ and requires a reason on each expectation.
   reason, are checked for fulfillment, and are reconciled against an exact
   reviewed inventory. Production `#[allow]` overrides are rejected.
 - The same checker inventories unsafe syntax. Its reviewed allowlist currently
-  contains 26 files: 14 production OS/FFI/mmap adapters and twelve
+  contains 25 files: 14 production OS/FFI/mmap adapters and eleven
   test/benchmark instrumentation files. A new unsafe-bearing file or stale
   allowlist entry fails the gate until the architectural inventory is
   reconciled explicitly.

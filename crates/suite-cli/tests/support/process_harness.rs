@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::fs;
 use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -10,6 +11,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, OwnedFd};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
@@ -66,6 +71,20 @@ pub fn run_git(root: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// Replaces an existing regular-file fixture with a directory.
+pub fn replace_file_with_directory(path: &Path) {
+    if path.exists() {
+        let displaced = path.with_extension("packet28-fixture-original");
+        assert!(
+            !displaced.exists(),
+            "fixture displacement already exists: {}",
+            displaced.display()
+        );
+        fs::rename(path, displaced).unwrap();
+    }
+    fs::create_dir(path).unwrap();
 }
 
 /// Resource and deadline limits applied by the integration process harness.
@@ -474,10 +493,20 @@ impl ManagedProcess {
         command: &mut Command,
         limits: HarnessLimits,
     ) -> Result<(Self, ChildStdout), HarnessError> {
+        let (process, stdout) = Self::spawn_with_stdout(command, limits, Stdio::piped())?;
+        let stdout = stdout.ok_or_else(|| missing_pipe("child stdout"))?;
+        Ok((process, stdout))
+    }
+
+    fn spawn_with_stdout(
+        command: &mut Command,
+        limits: HarnessLimits,
+        stdout: Stdio,
+    ) -> Result<(Self, Option<ChildStdout>), HarnessError> {
         let command_display = format!("{command:?}");
         command
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdout(stdout)
             .stderr(Stdio::piped());
         #[cfg(unix)]
         command.process_group(0);
@@ -494,13 +523,7 @@ impl ManagedProcess {
                 return Err(missing_pipe("child stdin"));
             }
         };
-        let stdout = match child.stdout.take() {
-            Some(stdout) => stdout,
-            None => {
-                cleanup_spawn_failure(&mut child, pid);
-                return Err(missing_pipe("child stdout"));
-            }
-        };
+        let stdout = child.stdout.take();
         let stderr = match child.stderr.take() {
             Some(stderr) => stderr,
             None => {
@@ -1333,6 +1356,302 @@ impl Drop for McpHarness {
         self.process.terminate_and_reap(true);
         self.finish_readers();
     }
+}
+
+/// MCP child owner whose stdout is intentionally backpressured by a small socket.
+#[cfg(unix)]
+pub struct BackpressuredMcpHarness {
+    process: ManagedProcess,
+    stdout: BufReader<UnixStream>,
+    stdout_capture: BoundedCapture,
+    limits: HarnessLimits,
+    framing: McpFraming,
+}
+
+#[cfg(unix)]
+impl BackpressuredMcpHarness {
+    pub fn spawn(command: &mut Command, limits: HarnessLimits) -> Result<Self, HarnessError> {
+        Self::spawn_with_framing(command, limits, McpFraming::ContentLength)
+    }
+
+    pub fn spawn_newline_json(
+        command: &mut Command,
+        limits: HarnessLimits,
+    ) -> Result<Self, HarnessError> {
+        Self::spawn_with_framing(command, limits, McpFraming::NewlineJson)
+    }
+
+    fn spawn_with_framing(
+        command: &mut Command,
+        limits: HarnessLimits,
+        framing: McpFraming,
+    ) -> Result<Self, HarnessError> {
+        let (child_stdout, parent_stdout) =
+            small_buffered_stdout_pair().map_err(|source| HarnessError::Io {
+                operation: "create backpressured MCP stdout",
+                source,
+            })?;
+        let child_stdout: OwnedFd = child_stdout.into();
+        let (process, piped_stdout) =
+            ManagedProcess::spawn_with_stdout(command, limits, Stdio::from(child_stdout))?;
+        debug_assert!(piped_stdout.is_none());
+        Ok(Self {
+            process,
+            stdout: BufReader::new(parent_stdout),
+            stdout_capture: BoundedCapture::new(limits.capture_bytes),
+            limits,
+            framing,
+        })
+    }
+
+    /// Sends one framed value and returns its unframed body size.
+    pub fn send_value(&mut self, value: &Value, timeout: Duration) -> Result<usize, HarnessError> {
+        let body = serde_json::to_vec(value)
+            .map_err(|error| self.mcp_error(format!("serialize MCP message: {error}")))?;
+        if body.len() > self.limits.mcp_message_bytes {
+            return Err(self.mcp_error(format!(
+                "outgoing MCP message is {} bytes; limit is {} bytes",
+                body.len(),
+                self.limits.mcp_message_bytes
+            )));
+        }
+        let body_len = body.len();
+        let framed = match self.framing {
+            McpFraming::ContentLength => {
+                let mut framed = format!("Content-Length: {body_len}\r\n\r\n").into_bytes();
+                framed.extend_from_slice(&body);
+                framed
+            }
+            McpFraming::NewlineJson => {
+                let mut framed = body;
+                framed.push(b'\n');
+                framed
+            }
+        };
+        let deadline = checked_deadline(timeout);
+        match self.process.write_all_until(&framed, deadline) {
+            Ok(()) => Ok(body_len),
+            Err(WriteFailure::Io(source)) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                Err(HarnessError::Io {
+                    operation: "write backpressured MCP stdin",
+                    source,
+                })
+            }
+            Err(WriteFailure::Timeout) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                Err(HarnessError::Timeout {
+                    operation: "write backpressured MCP stdin",
+                    timeout,
+                    diagnostics: Box::new(self.process.diagnostics(&self.stdout_capture)),
+                })
+            }
+        }
+    }
+
+    pub fn receive(&mut self, timeout: Duration) -> Result<Value, HarnessError> {
+        self.stdout
+            .get_ref()
+            .set_read_timeout(Some(timeout))
+            .map_err(|source| HarnessError::Io {
+                operation: "configure backpressured MCP stdout deadline",
+                source,
+            })?;
+        let message = match self.framing {
+            McpFraming::ContentLength => read_mcp_message(
+                &mut self.stdout,
+                self.limits.mcp_header_bytes,
+                self.limits.mcp_message_bytes,
+            ),
+            McpFraming::NewlineJson => {
+                read_newline_json_message(&mut self.stdout, self.limits.mcp_message_bytes)
+            }
+        }
+        .map_err(|message| self.mcp_error(message))?
+        .ok_or_else(|| self.mcp_error("MCP stdout closed"))?;
+        if let Ok(bytes) = serde_json::to_vec(&message) {
+            self.stdout_capture.append(&bytes);
+        }
+        Ok(message)
+    }
+
+    pub fn wait_for_stdout_backpressure(
+        &mut self,
+        response_lower_bound: usize,
+        timeout: Duration,
+    ) -> Result<(), HarnessError> {
+        let send_buffer =
+            socket_send_buffer(self.stdout.get_ref()).map_err(|source| HarnessError::Io {
+                operation: "read MCP stdout socket capacity",
+                source,
+            })?;
+        if response_lower_bound <= send_buffer.saturating_mul(4) {
+            return Err(self.mcp_error(format!(
+                "fixture response has {response_lower_bound} bytes but must exceed four times the {send_buffer}-byte socket capacity"
+            )));
+        }
+        let minimum_pending = (send_buffer / 4).max(1);
+        let deadline = checked_deadline(timeout);
+        loop {
+            let pending =
+                socket_pending_bytes(self.stdout.get_ref()).map_err(|source| HarnessError::Io {
+                    operation: "inspect MCP stdout socket pressure",
+                    source,
+                })?;
+            if pending >= minimum_pending {
+                thread::sleep(Duration::from_millis(50));
+                return Ok(());
+            }
+            let Some(remaining) = remaining_until(deadline) else {
+                return Err(HarnessError::Timeout {
+                    operation: "wait for MCP stdout backpressure",
+                    timeout,
+                    diagnostics: Box::new(self.process.diagnostics(&self.stdout_capture)),
+                });
+            };
+            sleep_for_poll(remaining, self.limits.poll_interval);
+        }
+    }
+
+    pub fn is_running(&mut self) -> Result<bool, HarnessError> {
+        self.process
+            .observe_status()
+            .map(|status| status.is_none())
+            .map_err(|source| HarnessError::Io {
+                operation: "poll backpressured MCP child",
+                source,
+            })
+    }
+
+    pub fn wait(&mut self, timeout: Duration) -> Result<ProcessOutput, HarnessError> {
+        let status = match self.process.wait_until(timeout) {
+            Ok(Some(_)) => {
+                self.process
+                    .complete_successful_wait()
+                    .map_err(|source| HarnessError::Io {
+                        operation: "reap backpressured MCP child",
+                        source,
+                    })?
+            }
+            Ok(None) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                return Err(HarnessError::Timeout {
+                    operation: "wait for backpressured MCP child",
+                    timeout,
+                    diagnostics: Box::new(self.process.diagnostics(&self.stdout_capture)),
+                });
+            }
+            Err(source) => {
+                self.process.terminate_and_reap(false);
+                self.finish_readers();
+                return Err(HarnessError::Io {
+                    operation: "poll backpressured MCP child",
+                    source,
+                });
+            }
+        };
+        self.finish_readers();
+        let stdout = self.stdout_capture.snapshot();
+        let stderr = self.process.stderr.snapshot();
+        Ok(ProcessOutput {
+            status,
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
+        })
+    }
+
+    fn mcp_error(&mut self, message: impl Into<String>) -> HarnessError {
+        HarnessError::Mcp {
+            message: message.into(),
+            diagnostics: Box::new(self.process.diagnostics(&self.stdout_capture)),
+        }
+    }
+
+    fn finish_readers(&mut self) {
+        self.process.finish_stdin_writer();
+        self.process.finish_stderr_pump();
+    }
+}
+
+#[cfg(unix)]
+impl Drop for BackpressuredMcpHarness {
+    fn drop(&mut self) {
+        self.process.terminate_and_reap(true);
+        self.finish_readers();
+    }
+}
+
+#[cfg(unix)]
+fn small_buffered_stdout_pair() -> io::Result<(UnixStream, UnixStream)> {
+    let (child_stdout, parent_stdout) = UnixStream::pair()?;
+    set_socket_send_buffer(&child_stdout)?;
+    set_socket_send_buffer(&parent_stdout)?;
+    Ok((child_stdout, parent_stdout))
+}
+
+#[cfg(unix)]
+fn set_socket_send_buffer(stream: &UnixStream) -> io::Result<()> {
+    let requested: libc::c_int = 4 * 1024;
+    // SAFETY: `stream` owns a valid socket descriptor and the option pointer
+    // references an initialized integer for the duration of the call.
+    let result = unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            (&raw const requested).cast(),
+            std::mem::size_of_val(&requested)
+                .try_into()
+                .expect("socket option length fits socklen_t"),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn socket_send_buffer(stream: &UnixStream) -> io::Result<usize> {
+    let mut size: libc::c_int = 0;
+    let mut length: libc::socklen_t = std::mem::size_of_val(&size)
+        .try_into()
+        .expect("socket option length fits socklen_t");
+    // SAFETY: `stream` owns a valid socket descriptor and both output pointers
+    // remain initialized and writable for the duration of the call.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            (&raw mut size).cast(),
+            &raw mut length,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    usize::try_from(size)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "negative socket buffer size"))
+}
+
+#[cfg(unix)]
+fn socket_pending_bytes(stream: &UnixStream) -> io::Result<usize> {
+    let mut pending: libc::c_int = 0;
+    // SAFETY: `stream` owns a valid socket descriptor and `pending` is a
+    // writable integer used by `FIONREAD`.
+    let result = unsafe { libc::ioctl(stream.as_raw_fd(), libc::FIONREAD, &raw mut pending) };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    usize::try_from(pending)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "negative pending byte count"))
 }
 
 fn spawn_mcp_reader(
