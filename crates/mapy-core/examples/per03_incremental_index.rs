@@ -72,12 +72,12 @@ fn measure_mapy_compaction(fixture: &BenchmarkFixture) -> AnyResult<Measurement>
         .0;
     }
     fixture.write_source(0, 400)?;
-    let before = snapshot_tree(&fixture.mapy_index_dir())?;
+    let before = snapshot_tree(&fixture.mapy_publication_dir())?;
     let started = Instant::now();
     let compacted =
         update_repo_index_runtime(&fixture.root, &runtime, std::slice::from_ref(&target), true)?.0;
     let elapsed = started.elapsed();
-    let after = snapshot_tree(&fixture.mapy_index_dir())?;
+    let after = snapshot_tree(&fixture.mapy_publication_dir())?;
     if compacted.manifest.segment_count != 1 {
         return Err("mapy compaction did not publish one segment".into());
     }
@@ -145,7 +145,7 @@ fn measure_mapy_pair(fixture: &BenchmarkFixture) -> AnyResult<(Measurement, Meas
         legacy_bytes = encoded.len() as u64;
         legacy = next;
 
-        let before = snapshot_tree(&fixture.mapy_index_dir())?;
+        let before = snapshot_tree(&fixture.mapy_publication_dir())?;
         let incremental_started = Instant::now();
         let (next_incremental, summary) = update_repo_index_runtime(
             &fixture.root,
@@ -163,7 +163,7 @@ fn measure_mapy_pair(fixture: &BenchmarkFixture) -> AnyResult<(Measurement, Meas
             changed_paths_considered: summary.work.changed_paths_considered,
         });
         incremental_samples.push(incremental_started.elapsed());
-        let after = snapshot_tree(&fixture.mapy_index_dir())?;
+        let after = snapshot_tree(&fixture.mapy_publication_dir())?;
         incremental_bytes = changed_file_bytes(&before, &after);
     }
 
@@ -388,8 +388,8 @@ impl BenchmarkFixture {
         fs::write(self.root.join(format!("src/file_{idx:03}.rs")), body)
     }
 
-    fn mapy_index_dir(&self) -> PathBuf {
-        self.root.join(".packet28").join("index").join("mapy-v1")
+    fn mapy_publication_dir(&self) -> PathBuf {
+        self.root.join(".packet28").join("index")
     }
 
     fn regex_index_dir(&self) -> PathBuf {

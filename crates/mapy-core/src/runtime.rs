@@ -379,17 +379,13 @@ pub fn build_repo_map_from_runtime(
     req: RepoMapRequest,
     runtime: &RepoIndexRuntime,
 ) -> Result<EnvelopeV1<RepoMapPayload>, CovyError> {
-    if !runtime.is_loaded() {
-        return Err(CovyError::Cache(
-            "repository index runtime is not loaded".to_string(),
-        ));
-    }
-    if req.include_tests && !runtime.manifest.include_tests {
-        return Err(CovyError::Cache(
-            "repository index runtime does not include test files".to_string(),
-        ));
-    }
-    let mut scans = Vec::with_capacity(runtime.manifest.total_files);
+    let file_count = runtime.validated_map_file_count(req.include_tests)?;
+    let mut scans = Vec::new();
+    scans.try_reserve_exact(file_count).map_err(|error| {
+        CovyError::Cache(format!(
+            "failed to reserve authenticated repository map input: {error}"
+        ))
+    })?;
     runtime.for_each_file(|entry| {
         if req.include_tests || !entry.is_test {
             scans.push(file_scan_from_index_entry(entry));

@@ -96,6 +96,17 @@ impl RetainedDir {
             .map_or(&self.root, |binding| &binding.file)
     }
 
+    pub(super) fn open_directory_lock_file(&self) -> io::Result<File> {
+        rfs::openat(
+            self.directory(),
+            OsStr::new("."),
+            DIRECTORY_FLAGS,
+            Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(io::Error::from)
+    }
+
     pub(super) fn validate(&self) -> io::Result<()> {
         let current_root =
             rfs::open(&self.root_path, DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)?;

@@ -220,11 +220,11 @@ pub struct RepoIndexSnapshot {
 pub struct RepoIndexUpdateWork {
     /// Bytes decoded from publication manifests and generation records while fencing this update.
     pub publication_metadata_bytes_decoded: usize,
-    /// Repository-sized base/segment bytes decoded while fencing this update.
+    /// Repository base/segment bytes decoded while validating newly persisted update artifacts.
     pub repository_artifact_bytes_decoded: usize,
-    /// Repository-sized base/segment artifacts decoded while fencing this update.
+    /// Repository base/segment artifacts decoded while validating this update.
     pub repository_artifacts_decoded: usize,
-    /// Repository-sized artifact bytes hashed while authenticating the publication fence.
+    /// Repository artifact bytes hashed for new digests, persisted-byte authentication, or fencing.
     pub repository_artifact_bytes_hashed: usize,
     /// Constant-size filesystem metadata checks performed for pinned publication artifacts.
     pub repository_artifact_metadata_checks: usize,

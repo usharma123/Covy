@@ -325,12 +325,16 @@ mod tests {
         let mut prepared = prepare_shared(root, &paths);
 
         let error = prepared
-            .publish_with(|root, _, _| {
+            .publish_with(|root, previous, current| {
                 let index_dir = root.join(".packet28").join("index").join("mapy-v1");
-                fs::write(index_dir.join("manifest.json"), b"partial current").unwrap();
+                fs::write(
+                    index_dir.join("manifest.json"),
+                    serde_json::to_vec_pretty(current).unwrap(),
+                )
+                .unwrap();
                 fs::write(
                     index_dir.join("manifest.previous.json"),
-                    b"partial previous",
+                    serde_json::to_vec_pretty(previous.unwrap()).unwrap(),
                 )
                 .unwrap();
                 Err(CovyError::Cache("injected publication failure".to_string()))

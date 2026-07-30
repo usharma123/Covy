@@ -1531,6 +1531,7 @@ dependencies = [
 name = "packet28-state-fs"
 version = "0.2.63"
 dependencies = [
+ "fs2",
  "rustix",
  "tempfile",
 ]

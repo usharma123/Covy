@@ -12,6 +12,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+#[cfg(unix)]
+use fs2::FileExt;
+
 const MAX_TEMP_ATTEMPTS: usize = 32;
 const MAX_DIRECTORY_ENTRIES: usize = 100_000;
 
@@ -53,6 +56,19 @@ pub struct OpenedStateFile {
     pub created: bool,
 }
 
+/// An advisory exclusive lease on a retained directory.
+///
+/// The lease is attached to the retained directory object rather than to a
+/// replaceable child entry. It is therefore suitable for serializing
+/// cooperative namespace writers even if an attacker renames their
+/// conventional lock-file leaf.
+#[cfg(unix)]
+#[derive(Debug)]
+#[must_use = "dropping the directory lock releases the exclusive lease"]
+pub struct StateDirLock {
+    file: File,
+}
+
 impl StateDir {
     /// Opens a managed directory beneath `root`.
     ///
@@ -83,6 +99,47 @@ impl StateDir {
     /// substituted since this capability was opened.
     pub fn validate(&self) -> io::Result<()> {
         self.inner.validate()
+    }
+
+    /// Acquires an advisory exclusive lease on this retained directory.
+    ///
+    /// Cooperative writers must acquire this lease before any replaceable
+    /// child lock. The retained ancestry is revalidated after acquisition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the advisory lock cannot be acquired or the
+    /// retained ancestry changes while waiting.
+    #[cfg(unix)]
+    pub fn lock_exclusive(&self) -> io::Result<StateDirLock> {
+        self.acquire_exclusive_lock(false)
+    }
+
+    /// Attempts to acquire an advisory exclusive lease without blocking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::WouldBlock`] when another descriptor holds an
+    /// incompatible lease, or an ancestry error if this capability detached.
+    #[cfg(unix)]
+    pub fn try_lock_exclusive(&self) -> io::Result<StateDirLock> {
+        self.acquire_exclusive_lock(true)
+    }
+
+    #[cfg(unix)]
+    fn acquire_exclusive_lock(&self, nonblocking: bool) -> io::Result<StateDirLock> {
+        self.validate()?;
+        let file = self.inner.open_directory_lock_file()?;
+        if nonblocking {
+            FileExt::try_lock_exclusive(&file)?;
+        } else {
+            FileExt::lock_exclusive(&file)?;
+        }
+        if let Err(error) = self.validate() {
+            let _ = FileExt::unlock(&file);
+            return Err(error);
+        }
+        Ok(StateDirLock { file })
     }
 
     /// Reads an optional regular file through a hard byte limit.
@@ -371,7 +428,27 @@ impl StateDir {
     ///
     /// Returns an error when traversal, removal, or ancestry validation fails.
     pub fn remove_tree_if_exists(&self, name: &str) -> io::Result<()> {
+        self.remove_tree_if_exists_with(name, || Ok(()))
+    }
+
+    /// Variant of [`Self::remove_tree_if_exists`] with a testable
+    /// pre-removal hook.
+    ///
+    /// The hook runs after ancestry validation and immediately before
+    /// descriptor-relative removal.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the same errors as [`Self::remove_tree_if_exists`] and errors
+    /// from `before_remove`.
+    #[doc(hidden)]
+    pub fn remove_tree_if_exists_with(
+        &self,
+        name: &str,
+        before_remove: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
         self.validate()?;
+        before_remove()?;
         self.inner.remove_tree_if_exists(name)?;
         self.inner.sync()?;
         self.validate()
@@ -384,6 +461,13 @@ impl StateDir {
     /// Returns an operating-system sync error.
     pub fn sync(&self) -> io::Result<()> {
         self.inner.sync()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for StateDirLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
     }
 }
 
@@ -514,6 +598,23 @@ mod tests {
         let error = state.read_bounded("oversized", 1_048_576).unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_directory_leases_contend_even_between_clones() {
+        let root = tempdir().unwrap();
+        let state = StateDir::open(root.path(), &[".packet28"], true).unwrap();
+        let lease = state.lock_exclusive().unwrap();
+
+        let error = state
+            .clone()
+            .try_lock_exclusive()
+            .expect_err("a clone must open an independently contending lock description");
+
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        drop(lease);
+        let _lease = state.try_lock_exclusive().unwrap();
     }
 
     #[cfg(unix)]
