@@ -561,6 +561,70 @@ fn live_recovered_cancellation_blocks_readiness_until_process_group_is_quiescent
 }
 
 #[test]
+fn live_recovered_idle_launch_blocks_readiness_and_is_reconciled_after_quiescence() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let mut process = ProcessGroupGuard::spawn();
+    assert!(process.exists(), "isolated process group did not start");
+    let registry = TaskRegistry {
+        tasks: BTreeMap::from([(
+            "idle-live-agent".to_string(),
+            TaskRecord {
+                task_id: "idle-live-agent".to_string(),
+                lifecycle: TaskLifecycle::Idle,
+                latest_agent_pid: Some(process.pid()),
+                latest_agent_started_at_unix: Some(7),
+                latest_agent_completed_at_unix: None,
+                ..TaskRecord::default()
+            },
+        )]),
+    };
+    save_task_watch_registry_checkpoint(workspace.path(), &registry, &WatchRegistry::default())
+        .expect("checkpoint live idle launch residue");
+    let tasks_before = serde_json::to_value(&registry).expect("encode idle task checkpoint");
+
+    let mut blocked_daemon = spawn_daemon(workspace.path());
+    let stderr = wait_for_startup_failure(&mut blocked_daemon, workspace.path());
+    assert!(stderr.contains("has a live recovered agent process group"));
+    assert!(
+        process.exists(),
+        "startup must not signal an unauthenticated pid"
+    );
+    assert_eq!(
+        serde_json::to_value(
+            load_task_registry(workspace.path()).expect("reload blocked idle checkpoint")
+        )
+        .expect("encode blocked idle checkpoint"),
+        tasks_before
+    );
+
+    process.terminate_and_reap();
+    let mut first_daemon = spawn_daemon(workspace.path());
+    let first_runtime = wait_for_ready(&mut first_daemon, workspace.path());
+    let recovered = load_task_registry(workspace.path()).expect("load reconciled idle launch");
+    let recovered_task = &recovered.tasks["idle-live-agent"];
+    assert_eq!(recovered_task.lifecycle, TaskLifecycle::Idle);
+    assert!(recovered_task.latest_agent_completed_at_unix.is_some());
+    assert!(recovered_task
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("was interrupted before packet28d restart")));
+    stop_and_wait(&mut first_daemon, &first_runtime);
+
+    let durable_after_first =
+        serde_json::to_value(recovered).expect("encode reconciled idle launch");
+    let mut second_daemon = spawn_daemon(workspace.path());
+    let second_runtime = wait_for_ready(&mut second_daemon, workspace.path());
+    assert_eq!(
+        serde_json::to_value(
+            load_task_registry(workspace.path()).expect("load idempotent idle restart")
+        )
+        .expect("encode idempotent idle restart"),
+        durable_after_first
+    );
+    stop_and_wait(&mut second_daemon, &second_runtime);
+}
+
+#[test]
 fn daemon_restart_durably_reconciles_crash_residue_once() {
     let workspace = tempfile::tempdir().expect("temporary workspace");
     let mut registry = TaskRegistry {

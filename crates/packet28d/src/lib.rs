@@ -245,16 +245,12 @@ fn preflight_restart_recovery(tasks: &TaskRegistry) -> Result<()> {
                 "startup replan task '{task_id}' has no stored sequence and cannot be recovered"
             );
         }
-        if matches!(
-            task.lifecycle,
-            TaskLifecycle::Cancelling { .. } | TaskLifecycle::Cancelled
-        ) && task.latest_agent_completed_at_unix.is_none()
-        {
+        if task.latest_agent_completed_at_unix.is_none() {
             if let Some(pid) = task.latest_agent_pid {
                 if crate::launch::recovered_agent_process_group_exists(pid)? {
                     anyhow::bail!(
                         "task '{task_id}' has a live recovered agent process group for pid {pid}; \
-                         refusing to complete cancellation from an unauthenticated persisted pid"
+                         refusing recovery from an unauthenticated persisted pid"
                     );
                 }
             }
@@ -280,11 +276,29 @@ fn reconcile_interrupted_task_lifecycles(
 ) -> Result<TaskRestartReconciliation> {
     let mut reconciliation = TaskRestartReconciliation::default();
     for (task_id, task) in &mut tasks.tasks {
+        let interrupted_agent_pid = task
+            .latest_agent_pid
+            .filter(|_| task.latest_agent_completed_at_unix.is_none());
+        if let Some(pid) = interrupted_agent_pid {
+            task.latest_agent_completed_at_unix = Some(recovered_at_unix);
+            let evidence = format!(
+                "delegated agent pid {pid} was interrupted before packet28d restart recovery"
+            );
+            task.last_error = Some(match task.last_error.take() {
+                Some(existing) if !existing.is_empty() => format!("{existing}; {evidence}"),
+                _ => evidence,
+            });
+        }
         let persisted_lifecycle = task.lifecycle;
         let evidence = match persisted_lifecycle {
-            TaskLifecycle::Idle => continue,
+            TaskLifecycle::Idle => {
+                if interrupted_agent_pid.is_some() {
+                    reconciliation.changed_tasks += 1;
+                }
+                continue;
+            }
             TaskLifecycle::Cancelled => {
-                if task.watch_ids.is_empty() {
+                if task.watch_ids.is_empty() && interrupted_agent_pid.is_none() {
                     continue;
                 }
                 let removed_watch_ids = std::mem::take(&mut task.watch_ids);
@@ -297,14 +311,13 @@ fn reconcile_interrupted_task_lifecycles(
                 continue;
             }
             TaskLifecycle::ReplanPending => {
+                if interrupted_agent_pid.is_some() {
+                    reconciliation.changed_tasks += 1;
+                }
                 reconciliation.replan_task_ids.push(task_id.clone());
                 continue;
             }
             TaskLifecycle::Cancelling { .. } => {
-                if task.latest_agent_completed_at_unix.is_none() && task.latest_agent_pid.is_some()
-                {
-                    task.latest_agent_completed_at_unix = Some(recovered_at_unix);
-                }
                 let removed_watch_ids = std::mem::take(&mut task.watch_ids);
                 watches.watches.retain(|watch| {
                     !removed_watch_ids
