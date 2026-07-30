@@ -560,6 +560,7 @@ dependencies = [
  "blake3",
  "fs2",
  "ignore",
+ "libc",
  "memmap2",
  "packet28-binary-codec",
  "packet28-reducer-core",
@@ -574,6 +575,7 @@ dependencies = [
 name = "packet28-state-fs"
 version = "0.2.63"
 dependencies = [
+ "fs2",
  "rustix",
 ]
 
