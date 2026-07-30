@@ -32,6 +32,42 @@ const MAX_CAPABILITY_DIRECTORY_ENTRIES: usize = 65_536;
 const MAX_CAPABILITY_RECURSION_DEPTH: usize = 64;
 const MAX_CAPABILITY_RECURSIVE_ENTRIES: usize = 65_536;
 
+trait StableDeviceId {
+    fn stable_device_id(self) -> u64;
+}
+
+macro_rules! stable_device_ids {
+    ($($type:ty),+ $(,)?) => {
+        $(
+            impl StableDeviceId for $type {
+                fn stable_device_id(self) -> u64 {
+                    self as u64
+                }
+            }
+        )+
+    };
+}
+
+stable_device_ids!(i16, i32, i64, u16, u32, u64);
+
+fn stable_device_id(device: rfs::Dev) -> u64 {
+    device.stable_device_id()
+}
+
+fn widen_filesystem_value<T>(value: T) -> u64
+where
+    u64: From<T>,
+{
+    u64::from(value)
+}
+
+fn widen_filesystem_mode<T>(mode: T) -> u32
+where
+    u32: From<T>,
+{
+    u32::from(mode)
+}
+
 pub(super) const RETENTION_JOURNAL_WRITE_TEMP_PREFIX: &str = ".retention-journal-write";
 pub(super) const RETENTION_JOURNAL_WRITE_DELETION_TEMP_PREFIX: &str =
     ".retention-journal-write-deleting";
@@ -530,7 +566,7 @@ impl CapabilityDir {
         validate_owned_directory(
             &stat,
             canonical.as_os_str(),
-            stat.st_dev as u64,
+            stable_device_id(stat.st_dev),
             "private capability directory",
         )?;
         validate_workspace_namespace_ancestors(&canonical, &stat)?;
@@ -553,7 +589,7 @@ impl CapabilityDir {
         validate_owned_directory(
             &stat,
             path.as_os_str(),
-            stat.st_dev as u64,
+            stable_device_id(stat.st_dev),
             "capability root",
         )?;
         let acl_has_authority = match acl_policy {
@@ -2596,7 +2632,7 @@ impl CapabilityDir {
     pub(super) fn validate_private(&self, expected_mode: RawMode) -> io::Result<()> {
         let stat = rfs::fstat(&self.fd).map_err(io::Error::from)?;
         let actual_mode = (stat.st_mode as u32) & 0o777;
-        let expected_mode = (expected_mode as u32) & 0o777;
+        let expected_mode = widen_filesystem_mode(expected_mode) & 0o777;
         if actual_mode != expected_mode || stat.st_uid as u32 != rustix::process::geteuid().as_raw()
         {
             return Err(io::Error::new(
@@ -3397,7 +3433,7 @@ fn error_after_cleanup(
 
 fn identity_from_stat(stat: &rfs::Stat) -> FileIdentity {
     FileIdentity {
-        device: stat.st_dev as u64,
+        device: stable_device_id(stat.st_dev),
         inode: stat.st_ino,
     }
 }
@@ -3425,7 +3461,7 @@ fn capability_entry_metadata(stat: &rfs::Stat) -> io::Result<CapabilityEntryMeta
         allocated_bytes,
         modified_unix_seconds: stat.st_mtime,
         modified_subsec_nanos: u32::try_from(stat.st_mtime_nsec).unwrap_or(0),
-        link_count: u64::from(stat.st_nlink),
+        link_count: widen_filesystem_value(stat.st_nlink),
     })
 }
 
@@ -3494,7 +3530,7 @@ fn validate_owned_directory(
             ),
         ));
     }
-    if stat.st_dev as u64 != expected_device {
+    if stable_device_id(stat.st_dev) != expected_device {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -3543,7 +3579,7 @@ fn validate_owned_single_link_regular(
             ),
         ));
     }
-    if stat.st_dev as u64 != expected_device {
+    if stable_device_id(stat.st_dev) != expected_device {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -3574,8 +3610,8 @@ fn validate_owned_regular_link_count(
     }
     let effective_uid = rustix::process::geteuid().as_raw();
     if stat.st_uid != effective_uid
-        || stat.st_dev as u64 != expected_device
-        || stat.st_nlink as u64 != expected_links
+        || stable_device_id(stat.st_dev) != expected_device
+        || widen_filesystem_value(stat.st_nlink) != expected_links
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -3627,7 +3663,7 @@ fn validate_owned_regular_read_snapshot(
             ),
         ));
     }
-    if stat.st_dev as u64 != expected_device {
+    if stable_device_id(stat.st_dev) != expected_device {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -5824,7 +5860,8 @@ mod tests {
         assert_eq!(stat.st_nlink, 0);
 
         let identity =
-            authenticated_read_entry_identity_from_stat(&stat, name, stat.st_dev as u64).unwrap();
+            authenticated_read_entry_identity_from_stat(&stat, name, stable_device_id(stat.st_dev))
+                .unwrap();
 
         assert_eq!(identity, None);
     }
