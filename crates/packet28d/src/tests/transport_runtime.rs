@@ -454,14 +454,21 @@ async fn tcp_stop_acknowledges_stops_accepting_and_joins_connection() {
         .unwrap();
 
     drop(client);
-    let reconnect = tokio::net::TcpStream::connect(address).await;
-    assert!(
-        matches!(
-            reconnect,
-            Err(ref error) if error.kind() == ErrorKind::ConnectionRefused
-        ),
-        "TCP endpoint still accepted connections after structured shutdown: {reconnect:?}"
-    );
+    // Some kernels can complete one handshake that was already queued while
+    // the listening descriptor closes. A live listener would keep accepting;
+    // a closed one must refuse a subsequent bounded probe.
+    for attempt in 1..=3 {
+        match tokio::net::TcpStream::connect(address).await {
+            Err(error) if error.kind() == ErrorKind::ConnectionRefused => return,
+            Ok(reconnect) if attempt < 3 => drop(reconnect),
+            outcome => {
+                panic!(
+                    "TCP endpoint still accepted connections after structured shutdown \
+                     (attempt {attempt}): {outcome:?}"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
