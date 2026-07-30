@@ -35,7 +35,7 @@ Environment:
 - rustc 1.93.0 (254b59607 2026-01-19)
 - cargo 1.93.0
 - exact integration base `48024d28a2a6aa3a11a406230a61fcfb0af66356`
-- measured implementation head `0d8933fa365198221284d0e954d5a7834b183788`
+- measured implementation head `869581bf69eb0610285810fe43c425036d8c535d`
 
 The result artifact records checksums for every measured product and benchmark
 source. Those file identities are the mechanically enforced provenance. The
@@ -78,11 +78,11 @@ startup reconciliation, torn-tail, lease, and failure-path tests.
 
 | Path | Median event state-lock hold | Median elapsed, 32 events | Published bytes | Full checkpoints |
 | --- | ---: | ---: | ---: | ---: |
-| Full checkpoint under lock | 89,229,708 ns | 2,881,355 µs | 59,150,656 | 32 |
-| Owned keyed WAL after lock | 2,792 ns | 670,027 µs | 193,096 | 0 |
+| Full checkpoint under lock | 87,428,083 ns | 2,801,016 µs | 59,150,656 | 32 |
+| Owned keyed WAL after lock | 2,541 ns | 652,998 µs | 193,096 | 0 |
 
 - Median daemon-state lock-hold reduction: **99.997%**
 - Published-byte reduction: **99.674%**
-- Wall-clock improvement on the capture host: **4.30×**
+- Wall-clock improvement on the capture host: **4.29×**
 - Owned published-byte ratio, 300 tasks / 1 task: **1.00×**
 - Recovered events on both paths: **33**

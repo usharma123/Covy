@@ -3,8 +3,8 @@
   "captured_at": "2026-07-30",
   "source": {
     "integration_base": "48024d28a2a6aa3a11a406230a61fcfb0af66356",
-    "implementation_head": "0d8933fa365198221284d0e954d5a7834b183788",
-    "implementation_tree": "184e9a1d82cac8679e9feff261f3a69e1b2e61ae",
+    "implementation_head": "869581bf69eb0610285810fe43c425036d8c535d",
+    "implementation_tree": "f82bdcf0409964f84c06426d23f0baca5a5d799c",
     "files": {
       "Cargo.lock": "03a7179589651838d5c44f6755a622b0dafaa51906ad9c0f0e76a4dd9cdb091c",
       "crates/packet28-daemon-core/Cargo.toml": "93d2ab393cf6f3d3877a2caa6daba24a294635cd3a61eb49d5de0a9bb374e5c7",
@@ -13,7 +13,7 @@
       "crates/packet28-daemon-core/src/storage.rs": "800c90900f0aea60ade6e93ea6d2126cb3acc385e1a85507d72d4c96b1da0ff6",
       "crates/packet28-daemon-core/src/storage/checkpoint.rs": "0a609055250fa076442c3a50122553418e467b87c0d1e2719bdf5eb0f451e876",
       "crates/packet28-daemon-core/src/storage/event_tail.rs": "5a95e250c6d907146adc47cadf6b623a35ac9167afb7506b3f6826f4c3b4d07e",
-      "crates/packet28-daemon-core/src/storage/registry_delta.rs": "95f4fcd773475bfffa4ec334dbee8759e5369a4511357955ce986c3323bc25d6",
+      "crates/packet28-daemon-core/src/storage/registry_delta.rs": "9ccae6648552a5d279c173b61671e701508494516424a5ec25cb13e34992bb1e",
       "crates/packet28d/src/application.rs": "c2f97bb99e3d6cad1c7e7351304eedbc97692ebb821b613725a844e1f215f4fb",
       "crates/packet28d/src/broker/support.rs": "7105d0cf1ed4b3449589810b25b7138be0fbcb80f857f5745ade078062896474",
       "crates/packet28d/src/launch.rs": "406f82f592da8bb17032e57ef8ddcebf25a7da3c9b718bf0a7146d40317a6309",
@@ -38,14 +38,14 @@
   "measured_events": 32,
   "repeats": 3,
   "legacy_full_checkpoint_under_lock": {
-    "median_event_lock_ns": 89229708,
-    "median_elapsed_us": 2881355,
+    "median_event_lock_ns": 87428083,
+    "median_elapsed_us": 2801016,
     "median_published_bytes": 59150656,
     "median_checkpoints": 32
   },
   "owned_wal_with_coalesced_checkpoint_after_lock": {
-    "median_event_lock_ns": 2792,
-    "median_elapsed_us": 670027,
+    "median_event_lock_ns": 2541,
+    "median_elapsed_us": 652998,
     "median_published_bytes": 193096,
     "median_checkpoints": 0
   },
@@ -58,8 +58,8 @@
     "large_owned_median_published_bytes": 193096,
     "published_byte_ratio_large_over_small": 1.0
   },
-  "lock_time_reduction_percent": 99.996870997269,
+  "lock_time_reduction_percent": 99.99709361121415,
   "write_byte_reduction_percent": 99.673552225693,
-  "elapsed_speedup": 4.300356552796,
+  "elapsed_speedup": 4.289471024413551,
   "parity_event_count": 33
 }
