@@ -1,7 +1,7 @@
 //! Bounded Git workspace attestation for full builds, incremental updates, and queries.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path};
 
@@ -12,6 +12,23 @@ use crate::paths::{inspect_workspace_path, WorkspacePathInspection, WorkspacePat
 
 const MAX_ATTESTED_WORKSPACE_ENTRIES: usize = 4_096;
 const MAX_ATTESTED_WORKSPACE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_BUILD_ATTESTATION_ENTRIES: usize = 100_000;
+const MAX_BUILD_ATTESTATION_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+struct AttestationLimits {
+    entries: usize,
+    bytes: u64,
+}
+
+const QUERY_ATTESTATION_LIMITS: AttestationLimits = AttestationLimits {
+    entries: MAX_ATTESTED_WORKSPACE_ENTRIES,
+    bytes: MAX_ATTESTED_WORKSPACE_BYTES,
+};
+const BUILD_ATTESTATION_LIMITS: AttestationLimits = AttestationLimits {
+    entries: MAX_BUILD_ATTESTATION_ENTRIES,
+    bytes: MAX_BUILD_ATTESTATION_BYTES,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkspacePathAttestation {
@@ -45,8 +62,7 @@ impl GitWorkspaceSnapshot {
             return Ok(());
         }
         Err(SearchError::IndexNotReady {
-            reason: "incremental regex update did not index the authenticated workspace bytes"
-                .to_string(),
+            reason: "regex index build did not index the authenticated workspace bytes".to_string(),
         })
     }
 }
@@ -54,6 +70,14 @@ impl GitWorkspaceSnapshot {
 pub(crate) fn git_workspace_snapshot(
     root: &Path,
     reported_paths: &[String],
+) -> std::result::Result<GitWorkspaceSnapshot, String> {
+    git_workspace_snapshot_with_limits(root, reported_paths, QUERY_ATTESTATION_LIMITS)
+}
+
+fn git_workspace_snapshot_with_limits(
+    root: &Path,
+    reported_paths: &[String],
+    limits: AttestationLimits,
 ) -> std::result::Result<GitWorkspaceSnapshot, String> {
     let status = run_git(
         root,
@@ -95,9 +119,10 @@ pub(crate) fn git_workspace_snapshot(
         dirty_paths.insert(path.to_string());
     }
     let reported = reported_paths.iter().cloned().collect::<BTreeSet<_>>();
-    if dirty_paths.union(&reported).count() > MAX_ATTESTED_WORKSPACE_ENTRIES {
+    if dirty_paths.union(&reported).count() > limits.entries {
         return Err(format!(
-            "workspace attestation exceeds the {MAX_ATTESTED_WORKSPACE_ENTRIES}-path safety limit"
+            "workspace attestation exceeds the {}-path safety limit",
+            limits.entries
         ));
     }
     let tracked_reported = validate_index_flags(root, &reported)?;
@@ -112,7 +137,7 @@ pub(crate) fn git_workspace_snapshot(
         }
         states.insert(
             path.clone(),
-            attest_workspace_path(root, path, &mut budget)?,
+            attest_workspace_path(root, path, &mut budget, limits.bytes)?,
         );
     }
     let entries = dirty_paths
@@ -187,6 +212,7 @@ fn attest_workspace_path(
     root: &Path,
     path: &str,
     budget: &mut u64,
+    max_budget: u64,
 ) -> std::result::Result<WorkspacePathAttestation, String> {
     let inspection = inspect_workspace_path(root, Path::new(path))
         .map_err(|error| format!("failed to inspect workspace path '{path}': {error}"))?;
@@ -209,10 +235,10 @@ fn attest_workspace_path(
         }
     };
     if metadata.len() > MAX_INDEXED_FILE_BYTES as u64 {
-        return Err(format!(
-            "workspace file '{path}' exceeds the {}-byte attestation limit",
-            MAX_INDEXED_FILE_BYTES
-        ));
+        return Ok(WorkspacePathAttestation {
+            digest: format!("oversized:{}", metadata.len()),
+            indexable: false,
+        });
     }
     let mut file = File::open(&full_path)
         .map_err(|error| format!("failed to read workspace file '{path}': {error}"))?;
@@ -229,7 +255,7 @@ fn attest_workspace_path(
         }
         bytes_read = bytes_read.saturating_add(read as u64);
         *budget = budget.saturating_add(read as u64);
-        if bytes_read > MAX_INDEXED_FILE_BYTES as u64 || *budget > MAX_ATTESTED_WORKSPACE_BYTES {
+        if bytes_read > MAX_INDEXED_FILE_BYTES as u64 || *budget > max_budget {
             return Err("workspace content exceeds the bounded attestation byte limit".to_string());
         }
         contains_zero |= buffer[..read].contains(&0);
@@ -241,18 +267,63 @@ fn attest_workspace_path(
     })
 }
 
-pub(crate) fn stable_clean_commit(
-    before: Option<&GitWorkspaceSnapshot>,
-    after: Option<&GitWorkspaceSnapshot>,
-) -> Option<String> {
-    match (before, after) {
-        (Some(before), Some(after))
-            if before.clean && after.clean && before.commit == after.commit =>
-        {
-            Some(after.commit.clone())
-        }
-        _ => None,
+pub(crate) fn begin_full_build_workspace(root: &Path) -> Result<Option<GitWorkspaceSnapshot>> {
+    if !git_metadata_present(root).map_err(index_not_ready)? {
+        return Ok(None);
     }
+    let snapshot = git_workspace_snapshot(root, &[])
+        .map_err(|reason| SearchError::IndexNotReady { reason })?;
+    if !snapshot.clean {
+        return Err(SearchError::IndexNotReady {
+            reason: "full regex index rebuild requires a clean Git working tree".to_string(),
+        });
+    }
+    Ok(Some(snapshot))
+}
+
+pub(crate) fn authenticate_full_build_workspace(
+    root: &Path,
+    before: Option<&GitWorkspaceSnapshot>,
+    reported_paths: &[String],
+    indexed_fingerprints: &BTreeMap<String, String>,
+) -> Result<Option<String>> {
+    let Some(before) = before else {
+        if git_metadata_present(root).map_err(index_not_ready)? {
+            return Err(SearchError::IndexNotReady {
+                reason: "a Git repository appeared while rebuilding the regex index".to_string(),
+            });
+        }
+        return Ok(None);
+    };
+    let after = git_workspace_snapshot_with_limits(root, reported_paths, BUILD_ATTESTATION_LIMITS)
+        .map_err(|reason| SearchError::IndexNotReady { reason })?;
+    if !before.clean || !after.clean || before.commit != after.commit {
+        return Err(SearchError::IndexNotReady {
+            reason:
+                "Git workspace changed while rebuilding the full regex index; retry from a clean working tree"
+                    .to_string(),
+        });
+    }
+    after.ensure_indexed_bytes(indexed_fingerprints)?;
+    Ok(Some(after.commit))
+}
+
+fn git_metadata_present(root: &Path) -> std::result::Result<bool, String> {
+    match fs::symlink_metadata(root.join(".git")) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err("repository Git metadata cannot be a symlink".to_string())
+        }
+        Ok(metadata) if metadata.is_dir() || metadata.is_file() => Ok(true),
+        Ok(_) => Err("repository Git metadata is not a file or directory".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "failed to inspect repository Git metadata: {error}"
+        )),
+    }
+}
+
+fn index_not_ready(reason: String) -> SearchError {
+    SearchError::IndexNotReady { reason }
 }
 
 pub(crate) fn workspace_freshness_reason(

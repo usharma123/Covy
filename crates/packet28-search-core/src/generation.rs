@@ -6,10 +6,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::error::{Result, SearchError};
-use crate::git_process::current_git_commit;
 use crate::layer::{
-    artifact_digest, build_layer, index_document, load_layer, populate_layer_digests,
-    scan_documents_with_progress, validate_layer_file_names, write_atomic, IndexedDocument,
+    artifact_digest, build_layer, discover_document_paths, index_document, load_layer,
+    populate_layer_digests, scan_documents_with_progress, validate_layer_file_names, write_atomic,
+    IndexedDocument,
 };
 use crate::model::{
     LayerFiles, LoadedIndex, LoadedOverlaySegment, OverlaySegmentRecord, OverlayState,
@@ -139,7 +139,8 @@ pub(crate) fn load_runtime_from_manifest(
 /// Returns [`SearchError::Io`], [`SearchError::BinaryEncode`],
 /// [`SearchError::BinaryDecode`], or [`SearchError::Json`] (possibly wrapped in
 /// [`SearchError::Context`]) when discovery, index construction, validation, or
-/// publication fails. [`SearchError::FailureProvenance`] reports the rarer case
+/// publication fails. [`SearchError::IndexNotReady`] rejects a Git workspace
+/// that is dirty or changes during the build. [`SearchError::FailureProvenance`] reports the rarer case
 /// where both the build and recording its failure fail.
 pub fn rebuild_full_index(root: &Path, include_tests: bool) -> Result<RegexIndexRuntime> {
     rebuild_full_index_with_progress(root, include_tests, |_, _| {})
@@ -162,7 +163,7 @@ where
     let _writer = acquire_writer_lock(root)?;
     let publication_snapshot = capture_manifest_files(root)?;
     let started = now_unix();
-    let workspace_before = workspace::git_workspace_snapshot(root, &[]).ok();
+    let workspace_before = workspace::begin_full_build_workspace(root)?;
     let previous = load_published_runtime(root)
         .ok()
         .flatten()
@@ -188,13 +189,26 @@ where
     manifest.indexed_files = docs.len();
     manifest.overlay_files = 0;
     manifest.overlay_segments = 0;
-    let workspace_after = workspace::git_workspace_snapshot(root, &[]).ok();
-    manifest.base_commit = workspace_after
-        .as_ref()
-        .map(|workspace| workspace.commit.clone())
-        .or_else(|| current_git_commit(root));
-    manifest.workspace_clean_commit =
-        workspace::stable_clean_commit(workspace_before.as_ref(), workspace_after.as_ref());
+    let reported_paths = discover_document_paths(root)?
+        .into_iter()
+        .map(|path| {
+            path.strip_prefix(root)
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                .map_err(|_| SearchError::corrupt("discovered path escaped the repository root"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let fingerprints = docs
+        .iter()
+        .map(|doc| (doc.path.clone(), doc.fingerprint.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let clean_commit = workspace::authenticate_full_build_workspace(
+        root,
+        workspace_before.as_ref(),
+        &reported_paths,
+        &fingerprints,
+    )?;
+    manifest.base_commit = clean_commit.clone();
+    manifest.workspace_clean_commit = clean_commit;
     manifest.last_build_completed_at_unix = Some(now_unix());
     let mut record = RegexGenerationRecord {
         schema_version: REGEX_INDEX_SCHEMA_VERSION,

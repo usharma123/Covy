@@ -17,7 +17,6 @@ use crate::generation::{
     durable_manifest, load_published_runtime, load_runtime, overlay_state_digest,
     prune_generation_artifacts, publish_manifest, validate_generation_record,
 };
-use crate::git_process::current_git_commit;
 use crate::layer::{build_layer, IndexedDocument};
 use crate::model::{
     LayerFiles, LoadedIndex, OverlayState, RegexGenerationRecord, RegexIndexManifest,
@@ -33,7 +32,9 @@ use crate::publication::{
 };
 use crate::support::{mtime_secs, now_unix};
 use crate::weights::WEIGHT_TABLE_VERSION;
-use crate::workspace::{git_workspace_snapshot, stable_clean_commit, GitWorkspaceSnapshot};
+use crate::workspace::{
+    authenticate_full_build_workspace, begin_full_build_workspace, GitWorkspaceSnapshot,
+};
 
 /// Maximum file size consumed by the regex full-index builder.
 pub const MAX_SHARED_SCAN_CONTENT_BYTES: usize = MAX_INDEXED_FILE_BYTES;
@@ -120,7 +121,8 @@ impl RegexIndexScanSession {
     /// # Errors
     ///
     /// Returns a typed filesystem or manifest error when the writer lock or
-    /// pre-publication state cannot be read.
+    /// pre-publication state cannot be read, or [`SearchError::IndexNotReady`]
+    /// when a Git-backed workspace is dirty.
     pub fn begin(root: &Path, include_tests: bool, discovered_paths: &[String]) -> Result<Self> {
         if let Some(path) = discovered_paths
             .iter()
@@ -129,7 +131,7 @@ impl RegexIndexScanSession {
             return Err(SearchError::InvalidChangedPath { path: path.clone() });
         }
         let writer = acquire_writer_lock(root)?;
-        let workspace_before = git_workspace_snapshot(root, &[]).ok();
+        let workspace_before = begin_full_build_workspace(root)?;
         let publication_snapshot = capture_manifest_files(root)?;
         let previous = load_published_runtime(root)
             .ok()
@@ -199,7 +201,8 @@ impl RegexIndexScanSession {
     /// # Errors
     ///
     /// Returns typed I/O, encoding, or corruption failures from base-layer
-    /// construction and generation-record validation.
+    /// construction and generation-record validation. A workspace change or
+    /// borrowed-content mismatch returns [`SearchError::IndexNotReady`].
     pub fn prepare(mut self) -> Result<PreparedRegexIndexRuntime> {
         self.docs.sort_by(|left, right| left.path.cmp(&right.path));
         for (index, document) in self.docs.iter_mut().enumerate() {
@@ -220,13 +223,20 @@ impl RegexIndexScanSession {
         let base_layer = build_layer(&self.root, &self.docs, &mut base_files)?;
         manifest.total_files = self.docs.len();
         manifest.indexed_files = self.docs.len();
-        let workspace_after = git_workspace_snapshot(&self.root, &[]).ok();
-        manifest.base_commit = workspace_after
-            .as_ref()
-            .map(|workspace| workspace.commit.clone())
-            .or_else(|| current_git_commit(&self.root));
-        manifest.workspace_clean_commit =
-            stable_clean_commit(self.workspace_before.as_ref(), workspace_after.as_ref());
+        let reported_paths = self.discovered.iter().cloned().collect::<Vec<_>>();
+        let fingerprints = self
+            .docs
+            .iter()
+            .map(|doc| (doc.path.clone(), doc.fingerprint.clone()))
+            .collect();
+        let clean_commit = authenticate_full_build_workspace(
+            &self.root,
+            self.workspace_before.as_ref(),
+            &reported_paths,
+            &fingerprints,
+        )?;
+        manifest.base_commit = clean_commit.clone();
+        manifest.workspace_clean_commit = clean_commit;
         manifest.last_build_completed_at_unix = Some(now_unix());
         let mut record = RegexGenerationRecord {
             schema_version: REGEX_INDEX_SCHEMA_VERSION,

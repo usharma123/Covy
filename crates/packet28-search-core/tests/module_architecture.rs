@@ -43,7 +43,6 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
                 max_lines: 1_025,
                 allowed_dependencies: &[
                     "error",
-                    "git_process",
                     "layer",
                     "model",
                     "paths",
@@ -117,7 +116,6 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
                 allowed_dependencies: &[
                     "error",
                     "generation",
-                    "git_process",
                     "layer",
                     "model",
                     "paths",
@@ -146,7 +144,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
         (
             "workspace",
             ModulePolicy {
-                max_lines: 400,
+                max_lines: 500,
                 allowed_dependencies: &["error", "git_process", "model", "paths"],
             },
         ),

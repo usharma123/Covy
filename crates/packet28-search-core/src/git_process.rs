@@ -34,12 +34,6 @@ pub(crate) fn run_git(root: &Path, args: &[&str]) -> std::result::Result<Output,
     Ok(output)
 }
 
-pub(crate) fn current_git_commit(root: &Path) -> Option<String> {
-    let output = run_git(root, &["rev-parse", "HEAD"]).ok()?;
-    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!commit.is_empty()).then_some(commit)
-}
-
 fn run_command_bounded(
     command: &mut Command,
     label: &str,

@@ -1,6 +1,8 @@
 use std::error::Error as _;
 use std::fs;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Command;
 
 use packet28_reducer_core::{SearchRequest, SearchResult};
 use packet28_search_core::{
@@ -9,6 +11,35 @@ use packet28_search_core::{
     Result, SearchError,
 };
 use tempfile::tempdir;
+
+#[cfg(unix)]
+fn run_fixture_git(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .expect("run fixture Git command");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.first().copied().unwrap_or("command"),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+fn initialize_clean_git_fixture(root: &Path) {
+    fs::write(root.join(".gitignore"), ".packet28/\n").expect("Git ignore fixture");
+    run_fixture_git(root, &["init", "--quiet"]);
+    run_fixture_git(root, &["config", "user.name", "Packet28 Test"]);
+    run_fixture_git(root, &["config", "user.email", "packet28@example.invalid"]);
+    run_fixture_git(root, &["add", "."]);
+    run_fixture_git(
+        root,
+        &["commit", "--quiet", "--no-gpg-sign", "-m", "fixture"],
+    );
+}
 
 #[test]
 fn public_result_exposes_the_typed_index_unavailable_variant() {
@@ -343,4 +374,81 @@ fn missing_requested_path_does_not_search_through_a_symlinked_directory() {
     let result = indexed_search(root.path(), &runtime, &request).unwrap();
 
     assert!(result.resolved_paths.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn full_rebuild_rejects_a_dirty_git_workspace_without_replacing_the_ready_generation() {
+    let directory = tempdir().unwrap();
+    let root = directory.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn original() {}\n").unwrap();
+    initialize_clean_git_fixture(root);
+    let ready = rebuild_full_index(root, true).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn dirty() {}\n").unwrap();
+
+    let error = rebuild_full_index(root, true)
+        .expect_err("dirty workspace unexpectedly published a ready generation");
+
+    assert!(matches!(error, SearchError::IndexNotReady { .. }));
+    assert_eq!(
+        load_runtime(root).unwrap().manifest.generation,
+        ready.manifest.generation
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn full_rebuild_rejects_clean_workspace_aba_bytes() {
+    let directory = tempdir().unwrap();
+    let root = directory.path();
+    let source = root.join("src/lib.rs");
+    let original = "pub fn original_bytes() {}\n";
+    let transient = "pub fn transient_bytes() {}\n";
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(&source, original).unwrap();
+    initialize_clean_git_fixture(root);
+    let ready = rebuild_full_index(root, true).unwrap();
+
+    let error = rebuild_full_index_with_progress(root, true, |completed, total| {
+        if completed == 0 {
+            fs::write(&source, transient).unwrap();
+        } else if completed == total {
+            fs::write(&source, original).unwrap();
+        }
+    })
+    .expect_err("clean-build ABA bytes unexpectedly published");
+
+    assert!(matches!(error, SearchError::IndexNotReady { .. }));
+    let retained = load_runtime(root).unwrap();
+    assert!(retained.is_loaded());
+    assert_eq!(retained.manifest.generation, ready.manifest.generation);
+}
+
+#[cfg(all(unix, feature = "shared-repository-scan"))]
+#[test]
+fn shared_rebuild_rejects_borrowed_bytes_restored_before_prepare() {
+    use packet28_search_core::shared_scan::RegexIndexScanSession;
+
+    let directory = tempdir().unwrap();
+    let root = directory.path();
+    let source = root.join("src/lib.rs");
+    let original = b"pub fn original_shared_bytes() {}\n";
+    let transient = b"pub fn transient_shared_bytes() {}\n";
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(&source, original).unwrap();
+    initialize_clean_git_fixture(root);
+    let paths = vec!["src/lib.rs".to_string()];
+    let mut session = RegexIndexScanSession::begin(root, true, &paths).unwrap();
+    fs::write(&source, transient).unwrap();
+    let metadata = fs::metadata(&source).unwrap();
+    session.ingest(&paths[0], &metadata, transient).unwrap();
+    fs::write(&source, original).unwrap();
+
+    let error = session
+        .prepare()
+        .err()
+        .expect("restored borrowed bytes unexpectedly authenticated");
+
+    assert!(matches!(error, SearchError::IndexNotReady { .. }));
 }
