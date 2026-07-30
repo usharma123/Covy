@@ -3651,10 +3651,7 @@ fn targeted_candidate_has_namespace_alias_anchored(
                     issues,
                     "storage_key_alias",
                     &path,
-                    format!(
-                        "managed entry spelling aliases retention candidate {:?}",
-                        expected_name
-                    ),
+                    format!("managed entry spelling aliases retention candidate {expected_name:?}"),
                 );
                 conflict = true;
             }
@@ -3894,10 +3891,7 @@ fn consume_managed_root_entry(
     Err(retention_resource_limit_error(
         "task-store managed-root enumeration exceeded the supported entry bound",
         root,
-        format!(
-            "maximum supported entries per managed root is {}",
-            max_entries
-        ),
+        format!("maximum supported entries per managed root is {max_entries}"),
     ))
 }
 

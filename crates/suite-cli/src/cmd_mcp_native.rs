@@ -110,7 +110,7 @@ fn search_request_summary_parts(
     strategy: Packet28SearchStrategy,
 ) -> String {
     let scope = if paths.is_empty() {
-        format!("search '{}' across repo ({:?})", query, response_mode)
+        format!("search '{query}' across repo ({response_mode:?})")
     } else {
         format!(
             "search '{}' in {} path(s) ({:?})",
@@ -299,7 +299,7 @@ fn execute_search_with_strategy(
             } else {
                 execution
                     .notes
-                    .push(format!("primary backend already used {}", primary_backend));
+                    .push(format!("primary backend already used {primary_backend}"));
             }
             Ok((primary, execution))
         }
@@ -516,7 +516,7 @@ pub(crate) fn handle_packet28_search(
                 args.paths.len()
             )
         } else if search_result.resolved_paths.is_empty() {
-            format!("No matches for '{}' across repo", query)
+            format!("No matches for '{query}' across repo")
         } else {
             format!(
                 "No matches for '{}' in {} path(s)",

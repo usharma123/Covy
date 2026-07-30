@@ -117,8 +117,7 @@ pub(crate) async fn ensure_upstream_resource_catalog_loaded(
         }
     }
     Err(anyhow!(
-        "upstream resource catalog changed during {} consecutive refresh attempts",
-        MAX_RESOURCE_CATALOG_REFRESH_ATTEMPTS
+        "upstream resource catalog changed during {MAX_RESOURCE_CATALOG_REFRESH_ATTEMPTS} consecutive refresh attempts"
     ))
 }
 

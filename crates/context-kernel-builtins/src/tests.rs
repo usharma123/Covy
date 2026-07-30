@@ -78,7 +78,7 @@ fn git(dir: &Path, args: &[&str]) {
         .args(args)
         .status()
         .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    assert!(status.success(), "git {args:?} failed with {status}");
 }
 
 fn setup_diff_repo(dir: &Path) {

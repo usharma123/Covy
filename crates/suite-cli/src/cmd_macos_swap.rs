@@ -275,8 +275,7 @@ impl ChildLaunchGate {
         }
         if response.len() > usize::try_from(MAX_LAUNCH_GATE_ERROR_BYTES).unwrap_or(usize::MAX) + 1 {
             return Err(anyhow!(
-                "macOS child launch gate error exceeded {} bytes",
-                MAX_LAUNCH_GATE_ERROR_BYTES
+                "macOS child launch gate error exceeded {MAX_LAUNCH_GATE_ERROR_BYTES} bytes"
             ));
         }
         if response[0] != LAUNCH_GATE_ERROR {
@@ -300,8 +299,7 @@ impl ChildLaunchGate {
                 String::from_utf8_lossy(&detail)
             ),
             Ok(_) => anyhow!(
-                "macOS child launch gate readiness error exceeded {} bytes",
-                MAX_LAUNCH_GATE_ERROR_BYTES
+                "macOS child launch gate readiness error exceeded {MAX_LAUNCH_GATE_ERROR_BYTES} bytes"
             ),
             Err(error) => anyhow!("failed to read macOS child launch gate error: {error}"),
         }
@@ -2425,8 +2423,7 @@ fn debug_log_rewrite(path: &str, original_bytes: usize, rewritten_bytes: usize) 
         ((original_bytes.saturating_sub(rewritten_bytes)) as f64 / original_bytes as f64) * 100.0
     };
     eprintln!(
-        "p28 virtualized path={} original_bytes={} rewritten_bytes={} reduction_pct={:.1}",
-        path, original_bytes, rewritten_bytes, reduction
+        "p28 virtualized path={path} original_bytes={original_bytes} rewritten_bytes={rewritten_bytes} reduction_pct={reduction:.1}"
     );
 }
 
@@ -2435,7 +2432,7 @@ fn debug_log_passthrough(path: &str, reason: &str) {
     if !debug_enabled() {
         return;
     }
-    eprintln!("p28 passthrough path={} reason={}", path, reason);
+    eprintln!("p28 passthrough path={path} reason={reason}");
 }
 
 #[cfg(target_os = "macos")]

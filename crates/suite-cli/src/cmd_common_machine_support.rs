@@ -711,9 +711,9 @@ pub fn cache_summary_line(metadata: &Value) -> Option<String> {
             age.unwrap_or_default()
         ))
     } else if let Some(reason) = miss_reason {
-        Some(format!("cache: miss key={} reason={}", key, reason))
+        Some(format!("cache: miss key={key} reason={reason}"))
     } else {
-        Some(format!("cache: miss key={}", key))
+        Some(format!("cache: miss key={key}"))
     }
 }
 

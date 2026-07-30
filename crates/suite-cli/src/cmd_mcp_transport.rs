@@ -40,8 +40,7 @@ pub(crate) fn read_message(
         if trimmed.starts_with('{') || trimmed.starts_with('[') {
             if trimmed.len() > MAX_MCP_MESSAGE_BYTES {
                 return Err(anyhow!(
-                    "MCP message exceeds {} byte limit",
-                    MAX_MCP_MESSAGE_BYTES
+                    "MCP message exceeds {MAX_MCP_MESSAGE_BYTES} byte limit"
                 ));
             }
             let value = serde_json::from_str(trimmed)?;
@@ -93,8 +92,7 @@ fn read_header_framed_message(
         content_length.ok_or_else(|| anyhow!("missing Content-Length header in MCP request"))?;
     if content_length > MAX_MCP_MESSAGE_BYTES {
         return Err(anyhow!(
-            "MCP message length {content_length} exceeds {} byte limit",
-            MAX_MCP_MESSAGE_BYTES
+            "MCP message length {content_length} exceeds {MAX_MCP_MESSAGE_BYTES} byte limit"
         ));
     }
     let mut body = vec![0_u8; content_length];
@@ -192,8 +190,7 @@ where
         if trimmed.starts_with('{') || trimmed.starts_with('[') {
             if trimmed.len() > MAX_MCP_MESSAGE_BYTES {
                 return Err(anyhow!(
-                    "MCP message exceeds {} byte limit",
-                    MAX_MCP_MESSAGE_BYTES
+                    "MCP message exceeds {MAX_MCP_MESSAGE_BYTES} byte limit"
                 ));
             }
             let value = serde_json::from_str(trimmed)?;
@@ -250,8 +247,7 @@ where
         content_length.ok_or_else(|| anyhow!("missing Content-Length header in MCP request"))?;
     if content_length > MAX_MCP_MESSAGE_BYTES {
         return Err(anyhow!(
-            "MCP message length {content_length} exceeds {} byte limit",
-            MAX_MCP_MESSAGE_BYTES
+            "MCP message length {content_length} exceeds {MAX_MCP_MESSAGE_BYTES} byte limit"
         ));
     }
     let mut body = vec![0_u8; content_length];

@@ -360,10 +360,7 @@ fn prepare_handoff_bootstrap(
         ));
     }
     let response = handoff.context.ok_or_else(|| {
-        anyhow!(
-            "Packet28 returned a ready handoff for task '{}' without context payload",
-            task_id
-        )
+        anyhow!("Packet28 returned a ready handoff for task '{task_id}' without context payload")
     })?;
     fs::write(handoff_path, serde_json::to_vec(&response)?).with_context(|| {
         format!(

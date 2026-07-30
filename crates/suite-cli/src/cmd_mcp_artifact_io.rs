@@ -34,10 +34,7 @@ impl io::Write for BoundedArtifactWriter {
         if new_len > MAX_MCP_ARTIFACT_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "artifact JSON exceeds the {} byte limit",
-                    MAX_MCP_ARTIFACT_BYTES
-                ),
+                format!("artifact JSON exceeds the {MAX_MCP_ARTIFACT_BYTES} byte limit"),
             ));
         }
         self.bytes.extend_from_slice(bytes);

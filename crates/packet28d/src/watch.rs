@@ -473,7 +473,7 @@ where
                 let sequence = task
                     .sequence
                     .clone()
-                    .ok_or_else(|| anyhow!("task '{}' has no stored sequence", task_id))?;
+                    .ok_or_else(|| anyhow!("task '{task_id}' has no stored sequence"))?;
                 (sequence, running_lifecycle, durable_replan_claim)
             };
             let generation = match fence.expected_generation() {
@@ -580,7 +580,7 @@ where
                 }
                 Err(err) => {
                     task.last_error = Some(err.to_string());
-                    daemon_log(&format!("task run failed task_id={} error={err}", task_id));
+                    daemon_log(&format!("task run failed task_id={task_id} error={err}"));
                 }
             }
             let rerun = task.lifecycle.finish_run()?;
@@ -801,10 +801,7 @@ pub(crate) fn cancel_task(
     }
     crate::launch::terminate_generation_processes(&generation)?;
     if !generation.wait_until_idle(TASK_CANCELLATION_QUIESCE_TIMEOUT) {
-        anyhow::bail!(
-            "timed out waiting for cancelled task '{}' generation to become idle",
-            task_id
-        );
+        anyhow::bail!("timed out waiting for cancelled task '{task_id}' generation to become idle");
     }
     let terminal =
         complete_task_cancellation_for_generation(state, task_id, generation.id(), &watch_ids)?;
@@ -867,10 +864,7 @@ fn rollback_failed_task_admission_inner(
 
     crate::launch::terminate_generation_processes(&generation)?;
     if !generation.wait_until_idle(TASK_CANCELLATION_QUIESCE_TIMEOUT) {
-        anyhow::bail!(
-            "timed out waiting for failed task '{}' generation to become idle",
-            task_id
-        );
+        anyhow::bail!("timed out waiting for failed task '{task_id}' generation to become idle");
     }
 
     let _event_guard = persistence.event_guard();
@@ -1307,7 +1301,7 @@ pub(crate) fn watch_paths(spec: &WatchSpec) -> Vec<PathBuf> {
 pub(crate) fn watch_id_for(spec: &WatchSpec) -> String {
     let digest = blake3::hash(
         serde_json::to_string(spec)
-            .unwrap_or_else(|_| format!("{:?}", spec))
+            .unwrap_or_else(|_| format!("{spec:?}"))
             .as_bytes(),
     );
     format!("watch-{}", &digest.to_hex()[..16])

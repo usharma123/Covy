@@ -116,7 +116,7 @@ fn economics_granularities(args: &CcEconomicsArgs) -> Vec<EconomicsGranularity> 
 fn load_ccusage_source(args: &CcEconomicsArgs) -> Result<(String, Value)> {
     if let Some(path) = args.ccusage_json.as_deref() {
         let content = fs::read_to_string(path)
-            .with_context(|| format!("failed to read ccusage JSON '{}'", path))?;
+            .with_context(|| format!("failed to read ccusage JSON '{path}'"))?;
         let value = serde_json::from_str(&content).context("invalid ccusage JSON")?;
         return Ok((path.to_string(), value));
     }

@@ -456,7 +456,7 @@ fn run_read(args: ReadArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.read",
             compact_path: "native_tool",
-            request_summary: format!("read {}", relative),
+            request_summary: format!("read {relative}"),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_str(&text)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -511,7 +511,7 @@ fn run_grep(args: GrepArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.grep",
             compact_path: "native_tool",
-            request_summary: format!("grep {}", query),
+            request_summary: format!("grep {query}"),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_for_value(&payload)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -581,7 +581,7 @@ fn run_json(args: JsonArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.json",
             compact_path: "native_tool",
-            request_summary: format!("json {}", relative),
+            request_summary: format!("json {relative}"),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_str(&raw)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -725,7 +725,7 @@ fn run_log(args: LogArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.log",
             compact_path: "native_tool",
-            request_summary: format!("log {}", relative),
+            request_summary: format!("log {relative}"),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_str(&raw)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -1207,7 +1207,7 @@ fn render_toml_value(value: &toml::Value) -> String {
 fn load_task_state(root: &Path, task_id: &str) -> Result<BrokerGetContextResponse> {
     let task_storage_id = TaskStorageId::try_from(task_id)?;
     let bytes = fs::read(task_state_json_path(root, &task_storage_id))
-        .with_context(|| format!("failed to read task state for '{}'", task_id))?;
+        .with_context(|| format!("failed to read task state for '{task_id}'"))?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 

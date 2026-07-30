@@ -30,11 +30,7 @@ pub fn resolve_json_output(
     if json_flag {
         if let Some(fmt) = legacy_format {
             if !fmt.eq_ignore_ascii_case("json") {
-                anyhow::bail!(
-                    "Conflicting output flags: --json and {} {}",
-                    legacy_flag_name,
-                    fmt
-                );
+                anyhow::bail!("Conflicting output flags: --json and {legacy_flag_name} {fmt}");
             }
         }
         return Ok(true);

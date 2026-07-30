@@ -156,8 +156,7 @@ pub fn resolve_plan_algorithm(
         "lpt" => Ok(PlannerAlgorithmArg::Lpt),
         "whale-lpt" => Ok(PlannerAlgorithmArg::WhaleLpt),
         _ => Err(TestyError::invalid(format!(
-            "Unsupported shard algorithm '{}'. Expected 'lpt' or 'whale-lpt'",
-            configured
+            "Unsupported shard algorithm '{configured}'. Expected 'lpt' or 'whale-lpt'"
         ))),
     }
 }

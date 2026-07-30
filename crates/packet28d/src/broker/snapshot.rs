@@ -48,7 +48,7 @@ pub(crate) fn render_recent_tool_activity_lines(
                 metadata.push(format!("regions={}", invocation.regions.len()));
             }
             if let Some(duration_ms) = invocation.duration_ms {
-                metadata.push(format!("duration={}ms", duration_ms));
+                metadata.push(format!("duration={duration_ms}ms"));
             }
             if let Some(savings) = savings.as_deref() {
                 metadata.push(savings.to_string());
@@ -836,10 +836,7 @@ pub(crate) fn build_budget_notes_section(
     let lines = saved_by_section
         .into_iter()
         .map(|(section_id, est_tokens)| {
-            format!(
-                "- {} omitted due to budget (saved ~{} tokens)",
-                section_id, est_tokens
-            )
+            format!("- {section_id} omitted due to budget (saved ~{est_tokens} tokens)")
         })
         .collect::<Vec<_>>();
     if lines.is_empty() {

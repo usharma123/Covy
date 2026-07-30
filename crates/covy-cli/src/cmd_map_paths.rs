@@ -109,7 +109,7 @@ pub fn run(args: MapPathsArgs, config_path: &str) -> Result<i32> {
                 write_strip_prefixes(config_path, &learned.suggested_strip_prefixes)?;
                 wrote_config = true;
                 if !args.json {
-                    println!("Updated {} with [paths].strip_prefix", config_path);
+                    println!("Updated {config_path} with [paths].strip_prefix");
                 }
             }
         }

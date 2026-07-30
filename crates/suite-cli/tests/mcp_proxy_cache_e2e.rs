@@ -35,7 +35,7 @@ fn test_mcp_proxy_cache_respects_timeout_ms() {
         format!(
             r#"import json, pathlib, sys, time
 
-COUNTER = pathlib.Path({counter:?})
+COUNTER = pathlib.Path({counter_path:?})
 
 def read_message():
     headers = {{}}
@@ -86,7 +86,6 @@ while True:
     else:
         write_message({{"jsonrpc": "2.0", "id": msg_id, "error": {{"code": -32601, "message": "unknown method"}}}})
 "#,
-            counter = counter_path,
         ),
     )
     .unwrap();

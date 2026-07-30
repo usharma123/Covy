@@ -170,7 +170,7 @@ fn render_setup_box_line(text: &str, width: usize, tone: Option<&str>) {
         Some("subtitle") => text.dimmed().to_string(),
         _ => text.bold().to_string(),
     };
-    println!("  | {}{} |", styled, padding);
+    println!("  | {styled}{padding} |");
 }
 
 pub(crate) fn render_setup_detection_overview(runtimes: &[RuntimeInfo]) {

@@ -244,7 +244,7 @@ fn clear_index_engine_directory(
         })?;
     directory
         .validate_binding()
-        .with_context(|| format!("{} parent binding changed before clear", description))?;
+        .with_context(|| format!("{description} parent binding changed before clear"))?;
     let binding = before_remove(&directory)?;
     after_open()?;
     let removal = match binding {
@@ -278,7 +278,7 @@ fn clear_index_engine_directory(
     }
     directory
         .validate_binding()
-        .with_context(|| format!("{} parent binding changed during clear", description))
+        .with_context(|| format!("{description} parent binding changed during clear"))
 }
 
 #[cfg(unix)]

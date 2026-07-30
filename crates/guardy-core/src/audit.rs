@@ -319,10 +319,7 @@ pub fn check_packet(config: &ContextConfig, packet: &GuardPacket) -> AuditResult
             findings.push(AuditFinding {
                 rule: "token_cap".to_string(),
                 subject: "packet".to_string(),
-                message: format!(
-                    "token usage {} exceeded cap {}",
-                    total_token_usage, token_cap
-                ),
+                message: format!("token usage {total_token_usage} exceeded cap {token_cap}"),
             });
         }
     }
@@ -332,10 +329,7 @@ pub fn check_packet(config: &ContextConfig, packet: &GuardPacket) -> AuditResult
             findings.push(AuditFinding {
                 rule: "runtime_ms_cap".to_string(),
                 subject: "packet".to_string(),
-                message: format!(
-                    "runtime {}ms exceeded cap {}ms",
-                    total_runtime_ms, runtime_cap
-                ),
+                message: format!("runtime {total_runtime_ms}ms exceeded cap {runtime_cap}ms"),
             });
         }
     }
@@ -345,10 +339,7 @@ pub fn check_packet(config: &ContextConfig, packet: &GuardPacket) -> AuditResult
             findings.push(AuditFinding {
                 rule: "tool_call_cap".to_string(),
                 subject: "packet".to_string(),
-                message: format!(
-                    "tool call count {} exceeded cap {}",
-                    total_tool_calls, tool_call_cap
-                ),
+                message: format!("tool call count {total_tool_calls} exceeded cap {tool_call_cap}"),
             });
         }
     }
@@ -384,8 +375,7 @@ pub fn check_packet(config: &ContextConfig, packet: &GuardPacket) -> AuditResult
                     rule: "redaction".to_string(),
                     subject: candidate.source.clone(),
                     message: format!(
-                        "forbidden pattern '{}' detected in packet content",
-                        pattern_source
+                        "forbidden pattern '{pattern_source}' detected in packet content"
                     ),
                 });
                 break;

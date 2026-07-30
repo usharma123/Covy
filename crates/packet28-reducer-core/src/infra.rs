@@ -1208,7 +1208,7 @@ fn collapse_repeated_log_lines(lines: &[&str]) -> Vec<String> {
         } else {
             if let Some(prev_line) = prev {
                 if count > 1 {
-                    result.push(format!("[x{}] {}", count, prev_line));
+                    result.push(format!("[x{count}] {prev_line}"));
                 } else {
                     result.push(prev_line.to_string());
                 }
@@ -1219,7 +1219,7 @@ fn collapse_repeated_log_lines(lines: &[&str]) -> Vec<String> {
     }
     if let Some(prev_line) = prev {
         if count > 1 {
-            result.push(format!("[x{}] {}", count, prev_line));
+            result.push(format!("[x{count}] {prev_line}"));
         } else {
             result.push(prev_line.to_string());
         }

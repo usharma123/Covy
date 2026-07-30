@@ -233,8 +233,7 @@ fn seeded_five_thousand_task_daemon_keeps_status_live_and_pages_every_task() {
     eprintln!("registry_request_elapsed={request_elapsed:?}");
     assert!(
         request_elapsed < Duration::from_secs(5),
-        "bounded status plus persistent-session pagination took {:?}",
-        request_elapsed
+        "bounded status plus persistent-session pagination took {request_elapsed:?}"
     );
 
     assert!(matches!(

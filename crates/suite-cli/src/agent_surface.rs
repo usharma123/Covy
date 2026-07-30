@@ -50,8 +50,7 @@ pub fn render_prompt_fragment(format: AgentPromptFormat, root: Option<&str>) -> 
     let wrapper = wrapper_command_example();
     let root_note = if root.is_some() {
         format!(
-            "Use `--root {}` only when the agent is operating outside the repository root.",
-            ROOT_PLACEHOLDER
+            "Use `--root {ROOT_PLACEHOLDER}` only when the agent is operating outside the repository root."
         )
     } else {
         "Use `--root <path>` only when the agent is operating outside the repository root."

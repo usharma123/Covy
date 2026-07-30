@@ -89,11 +89,9 @@ pub(crate) fn load_runtime_from_manifest(
             &mut manifest,
             "stale",
             format!(
-                "regex index weight/schema mismatch (found schema={}, weight={}, expected schema={}, weight={})",
-                found_schema,
-                found_weight,
-                REGEX_INDEX_SCHEMA_VERSION,
-                WEIGHT_TABLE_VERSION
+                "regex index weight/schema mismatch (found schema={found_schema}, \
+                 weight={found_weight}, expected schema={REGEX_INDEX_SCHEMA_VERSION}, \
+                 weight={WEIGHT_TABLE_VERSION})"
             ),
         );
         return Ok(RegexIndexRuntime {

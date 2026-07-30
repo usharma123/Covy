@@ -328,7 +328,7 @@ fn task_agent_handoff_path(root: &Path, task_id: &str) -> Result<PathBuf> {
 }
 
 fn task_agent_launch_log_path(root: &Path, task_id: &str, started_at_unix: u64) -> Result<PathBuf> {
-    Ok(task_agent_dir(root, task_id)?.join(format!("launch-{}.log", started_at_unix)))
+    Ok(task_agent_dir(root, task_id)?.join(format!("launch-{started_at_unix}.log")))
 }
 
 fn task_prepare_handoff_bootstrap(
@@ -355,10 +355,7 @@ fn task_prepare_handoff_bootstrap(
         );
     }
     let response = handoff.context.ok_or_else(|| {
-        anyhow!(
-            "Packet28 returned a ready handoff for task '{}' without context payload",
-            task_id
-        )
+        anyhow!("Packet28 returned a ready handoff for task '{task_id}' without context payload")
     })?;
     if let Some(parent) = handoff_path.parent() {
         fs::create_dir_all(parent)

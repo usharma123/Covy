@@ -427,7 +427,7 @@ pub(crate) fn build_verifier(request: &SearchRequest, query: &str) -> Result<Ver
         query.to_string()
     };
     let pattern = if request.whole_word {
-        format!(r"\b(?:{})\b", pattern)
+        format!(r"\b(?:{pattern})\b")
     } else {
         pattern
     };

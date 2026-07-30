@@ -301,7 +301,7 @@ pub(crate) fn run_reduce_fixture(args: ReduceFixtureArgs) -> Result<i32> {
         .with_context(|| format!("failed to read fixture '{}'", args.stdout_path))?;
     let stderr = if let Some(stderr_path) = args.stderr_path.as_ref() {
         fs::read_to_string(stderr_path)
-            .with_context(|| format!("failed to read fixture '{}'", stderr_path))?
+            .with_context(|| format!("failed to read fixture '{stderr_path}'"))?
     } else {
         String::new()
     };

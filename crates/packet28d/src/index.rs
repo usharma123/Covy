@@ -623,10 +623,7 @@ fn normalize_index_path(canonical_root: &Path, path: &str) -> Result<Option<Stri
         return Ok(None);
     }
     if path.trim() != path || path.contains('\n') || (cfg!(unix) && path.contains('\\')) {
-        anyhow::bail!(
-            "index path '{}' cannot be represented by the incremental index engines",
-            path
-        );
+        anyhow::bail!("index path '{path}' cannot be represented by the incremental index engines");
     }
     let candidate = Path::new(path);
     let absolute = if candidate.is_absolute() {
@@ -648,12 +645,9 @@ fn normalize_index_path(canonical_root: &Path, path: &str) -> Result<Option<Stri
     if relative.as_os_str().is_empty() {
         return Ok(None);
     }
-    let relative = relative.to_str().ok_or_else(|| {
-        anyhow!(
-            "index path '{}' resolves to a non-UTF-8 workspace path",
-            path
-        )
-    })?;
+    let relative = relative
+        .to_str()
+        .ok_or_else(|| anyhow!("index path '{path}' resolves to a non-UTF-8 workspace path"))?;
     Ok(Some(if cfg!(windows) {
         relative.replace('\\', "/")
     } else {
@@ -1582,9 +1576,8 @@ fn normalize_daemon_search_request(
         normalize_index_paths(root, &request.requested_paths)?;
     if exceeded_limit {
         anyhow::bail!(
-            "requested path count or size exceeds the daemon limit of {} inputs and {} bytes per path",
-            MAX_INDEX_PATH_INPUTS,
-            MAX_INDEX_PATH_BYTES
+            "requested path count or size exceeds the daemon limit of \
+             {MAX_INDEX_PATH_INPUTS} inputs and {MAX_INDEX_PATH_BYTES} bytes per path"
         );
     }
     if requested_paths.is_empty() && !includes_root {

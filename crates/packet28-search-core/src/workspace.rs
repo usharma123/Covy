@@ -247,8 +247,7 @@ fn attest_workspace_path(
     if metadata.len() > MAX_INDEXED_FILE_BYTES as u64 {
         if !allow_oversized {
             return Err(format!(
-                "workspace file '{path}' exceeds the {}-byte attestation limit",
-                MAX_INDEXED_FILE_BYTES
+                "workspace file '{path}' exceeds the {MAX_INDEXED_FILE_BYTES}-byte attestation limit"
             ));
         }
         return Ok(WorkspacePathAttestation {

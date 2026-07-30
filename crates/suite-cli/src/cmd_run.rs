@@ -157,8 +157,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
     } else {
         println!("{}", reduction.compact_preview);
         println!(
-            "tokens: raw={} reduced={} saved={} ({:.1}%)",
-            raw_est_tokens, reduced_est_tokens, saved, savings_pct
+            "tokens: raw={raw_est_tokens} reduced={reduced_est_tokens} saved={saved} ({savings_pct:.1}%)"
         );
     }
     Ok(exit_code)
@@ -392,8 +391,7 @@ fn emit_filtered_run(run: FilteredRun<'_>) -> Result<i32> {
                 .unwrap_or("")
         );
         println!(
-            "tokens: raw={} reduced={} saved={} ({:.1}%)",
-            raw_est_tokens, reduced_est_tokens, saved, savings_pct
+            "tokens: raw={raw_est_tokens} reduced={reduced_est_tokens} saved={saved} ({savings_pct:.1}%)"
         );
     }
     Ok(exit_code)

@@ -122,7 +122,7 @@ pub fn run(args: DoctorArgs, config_path: &str) -> Result<i32> {
     }
 
     println!("Repo root: {}", repo_root.display());
-    println!("Parsed reports: {} files", parsed_report_paths);
+    println!("Parsed reports: {parsed_report_paths} files");
     if stats.total == 0 {
         println!("Mapped paths: 0/0 (0.0%)");
         println!("No file paths were extracted from reports.");

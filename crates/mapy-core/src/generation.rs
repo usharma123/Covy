@@ -1199,8 +1199,7 @@ fn reserve_generation(root: &Path) -> Result<u64, CovyError> {
     let current = match load_generation_high_water(root)? {
         Some(stored) if stored < observed => {
             return Err(cache_error(format!(
-                "repository generation high-water {} trails observed generation {observed}",
-                stored
+                "repository generation high-water {stored} trails observed generation {observed}"
             )));
         }
         Some(stored) => stored,
@@ -1217,8 +1216,7 @@ fn ensure_generation_high_water(root: &Path) -> Result<u64, CovyError> {
     let observed = discover_generation_high_water(root)?;
     match load_generation_high_water(root)? {
         Some(stored) if stored < observed => Err(cache_error(format!(
-            "repository generation high-water {} trails observed generation {observed}",
-            stored
+            "repository generation high-water {stored} trails observed generation {observed}"
         ))),
         Some(stored) => Ok(stored),
         None => {
