@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::net::TcpStream;
@@ -187,12 +189,15 @@ fn stop_terminates_term_resistant_process_group_before_releasing_leases() {
     );
 
     let process_group = i32::try_from(pid).expect("child pid fits process-group id");
-    // SAFETY: signal 0 only probes the process group created by this test.
-    let probe_result = unsafe { libc::kill(-process_group, 0) };
-    assert_eq!(probe_result, -1);
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ESRCH)
+    let probe = Command::new("kill")
+        .args(["-0", "--", &format!("-{process_group}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("probe delegated process group with the system kill utility");
+    assert!(
+        !probe.success(),
+        "delegated process group remained alive after daemon Stop"
     );
     assert!(
         acquire_daemon_instance_lease(workspace.path()).is_ok(),
