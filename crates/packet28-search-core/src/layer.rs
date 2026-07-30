@@ -2,25 +2,28 @@
 
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
-use std::fs::{self, File, OpenOptions};
-use std::hash::{BuildHasher, RandomState};
+use std::fs;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
 
 use ignore::WalkBuilder;
 use memmap2::Mmap;
+use packet28_state_fs::StateFile;
 
 use crate::error::{Result, SearchError};
 use crate::model::{
     DocRecord, HeapItem, IndexedGram, LayerFiles, LoadedLayer, LookupPostingMeta, PositionSummary,
     PostingEntry, PostingRow, LOOKUP_ROW_BYTES, MAX_INDEXED_FILE_BYTES, SEGMENT_DOC_BATCH_SIZE,
-    SEGMENT_RECORD_BYTES, TEMP_FILE_NONCE,
+    SEGMENT_RECORD_BYTES,
 };
 use crate::paths::regex_index_dir;
 use crate::postings::{
     build_indexed_grams, checked_posting_bounds, decode_postings, encode_postings, read_fixed_width,
+};
+use crate::state::{
+    open_optional_state_file, read_optional_state_file, read_state_file,
+    remove_state_file_if_exists, write_state_atomic, write_state_atomic_stream,
+    write_state_immutable, MAX_REGEX_DOCS_BYTES, MAX_REGEX_MMAP_BYTES,
 };
 use crate::support::{ensure_valid_index, mtime_secs, ResultContext};
 
@@ -128,12 +131,11 @@ pub(crate) fn build_layer(
     docs: &[IndexedDocument],
     files: &mut LayerFiles,
 ) -> Result<LoadedLayer> {
-    fs::create_dir_all(regex_index_dir(root))?;
     validate_layer_file_names(files)?;
     for name in [&files.lookup, &files.postings, &files.docs] {
         let path = regex_index_dir(root).join(name);
         ensure_valid_index!(
-            !path.exists(),
+            open_optional_state_file(&path, MAX_REGEX_MMAP_BYTES)?.is_none(),
             "immutable regex index artifact '{}' already exists",
             path.display()
         );
@@ -203,13 +205,13 @@ impl SegmentFiles {
 impl Drop for SegmentFiles {
     fn drop(&mut self) {
         for path in &self.paths {
-            let _ = fs::remove_file(path);
+            let _ = remove_state_file_if_exists(path);
         }
     }
 }
 
 pub(crate) fn write_segment_file(path: &Path, pairs: &[(u64, u32, PositionSummary)]) -> Result<()> {
-    write_via_unique_temporary(path, |file| {
+    write_state_atomic_stream(path, |file| {
         for (hash, doc_id, summary) in pairs {
             file.write_all(&hash.to_le_bytes())?;
             file.write_all(&doc_id.to_le_bytes())?;
@@ -229,10 +231,10 @@ pub(crate) fn merge_segment_files(segment_paths: &[PathBuf]) -> Result<(Vec<Post
     let mut readers = Vec::new();
     let mut heap = BinaryHeap::<Reverse<HeapItem>>::new();
     for (segment_idx, path) in segment_paths.iter().enumerate() {
-        let mut reader = BufReader::new(
-            File::open(path)
-                .with_context(|| format!("failed to open segment '{}'", path.display()))?,
-        );
+        let file = open_optional_state_file(path, MAX_REGEX_MMAP_BYTES)?
+            .ok_or_else(|| SearchError::from(std::io::Error::from(std::io::ErrorKind::NotFound)))
+            .with_context(|| format!("failed to open segment '{}'", path.display()))?;
+        let mut reader = BufReader::new(file);
         if let Some((hash, doc_id, summary)) = read_segment_pair(&mut reader)
             .with_context(|| format!("failed to decode segment '{}'", path.display()))?
         {
@@ -339,15 +341,19 @@ pub(crate) fn load_layer(root: &Path, files: &LayerFiles) -> Result<LoadedLayer>
     let docs_path = dir.join(&files.docs);
     let lookup_path = dir.join(&files.lookup);
     let postings_path = dir.join(&files.postings);
-    let docs_exists = docs_path.exists();
-    let lookup_exists = lookup_path.exists();
-    let postings_exists = postings_path.exists();
-    let present_files = docs_exists as u8 + lookup_exists as u8 + postings_exists as u8;
+    let raw = read_optional_state_file(&docs_path, MAX_REGEX_DOCS_BYTES)
+        .with_context(|| format!("failed to read docs file '{}'", docs_path.display()))?;
+    let lookup_file = open_optional_state_file(&lookup_path, MAX_REGEX_MMAP_BYTES)
+        .with_context(|| format!("failed to open lookup file '{}'", lookup_path.display()))?;
+    let postings_file = open_optional_state_file(&postings_path, MAX_REGEX_MMAP_BYTES)
+        .with_context(|| format!("failed to open postings file '{}'", postings_path.display()))?;
+    let present_files =
+        raw.is_some() as u8 + lookup_file.is_some() as u8 + postings_file.is_some() as u8;
     if present_files != 3 {
         let missing = [
-            (!docs_exists).then_some(files.docs.as_str()),
-            (!lookup_exists).then_some(files.lookup.as_str()),
-            (!postings_exists).then_some(files.postings.as_str()),
+            raw.is_none().then_some(files.docs.as_str()),
+            lookup_file.is_none().then_some(files.lookup.as_str()),
+            postings_file.is_none().then_some(files.postings.as_str()),
         ]
         .into_iter()
         .flatten()
@@ -358,14 +364,17 @@ pub(crate) fn load_layer(root: &Path, files: &LayerFiles) -> Result<LoadedLayer>
             docs_path.display(),
         )));
     }
-    let raw = fs::read(&docs_path)
-        .with_context(|| format!("failed to read docs file '{}'", docs_path.display()))?;
+    let raw = raw.ok_or_else(|| SearchError::corrupt("docs presence count changed"))?;
     let docs = wincode::deserialize::<Vec<DocRecord>>(&raw)
         .with_context(|| format!("failed to decode docs file '{}'", docs_path.display()))?;
-    let lookup = mmap_optional(&lookup_path)
-        .with_context(|| format!("failed to map lookup file '{}'", lookup_path.display()))?;
-    let postings = mmap_optional(&postings_path)
-        .with_context(|| format!("failed to map postings file '{}'", postings_path.display()))?;
+    let lookup = mmap_retained(
+        lookup_file.ok_or_else(|| SearchError::corrupt("lookup presence count changed"))?,
+    )
+    .with_context(|| format!("failed to map lookup file '{}'", lookup_path.display()))?;
+    let postings = mmap_retained(
+        postings_file.ok_or_else(|| SearchError::corrupt("postings presence count changed"))?,
+    )
+    .with_context(|| format!("failed to map postings file '{}'", postings_path.display()))?;
     if files.has_digests() {
         verify_artifact_digest(&docs_path, &raw, &files.docs_digest)?;
         verify_artifact_digest(
@@ -400,111 +409,16 @@ pub(crate) fn load_layer(root: &Path, files: &LayerFiles) -> Result<LoadedLayer>
 }
 
 pub(crate) fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<()> {
-    write_via_unique_temporary(&path, |file| {
-        file.write_all(bytes)?;
-        Ok(())
-    })
-}
-
-fn write_via_unique_temporary(
-    path: &Path,
-    write: impl FnOnce(&mut File) -> Result<()>,
-) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        SearchError::corrupt(format!("index artifact '{}' has no parent", path.display()))
-    })?;
-    fs::create_dir_all(parent)?;
-    let target_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact");
-    let process_nonce = temporary_process_nonce();
-    let candidates = (0..128).map(|_| {
-        let counter = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
-        parent.join(format!(
-            ".{target_name}.tmp-{:016x}{:016x}-{}-{counter:016x}",
-            process_nonce[0],
-            process_nonce[1],
-            std::process::id(),
-        ))
-    });
-    write_via_temporary_candidates(path, candidates, write)
-}
-
-fn write_via_temporary_candidates(
-    path: &Path,
-    candidates: impl IntoIterator<Item = PathBuf>,
-    write: impl FnOnce(&mut File) -> Result<()>,
-) -> Result<()> {
-    let mut created = None;
-    for candidate in candidates {
-        match OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&candidate)
-        {
-            Ok(file) => {
-                created = Some((candidate, file));
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to create unique regex index temporary file '{}'",
-                        candidate.display()
-                    )
-                });
-            }
-        }
-    }
-    let (temporary_path, mut file) = created.ok_or_else(|| {
-        SearchError::corrupt(format!(
-            "temporary namespace exhausted while publishing regex index artifact '{}'",
-            path.display()
-        ))
-    })?;
-    let result = (|| -> Result<()> {
-        write(&mut file)?;
-        file.flush()?;
-        drop(file);
-        fs::rename(&temporary_path, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary_path);
-    }
-    result
-}
-
-fn temporary_process_nonce() -> &'static [u64; 2] {
-    static PROCESS_NONCE: OnceLock<[u64; 2]> = OnceLock::new();
-    PROCESS_NONCE.get_or_init(|| {
-        [
-            RandomState::new().hash_one(0_u8),
-            RandomState::new().hash_one(1_u8),
-        ]
-    })
+    write_state_atomic(&path, bytes)
 }
 
 pub(crate) fn write_immutable(path: PathBuf, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        SearchError::corrupt(format!("index artifact '{}' has no parent", path.display()))
-    })?;
-    fs::create_dir_all(parent)?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&path)
-        .with_context(|| {
-            format!(
-                "failed to create immutable index artifact '{}'",
-                path.display()
-            )
-        })?;
-    file.write_all(bytes)?;
-    file.flush()?;
-    Ok(())
+    write_state_immutable(&path, bytes).with_context(|| {
+        format!(
+            "failed to create immutable index artifact '{}'",
+            path.display()
+        )
+    })
 }
 pub(crate) fn validate_layer_file_names(files: &LayerFiles) -> Result<()> {
     let mut unique = BTreeSet::new();
@@ -537,22 +451,32 @@ pub(crate) fn verify_artifact_digest(path: &Path, bytes: &[u8], expected: &str) 
 
 pub(crate) fn populate_layer_digests(root: &Path, files: &mut LayerFiles) -> Result<()> {
     let directory = regex_index_dir(root);
-    files.lookup_digest = artifact_digest(&fs::read(directory.join(&files.lookup))?);
-    files.postings_digest = artifact_digest(&fs::read(directory.join(&files.postings))?);
-    files.docs_digest = artifact_digest(&fs::read(directory.join(&files.docs))?);
+    files.lookup_digest = digest_mapped_state_file(&directory.join(&files.lookup))?;
+    files.postings_digest = digest_mapped_state_file(&directory.join(&files.postings))?;
+    files.docs_digest = artifact_digest(&read_state_file(
+        &directory.join(&files.docs),
+        MAX_REGEX_DOCS_BYTES,
+    )?);
     Ok(())
 }
 
-pub(crate) fn mmap_optional(path: &Path) -> Result<Option<Mmap>> {
-    if !path.exists() || fs::metadata(path)?.len() == 0 {
+fn digest_mapped_state_file(path: &Path) -> Result<String> {
+    let file = open_optional_state_file(path, MAX_REGEX_MMAP_BYTES)?
+        .ok_or_else(|| SearchError::from(std::io::Error::from(std::io::ErrorKind::NotFound)))?;
+    let map = mmap_retained(file)?;
+    Ok(artifact_digest(map.as_deref().unwrap_or(&[])))
+}
+
+fn mmap_retained(file: StateFile) -> Result<Option<Mmap>> {
+    if file.is_empty()? {
         return Ok(None);
     }
-    let file = File::open(path)?;
     // SAFETY: published generation files are immutable and are replaced only
-    // by new generation-specific paths. `Mmap` owns the OS mapping after this
-    // local file handle closes, and validation occurs before the layer is
-    // exposed to readers.
-    let map = unsafe { Mmap::map(&file)? };
+    // by new generation-specific paths. The retained handle was admitted as a
+    // single-link regular file under authenticated ancestry. `Mmap` owns the OS
+    // mapping after this local handle closes.
+    let map = unsafe { Mmap::map(file.file())? };
+    file.validate_attachment()?;
     Ok(Some(map))
 }
 
@@ -675,7 +599,9 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("generation.segment");
+        let state_dir = regex_index_dir(dir.path());
+        fs::create_dir_all(&state_dir).unwrap();
+        let path = state_dir.join("generation.segment");
         let legacy_temporary = path.with_extension("tmp");
         let outside = dir.path().join("outside");
         fs::write(&outside, b"outside").unwrap();
@@ -699,22 +625,30 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("manifest.json");
+        let target = crate::paths::manifest_path(dir.path());
         let outside = dir.path().join("outside");
-        let planted = dir.path().join(".manifest.planted.tmp");
-        let fallback = dir.path().join(".manifest.owned.tmp");
         fs::write(&outside, b"outside").unwrap();
-        symlink(&outside, &planted).unwrap();
-
-        write_via_temporary_candidates(&target, [planted.clone(), fallback], |file| {
-            file.write_all(b"published")?;
-            Ok(())
-        })
-        .unwrap();
+        let state = crate::state::regex_state_dir(dir.path(), true).unwrap();
+        let mut planted = None;
+        state
+            .write_atomic_with_observers(
+                crate::model::MANIFEST_FILE_NAME,
+                b"published",
+                |candidate| {
+                    if planted.is_none() {
+                        symlink(&outside, candidate)?;
+                        planted = Some(candidate.to_path_buf());
+                    }
+                    Ok(())
+                },
+                |_| Ok(()),
+                |_, _| Ok(()),
+            )
+            .unwrap();
 
         assert_eq!(fs::read(&outside).unwrap(), b"outside");
         assert_eq!(fs::read(&target).unwrap(), b"published");
-        assert!(fs::symlink_metadata(planted)
+        assert!(fs::symlink_metadata(planted.expect("planted temp"))
             .unwrap()
             .file_type()
             .is_symlink());
@@ -723,28 +657,48 @@ mod tests {
     #[test]
     fn concurrent_atomic_writers_use_disjoint_temporary_files() {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("manifest.json");
+        let target = crate::paths::manifest_path(dir.path());
         let barrier = Arc::new(Barrier::new(9));
 
-        std::thread::scope(|scope| {
-            for writer in 0..8_u8 {
-                let barrier = Arc::clone(&barrier);
-                let target = target.clone();
-                scope.spawn(move || {
-                    barrier.wait();
-                    write_atomic(target, &[writer; 16]).unwrap();
-                });
-            }
+        let results = std::thread::scope(|scope| {
+            let handles = (0..8_u8)
+                .map(|writer| {
+                    let barrier = Arc::clone(&barrier);
+                    let target = target.clone();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        write_atomic(target, &[writer; 16])
+                    })
+                })
+                .collect::<Vec<_>>();
             barrier.wait();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
         });
+        for result in results {
+            if let Err(error) = result {
+                assert!(
+                    matches!(
+                        error,
+                        SearchError::Io { ref source }
+                            if source.kind() == std::io::ErrorKind::PermissionDenied
+                    ),
+                    "unexpected concurrent publication error: {error}"
+                );
+            }
+        }
 
         let published = fs::read(&target).unwrap();
         assert_eq!(published.len(), 16);
         assert!(published.iter().all(|byte| *byte == published[0]));
-        assert!(fs::read_dir(dir.path()).unwrap().all(|entry| !entry
+        assert!(fs::read_dir(regex_index_dir(dir.path()))
             .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .ends_with(".tmp")));
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")));
     }
 }

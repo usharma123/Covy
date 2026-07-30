@@ -21,6 +21,7 @@ anyhow.workspace = true
 blake3.workspace = true
 fs2 = "0.4"
 packet28-binary-codec.workspace = true
+packet28-state-fs.workspace = true
 ignore.workspace = true
 memmap2.workspace = true
 regex.workspace = true

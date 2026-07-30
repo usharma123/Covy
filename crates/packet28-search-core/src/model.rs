@@ -1,7 +1,6 @@
 //! Shared runtime and persisted-format model.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use memmap2::Mmap;
@@ -35,7 +34,6 @@ pub(crate) const MAX_INDEX_VERIFY_DENOMINATOR: usize = 2;
 pub(crate) const POSITION_BUCKET_COUNT: usize = 16;
 pub(crate) const OVERLAY_COMPACTION_SEGMENTS: usize = 8;
 
-pub(crate) static TEMP_FILE_NONCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 /// Persistent metadata describing the currently published regex index.

@@ -1,7 +1,5 @@
 //! Generation publication, recovery, retention, and writer serialization.
-
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -23,12 +21,12 @@ use crate::paths::{
 use crate::publication::{
     acquire_writer_lock, capture_manifest_files, ensure_manifest_files_unchanged,
     fence_generation_before_clear, generation_record_fingerprint, load_generation_record,
-    read_generation_high_water, reserve_generation, restore_owned_manifest_files,
-    save_generation_record, seal_generation_record, GenerationWriterLock, ManifestFilesSnapshot,
+    read_generation_high_water, read_optional_file, reserve_generation,
+    restore_owned_manifest_files, save_generation_record, seal_generation_record,
+    GenerationWriterLock, ManifestFilesSnapshot,
 };
 use crate::support::{ensure_valid_index, now_unix, ResultContext};
-use crate::weights::WEIGHT_TABLE_VERSION;
-use crate::workspace;
+use crate::{state, weights::WEIGHT_TABLE_VERSION, workspace};
 
 /// Loads and validates the index beneath `root`.
 ///
@@ -57,7 +55,7 @@ fn load_runtime_with_freshness(root: &Path, verify_workspace: bool) -> Result<Re
         Err(error) => return recover_previous_runtime(root, None, error, verify_workspace),
     };
     if manifest.schema_version == 0 {
-        if previous_manifest_path(root).exists() {
+        if read_optional_file(&previous_manifest_path(root))?.is_some() {
             return recover_previous_runtime(
                 root,
                 Some(manifest),
@@ -111,7 +109,11 @@ pub(crate) fn load_runtime_from_manifest(
             publication_fingerprint: None,
         });
     }
-    let record_exists = generation_record_path(root, manifest.generation).exists();
+    let record_exists = state::open_optional_state_file(
+        &generation_record_path(root, manifest.generation),
+        state::MAX_REGEX_METADATA_BYTES,
+    )?
+    .is_some();
     ensure_valid_index!(
         record_exists || manifest.publication_fingerprint.is_none(),
         "regex generation {} is missing its authenticated generation record",
@@ -414,10 +416,9 @@ pub fn clear_index(root: &Path) -> Result<()> {
     let writer = acquire_writer_lock(root)?;
     fence_generation_before_clear(root, &writer)?;
     let path = regex_index_dir(root);
-    if path.exists() {
-        fs::remove_dir_all(&path)
-            .with_context(|| format!("failed to remove regex index dir '{}'", path.display()))?;
-    }
+    state::index_parent_state_dir(root, false)?
+        .remove_tree_if_exists(crate::model::REGEX_DIR_NAME)
+        .with_context(|| format!("failed to remove regex index dir '{}'", path.display()))?;
     Ok(())
 }
 pub(crate) fn mark_manifest_unloaded(
@@ -431,21 +432,26 @@ pub(crate) fn mark_manifest_unloaded(
 }
 pub(crate) fn load_manifest_strict(root: &Path) -> Result<RegexIndexManifest> {
     let path = manifest_path(root);
-    if !path.exists() {
+    let Some(raw) = state::read_optional_state_file(&path, state::MAX_REGEX_METADATA_BYTES)
+        .with_context(|| format!("failed to read regex manifest '{}'", path.display()))?
+    else {
         return Ok(RegexIndexManifest::default());
-    }
-    load_manifest_file(&path)
+    };
+    decode_manifest_file(&path, &raw)
 }
 
 pub(crate) fn load_manifest_file(path: &Path) -> Result<RegexIndexManifest> {
-    let raw = fs::read(path)
+    let raw = state::read_state_file(path, state::MAX_REGEX_METADATA_BYTES)
         .with_context(|| format!("failed to read regex manifest '{}'", path.display()))?;
-    serde_json::from_slice(&raw)
+    decode_manifest_file(path, &raw)
+}
+
+fn decode_manifest_file(path: &Path, raw: &[u8]) -> Result<RegexIndexManifest> {
+    serde_json::from_slice(raw)
         .with_context(|| format!("failed to decode regex manifest '{}'", path.display()))
 }
 
 pub(crate) fn save_manifest(root: &Path, manifest: &RegexIndexManifest) -> Result<()> {
-    fs::create_dir_all(regex_index_dir(root))?;
     write_atomic(manifest_path(root), &serde_json::to_vec_pretty(manifest)?)
 }
 
@@ -520,12 +526,13 @@ pub(crate) fn durable_manifest(manifest: &RegexIndexManifest) -> RegexIndexManif
 
 pub(crate) fn load_overlay_state(root: &Path) -> Result<OverlayState> {
     let path = overlay_state_path(root);
-    let raw = fs::read(&path).with_context(|| {
-        format!(
-            "failed to read legacy regex overlay state '{}'",
-            path.display()
-        )
-    })?;
+    let raw =
+        state::read_state_file(&path, state::MAX_REGEX_METADATA_BYTES).with_context(|| {
+            format!(
+                "failed to read legacy regex overlay state '{}'",
+                path.display()
+            )
+        })?;
     serde_json::from_slice(&raw).with_context(|| {
         format!(
             "failed to decode legacy regex overlay state '{}'",
@@ -559,7 +566,7 @@ pub(crate) fn load_published_runtime(root: &Path) -> Result<Option<RegexIndexRun
     let manifest = load_manifest_strict(root)?;
     if manifest.schema_version == 0 {
         let path = previous_manifest_path(root);
-        if !path.exists() {
+        if read_optional_file(&path)?.is_none() {
             return Ok(None);
         }
         return load_generation_for_manifest(root, load_manifest_file(&path)?).map(Some);
@@ -579,7 +586,11 @@ fn load_generation_for_manifest(
         "regex generation {} cannot authenticate a non-ready or incompatible manifest",
         manifest.generation
     );
-    let record_exists = generation_record_path(root, manifest.generation).exists();
+    let record_exists = state::open_optional_state_file(
+        &generation_record_path(root, manifest.generation),
+        state::MAX_REGEX_METADATA_BYTES,
+    )?
+    .is_some();
     ensure_valid_index!(
         record_exists || manifest.publication_fingerprint.is_none(),
         "regex generation {} is missing its authenticated generation record",
@@ -656,16 +667,16 @@ pub(crate) fn prune_generation_artifacts(
         }
     }
     let directory = regex_index_dir(root);
-    for entry in fs::read_dir(&directory)? {
-        let entry = entry?;
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+    let state_dir = state::regex_state_dir(root, false)?;
+    for entry in state_dir.names()? {
+        let Some(name) = entry.to_str() else {
             continue;
         };
-        if is_managed_generation_artifact(&name) && !retained.contains(&name) {
-            fs::remove_file(entry.path()).with_context(|| {
+        if is_managed_generation_artifact(name) && !retained.contains(name) {
+            state_dir.remove_file_if_exists(name).with_context(|| {
                 format!(
                     "failed to prune regex index artifact '{}'",
-                    entry.path().display()
+                    directory.join(name).display()
                 )
             })?;
         }

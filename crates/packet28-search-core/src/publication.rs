@@ -1,9 +1,9 @@
 //! Durable generation reservation, writer serialization, and manifest snapshots.
 
-use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
 use fs2::FileExt;
+use packet28_state_fs::{FileAccess, StateFile};
 
 use crate::error::{Result, SearchError};
 use crate::layer::{artifact_digest, write_atomic, write_immutable};
@@ -11,6 +11,10 @@ use crate::model::{RegexGenerationRecord, RegexIndexManifest, WRITER_LOCK_FILE_N
 use crate::paths::{
     generation_high_water_path, generation_record_path, manifest_path, previous_manifest_path,
     regex_index_dir,
+};
+use crate::state::{
+    index_parent_state_dir, read_optional_state_file, read_state_file, regex_state_dir,
+    remove_state_file_if_exists, MAX_REGEX_METADATA_BYTES,
 };
 use crate::support::{ensure_valid_index, ResultContext};
 
@@ -82,27 +86,17 @@ fn restore_owned_optional_file(
 fn restore_optional_file(path: std::path::PathBuf, bytes: Option<&[u8]>) -> Result<()> {
     match bytes {
         Some(bytes) => write_atomic(path, bytes),
-        None => match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error).with_context(|| {
-                format!("failed to remove rolled-back manifest '{}'", path.display())
-            }),
-        },
+        None => remove_state_file_if_exists(&path)
+            .with_context(|| format!("failed to remove rolled-back manifest '{}'", path.display())),
     }
 }
 
 pub(crate) fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to read regex metadata '{}'", path.display())),
-    }
+    read_optional_state_file(path, MAX_REGEX_METADATA_BYTES)
+        .with_context(|| format!("failed to read regex metadata '{}'", path.display()))
 }
 
 pub(crate) fn save_generation_record(root: &Path, record: &RegexGenerationRecord) -> Result<()> {
-    fs::create_dir_all(regex_index_dir(root))?;
     write_immutable(
         generation_record_path(root, record.generation),
         &serde_json::to_vec_pretty(record)?,
@@ -114,7 +108,7 @@ pub(crate) fn load_generation_record(
     generation: u64,
 ) -> Result<RegexGenerationRecord> {
     let path = generation_record_path(root, generation);
-    let raw = fs::read(&path).with_context(|| {
+    let raw = read_state_file(&path, MAX_REGEX_METADATA_BYTES).with_context(|| {
         format!(
             "failed to read regex generation record '{}'",
             path.display()
@@ -197,27 +191,25 @@ pub(crate) fn read_generation_high_water(root: &Path) -> Result<Option<u64>> {
 fn observed_generation_high_water(root: &Path) -> Result<u64> {
     let mut high_water = 0;
     for path in [manifest_path(root), previous_manifest_path(root)] {
-        match fs::read(&path) {
-            Ok(raw) => {
-                if let Ok(manifest) = serde_json::from_slice::<RegexIndexManifest>(&raw) {
-                    high_water = high_water.max(manifest.generation);
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to inspect regex generation metadata '{}'",
-                        path.display()
-                    )
-                });
+        if let Some(raw) =
+            read_optional_state_file(&path, MAX_REGEX_METADATA_BYTES).with_context(|| {
+                format!(
+                    "failed to inspect regex generation metadata '{}'",
+                    path.display()
+                )
+            })?
+        {
+            if let Ok(manifest) = serde_json::from_slice::<RegexIndexManifest>(&raw) {
+                high_water = high_water.max(manifest.generation);
             }
         }
     }
     let directory = regex_index_dir(root);
-    let entries = match fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(high_water),
+    let state = match regex_state_dir(root, false) {
+        Ok(state) => state,
+        Err(SearchError::Io { source }) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(high_water);
+        }
         Err(error) => {
             return Err(error).with_context(|| {
                 format!(
@@ -227,10 +219,8 @@ fn observed_generation_high_water(root: &Path) -> Result<u64> {
             });
         }
     };
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
+    for entry in state.names()? {
+        let Some(name) = entry.to_str() else {
             continue;
         };
         if let Some(generation) = generation_from_artifact_name(name) {
@@ -256,26 +246,33 @@ fn generation_from_artifact_name(name: &str) -> Option<u64> {
         })
 }
 
-pub(crate) struct GenerationWriterLock(File);
+pub(crate) struct GenerationWriterLock(StateFile);
 
 impl Drop for GenerationWriterLock {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.0);
+        let _ = FileExt::unlock(self.0.file());
     }
 }
 
 pub(crate) fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock> {
     let parent = root.join(".packet28").join("index");
-    fs::create_dir_all(&parent)?;
     let path = parent.join(WRITER_LOCK_FILE_NAME);
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
+    let parent_state = index_parent_state_dir(root, true)
         .with_context(|| format!("failed to open regex writer lock '{}'", path.display()))?;
-    FileExt::lock_exclusive(&file)
+    let file = parent_state
+        .open_or_create(WRITER_LOCK_FILE_NAME, FileAccess::ReadWrite)
+        .with_context(|| format!("failed to open regex writer lock '{}'", path.display()))?;
+    let file = file.file;
+    FileExt::lock_exclusive(file.file())
         .with_context(|| format!("failed to acquire regex writer lock '{}'", path.display()))?;
+    if let Err(error) = file.validate_attachment() {
+        let _ = FileExt::unlock(file.file());
+        return Err(error).with_context(|| {
+            format!(
+                "regex writer lock '{}' was replaced while acquiring it",
+                path.display()
+            )
+        });
+    }
     Ok(GenerationWriterLock(file))
 }

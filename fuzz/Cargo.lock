@@ -563,10 +563,18 @@ dependencies = [
  "memmap2",
  "packet28-binary-codec",
  "packet28-reducer-core",
+ "packet28-state-fs",
  "regex",
  "regex-syntax",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "packet28-state-fs"
+version = "0.2.63"
+dependencies = [
+ "rustix",
 ]
 
 [[package]]

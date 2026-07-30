@@ -885,6 +885,7 @@ dependencies = [
  "memmap2",
  "packet28-binary-codec",
  "packet28-reducer-core",
+ "packet28-state-fs",
  "regex",
  "regex-syntax",
  "serde",

@@ -215,7 +215,8 @@ fn read_segment_pair_rejects_every_truncated_record_boundary() {
 #[test]
 fn merge_segment_files_cleans_temporary_segments_after_corruption() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("corrupt.segment");
+    let path = regex_index_dir(dir.path()).join("corrupt.segment");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, vec![0u8; SEGMENT_RECORD_BYTES - 1]).unwrap();
     let files = SegmentFiles {
         paths: vec![path.clone()],
@@ -233,7 +234,8 @@ fn merge_segment_files_cleans_temporary_segments_after_corruption() {
 #[test]
 fn merge_segment_files_accepts_clean_eof_and_cleans_temporary_segments() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("complete.segment");
+    let path = regex_index_dir(dir.path()).join("complete.segment");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, encoded_segment_record(7, 2, PositionSummary::new(4))).unwrap();
     let files = SegmentFiles {
         paths: vec![path.clone()],
@@ -919,7 +921,8 @@ fn corrupt_published_artifact_aborts_pruning_before_any_deletion() {
 #[test]
 fn immutable_artifact_writer_never_replaces_an_existing_target() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("generation-artifact");
+    let path = generation_record_path(dir.path(), 1);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, b"published").unwrap();
 
     let error = write_immutable(path.clone(), b"replacement").unwrap_err();

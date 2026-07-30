@@ -213,7 +213,24 @@ impl StateDir {
     /// Returns an error if the destination is unsafe, the temporary cannot be
     /// written, publication fails, or ancestry changes.
     pub fn write_atomic(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
-        self.write_atomic_with(name, bytes, || Ok(()))
+        self.write_atomic_stream(name, |file| file.write_all(bytes))
+    }
+
+    /// Atomically replaces a regular file with streamed content.
+    ///
+    /// The writer receives a newly created same-directory temporary. On
+    /// success the file is synced and published descriptor-relative.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error from `write` or if temporary creation, synchronization,
+    /// publication, or ancestry validation fails.
+    pub fn write_atomic_stream(
+        &self,
+        name: &str,
+        write: impl FnOnce(&mut File) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.write_atomic_stream_with_observers(name, write, |_| Ok(()), |_| Ok(()), |_, _| Ok(()))
     }
 
     /// Variant of [`Self::write_atomic`] with a testable pre-publication hook.
@@ -251,11 +268,34 @@ impl StateDir {
         &self,
         name: &str,
         bytes: &[u8],
+        before_temp_open: B,
+        after_temp_sync: A,
+        before_publish: P,
+    ) -> io::Result<()>
+    where
+        B: FnMut(&Path) -> io::Result<()>,
+        A: FnOnce(&Path) -> io::Result<()>,
+        P: FnOnce(&Path, &Path) -> io::Result<()>,
+    {
+        self.write_atomic_stream_with_observers(
+            name,
+            |file| file.write_all(bytes),
+            before_temp_open,
+            after_temp_sync,
+            before_publish,
+        )
+    }
+
+    fn write_atomic_stream_with_observers<W, B, A, P>(
+        &self,
+        name: &str,
+        write: W,
         mut before_temp_open: B,
         after_temp_sync: A,
         before_publish: P,
     ) -> io::Result<()>
     where
+        W: FnOnce(&mut File) -> io::Result<()>,
         B: FnMut(&Path) -> io::Result<()>,
         A: FnOnce(&Path) -> io::Result<()>,
         P: FnOnce(&Path, &Path) -> io::Result<()>,
@@ -282,7 +322,7 @@ impl StateDir {
             )
         })?;
         let result = (|| {
-            file.write_all(bytes)?;
+            write(&mut file)?;
             file.sync_all()?;
             after_temp_sync(&self.path().join(&temporary))?;
             self.inner
@@ -412,6 +452,12 @@ impl StateFile {
     pub fn sync_parent(&self) -> io::Result<()> {
         self.directory.sync()?;
         self.directory.validate()
+    }
+}
+
+impl Read for StateFile {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.file.read(buffer)
     }
 }
 
