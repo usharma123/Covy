@@ -11,6 +11,7 @@ use crate::layer::*;
 use crate::model::*;
 use crate::paths::*;
 use crate::postings::*;
+use crate::publication::*;
 use crate::query::*;
 use crate::SearchError;
 
@@ -67,14 +68,20 @@ fn current_base_files(root: &Path) -> LayerFiles {
     current_generation_record(root).base
 }
 
+fn rewrite_generation_record_unbound(root: &Path, record: &mut RegexGenerationRecord) {
+    record.manifest.publication_fingerprint = None;
+    save_manifest(root, &record.manifest).expect("rewrite manifest");
+    write_atomic(
+        generation_record_path(root, record.generation),
+        &serde_json::to_vec_pretty(record).expect("record"),
+    )
+    .expect("rewrite record");
+}
+
 fn refresh_current_base_digests(root: &Path) {
     let mut record = current_generation_record(root);
     populate_layer_digests(root, &mut record.base).expect("refresh digests");
-    write_atomic(
-        generation_record_path(root, record.generation),
-        &serde_json::to_vec_pretty(&record).expect("record"),
-    )
-    .expect("rewrite record");
+    rewrite_generation_record_unbound(root, &mut record);
 }
 
 fn corrupt_first_lookup_range(root: &Path, offset: u64, len: u32) {
@@ -127,6 +134,7 @@ fn build_legacy_tombstone_fixture(
         build_layer(root, &[], &mut LayerFiles::legacy_overlay()).unwrap();
     }
     let mut manifest = updated.manifest.clone();
+    manifest.publication_fingerprint = None;
     if !with_state_digest {
         manifest.overlay_state_digest = None;
     }
@@ -402,11 +410,7 @@ fn owner_mapping_mutation_recovers_instead_of_loading_stale_content() {
         .overlay_state
         .owners
         .insert("src/lib.rs".to_string(), beta.manifest.generation);
-    write_atomic(
-        generation_record_path(root, record.generation),
-        &serde_json::to_vec_pretty(&record).unwrap(),
-    )
-    .unwrap();
+    rewrite_generation_record_unbound(root, &mut record);
 
     let recovered = load_runtime(root).unwrap();
 
@@ -433,6 +437,7 @@ fn legacy_digestless_record_still_rejects_an_older_valid_owner() {
     let _gamma = update_overlay_index(root, Some(&beta), &[String::from("src/lib.rs")]).unwrap();
     let mut manifest = load_manifest_strict(root).unwrap();
     manifest.overlay_state_digest = None;
+    manifest.publication_fingerprint = None;
     save_manifest(root, &manifest).unwrap();
     let mut record = current_generation_record(root);
     record.manifest.overlay_state_digest = None;
@@ -440,11 +445,7 @@ fn legacy_digestless_record_still_rejects_an_older_valid_owner() {
         .overlay_state
         .owners
         .insert("src/lib.rs".to_string(), beta.manifest.generation);
-    write_atomic(
-        generation_record_path(root, record.generation),
-        &serde_json::to_vec_pretty(&record).unwrap(),
-    )
-    .unwrap();
+    rewrite_generation_record_unbound(root, &mut record);
 
     let recovered = load_runtime(root).unwrap();
 
@@ -701,11 +702,7 @@ fn invalid_overlay_owner_and_non_increasing_segments_are_recoverable_corruption(
         .overlay_state
         .owners
         .insert("src/lib.rs".to_string(), second.manifest.generation + 1);
-    write_atomic(
-        generation_record_path(root, record.generation),
-        &serde_json::to_vec_pretty(&record).unwrap(),
-    )
-    .unwrap();
+    rewrite_generation_record_unbound(root, &mut record);
 
     let recovered = load_runtime(root).unwrap();
 
@@ -899,6 +896,36 @@ fn retention_keeps_only_current_and_previous_full_generations() {
         "generation-{:020}.json",
         third.manifest.generation
     )));
+}
+
+#[test]
+fn corrupt_published_artifact_aborts_pruning_before_any_deletion() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let runtime = build_fixture_index(root);
+    let files = current_base_files(root);
+    fs::write(regex_index_dir(root).join(files.docs), b"corrupt").unwrap();
+    let sentinel = regex_index_dir(root).join("base-00000000000000000000.lookup.dat");
+    fs::write(&sentinel, b"must remain").unwrap();
+    let writer = acquire_writer_lock(root).unwrap();
+
+    let error = prune_generation_artifacts(root, &writer).unwrap_err();
+
+    assert!(error.to_string().contains("failed to decode docs file"));
+    assert_eq!(fs::read(sentinel).unwrap(), b"must remain");
+    drop(runtime);
+}
+
+#[test]
+fn immutable_artifact_writer_never_replaces_an_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("generation-artifact");
+    fs::write(&path, b"published").unwrap();
+
+    let error = write_immutable(path.clone(), b"replacement").unwrap_err();
+
+    assert!(error.to_string().contains("immutable index artifact"));
+    assert_eq!(fs::read(path).unwrap(), b"published");
 }
 
 #[test]

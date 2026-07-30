@@ -14,19 +14,24 @@ use crate::error::{Result, SearchError};
 #[cfg(test)]
 use crate::generation::rebuild_full_index;
 use crate::generation::{
-    acquire_writer_lock, current_git_commit, durable_manifest, load_manifest, load_runtime,
-    overlay_state_digest, prune_generation_artifacts, publish_manifest, save_generation_record,
-    validate_generation_record, GenerationWriterLock,
+    current_git_commit, durable_manifest, load_published_runtime, load_runtime,
+    overlay_state_digest, prune_generation_artifacts, publish_manifest, validate_generation_record,
 };
-use crate::layer::{build_layer, write_atomic, IndexedDocument};
+use crate::layer::{build_layer, IndexedDocument};
 use crate::model::{
     git_workspace_snapshot, stable_clean_commit, GitWorkspaceSnapshot, LayerFiles, LoadedIndex,
     OverlayState, RegexGenerationRecord, RegexIndexManifest, RegexIndexRuntime,
     MAX_INDEXED_FILE_BYTES, REGEX_INDEX_SCHEMA_VERSION,
 };
+#[cfg(test)]
 use crate::paths::{manifest_path, previous_manifest_path};
 use crate::postings::build_indexed_grams;
-use crate::support::{mtime_secs, now_unix, ResultContext};
+use crate::publication::{
+    acquire_writer_lock, capture_manifest_files, ensure_manifest_files_unchanged,
+    reserve_generation, restore_owned_manifest_files, save_generation_record,
+    seal_generation_record, GenerationWriterLock, ManifestFilesSnapshot,
+};
+use crate::support::{mtime_secs, now_unix};
 use crate::weights::WEIGHT_TABLE_VERSION;
 
 /// Maximum file size consumed by the regex full-index builder.
@@ -102,8 +107,7 @@ pub struct RegexIndexScanSession {
     docs: Vec<IndexedDocument>,
     writer: GenerationWriterLock,
     previous: Option<RegexIndexManifest>,
-    previous_current_bytes: Option<Vec<u8>>,
-    previous_previous_bytes: Option<Vec<u8>>,
+    publication_snapshot: ManifestFilesSnapshot,
     generation: u64,
     started_at_unix: u64,
     workspace_before: Option<GitWorkspaceSnapshot>,
@@ -125,16 +129,13 @@ impl RegexIndexScanSession {
         }
         let writer = acquire_writer_lock(root)?;
         let workspace_before = git_workspace_snapshot(root).ok();
-        let previous_current_bytes = read_optional_file(&manifest_path(root))?;
-        let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
-        let previous = load_runtime(root)
+        let publication_snapshot = capture_manifest_files(root)?;
+        let previous = load_published_runtime(root)
             .ok()
-            .filter(RegexIndexRuntime::is_loaded)
+            .flatten()
+            .or_else(|| load_runtime(root).ok().filter(RegexIndexRuntime::is_loaded))
             .map(|runtime| durable_manifest(&runtime.manifest));
-        let generation = load_manifest(root)
-            .generation
-            .max(previous.as_ref().map_or(0, |manifest| manifest.generation))
-            .saturating_add(1);
+        let generation = reserve_generation(root, &writer)?;
         Ok(Self {
             root: root.to_path_buf(),
             include_tests,
@@ -146,8 +147,7 @@ impl RegexIndexScanSession {
             docs: Vec::new(),
             writer,
             previous,
-            previous_current_bytes,
-            previous_previous_bytes,
+            publication_snapshot,
             generation,
             started_at_unix: now_unix(),
             workspace_before,
@@ -227,7 +227,7 @@ impl RegexIndexScanSession {
         manifest.workspace_clean_commit =
             stable_clean_commit(self.workspace_before.as_ref(), workspace_after.as_ref());
         manifest.last_build_completed_at_unix = Some(now_unix());
-        let record = RegexGenerationRecord {
+        let mut record = RegexGenerationRecord {
             schema_version: REGEX_INDEX_SCHEMA_VERSION,
             generation: self.generation,
             manifest: manifest.clone(),
@@ -235,6 +235,7 @@ impl RegexIndexScanSession {
             segments: Vec::new(),
             overlay_state: overlay_state.clone(),
         };
+        let publication_fingerprint = seal_generation_record(&mut manifest, &mut record)?;
         validate_generation_record(&record)?;
         save_generation_record(&self.root, &record)?;
         let runtime = RegexIndexRuntime {
@@ -245,14 +246,14 @@ impl RegexIndexScanSession {
                 overlays: Vec::new(),
                 overlay_state,
             })),
+            publication_fingerprint: Some(publication_fingerprint),
         };
         Ok(PreparedRegexIndexRuntime {
             root: self.root,
             _writer: self.writer,
             previous: self.previous,
-            previous_current_bytes: self.previous_current_bytes,
-            previous_previous_bytes: self.previous_previous_bytes,
-            record,
+            publication_snapshot: self.publication_snapshot,
+            published_snapshot: None,
             runtime,
             published: false,
             committed: false,
@@ -268,9 +269,8 @@ pub struct PreparedRegexIndexRuntime {
     root: PathBuf,
     _writer: GenerationWriterLock,
     previous: Option<RegexIndexManifest>,
-    previous_current_bytes: Option<Vec<u8>>,
-    previous_previous_bytes: Option<Vec<u8>>,
-    record: RegexGenerationRecord,
+    publication_snapshot: ManifestFilesSnapshot,
+    published_snapshot: Option<ManifestFilesSnapshot>,
     runtime: RegexIndexRuntime,
     published: bool,
     committed: bool,
@@ -283,31 +283,137 @@ impl PreparedRegexIndexRuntime {
     ///
     /// Returns a typed manifest error or rejects a duplicate publication.
     pub fn publish(&mut self) -> Result<()> {
-        self.publish_with(publish_manifest)
+        self.publish_with(|root, writer, expected, previous, current| {
+            publish_manifest(root, writer, expected, previous, current).map(|_| ())
+        })
     }
 
     fn publish_with<F>(&mut self, publish: F) -> Result<()>
     where
-        F: FnOnce(&Path, Option<&RegexIndexManifest>, &RegexIndexManifest) -> Result<()>,
+        F: FnOnce(
+            &Path,
+            &GenerationWriterLock,
+            &ManifestFilesSnapshot,
+            Option<&RegexIndexManifest>,
+            &RegexIndexManifest,
+        ) -> Result<()>,
+    {
+        self.publish_with_observer(publish, capture_manifest_files)
+    }
+
+    fn publish_with_observer<F, O>(&mut self, publish: F, mut observe: O) -> Result<()>
+    where
+        F: FnOnce(
+            &Path,
+            &GenerationWriterLock,
+            &ManifestFilesSnapshot,
+            Option<&RegexIndexManifest>,
+            &RegexIndexManifest,
+        ) -> Result<()>,
+        O: FnMut(&Path) -> Result<ManifestFilesSnapshot>,
     {
         if self.published {
             return Err(SearchError::corrupt(
                 "prepared regex generation was already published",
             ));
         }
-        self.published = true;
-        match publish(&self.root, self.previous.as_ref(), &self.runtime.manifest) {
-            Ok(()) => Ok(()),
-            Err(publication) => match self.rollback() {
-                Ok(()) => Err(publication),
-                Err(rollback) => Err(SearchError::FailureProvenance {
+        ensure_manifest_files_unchanged(&self.root, &self.publication_snapshot)?;
+        let published_snapshot = ManifestFilesSnapshot {
+            current: Some(serde_json::to_vec_pretty(&self.runtime.manifest)?),
+            previous: self
+                .previous
+                .as_ref()
+                .filter(|manifest| manifest.generation > 0)
+                .map(durable_manifest)
+                .map(|manifest| serde_json::to_vec_pretty(&manifest))
+                .transpose()?
+                .or_else(|| self.publication_snapshot.previous.clone()),
+        };
+        match publish(
+            &self.root,
+            &self._writer,
+            &self.publication_snapshot,
+            self.previous.as_ref(),
+            &self.runtime.manifest,
+        ) {
+            Ok(()) => {
+                self.published = true;
+                self.published_snapshot = Some(published_snapshot.clone());
+                match observe(&self.root) {
+                    Ok(actual) if actual == published_snapshot => Ok(()),
+                    Ok(_) => {
+                        self.relinquish_publication();
+                        Err(SearchError::corrupt(
+                            "regex index manifests changed after publication",
+                        ))
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Err(publication) => {
+                self.handle_failed_publication(publication, published_snapshot, observe(&self.root))
+            }
+        }
+    }
+
+    fn handle_failed_publication(
+        &mut self,
+        publication: SearchError,
+        published_snapshot: ManifestFilesSnapshot,
+        observed: Result<ManifestFilesSnapshot>,
+    ) -> Result<()> {
+        match observed {
+            Ok(actual) if actual == self.publication_snapshot => Err(publication),
+            Ok(actual)
+                if snapshot_uses_only_owned_or_target(
+                    &actual,
+                    &published_snapshot,
+                    &self.publication_snapshot,
+                ) =>
+            {
+                self.published = true;
+                self.published_snapshot = Some(published_snapshot);
+                self.restore_after_publication_error(publication)
+            }
+            Ok(_) => Err(publication),
+            Err(observation) => {
+                self.published = true;
+                self.published_snapshot = Some(published_snapshot);
+                Err(SearchError::FailureProvenance {
                     build: Box::new(publication),
                     persistence: Box::new(
-                        rollback.context("failed to restore pre-publication regex manifests"),
+                        observation.context("failed to inspect regex publication outcome"),
                     ),
-                }),
-            },
+                })
+            }
         }
+    }
+
+    fn restore_after_publication_error(&mut self, publication: SearchError) -> Result<()> {
+        let published_snapshot = self.published_snapshot.as_ref().ok_or_else(|| {
+            SearchError::corrupt("failed regex publication has no rollback fingerprint")
+        })?;
+        match restore_owned_manifest_files(
+            &self.root,
+            published_snapshot,
+            &self.publication_snapshot,
+        ) {
+            Ok(()) => {
+                self.relinquish_publication();
+                Err(publication)
+            }
+            Err(rollback) => Err(SearchError::FailureProvenance {
+                build: Box::new(publication),
+                persistence: Box::new(
+                    rollback.context("failed to restore pre-publication regex manifests"),
+                ),
+            }),
+        }
+    }
+
+    fn relinquish_publication(&mut self) {
+        self.published = false;
+        self.published_snapshot = None;
     }
 
     /// Restores both regex manifest files to their pre-publication bytes.
@@ -319,15 +425,12 @@ impl PreparedRegexIndexRuntime {
         if !self.published {
             return Ok(());
         }
-        restore_optional_file(
-            previous_manifest_path(&self.root),
-            self.previous_previous_bytes.as_deref(),
-        )?;
-        restore_optional_file(
-            manifest_path(&self.root),
-            self.previous_current_bytes.as_deref(),
-        )?;
+        let published_snapshot = self.published_snapshot.as_ref().ok_or_else(|| {
+            SearchError::corrupt("published regex generation has no rollback fingerprint")
+        })?;
+        restore_owned_manifest_files(&self.root, published_snapshot, &self.publication_snapshot)?;
         self.published = false;
+        self.published_snapshot = None;
         Ok(())
     }
 
@@ -352,10 +455,23 @@ impl PreparedRegexIndexRuntime {
                 "prepared regex generation must be published before commit",
             ));
         }
-        let _ = prune_generation_artifacts(&self.root, &self.record, self.previous.as_ref());
+        let published_snapshot = self.published_snapshot.as_ref().ok_or_else(|| {
+            SearchError::corrupt("published regex generation has no commit fingerprint")
+        })?;
+        ensure_manifest_files_unchanged(&self.root, published_snapshot)?;
+        let _ = prune_generation_artifacts(&self.root, &self._writer);
         self.committed = true;
         Ok(self.runtime.clone())
     }
+}
+
+fn snapshot_uses_only_owned_or_target(
+    actual: &ManifestFilesSnapshot,
+    owned: &ManifestFilesSnapshot,
+    target: &ManifestFilesSnapshot,
+) -> bool {
+    (actual.current == owned.current || actual.current == target.current)
+        && (actual.previous == owned.previous || actual.previous == target.previous)
 }
 
 impl Drop for PreparedRegexIndexRuntime {
@@ -363,28 +479,6 @@ impl Drop for PreparedRegexIndexRuntime {
         if self.published && !self.committed {
             let _ = self.rollback();
         }
-    }
-}
-
-fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error)
-            .with_context(|| format!("failed to preserve regex manifest '{}'", path.display())),
-    }
-}
-
-fn restore_optional_file(path: PathBuf, bytes: Option<&[u8]>) -> Result<()> {
-    match bytes {
-        Some(bytes) => write_atomic(path, bytes),
-        None => match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error).with_context(|| {
-                format!("failed to remove rolled-back manifest '{}'", path.display())
-            }),
-        },
     }
 }
 
@@ -479,9 +573,13 @@ mod tests {
         let mut prepared = prepare_shared(root, &paths);
 
         let error = prepared
-            .publish_with(|root, _, _| {
-                fs::write(manifest_path(root), b"partial current").unwrap();
-                fs::write(previous_manifest_path(root), b"partial previous").unwrap();
+            .publish_with(|root, _, _, previous, _| {
+                let previous = previous.expect("previous generation");
+                fs::write(
+                    previous_manifest_path(root),
+                    serde_json::to_vec_pretty(&durable_manifest(previous)).unwrap(),
+                )
+                .unwrap();
                 Err(SearchError::corrupt("injected publication failure"))
             })
             .unwrap_err();
@@ -489,6 +587,107 @@ mod tests {
         assert!(error.to_string().contains("injected publication failure"));
         assert_eq!(fs::read(current_path).unwrap(), expected_current);
         assert_eq!(fs::read(previous_path).unwrap(), expected_previous);
+    }
+
+    #[test]
+    fn post_publication_cas_failure_preserves_foreign_manifest_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), b"pub struct Shared;\n").unwrap();
+        rebuild_full_index(root, true).unwrap();
+        let paths = vec![String::from("src/lib.rs")];
+        let mut prepared = prepare_shared(root, &paths);
+        let foreign = b"{\"foreign\":true}";
+
+        let error = prepared
+            .publish_with(|root, writer, expected, previous, current| {
+                publish_manifest(root, writer, expected, previous, current).map(|_| ())?;
+                fs::write(manifest_path(root), foreign).unwrap();
+                Ok(())
+            })
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("manifests changed after publication"));
+        assert_eq!(fs::read(manifest_path(root)).unwrap(), foreign);
+        drop(prepared);
+        assert_eq!(fs::read(manifest_path(root)).unwrap(), foreign);
+    }
+
+    #[test]
+    fn pre_publication_cas_failure_preserves_foreign_manifest_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), b"pub struct Shared;\n").unwrap();
+        rebuild_full_index(root, true).unwrap();
+        let paths = vec![String::from("src/lib.rs")];
+        let mut prepared = prepare_shared(root, &paths);
+        let foreign = b"{\"foreign\":\"before\"}";
+
+        let error = prepared
+            .publish_with(|root, writer, expected, previous, current| {
+                fs::write(manifest_path(root), foreign).unwrap();
+                publish_manifest(root, writer, expected, previous, current).map(|_| ())
+            })
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("manifests changed while the writer lock was held"));
+        drop(prepared);
+        assert_eq!(fs::read(manifest_path(root)).unwrap(), foreign);
+    }
+
+    #[test]
+    fn indeterminate_post_publication_read_retains_rollback_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), b"pub struct Shared;\n").unwrap();
+        let base = rebuild_full_index(root, true).unwrap();
+        let paths = vec![String::from("src/lib.rs")];
+        let mut prepared = prepare_shared(root, &paths);
+
+        let error = prepared
+            .publish_with_observer(
+                |root, writer, expected, previous, current| {
+                    publish_manifest(root, writer, expected, previous, current).map(|_| ())
+                },
+                |_| Err(std::io::Error::other("injected manifest read failure").into()),
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("injected manifest read failure"));
+        prepared.rollback().unwrap();
+        assert_eq!(
+            load_runtime(root).unwrap().manifest.generation,
+            base.manifest.generation
+        );
+    }
+
+    #[test]
+    fn rollback_retries_after_current_manifest_was_already_restored() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), b"pub struct Shared;\n").unwrap();
+        rebuild_full_index(root, true).unwrap();
+        let paths = vec![String::from("src/lib.rs")];
+        let mut prepared = prepare_shared(root, &paths);
+        let before = prepared.publication_snapshot.clone();
+        prepared.publish().unwrap();
+
+        fs::write(
+            manifest_path(root),
+            before.current.as_deref().expect("pre-publication manifest"),
+        )
+        .unwrap();
+        prepared.rollback().unwrap();
+
+        assert_eq!(capture_manifest_files(root).unwrap(), before);
     }
 
     #[test]

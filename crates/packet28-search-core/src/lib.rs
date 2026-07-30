@@ -8,20 +8,23 @@
 //! writer prepares the next one. Legacy schema-v3 aggregate overlays remain
 //! readable and migrate to segmented generation records on their next update.
 //! Public writers serialize on a repository-local lock and reject stale
-//! generation handles rather than silently overwriting a newer publication.
-//! Every generation record carries BLAKE3 digests for its artifacts, and
-//! published manifests bind overlay ownership/tombstone state to a digest.
+//! handles by both generation and validated publication fingerprint. A durable
+//! high-water mark outside the clearable index directory reserves each
+//! generation before artifact construction and is never rolled back.
+//! Every generation record carries BLAKE3 digests for its artifacts. New
+//! manifests also bind the complete immutable generation record to a digest,
+//! while separately binding overlay ownership/tombstone state.
 //! Legacy digestless records remain readable only when their owner mapping
 //! names the newest segment containing each live path.
 //!
-//! best-effort pruning retains only the current and explicitly recoverable
+//! Best-effort pruning retains only the current and explicitly recoverable
 //! previous generation under normal filesystem operation.
 //!
 //! Publication is process-crash atomic on filesystems that provide atomic
-//! same-directory rename: artifacts are written to flushed temporary files and
-//! the manifest is renamed last. The implementation does not call `fsync` on
-//! files or parent directories and therefore does not claim power-loss
-//! durability.
+//! same-directory rename: immutable generation-specific artifacts are created
+//! once and flushed before the mutable manifest is renamed last. The
+//! implementation does not call `fsync` on files or parent directories and
+//! therefore does not claim power-loss durability.
 //! Fallible operations return [`SearchError`], allowing callers to distinguish
 //! unavailable indexes, invalid queries, corruption, and typed dependency
 //! failures without parsing an `anyhow` report.
@@ -50,6 +53,7 @@ mod layer;
 mod model;
 mod paths;
 mod postings;
+mod publication;
 mod query;
 #[cfg(feature = "shared-repository-scan")]
 pub mod shared_scan;

@@ -2,7 +2,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -127,6 +127,15 @@ pub(crate) fn build_layer(
     files: &mut LayerFiles,
 ) -> Result<LoadedLayer> {
     fs::create_dir_all(regex_index_dir(root))?;
+    validate_layer_file_names(files)?;
+    for name in [&files.lookup, &files.postings, &files.docs] {
+        let path = regex_index_dir(root).join(name);
+        ensure_valid_index!(
+            !path.exists(),
+            "immutable regex index artifact '{}' already exists",
+            path.display()
+        );
+    }
     let segment_files = write_segment_files(root, &files.lookup, docs)?;
     let (rows, postings) = merge_and_cleanup_segment_files(segment_files)?;
     let mut lookup = Vec::with_capacity(rows.len() * LOOKUP_ROW_BYTES);
@@ -150,9 +159,9 @@ pub(crate) fn build_layer(
     files.lookup_digest = artifact_digest(&lookup);
     files.postings_digest = artifact_digest(&postings);
     files.docs_digest = artifact_digest(&docs_bytes);
-    write_atomic(regex_index_dir(root).join(&files.lookup), &lookup)?;
-    write_atomic(regex_index_dir(root).join(&files.postings), &postings)?;
-    write_atomic(regex_index_dir(root).join(&files.docs), &docs_bytes)?;
+    write_immutable(regex_index_dir(root).join(&files.lookup), &lookup)?;
+    write_immutable(regex_index_dir(root).join(&files.postings), &postings)?;
+    write_immutable(regex_index_dir(root).join(&files.docs), &docs_bytes)?;
     load_layer(root, files)
 }
 
@@ -417,6 +426,26 @@ pub(crate) fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<()> {
         let _ = fs::remove_file(tmp);
     }
     result
+}
+
+pub(crate) fn write_immutable(path: PathBuf, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        SearchError::corrupt(format!("index artifact '{}' has no parent", path.display()))
+    })?;
+    fs::create_dir_all(parent)?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| {
+            format!(
+                "failed to create immutable index artifact '{}'",
+                path.display()
+            )
+        })?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    Ok(())
 }
 pub(crate) fn validate_layer_file_names(files: &LayerFiles) -> Result<()> {
     let mut unique = BTreeSet::new();

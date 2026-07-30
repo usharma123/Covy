@@ -6,7 +6,8 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::{Result, SearchError};
 use crate::model::{
-    MANIFEST_FILE_NAME, OVERLAY_STATE_FILE_NAME, PREVIOUS_MANIFEST_FILE_NAME, REGEX_DIR_NAME,
+    GENERATION_HIGH_WATER_FILE_NAME, MANIFEST_FILE_NAME, OVERLAY_STATE_FILE_NAME,
+    PREVIOUS_MANIFEST_FILE_NAME, REGEX_DIR_NAME,
 };
 
 pub(crate) fn regex_index_dir(root: &Path) -> PathBuf {
@@ -23,6 +24,12 @@ pub(crate) fn manifest_path(root: &Path) -> PathBuf {
 
 pub(crate) fn previous_manifest_path(root: &Path) -> PathBuf {
     regex_index_dir(root).join(PREVIOUS_MANIFEST_FILE_NAME)
+}
+
+pub(crate) fn generation_high_water_path(root: &Path) -> PathBuf {
+    root.join(".packet28")
+        .join("index")
+        .join(GENERATION_HIGH_WATER_FILE_NAME)
 }
 
 pub(crate) fn generation_record_path(root: &Path, generation: u64) -> PathBuf {

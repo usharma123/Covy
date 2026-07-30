@@ -1,12 +1,10 @@
 //! Generation publication, recovery, retention, and writer serialization.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-
-use fs2::FileExt;
 
 use crate::error::{Result, SearchError};
 use crate::layer::{
@@ -17,11 +15,17 @@ use crate::model::{
     git_workspace_snapshot, stable_clean_commit, workspace_freshness_reason, LayerFiles,
     LoadedIndex, LoadedOverlaySegment, OverlaySegmentRecord, OverlayState, RegexGenerationRecord,
     RegexIndexManifest, RegexIndexRuntime, MANIFEST_FILE_NAME, OVERLAY_COMPACTION_SEGMENTS,
-    PREVIOUS_MANIFEST_FILE_NAME, REGEX_INDEX_SCHEMA_VERSION, WRITER_LOCK_FILE_NAME,
+    PREVIOUS_MANIFEST_FILE_NAME, REGEX_INDEX_SCHEMA_VERSION,
 };
 use crate::paths::{
     generation_record_path, manifest_path, normalize_changed_paths, overlay_state_path,
     previous_manifest_path, regex_index_dir,
+};
+use crate::publication::{
+    acquire_writer_lock, capture_manifest_files, ensure_manifest_files_unchanged,
+    generation_record_fingerprint, load_generation_record, read_generation_high_water,
+    reserve_generation, restore_owned_manifest_files, save_generation_record,
+    seal_generation_record, GenerationWriterLock, ManifestFilesSnapshot,
 };
 use crate::support::{ensure_valid_index, now_unix, ResultContext};
 use crate::weights::WEIGHT_TABLE_VERSION;
@@ -45,9 +49,17 @@ pub fn load_runtime(root: &Path) -> Result<RegexIndexRuntime> {
         Err(error) => return recover_previous_runtime(root, None, error),
     };
     if manifest.schema_version == 0 {
+        if previous_manifest_path(root).exists() {
+            return recover_previous_runtime(
+                root,
+                Some(manifest),
+                SearchError::corrupt("current regex manifest is missing or has schema zero"),
+            );
+        }
         return Ok(RegexIndexRuntime {
             manifest,
             loaded: None,
+            publication_fingerprint: None,
         });
     }
     match load_runtime_from_manifest(root, manifest.clone()) {
@@ -79,12 +91,14 @@ pub(crate) fn load_runtime_from_manifest(
         return Ok(RegexIndexRuntime {
             manifest,
             loaded: None,
+            publication_fingerprint: None,
         });
     }
     if manifest.status != "ready" {
         return Ok(RegexIndexRuntime {
             manifest,
             loaded: None,
+            publication_fingerprint: None,
         });
     }
     if let Some(reason) = workspace_freshness_reason(root, &manifest) {
@@ -92,9 +106,16 @@ pub(crate) fn load_runtime_from_manifest(
         return Ok(RegexIndexRuntime {
             manifest,
             loaded: None,
+            publication_fingerprint: None,
         });
     }
-    if generation_record_path(root, manifest.generation).exists() {
+    let record_exists = generation_record_path(root, manifest.generation).exists();
+    ensure_valid_index!(
+        record_exists || manifest.publication_fingerprint.is_none(),
+        "regex generation {} is missing its authenticated generation record",
+        manifest.generation
+    );
+    if record_exists {
         let record = load_generation_record(root, manifest.generation)?;
         return load_recorded_generation(root, manifest, record);
     }
@@ -135,16 +156,15 @@ where
     F: FnMut(usize, usize),
 {
     let _writer = acquire_writer_lock(root)?;
+    let publication_snapshot = capture_manifest_files(root)?;
     let started = now_unix();
     let workspace_before = git_workspace_snapshot(root).ok();
-    let previous = load_runtime(root)
+    let previous = load_published_runtime(root)
         .ok()
-        .filter(RegexIndexRuntime::is_loaded)
+        .flatten()
+        .or_else(|| load_runtime(root).ok().filter(RegexIndexRuntime::is_loaded))
         .map(|runtime| durable_manifest(&runtime.manifest));
-    let generation = load_manifest(root)
-        .generation
-        .max(previous.as_ref().map_or(0, |manifest| manifest.generation))
-        .saturating_add(1);
+    let generation = reserve_generation(root, &_writer)?;
     let overlay_state = OverlayState::default();
     let mut manifest = RegexIndexManifest {
         schema_version: REGEX_INDEX_SCHEMA_VERSION,
@@ -172,7 +192,7 @@ where
     manifest.workspace_clean_commit =
         stable_clean_commit(workspace_before.as_ref(), workspace_after.as_ref());
     manifest.last_build_completed_at_unix = Some(now_unix());
-    let record = RegexGenerationRecord {
+    let mut record = RegexGenerationRecord {
         schema_version: REGEX_INDEX_SCHEMA_VERSION,
         generation,
         manifest: manifest.clone(),
@@ -180,6 +200,7 @@ where
         segments: Vec::new(),
         overlay_state: overlay_state.clone(),
     };
+    let publication_fingerprint = seal_generation_record(&mut manifest, &mut record)?;
     validate_generation_record(&record)?;
     save_generation_record(root, &record)?;
     let runtime = RegexIndexRuntime {
@@ -190,9 +211,16 @@ where
             overlays: Vec::new(),
             overlay_state,
         })),
+        publication_fingerprint: Some(publication_fingerprint),
     };
-    publish_manifest(root, previous.as_ref(), &manifest)?;
-    let _ = prune_generation_artifacts(root, &record, previous.as_ref());
+    publish_manifest(
+        root,
+        &_writer,
+        &publication_snapshot,
+        previous.as_ref(),
+        &manifest,
+    )?;
+    let _ = prune_generation_artifacts(root, &_writer);
     Ok(runtime)
 }
 
@@ -223,16 +251,25 @@ pub fn update_overlay_index(
         return rebuild_full_index(root, true);
     }
     let loaded = current.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
+    let caller_fingerprint =
+        generation_record_fingerprint(&generation_record_from_loaded(&current.manifest, loaded))?;
     let normalized = normalize_changed_paths(root, changed_paths)?;
     let _writer = acquire_writer_lock(root)?;
-    let published = load_manifest_strict(root)?;
-    if published.generation != current.manifest.generation {
+    let publication_snapshot = capture_manifest_files(root)?;
+    let published = load_published_runtime(root)?.ok_or(SearchError::ConcurrentWriter {
+        expected: current.manifest.generation,
+        actual: 0,
+    })?;
+    if published.manifest.generation != current.manifest.generation
+        || published.publication_fingerprint != current.publication_fingerprint
+        || current.publication_fingerprint.as_deref() != Some(caller_fingerprint.as_str())
+    {
         return Err(SearchError::ConcurrentWriter {
             expected: current.manifest.generation,
-            actual: published.generation,
+            actual: published.manifest.generation,
         });
     }
-    let generation = published.generation.saturating_add(1);
+    let generation = reserve_generation(root, &_writer)?;
     let mut overlay_state = loaded.overlay_state.clone();
     let mut overlay_docs = Vec::<IndexedDocument>::new();
     for path in normalized {
@@ -290,7 +327,7 @@ pub fn update_overlay_index(
     };
     validate_loaded_overlay_state(&loaded_index)?;
 
-    let mut manifest = durable_manifest(&current.manifest);
+    let mut manifest = durable_manifest(&published.manifest);
     manifest.generation = generation;
     manifest.status = "ready".to_string();
     manifest.last_build_started_at_unix = Some(started);
@@ -302,15 +339,23 @@ pub fn update_overlay_index(
     manifest.stale_reason = None;
     manifest.last_error = None;
     manifest.last_build_completed_at_unix = Some(now_unix());
-    let record = generation_record_from_loaded(&manifest, &loaded_index);
+    let mut record = generation_record_from_loaded(&manifest, &loaded_index);
+    let publication_fingerprint = seal_generation_record(&mut manifest, &mut record)?;
     validate_generation_record(&record)?;
     save_generation_record(root, &record)?;
-    publish_manifest(root, Some(&current.manifest), &manifest)?;
-    let _ = prune_generation_artifacts(root, &record, Some(&current.manifest));
+    publish_manifest(
+        root,
+        &_writer,
+        &publication_snapshot,
+        Some(&published.manifest),
+        &manifest,
+    )?;
+    let _ = prune_generation_artifacts(root, &_writer);
 
     Ok(RegexIndexRuntime {
         manifest,
         loaded: Some(Arc::new(loaded_index)),
+        publication_fingerprint: Some(publication_fingerprint),
     })
 }
 
@@ -329,6 +374,7 @@ pub fn clear_index(root: &Path) -> Result<()> {
     }
     Ok(())
 }
+
 pub(crate) fn mark_manifest_unloaded(
     manifest: &mut RegexIndexManifest,
     status: &str,
@@ -338,34 +384,6 @@ pub(crate) fn mark_manifest_unloaded(
     manifest.stale_reason = Some(reason.clone());
     manifest.last_error = Some(reason);
 }
-pub(crate) struct GenerationWriterLock(File);
-
-impl Drop for GenerationWriterLock {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.0);
-    }
-}
-
-pub(crate) fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock> {
-    let parent = root.join(".packet28").join("index");
-    fs::create_dir_all(&parent)?;
-    let path = parent.join(WRITER_LOCK_FILE_NAME);
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("failed to open regex writer lock '{}'", path.display()))?;
-    FileExt::lock_exclusive(&file)
-        .with_context(|| format!("failed to acquire regex writer lock '{}'", path.display()))?;
-    Ok(GenerationWriterLock(file))
-}
-
-pub(crate) fn load_manifest(root: &Path) -> RegexIndexManifest {
-    load_manifest_strict(root).unwrap_or_default()
-}
-
 pub(crate) fn load_manifest_strict(root: &Path) -> Result<RegexIndexManifest> {
     let path = manifest_path(root);
     if !path.exists() {
@@ -388,16 +406,62 @@ pub(crate) fn save_manifest(root: &Path, manifest: &RegexIndexManifest) -> Resul
 
 pub(crate) fn publish_manifest(
     root: &Path,
+    _writer: &GenerationWriterLock,
+    expected: &ManifestFilesSnapshot,
     previous: Option<&RegexIndexManifest>,
     current: &RegexIndexManifest,
-) -> Result<()> {
-    if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
-        write_atomic(
-            previous_manifest_path(root),
-            &serde_json::to_vec_pretty(&durable_manifest(previous))?,
-        )?;
+) -> Result<String> {
+    ensure_manifest_files_unchanged(root, expected)?;
+    let high_water = read_generation_high_water(root)?;
+    ensure_valid_index!(
+        high_water == Some(current.generation),
+        "regex generation {} is not the reserved high-water generation {:?}",
+        current.generation,
+        high_water
+    );
+    let candidate = load_generation_for_manifest(root, current.clone())?;
+    let fingerprint = candidate.publication_fingerprint.ok_or_else(|| {
+        SearchError::corrupt(format!(
+            "regex generation {} has no publication fingerprint",
+            current.generation
+        ))
+    })?;
+    ensure_valid_index!(
+        current.publication_fingerprint.as_deref() == Some(fingerprint.as_str()),
+        "regex generation {} manifest is not bound to its generation record",
+        current.generation
+    );
+    let previous_bytes = previous
+        .filter(|manifest| manifest.generation > 0)
+        .map(durable_manifest)
+        .map(|manifest| {
+            load_generation_for_manifest(root, manifest.clone())?;
+            serde_json::to_vec_pretty(&manifest).map_err(SearchError::from)
+        })
+        .transpose()?;
+    let published_snapshot = ManifestFilesSnapshot {
+        current: Some(serde_json::to_vec_pretty(current)?),
+        previous: previous_bytes.clone().or_else(|| expected.previous.clone()),
+    };
+    ensure_manifest_files_unchanged(root, expected)?;
+    let publication = (|| {
+        if let Some(bytes) = previous_bytes.as_ref() {
+            write_atomic(previous_manifest_path(root), bytes)?;
+        }
+        save_manifest(root, current)
+    })();
+    match publication {
+        Ok(()) => Ok(fingerprint),
+        Err(build) => match restore_owned_manifest_files(root, &published_snapshot, expected) {
+            Ok(()) => Err(build),
+            Err(persistence) => Err(SearchError::FailureProvenance {
+                build: Box::new(build),
+                persistence: Box::new(
+                    persistence.context("failed to restore pre-publication regex manifests"),
+                ),
+            }),
+        },
     }
-    save_manifest(root, current)
 }
 
 pub(crate) fn durable_manifest(manifest: &RegexIndexManifest) -> RegexIndexManifest {
@@ -446,38 +510,90 @@ pub(crate) fn generation_record_from_loaded(
     }
 }
 
-pub(crate) fn save_generation_record(root: &Path, record: &RegexGenerationRecord) -> Result<()> {
-    fs::create_dir_all(regex_index_dir(root))?;
-    write_atomic(
-        generation_record_path(root, record.generation),
-        &serde_json::to_vec_pretty(record)?,
-    )
+pub(crate) fn load_published_runtime(root: &Path) -> Result<Option<RegexIndexRuntime>> {
+    let manifest = load_manifest_strict(root)?;
+    if manifest.schema_version == 0 {
+        let path = previous_manifest_path(root);
+        if !path.exists() {
+            return Ok(None);
+        }
+        return load_generation_for_manifest(root, load_manifest_file(&path)?).map(Some);
+    }
+    load_generation_for_manifest(root, manifest).map(Some)
 }
 
-pub(crate) fn load_generation_record(
+fn load_generation_for_manifest(
     root: &Path,
-    generation: u64,
-) -> Result<RegexGenerationRecord> {
-    let path = generation_record_path(root, generation);
-    let raw = fs::read(&path).with_context(|| {
-        format!(
-            "failed to read regex generation record '{}'",
-            path.display()
-        )
+    manifest: RegexIndexManifest,
+) -> Result<RegexIndexRuntime> {
+    ensure_valid_index!(
+        manifest.schema_version == REGEX_INDEX_SCHEMA_VERSION
+            && manifest.weight_table_version == WEIGHT_TABLE_VERSION
+            && manifest.generation > 0
+            && manifest.status == "ready",
+        "regex generation {} cannot authenticate a non-ready or incompatible manifest",
+        manifest.generation
+    );
+    let record_exists = generation_record_path(root, manifest.generation).exists();
+    ensure_valid_index!(
+        record_exists || manifest.publication_fingerprint.is_none(),
+        "regex generation {} is missing its authenticated generation record",
+        manifest.generation
+    );
+    if record_exists {
+        let record = load_generation_record(root, manifest.generation)?;
+        load_recorded_generation(root, manifest, record)
+    } else {
+        load_legacy_generation(root, manifest)
+    }
+}
+
+fn generation_record_from_runtime(runtime: &RegexIndexRuntime) -> Result<RegexGenerationRecord> {
+    let loaded = runtime.loaded.as_ref().ok_or_else(|| {
+        SearchError::corrupt(format!(
+            "regex generation {} has no validated layers",
+            runtime.manifest.generation
+        ))
     })?;
-    serde_json::from_slice(&raw).with_context(|| {
-        format!(
-            "failed to decode regex generation record '{}'",
-            path.display()
-        )
-    })
+    let record = generation_record_from_loaded(&runtime.manifest, loaded);
+    validate_generation_record(&record)?;
+    let fingerprint = generation_record_fingerprint(&record)?;
+    ensure_valid_index!(
+        runtime.publication_fingerprint.as_deref() == Some(fingerprint.as_str()),
+        "regex generation {} publication fingerprint changed",
+        runtime.manifest.generation
+    );
+    Ok(record)
 }
 
 pub(crate) fn prune_generation_artifacts(
     root: &Path,
-    current: &RegexGenerationRecord,
-    previous: Option<&RegexIndexManifest>,
+    _writer: &GenerationWriterLock,
 ) -> Result<()> {
+    let snapshot = capture_manifest_files(root)?;
+    let current_manifest = load_manifest_strict(root)?;
+    if current_manifest.schema_version == 0 {
+        return Ok(());
+    }
+    let current_runtime = load_generation_for_manifest(root, current_manifest)?;
+    let current = generation_record_from_runtime(&current_runtime)?;
+    let previous = match load_manifest_file(&previous_manifest_path(root)) {
+        Ok(manifest) => {
+            let runtime = load_generation_for_manifest(root, manifest)?;
+            Some(generation_record_from_runtime(&runtime)?)
+        }
+        Err(SearchError::Context { source, .. })
+            if matches!(
+                source.as_ref(),
+                SearchError::Io { source }
+                    if source.kind() == std::io::ErrorKind::NotFound
+            ) =>
+        {
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    ensure_manifest_files_unchanged(root, &snapshot)?;
     let mut retained = BTreeSet::from([
         MANIFEST_FILE_NAME.to_string(),
         PREVIOUS_MANIFEST_FILE_NAME.to_string(),
@@ -487,11 +603,10 @@ pub(crate) fn prune_generation_artifacts(
     for segment in &current.segments {
         retain_layer_files(&mut retained, &segment.files);
     }
-    if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
-        let record = load_generation_record(root, previous.generation)?;
-        retained.insert(format!("generation-{:020}.json", record.generation));
-        retain_layer_files(&mut retained, &record.base);
-        for segment in &record.segments {
+    if let Some(previous) = previous.as_ref() {
+        retained.insert(format!("generation-{:020}.json", previous.generation));
+        retain_layer_files(&mut retained, &previous.base);
+        for segment in &previous.segments {
             retain_layer_files(&mut retained, &segment.files);
         }
     }
@@ -544,6 +659,14 @@ pub(crate) fn validate_generation_record(record: &RegexGenerationRecord) -> Resu
         record.manifest.overlay_segments,
         record.segments.len()
     );
+    if let Some(expected) = record.manifest.publication_fingerprint.as_deref() {
+        let actual = generation_record_fingerprint(record)?;
+        ensure_valid_index!(
+            actual == expected,
+            "regex generation {} failed publication fingerprint validation (expected {expected}, found {actual})",
+            record.generation
+        );
+    }
     validate_layer_file_names(&record.base)?;
     ensure_valid_index!(
         record.base.has_digests(),
@@ -638,6 +761,7 @@ pub(crate) fn load_recorded_generation(
     record: RegexGenerationRecord,
 ) -> Result<RegexIndexRuntime> {
     validate_generation_record(&record)?;
+    let publication_fingerprint = generation_record_fingerprint(&record)?;
     ensure_valid_index!(
         record.manifest == durable_manifest(&manifest),
         "regex generation {} record does not match its published manifest",
@@ -670,6 +794,7 @@ pub(crate) fn load_recorded_generation(
     Ok(RegexIndexRuntime {
         manifest,
         loaded: Some(Arc::new(loaded)),
+        publication_fingerprint: Some(publication_fingerprint),
     })
 }
 
@@ -717,9 +842,13 @@ pub(crate) fn load_legacy_generation(
         overlay_state,
     };
     validate_loaded_overlay_state(&loaded)?;
+    let record = generation_record_from_loaded(&manifest, &loaded);
+    validate_generation_record(&record)?;
+    let publication_fingerprint = generation_record_fingerprint(&record)?;
     Ok(RegexIndexRuntime {
         manifest,
         loaded: Some(Arc::new(loaded)),
+        publication_fingerprint: Some(publication_fingerprint),
     })
 }
 
@@ -837,6 +966,7 @@ pub(crate) fn recover_previous_runtime(
     Ok(RegexIndexRuntime {
         manifest,
         loaded: None,
+        publication_fingerprint: None,
     })
 }
 

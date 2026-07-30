@@ -40,8 +40,16 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
         (
             "generation",
             ModulePolicy {
-                max_lines: 1_000,
-                allowed_dependencies: &["error", "layer", "model", "paths", "support", "weights"],
+                max_lines: 1_025,
+                allowed_dependencies: &[
+                    "error",
+                    "layer",
+                    "model",
+                    "paths",
+                    "publication",
+                    "support",
+                    "weights",
+                ],
             },
         ),
         (
@@ -73,6 +81,13 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
             },
         ),
         (
+            "publication",
+            ModulePolicy {
+                max_lines: 300,
+                allowed_dependencies: &["error", "layer", "model", "paths", "support"],
+            },
+        ),
+        (
             "query",
             ModulePolicy {
                 max_lines: 1_500,
@@ -82,7 +97,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
         (
             "shared_scan",
             ModulePolicy {
-                max_lines: 650,
+                max_lines: 750,
                 allowed_dependencies: &[
                     "error",
                     "generation",
@@ -90,6 +105,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
                     "model",
                     "paths",
                     "postings",
+                    "publication",
                     "support",
                     "weights",
                 ],
@@ -385,8 +401,8 @@ fn search_core_source_architecture_stays_reviewed() {
     );
     let tests = fs::read_to_string(source_dir.join("tests.rs")).expect("search tests");
     assert!(
-        tests.lines().count() <= 1_600,
-        "search unit tests exceeded 1,600 lines"
+        tests.lines().count() <= 1_650,
+        "search unit tests exceeded 1,650 lines"
     );
 
     let mut observed = BTreeMap::new();

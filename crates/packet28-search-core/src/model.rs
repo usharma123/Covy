@@ -15,6 +15,7 @@ pub(crate) const REGEX_DIR_NAME: &str = "regex-v1";
 pub(crate) const MANIFEST_FILE_NAME: &str = "manifest.json";
 pub(crate) const PREVIOUS_MANIFEST_FILE_NAME: &str = "manifest.previous.json";
 pub(crate) const WRITER_LOCK_FILE_NAME: &str = ".regex-v1.writer.lock";
+pub(crate) const GENERATION_HIGH_WATER_FILE_NAME: &str = ".regex-v1.generation-high-water";
 pub(crate) const BASE_LOOKUP_FILE_NAME: &str = "base.lookup.dat";
 pub(crate) const BASE_POSTINGS_FILE_NAME: &str = "base.postings.dat";
 pub(crate) const BASE_DOCS_FILE_NAME: &str = "docs.dat";
@@ -47,6 +48,12 @@ pub struct RegexIndexManifest {
     pub weight_table_version: u32,
     /// Monotonically increasing publication generation.
     pub generation: u64,
+    /// Digest binding this manifest to its immutable generation record.
+    ///
+    /// Older persisted generations may omit this field and are authenticated
+    /// when loaded before their next publication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_fingerprint: Option<String>,
     /// Whether test files were included during the last full build.
     pub include_tests: bool,
     /// Persistent lifecycle status such as `building`, `ready`, or `corrupt`.
@@ -192,6 +199,7 @@ pub struct RegexIndexRuntime {
     /// Metadata for the loaded or unavailable generation.
     pub manifest: RegexIndexManifest,
     pub(crate) loaded: Option<Arc<LoadedIndex>>,
+    pub(crate) publication_fingerprint: Option<String>,
 }
 
 impl RegexIndexRuntime {
