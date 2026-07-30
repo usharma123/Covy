@@ -66,11 +66,11 @@ run_cmd() {
   fi
 }
 
-# Workspace policy intentionally resolves metadata offline. Bootstrap the exact
-# locked graph first so the same invariant holds on a clean runner and a warm
-# developer machine.
-run_cmd cargo fetch --locked
-run_cmd scripts/verify_workspace_policy.sh
+# Workspace policy discovers every tracked Cargo workspace, fetches each exact
+# lockfile graph, then resolves the same manifests offline. Keeping discovery
+# and bootstrap in one loop prevents auxiliary lockfiles from being masked by a
+# warm cache.
+run_cmd scripts/verify_workspace_policy.sh --bootstrap
 run_cmd python3 scripts/check_direct_dependencies.py
 run_cmd python3 scripts/check_architecture.py
 run_cmd python3 -m unittest scripts.tests.test_check_architecture

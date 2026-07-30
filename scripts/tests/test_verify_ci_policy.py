@@ -74,6 +74,9 @@ class CanonicalGatePolicyTests(unittest.TestCase):
         cls.full_gate = (
             verify_ci_policy.ROOT / "scripts" / "validate_full_gate.sh"
         ).read_text(encoding="utf-8")
+        cls.workspace_policy = (
+            verify_ci_policy.ROOT / "scripts" / "verify_workspace_policy.sh"
+        ).read_text(encoding="utf-8")
 
     def test_repository_release_gate_strictly_finalizes_the_audit_ledger(
         self,
@@ -93,39 +96,47 @@ class CanonicalGatePolicyTests(unittest.TestCase):
         self,
     ) -> None:
         self.assertEqual(
-            verify_ci_policy.clean_runner_bootstrap_errors(self.full_gate),
+            verify_ci_policy.clean_runner_bootstrap_errors(
+                self.full_gate,
+                self.workspace_policy,
+            ),
             [],
         )
 
-    def test_policy_rejects_offline_policy_before_locked_fetch(self) -> None:
+    def test_policy_rejects_gate_without_workspace_bootstrap(self) -> None:
         unsafe = self.full_gate.replace(
-            "run_cmd cargo fetch --locked\n",
+            "run_cmd scripts/verify_workspace_policy.sh --bootstrap\n",
+            "run_cmd scripts/verify_workspace_policy.sh\n",
+            1,
+        )
+
+        self.assertEqual(
+            verify_ci_policy.clean_runner_bootstrap_errors(
+                unsafe,
+                self.workspace_policy,
+            ),
+            [
+                "canonical gate does not bootstrap every locked workspace"
+            ],
+        )
+
+    def test_policy_rejects_missing_per_manifest_fetch(self) -> None:
+        unsafe = self.workspace_policy.replace(
+            "    cargo fetch \\\n"
+            "      --locked \\\n"
+            '      --manifest-path "$manifest"\n',
             "",
             1,
         )
 
         self.assertEqual(
-            verify_ci_policy.clean_runner_bootstrap_errors(unsafe),
+            verify_ci_policy.clean_runner_bootstrap_errors(
+                self.full_gate,
+                unsafe,
+            ),
             [
-                "canonical gate does not fetch the locked graph for clean "
-                "runners"
-            ],
-        )
-
-    def test_policy_rejects_locked_fetch_after_offline_policy(self) -> None:
-        unsafe = self.full_gate.replace(
-            "run_cmd cargo fetch --locked\n"
-            "run_cmd scripts/verify_workspace_policy.sh\n",
-            "run_cmd scripts/verify_workspace_policy.sh\n"
-            "run_cmd cargo fetch --locked\n",
-            1,
-        )
-
-        self.assertEqual(
-            verify_ci_policy.clean_runner_bootstrap_errors(unsafe),
-            [
-                "canonical gate does not fetch the locked graph before "
-                "offline workspace policy"
+                "workspace policy does not fetch each discovered locked "
+                "manifest"
             ],
         )
 

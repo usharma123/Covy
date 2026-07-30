@@ -5,6 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+bootstrap=false
+if [[ "${1:-}" == "--bootstrap" ]]; then
+  bootstrap=true
+  shift
+fi
+if (($#)); then
+  echo "usage: scripts/verify_workspace_policy.sh [--bootstrap]" >&2
+  exit 2
+fi
+
 fail() {
   echo "workspace policy invariant failed: $*" >&2
   exit 1
@@ -24,6 +34,11 @@ while IFS= read -r manifest; do
     fail "$manifest defines a Cargo workspace without $lock_file"
   git ls-files --error-unmatch -- "$lock_file" >/dev/null 2>&1 ||
     fail "$lock_file is not tracked"
+  if [[ "$bootstrap" == true ]]; then
+    cargo fetch \
+      --locked \
+      --manifest-path "$manifest"
+  fi
   cargo metadata \
     --locked \
     --offline \

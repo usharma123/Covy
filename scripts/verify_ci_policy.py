@@ -636,21 +636,32 @@ def direct_minimum_gate_errors(full_gate: str) -> list[str]:
     ]
 
 
-def clean_runner_bootstrap_errors(full_gate: str) -> list[str]:
-    """Require a locked dependency fetch before the first offline Cargo check."""
+def clean_runner_bootstrap_errors(
+    full_gate: str,
+    workspace_policy: str,
+) -> list[str]:
+    """Require every discovered workspace to fetch before offline metadata."""
 
-    fetch = "run_cmd cargo fetch --locked"
-    offline_policy = "run_cmd scripts/verify_workspace_policy.sh"
-    fetch_index = full_gate.find(fetch)
-    policy_index = full_gate.find(offline_policy)
-    if fetch_index < 0:
+    invocation = "run_cmd scripts/verify_workspace_policy.sh --bootstrap"
+    if invocation not in full_gate:
         return [
-            "canonical gate does not fetch the locked graph for clean runners"
+            "canonical gate does not bootstrap every locked workspace"
         ]
-    if policy_index < 0 or fetch_index > policy_index:
+    fetch = workspace_policy.find(
+        'cargo fetch \\\n      --locked \\\n      --manifest-path "$manifest"'
+    )
+    metadata = workspace_policy.find(
+        'cargo metadata \\\n    --locked \\\n    --offline \\\n'
+        '    --manifest-path "$manifest"'
+    )
+    if fetch < 0:
         return [
-            "canonical gate does not fetch the locked graph before offline "
-            "workspace policy"
+            "workspace policy does not fetch each discovered locked manifest"
+        ]
+    if metadata < 0 or fetch > metadata:
+        return [
+            "workspace policy does not fetch each manifest before offline "
+            "metadata"
         ]
     return []
 
@@ -689,6 +700,9 @@ def verify_workflow_wiring(errors: list[str]) -> None:
     full_gate = (ROOT / "scripts" / "validate_full_gate.sh").read_text(
         encoding="utf-8"
     )
+    workspace_policy = (
+        ROOT / "scripts" / "verify_workspace_policy.sh"
+    ).read_text(encoding="utf-8")
 
     if "scripts/validate_full_gate.sh" not in build:
         errors.append("build workflow does not invoke the canonical full gate")
@@ -715,7 +729,7 @@ def verify_workflow_wiring(errors: list[str]) -> None:
     errors.extend(runtime_starvation_evidence_gate_errors(full_gate))
     errors.extend(incremental_index_evidence_gate_errors(full_gate))
     errors.extend(direct_minimum_gate_errors(full_gate))
-    errors.extend(clean_runner_bootstrap_errors(full_gate))
+    errors.extend(clean_runner_bootstrap_errors(full_gate, workspace_policy))
     if "run_cmd cargo deny --locked check" not in full_gate:
         errors.append("canonical gate does not run cargo-deny against the lockfile")
 
