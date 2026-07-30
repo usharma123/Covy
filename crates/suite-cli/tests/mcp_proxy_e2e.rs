@@ -562,6 +562,85 @@ fn test_mcp_proxy_cli_namespaces_colliding_tools() {
 
 #[test]
 #[cfg(unix)]
+fn test_mcp_proxy_unites_exact_and_template_resource_ownership() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script_alpha = dir.path().join("alpha_resources.py");
+    write_colliding_tool_server(&script_alpha, "alpha");
+    let script_beta = dir.path().join("beta_resources.py");
+    write_colliding_tool_server(&script_beta, "beta");
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "alpha": {
+                    "command": "python3",
+                    "args": ["-u", script_alpha.to_str().unwrap()],
+                    "framing": "content_length"
+                },
+                "beta": {
+                    "command": "python3",
+                    "args": ["-u", script_beta.to_str().unwrap()],
+                    "framing": "content_length"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut server =
+        start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-resource-routing");
+    initialize_mcp_session(&mut server);
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"templated-read",
+            "method":"resources/read",
+            "params":{"uri":"alpha://items/42"}
+        }),
+    );
+    let templated = read_until(&mut server, |message| message["id"] == "templated-read");
+    assert_eq!(templated["id"], "templated-read");
+    assert_eq!(templated["result"]["contents"][0]["text"], "alpha resource");
+
+    for (id, uri) in [
+        ("duplicate-exact", "shared://resource"),
+        ("exact-template-union", "union://items/42"),
+    ] {
+        write_mcp_message(
+            &mut server,
+            &json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":"resources/read",
+                "params":{"uri":uri}
+            }),
+        );
+        let duplicate = read_until(&mut server, |message| message["id"] == id);
+        assert_eq!(duplicate["id"], id);
+        assert_eq!(duplicate["error"]["code"], -32000);
+        assert_eq!(
+            duplicate["error"]["message"],
+            format!("resource '{uri}' is advertised by multiple upstreams: alpha, beta")
+        );
+    }
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
 fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();

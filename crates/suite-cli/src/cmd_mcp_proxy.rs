@@ -1,9 +1,10 @@
 use super::*;
 use crate::cmd_mcp::proxy_catalog::{
     ensure_upstream_resource_templates_loaded, ensure_upstream_resources_loaded,
-    ensure_upstream_tools_loaded, forward_name_for_tool, owner_for_resource, owner_for_tool,
+    ensure_upstream_tools_loaded, forward_name_for_tool, owner_for_tool, route_for_resource,
     ProxyCatalog,
 };
+use crate::cmd_mcp::proxy_resource::ResourceRoute;
 use crate::cmd_mcp::proxy_upstream::{
     proxy_output_channel, spawn_upstream_clients, write_proxy_output, UpstreamClient, UpstreamPool,
 };
@@ -527,6 +528,7 @@ async fn handle_proxy_method(
                 guard.upstream_tools_loaded = false;
                 guard.upstream_resources_loaded = false;
                 guard.upstream_resource_templates_loaded = false;
+                guard.resource_routes.clear();
             }
             for upstream in upstreams.values() {
                 let request = json!({
@@ -619,11 +621,20 @@ async fn handle_proxy_method(
                     "result": handle_local_method(root, session, method, params).await?,
                 }));
             }
-            if owner_for_resource(session, uri).is_none() {
-                let _ = ensure_upstream_resources_loaded(session, upstreams, catalog).await?;
-            }
-            let owner = owner_for_resource(session, uri)
-                .ok_or_else(|| anyhow!("no upstream owns resource '{uri}'"))?;
+            let _ = ensure_upstream_resources_loaded(session, upstreams, catalog).await?;
+            let _ = ensure_upstream_resource_templates_loaded(session, upstreams, catalog).await?;
+            let owner = match route_for_resource(session, uri)? {
+                ResourceRoute::Missing => {
+                    return Err(anyhow!("no upstream owns resource '{uri}'"));
+                }
+                ResourceRoute::Unique(owner) => owner,
+                ResourceRoute::Ambiguous(owners) => {
+                    return Err(anyhow!(
+                        "resource '{uri}' is advertised by multiple upstreams: {}",
+                        owners.join(", ")
+                    ));
+                }
+            };
             let upstream = upstreams
                 .get(&owner)
                 .ok_or_else(|| anyhow!("missing upstream '{owner}'"))?;

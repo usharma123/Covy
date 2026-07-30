@@ -24,6 +24,8 @@ def write_message(value):
     sys.stdout.buffer.write(body)
     sys.stdout.buffer.flush()
 
+OWNER = "__OWNER__"
+
 while True:
     message = read_message()
     if message is None:
@@ -37,9 +39,18 @@ while True:
     elif method == "tools/list":
         write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": [{"name": "shared.read", "description": "__OWNER__ shared tool", "inputSchema": {"type": "object", "properties": {}}}]}})
     elif method == "resources/list":
-        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"resources": []}})
+        resources = [{"uri": "shared://resource", "name": "__OWNER__ shared resource"}]
+        if OWNER == "alpha":
+            resources.append({"uri": "union://items/42", "name": "alpha exact item"})
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"resources": resources}})
     elif method == "resources/templates/list":
-        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"resourceTemplates": []}})
+        templates = [{"uriTemplate": "__OWNER__://items/{id}", "name": "__OWNER__ item"}]
+        if OWNER == "beta":
+            templates.append({"uriTemplate": "union://items/{id}", "name": "beta union item"})
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"resourceTemplates": templates}})
+    elif method == "resources/read":
+        uri = message.get("params", {}).get("uri", "")
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "__OWNER__ resource"}]}})
     elif method == "tools/call":
         write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"content": [{"type": "text", "text": "__OWNER__ ok"}], "structuredContent": {"owner": "__OWNER__"}}})
     else:

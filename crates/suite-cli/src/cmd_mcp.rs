@@ -43,6 +43,8 @@ mod prompt_resource;
 mod proxy;
 #[path = "cmd_mcp_proxy_catalog.rs"]
 mod proxy_catalog;
+#[path = "cmd_mcp_proxy_resource.rs"]
+mod proxy_resource;
 #[path = "cmd_mcp_proxy_upstream.rs"]
 mod proxy_upstream;
 #[path = "cmd_mcp_response.rs"]
@@ -212,7 +214,7 @@ struct McpSessionState {
     tool_forward_names: BTreeMap<String, String>,
     upstream_tools_cache: Vec<Value>,
     upstream_tools_loaded: bool,
-    resource_owners: BTreeMap<String, String>,
+    resource_routes: proxy_resource::ResourceRoutingTable,
     upstream_resources_cache: Vec<Value>,
     upstream_resources_loaded: bool,
     upstream_resource_templates_cache: Vec<Value>,

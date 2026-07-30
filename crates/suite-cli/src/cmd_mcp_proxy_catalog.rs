@@ -1,5 +1,8 @@
 use super::*;
 
+use std::collections::BTreeSet;
+
+use crate::cmd_mcp::proxy_resource::ResourceRoute;
 use crate::cmd_mcp::proxy_upstream::UpstreamPool;
 
 #[derive(Default)]
@@ -27,14 +30,15 @@ pub(crate) fn forward_name_for_tool(
         .and_then(|guard| guard.tool_forward_names.get(tool_name).cloned())
 }
 
-pub(crate) fn owner_for_resource(
+pub(crate) fn route_for_resource(
     session: &Arc<Mutex<McpSessionState>>,
     uri: &str,
-) -> Option<String> {
-    session
+) -> Result<ResourceRoute> {
+    Ok(session
         .lock()
-        .ok()
-        .and_then(|guard| guard.resource_owners.get(uri).cloned())
+        .map_err(|_| anyhow!("failed to lock MCP session"))?
+        .resource_routes
+        .route(uri))
 }
 
 pub(crate) async fn ensure_upstream_tools_loaded(
@@ -92,6 +96,7 @@ pub(crate) async fn ensure_upstream_resource_templates_loaded(
         }
     }
     let mut templates = Vec::new();
+    let mut template_owners = BTreeMap::<String, BTreeSet<String>>::new();
     for upstream in upstreams.values() {
         let response = upstream
             .send_request(&json!({
@@ -106,12 +111,37 @@ pub(crate) async fn ensure_upstream_resource_templates_loaded(
             .and_then(Value::as_array)
         {
             templates.extend(items.iter().cloned());
+            for item in items {
+                let template = item
+                    .get("uriTemplate")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "upstream '{}' advertised a resource template without a string uriTemplate",
+                            upstream.name
+                        )
+                    })?;
+                template_owners
+                    .entry(template.to_string())
+                    .or_default()
+                    .insert(upstream.name.clone());
+            }
         }
     }
-    if let Ok(mut guard) = session.lock() {
-        guard.upstream_resource_templates_cache = templates.clone();
-        guard.upstream_resource_templates_loaded = true;
-    }
+    let mut routes = session
+        .lock()
+        .map_err(|_| anyhow!("failed to lock MCP session"))?
+        .resource_routes
+        .clone();
+    routes
+        .replace_templates(template_owners)
+        .context("upstream advertised an invalid or unsupported resource template")?;
+    let mut guard = session
+        .lock()
+        .map_err(|_| anyhow!("failed to lock MCP session"))?;
+    guard.resource_routes = routes;
+    guard.upstream_resource_templates_cache = templates.clone();
+    guard.upstream_resource_templates_loaded = true;
     Ok(templates)
 }
 
@@ -180,7 +210,7 @@ async fn refresh_upstream_resources(
     session: &Arc<Mutex<McpSessionState>>,
     upstreams: &Arc<UpstreamPool>,
 ) -> Result<Vec<Value>> {
-    let mut resource_owners = BTreeMap::new();
+    let mut resource_owners = BTreeMap::<String, BTreeSet<String>>::new();
     let mut rendered_resources = Vec::new();
     for upstream in upstreams.values() {
         let response = upstream
@@ -196,10 +226,17 @@ async fn refresh_upstream_resources(
             .and_then(Value::as_array)
         {
             for item in items {
-                if let Some(uri) = item.get("uri").and_then(Value::as_str) {
-                    resource_owners.insert(uri.to_string(), upstream.name.clone());
-                    rendered_resources.push(item.clone());
-                }
+                let uri = item.get("uri").and_then(Value::as_str).ok_or_else(|| {
+                    anyhow!(
+                        "upstream '{}' advertised a resource without a string uri",
+                        upstream.name
+                    )
+                })?;
+                resource_owners
+                    .entry(uri.to_string())
+                    .or_default()
+                    .insert(upstream.name.clone());
+                rendered_resources.push(item.clone());
             }
         }
     }
@@ -208,11 +245,12 @@ async fn refresh_upstream_resources(
             .and_then(Value::as_str)
             .cmp(&right.get("uri").and_then(Value::as_str))
     });
-    if let Ok(mut guard) = session.lock() {
-        guard.resource_owners = resource_owners;
-        guard.upstream_resources_cache = rendered_resources.clone();
-        guard.upstream_resources_loaded = true;
-    }
+    let mut guard = session
+        .lock()
+        .map_err(|_| anyhow!("failed to lock MCP session"))?;
+    guard.resource_routes.replace_exact(resource_owners);
+    guard.upstream_resources_cache = rendered_resources.clone();
+    guard.upstream_resources_loaded = true;
     Ok(rendered_resources)
 }
 
