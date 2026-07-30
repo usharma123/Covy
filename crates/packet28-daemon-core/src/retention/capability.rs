@@ -27,6 +27,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PROCESS_NONCE: OnceLock<[u8; 16]> = OnceLock::new();
 
 const MAX_UNIQUE_NAME_ATTEMPTS: usize = 16;
+const MAX_AUTHENTICATED_READ_ATTEMPTS: usize = 16;
 const MAX_CAPABILITY_DIRECTORY_ENTRIES: usize = 65_536;
 const MAX_CAPABILITY_RECURSION_DEPTH: usize = 64;
 const MAX_CAPABILITY_RECURSIVE_ENTRIES: usize = 65_536;
@@ -69,6 +70,12 @@ enum LockInitializerKillPoint {
 }
 
 #[cfg(test)]
+struct InjectedAuthenticatedReadAfterOpen {
+    name: OsString,
+    action: Box<dyn FnOnce()>,
+}
+
+#[cfg(test)]
 std::thread_local! {
     static INJECT_ATOMIC_AFTER_RENAME_FOR:
         std::cell::RefCell<Option<(OsString, InjectedAtomicAfterRenameFailure)>> =
@@ -80,6 +87,9 @@ std::thread_local! {
     static INJECT_NEW_ENTRY_CHMOD_FAILURE_FOR: std::cell::RefCell<Option<OsString>> =
         const { std::cell::RefCell::new(None) };
     static INJECT_PREFLIGHT_FIFO_SWAP_FOR: std::cell::RefCell<Option<OsString>> =
+        const { std::cell::RefCell::new(None) };
+    static INJECT_AUTHENTICATED_READ_AFTER_OPEN:
+        std::cell::RefCell<Option<InjectedAuthenticatedReadAfterOpen>> =
         const { std::cell::RefCell::new(None) };
     static INJECT_NAME_MAX: std::cell::Cell<Option<usize>> =
         const { std::cell::Cell::new(None) };
@@ -195,6 +205,17 @@ pub(super) struct CapabilityFileRead {
     pub(super) mode: RawMode,
 }
 
+struct AuthenticatedReadFile {
+    file: File,
+    identity: FileIdentity,
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedReadDescriptor {
+    identity: FileIdentity,
+    attached: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CapabilityEntryKind {
     Symlink,
@@ -260,6 +281,19 @@ pub(super) fn inject_noreplace_unsupported_once() {
 }
 
 #[cfg(test)]
+pub(super) fn inject_authenticated_read_after_open_once(
+    name: &OsStr,
+    action: impl FnOnce() + 'static,
+) {
+    INJECT_AUTHENTICATED_READ_AFTER_OPEN.with(|configured| {
+        *configured.borrow_mut() = Some(InjectedAuthenticatedReadAfterOpen {
+            name: name.to_os_string(),
+            action: Box::new(action),
+        });
+    });
+}
+
+#[cfg(test)]
 pub(super) fn inject_directory_create_sync_failure_once(name: &OsStr) {
     INJECT_DIRECTORY_CREATE_SYNC_FAILURE_FOR.with(|configured| {
         *configured.borrow_mut() = Some(name.to_os_string());
@@ -309,6 +343,24 @@ fn maybe_swap_preflight_to_fifo(display_path: &Path, name: &OsStr) -> io::Result
             "mkfifo failed while injecting a preflight race for {}",
             path.display()
         )))
+    }
+}
+
+#[cfg(test)]
+fn maybe_inject_authenticated_read_after_open(name: &OsStr) {
+    let injection = INJECT_AUTHENTICATED_READ_AFTER_OPEN.with(|configured| {
+        let mut configured = configured.borrow_mut();
+        if configured
+            .as_ref()
+            .is_some_and(|injection| injection.name == name)
+        {
+            configured.take()
+        } else {
+            None
+        }
+    });
+    if let Some(injection) = injection {
+        (injection.action)();
     }
 }
 
@@ -994,66 +1046,75 @@ impl CapabilityDir {
 
     pub(super) fn open_read_file(&self, name: &OsStr) -> io::Result<File> {
         validate_normal_component(name)?;
-        self.validate_mutation_authority()?;
-        let preflight =
-            rfs::statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
-        if FileType::from_raw_mode(preflight.st_mode) != FileType::RegularFile {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "capability entry is not a regular file",
-            ));
+        for _ in 0..MAX_AUTHENTICATED_READ_ATTEMPTS {
+            if let Some(opened) = self.open_read_file_once(name)? {
+                return Ok(opened.file);
+            }
         }
-        validate_owned_single_link_regular(
-            &preflight,
+        Err(authenticated_read_retry_limit_error(name))
+    }
+
+    fn open_read_file_once(&self, name: &OsStr) -> io::Result<Option<AuthenticatedReadFile>> {
+        self.validate_mutation_authority()?;
+        let expected = self
+            .authenticated_read_entry_identity(name)?
+            .ok_or_else(|| authenticated_read_not_found_error(name))?;
+        #[cfg(test)]
+        maybe_swap_preflight_to_fifo(&self.display_path, name)?;
+        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        let fd = match rfs::openat(&self.fd, name, flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(source) => return Err(source.into()),
+        };
+        #[cfg(test)]
+        maybe_inject_authenticated_read_after_open(name);
+        let descriptor = authenticate_read_descriptor(
+            &fd,
             name,
             self.identity.device,
             "capability managed file",
         )?;
-        let preflight_mode = (preflight.st_mode as RawMode) & 0o777;
-        if (preflight_mode & 0o400) == 0 || (preflight_mode & 0o022) != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "capability managed file is not owner-readable with no non-owner write authority: {}",
-                    Path::new(name).display()
-                ),
-            ));
+        let current = self.authenticated_read_entry_identity(name)?;
+        if !descriptor.attached || descriptor.identity != expected || current != Some(expected) {
+            return Ok(None);
         }
-        let expected = identity_from_stat(&preflight);
-        #[cfg(test)]
-        maybe_swap_preflight_to_fifo(&self.display_path, name)?;
-        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-        let fd = rfs::openat(&self.fd, name, flags, Mode::empty()).map_err(io::Error::from)?;
-        let stat = rfs::fstat(&fd).map_err(io::Error::from)?;
-        validate_owned_regular_read_snapshot(
+        Ok(Some(AuthenticatedReadFile {
+            file: File::from(fd),
+            identity: expected,
+        }))
+    }
+
+    fn authenticated_read_entry_identity(&self, name: &OsStr) -> io::Result<Option<FileIdentity>> {
+        let stat = match rfs::statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(source) => return Err(source.into()),
+        };
+        validate_owned_single_link_regular(
             &stat,
             name,
             self.identity.device,
             "capability managed file",
         )?;
-        if identity_from_stat(&stat) != expected {
-            return Err(identity_changed(name));
-        }
-        let descriptor_mode = (stat.st_mode as RawMode) & 0o777;
-        if has_extended_acl(&fd)? {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "capability managed file has an extended ACL and cannot be authenticated automatically: {}",
-                    Path::new(name).display()
-                ),
-            ));
-        }
-        if (descriptor_mode & 0o400) == 0 || (descriptor_mode & 0o022) != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "capability managed file lost owner-read safety during authentication: {}",
-                    Path::new(name).display()
-                ),
-            ));
-        }
-        Ok(File::from(fd))
+        validate_authenticated_read_mode(&stat, name)?;
+        Ok(Some(identity_from_stat(&stat)))
+    }
+
+    fn read_file_is_still_attached(
+        &self,
+        name: &OsStr,
+        file: &File,
+        expected: FileIdentity,
+    ) -> io::Result<bool> {
+        let descriptor = authenticate_read_descriptor(
+            file,
+            name,
+            self.identity.device,
+            "capability managed file",
+        )?;
+        let current = self.authenticated_read_entry_identity(name)?;
+        Ok(descriptor.attached && descriptor.identity == expected && current == Some(expected))
     }
 
     pub(super) fn authenticate_regular_file(
@@ -1186,67 +1247,77 @@ impl CapabilityDir {
         name: &OsStr,
         max_bytes: usize,
     ) -> io::Result<CapabilityFileRead> {
-        let file = self.open_read_file(name)?;
-        let stat = rfs::fstat(&file).map_err(io::Error::from)?;
-        let max_len = u64::try_from(max_bytes).unwrap_or(u64::MAX);
-        let logical_bytes = u64::try_from(stat.st_size).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "capability file has a negative logical size",
-            )
-        })?;
-        if logical_bytes > max_len {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("capability file exceeds {max_bytes} bytes"),
-            ));
-        }
-        let initial_capacity = usize::try_from(logical_bytes).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "capability file length does not fit in memory address space",
-            )
-        })?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(initial_capacity)
-            .map_err(|source| {
+        validate_normal_component(name)?;
+        for _ in 0..MAX_AUTHENTICATED_READ_ATTEMPTS {
+            let Some(opened) = self.open_read_file_once(name)? else {
+                continue;
+            };
+            let stat = rfs::fstat(&opened.file).map_err(io::Error::from)?;
+            let max_len = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+            let logical_bytes = u64::try_from(stat.st_size).map_err(|_| {
                 io::Error::new(
-                    io::ErrorKind::OutOfMemory,
-                    format!("failed to reserve bounded capability file storage: {source}"),
+                    io::ErrorKind::InvalidData,
+                    "capability file has a negative logical size",
                 )
             })?;
-        let mut reader = file.take(max_len.saturating_add(1));
-        let mut chunk = [0_u8; 8 * 1024];
-        loop {
-            let read = reader.read(&mut chunk)?;
-            if read == 0 {
-                break;
+            if logical_bytes > max_len {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("capability file exceeds {max_bytes} bytes"),
+                ));
             }
-            bytes.try_reserve(read).map_err(|source| {
+            let initial_capacity = usize::try_from(logical_bytes).map_err(|_| {
                 io::Error::new(
-                    io::ErrorKind::OutOfMemory,
-                    format!("failed to grow bounded capability file storage: {source}"),
+                    io::ErrorKind::InvalidData,
+                    "capability file length does not fit in memory address space",
                 )
             })?;
-            bytes.extend_from_slice(&chunk[..read]);
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(initial_capacity)
+                .map_err(|source| {
+                    io::Error::new(
+                        io::ErrorKind::OutOfMemory,
+                        format!("failed to reserve bounded capability file storage: {source}"),
+                    )
+                })?;
+            let mut reader = opened.file.take(max_len.saturating_add(1));
+            let mut chunk = [0_u8; 8 * 1024];
+            loop {
+                let read = reader.read(&mut chunk)?;
+                if read == 0 {
+                    break;
+                }
+                bytes.try_reserve(read).map_err(|source| {
+                    io::Error::new(
+                        io::ErrorKind::OutOfMemory,
+                        format!("failed to grow bounded capability file storage: {source}"),
+                    )
+                })?;
+                bytes.extend_from_slice(&chunk[..read]);
+            }
+            if bytes.len() > max_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("capability file exceeds {max_bytes} bytes"),
+                ));
+            }
+            let file = reader.into_inner();
+            if !self.read_file_is_still_attached(name, &file, opened.identity)? {
+                continue;
+            }
+            let allocated_bytes = u64::try_from(stat.st_blocks)
+                .unwrap_or(0)
+                .saturating_mul(512);
+            return Ok(CapabilityFileRead {
+                bytes,
+                logical_bytes,
+                allocated_bytes,
+                identity: opened.identity,
+                mode: (stat.st_mode as RawMode) & 0o777,
+            });
         }
-        if bytes.len() > max_bytes {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("capability file exceeds {max_bytes} bytes"),
-            ));
-        }
-        let allocated_bytes = u64::try_from(stat.st_blocks)
-            .unwrap_or(0)
-            .saturating_mul(512);
-        Ok(CapabilityFileRead {
-            bytes,
-            logical_bytes,
-            allocated_bytes,
-            identity: identity_from_stat(&stat),
-            mode: (stat.st_mode as RawMode) & 0o777,
-        })
+        Err(authenticated_read_retry_limit_error(name))
     }
 
     pub(super) fn open_existing_lock_file(&self, name: &OsStr) -> io::Result<Option<File>> {
@@ -3576,6 +3647,66 @@ fn validate_owned_regular_read_snapshot(
     Ok(())
 }
 
+fn validate_authenticated_read_mode(stat: &rfs::Stat, name: &OsStr) -> io::Result<RawMode> {
+    let mode = (stat.st_mode as RawMode) & 0o777;
+    if (mode & 0o400) == 0 || (mode & 0o022) != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "capability managed file is not owner-readable with no non-owner write authority: {}",
+                Path::new(name).display()
+            ),
+        ));
+    }
+    Ok(mode)
+}
+
+fn authenticate_read_descriptor(
+    fd: impl AsFd,
+    name: &OsStr,
+    expected_device: u64,
+    kind: &str,
+) -> io::Result<AuthenticatedReadDescriptor> {
+    let stat = rfs::fstat(&fd).map_err(io::Error::from)?;
+    validate_owned_regular_read_snapshot(&stat, name, expected_device, kind)?;
+    validate_authenticated_read_mode(&stat, name)?;
+    if has_extended_acl(&fd)? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "capability managed file has an extended ACL and cannot be authenticated automatically: {}",
+                Path::new(name).display()
+            ),
+        ));
+    }
+    // Atomic replacement may detach this already-open, authenticated inode.
+    // It remains safe to inspect, but the caller must reopen before accepting it.
+    Ok(AuthenticatedReadDescriptor {
+        identity: identity_from_stat(&stat),
+        attached: stat.st_nlink == 1,
+    })
+}
+
+fn authenticated_read_not_found_error(name: &OsStr) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "capability managed file is absent: {}",
+            Path::new(name).display()
+        ),
+    )
+}
+
+fn authenticated_read_retry_limit_error(name: &OsStr) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "capability managed file changed during {MAX_AUTHENTICATED_READ_ATTEMPTS} consecutive authenticated read attempts: {}",
+            Path::new(name).display()
+        ),
+    )
+}
+
 fn unique_name(prefix: &str) -> OsString {
     #[cfg(test)]
     if let Some(name) = INJECT_UNIQUE_NAMES.with(|configured| configured.borrow_mut().pop_front()) {
@@ -5618,6 +5749,56 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn authenticated_reader_rejects_symlink_substitution_after_open_without_following() {
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let parent = CapabilityDir::open(root.path()).unwrap();
+        let name = OsStr::new("authority.json");
+        let authority = root.path().join(name);
+        fs::write(&authority, b"trusted").unwrap();
+        fs::set_permissions(&authority, fs::Permissions::from_mode(0o600)).unwrap();
+        let outside_target = outside.path().join("outside.json");
+        fs::write(&outside_target, b"outside").unwrap();
+        let staged_symlink = root.path().join("staged-symlink");
+        std::os::unix::fs::symlink(&outside_target, &staged_symlink).unwrap();
+        let authority_for_hook = authority.clone();
+        inject_authenticated_read_after_open_once(name, move || {
+            fs::rename(staged_symlink, authority_for_hook).unwrap();
+        });
+
+        let error = parent.read_file_limited(name, 1024).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(outside_target).unwrap(), b"outside");
+    }
+
+    #[test]
+    fn authenticated_reader_rejects_hard_link_substitution_after_open() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = tempdir().unwrap();
+        let parent = CapabilityDir::open(root.path()).unwrap();
+        let name = OsStr::new("authority.json");
+        let authority = root.path().join(name);
+        fs::write(&authority, b"trusted").unwrap();
+        fs::set_permissions(&authority, fs::Permissions::from_mode(0o600)).unwrap();
+        let linked_source = root.path().join("linked-source.json");
+        let staged_link = root.path().join("staged-link.json");
+        fs::write(&linked_source, b"linked").unwrap();
+        fs::set_permissions(&linked_source, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&linked_source, &staged_link).unwrap();
+        let authority_for_hook = authority.clone();
+        inject_authenticated_read_after_open_once(name, move || {
+            fs::rename(staged_link, authority_for_hook).unwrap();
+        });
+
+        let error = parent.read_file_limited(name, 1024).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::metadata(linked_source).unwrap().nlink(), 2);
     }
 
     #[test]

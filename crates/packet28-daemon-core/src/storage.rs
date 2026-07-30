@@ -28,7 +28,7 @@ use unicode_casefold::UnicodeCaseFold as _;
 use unicode_normalization::UnicodeNormalization as _;
 
 #[cfg(all(unix, test))]
-use crate::capability::generated_name_matches;
+use crate::capability::{generated_name_matches, inject_authenticated_read_after_open_once};
 #[cfg(unix)]
 use crate::capability::{
     sync_file_barrier, CapabilityDir, ACTIVE_TASK_WRITE_TEMP_PREFIX,
@@ -6085,6 +6085,44 @@ mod tests {
             load_active_task_record(fifo_root.path()),
             Err(DaemonCoreError::Io { .. })
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_task_reader_reopens_when_atomic_replacement_detaches_open_inode() {
+        let root = tempdir().unwrap();
+        let old = ActiveTaskRecord {
+            task_id: "old".to_string(),
+            session_id: Some("old-session".to_string()),
+            updated_at_unix: 1,
+        };
+        let replacement = ActiveTaskRecord {
+            task_id: "replacement".to_string(),
+            session_id: Some("replacement-session".to_string()),
+            updated_at_unix: 2,
+        };
+        save_active_task_record(root.path(), &old).unwrap();
+        let writer_root = root.path().to_path_buf();
+        let writer_record = replacement.clone();
+        inject_authenticated_read_after_open_once(
+            OsStr::new(AGENT_ACTIVE_TASK_FILE_NAME),
+            move || save_active_task_record(&writer_root, &writer_record).unwrap(),
+        );
+
+        let loaded = load_active_task_record(root.path()).unwrap().unwrap();
+
+        assert_eq!(
+            (
+                loaded.task_id.as_str(),
+                loaded.session_id.as_deref(),
+                loaded.updated_at_unix,
+            ),
+            (
+                replacement.task_id.as_str(),
+                replacement.session_id.as_deref(),
+                replacement.updated_at_unix,
+            )
+        );
     }
 
     #[test]
