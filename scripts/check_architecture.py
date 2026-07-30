@@ -100,13 +100,32 @@ PACKET28D_PUBLIC_DOC_INVENTORY = (
     ("packet28-daemon-protocol", "index", "excluded", "index-state-process-tests"),
     ("packet28-daemon-protocol", "message", "excluded", "request-response-json-tests"),
     ("packet28-daemon-protocol", "paths", "excluded", "path-endpoint-tests"),
-    ("packet28-daemon-protocol", "registry", "excluded", "registry-v1-json-compat-tests"),
+    (
+        "packet28-daemon-protocol", "registry", "covered",
+        "protocol-registry-migration-runnable+json-compat-tests",
+    ),
     ("packet28-daemon-protocol", "task", "covered", "protocol-task-lifecycle-runnable+compile_fail"),
+    (
+        "packet28-daemon-protocol", "root_compatibility", "excluded",
+        "exact-two-name-root-allowlist",
+    ),
+    (
+        "packet28-daemon-client", "runtime_discovery", "covered",
+        "daemon-client-discovery-runnable",
+    ),
+    (
+        "packet28-daemon-client", "transport", "excluded",
+        "authenticated-transport-process-tests",
+    ),
     ("packet28-daemon-core", "integrity", "excluded", "integrity-corruption-tests"),
     ("packet28-daemon-core", "retention", "excluded", "retention-recovery-process-tests"),
     ("packet28-daemon-core", "storage", "covered", "daemon-core-storage-runnable"),
     ("packet28-daemon-core", "task_store_lease", "excluded", "lease-authority-process-tests"),
     ("packet28-daemon-core", "trust", "excluded", "trust-platform-tests"),
+    (
+        "packet28-daemon-core", "root_compatibility", "excluded",
+        "exact-182-name-frozen-v0-inventory",
+    ),
     ("packet28d", "serve", "excluded", "non-hermetic-process-lifecycle-owner"),
     ("packet28d", "shared_repository_scan", "covered", "packet28d-shared-scan-no_run+feature-shared-repository-scan"),
 )
@@ -118,6 +137,17 @@ PACKET28D_DOCTEST_ANCHORS = (
         ("write_frame(", "read_frame(", "DaemonRequest::Status", "DaemonResponse::Ack"),
     ),
     (
+        "protocol-registry-migration-runnable",
+        "crates/packet28-daemon-protocol/src/registry.rs",
+        "runnable",
+        "//! ```",
+        (
+            "DaemonRegistryRequestV1::TaskListPage",
+            "TaskListPageRequestV1::default()",
+            "serde_json::from_value::<DaemonRequest>",
+        ),
+    ),
+    (
         "protocol-task-lifecycle-runnable", "crates/packet28-daemon-protocol/src/task.rs",
         "runnable", "/// ```",
         ("TaskLifecycle::Idle", "lifecycle.start()?", "lifecycle.finish_run()?"),
@@ -126,6 +156,13 @@ PACKET28D_DOCTEST_ANCHORS = (
         "protocol-task-lifecycle-compile_fail", "crates/packet28-daemon-protocol/src/task.rs",
         "compile_fail", "/// ```compile_fail",
         ("TaskLifecycle {", "running: true", "cancel_requested: true"),
+    ),
+    (
+        "daemon-client-discovery-runnable",
+        "crates/packet28-daemon-client/src/lib.rs",
+        "runnable",
+        "//! ```",
+        ("read_runtime_info_if_present(", "runtime.is_none()"),
     ),
     (
         "daemon-core-storage-runnable", "crates/packet28-daemon-core/src/lib.rs",
@@ -501,6 +538,7 @@ def check_packet28d_runtime_documentation(root: Path) -> list[str]:
 
     public_source_paths = {
         "packet28-daemon-protocol": "crates/packet28-daemon-protocol/src/lib.rs",
+        "packet28-daemon-client": "crates/packet28-daemon-client/src/lib.rs",
         "packet28-daemon-core": "crates/packet28-daemon-core/src/lib.rs",
         "packet28d": "crates/packet28d/src/lib.rs",
     }
@@ -508,7 +546,7 @@ def check_packet28d_runtime_documentation(root: Path) -> list[str]:
         owner: {
             item
             for inventory_owner, item, _, _ in PACKET28D_PUBLIC_DOC_INVENTORY
-            if inventory_owner == owner
+            if inventory_owner == owner and item != "root_compatibility"
         }
         for owner in public_source_paths
     }

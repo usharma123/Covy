@@ -22,12 +22,15 @@ documentation inventory below.
 
 ## Public documentation inventory
 
-Every public module in `packet28-daemon-protocol` and `packet28-daemon-core`,
-and every public module or export in `packet28d`, appears exactly once here.
-`covered` means the row names a compile-checked source example. `excluded`
-means the public seam is better covered by the named exact JSON, compatibility,
-failure-path, process, or platform tests. An exclusion is deliberate coverage,
-not an undocumented omission.
+Every public module in `packet28-daemon-protocol`,
+`packet28-daemon-client`, and `packet28-daemon-core`, and every public module
+or export in `packet28d`, appears exactly once here. The protocol's two root
+aliases and daemon-core's frozen 182-name root inventory are classified as
+compatibility groups; exact source inventories prevent additions from hiding
+inside those groups. `covered` means the row names a compile-checked source
+example. `excluded` means the public seam is better covered by the named exact
+JSON, compatibility, failure-path, process, or platform tests. An exclusion is
+deliberate coverage, not an undocumented omission.
 
 | Owner | Public module or export | Classification | Evidence or exclusion |
 | --- | --- | --- | --- |
@@ -39,13 +42,17 @@ not an undocumented omission.
 | packet28-daemon-protocol | index | excluded | index-state-process-tests |
 | packet28-daemon-protocol | message | excluded | request-response-json-tests |
 | packet28-daemon-protocol | paths | excluded | path-endpoint-tests |
-| packet28-daemon-protocol | registry | excluded | registry-v1-json-compat-tests |
+| packet28-daemon-protocol | registry | covered | protocol-registry-migration-runnable+json-compat-tests |
 | packet28-daemon-protocol | task | covered | protocol-task-lifecycle-runnable+compile_fail |
+| packet28-daemon-protocol | root_compatibility | excluded | exact-two-name-root-allowlist |
+| packet28-daemon-client | runtime_discovery | covered | daemon-client-discovery-runnable |
+| packet28-daemon-client | transport | excluded | authenticated-transport-process-tests |
 | packet28-daemon-core | integrity | excluded | integrity-corruption-tests |
 | packet28-daemon-core | retention | excluded | retention-recovery-process-tests |
 | packet28-daemon-core | storage | covered | daemon-core-storage-runnable |
 | packet28-daemon-core | task_store_lease | excluded | lease-authority-process-tests |
 | packet28-daemon-core | trust | excluded | trust-platform-tests |
+| packet28-daemon-core | root_compatibility | excluded | exact-182-name-frozen-v0-inventory |
 | packet28d | serve | excluded | non-hermetic-process-lifecycle-owner |
 | packet28d | shared_repository_scan | covered | packet28d-shared-scan-no_run+feature-shared-repository-scan |
 
@@ -57,13 +64,17 @@ not an undocumented omission.
 <!-- packet28d-public owner=packet28-daemon-protocol item=index classification=excluded evidence=index-state-process-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=message classification=excluded evidence=request-response-json-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=paths classification=excluded evidence=path-endpoint-tests -->
-<!-- packet28d-public owner=packet28-daemon-protocol item=registry classification=excluded evidence=registry-v1-json-compat-tests -->
+<!-- packet28d-public owner=packet28-daemon-protocol item=registry classification=covered evidence=protocol-registry-migration-runnable+json-compat-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=task classification=covered evidence=protocol-task-lifecycle-runnable+compile_fail -->
+<!-- packet28d-public owner=packet28-daemon-protocol item=root_compatibility classification=excluded evidence=exact-two-name-root-allowlist -->
+<!-- packet28d-public owner=packet28-daemon-client item=runtime_discovery classification=covered evidence=daemon-client-discovery-runnable -->
+<!-- packet28d-public owner=packet28-daemon-client item=transport classification=excluded evidence=authenticated-transport-process-tests -->
 <!-- packet28d-public owner=packet28-daemon-core item=integrity classification=excluded evidence=integrity-corruption-tests -->
 <!-- packet28d-public owner=packet28-daemon-core item=retention classification=excluded evidence=retention-recovery-process-tests -->
 <!-- packet28d-public owner=packet28-daemon-core item=storage classification=covered evidence=daemon-core-storage-runnable -->
 <!-- packet28d-public owner=packet28-daemon-core item=task_store_lease classification=excluded evidence=lease-authority-process-tests -->
 <!-- packet28d-public owner=packet28-daemon-core item=trust classification=excluded evidence=trust-platform-tests -->
+<!-- packet28d-public owner=packet28-daemon-core item=root_compatibility classification=excluded evidence=exact-182-name-frozen-v0-inventory -->
 <!-- packet28d-public owner=packet28d item=serve classification=excluded evidence=non-hermetic-process-lifecycle-owner -->
 <!-- packet28d-public owner=packet28d item=shared_repository_scan classification=covered evidence=packet28d-shared-scan-no_run+feature-shared-repository-scan -->
 
@@ -81,16 +92,20 @@ compatibility boundary in addition to the module rows.
 | Anchor | Source | Fence |
 | --- | --- | --- |
 | protocol-frame-runnable | crates/packet28-daemon-protocol/src/frame.rs | runnable |
+| protocol-registry-migration-runnable | crates/packet28-daemon-protocol/src/registry.rs | runnable |
 | protocol-task-lifecycle-runnable | crates/packet28-daemon-protocol/src/task.rs | runnable |
 | protocol-task-lifecycle-compile_fail | crates/packet28-daemon-protocol/src/task.rs | compile_fail |
+| daemon-client-discovery-runnable | crates/packet28-daemon-client/src/lib.rs | runnable |
 | daemon-core-storage-runnable | crates/packet28-daemon-core/src/lib.rs | runnable |
 | daemon-core-error-source-chain-runnable | crates/packet28-daemon-core/src/error.rs | runnable |
 | daemon-core-root-compatibility-compile_fail | crates/packet28-daemon-core/src/lib.rs | compile_fail |
 | packet28d-shared-scan-no_run | crates/packet28d/src/shared_repository_scan.rs | no_run |
 
 <!-- packet28d-anchor id=protocol-frame-runnable source=crates/packet28-daemon-protocol/src/frame.rs fence=runnable -->
+<!-- packet28d-anchor id=protocol-registry-migration-runnable source=crates/packet28-daemon-protocol/src/registry.rs fence=runnable -->
 <!-- packet28d-anchor id=protocol-task-lifecycle-runnable source=crates/packet28-daemon-protocol/src/task.rs fence=runnable -->
 <!-- packet28d-anchor id=protocol-task-lifecycle-compile_fail source=crates/packet28-daemon-protocol/src/task.rs fence=compile_fail -->
+<!-- packet28d-anchor id=daemon-client-discovery-runnable source=crates/packet28-daemon-client/src/lib.rs fence=runnable -->
 <!-- packet28d-anchor id=daemon-core-storage-runnable source=crates/packet28-daemon-core/src/lib.rs fence=runnable -->
 <!-- packet28d-anchor id=daemon-core-error-source-chain-runnable source=crates/packet28-daemon-core/src/error.rs fence=runnable -->
 <!-- packet28d-anchor id=daemon-core-root-compatibility-compile_fail source=crates/packet28-daemon-core/src/lib.rs fence=compile_fail -->
@@ -309,6 +324,7 @@ cargo check -p packet28d --all-targets --all-features --locked
 cargo clippy -p packet28d --all-targets --all-features --locked -- -D warnings
 cargo test -p packet28d --all-features --locked
 cargo test -p packet28-daemon-protocol --all-features --locked --doc
+cargo test -p packet28-daemon-client --all-features --locked --doc
 cargo test -p packet28-daemon-core --all-features --locked --doc
 python3 scripts/check_architecture.py
 python3 -m unittest scripts.tests.test_check_architecture

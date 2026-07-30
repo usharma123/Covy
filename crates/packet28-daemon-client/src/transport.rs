@@ -49,6 +49,10 @@ pub enum DaemonStream {
 
 impl DaemonStream {
     /// Clones the underlying socket handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating-system error from cloning the connected socket.
     pub fn try_clone(&self) -> std::io::Result<Self> {
         match self {
             Self::Unix(stream) => stream.try_clone().map(Self::Unix),
@@ -143,6 +147,13 @@ pub enum DaemonClientError {
 /// A missing authenticated runtime publication uses the conventional Unix
 /// endpoint for compatibility. Any present but unauthentic discovery state
 /// fails closed.
+///
+/// # Errors
+///
+/// Returns [`DaemonClientError::Discovery`] when published state cannot be
+/// authenticated or decoded, and
+/// [`DaemonClientError::LegacyUnauthenticatedTcp`] when an older runtime
+/// advertises TCP without a per-instance capability.
 pub fn discover_endpoint(root: &Path) -> Result<DaemonEndpoint, DaemonClientError> {
     let Some(runtime) = read_runtime_info_if_present(root)? else {
         return Ok(default_endpoint(root));
@@ -171,12 +182,23 @@ pub fn endpoint_may_have_stale_socket(endpoint: &DaemonEndpoint) -> bool {
 /// Unix server credentials or the TCP capability prelude are authenticated
 /// before this function returns, so callers cannot send a request frame to an
 /// unauthenticated peer.
+///
+/// # Errors
+///
+/// Returns [`DaemonClientError`] when discovery, connection setup, Unix peer
+/// verification, or the TCP authentication prelude fails.
 pub fn connect(root: &Path, timeout: Duration) -> Result<DaemonStream, DaemonClientError> {
     let endpoint = discover_endpoint(root)?;
     connect_endpoint(&endpoint, timeout)
 }
 
 /// Connects to a previously authenticated discovery result.
+///
+/// # Errors
+///
+/// Returns [`DaemonClientError`] when the socket cannot be connected or
+/// configured, the Unix peer has the wrong effective user, or the TCP
+/// capability exchange fails.
 pub fn connect_endpoint(
     endpoint: &DaemonEndpoint,
     timeout: Duration,

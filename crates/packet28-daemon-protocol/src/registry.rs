@@ -4,6 +4,27 @@
 //! and [`crate::message::DaemonResponse`]. Those enums are frozen for the 0.2
 //! compatibility line, while new registry capabilities use versioned wire
 //! tags that can evolve through a later protocol version.
+//!
+//! # Examples
+//!
+//! A V1 page request is an additive wire message, not a legacy
+//! [`crate::DaemonRequest`] variant:
+//!
+//! ```
+//! use packet28_daemon_protocol::registry::{
+//!     DaemonRegistryRequestV1, TaskListPageRequestV1,
+//! };
+//! use packet28_daemon_protocol::DaemonRequest;
+//!
+//! let request = DaemonRegistryRequestV1::TaskListPage {
+//!     request: TaskListPageRequestV1::default(),
+//! };
+//! let wire = serde_json::to_value(request)?;
+//!
+//! assert_eq!(wire["type"], "task_list_page_v1");
+//! assert!(serde_json::from_value::<DaemonRequest>(wire).is_err());
+//! # Ok::<(), serde_json::Error>(())
+//! ```
 
 use serde::{Deserialize, Serialize};
 

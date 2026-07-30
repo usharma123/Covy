@@ -63,6 +63,13 @@ pub enum FrameError {
 }
 
 /// Writes one big-endian length-prefixed JSON frame and flushes the stream.
+///
+/// # Errors
+///
+/// Returns [`FrameError::Json`] when `value` cannot be encoded,
+/// [`FrameError::TooLarge`] when its encoded body exceeds
+/// [`MAX_SOCKET_MESSAGE_BYTES`], or [`FrameError::Io`] when the header, body,
+/// or final flush cannot be written.
 pub fn write_frame<W: Write, T: Serialize>(writer: &mut W, value: &T) -> Result<(), FrameError> {
     let bytes = serde_json::to_vec(value)?;
     if bytes.len() > MAX_SOCKET_MESSAGE_BYTES {
@@ -79,6 +86,14 @@ pub fn write_frame<W: Write, T: Serialize>(writer: &mut W, value: &T) -> Result<
 }
 
 /// Reads one big-endian length-prefixed JSON frame.
+///
+/// # Errors
+///
+/// Returns [`FrameError::Io`] for a truncated or unreadable stream,
+/// [`FrameError::Empty`] for a zero-length body, [`FrameError::TooLarge`] for
+/// an over-limit declaration, [`FrameError::LengthOverflow`] when the declared
+/// length is not representable, or [`FrameError::Json`] when the bounded body
+/// is not valid JSON for `T`.
 pub fn read_frame<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, FrameError> {
     let mut len_bytes = [0_u8; 8];
     reader.read_exact(&mut len_bytes)?;

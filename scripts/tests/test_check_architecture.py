@@ -73,6 +73,10 @@ CORE_PUBLIC_MODULES = (
     "task_store_lease",
     "trust",
 )
+CLIENT_PUBLIC_MODULES = (
+    "runtime_discovery",
+    "transport",
+)
 
 
 def package(name: str, *, binary: bool = False) -> dict[str, object]:
@@ -200,6 +204,15 @@ def write_packet28d_sources(
         "//! ```\n",
         encoding="utf-8",
     )
+    (protocol / "registry.rs").write_text(
+        "//! ```\n"
+        "//! let request = DaemonRegistryRequestV1::TaskListPage {\n"
+        "//!     request: TaskListPageRequestV1::default(),\n"
+        "//! };\n"
+        "//! let _ = serde_json::from_value::<DaemonRequest>(request);\n"
+        "//! ```\n",
+        encoding="utf-8",
+    )
     (protocol / "task.rs").write_text(
         "/// ```\n"
         "/// let mut lifecycle = TaskLifecycle::Idle;\n"
@@ -236,6 +249,17 @@ def write_packet28d_sources(
         "/// let _ = DaemonCoreError::Frame;\n"
         "/// assert!(error.source().is_some());\n"
         "/// ```\n",
+        encoding="utf-8",
+    )
+
+    client = root / "crates" / "packet28-daemon-client" / "src"
+    client.mkdir(parents=True)
+    (client / "lib.rs").write_text(
+        "//! ```\n"
+        "//! let runtime = read_runtime_info_if_present(());\n"
+        "//! assert!(runtime.is_none());\n"
+        "//! ```\n"
+        + "\n".join(f"pub mod {module};" for module in CLIENT_PUBLIC_MODULES),
         encoding="utf-8",
     )
 
@@ -753,6 +777,18 @@ class ArchitectureDependencyTests(unittest.TestCase):
         self.assertIn(
             "does not classify public source item "
             "packet28-daemon-protocol::surprise",
+            result.stderr,
+        )
+
+    def test_packet28d_runtime_doc_rejects_unclassified_client_module(self) -> None:
+        result = self.run_packet28d_mutation(
+            "crates/packet28-daemon-client/src/lib.rs",
+            lambda source: source + "\npub mod surprise;\n",
+        )
+
+        self.assertIn(
+            "does not classify public source item "
+            "packet28-daemon-client::surprise",
             result.stderr,
         )
 

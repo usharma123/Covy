@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io::Cursor;
 
 use packet28_daemon_protocol::broker::BrokerGetContextRequest;
@@ -12,6 +13,23 @@ use packet28_daemon_protocol::registry::{
     DaemonRegistryRequestV1, DaemonRegistryResponseV1, DaemonStatusV1, RegistryRevisionV1,
 };
 use packet28_daemon_protocol::task::TaskAwaitHandoffRequest;
+
+const REVIEWED_MODULES: &[(&str, &str)] = &[
+    ("broker", "wire DTO and JSON compatibility tests"),
+    ("commands", "command dispatch and JSON compatibility tests"),
+    ("context_store", "context-store process and JSON tests"),
+    ("frame", "runnable bounded-framing example"),
+    ("hooks", "hook-ingest JSON compatibility tests"),
+    ("index", "index state and process tests"),
+    ("message", "frozen request/response compatibility tests"),
+    ("paths", "deterministic endpoint and confinement tests"),
+    (
+        "registry",
+        "runnable additive migration example and JSON tests",
+    ),
+    ("task", "runnable lifecycle and compile-fail examples"),
+];
+const ROOT_COMPATIBILITY_EXPORTS: &[&str] = &["message::{DaemonRequest,DaemonResponse}"];
 
 fn frozen_request_match(request: DaemonRequest) -> &'static str {
     match request {
@@ -218,4 +236,82 @@ fn registry_v1_uses_separate_versioned_wire_tags() {
             "revision": 42
         })
     );
+}
+
+#[test]
+fn every_public_module_has_a_reviewed_classification() {
+    let source = include_str!("../src/lib.rs");
+    let actual = source
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("pub mod ")
+                .and_then(|tail| tail.strip_suffix(';'))
+                .map(ToOwned::to_owned)
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = REVIEWED_MODULES
+        .iter()
+        .map(|(module, reason)| {
+            assert!(
+                !reason.trim().is_empty(),
+                "reviewed module '{module}' needs a coverage reason"
+            );
+            (*module).to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        actual, expected,
+        "protocol root changed without updating its reviewed documentation inventory"
+    );
+}
+
+#[test]
+fn root_compatibility_exports_remain_an_explicit_allowlist() {
+    let source = include_str!("../src/lib.rs");
+    let actual = root_reexports(source);
+    let expected = ROOT_COMPATIBILITY_EXPORTS
+        .iter()
+        .map(|export| (*export).to_owned())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        actual, expected,
+        "protocol root compatibility exports changed without an inventory update"
+    );
+}
+
+fn root_reexports(source: &str) -> BTreeSet<String> {
+    let mut exports = BTreeSet::new();
+    let mut current = None::<String>;
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(statement) = current.as_mut() {
+            statement.push_str(trimmed);
+            if trimmed.ends_with(';') {
+                let completed = current.take().expect("active public use statement");
+                exports.insert(normalize_export(&completed));
+            }
+        } else if let Some(tail) = trimmed.strip_prefix("pub use ") {
+            if tail.ends_with(';') {
+                exports.insert(normalize_export(tail));
+            } else {
+                current = Some(tail.to_owned());
+            }
+        }
+    }
+
+    assert!(current.is_none(), "unterminated root public use statement");
+    exports
+}
+
+fn normalize_export(statement: &str) -> String {
+    let normalized = statement
+        .trim_end_matches(';')
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    normalized.replace(",}", "}")
 }
