@@ -1265,18 +1265,34 @@ impl CachePersistence {
             for change in changes.into_iter().rev() {
                 match change {
                     BatchChange::Inserted { cache_key } => {
-                        let incoming = dirty
-                            .remove(&cache_key)
-                            .expect("inserted dirty delta must be available for rollback");
+                        let Some(incoming) = dirty.remove(&cache_key) else {
+                            return Err(RejectedBatch {
+                                error: CachePersistenceError::Io {
+                                    operation: "dirty rollback",
+                                    detail: format!(
+                                        "inserted delta `{cache_key}` disappeared before rollback"
+                                    ),
+                                },
+                                batch,
+                            });
+                        };
                         batch.insert(cache_key, incoming.delta);
                     }
                     BatchChange::Replaced {
                         cache_key,
                         previous,
                     } => {
-                        let incoming = dirty
-                            .insert(cache_key.clone(), previous)
-                            .expect("replacement dirty delta must be available for rollback");
+                        let Some(incoming) = dirty.insert(cache_key.clone(), previous) else {
+                            return Err(RejectedBatch {
+                                error: CachePersistenceError::Io {
+                                    operation: "dirty rollback",
+                                    detail: format!(
+                                        "replacement delta `{cache_key}` disappeared before rollback"
+                                    ),
+                                },
+                                batch,
+                            });
+                        };
                         batch.insert(cache_key, incoming.delta);
                     }
                     BatchChange::Superseded {
