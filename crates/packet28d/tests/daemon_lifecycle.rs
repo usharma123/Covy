@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use context_kernel_core::{KernelRequest, KernelSequenceRequest, KernelStepRequest};
 use fs2::FileExt;
-use packet28_daemon_core::storage::{load_task_events, load_task_registry, save_task_registry};
+use packet28_daemon_core::storage::{
+    load_task_events, load_task_registry, load_task_watch_registry_with_deltas, save_task_registry,
+};
 use packet28_daemon_core::task_store_lease::{
     acquire_daemon_instance_lease, try_acquire_task_store_retention_lease,
 };
@@ -618,8 +620,9 @@ fn failed_initial_submission_can_retry_the_same_task_id() {
         "invalid first submission unexpectedly succeeded: {failed:?}"
     );
     assert!(
-        !load_task_registry(workspace.path())
+        !load_task_watch_registry_with_deltas(workspace.path())
             .expect("load registry after failed first submission")
+            .tasks
             .tasks
             .contains_key(task_id),
         "failed first submission remained durably admitted"
