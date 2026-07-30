@@ -4491,7 +4491,6 @@ fn finish_anchored_committed_registry_removal(
     with_anchored_registry_lock(daemon, workspace_root, || {
         let mut registry = read_anchored_registry_value(daemon, workspace_root)?;
         let tasks = registry_tasks_mut(&mut registry, workspace_root)?;
-        let mut changed = false;
         for (task_id, expected) in expected_records {
             let Some(current) = tasks.get(task_id) else {
                 continue;
@@ -4500,12 +4499,13 @@ fn finish_anchored_committed_registry_removal(
                 return Ok(false);
             }
             tasks.remove(task_id);
-            changed = true;
         }
-        if changed {
-            validate_anchored_registry_watch_relationships(daemon, workspace_root, &registry)?;
-            write_anchored_registry_value(daemon, workspace_root, &registry)?;
-        }
+        validate_anchored_registry_watch_relationships(daemon, workspace_root, &registry)?;
+        // A prior checkpoint attempt may have published both canonical
+        // registry images but stopped before its commit manifest. Rewriting
+        // the already-removed view completes the retention transaction
+        // without treating those uncommitted images as authority.
+        write_anchored_registry_value(daemon, workspace_root, &registry)?;
         Ok(true)
     })
 }
@@ -10198,7 +10198,7 @@ mod tests {
         let error = apply_candidate(&snapshot, candidate).unwrap_err();
 
         assert!(matches!(error.error, DaemonCoreError::Io { .. }));
-        assert!(!crate::storage::load_task_registry(root.path())
+        assert!(crate::storage::load_task_registry(root.path())
             .unwrap()
             .tasks
             .contains_key("registry-sync"));
@@ -10212,6 +10212,10 @@ mod tests {
 
         let recovery = recover_task_store_quarantine(root.path()).unwrap();
         assert_eq!(recovery.completed_committed_groups, 1);
+        assert!(!crate::storage::load_task_registry(root.path())
+            .unwrap()
+            .tasks
+            .contains_key("registry-sync"));
     }
 
     #[cfg(unix)]

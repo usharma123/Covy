@@ -7,15 +7,15 @@ use super::*;
 /// corruption outside the former suffix cannot be accepted.
 pub const MAX_TASK_EVENT_TAIL_SCAN_BYTES: usize = 3 * (MAX_TASK_EVENT_LINE_BYTES + 1);
 
-/// Loads one generation-consistent task/watch checkpoint and authenticated
-/// event tails while holding the task registry as the cross-registry lock.
+/// Loads one committed task/watch checkpoint and authenticated event tails
+/// while holding the task registry as the cross-registry lock.
 ///
 /// Legacy task and watch documents are accepted only when both omit the
 /// checkpoint generation. Once either document carries a generation, both
-/// must carry the same value. Downgrading that workspace to a writer predating
-/// paired checkpoints is unsupported: an old task-only writer can preserve an
-/// unknown generation while changing content, so restart does not claim to
-/// detect or repair downgrade/re-upgrade writes.
+/// must carry the same value. New checkpoints additionally use a hash-bound
+/// commit manifest and recovery journal. If a process stops between canonical
+/// registry publications, the loader selects the prior manifest-authorized
+/// pair; bytes outside the recorded publication phases fail closed.
 ///
 /// # Errors
 ///
@@ -28,30 +28,14 @@ pub fn load_task_watch_registry_checkpoint_with_event_tails(
 ) -> Result<(TaskRegistry, WatchRegistry, BTreeMap<String, Option<u64>>)> {
     #[cfg(unix)]
     {
-        let registry_path = task_registry_path(root);
         let writer_lease = acquire_task_store_writer_lease(root)?;
         with_anchored_task_registry_lock(
             root,
             RegistryLockMode::Shared,
             || Ok(()),
             |daemon| {
-                let (registry, task_generation) = match daemon
-                    .read_file_limited(OsStr::new(TASK_REGISTRY_FILE_NAME), MAX_TASK_REGISTRY_BYTES)
-                {
-                    Ok(raw) => {
-                        decode_task_registry_with_checkpoint_generation(&registry_path, &raw)?
-                    }
-                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                        (TaskRegistry::default(), None)
-                    }
-                    Err(source) => {
-                        return Err(task_registry_read_error(daemon, &registry_path, source));
-                    }
-                };
-                let (watches, watch_generation) =
-                    load_watch_registry_with_generation_under_task_lock(root, daemon)?;
-                validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
-                validate_task_watch_registry_relationships(root, &registry, &watches)?;
+                let (registry, watches, _, _) =
+                    load_task_watch_registry_checkpoint_under_task_lock(root, daemon)?;
                 let mut tails = BTreeMap::new();
                 for task_id in registry.tasks.keys() {
                     let storage_id = checked_task_storage_id(root, task_id)?;
@@ -68,14 +52,8 @@ pub fn load_task_watch_registry_checkpoint_with_event_tails(
         let registry_path = task_registry_path(root);
         let writer_lease = acquire_task_store_writer_lease(root)?;
         with_registry_lock(root, &registry_path, RegistryLockMode::Shared, || {
-            let (registry, task_generation) = match read_task_registry_portable(&registry_path)? {
-                Some(raw) => decode_task_registry_with_checkpoint_generation(&registry_path, &raw)?,
-                None => (TaskRegistry::default(), None),
-            };
-            let (watches, watch_generation) =
-                load_watch_registry_with_generation_portable_under_task_lock(root)?;
-            validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
-            validate_task_watch_registry_relationships(root, &registry, &watches)?;
+            let (registry, watches, _, _) =
+                load_task_watch_registry_checkpoint_portable_under_task_lock(root)?;
             let mut tails = BTreeMap::new();
             for task_id in registry.tasks.keys() {
                 let storage_id = checked_task_storage_id(root, task_id)?;

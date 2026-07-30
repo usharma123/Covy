@@ -251,6 +251,16 @@ dirty, are retried, and are surfaced by the next barrier instead of being
 discarded. A timed-out shutdown detaches rather than blocking forever, but the
 worker retains its task-store lifecycle lease until it actually exits.
 
+Each paired registry checkpoint first synchronizes exact copies of the prior
+committed task and watch images and a descriptor journal. It publishes the new
+watch and task images before atomically replacing a compact commit manifest
+that binds their generation, lengths, and BLAKE3 digests. The manifest is the
+commit point. If a process stops earlier, startup accepts only the precise
+base/target combinations recorded by the journal and recovers the prior pair.
+Arbitrary mixed generations, malformed manifests, and altered journal images
+remain corruption. Existing generation-only and generation-free registry
+pairs migrate on their next successful checkpoint.
+
 For task events, subscriber publication follows the synchronized event-log
 append and the in-memory high-water update. The derived full-registry snapshot
 is queued before publication but may be checkpointed later by the owner. This

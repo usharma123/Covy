@@ -37,6 +37,7 @@ use crate::capability::{
 use crate::task_store_lease::acquire_task_store_writer_lease;
 use crate::{DaemonCoreError, Result};
 
+mod checkpoint;
 mod event_tail;
 
 pub use event_tail::{
@@ -921,18 +922,8 @@ pub fn load_watch_registry(root: &Path) -> Result<WatchRegistry> {
             RegistryLockMode::Shared,
             || Ok(()),
             |daemon| {
-                let task_path = task_registry_path(root);
-                let (tasks, task_generation) =
-                    match read_anchored_task_registry(daemon, &task_path)? {
-                        Some(raw) => {
-                            decode_task_registry_with_checkpoint_generation(&task_path, &raw)?
-                        }
-                        None => (TaskRegistry::default(), None),
-                    };
-                let (watches, watch_generation) =
-                    load_watch_registry_with_generation_under_task_lock(root, daemon)?;
-                validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
-                validate_task_watch_registry_relationships(root, &tasks, &watches)?;
+                let (_, watches, _, _) =
+                    load_task_watch_registry_checkpoint_under_task_lock(root, daemon)?;
                 Ok(watches)
             },
         )
@@ -941,14 +932,8 @@ pub fn load_watch_registry(root: &Path) -> Result<WatchRegistry> {
     {
         let task_path = task_registry_path(root);
         with_registry_lock(root, &task_path, RegistryLockMode::Shared, || {
-            let (tasks, task_generation) = match read_task_registry_portable(&task_path)? {
-                Some(raw) => decode_task_registry_with_checkpoint_generation(&task_path, &raw)?,
-                None => (TaskRegistry::default(), None),
-            };
-            let (watches, watch_generation) =
-                load_watch_registry_with_generation_portable_under_task_lock(root)?;
-            validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
-            validate_task_watch_registry_relationships(root, &tasks, &watches)?;
+            let (_, watches, _, _) =
+                load_task_watch_registry_checkpoint_portable_under_task_lock(root)?;
             Ok(watches)
         })
     }
@@ -1020,27 +1005,13 @@ pub fn save_watch_registry(root: &Path, registry: &WatchRegistry) -> Result<()> 
 pub fn load_task_registry(root: &Path) -> Result<TaskRegistry> {
     #[cfg(unix)]
     {
-        let path = task_registry_path(root);
         with_anchored_task_registry_lock(
             root,
             RegistryLockMode::Shared,
             || Ok(()),
             |daemon| {
-                let (registry, task_generation) = match daemon
-                    .read_file_limited(OsStr::new(TASK_REGISTRY_FILE_NAME), MAX_TASK_REGISTRY_BYTES)
-                {
-                    Ok(raw) => decode_task_registry_with_checkpoint_generation(&path, &raw)?,
-                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                        (TaskRegistry::default(), None)
-                    }
-                    Err(source) => {
-                        return Err(task_registry_read_error(daemon, &path, source));
-                    }
-                };
-                let (watches, watch_generation) =
-                    load_watch_registry_with_generation_under_task_lock(root, daemon)?;
-                validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
-                validate_task_watch_registry_relationships(root, &registry, &watches)?;
+                let (registry, _, _, _) =
+                    load_task_watch_registry_checkpoint_under_task_lock(root, daemon)?;
                 Ok(registry)
             },
         )
@@ -1076,6 +1047,42 @@ fn task_registry_read_error(
     DaemonCoreError::io("failed to read anchored task registry", path, source)
 }
 
+#[cfg(unix)]
+pub(super) fn load_task_watch_registry_checkpoint_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+) -> Result<(TaskRegistry, WatchRegistry, Option<u64>, Option<u64>)> {
+    let task_path = task_registry_path(root);
+    let watch_path = watch_registry_path(root);
+    with_anchored_watch_registry_lock(daemon, RegistryLockMode::Shared, || {
+        let resolved = checkpoint::resolve_anchored(
+            root,
+            daemon,
+            read_anchored_task_registry(daemon, &task_path)?,
+            read_anchored_watch_registry(daemon, &watch_path)?,
+        )?;
+        let (tasks, watches) = resolved.materialize(root)?;
+        decode_registry_checkpoint_pair(root, &tasks, &watches)
+    })
+}
+
+#[cfg(any(not(unix), test))]
+fn load_task_watch_registry_checkpoint_portable_under_task_lock(
+    root: &Path,
+) -> Result<(TaskRegistry, WatchRegistry, Option<u64>, Option<u64>)> {
+    let task_path = task_registry_path(root);
+    let watch_path = watch_registry_path(root);
+    with_registry_lock(root, &watch_path, RegistryLockMode::Shared, || {
+        let resolved = checkpoint::resolve_portable(
+            root,
+            read_task_registry_portable(&task_path)?,
+            read_watch_registry(&watch_path)?,
+        )?;
+        let (tasks, watches) = resolved.materialize(root)?;
+        decode_registry_checkpoint_pair(root, &tasks, &watches)
+    })
+}
+
 /// Persists the task registry under an exclusive interprocess lock.
 ///
 /// # Errors
@@ -1105,10 +1112,12 @@ pub fn save_task_registry(root: &Path, registry: &TaskRegistry) -> Result<()> {
 
 /// Persists task and watch registries as one monotonic durable generation.
 ///
-/// Both documents are fully encoded before either is replaced. The watch
-/// registry is published first and the task registry is the commit record, so
-/// a crash between replacements leaves unequal generations that startup
-/// rejects instead of advertising mixed state.
+/// Both documents are fully encoded before either is replaced. Before
+/// publication, the prior committed pair and a hash-bound transition journal
+/// are synchronized. The watch and task images are then published, followed
+/// by one atomic commit manifest. A crash before that manifest leaves the
+/// prior pair recoverable; unrelated bytes that do not match a journaled
+/// publication phase remain corruption.
 ///
 /// Workspace downgrade to writers that predate paired checkpoints is not
 /// supported once either document carries a generation. An older task-only
@@ -1142,22 +1151,8 @@ pub fn save_task_watch_registry_checkpoint(
             RegistryLockMode::Exclusive,
             || Ok(()),
             |daemon| {
-                let existing_task = read_anchored_task_registry(daemon, &task_path)?;
-                let task_bytes = encode_task_registry_preserving_existing(
-                    root,
-                    &task_path,
-                    tasks,
-                    existing_task.as_deref(),
-                    task_bytes,
-                )?;
                 save_task_watch_registry_checkpoint_anchored(
-                    root,
-                    daemon,
-                    tasks,
-                    watches,
-                    existing_task.as_deref(),
-                    task_bytes,
-                    |bytes| write_anchored_task_registry(daemon, &task_path, bytes, || Ok(())),
+                    root, daemon, tasks, watches, task_bytes,
                 )
             },
         )
@@ -1165,22 +1160,7 @@ pub fn save_task_watch_registry_checkpoint(
     #[cfg(not(unix))]
     {
         with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
-            let existing_task = read_task_registry_portable(&task_path)?;
-            let task_bytes = encode_task_registry_preserving_existing(
-                root,
-                &task_path,
-                tasks,
-                existing_task.as_deref(),
-                task_bytes,
-            )?;
-            save_task_watch_registry_checkpoint_portable(
-                root,
-                tasks,
-                watches,
-                existing_task.as_deref(),
-                task_bytes,
-                |bytes| write_atomically(&task_path, bytes),
-            )
+            save_task_watch_registry_checkpoint_portable(root, tasks, watches, task_bytes)
         })
     }
 }
@@ -1327,22 +1307,41 @@ fn save_task_watch_registry_checkpoint_anchored(
     daemon: &CapabilityDir,
     tasks: &TaskRegistry,
     watches: &WatchRegistry,
-    existing_task: Option<&[u8]>,
     task_bytes: Vec<u8>,
-    write_task: impl FnOnce(&[u8]) -> Result<()>,
 ) -> Result<()> {
+    let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
     with_anchored_watch_registry_lock(daemon, RegistryLockMode::Exclusive, || {
-        let existing_watch = read_anchored_watch_registry(daemon, &watch_path)?;
-        save_task_watch_registry_checkpoint_locked(
+        let resolved = checkpoint::resolve_anchored(
             root,
+            daemon,
+            read_anchored_task_registry(daemon, &task_path)?,
+            read_anchored_watch_registry(daemon, &watch_path)?,
+        )?;
+        let task_bytes = encode_task_registry_preserving_existing(
+            root,
+            &task_path,
             tasks,
-            watches,
-            existing_task,
-            existing_watch.as_deref(),
+            resolved.tasks.as_deref(),
             task_bytes,
+        )?;
+        let canonical_recovery = resolved.canonical_recovery();
+        let (base_task, base_watch) = resolved.materialize(root)?;
+        let (task_generation, watch_generation) =
+            registry_checkpoint_generations_from_raw(root, &base_task, &base_watch)?;
+        let generation =
+            next_registry_checkpoint_generation(root, task_generation, watch_generation)?;
+        let task_bytes = inject_registry_checkpoint_generation(&task_path, task_bytes, generation)?;
+        validate_encoded_task_registry(&task_path, tasks, &task_bytes)?;
+        let watch_bytes = encode_watch_registry(&watch_path, watches, Some(generation))?;
+        checkpoint::publish_anchored(
+            root,
+            daemon,
+            canonical_recovery,
+            (&base_task, &base_watch),
+            (&task_bytes, &watch_bytes),
             |bytes| write_anchored_watch_registry(daemon, &watch_path, bytes),
-            write_task,
+            |bytes| write_anchored_task_registry(daemon, &task_path, bytes, || Ok(())),
         )
     })
 }
@@ -1357,29 +1356,29 @@ pub(crate) fn save_retained_task_registry_checkpoint_under_task_lock(
     let watch_path = watch_registry_path(root);
     let tasks = decode_task_registry(&task_path, &task_bytes)?;
     validate_encoded_task_registry(&task_path, &tasks, &task_bytes)?;
-    let existing_task = read_anchored_task_registry(daemon, &task_path)?;
     with_anchored_watch_registry_lock(daemon, RegistryLockMode::Exclusive, || {
-        let existing_watch = read_anchored_watch_registry(daemon, &watch_path)?;
-        let task_generation = existing_task
-            .as_deref()
-            .map(|raw| {
-                registry_checkpoint_generation(&task_path, raw, AuthorityJsonProfile::TaskRegistry)
-            })
-            .transpose()?
-            .flatten();
-        let (watches, watch_generation) = match existing_watch.as_deref() {
-            Some(raw) => decode_watch_registry_with_generation(&watch_path, raw)?,
-            None => (WatchRegistry::default(), None),
-        };
-        validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
-        validate_task_watch_registry_relationships(root, &tasks, &watches)?;
-        save_task_watch_registry_checkpoint_locked(
+        let resolved = checkpoint::resolve_anchored(
             root,
-            &tasks,
-            &watches,
-            existing_task.as_deref(),
-            existing_watch.as_deref(),
-            task_bytes,
+            daemon,
+            read_anchored_task_registry(daemon, &task_path)?,
+            read_anchored_watch_registry(daemon, &watch_path)?,
+        )?;
+        let canonical_recovery = resolved.canonical_recovery();
+        let (base_task, base_watch) = resolved.materialize(root)?;
+        let (_, watches, task_generation, watch_generation) =
+            decode_registry_checkpoint_pair(root, &base_task, &base_watch)?;
+        validate_task_watch_registry_relationships(root, &tasks, &watches)?;
+        let generation =
+            next_registry_checkpoint_generation(root, task_generation, watch_generation)?;
+        let task_bytes = inject_registry_checkpoint_generation(&task_path, task_bytes, generation)?;
+        validate_encoded_task_registry(&task_path, &tasks, &task_bytes)?;
+        let watch_bytes = encode_watch_registry(&watch_path, &watches, Some(generation))?;
+        checkpoint::publish_anchored(
+            root,
+            daemon,
+            canonical_recovery,
+            (&base_task, &base_watch),
+            (&task_bytes, &watch_bytes),
             |bytes| write_anchored_watch_registry(daemon, &watch_path, bytes),
             |bytes| write_anchored_task_registry(daemon, &task_path, bytes, || Ok(())),
         )
@@ -1391,64 +1390,75 @@ fn save_task_watch_registry_checkpoint_portable(
     root: &Path,
     tasks: &TaskRegistry,
     watches: &WatchRegistry,
-    existing_task: Option<&[u8]>,
     task_bytes: Vec<u8>,
-    write_task: impl FnOnce(&[u8]) -> Result<()>,
 ) -> Result<()> {
+    let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
     with_registry_lock(root, &watch_path, RegistryLockMode::Exclusive, || {
-        let existing_watch = read_watch_registry(&watch_path)?;
-        save_task_watch_registry_checkpoint_locked(
+        let resolved = checkpoint::resolve_portable(
             root,
+            read_task_registry_portable(&task_path)?,
+            read_watch_registry(&watch_path)?,
+        )?;
+        let task_bytes = encode_task_registry_preserving_existing(
+            root,
+            &task_path,
             tasks,
-            watches,
-            existing_task,
-            existing_watch.as_deref(),
+            resolved.tasks.as_deref(),
             task_bytes,
+        )?;
+        let canonical_recovery = resolved.canonical_recovery();
+        let (base_task, base_watch) = resolved.materialize(root)?;
+        let (task_generation, watch_generation) =
+            registry_checkpoint_generations_from_raw(root, &base_task, &base_watch)?;
+        let generation =
+            next_registry_checkpoint_generation(root, task_generation, watch_generation)?;
+        let task_bytes = inject_registry_checkpoint_generation(&task_path, task_bytes, generation)?;
+        validate_encoded_task_registry(&task_path, tasks, &task_bytes)?;
+        let watch_bytes = encode_watch_registry(&watch_path, watches, Some(generation))?;
+        checkpoint::publish_portable(
+            root,
+            canonical_recovery,
+            (&base_task, &base_watch),
+            (&task_bytes, &watch_bytes),
             |bytes| write_atomically(&watch_path, bytes),
-            write_task,
+            |bytes| write_atomically(&task_path, bytes),
         )
     })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "both checkpoint halves and their authenticated writers are explicit"
-)]
-fn save_task_watch_registry_checkpoint_locked(
+fn registry_checkpoint_generations_from_raw(
     root: &Path,
-    tasks: &TaskRegistry,
-    watches: &WatchRegistry,
-    existing_task: Option<&[u8]>,
-    existing_watch: Option<&[u8]>,
-    task_bytes: Vec<u8>,
-    write_watch: impl FnOnce(&[u8]) -> Result<()>,
-    write_task: impl FnOnce(&[u8]) -> Result<()>,
-) -> Result<()> {
+    task_bytes: &[u8],
+    watch_bytes: &[u8],
+) -> Result<(Option<u64>, Option<u64>)> {
     let task_path = task_registry_path(root);
     let watch_path = watch_registry_path(root);
-    let task_generation = existing_task
-        .map(|raw| {
-            registry_checkpoint_generation(&task_path, raw, AuthorityJsonProfile::TaskRegistry)
-        })
-        .transpose()?
-        .flatten();
-    let watch_generation = existing_watch
-        .map(|raw| {
-            registry_checkpoint_generation(&watch_path, raw, AuthorityJsonProfile::WatchRegistry)
-        })
-        .transpose()?
-        .flatten();
-    let generation = next_registry_checkpoint_generation(root, task_generation, watch_generation)?;
-    let task_bytes = inject_registry_checkpoint_generation(&task_path, task_bytes, generation)?;
-    validate_encoded_task_registry(&task_path, tasks, &task_bytes)?;
-    let watch_bytes = encode_watch_registry(&watch_path, watches, Some(generation))?;
+    let task_generation =
+        registry_checkpoint_generation(&task_path, task_bytes, AuthorityJsonProfile::TaskRegistry)?;
+    let watch_generation = registry_checkpoint_generation(
+        &watch_path,
+        watch_bytes,
+        AuthorityJsonProfile::WatchRegistry,
+    )?;
+    validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+    Ok((task_generation, watch_generation))
+}
 
-    write_watch(&watch_bytes)?;
-    maybe_exit_after_registry_checkpoint_phase("watch");
-    write_task(&task_bytes)?;
-    maybe_exit_after_registry_checkpoint_phase("task");
-    Ok(())
+fn decode_registry_checkpoint_pair(
+    root: &Path,
+    task_bytes: &[u8],
+    watch_bytes: &[u8],
+) -> Result<(TaskRegistry, WatchRegistry, Option<u64>, Option<u64>)> {
+    let task_path = task_registry_path(root);
+    let watch_path = watch_registry_path(root);
+    let (tasks, task_generation) =
+        decode_task_registry_with_checkpoint_generation(&task_path, task_bytes)?;
+    let (watches, watch_generation) =
+        decode_watch_registry_with_generation(&watch_path, watch_bytes)?;
+    validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
+    validate_task_watch_registry_relationships(root, &tasks, &watches)?;
+    Ok((tasks, watches, task_generation, watch_generation))
 }
 
 fn next_registry_checkpoint_generation(
@@ -1469,14 +1479,14 @@ fn next_registry_checkpoint_generation(
         })
 }
 
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 fn maybe_exit_after_registry_checkpoint_phase(phase: &str) {
     if std::env::var("PACKET28_REGISTRY_CHECKPOINT_EXIT_AFTER").as_deref() == Ok(phase) {
         std::process::exit(86);
     }
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, debug_assertions)))]
 fn maybe_exit_after_registry_checkpoint_phase(_phase: &str) {}
 
 fn encode_task_registry(path: &Path, registry: &TaskRegistry) -> Result<Vec<u8>> {
@@ -2812,14 +2822,8 @@ fn windows_storage_key_is_reserved(storage_key: &str) -> bool {
 fn load_task_registry_portable(root: &Path) -> Result<TaskRegistry> {
     let path = task_registry_path(root);
     with_registry_lock(root, &path, RegistryLockMode::Shared, || {
-        let (registry, task_generation) = match read_task_registry_portable(&path)? {
-            Some(raw) => decode_task_registry_with_checkpoint_generation(&path, &raw)?,
-            None => (TaskRegistry::default(), None),
-        };
-        let (watches, watch_generation) =
-            load_watch_registry_with_generation_portable_under_task_lock(root)?;
-        validate_registry_checkpoint_generations(root, task_generation, watch_generation)?;
-        validate_task_watch_registry_relationships(root, &registry, &watches)?;
+        let (registry, _, _, _) =
+            load_task_watch_registry_checkpoint_portable_under_task_lock(root)?;
         Ok(registry)
     })
 }
@@ -4852,6 +4856,33 @@ mod tests {
         fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
     }
 
+    fn authenticate_checkpoint_manifest_for_current_pair(root: &Path) {
+        let task_raw = fs::read(task_registry_path(root)).unwrap();
+        let watch_raw = fs::read(watch_registry_path(root)).unwrap();
+        let generation = registry_checkpoint_generation(
+            &task_registry_path(root),
+            &task_raw,
+            AuthorityJsonProfile::TaskRegistry,
+        )
+        .unwrap();
+        let path = daemon_dir(root).join("task-watch-checkpoint-v1.json");
+        let manifest = serde_json::json!({
+            "schema_version": 1,
+            "checkpoint": {
+                "generation": generation,
+                "tasks": {
+                    "bytes": task_raw.len(),
+                    "blake3": blake3::hash(&task_raw).to_hex().to_string(),
+                },
+                "watches": {
+                    "bytes": watch_raw.len(),
+                    "blake3": blake3::hash(&watch_raw).to_hex().to_string(),
+                },
+            },
+        });
+        fs::write(path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    }
+
     fn write_frozen_legacy_registry_pair(
         root: &Path,
         tasks: &TaskRegistry,
@@ -5172,6 +5203,7 @@ mod tests {
         let watch_path = watch_registry_path(root.path());
         set_checkpoint_generation(&task_path, u64::MAX);
         set_checkpoint_generation(&watch_path, u64::MAX);
+        authenticate_checkpoint_manifest_for_current_pair(root.path());
         let task_before = fs::read(&task_path).unwrap();
         let watch_before = fs::read(&watch_path).unwrap();
 
@@ -5215,9 +5247,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn abrupt_checkpoint_exit_is_rejected_after_watch_and_committed_after_task() {
+    fn abrupt_checkpoint_exit_recovers_prior_pair_until_manifest_commit() {
         let executable = std::env::current_exe().unwrap();
-        for phase in ["watch", "task"] {
+        for phase in ["watch", "task", "manifest"] {
             let root = tempdir().unwrap();
             save_task_watch_registry_checkpoint(
                 root.path(),
@@ -5241,36 +5273,134 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
 
-            let loaded = load_task_watch_registry_checkpoint_with_event_tails(root.path());
-            if phase == "watch" {
-                assert!(matches!(
-                    loaded.unwrap_err(),
-                    DaemonCoreError::RegistryCheckpointGenerationMismatch { .. }
-                ));
-                assert!(matches!(
-                    load_watch_registry(root.path()).unwrap_err(),
-                    DaemonCoreError::RegistryCheckpointGenerationMismatch { .. }
-                ));
-                assert!(matches!(
-                    load_task_registry(root.path()).unwrap_err(),
-                    DaemonCoreError::RegistryCheckpointGenerationMismatch { .. }
-                ));
-                save_task_watch_registry_checkpoint(
-                    root.path(),
-                    &registry_with_watch("healed", "watch-healed"),
-                    &watch_registry_with_marker("watch-healed", "healed"),
-                )
-                .unwrap();
-                let (tasks, watches, _) =
-                    load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap();
-                assert!(tasks.tasks.contains_key("healed"));
-                assert_eq!(watches.watches[0].watch_id, "watch-healed");
+            let (tasks, watches, _) =
+                load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap();
+            if phase == "manifest" {
+                assert!(tasks.tasks.contains_key("manifest"));
+                assert_eq!(watches.watches[0].watch_id, "watch-manifest");
             } else {
-                let (tasks, watches, _) = loaded.unwrap();
-                assert!(tasks.tasks.contains_key("task"));
-                assert_eq!(watches.watches[0].watch_id, "watch-task");
+                assert!(tasks.tasks.contains_key("existing"));
+                assert_eq!(watches.watches[0].watch_id, "watch-existing");
+                assert!(load_task_registry(root.path())
+                    .unwrap()
+                    .tasks
+                    .contains_key("existing"));
+                assert_eq!(
+                    load_watch_registry(root.path()).unwrap().watches[0].watch_id,
+                    "watch-existing"
+                );
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_retry_heals_the_base_before_replacing_the_recovery_journal() {
+        let executable = std::env::current_exe().unwrap();
+        for first_phase in ["watch", "task"] {
+            let root = tempdir().unwrap();
+            save_task_watch_registry_checkpoint(
+                root.path(),
+                &registry_with_watch("existing", "watch-existing"),
+                &watch_registry_with_marker("watch-existing", "existing"),
+            )
+            .unwrap();
+            let task_path = task_registry_path(root.path());
+            let watch_path = watch_registry_path(root.path());
+            let committed_tasks = fs::read(&task_path).unwrap();
+            let committed_watches = fs::read(&watch_path).unwrap();
+
+            for phase in [first_phase, "journal"] {
+                let output = Command::new(&executable)
+                    .arg("--exact")
+                    .arg("storage::tests::registry_checkpoint_process_child")
+                    .env("PACKET28_REGISTRY_CHECKPOINT_CHILD_ROOT", root.path())
+                    .env("PACKET28_REGISTRY_CHECKPOINT_EXIT_AFTER", phase)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(86),
+                    "checkpoint child failed at {phase} after {first_phase}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+
+            assert_eq!(
+                (
+                    fs::read(&task_path).unwrap(),
+                    fs::read(&watch_path).unwrap()
+                ),
+                (committed_tasks, committed_watches),
+                "the second journal replaced recovery authority before healing \
+                 the canonical {first_phase} interruption"
+            );
+            let (tasks, watches, _) =
+                load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap();
+            assert_eq!(
+                (
+                    tasks.tasks.contains_key("existing"),
+                    watches.watches[0].watch_id.as_str(),
+                ),
+                (true, "watch-existing")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_checkpoint_rejects_a_corrupt_recovery_image() {
+        let root = tempdir().unwrap();
+        save_task_watch_registry_checkpoint(
+            root.path(),
+            &registry_with_watch("existing", "watch-existing"),
+            &watch_registry_with_marker("watch-existing", "existing"),
+        )
+        .unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("storage::tests::registry_checkpoint_process_child")
+            .env("PACKET28_REGISTRY_CHECKPOINT_CHILD_ROOT", root.path())
+            .env("PACKET28_REGISTRY_CHECKPOINT_EXIT_AFTER", "watch")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(86));
+        fs::write(
+            daemon_dir(root.path()).join(".task-watch-checkpoint-v1.journal.tasks"),
+            b"corrupt",
+        )
+        .unwrap();
+
+        let error = load_task_watch_registry_checkpoint_with_event_tails(root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DaemonCoreError::InvalidTaskWatchRegistry { .. }
+        ));
+    }
+
+    #[test]
+    fn checkpoint_loader_rejects_a_corrupt_commit_manifest() {
+        let root = tempdir().unwrap();
+        save_task_watch_registry_checkpoint(
+            root.path(),
+            &registry_with_watch("existing", "watch-existing"),
+            &watch_registry_with_marker("watch-existing", "existing"),
+        )
+        .unwrap();
+        fs::write(
+            daemon_dir(root.path()).join("task-watch-checkpoint-v1.json"),
+            b"{not-json",
+        )
+        .unwrap();
+
+        let error = load_task_registry(root.path()).unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::Json { .. }));
     }
 
     fn task_event_frame(task_id: &str, seq: u64) -> DaemonEventFrame {

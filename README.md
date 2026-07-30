@@ -387,6 +387,7 @@ Daemon persistence:
 - `.packet28/daemon/packet28d.log` — Daemon logs
 - `.packet28/daemon/watch-registry-v1.json` — Active watches
 - `.packet28/daemon/task-registry-v1.json` — Task state
+- `.packet28/daemon/task-watch-checkpoint-v1.json` — Committed task/watch generation and digests
 - `.packet28/daemon/tasks/<id>/events.jsonl` — Per-task event log
 - `.packet28/packet-cache-v3.bin` — Persistent packet-cache checkpoint with indexes
 - `.packet28/packet-cache-v3.backup.bin` — Authenticated checkpoint recovery baseline
@@ -587,6 +588,8 @@ All persistent state lives under `.packet28/` at the workspace root:
     ├── packet28d.log            Daemon log
     ├── watch-registry-v1.json   Active file watches
     ├── task-registry-v1.json    Task state
+    ├── task-watch-checkpoint-v1.json
+    │                            Committed task/watch generation and digests
     └── tasks/
         └── <task-id>/
             └── events.jsonl     Per-task event log

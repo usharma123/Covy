@@ -133,6 +133,17 @@ task/watch snapshot. The persistence owner serializes and publishes the latest
 snapshot after the daemon-state mutex has been released; its bounded debounce
 coalesces bursts without making failure invisible.
 
+Task/watch snapshots use a recovery journal and a final commit manifest. The
+prior committed task and watch images plus their BLAKE3 descriptors are made
+durable before either canonical registry is replaced. The watch image and task
+image are then published, and only an atomic
+`task-watch-checkpoint-v1.json` replacement commits the new generation.
+Startup recognizes only the exact journaled publication phases: a crash after
+one or both canonical replacements automatically reloads the prior committed
+pair, while unrelated generation changes, malformed metadata, and digest
+mismatches remain fail-closed corruption. Legacy pairs without a manifest are
+accepted and promoted by the next daemon checkpoint.
+
 A task must be durably admitted to the registry before any managed artifact or
 event namespace is created. Artifact and hook writers call the admission fence,
 which waits for the persistence owner to publish the required revision. Startup
