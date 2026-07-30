@@ -92,11 +92,12 @@ benchmark also used `saturating_sub`, so a regression was printed as a
 `0.00%` reduction.
 
 Commit `9fc911d8` replaces that reload with a generation/digest comparison
-under the publication lock. The already authenticated in-memory generation is
-retained; immutable artifact metadata is checked, and only an artifact whose
-metadata changed is rehashed. Benchmark deltas are now signed
-`(after - before) / before` values, where a positive time delta is a
-regression.
+under the publication lock. Follow-up `2436983b` authenticates the persisted
+generation record, retains the already authenticated in-memory generation, and
+checks immutable artifacts using stable Unix file identity with digest
+validation whenever that identity changes. Platforms without a stable change
+token conservatively rehash retained artifacts. Benchmark deltas are signed
+`(after - before) / before` values, where a positive time delta is a regression.
 
 The exact release command under [Reproduce](#reproduce) was run three times
 before and after the change:
@@ -105,16 +106,16 @@ before and after the change:
 | --- | --- | ---: | ---: |
 | `43753c58` whole snapshot | 6,506; 5,251; 5,466 | 5,466 | baseline |
 | `43753c58` incremental generation | 16,965; 15,732; 18,205 | 16,965 | +210.37% |
-| `9fc911d8` whole snapshot | 4,471; 5,068; 4,751 | 4,751 | baseline |
-| `9fc911d8` incremental generation | 2,073; 2,210; 2,314 | 2,210 | -53.48% |
+| `2436983b` whole snapshot | 6,967; 4,781; 4,603 | 4,781 | baseline |
+| `2436983b` incremental generation | 2,471; 2,705; 3,076 | 2,705 | -43.42% |
 
-The incremental invocation median improved from 16,965 to 2,210 µs
-(-86.97%, or 7.68× faster). Each final run published 5,323 bytes versus
+The incremental invocation median improved from 16,965 to 2,705 µs
+(-84.06%, or 6.27× faster). Each final run published 5,323 bytes versus
 3,490,797 bytes for the whole-snapshot model and reported the same bounded
 work:
 
 ```text
-publication_metadata_bytes_decoded=315
+publication_metadata_bytes_decoded=1457
 repository_artifact_bytes_decoded=0
 repository_artifacts_decoded=0
 repository_artifact_bytes_hashed=0
@@ -123,8 +124,12 @@ changed_paths_considered=1
 ```
 
 The focused invariant seeds four retained segments and asserts zero
-repository-artifact decoding/hashing, five bounded metadata checks (base plus
-four segments), and exactly one considered changed path.
+repository-artifact decoding, five bounded metadata checks (base plus four
+segments), and exactly one considered changed path. It also asserts zero
+retained-artifact hashing on the Unix stable-identity fast path. Dedicated
+regressions corrupt the persisted generation record and apply same-size base
+corruption with the original mtime restored; both fail closed without
+displacing the retained recovery generation.
 
 ## Compaction cost
 
