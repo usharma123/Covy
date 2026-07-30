@@ -31,7 +31,7 @@ This keeps Packet28 useful as both a context broker and a reducer layer: small i
 
 ## Architecture
 
-Packet28 is a Rust workspace of 33 crates organized into four layers:
+Packet28 is a Rust workspace of 34 crates organized into four layers:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -825,7 +825,7 @@ notes before any package is published.
 ## Project Stats
 
 <!-- BEGIN GENERATED PROJECT STATS -->
-- 249,121 lines across 660 Rust files
-- 33 crates in the workspace
+- 260,886 lines across 677 Rust files
+- 34 crates in the workspace
 - 8 Cargo binary targets (including one internal generator)
 <!-- END GENERATED PROJECT STATS -->
