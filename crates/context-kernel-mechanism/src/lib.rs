@@ -17,10 +17,11 @@ use serde_json::{json, Map, Value};
 use thiserror::Error;
 
 use context_memory_core::{
-    CachePacket, CachePersistence, CachePersistenceMetrics, ContextStoreEntryDetail,
-    ContextStoreEntrySummary, ContextStoreListFilter, ContextStorePaging, ContextStorePruneReport,
-    ContextStorePruneRequest, ContextStoreStats, DeltaReuseHooks, NoopDeltaReuseHooks, PacketCache,
-    RecallHit, RecallOptions, RelatedEntryMatch,
+    CachePacket, CachePersistence, CachePersistenceError, CachePersistenceMetrics,
+    ContextStoreEntryDetail, ContextStoreEntrySummary, ContextStoreListFilter, ContextStorePaging,
+    ContextStorePruneReport, ContextStorePruneRequest, ContextStoreStats, DeltaReuseHooks,
+    NoopDeltaReuseHooks, PacketCache, PreparedPersistentCacheMutation, RecallHit, RecallOptions,
+    RelatedEntryMatch,
 };
 
 pub use context_memory_core::PersistConfig;

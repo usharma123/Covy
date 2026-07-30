@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use context_memory_core::{
-    CachePacket, CachePersistence, NoopDeltaReuseHooks, PacketCache, PacketCacheEntry,
-    PersistConfig,
+    CacheLookup, CachePacket, CachePersistence, NoopDeltaReuseHooks, PacketCache, PacketCacheEntry,
+    PersistConfig, PreparedCacheMutation,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -132,17 +132,17 @@ fn run_owned_delta_path() -> Result<Observation, Box<dyn std::error::Error>> {
     let started = Instant::now();
     let mut lock_samples = Vec::with_capacity(MEASURED_WRITES);
     for offset in 0..MEASURED_WRITES {
-        let lock_started = Instant::now();
-        let (entry, reservation) = {
-            let mut cache = cache
+        let id = FIXTURE_ENTRIES + offset;
+        let lookup = {
+            let cache = cache
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let reservation = owner.reserve_mutation(1)?;
-            let entry = put_entry(&mut cache, FIXTURE_ENTRIES + offset, PAYLOAD_BYTES);
-            (entry, reservation)
+            cache_lookup(&cache, id)
         };
-        lock_samples.push(elapsed_nanos(lock_started));
-        owner.record_update_reserved(&entry, Vec::new(), reservation)?;
+        let mutation = prepare_mutation(id, PAYLOAD_BYTES, &lookup);
+        let prepared = owner.prepare_update(mutation);
+        let outcome = owner.commit_prepared_update(prepared, &mut NoopDeltaReuseHooks)?;
+        lock_samples.push(outcome.lock_nanos);
     }
     let metrics = owner.flush(Duration::from_secs(30))?;
     let elapsed_us = elapsed_micros(started);
@@ -174,18 +174,42 @@ fn put_entry(cache: &mut PacketCache, id: usize, payload_bytes: usize) -> Packet
     cache.put_with_hooks(
         &target,
         &lookup,
-        vec![CachePacket {
-            packet_id: Some(format!("packet-{id}")),
-            body: json!({
-                "summary": format!("cache persistence benchmark entry {id}"),
-                "payload": "x".repeat(payload_bytes),
-                "files": [{"path": format!("src/generated/{id}.rs")}],
-            }),
-            ..CachePacket::default()
-        }],
+        cache_packets(id, payload_bytes),
         Value::Null,
         &mut hooks,
     )
+}
+
+fn cache_lookup(cache: &PacketCache, id: usize) -> CacheLookup {
+    let target = format!("benchmark.reducer.{id}");
+    let mut hooks = NoopDeltaReuseHooks;
+    cache.lookup_with_hooks(&target, &json!({"id": id}), &mut hooks)
+}
+
+fn prepare_mutation(
+    id: usize,
+    payload_bytes: usize,
+    lookup: &CacheLookup,
+) -> PreparedCacheMutation {
+    let target = format!("benchmark.reducer.{id}");
+    PacketCache::prepare_mutation(
+        &target,
+        lookup,
+        cache_packets(id, payload_bytes),
+        Value::Null,
+    )
+}
+
+fn cache_packets(id: usize, payload_bytes: usize) -> Vec<CachePacket> {
+    vec![CachePacket {
+        packet_id: Some(format!("packet-{id}")),
+        body: json!({
+            "summary": format!("cache persistence benchmark entry {id}"),
+            "payload": "x".repeat(payload_bytes),
+            "files": [{"path": format!("src/generated/{id}.rs")}],
+        }),
+        ..CachePacket::default()
+    }]
 }
 
 fn summarize(observations: &[Observation]) -> PathMeasurement {

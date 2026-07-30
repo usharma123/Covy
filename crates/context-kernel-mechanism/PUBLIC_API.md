@@ -152,14 +152,23 @@ assert!(metrics.persisted_deltas >= 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-Cache mutations become visible in memory before asynchronous durability.
-`flush_cache_persistence` waits for queued deltas to reach the WAL;
+Cache mutations become visible in memory only after the bounded persistence
+owner-controlled commit accepts their exact upsert and tombstone set. The
+reservation and publish-token internals are not public. Admission or queue
+rejections return [`KernelError::CachePersistence`] without exposing the
+mutation. Entry payloads are persistence-encoded and measured before the live
+cache lock; non-canonical keys and entries too large for one bounded WAL frame
+are rejected there. Rejected payloads and replaced raw or encoded entries are
+destroyed after the guard is released. Only bounded admission, move-only
+queueing, scalar timestamping, and index updates occur inside it. Coalesced
+deltas are split into sequence-ordered bounded WAL frames.
+`flush_cache_persistence` waits for accepted deltas to reach the WAL;
 `shutdown_cache_persistence` is the explicit bounded flush, checkpoint, and
 join contract for the final root owner. Callers must not rely on drop timing.
 Timeouts and lower-level failures are reported as
-[`KernelError::CachePersistence`]. Pruning reserves persistence capacity before
-mutating live state, then records tombstones and flushes; a later persistence
-failure is reported but is not a transactional rollback.
+[`KernelError::CachePersistence`]. Pruning queues its exact tombstone set
+before mutating live state, then flushes. A later flush failure is reported but
+is not a transactional rollback.
 
 ## Errors
 

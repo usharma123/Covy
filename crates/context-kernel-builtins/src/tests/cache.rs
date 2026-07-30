@@ -156,7 +156,7 @@ fn persistent_kernel_reuses_cache_across_instances() {
 }
 
 #[test]
-fn persistent_kernel_flushes_deltas_after_releasing_cache_lock() {
+fn persistent_kernel_flushes_accepted_deltas_without_checkpointing() {
     let dir = tempdir().unwrap();
     let config = PersistConfig::new(dir.path().to_path_buf());
     let mut kernel = Kernel::with_persistence(config.clone());

@@ -204,7 +204,9 @@ dirty-entry deltas are staged in `.packet28/packet-cache-v3.wal` between
 debounced checkpoints, while `.packet28/packet-cache-v3.lock` serializes
 cross-process WAL sequence and checkpoint changes. The lock state also binds
 the root's TTL policy so another process cannot checkpoint the same cache with
-a different retention window.
+a different retention window. Persistent mutations are encoded and measured
+before live publication: malformed keys and entries that cannot fit a bounded
+WAL frame are rejected, while coalesced deltas are split into ordered frames.
 
 Unauthenticated legacy raw V3 checkpoint payloads are deliberately rejected:
 cache state is disposable, and accepting a structurally decodable but

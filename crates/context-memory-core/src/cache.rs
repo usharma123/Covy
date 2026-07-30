@@ -1,10 +1,63 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 use crate::*;
+
+/// A cache mutation whose owned payload is ready for optional persistence
+/// preparation without being visible in the live cache.
+pub struct PreparedCacheMutation {
+    pub(crate) entry: PacketCacheEntry,
+    #[cfg(test)]
+    drop_probe: PreparedMutationDropProbe,
+}
+
+impl PreparedCacheMutation {
+    /// Returns the canonical key that will become visible after acceptance.
+    pub fn cache_key(&self) -> &str {
+        &self.entry.cache_key
+    }
+
+    pub(crate) fn into_entry_at(mut self, created_at_unix: u64) -> PacketCacheEntry {
+        self.entry.created_at_unix = created_at_unix;
+        #[cfg(test)]
+        self.drop_probe.disarm();
+        self.entry
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_drop_probe(&mut self, probe: Arc<dyn Fn() + Send + Sync>) {
+        self.drop_probe.callback = Some(probe);
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct PreparedMutationDropProbe {
+    callback: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+#[cfg(test)]
+impl PreparedMutationDropProbe {
+    fn disarm(&mut self) {
+        self.callback = None;
+    }
+}
+
+#[cfg(test)]
+impl Drop for PreparedMutationDropProbe {
+    fn drop(&mut self) {
+        if let Some(callback) = self.callback.take() {
+            callback();
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct PacketCache {
@@ -36,18 +89,28 @@ impl PacketCache {
     }
 
     pub fn evict_expired_entries(&mut self, ttl_secs: u64) -> Vec<String> {
+        self.evict_expired_entries_at(ttl_secs, now_unix())
+    }
+
+    /// Evicts entries expired at one caller-supplied timestamp.
+    pub fn evict_expired_entries_at(&mut self, ttl_secs: u64, now_unix: u64) -> Vec<String> {
         self.remove_where(
-            |entry, now| is_expired(entry.created_at_unix, ttl_secs, now),
+            |entry, _| is_expired(entry.created_at_unix, ttl_secs, now_unix),
             EvictionReason::ExpiredTtl,
+            now_unix,
         )
     }
 
     pub fn expired_entry_keys(&self, ttl_secs: u64) -> Vec<String> {
-        let now = now_unix();
+        self.expired_entry_keys_at(ttl_secs, now_unix())
+    }
+
+    /// Returns entries expired at one caller-supplied timestamp.
+    pub fn expired_entry_keys_at(&self, ttl_secs: u64, now_unix: u64) -> Vec<String> {
         let mut keys = self
             .entries_by_hash
             .iter()
-            .filter(|(_, entry)| is_expired(entry.created_at_unix, ttl_secs, now))
+            .filter(|(_, entry)| is_expired(entry.created_at_unix, ttl_secs, now_unix))
             .map(|(cache_key, _)| cache_key.clone())
             .collect::<Vec<_>>();
         keys.sort();
@@ -135,29 +198,96 @@ impl PacketCache {
         metadata: Value,
         hooks: &mut dyn DeltaReuseHooks,
     ) -> PacketCacheEntry {
-        let entry = PacketCacheEntry {
+        self.put_at_with_hooks(target, lookup, packets, metadata, now_unix(), hooks)
+    }
+
+    pub fn put_at_with_hooks(
+        &mut self,
+        target: &str,
+        lookup: &CacheLookup,
+        packets: Vec<CachePacket>,
+        metadata: Value,
+        created_at_unix: u64,
+        hooks: &mut dyn DeltaReuseHooks,
+    ) -> PacketCacheEntry {
+        let mutation = Self::prepare_mutation(target, lookup, packets, metadata);
+        self.commit_prepared_volatile_at(mutation, created_at_unix, hooks)
+    }
+
+    /// Builds an opaque cache mutation without exposing it through this cache.
+    ///
+    /// Persistence owners may encode this value before the caller acquires the
+    /// live cache mutex, then accept it cheaply while that mutex is held.
+    pub fn prepare_mutation(
+        target: &str,
+        lookup: &CacheLookup,
+        packets: Vec<CachePacket>,
+        metadata: Value,
+    ) -> PreparedCacheMutation {
+        PreparedCacheMutation {
+            entry: Self::prepare_entry_at(target, lookup, packets, metadata, 0),
+            #[cfg(test)]
+            drop_probe: PreparedMutationDropProbe::default(),
+        }
+    }
+
+    pub(crate) fn prepare_entry_at(
+        target: &str,
+        lookup: &CacheLookup,
+        packets: Vec<CachePacket>,
+        metadata: Value,
+        created_at_unix: u64,
+    ) -> PacketCacheEntry {
+        PacketCacheEntry {
             cache_key: lookup.cache_key.clone(),
             target: target.to_string(),
             input_hash: lookup.input_hash.clone(),
-            created_at_unix: now_unix(),
+            created_at_unix,
             packets,
             metadata,
             delta_reuse: DeltaReuse {
                 reused_from: lookup.suggested_reuse_base.clone(),
                 delta_ratio: None,
             },
-        };
+        }
+    }
 
+    pub(crate) fn commit_prepared_volatile_at(
+        &mut self,
+        mutation: PreparedCacheMutation,
+        created_at_unix: u64,
+        hooks: &mut dyn DeltaReuseHooks,
+    ) -> PacketCacheEntry {
+        let entry = self.insert_entry(mutation.into_entry_at(created_at_unix));
+        hooks.on_put(&entry);
+        entry
+    }
+
+    pub(crate) fn insert_entry(&mut self, entry: PacketCacheEntry) -> PacketCacheEntry {
+        let request_hash = Self::compute_request_hash(&entry.target, &entry.input_hash);
         if self.entries_by_hash.contains_key(&entry.cache_key) {
             self.remove_index_for(&entry.cache_key);
         }
         self.entries_by_hash
             .insert(entry.cache_key.clone(), entry.clone());
         self.latest_request_index
-            .insert(lookup.cache_key.clone(), entry.cache_key.clone());
+            .insert(request_hash, entry.cache_key.clone());
         self.index_entry(&entry);
-        hooks.on_put(&entry);
         entry
+    }
+
+    pub(crate) fn insert_owned(&mut self, entry: PacketCacheEntry) -> Option<PacketCacheEntry> {
+        let cache_key = entry.cache_key.clone();
+        let request_hash = Self::compute_request_hash(&entry.target, &entry.input_hash);
+        if self.entries_by_hash.contains_key(&cache_key) {
+            self.remove_index_for(&cache_key);
+        }
+        let document = build_recall_document(&entry, self.workspace_root.as_deref());
+        self.latest_request_index
+            .insert(request_hash, cache_key.clone());
+        let retired = self.entries_by_hash.insert(cache_key.clone(), entry);
+        self.index_document(document);
+        retired
     }
 
     pub fn list_entries(
@@ -249,6 +379,15 @@ impl PacketCache {
     }
 
     pub fn prune(&mut self, request: ContextStorePruneRequest) -> ContextStorePruneReport {
+        self.prune_at(request, now_unix())
+    }
+
+    /// Prunes entries selected at one caller-supplied timestamp.
+    pub fn prune_at(
+        &mut self,
+        request: ContextStorePruneRequest,
+        now_unix: u64,
+    ) -> ContextStorePruneReport {
         let removed = if request.all {
             let removed = self.entries_by_hash.len();
             self.entries_by_hash.clear();
@@ -261,8 +400,9 @@ impl PacketCache {
         } else {
             let ttl_secs = request.ttl_secs.unwrap_or(DEFAULT_PERSIST_TTL_SECS);
             self.remove_where(
-                |entry, now| is_expired(entry.created_at_unix, ttl_secs, now),
+                |entry, _| is_expired(entry.created_at_unix, ttl_secs, now_unix),
                 EvictionReason::ManualPrune,
+                now_unix,
             )
             .len()
         };
@@ -275,12 +415,24 @@ impl PacketCache {
     }
 
     pub fn prune_candidate_keys(&self, request: &ContextStorePruneRequest) -> Vec<String> {
+        self.prune_candidate_keys_at(request, now_unix())
+    }
+
+    /// Returns prune candidates selected at one caller-supplied timestamp.
+    pub fn prune_candidate_keys_at(
+        &self,
+        request: &ContextStorePruneRequest,
+        now_unix: u64,
+    ) -> Vec<String> {
         if request.all {
             let mut keys = self.entries_by_hash.keys().cloned().collect::<Vec<_>>();
             keys.sort();
             return keys;
         }
-        self.expired_entry_keys(request.ttl_secs.unwrap_or(DEFAULT_PERSIST_TTL_SECS))
+        self.expired_entry_keys_at(
+            request.ttl_secs.unwrap_or(DEFAULT_PERSIST_TTL_SECS),
+            now_unix,
+        )
     }
 
     pub fn stats(&self) -> ContextStoreStats {
@@ -306,15 +458,15 @@ impl PacketCache {
         &mut self,
         mut predicate: F,
         reason: EvictionReason,
+        now_unix: u64,
     ) -> Vec<String>
     where
         F: FnMut(&PacketCacheEntry, u64) -> bool,
     {
-        let now = now_unix();
         let mut to_remove = self
             .entries_by_hash
             .iter()
-            .filter(|(_, entry)| predicate(entry, now))
+            .filter(|(_, entry)| predicate(entry, now_unix))
             .map(|(cache_key, _)| cache_key.clone())
             .collect::<Vec<_>>();
         to_remove.sort();
@@ -377,6 +529,10 @@ impl PacketCache {
 
     pub(crate) fn index_entry(&mut self, entry: &PacketCacheEntry) {
         let doc = build_recall_document(entry, self.workspace_root.as_deref());
+        self.index_document(doc);
+    }
+
+    fn index_document(&mut self, doc: RecallDocument) {
         self.recall_total_doc_length = self.recall_total_doc_length.saturating_add(doc.doc_length);
         self.recall_avg_doc_length = if self.entries_by_hash.is_empty() {
             0.0
@@ -489,7 +645,19 @@ pub(crate) fn is_expired(created_at_unix: u64, ttl_secs: u64, now_unix: u64) -> 
 }
 
 pub(crate) fn encode_json_value(value: &Value) -> String {
+    #[cfg(test)]
+    PERSIST_JSON_ENCODE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    static PERSIST_JSON_ENCODE_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn persist_json_encode_calls() -> usize {
+    PERSIST_JSON_ENCODE_CALLS.with(Cell::get)
 }
 
 pub(crate) fn decode_json_value(raw: &str) -> Value {
@@ -856,6 +1024,40 @@ mod tests {
     }
 
     #[test]
+    fn ttl_candidates_and_evictions_use_the_same_boundary_timestamp() {
+        const NOW: u64 = 10_000;
+        let cases = [
+            (0_u64, 10_000_u64, false),
+            (60, 59, false),
+            (60, 60, false),
+            (60, 61, true),
+        ];
+
+        for (case, (ttl_secs, age_secs, expected_expired)) in cases.into_iter().enumerate() {
+            let mut cache = PacketCache::new();
+            let mut hooks = NoopDeltaReuseHooks;
+            let target = format!("demo.reducer.{case}");
+            let lookup =
+                cache.lookup_with_hooks(&target, &serde_json::json!({"case": case}), &mut hooks);
+            let entry = PacketCache::prepare_entry_at(
+                &target,
+                &lookup,
+                vec![CachePacket::default()],
+                Value::Null,
+                NOW.saturating_sub(age_secs),
+            );
+            let cache_key = entry.cache_key.clone();
+            cache.insert_entry(entry);
+
+            let candidates = cache.expired_entry_keys_at(ttl_secs, NOW);
+            let removed = cache.evict_expired_entries_at(ttl_secs, NOW);
+
+            assert_eq!(candidates, removed, "case {case}");
+            assert_eq!(removed == vec![cache_key], expected_expired, "case {case}");
+        }
+    }
+
+    #[test]
     fn load_from_disk_ignores_corrupt_file() {
         let dir = tempdir().unwrap();
         let config = PersistConfig::new(dir.path().to_path_buf());
@@ -1191,6 +1393,7 @@ mod tests {
         cache.remove_where(
             |entry, _| entry.cache_key == first.cache_key,
             EvictionReason::ManualPrune,
+            now_unix(),
         );
 
         assert_eq!(

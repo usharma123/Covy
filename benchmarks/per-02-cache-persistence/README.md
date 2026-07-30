@@ -51,12 +51,17 @@ checkpoint and all indexes, write it, and release the mutex. This is a
 controlled work model in the current source, not a checkout of a historical
 binary.
 
-`owned_delta_wal_after_lock` exercises the product `CachePersistence` path:
-reserve bounded persistence capacity and mutate under the root-shared live
-cache mutex, release it, commit the reserved entry delta, then use a bounded
-flush to await the debounced WAL owner. Published bytes combine actual WAL
-frame bytes and durable eight-byte coordination-generation writes reported by
-product telemetry.
+`owned_delta_wal_after_lock` (the retained schema field name) exercises the
+product `CachePersistence` path: prepare and JSON-encode the owned entry outside
+the root-shared live cache mutex; then cross one owner-controlled commit
+boundary that samples one timestamp under the mutex, reserves bounded
+persistence capacity, moves the exact delta into the queue, and exposes the
+live mutation only after acceptance. The low-level reservation and
+publish-token sequence is not public. Rejected payloads and superseded raw or
+encoded entries are destroyed after the live-cache guard is released. A
+bounded flush then awaits the debounced WAL owner. Published bytes combine
+actual WAL frame bytes and durable eight-byte coordination-generation writes
+reported by product telemetry.
 
 The legacy path counts both authenticated checkpoint payload copies (backup
 and primary) written for every measured mutation. The owned path reports its
@@ -80,6 +85,7 @@ checksummed valid-prefix replay and checkpoint sequence-watermark tests.
 - Recovered entries on both paths: **576**
 
 The timing values are machine-specific. The architectural conclusion rests on
-the invariant that encoding, `sync_data`, and checkpoint I/O occur in the owner
-after the live cache mutex is released; telemetry and the deterministic byte
-comparison guard against reintroducing full-envelope writes per mutation.
+the invariant that payload encoding occurs before the live cache mutex, while
+WAL framing, `sync_data`, and checkpoint I/O occur in the owner after that mutex
+is released. Telemetry and the deterministic byte comparison guard against
+reintroducing full-envelope writes per mutation.

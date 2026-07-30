@@ -19,15 +19,16 @@ mod recall;
 mod recall_document;
 mod types;
 
-pub use cache::PacketCache;
 pub(crate) use cache::*;
+pub use cache::{PacketCache, PreparedCacheMutation};
 pub use cache_file::CachePathViolation;
 pub(crate) use normalize::*;
 pub use normalize::{basename_alias, normalize_context_path};
 #[cfg(test)]
 pub(crate) use persist::*;
 pub use persistence_owner::{
-    CacheMutationReservation, CachePersistence, CachePersistenceError, CachePersistenceMetrics,
+    CacheCommitOutcome, CachePersistence, CachePersistenceError, CachePersistenceMetrics,
+    PreparedPersistentCacheMutation,
 };
 pub(crate) use recall_document::*;
 pub use types::*;

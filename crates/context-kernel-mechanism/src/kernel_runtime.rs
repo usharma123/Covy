@@ -75,6 +75,25 @@ type ReducerFn = dyn Fn(&mut ExecutionContext, &[KernelPacket]) -> Result<Reduce
     + Send
     + Sync;
 
+enum PendingCacheUpdate {
+    Volatile(VolatileCacheUpdate),
+    Persistent(PreparedPersistentCacheMutation),
+}
+
+#[derive(Clone, Copy)]
+enum CacheMutationTime {
+    Current,
+    #[cfg(test)]
+    Fixed(u64),
+}
+
+struct VolatileCacheUpdate {
+    target: String,
+    lookup: context_memory_core::CacheLookup,
+    packets: Vec<CachePacket>,
+    metadata: Value,
+}
+
 pub struct KernelMechanism {
     reducers: HashMap<String, Arc<ReducerFn>>,
     next_request_id: AtomicU64,
@@ -260,31 +279,25 @@ impl KernelMechanism {
         let Some(persistence) = self.persistence.as_ref() else {
             return Err(self.persistence_unavailable_error()?);
         };
-        let (report, removed_cache_keys, reservation) = {
-            let mut cache = self.lock_memory()?;
-            let removed_cache_keys = cache.prune_candidate_keys(&request);
-            let reservation = persistence
-                .reserve_mutation(removed_cache_keys.len())
-                .map_err(|source| KernelError::CachePersistence {
-                    detail: source.to_string(),
-                })?;
-            let report = cache.prune(request);
-            debug_assert_eq!(report.removed, removed_cache_keys.len());
-            (report, removed_cache_keys, reservation)
-        };
         persistence
-            .record_removals_reserved(removed_cache_keys, reservation)
-            .map_err(|source| KernelError::CachePersistence {
-                detail: source.to_string(),
-            })?;
-        persistence
-            .flush(timeout)
-            .map_err(|source| KernelError::CachePersistence {
-                detail: source.to_string(),
-            })?;
-        Ok(report)
+            .prune(request, timeout)
+            .map_err(|source| self.map_cache_persistence_error(source))
     }
 
+    #[cfg(test)]
+    fn context_store_prune_at(
+        &self,
+        request: ContextStorePruneRequest,
+        timeout: Duration,
+        now_unix: u64,
+    ) -> Result<ContextStorePruneReport, KernelError> {
+        let Some(persistence) = self.persistence.as_ref() else {
+            return Err(self.persistence_unavailable_error()?);
+        };
+        persistence
+            .prune_at(request, timeout, now_unix)
+            .map_err(|source| self.map_cache_persistence_error(source))
+    }
     fn lock_memory(&self) -> Result<std::sync::MutexGuard<'_, PacketCache>, KernelError> {
         self.memory.lock().map_err(|source| KernelError::CacheLock {
             detail: source.to_string(),
@@ -301,6 +314,41 @@ impl KernelMechanism {
             .clone()
             .unwrap_or_else(|| "persistence is not configured".to_string());
         Ok(KernelError::CachePersistence { detail })
+    }
+
+    fn cache_persistence_error(&self, source: impl ToString) -> KernelError {
+        let detail = source.to_string();
+        if let Ok(mut last_error) = self.persistence_error.lock() {
+            *last_error = Some(detail.clone());
+        }
+        KernelError::CachePersistence { detail }
+    }
+
+    fn map_cache_persistence_error(&self, source: CachePersistenceError) -> KernelError {
+        match source {
+            CachePersistenceError::CacheLock { detail } => KernelError::CacheLock { detail },
+            source => self.cache_persistence_error(source),
+        }
+    }
+
+    fn prepare_cache_update(
+        &self,
+        target: &str,
+        lookup: &context_memory_core::CacheLookup,
+        packets: Vec<CachePacket>,
+        metadata: Value,
+    ) -> PendingCacheUpdate {
+        match self.persistence.as_ref() {
+            Some(persistence) => PendingCacheUpdate::Persistent(persistence.prepare_update(
+                PacketCache::prepare_mutation(target, lookup, packets, metadata),
+            )),
+            None => PendingCacheUpdate::Volatile(VolatileCacheUpdate {
+                target: target.to_string(),
+                lookup: lookup.clone(),
+                packets,
+                metadata,
+            }),
+        }
     }
 
     pub fn cache_runtime_metrics(&self) -> CacheRuntimeMetrics {
@@ -519,59 +567,14 @@ impl KernelMechanism {
                 .collect();
 
             let metadata = response.metadata.clone();
-            let (entry, removed_cache_keys, reservation, stats, lock_nanos) = {
-                let mut cache = self
-                    .memory
-                    .lock()
-                    .map_err(|source| KernelError::CacheLock {
-                        detail: source.to_string(),
-                    })?;
-                let lock_started = Instant::now();
-                let mut expected_removed_cache_keys = self
-                    .persist_ttl_secs
-                    .map(|ttl_secs| cache.expired_entry_keys(ttl_secs))
-                    .unwrap_or_default();
-                expected_removed_cache_keys
-                    .retain(|cache_key| cache_key != &cache_lookup.cache_key);
-                let reservation = self
-                    .persistence
-                    .as_ref()
-                    .map(|persistence| {
-                        persistence
-                            .reserve_mutation(expected_removed_cache_keys.len().saturating_add(1))
-                    })
-                    .transpose()
-                    .map_err(|source| KernelError::CachePersistence {
-                        detail: source.to_string(),
-                    })?;
-                let entry = cache.put_with_hooks(&target, &cache_lookup, packets, metadata, hooks);
-                let removed_cache_keys = self
-                    .persist_ttl_secs
-                    .map(|ttl_secs| cache.evict_expired_entries(ttl_secs))
-                    .unwrap_or_default();
-                debug_assert_eq!(removed_cache_keys, expected_removed_cache_keys);
-                let stats = cache.stats();
-                let lock_nanos = lock_started
-                    .elapsed()
-                    .as_nanos()
-                    .try_into()
-                    .unwrap_or(u64::MAX);
-                (entry, removed_cache_keys, reservation, stats, lock_nanos)
-            };
+            let update = self.prepare_cache_update(&target, &cache_lookup, packets, metadata);
+            let (_, stats, lock_nanos) =
+                self.commit_cache_update(update, hooks, CacheMutationTime::Current)?;
             self.cache_mutation_lock_operations
                 .fetch_add(1, Ordering::Relaxed);
             self.cache_mutation_lock_nanos
                 .fetch_add(lock_nanos, Ordering::Relaxed);
 
-            if let (Some(persistence), Some(reservation)) = (&self.persistence, reservation) {
-                if let Err(error) =
-                    persistence.record_update_reserved(&entry, removed_cache_keys, reservation)
-                {
-                    if let Ok(mut last_error) = self.persistence_error.lock() {
-                        *last_error = Some(error.to_string());
-                    }
-                }
-            }
             if let Some(cache_obj) = response
                 .metadata
                 .as_object_mut()
@@ -592,6 +595,67 @@ impl KernelMechanism {
         }
 
         Ok(response)
+    }
+
+    fn commit_cache_update(
+        &self,
+        update: PendingCacheUpdate,
+        hooks: &mut dyn DeltaReuseHooks,
+        mutation_time: CacheMutationTime,
+    ) -> Result<(String, ContextStoreStats, u64), KernelError> {
+        match update {
+            PendingCacheUpdate::Volatile(mutation) => {
+                let mut cache = self.lock_memory()?;
+                let lock_started = Instant::now();
+                let mutation_now = match mutation_time {
+                    CacheMutationTime::Current => now_unix(),
+                    #[cfg(test)]
+                    CacheMutationTime::Fixed(created_at_unix) => created_at_unix,
+                };
+                let cache_key = mutation.lookup.cache_key.clone();
+                let mut removed_cache_keys = self
+                    .persist_ttl_secs
+                    .map(|ttl_secs| cache.expired_entry_keys_at(ttl_secs, mutation_now))
+                    .unwrap_or_default();
+                removed_cache_keys.retain(|removed| removed != &cache_key);
+                let entry = cache.put_at_with_hooks(
+                    &mutation.target,
+                    &mutation.lookup,
+                    mutation.packets,
+                    mutation.metadata,
+                    mutation_now,
+                    hooks,
+                );
+                let evicted_cache_keys = self
+                    .persist_ttl_secs
+                    .map(|ttl_secs| cache.evict_expired_entries_at(ttl_secs, mutation_now))
+                    .unwrap_or_default();
+                debug_assert_eq!(evicted_cache_keys, removed_cache_keys);
+                let stats = cache.stats();
+                let lock_nanos = lock_started
+                    .elapsed()
+                    .as_nanos()
+                    .try_into()
+                    .unwrap_or(u64::MAX);
+                Ok((entry.cache_key, stats, lock_nanos))
+            }
+            PendingCacheUpdate::Persistent(mutation) => {
+                let persistence = self.persistence.as_ref().ok_or_else(|| {
+                    self.cache_persistence_error("prepared persistence owner is unavailable")
+                })?;
+                let outcome = match mutation_time {
+                    CacheMutationTime::Current => {
+                        persistence.commit_prepared_update(mutation, hooks)
+                    }
+                    #[cfg(test)]
+                    CacheMutationTime::Fixed(created_at_unix) => {
+                        persistence.commit_prepared_update_at(mutation, hooks, created_at_unix)
+                    }
+                }
+                .map_err(|source| self.map_cache_persistence_error(source))?;
+                Ok((outcome.cache_key, outcome.stats, outcome.lock_nanos))
+            }
+        }
     }
 
     pub fn execute_sequence(
@@ -893,6 +957,44 @@ fn ensure_sequence_active(
 mod tests {
     use super::*;
 
+    fn cache_lookup(
+        kernel: &KernelMechanism,
+        target: &str,
+        reducer_input: Value,
+        hooks: &mut dyn DeltaReuseHooks,
+    ) -> context_memory_core::CacheLookup {
+        kernel
+            .lock_memory()
+            .unwrap()
+            .lookup_with_hooks(target, &reducer_input, hooks)
+    }
+
+    fn commit_test_entry_at(
+        kernel: &KernelMechanism,
+        target: &str,
+        reducer_input: Value,
+        created_at_unix: u64,
+    ) -> context_memory_core::PacketCacheEntry {
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache_lookup(kernel, target, reducer_input, &mut hooks);
+        let update =
+            kernel.prepare_cache_update(target, &lookup, vec![CachePacket::default()], Value::Null);
+        let cache_key = kernel
+            .commit_cache_update(
+                update,
+                &mut hooks,
+                CacheMutationTime::Fixed(created_at_unix),
+            )
+            .unwrap()
+            .0;
+        kernel
+            .lock_memory()
+            .unwrap()
+            .get(&cache_key)
+            .cloned()
+            .expect("committed cache entry must be immediately visible")
+    }
+
     #[test]
     fn strict_persistence_constructor_rejects_an_unopenable_owner() {
         let root = tempfile::tempdir().unwrap();
@@ -927,5 +1029,176 @@ mod tests {
                 if detail
                     == "scheduler selected step `missing` that is absent from the remaining plan"
         ));
+    }
+
+    #[test]
+    fn cache_update_uses_one_timestamp_at_the_ttl_boundary() {
+        const TTL_SECS: u64 = 3_600;
+        let dir = tempfile::tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf()).with_ttl_secs(TTL_SECS);
+        let kernel = KernelMechanism::try_with_persistence(config.clone()).unwrap();
+        let boundary = now_unix().saturating_add(600);
+        let old_entry = commit_test_entry_at(
+            &kernel,
+            "test.reducer",
+            json!({"entry":"old"}),
+            boundary.saturating_sub(TTL_SECS),
+        );
+        kernel
+            .flush_cache_persistence(Duration::from_secs(2))
+            .unwrap();
+
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache_lookup(&kernel, "test.reducer", json!({"entry":"new"}), &mut hooks);
+        let update = kernel.prepare_cache_update(
+            "test.reducer",
+            &lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+        );
+        let new_cache_key = kernel
+            .commit_cache_update(update, &mut hooks, CacheMutationTime::Fixed(boundary))
+            .unwrap()
+            .0;
+        let new_entry = kernel
+            .lock_memory()
+            .unwrap()
+            .get(&new_cache_key)
+            .cloned()
+            .expect("committed cache entry must be immediately visible");
+
+        assert!(kernel
+            .context_store_get(&old_entry.cache_key)
+            .unwrap()
+            .is_some());
+        assert!(kernel
+            .context_store_get(&new_entry.cache_key)
+            .unwrap()
+            .is_some());
+        kernel
+            .shutdown_cache_persistence(Duration::from_secs(2))
+            .unwrap();
+        drop(kernel);
+
+        let reopened = KernelMechanism::try_with_persistence(config).unwrap();
+        assert_eq!(reopened.context_store_stats().unwrap().entries, 2);
+        assert!(reopened
+            .context_store_get(&old_entry.cache_key)
+            .unwrap()
+            .is_some());
+        assert!(reopened
+            .context_store_get(&new_entry.cache_key)
+            .unwrap()
+            .is_some());
+        reopened
+            .shutdown_cache_persistence(Duration::from_secs(2))
+            .unwrap();
+    }
+
+    #[test]
+    fn rejected_persistence_update_is_absent_from_memory_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let kernel = KernelMechanism::try_with_persistence(config.clone()).unwrap();
+        let baseline = commit_test_entry_at(
+            &kernel,
+            "test.reducer",
+            json!({"entry":"baseline"}),
+            now_unix(),
+        );
+        kernel
+            .flush_cache_persistence(Duration::from_secs(2))
+            .unwrap();
+        kernel
+            .persistence
+            .as_ref()
+            .unwrap()
+            .shutdown(Duration::from_secs(2))
+            .unwrap();
+
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache_lookup(
+            &kernel,
+            "test.reducer",
+            json!({"entry":"rejected"}),
+            &mut hooks,
+        );
+        let rejected_key = lookup.cache_key.clone();
+        let update = kernel.prepare_cache_update(
+            "test.reducer",
+            &lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+        );
+        let error = kernel
+            .commit_cache_update(update, &mut hooks, CacheMutationTime::Current)
+            .unwrap_err();
+
+        assert!(matches!(error, KernelError::CachePersistence { .. }));
+        assert_eq!(kernel.context_store_stats().unwrap().entries, 1);
+        assert!(kernel
+            .context_store_get(&baseline.cache_key)
+            .unwrap()
+            .is_some());
+        assert!(kernel.context_store_get(&rejected_key).unwrap().is_none());
+        assert!(kernel
+            .cache_runtime_metrics()
+            .persistence_error
+            .is_some_and(|detail| detail.contains("worker is unavailable")));
+        drop(kernel);
+
+        let reopened = KernelMechanism::try_with_persistence(config).unwrap();
+        assert_eq!(reopened.context_store_stats().unwrap().entries, 1);
+        assert!(reopened
+            .context_store_get(&baseline.cache_key)
+            .unwrap()
+            .is_some());
+        assert!(reopened.context_store_get(&rejected_key).unwrap().is_none());
+        reopened
+            .shutdown_cache_persistence(Duration::from_secs(2))
+            .unwrap();
+    }
+
+    #[test]
+    fn prune_uses_one_timestamp_at_the_ttl_boundary() {
+        const TTL_SECS: u64 = 3_600;
+        let dir = tempfile::tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf()).with_ttl_secs(TTL_SECS);
+        let kernel = KernelMechanism::try_with_persistence(config.clone()).unwrap();
+        let boundary = now_unix().saturating_add(600);
+        let entry = commit_test_entry_at(
+            &kernel,
+            "test.reducer",
+            json!({"entry":"prune-boundary"}),
+            boundary.saturating_sub(TTL_SECS),
+        );
+        let request = ContextStorePruneRequest {
+            all: false,
+            ttl_secs: Some(TTL_SECS),
+        };
+
+        let at_boundary = kernel
+            .context_store_prune_at(request.clone(), Duration::from_secs(2), boundary)
+            .unwrap();
+        let after_boundary = kernel
+            .context_store_prune_at(request, Duration::from_secs(2), boundary.saturating_add(1))
+            .unwrap();
+
+        assert_eq!(at_boundary.removed, 0);
+        assert_eq!(after_boundary.removed, 1);
+        assert!(kernel
+            .context_store_get(&entry.cache_key)
+            .unwrap()
+            .is_none());
+        kernel
+            .shutdown_cache_persistence(Duration::from_secs(2))
+            .unwrap();
+        drop(kernel);
+
+        let reopened = KernelMechanism::try_with_persistence(config).unwrap();
+        assert_eq!(reopened.context_store_stats().unwrap().entries, 0);
+        reopened
+            .shutdown_cache_persistence(Duration::from_secs(2))
+            .unwrap();
     }
 }

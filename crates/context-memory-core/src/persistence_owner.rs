@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -17,9 +19,16 @@ use crate::cache_file::{
 };
 use crate::persist::{
     append_wal_record, persist_cache_backup_path_v3, persist_cache_path_v1, persist_cache_path_v2,
-    persist_cache_path_v3, replay_wal_for_repair, reset_wal, PersistDelta,
+    persist_cache_path_v3, persist_delta_encoded_len, persist_wal_record_payload_len,
+    replay_wal_for_repair, reset_wal, PersistDelta, PersistPacketCacheEntry,
+    MAX_PERSIST_WAL_RECORD_BYTES,
 };
-use crate::{PacketCache, PacketCacheEntry, PersistConfig};
+#[cfg(test)]
+use crate::PacketCacheEntry;
+use crate::{
+    now_unix, ContextStorePruneReport, ContextStorePruneRequest, ContextStoreStats,
+    DeltaReuseHooks, PacketCache, PersistConfig, PreparedCacheMutation,
+};
 
 const PERSISTENCE_QUEUE_CAPACITY: usize = 256;
 const PERSISTENCE_DEBOUNCE: Duration = Duration::from_millis(20);
@@ -515,6 +524,24 @@ pub enum CachePersistenceError {
     #[error("cache persistence mutation reservation belongs to a different root owner")]
     ReservationOwnerMismatch,
 
+    /// A prepared mutation's key does not match its target and input hash.
+    #[error("cache persistence rejected a non-canonical mutation key")]
+    InvalidCacheKey,
+
+    /// A prepared mutation cannot fit in one bounded WAL record.
+    #[error(
+        "cache persistence mutation requires {encoded_bytes} WAL bytes; \
+         maximum is {max_bytes}"
+    )]
+    MutationTooLarge {
+        encoded_bytes: usize,
+        max_bytes: usize,
+    },
+
+    /// The shared live cache mutex was poisoned by a prior panic.
+    #[error("cache persistence live-cache lock failed: {detail}")]
+    CacheLock { detail: String },
+
     /// The persistence worker stopped before accepting an operation.
     #[error("cache persistence worker is unavailable")]
     WorkerUnavailable,
@@ -566,6 +593,13 @@ pub struct CachePersistenceMetrics {
     pub failures: u64,
 }
 
+/// Result of one persistence-owned live-cache commit.
+pub struct CacheCommitOutcome {
+    pub cache_key: String,
+    pub stats: ContextStoreStats,
+    pub lock_nanos: u64,
+}
+
 #[derive(Default)]
 struct SharedMetrics {
     enqueued_batches: AtomicU64,
@@ -613,6 +647,29 @@ struct PendingDelta {
     delta: PersistDelta,
 }
 
+struct RecordedBatch {
+    retired: Vec<PendingDelta>,
+}
+
+struct RejectedBatch {
+    error: CachePersistenceError,
+    batch: BTreeMap<String, PersistDelta>,
+}
+
+enum BatchChange {
+    Inserted {
+        cache_key: String,
+    },
+    Replaced {
+        cache_key: String,
+        previous: PendingDelta,
+    },
+    Superseded {
+        cache_key: String,
+        incoming: PendingDelta,
+    },
+}
+
 type CommandReply = mpsc::Sender<Result<CachePersistenceMetrics, CachePersistenceError>>;
 type ShutdownCompletion = Arc<(
     Mutex<Option<Result<CachePersistenceMetrics, CachePersistenceError>>>,
@@ -629,19 +686,35 @@ enum PersistenceCommand {
 
 /// Single-owner, bounded persistence pipeline for a [`PacketCache`].
 ///
-/// Cache mutations remain immediately visible in the caller's in-memory cache.
-/// This owner coalesces per-key dirty deltas, appends a checksummed WAL record
-/// after a short debounce, and periodically folds the WAL into a checkpoint.
-/// WAL and coordination descriptors reject symbolic links, non-regular files,
-/// and path replacement; checkpoints publish verified exclusive temp files.
+/// Callers can pre-encode, reserve, and queue a mutation before exposing it in
+/// their in-memory cache. Preparation also measures the exact conservative WAL
+/// representation, so an unframeable mutation is rejected before visibility.
+/// Acceptance moves the encoded delta without payload work under the live
+/// cache lock. This owner coalesces per-key dirty deltas, frames each bounded
+/// WAL record after a short debounce, and periodically folds the WAL into a
+/// checkpoint. WAL and coordination descriptors reject symbolic links,
+/// non-regular files, and path replacement; checkpoints publish verified
+/// exclusive temp files.
 pub struct CachePersistence {
     owner: Arc<CachePersistenceOwner>,
 }
 
-/// Capacity and ordering reserved before a live cache mutation is exposed.
-///
-/// Dropping an unused reservation releases its bounded admission slots.
-pub struct CacheMutationReservation {
+/// An opaque cache mutation whose persistence payload was encoded before
+/// entering the live cache critical section.
+pub struct PreparedPersistentCacheMutation {
+    mutation: PreparedCacheMutation,
+    persisted_delta: PersistDelta,
+    wal_record_payload_bytes: usize,
+}
+
+impl PreparedPersistentCacheMutation {
+    /// Returns the canonical key that will become visible after acceptance.
+    pub fn cache_key(&self) -> &str {
+        self.mutation.cache_key()
+    }
+}
+
+struct CacheMutationReservation {
     owner: Arc<CachePersistenceOwner>,
     revision: u64,
     reserved_slots: usize,
@@ -795,15 +868,230 @@ impl CachePersistence {
     }
 
     /// Returns the process-root cache shared by every live owner handle.
+    ///
+    /// Callers may inspect this cache directly. Persistent mutations must use
+    /// [`Self::prepare_update`] followed by [`Self::commit_prepared_update`];
+    /// mutating this raw cache bypasses durability.
     pub fn shared_cache(&self) -> Arc<Mutex<PacketCache>> {
         self.owner.memory.clone()
     }
 
-    /// Queues one cache upsert and any tombstones created by the same mutation.
+    /// Encodes and measures a cache upsert before the live cache lock.
+    pub fn prepare_update(
+        &self,
+        mutation: PreparedCacheMutation,
+    ) -> PreparedPersistentCacheMutation {
+        let mut persisted_entry = PersistPacketCacheEntry::from_entry(&mutation.entry);
+        persisted_entry.created_at_unix = u64::MAX;
+        let mut persisted_delta = PersistDelta::prepared_upsert(persisted_entry);
+        let wal_record_payload_bytes = persist_delta_encoded_len(&persisted_delta)
+            .and_then(|encoded_len| persist_wal_record_payload_len(&[encoded_len]))
+            .unwrap_or(usize::MAX);
+        persisted_delta.set_upsert_created_at_unix(0);
+        PreparedPersistentCacheMutation {
+            mutation,
+            persisted_delta,
+            wal_record_payload_bytes,
+        }
+    }
+
+    /// Commits a pre-encoded mutation through the persistence owner.
     ///
-    /// The bounded queue applies backpressure only after the caller has
-    /// released its cache lock.
-    pub fn record_update(
+    /// The owner samples one timestamp after taking its live-cache lock,
+    /// reserves and queues the exact upsert/tombstone set, then publishes the
+    /// matching in-memory entry. Rejected payloads and superseded encoded
+    /// deltas are destroyed only after the live-cache guard is released.
+    /// Non-canonical keys and mutations that cannot fit one bounded WAL frame
+    /// are rejected before that guard is acquired.
+    pub fn commit_prepared_update(
+        &self,
+        prepared: PreparedPersistentCacheMutation,
+        hooks: &mut dyn DeltaReuseHooks,
+    ) -> Result<CacheCommitOutcome, CachePersistenceError> {
+        self.commit_prepared_update_with_clock(prepared, hooks, now_unix)
+    }
+
+    /// Commits a pre-encoded mutation at a caller-supplied timestamp.
+    ///
+    /// This deterministic variant has the same ownership and lock boundaries
+    /// as [`Self::commit_prepared_update`].
+    pub fn commit_prepared_update_at(
+        &self,
+        prepared: PreparedPersistentCacheMutation,
+        hooks: &mut dyn DeltaReuseHooks,
+        created_at_unix: u64,
+    ) -> Result<CacheCommitOutcome, CachePersistenceError> {
+        self.commit_prepared_update_with_clock(prepared, hooks, || created_at_unix)
+    }
+
+    /// Commits a pre-encoded mutation using a trusted internal clock sampled
+    /// under the persistence owner's live-cache lock.
+    fn commit_prepared_update_with_clock<C>(
+        &self,
+        mut prepared: PreparedPersistentCacheMutation,
+        hooks: &mut dyn DeltaReuseHooks,
+        clock: C,
+    ) -> Result<CacheCommitOutcome, CachePersistenceError>
+    where
+        C: FnOnce() -> u64,
+    {
+        let expected_cache_key = PacketCache::compute_request_hash(
+            &prepared.mutation.entry.target,
+            &prepared.mutation.entry.input_hash,
+        );
+        if prepared.cache_key() != expected_cache_key {
+            return Err(CachePersistenceError::InvalidCacheKey);
+        }
+        if prepared.wal_record_payload_bytes > MAX_PERSIST_WAL_RECORD_BYTES {
+            return Err(CachePersistenceError::MutationTooLarge {
+                encoded_bytes: prepared.wal_record_payload_bytes,
+                max_bytes: MAX_PERSIST_WAL_RECORD_BYTES,
+            });
+        }
+        let mut hook_snapshot = prepared.mutation.entry.clone();
+        let mut cache = match self.owner.memory.lock() {
+            Ok(cache) => cache,
+            Err(source) => {
+                let detail = source.to_string();
+                drop(source);
+                drop(prepared);
+                drop(hook_snapshot);
+                return Err(CachePersistenceError::CacheLock { detail });
+            }
+        };
+        let lock_started = Instant::now();
+        let created_at_unix = clock();
+        let cache_key = prepared.mutation.cache_key().to_string();
+        let mut removed_cache_keys =
+            cache.expired_entry_keys_at(self.owner.ttl_secs, created_at_unix);
+        removed_cache_keys.retain(|removed| removed != &cache_key);
+        let reservation = match self.reserve_mutation(removed_cache_keys.len().saturating_add(1)) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                drop(cache);
+                drop(prepared);
+                drop(hook_snapshot);
+                return Err(error);
+            }
+        };
+
+        prepared
+            .persisted_delta
+            .set_upsert_created_at_unix(created_at_unix);
+        let mut batch = BTreeMap::new();
+        batch.insert(cache_key, prepared.persisted_delta);
+        for removed_cache_key in &removed_cache_keys {
+            batch.insert(
+                removed_cache_key.clone(),
+                PersistDelta::remove(removed_cache_key.clone()),
+            );
+        }
+
+        let recorded = match self.record_reserved_batch(batch, reservation) {
+            Ok(recorded) => recorded,
+            Err(rejected) => {
+                let RejectedBatch { error, batch } = rejected;
+                drop(cache);
+                drop(prepared.mutation);
+                drop(batch);
+                drop(hook_snapshot);
+                return Err(error);
+            }
+        };
+        let entry = prepared.mutation.into_entry_at(created_at_unix);
+        let cache_key = entry.cache_key.clone();
+        let retired_entry = cache.insert_owned(entry);
+        let evicted_cache_keys =
+            cache.evict_expired_entries_at(self.owner.ttl_secs, created_at_unix);
+        debug_assert_eq!(evicted_cache_keys, removed_cache_keys);
+        let stats = cache.stats();
+        let lock_nanos = lock_started
+            .elapsed()
+            .as_nanos()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        drop(cache);
+        drop(recorded.retired);
+        drop(retired_entry);
+        hook_snapshot.created_at_unix = created_at_unix;
+        hooks.on_put(&hook_snapshot);
+        Ok(CacheCommitOutcome {
+            cache_key,
+            stats,
+            lock_nanos,
+        })
+    }
+
+    /// Persists and applies a context-store prune through one owner boundary.
+    pub fn prune(
+        &self,
+        request: ContextStorePruneRequest,
+        timeout: Duration,
+    ) -> Result<ContextStorePruneReport, CachePersistenceError> {
+        self.prune_with_clock(request, timeout, now_unix)
+    }
+
+    /// Persists and applies a prune at a deterministic timestamp.
+    pub fn prune_at(
+        &self,
+        request: ContextStorePruneRequest,
+        timeout: Duration,
+        now_unix: u64,
+    ) -> Result<ContextStorePruneReport, CachePersistenceError> {
+        self.prune_with_clock(request, timeout, || now_unix)
+    }
+
+    /// Persists and applies a prune using a trusted internal clock sampled
+    /// under the persistence owner's live-cache lock.
+    fn prune_with_clock<C>(
+        &self,
+        request: ContextStorePruneRequest,
+        timeout: Duration,
+        clock: C,
+    ) -> Result<ContextStorePruneReport, CachePersistenceError>
+    where
+        C: FnOnce() -> u64,
+    {
+        let mut cache =
+            self.owner
+                .memory
+                .lock()
+                .map_err(|source| CachePersistenceError::CacheLock {
+                    detail: source.to_string(),
+                })?;
+        let now_unix = clock();
+        let removed_cache_keys = cache.prune_candidate_keys_at(&request, now_unix);
+        let removed_count = removed_cache_keys.len();
+        let reservation = match self.reserve_mutation(removed_count) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                drop(cache);
+                return Err(error);
+            }
+        };
+        let batch = removed_cache_keys
+            .iter()
+            .map(|cache_key| (cache_key.clone(), PersistDelta::remove(cache_key.clone())))
+            .collect();
+        let recorded = match self.record_reserved_batch(batch, reservation) {
+            Ok(recorded) => recorded,
+            Err(rejected) => {
+                let RejectedBatch { error, batch } = rejected;
+                drop(cache);
+                drop(batch);
+                return Err(error);
+            }
+        };
+        let report = cache.prune_at(request, now_unix);
+        debug_assert_eq!(report.removed, removed_count);
+        drop(cache);
+        drop(recorded.retired);
+        self.flush(timeout)?;
+        Ok(report)
+    }
+
+    #[cfg(test)]
+    fn record_update(
         &self,
         entry: &PacketCacheEntry,
         removed_cache_keys: Vec<String>,
@@ -818,12 +1106,7 @@ impl CachePersistence {
         self.record_update_reserved(entry, removed_cache_keys, reservation)
     }
 
-    /// Reserves bounded capacity and a root-global mutation revision.
-    ///
-    /// Callers must reserve while still holding the live cache mutation lock,
-    /// mutate only after this succeeds, then enqueue the resulting deltas with
-    /// the reservation after releasing that lock.
-    pub fn reserve_mutation(
+    fn reserve_mutation(
         &self,
         unique_key_count: usize,
     ) -> Result<CacheMutationReservation, CachePersistenceError> {
@@ -894,8 +1177,8 @@ impl CachePersistence {
         })
     }
 
-    /// Queues one cache mutation using capacity reserved before mutation.
-    pub fn record_update_reserved(
+    #[cfg(test)]
+    fn record_update_reserved(
         &self,
         entry: &PacketCacheEntry,
         removed_cache_keys: Vec<String>,
@@ -906,11 +1189,11 @@ impl CachePersistence {
         for cache_key in removed_cache_keys {
             batch.insert(cache_key.clone(), PersistDelta::remove(cache_key));
         }
-        self.record_reserved_batch(batch, reservation)
+        discard_record_result(self.record_reserved_batch(batch, reservation))
     }
 
-    /// Queues tombstones using capacity reserved before pruning.
-    pub fn record_removals_reserved(
+    #[cfg(test)]
+    fn record_removals_reserved(
         &self,
         removed_cache_keys: Vec<String>,
         reservation: CacheMutationReservation,
@@ -919,53 +1202,120 @@ impl CachePersistence {
             .into_iter()
             .map(|cache_key| (cache_key.clone(), PersistDelta::remove(cache_key)))
             .collect();
-        self.record_reserved_batch(batch, reservation)
+        discard_record_result(self.record_reserved_batch(batch, reservation))
     }
 
     fn record_reserved_batch(
         &self,
         batch: BTreeMap<String, PersistDelta>,
         mut reservation: CacheMutationReservation,
-    ) -> Result<(), CachePersistenceError> {
+    ) -> Result<RecordedBatch, RejectedBatch> {
         if !Arc::ptr_eq(&self.owner, &reservation.owner) {
-            return Err(CachePersistenceError::ReservationOwnerMismatch);
+            return Err(RejectedBatch {
+                error: CachePersistenceError::ReservationOwnerMismatch,
+                batch,
+            });
         }
         if batch.is_empty() {
-            return Ok(());
+            return Ok(RecordedBatch {
+                retired: Vec::new(),
+            });
         }
         if batch.len() > reservation.reserved_slots {
-            return Err(CachePersistenceError::Backpressure {
-                capacity: reservation.reserved_slots,
-                pending: self.owner.pending_slots.load(Ordering::Acquire),
-                requested_new_keys: batch.len(),
+            return Err(RejectedBatch {
+                error: CachePersistenceError::Backpressure {
+                    capacity: reservation.reserved_slots,
+                    pending: self.owner.pending_slots.load(Ordering::Acquire),
+                    requested_new_keys: batch.len(),
+                },
+                batch,
             });
         }
         let revision = reservation.revision;
-        let pending = {
-            let mut dirty = lock_recover(&self.owner.dirty);
-            let mut retained_slots = 0usize;
-            for (cache_key, delta) in batch
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-            {
-                match dirty.entry(cache_key) {
-                    std::collections::btree_map::Entry::Vacant(slot) => {
-                        slot.insert(PendingDelta { revision, delta });
-                        retained_slots = retained_slots.saturating_add(1);
-                    }
-                    std::collections::btree_map::Entry::Occupied(mut slot)
-                        if slot.get().revision <= revision =>
-                    {
-                        slot.insert(PendingDelta { revision, delta });
-                    }
-                    std::collections::btree_map::Entry::Occupied(_) => {}
+        let batch_len = batch.len();
+        let mut dirty = lock_recover(&self.owner.dirty);
+        let mut changes = Vec::with_capacity(batch_len);
+        for (cache_key, delta) in batch {
+            let incoming = PendingDelta { revision, delta };
+            match dirty.entry(cache_key.clone()) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(incoming);
+                    changes.push(BatchChange::Inserted { cache_key });
+                }
+                std::collections::btree_map::Entry::Occupied(mut slot)
+                    if slot.get().revision <= revision =>
+                {
+                    let previous = slot.insert(incoming);
+                    changes.push(BatchChange::Replaced {
+                        cache_key,
+                        previous,
+                    });
+                }
+                std::collections::btree_map::Entry::Occupied(_) => {
+                    changes.push(BatchChange::Superseded {
+                        cache_key,
+                        incoming,
+                    });
                 }
             }
+        }
+
+        if let Err(error) = self.wake_worker() {
+            let mut batch = BTreeMap::new();
+            for change in changes.into_iter().rev() {
+                match change {
+                    BatchChange::Inserted { cache_key } => {
+                        let incoming = dirty
+                            .remove(&cache_key)
+                            .expect("inserted dirty delta must be available for rollback");
+                        batch.insert(cache_key, incoming.delta);
+                    }
+                    BatchChange::Replaced {
+                        cache_key,
+                        previous,
+                    } => {
+                        let incoming = dirty
+                            .insert(cache_key.clone(), previous)
+                            .expect("replacement dirty delta must be available for rollback");
+                        batch.insert(cache_key, incoming.delta);
+                    }
+                    BatchChange::Superseded {
+                        cache_key,
+                        incoming,
+                    } => {
+                        batch.insert(cache_key, incoming.delta);
+                    }
+                }
+            }
+            drop(dirty);
             self.owner
-                .release_pending_slots(reservation.reserved_slots.saturating_sub(retained_slots));
-            reservation.reserved_slots = 0;
-            dirty.len()
-        };
+                .metrics
+                .rejected_batches
+                .fetch_add(1, Ordering::Relaxed);
+            self.owner
+                .metrics
+                .rejected_deltas
+                .fetch_add(batch_len as u64, Ordering::Relaxed);
+            return Err(RejectedBatch { error, batch });
+        }
+
+        let retained_slots = changes
+            .iter()
+            .filter(|change| matches!(change, BatchChange::Inserted { .. }))
+            .count();
+        let mut retired = Vec::with_capacity(batch_len.saturating_sub(retained_slots));
+        for change in changes {
+            match change {
+                BatchChange::Replaced { previous, .. } => retired.push(previous),
+                BatchChange::Superseded { incoming, .. } => retired.push(incoming),
+                BatchChange::Inserted { .. } => {}
+            }
+        }
+        self.owner
+            .release_pending_slots(reservation.reserved_slots.saturating_sub(retained_slots));
+        reservation.reserved_slots = 0;
+        let pending = dirty.len();
+        drop(dirty);
         self.owner
             .metrics
             .enqueued_batches
@@ -973,9 +1323,9 @@ impl CachePersistence {
         self.owner
             .metrics
             .enqueued_deltas
-            .fetch_add(batch.len() as u64, Ordering::Relaxed);
+            .fetch_add(batch_len as u64, Ordering::Relaxed);
         debug_assert!(pending <= MAX_DIRTY_DELTAS);
-        self.wake_worker()
+        Ok(RecordedBatch { retired })
     }
 
     /// Waits up to `timeout` for all previously queued deltas to reach the WAL.
@@ -1326,10 +1676,15 @@ impl PersistenceWorker {
         if pending_deltas.is_empty() {
             return Ok(());
         }
-        let deltas = pending_deltas
-            .iter()
-            .map(|pending| pending.delta.clone())
-            .collect::<Vec<_>>();
+        let delta_chunks = match chunk_persist_deltas(&pending_deltas, MAX_PERSIST_WAL_RECORD_BYTES)
+        {
+            Ok(chunks) => chunks,
+            Err(error) => {
+                self.restore_pending_deltas(pending_deltas);
+                return Err(error);
+            }
+        };
+        let wal_record_count = delta_chunks.len() as u64;
 
         let persist_result = (|| {
             let mut locked_root = self.root_lock.lock()?;
@@ -1343,12 +1698,34 @@ impl PersistenceWorker {
             self.metrics
                 .coordination_bytes
                 .fetch_add(COORDINATION_STATE_LEN as u64, Ordering::Relaxed);
-            let sequence = self.cache.persisted_sequence.saturating_add(1);
-            let wal_bytes = append_wal_record(&self.config, sequence, &deltas)
-                .map_err(|source| io_error("WAL append", source))?;
-            Ok((next_generation, sequence, wal_bytes))
+            let first_sequence = self
+                .cache
+                .persisted_sequence
+                .checked_add(1)
+                .ok_or_else(|| CachePersistenceError::Io {
+                    operation: "WAL append",
+                    detail: "cache WAL sequence exhausted".to_string(),
+                })?;
+            let mut sequence = first_sequence;
+            let mut wal_bytes = 0_u64;
+            for (index, deltas) in delta_chunks.iter().enumerate() {
+                if index > 0 {
+                    sequence =
+                        sequence
+                            .checked_add(1)
+                            .ok_or_else(|| CachePersistenceError::Io {
+                                operation: "WAL append",
+                                detail: "cache WAL sequence exhausted".to_string(),
+                            })?;
+                }
+                wal_bytes = wal_bytes.saturating_add(
+                    append_wal_record(&self.config, sequence, deltas)
+                        .map_err(|source| io_error("WAL append", source))?,
+                );
+            }
+            Ok((next_generation, first_sequence, wal_bytes))
         })();
-        let (next_generation, sequence, wal_bytes) = match persist_result {
+        let (next_generation, first_sequence, wal_bytes) = match persist_result {
             Ok(result) => result,
             Err(error) => {
                 self.restore_pending_deltas(pending_deltas);
@@ -1356,7 +1733,7 @@ impl PersistenceWorker {
             }
         };
         self.observed_generation = next_generation;
-        let delta_count = deltas.len() as u64;
+        let delta_count = pending_deltas.len() as u64;
         for pending in &pending_deltas {
             self.persisted_revisions
                 .entry(pending.delta.cache_key().to_string())
@@ -1364,11 +1741,16 @@ impl PersistenceWorker {
                 .or_insert(pending.revision);
         }
         self.release_pending_slots(pending_deltas.len());
-        self.cache.apply_persist_deltas(sequence, deltas);
+        for (index, deltas) in delta_chunks.into_iter().enumerate() {
+            let sequence = first_sequence.saturating_add(index as u64);
+            self.cache.apply_persist_deltas(sequence, deltas);
+        }
         self.metrics
             .persisted_deltas
             .fetch_add(delta_count, Ordering::Relaxed);
-        self.metrics.wal_records.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .wal_records
+            .fetch_add(wal_record_count, Ordering::Relaxed);
         self.metrics
             .wal_bytes
             .fetch_add(wal_bytes, Ordering::Relaxed);
@@ -1385,27 +1767,15 @@ impl PersistenceWorker {
     }
 
     fn restore_pending_deltas(&self, pending_deltas: Vec<PendingDelta>) {
-        let mut dirty = lock_recover(&self.dirty);
-        let mut superseded_slots = 0usize;
-        for pending in pending_deltas {
-            let cache_key = pending.delta.cache_key().to_string();
-            match dirty.entry(cache_key) {
-                std::collections::btree_map::Entry::Vacant(slot) => {
-                    slot.insert(pending);
-                }
-                std::collections::btree_map::Entry::Occupied(mut slot)
-                    if slot.get().revision <= pending.revision =>
-                {
-                    slot.insert(pending);
-                    superseded_slots = superseded_slots.saturating_add(1);
-                }
-                std::collections::btree_map::Entry::Occupied(_) => {
-                    superseded_slots = superseded_slots.saturating_add(1);
-                }
-            }
-        }
-        drop(dirty);
-        self.release_pending_slots(superseded_slots);
+        let retired = {
+            let mut dirty = lock_recover(&self.dirty);
+            merge_restored_pending_deltas(&mut dirty, pending_deltas)
+        };
+        self.release_pending_slots(retired.len());
+        // Retired encoded payloads can be multi-megabyte. Keeping their
+        // destruction outside `dirty` prevents a concurrent owner commit from
+        // extending its live-cache critical section while waiting for this map.
+        drop(retired);
     }
 
     fn release_pending_slots(&self, count: usize) {
@@ -1468,10 +1838,94 @@ impl PersistenceWorker {
     }
 }
 
+fn merge_restored_pending_deltas(
+    dirty: &mut BTreeMap<String, PendingDelta>,
+    pending_deltas: Vec<PendingDelta>,
+) -> Vec<PendingDelta> {
+    let mut retired = Vec::new();
+    for pending in pending_deltas {
+        let cache_key = pending.delta.cache_key().to_string();
+        match dirty.entry(cache_key) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(pending);
+            }
+            std::collections::btree_map::Entry::Occupied(mut slot)
+                if slot.get().revision <= pending.revision =>
+            {
+                retired.push(slot.insert(pending));
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                retired.push(pending);
+            }
+        }
+    }
+    retired
+}
+
+fn chunk_persist_deltas(
+    pending_deltas: &[PendingDelta],
+    max_record_bytes: usize,
+) -> Result<Vec<Vec<PersistDelta>>, CachePersistenceError> {
+    let empty_record_bytes =
+        persist_wal_record_payload_len(&[]).map_err(|source| io_error("WAL sizing", source))?;
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut current_bytes = empty_record_bytes;
+
+    for pending in pending_deltas {
+        let encoded_bytes = persist_delta_encoded_len(&pending.delta)
+            .map_err(|source| io_error("WAL sizing", source))?;
+        let separator_bytes = usize::from(!current.is_empty());
+        let candidate_bytes = current_bytes
+            .checked_add(separator_bytes)
+            .and_then(|bytes| bytes.checked_add(encoded_bytes))
+            .unwrap_or(usize::MAX);
+        if candidate_bytes > max_record_bytes {
+            if current.is_empty() {
+                return Err(CachePersistenceError::MutationTooLarge {
+                    encoded_bytes: candidate_bytes,
+                    max_bytes: max_record_bytes,
+                });
+            }
+            chunks.push(std::mem::take(&mut current));
+            current_bytes = empty_record_bytes.saturating_add(encoded_bytes);
+            if current_bytes > max_record_bytes {
+                return Err(CachePersistenceError::MutationTooLarge {
+                    encoded_bytes: current_bytes,
+                    max_bytes: max_record_bytes,
+                });
+            }
+        } else {
+            current_bytes = candidate_bytes;
+        }
+        current.push(pending.delta.clone());
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    Ok(chunks)
+}
+
 fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+fn discard_record_result(
+    result: Result<RecordedBatch, RejectedBatch>,
+) -> Result<(), CachePersistenceError> {
+    match result {
+        Ok(recorded) => {
+            drop(recorded.retired);
+            Ok(())
+        }
+        Err(rejected) => {
+            drop(rejected.batch);
+            Err(rejected.error)
+        }
+    }
 }
 
 fn io_error(operation: &'static str, source: std::io::Error) -> CachePersistenceError {
@@ -1628,6 +2082,7 @@ fn timeout_error(operation: &'static str, timeout: Duration) -> CachePersistence
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs::{self, OpenOptions};
     use std::io::Write;
     #[cfg(unix)]
@@ -1660,6 +2115,129 @@ mod tests {
             Value::Null,
             &mut hooks,
         )
+    }
+
+    fn prepare_labeled_update(
+        owner: &CachePersistence,
+        memory: &Arc<Mutex<PacketCache>>,
+        target: &str,
+        reducer_input: &Value,
+        label: &str,
+    ) -> PreparedPersistentCacheMutation {
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = lock_recover(memory).lookup_with_hooks(target, reducer_input, &mut hooks);
+        owner.prepare_update(PacketCache::prepare_mutation(
+            target,
+            &lookup,
+            vec![CachePacket {
+                body: json!({"label": label}),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+        ))
+    }
+
+    fn labeled_entry(cache: &PacketCache, cache_key: &str) -> Option<String> {
+        cache
+            .get(cache_key)
+            .and_then(|entry| entry.packets.first())
+            .and_then(|packet| packet.body.get("label"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    }
+
+    fn pending_delta(revision: u64, cache_key: &str, label: &str) -> PendingDelta {
+        PendingDelta {
+            revision,
+            delta: PersistDelta::prepared_upsert(PersistPacketCacheEntry {
+                cache_key: cache_key.to_string(),
+                metadata_json: label.to_string(),
+                ..PersistPacketCacheEntry::default()
+            }),
+        }
+    }
+
+    fn pending_delta_label(pending: &PendingDelta) -> &str {
+        match &pending.delta {
+            PersistDelta::Upsert { entry } => &entry.metadata_json,
+            PersistDelta::Remove { .. } => "",
+        }
+    }
+
+    struct ReentrantPutHooks {
+        memory: Arc<Mutex<PacketCache>>,
+        called: bool,
+    }
+
+    impl DeltaReuseHooks for ReentrantPutHooks {
+        fn on_put(&mut self, entry: &PacketCacheEntry) {
+            {
+                let cache = self
+                    .memory
+                    .try_lock()
+                    .expect("on_put must run after releasing the live-cache lock");
+                assert_eq!(
+                    cache
+                        .get(&entry.cache_key)
+                        .map(|stored| stored.created_at_unix),
+                    Some(entry.created_at_unix)
+                );
+            }
+            self.called = true;
+        }
+    }
+
+    fn attach_concurrent_reader_drop_probe(
+        prepared: &mut PreparedPersistentCacheMutation,
+        memory: Arc<Mutex<PacketCache>>,
+    ) -> thread::JoinHandle<()> {
+        let (drop_started_sender, drop_started_receiver) = mpsc::channel();
+        let (reader_acquired_sender, reader_acquired_receiver) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            drop_started_receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("rejected prepared mutation was not dropped");
+            let _cache = lock_recover(&memory);
+            reader_acquired_sender
+                .send(())
+                .expect("drop observer stopped before the reader acquired the cache");
+        });
+        let reader_acquired_receiver = Mutex::new(reader_acquired_receiver);
+        prepared.mutation.set_drop_probe(Arc::new(move || {
+            drop_started_sender
+                .send(())
+                .expect("concurrent reader stopped before payload destruction");
+            reader_acquired_receiver
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .recv_timeout(Duration::from_secs(2))
+                .expect("prepared payload was destroyed while holding the live-cache lock");
+        }));
+        reader
+    }
+
+    fn prepare_large_update(
+        owner: &CachePersistence,
+        memory: &Arc<Mutex<PacketCache>>,
+        target: &str,
+    ) -> PreparedPersistentCacheMutation {
+        const PACKET_COUNT: usize = 512;
+        const PACKET_BYTES: usize = 8 * 1024;
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup =
+            lock_recover(memory).lookup_with_hooks(target, &json!({"large": true}), &mut hooks);
+        owner.prepare_update(PacketCache::prepare_mutation(
+            target,
+            &lookup,
+            (0..PACKET_COUNT)
+                .map(|packet| CachePacket {
+                    packet_id: Some(format!("packet-{packet}")),
+                    body: json!({"payload": "x".repeat(PACKET_BYTES)}),
+                    ..CachePacket::default()
+                })
+                .collect(),
+            Value::Null,
+        ))
     }
 
     fn wait_for_path(path: &Path) {
@@ -2368,6 +2946,560 @@ mod tests {
 
         let loaded = PacketCache::load_from_disk(&config);
         assert!(loaded.get(&entry.cache_key).is_some());
+    }
+
+    #[test]
+    fn reserved_revision_ordering_holds_for_every_upsert_tombstone_publication_order() {
+        enum Mutation {
+            Upsert(PacketCacheEntry, CacheMutationReservation),
+            Tombstone(String, CacheMutationReservation),
+        }
+
+        fn publish(owner: &CachePersistence, mutation: Mutation) {
+            match mutation {
+                Mutation::Upsert(entry, reservation) => owner
+                    .record_update_reserved(&entry, Vec::new(), reservation)
+                    .unwrap(),
+                Mutation::Tombstone(cache_key, reservation) => owner
+                    .record_removals_reserved(vec![cache_key], reservation)
+                    .unwrap(),
+            }
+        }
+
+        for newest_is_upsert in [false, true] {
+            for newest_published_first in [false, true] {
+                let dir = tempdir().unwrap();
+                let config = PersistConfig::new(dir.path().to_path_buf());
+                let owner = CachePersistence::open(config.clone()).unwrap();
+                let memory = owner.shared_cache();
+                let (entry, older_reservation, newer_reservation) = {
+                    let mut cache = lock_recover(&memory);
+                    let older_reservation = owner.reserve_mutation(1).unwrap();
+                    let newer_reservation = owner.reserve_mutation(1).unwrap();
+                    let entry = put_entry(&mut cache, 31_100 + usize::from(newest_is_upsert), 16);
+                    (entry, older_reservation, newer_reservation)
+                };
+                let cache_key = entry.cache_key.clone();
+                let (older, newer) = if newest_is_upsert {
+                    (
+                        Mutation::Tombstone(cache_key.clone(), older_reservation),
+                        Mutation::Upsert(entry, newer_reservation),
+                    )
+                } else {
+                    (
+                        Mutation::Upsert(entry, older_reservation),
+                        Mutation::Tombstone(cache_key.clone(), newer_reservation),
+                    )
+                };
+
+                if newest_published_first {
+                    publish(&owner, newer);
+                    publish(&owner, older);
+                } else {
+                    publish(&owner, older);
+                    publish(&owner, newer);
+                }
+                owner.shutdown(Duration::from_secs(2)).unwrap();
+
+                let loaded = PacketCache::load_from_disk(&config);
+                assert_eq!(
+                    loaded.get(&cache_key).is_some(),
+                    newest_is_upsert,
+                    "newest_is_upsert={newest_is_upsert}, \
+                     newest_published_first={newest_published_first}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn owner_commit_linearizes_prepared_same_key_updates_in_memory_and_restart() {
+        for labels in [["older", "newer"], ["newer", "older"]] {
+            let dir = tempdir().unwrap();
+            let config = PersistConfig::new(dir.path().to_path_buf());
+            let owner = CachePersistence::open(config.clone()).unwrap();
+            let memory = owner.shared_cache();
+            let target = "same-key-owner-commit.reducer";
+            let input = json!({"same_key": true});
+            let first = prepare_labeled_update(&owner, &memory, target, &input, labels[0]);
+            let second = prepare_labeled_update(&owner, &memory, target, &input, labels[1]);
+            assert_eq!(first.cache_key(), second.cache_key());
+            let cache_key = first.cache_key().to_string();
+            let mut hooks = NoopDeltaReuseHooks;
+            let created_at = crate::now_unix();
+
+            owner
+                .commit_prepared_update_at(first, &mut hooks, created_at)
+                .unwrap();
+            owner
+                .commit_prepared_update_at(second, &mut hooks, created_at.saturating_add(1))
+                .unwrap();
+            assert_eq!(
+                labeled_entry(&lock_recover(&memory), &cache_key).as_deref(),
+                Some(labels[1])
+            );
+
+            owner.shutdown(Duration::from_secs(2)).unwrap();
+            drop(memory);
+            drop(owner);
+            assert_eq!(
+                labeled_entry(&PacketCache::load_from_disk(&config), &cache_key).as_deref(),
+                Some(labels[1])
+            );
+        }
+    }
+
+    #[test]
+    fn owner_commit_recall_statistics_match_restart() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let target = "owned-recall-statistics.reducer";
+        let input = json!({"recall": true});
+        let prepared = prepare_labeled_update(
+            &owner,
+            &memory,
+            target,
+            &input,
+            "restart stable recall term",
+        );
+        let cache_key = prepared.cache_key().to_string();
+        let created_at_unix = crate::now_unix().saturating_add(600);
+        owner
+            .commit_prepared_update_at(prepared, &mut NoopDeltaReuseHooks, created_at_unix)
+            .unwrap();
+
+        let (live_average, live_score) = {
+            let cache = lock_recover(&memory);
+            let hits = cache.recall("restart stable recall", &crate::RecallOptions::default());
+            (
+                cache.recall_avg_doc_length,
+                hits.first().map(|hit| hit.score).unwrap_or_default(),
+            )
+        };
+        assert!(live_average > 0.0);
+        assert!(live_score > 0.0);
+
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        drop(memory);
+        drop(owner);
+        let restarted = PacketCache::load_from_disk(&config);
+        let restarted_hits =
+            restarted.recall("restart stable recall", &crate::RecallOptions::default());
+        assert_eq!(restarted.recall_avg_doc_length, live_average);
+        assert_eq!(
+            restarted_hits.first().map(|hit| hit.cache_key.as_str()),
+            Some(cache_key.as_str())
+        );
+        assert!(
+            (restarted_hits[0].score - live_score).abs() < f64::EPSILON,
+            "live and restarted BM25 scores must match"
+        );
+    }
+
+    #[test]
+    fn owner_commit_invokes_put_hook_after_live_lock_release() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let target = "reentrant-put-hook.reducer";
+        let input = json!({"reentrant": true});
+        let prepared =
+            prepare_labeled_update(&owner, &memory, target, &input, "hook sees live entry");
+        let cache_key = prepared.cache_key().to_string();
+        let mut hooks = ReentrantPutHooks {
+            memory: memory.clone(),
+            called: false,
+        };
+
+        owner.commit_prepared_update(prepared, &mut hooks).unwrap();
+        assert!(hooks.called);
+        assert!(lock_recover(&memory).get(&cache_key).is_some());
+
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        drop(memory);
+        drop(owner);
+        assert!(PacketCache::load_from_disk(&config)
+            .get(&cache_key)
+            .is_some());
+    }
+
+    #[test]
+    fn owner_rejects_noncanonical_public_mutations_before_visibility() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let target = "invalid-public-key.reducer";
+        let input_hash = PacketCache::compute_input_hash(target, &json!({"invalid": true}));
+
+        for cache_key in ["", "forged-cache-key"] {
+            let lookup = crate::CacheLookup {
+                cache_key: cache_key.to_string(),
+                input_hash: input_hash.clone(),
+                entry: None,
+                suggested_reuse_base: None,
+            };
+            let prepared = owner.prepare_update(PacketCache::prepare_mutation(
+                target,
+                &lookup,
+                vec![CachePacket::default()],
+                Value::Null,
+            ));
+            assert!(matches!(
+                owner.commit_prepared_update(prepared, &mut NoopDeltaReuseHooks),
+                Err(CachePersistenceError::InvalidCacheKey)
+            ));
+        }
+
+        assert!(lock_recover(&memory).is_empty());
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        drop(memory);
+        drop(owner);
+        assert!(PacketCache::load_from_disk(&config).is_empty());
+    }
+
+    #[test]
+    fn owner_rejects_unframeable_public_mutation_before_visibility() {
+        const RAW_BACKSLASH_BYTES: usize = 17 * 1024 * 1024;
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let target = "oversized-public-mutation.reducer";
+        let input = json!({"oversized": true});
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = lock_recover(&memory).lookup_with_hooks(target, &input, &mut hooks);
+        let prepared = owner.prepare_update(PacketCache::prepare_mutation(
+            target,
+            &lookup,
+            vec![CachePacket {
+                body: json!({"payload": "\\".repeat(RAW_BACKSLASH_BYTES)}),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+        ));
+
+        let error = match owner.commit_prepared_update(prepared, &mut hooks) {
+            Ok(_) => panic!("unframeable mutation was accepted"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            CachePersistenceError::MutationTooLarge {
+                encoded_bytes,
+                max_bytes: MAX_PERSIST_WAL_RECORD_BYTES,
+            } if encoded_bytes > MAX_PERSIST_WAL_RECORD_BYTES
+        ));
+        assert!(lock_recover(&memory).is_empty());
+        let metrics = owner.flush(Duration::from_secs(2)).unwrap();
+        assert_eq!(metrics.persisted_deltas, 0);
+
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        drop(memory);
+        drop(owner);
+        assert!(PacketCache::load_from_disk(&config).is_empty());
+    }
+
+    #[test]
+    fn owner_prune_samples_trusted_clock_after_live_lock() {
+        const TTL_SECS: u64 = 3_600;
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let boundary = crate::now_unix().saturating_add(600);
+        let prepared = prepare_labeled_update(
+            &owner,
+            &memory,
+            "prune-clock.reducer",
+            &json!({"prune": true}),
+            "expires after boundary",
+        );
+        owner
+            .commit_prepared_update_at(
+                prepared,
+                &mut NoopDeltaReuseHooks,
+                boundary.saturating_sub(TTL_SECS),
+            )
+            .unwrap();
+        let request = ContextStorePruneRequest {
+            all: false,
+            ttl_secs: Some(TTL_SECS),
+        };
+        assert_eq!(
+            owner
+                .prune_at(request.clone(), Duration::from_secs(2), boundary)
+                .unwrap()
+                .removed,
+            0
+        );
+
+        let clock_calls = Cell::new(0_u64);
+        let report = owner
+            .prune_with_clock(request, Duration::from_secs(2), || {
+                clock_calls.set(clock_calls.get().saturating_add(1));
+                assert!(matches!(
+                    memory.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                boundary.saturating_add(1)
+            })
+            .unwrap();
+        assert_eq!(clock_calls.get(), 1);
+        assert_eq!(report.removed, 1);
+
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        drop(memory);
+        drop(owner);
+        assert!(PacketCache::load_from_disk(&config).is_empty());
+    }
+
+    #[test]
+    fn restore_merge_returns_superseded_payloads_to_the_caller() {
+        let mut dirty = BTreeMap::from([
+            (
+                "keep-newer".to_string(),
+                pending_delta(2, "keep-newer", "dirty-newer"),
+            ),
+            (
+                "replace-older".to_string(),
+                pending_delta(1, "replace-older", "dirty-older"),
+            ),
+        ]);
+        let retired = merge_restored_pending_deltas(
+            &mut dirty,
+            vec![
+                pending_delta(1, "keep-newer", "incoming-older"),
+                pending_delta(2, "replace-older", "incoming-newer"),
+                pending_delta(1, "insert-vacant", "incoming-vacant"),
+            ],
+        );
+
+        assert_eq!(dirty.len(), 3);
+        assert_eq!(
+            pending_delta_label(dirty.get("keep-newer").unwrap()),
+            "dirty-newer"
+        );
+        assert_eq!(
+            pending_delta_label(dirty.get("replace-older").unwrap()),
+            "incoming-newer"
+        );
+        assert_eq!(
+            pending_delta_label(dirty.get("insert-vacant").unwrap()),
+            "incoming-vacant"
+        );
+        let retired_labels = retired
+            .iter()
+            .map(pending_delta_label)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            retired_labels,
+            BTreeSet::from(["dirty-older", "incoming-older"])
+        );
+    }
+
+    #[test]
+    fn wal_chunking_preserves_every_delta_below_the_record_bound() {
+        let pending = vec![
+            pending_delta(1, "chunk-a", "payload"),
+            pending_delta(1, "chunk-b", "payload"),
+            pending_delta(1, "chunk-c", "payload"),
+        ];
+        let one_delta_bytes = persist_delta_encoded_len(&pending[0].delta).unwrap();
+        let one_record_bytes = persist_wal_record_payload_len(&[one_delta_bytes]).unwrap();
+        let chunks = chunk_persist_deltas(&pending, one_record_bytes).unwrap();
+
+        assert_eq!(chunks.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 1]);
+        assert_eq!(
+            chunks
+                .iter()
+                .flatten()
+                .map(PersistDelta::cache_key)
+                .collect::<Vec<_>>(),
+            ["chunk-a", "chunk-b", "chunk-c"]
+        );
+    }
+
+    #[test]
+    fn same_key_upsert_and_tombstone_orders_match_restart() {
+        const TTL_SECS: u64 = 1;
+        for upsert_last in [false, true] {
+            let dir = tempdir().unwrap();
+            let config = PersistConfig::new(dir.path().to_path_buf()).with_ttl_secs(TTL_SECS);
+            let owner = CachePersistence::open(config.clone()).unwrap();
+            let memory = owner.shared_cache();
+            let target = format!("same-key-tombstone-{upsert_last}.reducer");
+            let input = json!({"same_key": true});
+            let mut hooks = NoopDeltaReuseHooks;
+            let boundary = crate::now_unix().saturating_add(600);
+            let seed = prepare_labeled_update(&owner, &memory, &target, &input, "seed");
+            let cache_key = seed.cache_key().to_string();
+            owner
+                .commit_prepared_update_at(seed, &mut hooks, boundary)
+                .unwrap();
+            let replacement =
+                prepare_labeled_update(&owner, &memory, &target, &input, "replacement");
+            let prune = ContextStorePruneRequest {
+                all: false,
+                ttl_secs: Some(TTL_SECS),
+            };
+
+            if upsert_last {
+                owner
+                    .prune_at(prune, Duration::from_secs(2), boundary.saturating_add(2))
+                    .unwrap();
+                owner
+                    .commit_prepared_update_at(replacement, &mut hooks, boundary.saturating_add(2))
+                    .unwrap();
+            } else {
+                owner
+                    .commit_prepared_update_at(replacement, &mut hooks, boundary.saturating_add(2))
+                    .unwrap();
+                owner
+                    .prune_at(prune, Duration::from_secs(2), boundary.saturating_add(4))
+                    .unwrap();
+            }
+            let live_label = labeled_entry(&lock_recover(&memory), &cache_key);
+            assert_eq!(live_label.as_deref(), upsert_last.then_some("replacement"));
+
+            owner.shutdown(Duration::from_secs(2)).unwrap();
+            drop(memory);
+            drop(owner);
+            assert_eq!(
+                labeled_entry(&PacketCache::load_from_disk(&config), &cache_key),
+                live_label
+            );
+        }
+    }
+
+    #[test]
+    fn same_key_expiry_never_overwrites_the_prepared_upsert_delta() {
+        const TTL_SECS: u64 = 1;
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf()).with_ttl_secs(TTL_SECS);
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let target = "same-key-expiry-overlap.reducer";
+        let input = json!({"same_key": true});
+        let mut hooks = NoopDeltaReuseHooks;
+        let boundary = crate::now_unix().saturating_add(600);
+        let seed = prepare_labeled_update(&owner, &memory, target, &input, "seed");
+        let cache_key = seed.cache_key().to_string();
+        owner
+            .commit_prepared_update_at(seed, &mut hooks, boundary)
+            .unwrap();
+        let replacement = prepare_labeled_update(&owner, &memory, target, &input, "replacement");
+
+        owner
+            .commit_prepared_update_at(replacement, &mut hooks, boundary.saturating_add(2))
+            .unwrap();
+        assert_eq!(
+            labeled_entry(&lock_recover(&memory), &cache_key).as_deref(),
+            Some("replacement")
+        );
+
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+        drop(memory);
+        drop(owner);
+        assert_eq!(
+            labeled_entry(&PacketCache::load_from_disk(&config), &cache_key).as_deref(),
+            Some("replacement")
+        );
+    }
+
+    #[test]
+    fn backpressure_drops_large_rejected_payload_after_releasing_live_cache() {
+        let dir = tempdir().unwrap();
+        let owner = CachePersistence::open(PersistConfig::new(dir.path().to_path_buf())).unwrap();
+        let memory = owner.shared_cache();
+        let capacity_reservation = owner.reserve_mutation(MAX_DIRTY_DELTAS).unwrap();
+        let mut prepared = prepare_large_update(&owner, &memory, "backpressure-drop.reducer");
+        let reader = attach_concurrent_reader_drop_probe(&mut prepared, memory.clone());
+
+        let error = match owner.commit_prepared_update(prepared, &mut NoopDeltaReuseHooks) {
+            Ok(_) => panic!("capacity-saturated owner accepted a mutation"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, CachePersistenceError::Backpressure { .. }));
+        reader.join().unwrap();
+        assert!(lock_recover(&memory).is_empty());
+
+        drop(capacity_reservation);
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn unavailable_worker_drops_large_rejected_payload_after_releasing_live_cache() {
+        let dir = tempdir().unwrap();
+        let owner = CachePersistence::open(PersistConfig::new(dir.path().to_path_buf())).unwrap();
+        let memory = owner.shared_cache();
+        owner
+            .owner
+            .sender()
+            .unwrap()
+            .send(PersistenceCommand::ExitWithoutShutdown)
+            .unwrap();
+        let worker_exit_deadline = Instant::now() + Duration::from_secs(2);
+        while !owner.owner.worker_is_finished() {
+            assert!(Instant::now() < worker_exit_deadline);
+            thread::yield_now();
+        }
+        let mut prepared = prepare_large_update(&owner, &memory, "worker-unavailable-drop.reducer");
+        let reader = attach_concurrent_reader_drop_probe(&mut prepared, memory.clone());
+
+        let error = match owner.commit_prepared_update(prepared, &mut NoopDeltaReuseHooks) {
+            Ok(_) => panic!("stopped worker accepted a mutation"),
+            Err(error) => error,
+        };
+        assert_eq!(error, CachePersistenceError::WorkerUnavailable);
+        reader.join().unwrap();
+        assert!(lock_recover(&memory).is_empty());
+    }
+
+    #[test]
+    fn multi_megabyte_upsert_is_encoded_before_live_cache_acceptance() {
+        const PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
+        let dir = tempdir().unwrap();
+        let owner = CachePersistence::open(PersistConfig::new(dir.path().to_path_buf())).unwrap();
+        let memory = owner.shared_cache();
+        let target = "large-payload.reducer";
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = lock_recover(&memory).lookup_with_hooks(
+            target,
+            &json!({"payload_bytes": PAYLOAD_BYTES}),
+            &mut hooks,
+        );
+        let mutation = PacketCache::prepare_mutation(
+            target,
+            &lookup,
+            vec![CachePacket {
+                body: json!({"payload": "x".repeat(PAYLOAD_BYTES)}),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+        );
+
+        let before_prepare = crate::persist_json_encode_calls();
+        let prepared = owner.prepare_update(mutation);
+        let after_prepare = crate::persist_json_encode_calls();
+        assert!(after_prepare > before_prepare);
+
+        owner
+            .commit_prepared_update_with_clock(prepared, &mut hooks, || {
+                assert!(matches!(
+                    memory.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                assert_eq!(crate::persist_json_encode_calls(), after_prepare);
+                crate::now_unix()
+            })
+            .unwrap();
+        assert_eq!(crate::persist_json_encode_calls(), after_prepare);
+
+        owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 
     #[test]

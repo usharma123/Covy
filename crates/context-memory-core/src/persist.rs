@@ -12,7 +12,7 @@ use crate::cache_file::{
 const PERSIST_WAL_VERSION: u32 = 1;
 const PERSIST_WAL_MAGIC: &[u8; 8] = b"P28CWAL1";
 const PERSIST_WAL_HEADER_LEN: usize = 8 + 8 + 32;
-const MAX_PERSIST_WAL_RECORD_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_PERSIST_WAL_RECORD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PERSIST_WAL_BYTES: u64 = 512 * 1024 * 1024;
 const PERSIST_CHECKPOINT_MAGIC: &[u8; 8] = b"P28CCP31";
 const PERSIST_CHECKPOINT_HEADER_LEN: usize = 8 + 8 + 32;
@@ -94,10 +94,15 @@ pub(crate) enum PersistDelta {
 }
 
 impl PersistDelta {
+    #[cfg(test)]
     pub(crate) fn upsert(entry: &PacketCacheEntry) -> Self {
         Self::Upsert {
             entry: PersistPacketCacheEntry::from_entry(entry),
         }
+    }
+
+    pub(crate) fn prepared_upsert(entry: PersistPacketCacheEntry) -> Self {
+        Self::Upsert { entry }
     }
 
     pub(crate) fn remove(cache_key: String) -> Self {
@@ -110,6 +115,12 @@ impl PersistDelta {
             Self::Remove { cache_key } => cache_key,
         }
     }
+
+    pub(crate) fn set_upsert_created_at_unix(&mut self, created_at_unix: u64) {
+        if let Self::Upsert { entry } = self {
+            entry.created_at_unix = created_at_unix;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +128,65 @@ struct PersistWalRecord {
     version: u32,
     sequence: u64,
     deltas: Vec<PersistDelta>,
+}
+
+#[derive(Serialize)]
+struct PersistWalRecordRef<'a> {
+    version: u32,
+    sequence: u64,
+    deltas: &'a [PersistDelta],
+}
+
+#[derive(Default)]
+struct EncodedSize {
+    bytes: usize,
+}
+
+impl Write for EncodedSize {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.bytes = self
+            .bytes
+            .checked_add(buffer.len())
+            .ok_or_else(|| io::Error::other("encoded cache WAL size overflow"))?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encoded_json_len<T>(value: &T) -> io::Result<usize>
+where
+    T: Serialize + ?Sized,
+{
+    let mut counter = EncodedSize::default();
+    serde_json::to_writer(&mut counter, value).map_err(|source| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("failed to measure cache WAL JSON: {source}"),
+        )
+    })?;
+    Ok(counter.bytes)
+}
+
+pub(crate) fn persist_delta_encoded_len(delta: &PersistDelta) -> io::Result<usize> {
+    encoded_json_len(delta)
+}
+
+pub(crate) fn persist_wal_record_payload_len(delta_encoded_lengths: &[usize]) -> io::Result<usize> {
+    let empty_record_len = encoded_json_len(&PersistWalRecordRef {
+        version: PERSIST_WAL_VERSION,
+        sequence: u64::MAX,
+        deltas: &[],
+    })?;
+    delta_encoded_lengths
+        .iter()
+        .try_fold(empty_record_len, |total, encoded_len| {
+            total.checked_add(*encoded_len)
+        })
+        .and_then(|total| total.checked_add(delta_encoded_lengths.len().saturating_sub(1)))
+        .ok_or_else(|| io::Error::other("encoded cache WAL record size overflow"))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -973,10 +1043,10 @@ fn append_wal_record_with_observer<F>(
 where
     F: FnOnce(&Path) -> Result<(), io::Error>,
 {
-    let payload = serde_json::to_vec(&PersistWalRecord {
+    let payload = serde_json::to_vec(&PersistWalRecordRef {
         version: PERSIST_WAL_VERSION,
         sequence,
-        deltas: deltas.to_vec(),
+        deltas,
     })
     .map_err(|source| {
         io::Error::new(
