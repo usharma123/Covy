@@ -59,6 +59,140 @@ while True:
     fs::write(path, script.replace("__OWNER__", owner)).unwrap();
 }
 
+pub fn write_paginated_resource_server(path: &Path) {
+    fs::write(
+        path,
+        r#"import json, sys
+
+def read_message():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, value = line.decode("utf-8").split(":", 1)
+        headers[name.lower().strip()] = value.strip()
+    length = int(headers.get("content-length", "0"))
+    return json.loads(sys.stdin.buffer.read(length))
+
+def write_message(value):
+    body = json.dumps(value).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+while True:
+    message = read_message()
+    if message is None:
+        break
+    msg_id = message.get("id")
+    if msg_id is None:
+        continue
+    method = message.get("method")
+    cursor = message.get("params", {}).get("cursor")
+    if method == "initialize":
+        result = {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"resources": {"listChanged": True}},
+            "serverInfo": {"name": "paginated-resources", "version": "1"}
+        }
+    elif method == "tools/list":
+        result = {"tools": []}
+    elif method == "resources/list":
+        if cursor is None:
+            result = {
+                "resources": [
+                    {"uri": f"paged://static/{index:03}", "name": f"Paged resource {index}"}
+                    for index in range(200)
+                ],
+                "nextCursor": "resources-page-2"
+            }
+        elif cursor == "resources-page-2":
+            result = {
+                "resources": [
+                    {"uri": f"paged://static/{index:03}", "name": f"Paged resource {index}"}
+                    for index in range(200, 300)
+                ]
+            }
+        else:
+            write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32602, "message": f"unknown resource cursor {cursor!r}"}})
+            continue
+    elif method == "resources/templates/list":
+        if cursor is None:
+            result = {
+                "resourceTemplates": [{"uriTemplate": "paged://items/{id}", "name": "Paged item"}],
+                "nextCursor": "templates-page-2"
+            }
+        elif cursor == "templates-page-2":
+            result = {
+                "resourceTemplates": [{"uriTemplate": "paged://other/{id}", "name": "Other paged item"}]
+            }
+        else:
+            write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32602, "message": f"unknown template cursor {cursor!r}"}})
+            continue
+    elif method == "resources/read":
+        uri = message.get("params", {}).get("uri", "")
+        result = {"contents": [{"uri": uri, "mimeType": "text/plain", "text": "paginated resource"}]}
+    else:
+        write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": "unknown method"}})
+        continue
+    write_message({"jsonrpc": "2.0", "id": msg_id, "result": result})
+"#,
+    )
+    .unwrap();
+}
+
+pub fn write_cyclic_resource_server(path: &Path) {
+    fs::write(
+        path,
+        r#"import json, sys
+
+def read_message():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, value = line.decode("utf-8").split(":", 1)
+        headers[name.lower().strip()] = value.strip()
+    length = int(headers.get("content-length", "0"))
+    return json.loads(sys.stdin.buffer.read(length))
+
+def write_message(value):
+    body = json.dumps(value).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+while True:
+    message = read_message()
+    if message is None:
+        break
+    msg_id = message.get("id")
+    if msg_id is None:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": "2025-03-26", "capabilities": {"resources": {}}, "serverInfo": {"name": "cyclic-resources", "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": []}
+    elif method == "resources/list":
+        result = {"resources": [], "nextCursor": "loop"}
+    elif method == "resources/templates/list":
+        result = {"resourceTemplates": []}
+    else:
+        write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": "unknown method"}})
+        continue
+    write_message({"jsonrpc": "2.0", "id": msg_id, "result": result})
+"#,
+    )
+    .unwrap();
+}
+
 pub fn write_compact_read_server(path: &Path) {
     fs::write(
         path,

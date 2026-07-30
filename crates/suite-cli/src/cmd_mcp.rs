@@ -43,8 +43,12 @@ mod prompt_resource;
 mod proxy;
 #[path = "cmd_mcp_proxy_catalog.rs"]
 mod proxy_catalog;
+#[path = "cmd_mcp_proxy_catalog_pagination.rs"]
+mod proxy_catalog_pagination;
 #[path = "cmd_mcp_proxy_resource.rs"]
 mod proxy_resource;
+#[path = "cmd_mcp_proxy_resource_paging.rs"]
+mod proxy_resource_paging;
 #[path = "cmd_mcp_proxy_upstream.rs"]
 mod proxy_upstream;
 #[path = "cmd_mcp_response.rs"]
@@ -216,9 +220,9 @@ struct McpSessionState {
     upstream_tools_loaded: bool,
     resource_routes: proxy_resource::ResourceRoutingTable,
     upstream_resources_cache: Vec<Value>,
-    upstream_resources_loaded: bool,
     upstream_resource_templates_cache: Vec<Value>,
-    upstream_resource_templates_loaded: bool,
+    upstream_resource_catalog_loaded: bool,
+    resource_catalog_epoch: u64,
     proxy_task_id: Option<String>,
     next_invocation_seq: u64,
     fff_client: Option<FffMcpClient>,

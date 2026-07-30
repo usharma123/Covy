@@ -18,12 +18,13 @@ mod process_harness;
 
 use mcp_proxy_fake::{
     write_bidirectional_server, write_colliding_tool_server, write_compact_read_server,
-    write_concurrent_tool_server, write_newline_only_server, write_slow_initialize_server,
-    write_upstream_batch_server,
+    write_concurrent_tool_server, write_cyclic_resource_server, write_newline_only_server,
+    write_paginated_resource_server, write_slow_initialize_server, write_upstream_batch_server,
 };
 use packet28_daemon_protocol::context_store::{ContextStoreGetRequest, ContextStoreListRequest};
 use process_harness::McpHarness;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -631,6 +632,166 @@ fn test_mcp_proxy_unites_exact_and_template_resource_ownership() {
             format!("resource '{uri}' is advertised by multiple upstreams: alpha, beta")
         );
     }
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_exhausts_upstream_resource_pages_and_pages_stable_downstream_snapshot() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script = dir.path().join("paginated_resources.py");
+    write_paginated_resource_server(&script);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "paginated": {
+                    "command": "python3",
+                    "args": ["-u", script.to_str().unwrap()],
+                    "framing": "content_length"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut server =
+        start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-paginated-resources");
+    initialize_mcp_session(&mut server);
+
+    let mut cursor = None;
+    let mut listed_uris = Vec::new();
+    for page in 1..=2 {
+        let id = format!("resources-page-{page}");
+        let params = cursor
+            .as_ref()
+            .map_or_else(|| json!({}), |cursor| json!({"cursor":cursor}));
+        write_mcp_message(
+            &mut server,
+            &json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":"resources/list",
+                "params":params
+            }),
+        );
+        let response = read_until(&mut server, |message| message["id"] == id);
+        assert_eq!(response["id"], id);
+        listed_uris.extend(
+            response["result"]["resources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|resource| resource["uri"].as_str().map(str::to_string)),
+        );
+        cursor = response["result"]["nextCursor"]
+            .as_str()
+            .map(str::to_string);
+    }
+    assert!(cursor.is_none(), "second downstream page must be terminal");
+    let unique_uris = listed_uris.iter().cloned().collect::<BTreeSet<_>>();
+    assert_eq!(unique_uris.len(), listed_uris.len());
+    assert!(unique_uris.contains("paged://static/299"));
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"templates",
+            "method":"resources/templates/list",
+            "params":{}
+        }),
+    );
+    let templates = read_until(&mut server, |message| message["id"] == "templates");
+    assert!(templates["result"]["resourceTemplates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|template| template["uriTemplate"] == "paged://other/{id}"));
+
+    for (id, uri) in [
+        ("read-page-two-static", "paged://static/299"),
+        ("read-page-two-template", "paged://other/42"),
+    ] {
+        write_mcp_message(
+            &mut server,
+            &json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":"resources/read",
+                "params":{"uri":uri}
+            }),
+        );
+        let response = read_until(&mut server, |message| message["id"] == id);
+        assert_eq!(response["id"], id);
+        assert_eq!(
+            response["result"]["contents"][0]["text"],
+            "paginated resource"
+        );
+    }
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_rejects_upstream_resource_cursor_cycles_with_original_id() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script = dir.path().join("cyclic_resources.py");
+    write_cyclic_resource_server(&script);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "cyclic": {
+                    "command": "python3",
+                    "args": ["-u", script.to_str().unwrap()],
+                    "framing": "content_length"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut server =
+        start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-cyclic-resources");
+    initialize_mcp_session(&mut server);
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"cyclic-list",
+            "method":"resources/list",
+            "params":{}
+        }),
+    );
+
+    let response = read_until(&mut server, |message| message["id"] == "cyclic-list");
+    assert_eq!(response["id"], "cyclic-list");
+    assert!(response["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("repeated cursor \"loop\"")));
 
     stop_mcp_server(server);
     suite_cmd()

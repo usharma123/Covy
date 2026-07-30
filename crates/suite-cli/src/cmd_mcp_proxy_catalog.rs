@@ -2,12 +2,46 @@ use super::*;
 
 use std::collections::BTreeSet;
 
-use crate::cmd_mcp::proxy_resource::ResourceRoute;
+use crate::cmd_mcp::proxy_catalog_pagination::collect_paginated_list;
+use crate::cmd_mcp::proxy_resource::{ResourceRoute, ResourceRoutingTable};
+use crate::cmd_mcp::proxy_resource_paging::{DownstreamCatalogPager, ResourceListKind};
 use crate::cmd_mcp::proxy_upstream::UpstreamPool;
 
-#[derive(Default)]
+const MAX_COMBINED_CATALOG_ITEMS: usize = 65_536;
+const MAX_RESOURCE_CATALOG_REFRESH_ATTEMPTS: usize = 3;
+
 pub(crate) struct ProxyCatalog {
     refresh: tokio::sync::Mutex<()>,
+    downstream_pages: Mutex<DownstreamCatalogPager>,
+}
+
+impl Default for ProxyCatalog {
+    fn default() -> Self {
+        Self {
+            refresh: tokio::sync::Mutex::new(()),
+            downstream_pages: Mutex::new(DownstreamCatalogPager::default()),
+        }
+    }
+}
+
+impl ProxyCatalog {
+    pub(crate) fn page_resources(
+        &self,
+        kind: ResourceListKind,
+        params: &Value,
+        items: Vec<Value>,
+    ) -> Result<Value> {
+        self.downstream_pages
+            .lock()
+            .map_err(|_| anyhow!("failed to lock MCP resource catalog pages"))?
+            .page(kind, params, items)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct UpstreamResourceCatalog {
+    pub(crate) resources: Vec<Value>,
+    pub(crate) templates: Vec<Value>,
 }
 
 pub(crate) fn owner_for_tool(
@@ -60,89 +94,44 @@ pub(crate) async fn ensure_upstream_tools_loaded(
     refresh_upstream_tools(session, upstreams).await
 }
 
-pub(crate) async fn ensure_upstream_resources_loaded(
+pub(crate) async fn ensure_upstream_resource_catalog_loaded(
     session: &Arc<Mutex<McpSessionState>>,
     upstreams: &Arc<UpstreamPool>,
     catalog: &ProxyCatalog,
-) -> Result<Vec<Value>> {
-    if let Ok(guard) = session.lock() {
-        if guard.upstream_resources_loaded {
-            return Ok(guard.upstream_resources_cache.clone());
-        }
+) -> Result<UpstreamResourceCatalog> {
+    if let Some(cached) = cached_resource_catalog(session)? {
+        return Ok(cached);
     }
     let _guard = catalog.refresh.lock().await;
-    if let Ok(guard) = session.lock() {
-        if guard.upstream_resources_loaded {
-            return Ok(guard.upstream_resources_cache.clone());
+    for _ in 0..MAX_RESOURCE_CATALOG_REFRESH_ATTEMPTS {
+        if let Some(cached) = cached_resource_catalog(session)? {
+            return Ok(cached);
+        }
+        let epoch = session
+            .lock()
+            .map_err(|_| anyhow!("failed to lock MCP session"))?
+            .resource_catalog_epoch;
+        let discovered = load_upstream_resource_catalog(upstreams).await?;
+        if let Some(published) = publish_resource_catalog(session, epoch, discovered)? {
+            return Ok(published);
         }
     }
-    refresh_upstream_resources(session, upstreams).await
+    Err(anyhow!(
+        "upstream resource catalog changed during {} consecutive refresh attempts",
+        MAX_RESOURCE_CATALOG_REFRESH_ATTEMPTS
+    ))
 }
 
-pub(crate) async fn ensure_upstream_resource_templates_loaded(
-    session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &Arc<UpstreamPool>,
-    catalog: &ProxyCatalog,
-) -> Result<Vec<Value>> {
-    if let Ok(guard) = session.lock() {
-        if guard.upstream_resource_templates_loaded {
-            return Ok(guard.upstream_resource_templates_cache.clone());
-        }
-    }
-    let _guard = catalog.refresh.lock().await;
-    if let Ok(guard) = session.lock() {
-        if guard.upstream_resource_templates_loaded {
-            return Ok(guard.upstream_resource_templates_cache.clone());
-        }
-    }
-    let mut templates = Vec::new();
-    let mut template_owners = BTreeMap::<String, BTreeSet<String>>::new();
-    for upstream in upstreams.values() {
-        let response = upstream
-            .send_request(&json!({
-                "jsonrpc":"2.0",
-                "id": format!("packet28-templates-list-{}", upstream.name),
-                "method":"resources/templates/list"
-            }))
-            .await?;
-        if let Some(items) = response
-            .get("result")
-            .and_then(|value| value.get("resourceTemplates"))
-            .and_then(Value::as_array)
-        {
-            templates.extend(items.iter().cloned());
-            for item in items {
-                let template = item
-                    .get("uriTemplate")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "upstream '{}' advertised a resource template without a string uriTemplate",
-                            upstream.name
-                        )
-                    })?;
-                template_owners
-                    .entry(template.to_string())
-                    .or_default()
-                    .insert(upstream.name.clone());
-            }
-        }
-    }
-    let mut routes = session
-        .lock()
-        .map_err(|_| anyhow!("failed to lock MCP session"))?
-        .resource_routes
-        .clone();
-    routes
-        .replace_templates(template_owners)
-        .context("upstream advertised an invalid or unsupported resource template")?;
+pub(crate) fn invalidate_resource_catalog(session: &Arc<Mutex<McpSessionState>>) -> Result<()> {
     let mut guard = session
         .lock()
         .map_err(|_| anyhow!("failed to lock MCP session"))?;
-    guard.resource_routes = routes;
-    guard.upstream_resource_templates_cache = templates.clone();
-    guard.upstream_resource_templates_loaded = true;
-    Ok(templates)
+    guard.resource_catalog_epoch = guard.resource_catalog_epoch.wrapping_add(1);
+    guard.upstream_resource_catalog_loaded = false;
+    guard.upstream_resources_cache.clear();
+    guard.upstream_resource_templates_cache.clear();
+    guard.resource_routes.clear();
+    Ok(())
 }
 
 async fn refresh_upstream_tools(
@@ -206,52 +195,130 @@ async fn refresh_upstream_tools(
     Ok(rendered_tools)
 }
 
-async fn refresh_upstream_resources(
+fn cached_resource_catalog(
     session: &Arc<Mutex<McpSessionState>>,
-    upstreams: &Arc<UpstreamPool>,
-) -> Result<Vec<Value>> {
-    let mut resource_owners = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut rendered_resources = Vec::new();
-    for upstream in upstreams.values() {
-        let response = upstream
-            .send_request(&json!({
-                "jsonrpc":"2.0",
-                "id": format!("packet28-resources-refresh-{}", upstream.name),
-                "method":"resources/list"
-            }))
-            .await?;
-        if let Some(items) = response
-            .get("result")
-            .and_then(|value| value.get("resources"))
-            .and_then(Value::as_array)
-        {
-            for item in items {
-                let uri = item.get("uri").and_then(Value::as_str).ok_or_else(|| {
-                    anyhow!(
-                        "upstream '{}' advertised a resource without a string uri",
-                        upstream.name
-                    )
-                })?;
-                resource_owners
-                    .entry(uri.to_string())
-                    .or_default()
-                    .insert(upstream.name.clone());
-                rendered_resources.push(item.clone());
-            }
-        }
-    }
-    rendered_resources.sort_by(|left, right| {
-        left.get("uri")
-            .and_then(Value::as_str)
-            .cmp(&right.get("uri").and_then(Value::as_str))
-    });
+) -> Result<Option<UpstreamResourceCatalog>> {
+    let guard = session
+        .lock()
+        .map_err(|_| anyhow!("failed to lock MCP session"))?;
+    Ok(guard
+        .upstream_resource_catalog_loaded
+        .then(|| UpstreamResourceCatalog {
+            resources: guard.upstream_resources_cache.clone(),
+            templates: guard.upstream_resource_templates_cache.clone(),
+        }))
+}
+
+struct DiscoveredResourceCatalog {
+    resources: Vec<Value>,
+    templates: Vec<Value>,
+    routes: ResourceRoutingTable,
+}
+
+fn publish_resource_catalog(
+    session: &Arc<Mutex<McpSessionState>>,
+    expected_epoch: u64,
+    discovered: DiscoveredResourceCatalog,
+) -> Result<Option<UpstreamResourceCatalog>> {
     let mut guard = session
         .lock()
         .map_err(|_| anyhow!("failed to lock MCP session"))?;
-    guard.resource_routes.replace_exact(resource_owners);
-    guard.upstream_resources_cache = rendered_resources.clone();
-    guard.upstream_resources_loaded = true;
-    Ok(rendered_resources)
+    if guard.resource_catalog_epoch != expected_epoch {
+        return Ok(None);
+    }
+    guard.resource_routes = discovered.routes;
+    guard.upstream_resources_cache = discovered.resources.clone();
+    guard.upstream_resource_templates_cache = discovered.templates.clone();
+    guard.upstream_resource_catalog_loaded = true;
+    Ok(Some(UpstreamResourceCatalog {
+        resources: discovered.resources,
+        templates: discovered.templates,
+    }))
+}
+
+async fn load_upstream_resource_catalog(
+    upstreams: &Arc<UpstreamPool>,
+) -> Result<DiscoveredResourceCatalog> {
+    let mut resource_owners = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut template_owners = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut rendered_resources = Vec::<(String, String, Value)>::new();
+    let mut rendered_templates = Vec::<(String, String, Value)>::new();
+    for upstream in upstreams.values() {
+        for item in collect_paginated_list(upstream, "resources/list", "resources").await? {
+            let uri = item.get("uri").and_then(Value::as_str).ok_or_else(|| {
+                anyhow!(
+                    "upstream '{}' advertised a resource without a string uri",
+                    upstream.name
+                )
+            })?;
+            reject_reserved_resource_namespace(&upstream.name, "resource URI", uri)?;
+            resource_owners
+                .entry(uri.to_string())
+                .or_default()
+                .insert(upstream.name.clone());
+            rendered_resources.push((uri.to_string(), upstream.name.clone(), item));
+            if rendered_resources.len() > MAX_COMBINED_CATALOG_ITEMS {
+                return Err(anyhow!(
+                    "combined upstream resource catalog exceeds the item limit ({MAX_COMBINED_CATALOG_ITEMS})"
+                ));
+            }
+        }
+        for item in
+            collect_paginated_list(upstream, "resources/templates/list", "resourceTemplates")
+                .await?
+        {
+            let template = item
+                .get("uriTemplate")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "upstream '{}' advertised a resource template without a string uriTemplate",
+                        upstream.name
+                    )
+                })?;
+            reject_reserved_resource_namespace(&upstream.name, "resource template", template)?;
+            template_owners
+                .entry(template.to_string())
+                .or_default()
+                .insert(upstream.name.clone());
+            rendered_templates.push((template.to_string(), upstream.name.clone(), item));
+            if rendered_templates.len() > MAX_COMBINED_CATALOG_ITEMS {
+                return Err(anyhow!(
+                    "combined upstream resource template catalog exceeds the item limit ({MAX_COMBINED_CATALOG_ITEMS})"
+                ));
+            }
+        }
+    }
+    rendered_resources
+        .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    rendered_templates
+        .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut routes = ResourceRoutingTable::default();
+    routes.replace_exact(resource_owners);
+    routes
+        .replace_templates(template_owners)
+        .context("upstream advertised an invalid or unsupported resource template")?;
+    Ok(DiscoveredResourceCatalog {
+        resources: rendered_resources
+            .into_iter()
+            .map(|(_, _, value)| value)
+            .collect(),
+        templates: rendered_templates
+            .into_iter()
+            .map(|(_, _, value)| value)
+            .collect(),
+        routes,
+    })
+}
+
+fn reject_reserved_resource_namespace(owner: &str, kind: &str, value: &str) -> Result<()> {
+    if value.starts_with("packet28://") {
+        return Err(anyhow!(
+            "upstream '{owner}' advertised {kind} {value:?} in Packet28's reserved namespace"
+        ));
+    }
+    Ok(())
 }
 
 fn namespaced_tool_name(owner: &str, name: &str) -> String {
@@ -296,4 +363,35 @@ fn native_tool_names() -> BTreeMap<String, ()> {
     .into_iter()
     .map(|name| (name.to_string(), ()))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_catalog_builder_cannot_publish_after_epoch_invalidation() {
+        let session = Arc::new(Mutex::new(McpSessionState::default()));
+        let captured_epoch = session.lock().unwrap().resource_catalog_epoch;
+        invalidate_resource_catalog(&session).unwrap();
+        let discovered = DiscoveredResourceCatalog {
+            resources: vec![json!({"uri":"demo://stale"})],
+            templates: Vec::new(),
+            routes: ResourceRoutingTable::default(),
+        };
+
+        let published = publish_resource_catalog(&session, captured_epoch, discovered).unwrap();
+
+        assert!(published.is_none());
+        assert!(!session.lock().unwrap().upstream_resource_catalog_loaded);
+    }
+
+    #[test]
+    fn upstream_cannot_advertise_packet28_reserved_resource_namespace() {
+        let error =
+            reject_reserved_resource_namespace("spoof", "resource URI", "packet28://current/task")
+                .unwrap_err();
+
+        assert!(error.to_string().contains("reserved namespace"));
+    }
 }

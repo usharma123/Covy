@@ -1,10 +1,10 @@
 use super::*;
 use crate::cmd_mcp::proxy_catalog::{
-    ensure_upstream_resource_templates_loaded, ensure_upstream_resources_loaded,
-    ensure_upstream_tools_loaded, forward_name_for_tool, owner_for_tool, route_for_resource,
-    ProxyCatalog,
+    ensure_upstream_resource_catalog_loaded, ensure_upstream_tools_loaded, forward_name_for_tool,
+    invalidate_resource_catalog, owner_for_tool, route_for_resource, ProxyCatalog,
 };
 use crate::cmd_mcp::proxy_resource::ResourceRoute;
+use crate::cmd_mcp::proxy_resource_paging::{resource_catalog_continuation, ResourceListKind};
 use crate::cmd_mcp::proxy_upstream::{
     proxy_output_channel, spawn_upstream_clients, write_proxy_output, UpstreamClient, UpstreamPool,
 };
@@ -526,10 +526,8 @@ async fn handle_proxy_method(
             if let Ok(mut guard) = session.lock() {
                 guard.initialized = true;
                 guard.upstream_tools_loaded = false;
-                guard.upstream_resources_loaded = false;
-                guard.upstream_resource_templates_loaded = false;
-                guard.resource_routes.clear();
             }
+            invalidate_resource_catalog(session)?;
             for upstream in upstreams.values() {
                 let request = json!({
                     "jsonrpc":"2.0",
@@ -560,23 +558,41 @@ async fn handle_proxy_method(
             Ok(json!({"jsonrpc":"2.0","id":id,"result":result}))
         }
         "resources/list" => {
-            let mut result = handle_local_method(root, session, method, Value::Null).await?;
-            if let Some(resources) = result.get_mut("resources").and_then(Value::as_array_mut) {
-                resources
-                    .extend(ensure_upstream_resources_loaded(session, upstreams, catalog).await?);
+            if resource_catalog_continuation(&params)? {
+                let result =
+                    catalog.page_resources(ResourceListKind::Resources, &params, Vec::new())?;
+                return Ok(json!({"jsonrpc":"2.0","id":id,"result":result}));
             }
+            let local = handle_local_method(root, session, method, Value::Null).await?;
+            let mut resources = local
+                .get("resources")
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or_else(|| anyhow!("local resources/list result is missing resources"))?;
+            let upstream =
+                ensure_upstream_resource_catalog_loaded(session, upstreams, catalog).await?;
+            resources.extend(upstream.resources);
+            let result = catalog.page_resources(ResourceListKind::Resources, &params, resources)?;
             Ok(json!({"jsonrpc":"2.0","id":id,"result":result}))
         }
         "resources/templates/list" => {
-            let mut result = handle_local_method(root, session, method, Value::Null).await?;
-            if let Some(templates) = result
-                .get_mut("resourceTemplates")
-                .and_then(Value::as_array_mut)
-            {
-                templates.extend(
-                    ensure_upstream_resource_templates_loaded(session, upstreams, catalog).await?,
-                );
+            if resource_catalog_continuation(&params)? {
+                let result =
+                    catalog.page_resources(ResourceListKind::Templates, &params, Vec::new())?;
+                return Ok(json!({"jsonrpc":"2.0","id":id,"result":result}));
             }
+            let local = handle_local_method(root, session, method, Value::Null).await?;
+            let mut templates = local
+                .get("resourceTemplates")
+                .and_then(Value::as_array)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow!("local resources/templates/list result is missing resourceTemplates")
+                })?;
+            let upstream =
+                ensure_upstream_resource_catalog_loaded(session, upstreams, catalog).await?;
+            templates.extend(upstream.templates);
+            let result = catalog.page_resources(ResourceListKind::Templates, &params, templates)?;
             Ok(json!({"jsonrpc":"2.0","id":id,"result":result}))
         }
         "prompts/list" => Ok(json!({
@@ -621,8 +637,7 @@ async fn handle_proxy_method(
                     "result": handle_local_method(root, session, method, params).await?,
                 }));
             }
-            let _ = ensure_upstream_resources_loaded(session, upstreams, catalog).await?;
-            let _ = ensure_upstream_resource_templates_loaded(session, upstreams, catalog).await?;
+            let _ = ensure_upstream_resource_catalog_loaded(session, upstreams, catalog).await?;
             let owner = match route_for_resource(session, uri)? {
                 ResourceRoute::Missing => {
                     return Err(anyhow!("no upstream owns resource '{uri}'"));
