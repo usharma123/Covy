@@ -1,6 +1,6 @@
 # PER-02 cache-persistence owner
 
-Date: 2026-07-28
+Date: 2026-07-30
 
 This release-mode experiment validates the replacement of full context-cache
 checkpoint writes under the live cache mutex with a single persistence owner,
@@ -31,9 +31,9 @@ python3 benchmarks/per-02-cache-persistence/verify.py
 Environment:
 
 - Darwin 24.6.0 arm64
-- rustc 1.93.1 (01f6ddf75 2026-02-11)
-- cargo 1.93.1 (083ac5135 2025-12-15)
-- source base `a7c21073c1f1b37fd00822a4ba5ab75ed879480e`
+- rustc 1.93.0 (254b59607 2026-01-19) (Homebrew)
+- cargo 1.93.0 (Homebrew)
+- source base `6b120c8fd3d0b7fe5563b11d96eb9d2f7fb21ed5`
 
 The result artifact records checksums for the measured context-memory source and
 example. The source base identifies the committed lifecycle implementation used
@@ -60,7 +60,8 @@ live mutation only after acceptance. The low-level reservation and
 publish-token sequence is not public. Rejected payloads and superseded raw or
 encoded entries are destroyed after the live-cache guard is released. A
 bounded flush then awaits the debounced WAL owner. Published bytes combine
-actual WAL frame bytes and durable eight-byte coordination-generation writes
+actual WAL frame bytes and durable sixteen-byte coordination-state writes
+(generation plus bound TTL)
 reported by product telemetry.
 
 The legacy path counts both authenticated checkpoint payload copies (backup
@@ -77,10 +78,10 @@ checksummed valid-prefix replay and checkpoint sequence-watermark tests.
 
 | Path | Median write-lock hold | Median elapsed, 64 writes | Payload bytes | Coordination bytes | Published bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Full checkpoint under lock | 49,159,083 ns | 3,255,867 µs | 533,971,344 | 0 | 533,971,344 |
-| Owned delta WAL after lock | 40,125 ns | 15,905 µs | 101,461 | 8 | 101,469 |
+| Full checkpoint under lock | 51,949,458 ns | 3,464,877 µs | 533,971,344 | 0 | 533,971,344 |
+| Owned delta WAL after lock | 228,125 ns | 29,565 µs | 101,461 | 16 | 101,477 |
 
-- Median cache-lock hold reduction: **99.918%**
+- Median cache-lock hold reduction: **99.561%**
 - Published-byte reduction: **99.981%**
 - Recovered entries on both paths: **576**
 
