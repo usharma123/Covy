@@ -483,7 +483,7 @@ impl PersistenceHandle {
             let staged = pending
                 .delta
                 .as_ref()
-                .expect("pending delta exists after staging");
+                .ok_or_else(|| anyhow!("daemon persistence staged no pending registry delta"))?;
             let pending_task_keys = u64::try_from(
                 staged
                     .delta
