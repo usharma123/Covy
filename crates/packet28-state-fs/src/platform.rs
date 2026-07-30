@@ -66,13 +66,14 @@ impl RetainedDir {
             let stat = rfs::fstat(&child).map_err(io::Error::from)?;
             require_directory(&stat, &name)?;
             let child_identity = identity(&stat);
+            let next = rustix::io::dup(&child).map_err(io::Error::from)?;
             path.push(&name);
             bindings.push(Binding {
                 name,
                 file: child,
                 identity: child_identity,
             });
-            current = rustix::io::dup(&bindings.last().unwrap().file).map_err(io::Error::from)?;
+            current = next;
         }
         let retained = Self {
             root_path,
