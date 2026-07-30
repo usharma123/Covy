@@ -22,6 +22,7 @@ const FRAME_FOOTER_BYTES: usize = 56;
 #[cfg(test)]
 std::thread_local! {
     static FAST_TAIL_BYTES_READ: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static APPLY_WATCH_RECORDS_SCANNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Maximum encoded JSON payload accepted for one atomic registry delta.
@@ -335,23 +336,32 @@ impl RegistryDeltaBatch {
         watches: &mut WatchRegistry,
     ) -> std::result::Result<(), RegistryDeltaValidationError> {
         self.validate()?;
-        let mut admitted_watch_ids = BTreeSet::new();
-        for watch in &watches.watches {
-            if !admitted_watch_ids.insert(watch.watch_id.as_str()) {
-                return Err(RegistryDeltaValidationError::DuplicateWatchIdentifier {
-                    watch_id: watch.watch_id.clone(),
-                });
+        let mutates_watches = !self.watch_upserts.is_empty()
+            || !self.watch_upsert_order.is_empty()
+            || !self.watch_removals.is_empty();
+        if mutates_watches {
+            let mut admitted_watch_ids = BTreeSet::new();
+            for watch in &watches.watches {
+                record_apply_watch_scan();
+                if !admitted_watch_ids.insert(watch.watch_id.as_str()) {
+                    return Err(RegistryDeltaValidationError::DuplicateWatchIdentifier {
+                        watch_id: watch.watch_id.clone(),
+                    });
+                }
             }
         }
 
-        // All fallible validation finishes above. Mutations below touch only
-        // dirty task/watch records plus one watch-position index, so applying
-        // a small delta never clones the O(total tasks) registry.
+        // Task-only high-water updates never inspect or index the watch
+        // registry. Watch mutations retain the failure-atomic duplicate check
+        // above before either registry is changed.
         for task_id in &self.task_removals {
             tasks.tasks.remove(task_id);
         }
         for (task_id, task) in &self.task_upserts {
             tasks.tasks.insert(task_id.clone(), task.clone());
+        }
+        if !mutates_watches {
+            return Ok(());
         }
         watches
             .watches
@@ -1530,6 +1540,13 @@ fn record_fast_tail_read(bytes: usize) {
     let _ = bytes;
 }
 
+fn record_apply_watch_scan() {
+    #[cfg(test)]
+    APPLY_WATCH_RECORDS_SCANNED.with(|observed| {
+        observed.set(observed.get().saturating_add(1));
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::{self, OpenOptions};
@@ -1653,6 +1670,67 @@ mod tests {
                 .map(|watch| watch.watch_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["one", "three", "two"]
+        );
+    }
+
+    #[test]
+    fn task_only_apply_does_not_scan_or_index_watches() {
+        let watch_ids = (0..1_024)
+            .map(|ordinal| format!("watch-{ordinal}"))
+            .collect::<Vec<_>>();
+        let mut tasks = TaskRegistry {
+            tasks: BTreeMap::from([(
+                "task".to_string(),
+                TaskRecord {
+                    task_id: "task".to_string(),
+                    watch_ids: watch_ids.clone(),
+                    ..TaskRecord::default()
+                },
+            )]),
+        };
+        let mut watches = WatchRegistry {
+            watches: watch_ids
+                .iter()
+                .map(|watch_id| watch(watch_id, "task"))
+                .collect(),
+        };
+        let mut updated = tasks.tasks["task"].clone();
+        updated.last_event_seq = 9;
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| observed.set(0));
+
+        RegistryDeltaBatch::default()
+            .upsert_task(updated)
+            .apply_to(&mut tasks, &mut watches)
+            .unwrap();
+
+        assert_eq!(tasks.tasks["task"].last_event_seq, 9);
+        assert_eq!(watches.watches.len(), 1_024);
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| assert_eq!(observed.get(), 0));
+    }
+
+    #[test]
+    fn watch_mutation_validates_every_existing_watch_before_apply() {
+        let mut tasks = TaskRegistry {
+            tasks: BTreeMap::from([("task".to_string(), task("task", &["one", "two"]))]),
+        };
+        let mut watches = WatchRegistry {
+            watches: vec![watch("one", "task"), watch("two", "task")],
+        };
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| observed.set(0));
+
+        RegistryDeltaBatch::default()
+            .upsert_watch(watch("one", "task"))
+            .apply_to(&mut tasks, &mut watches)
+            .unwrap();
+
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| assert_eq!(observed.get(), 2));
+        assert_eq!(
+            watches
+                .watches
+                .iter()
+                .map(|watch| watch.watch_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two"]
         );
     }
 
