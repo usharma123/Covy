@@ -11,7 +11,7 @@ mod process_harness;
 
 use mcp_proxy_fake::{
     write_bidirectional_server, write_colliding_tool_server, write_compact_read_server,
-    write_concurrent_tool_server, write_upstream_batch_server,
+    write_concurrent_tool_server, write_newline_only_server, write_upstream_batch_server,
 };
 use process_harness::McpHarness;
 use serde_json::json;
@@ -66,6 +66,76 @@ fn read_until(
 
 #[test]
 #[cfg(unix)]
+fn test_mcp_proxy_defaults_upstream_initialize_tool_and_reverse_calls_to_newline_json() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script_path = dir.path().join("newline_only_mcp.py");
+    write_newline_only_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "newline": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()]
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut server = start_mcp_proxy_server(dir.path(), &config_path, "task-proxy-newline");
+    initialize_mcp_session(&mut server);
+
+    write_mcp_message(
+        &mut server,
+        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    );
+    let tools = read_mcp_message_for_id(&mut server, 2);
+    assert!(tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["name"] == "newline.echo"));
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":3,
+            "method":"tools/call",
+            "params":{"name":"newline.echo","arguments":{}}
+        }),
+    );
+    let roots_request = read_until(&mut server, |message| message["method"] == "roots/list");
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":roots_request["id"],
+            "result":{"roots":[{"uri":"file:///tmp/repo","name":"repo"}]}
+        }),
+    );
+    let tool_response = read_mcp_message_for_id(&mut server, 3);
+    assert_eq!(
+        tool_response["result"]["structuredContent"]["root_count"],
+        1
+    );
+
+    stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
 fn test_mcp_proxy_routes_server_requests_and_json_rpc_batches() {
     ensure_packet28d_built();
     let dir = TempDir::new().unwrap();
@@ -81,7 +151,8 @@ fn test_mcp_proxy_routes_server_requests_and_json_rpc_batches() {
             "mcpServers": {
                 "bidirectional": {
                     "command": "python3",
-                    "args": ["-u", script_path.to_str().unwrap()]
+                    "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length"
                 }
             }
         })
@@ -172,7 +243,8 @@ fn test_mcp_proxy_routes_mixed_upstream_batch_and_diagnoses_invalid_batches() {
             "mcpServers": {
                 "upstream-batch": {
                     "command": "python3",
-                    "args": ["-u", script_path.to_str().unwrap()]
+                    "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length"
                 }
             }
         })
@@ -276,11 +348,13 @@ fn test_mcp_proxy_cli_namespaces_colliding_tools() {
             "mcpServers": {
                 "alpha": {
                     "command": "python3",
-                    "args": ["-u", script_alpha.to_str().unwrap()]
+                    "args": ["-u", script_alpha.to_str().unwrap()],
+                    "framing": "content_length"
                 },
                 "beta": {
                     "command": "python3",
-                    "args": ["-u", script_beta.to_str().unwrap()]
+                    "args": ["-u", script_beta.to_str().unwrap()],
+                    "framing": "content_length"
                 }
             }
         })
@@ -359,6 +433,7 @@ fn test_mcp_proxy_cli_compacts_allowlisted_read_tool_results() {
                 "compact": {
                     "command": "python3",
                     "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length",
                     "compact_tools": ["compact.read"]
                 }
             }
@@ -448,6 +523,7 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
                 "concurrent": {
                     "command": "python3",
                     "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length",
                     "timeout_ms": 500
                 }
             }

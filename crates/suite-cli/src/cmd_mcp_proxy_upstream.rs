@@ -811,6 +811,7 @@ pub(crate) struct UpstreamClient {
     pub(crate) request_timeout: Duration,
     pub(crate) command_preview: String,
     pub(crate) compact_tools: Vec<String>,
+    framing: McpMessageFraming,
     shutdown: watch::Sender<bool>,
     exit_reason: Mutex<Option<String>>,
     reaped: AtomicBool,
@@ -876,7 +877,7 @@ impl UpstreamClient {
     async fn write_before(&self, deadline: Instant, request: &Value) -> Result<()> {
         let write = async {
             let mut stdin = self.stdin.lock().await;
-            write_message_async(&mut *stdin, request, McpMessageFraming::ContentLength).await
+            write_message_async(&mut *stdin, request, self.framing).await
         };
         timeout_at(deadline, write)
             .await
@@ -1377,6 +1378,7 @@ async fn spawn_upstream_client(
         request_timeout: timeout,
         command_preview,
         compact_tools: server.compact_tools.clone(),
+        framing: server.framing.into(),
         shutdown,
         exit_reason: Mutex::new(None),
         reaped: AtomicBool::new(false),
@@ -2579,6 +2581,7 @@ while True:
                 command: "python3".to_string(),
                 args: vec!["-u".to_string(), script.display().to_string()],
                 timeout_ms: Some(1_000),
+                framing: super::super::config::McpProxyStdioFraming::ContentLength,
                 ..super::super::config::McpProxyServerConfig::default()
             },
         )
@@ -2620,6 +2623,7 @@ while True:
             command: "python3".to_string(),
             args: vec!["-u".to_string(), script.display().to_string()],
             timeout_ms: Some(timeout_ms),
+            framing: super::super::config::McpProxyStdioFraming::ContentLength,
             ..super::super::config::McpProxyServerConfig::default()
         };
         let (output, receiver) = proxy_output_channel();

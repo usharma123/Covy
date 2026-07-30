@@ -99,6 +99,7 @@ while True:
                 "slow": {
                     "command": "python3",
                     "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length",
                     "timeout_ms": 100
                 }
             }

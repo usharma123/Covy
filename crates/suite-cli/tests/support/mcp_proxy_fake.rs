@@ -359,3 +359,80 @@ while True:
     )
     .unwrap();
 }
+
+pub fn write_newline_only_server(path: &Path) {
+    fs::write(
+        path,
+        r#"import json, sys
+
+def read_message():
+    line = sys.stdin.buffer.readline()
+    if not line:
+        return None
+    if line.lower().startswith(b"content-length:"):
+        raise RuntimeError("legacy Content-Length framing is not accepted")
+    return json.loads(line)
+
+def write_message(value):
+    body = json.dumps(value, separators=(",", ":")).encode("utf-8")
+    sys.stdout.buffer.write(body + b"\n")
+    sys.stdout.buffer.flush()
+
+pending_tool_call = None
+while True:
+    message = read_message()
+    if message is None:
+        break
+    method = message.get("method")
+    msg_id = message.get("id")
+    if method == "initialize":
+        write_message({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "newline-only", "version": "1"}
+            }
+        })
+    elif method == "tools/list":
+        write_message({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "tools": [{
+                    "name": "newline.echo",
+                    "description": "strict newline-framed upstream",
+                    "inputSchema": {"type": "object", "properties": {}}
+                }]
+            }
+        })
+    elif method == "tools/call":
+        pending_tool_call = msg_id
+        write_message({
+            "jsonrpc": "2.0",
+            "id": "newline-roots",
+            "method": "roots/list",
+            "params": {}
+        })
+    elif method is None and msg_id == "newline-roots":
+        roots = message.get("result", {}).get("roots", [])
+        write_message({
+            "jsonrpc": "2.0",
+            "id": pending_tool_call,
+            "result": {
+                "content": [{"type": "text", "text": "newline ok"}],
+                "structuredContent": {"root_count": len(roots)}
+            }
+        })
+        pending_tool_call = None
+    elif msg_id is not None:
+        write_message({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": -32601, "message": "unknown method"}
+        })
+"#,
+    )
+    .unwrap();
+}
