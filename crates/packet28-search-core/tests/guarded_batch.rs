@@ -212,7 +212,7 @@ fn broker_batch_returns_no_results_when_final_freshness_attestation_fails() {
     let error = broker_internal_guarded_indexed_search_batch(
         root,
         &runtime,
-        &[request.clone()],
+        std::slice::from_ref(&request),
         &mut session,
     )
     .unwrap_err();
