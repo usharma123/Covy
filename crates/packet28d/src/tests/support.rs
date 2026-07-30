@@ -29,7 +29,7 @@ pub(crate) fn daemon_test_state_with_persistence_debounce(
     let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
     thread::spawn(move || while background_rx.blocking_recv().is_some() {});
     let (persistence_owner, persistence) =
-        PersistenceOwner::start_unleased(root.clone(), persistence_debounce).unwrap();
+        PersistenceOwner::start_for_test(root.clone(), persistence_debounce).unwrap();
     Arc::new(Mutex::new(DaemonState {
         root,
         kernel,

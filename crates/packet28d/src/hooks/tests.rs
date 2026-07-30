@@ -21,7 +21,7 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
     thread::spawn(move || index_rx.discard_until_shutdown());
     let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(8);
     thread::spawn(move || while background_rx.blocking_recv().is_some() {});
-    let (persistence_owner, persistence) = PersistenceOwner::start_unleased(
+    let (persistence_owner, persistence) = PersistenceOwner::start_for_test(
         root.clone(),
         Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
     )

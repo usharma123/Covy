@@ -1013,6 +1013,8 @@ fn packet28d_persistence_io_has_one_source_owner() {
                 "save_task_watch_registry_checkpoint_at_revision(",
                 "append_task_watch_registry_delta(",
                 "append_next_task_event(",
+                "admit_task_event_from_registry(",
+                "append_next_task_event_with_admission(",
                 "append_task_event(",
             ] {
                 if source.contains(forbidden) {

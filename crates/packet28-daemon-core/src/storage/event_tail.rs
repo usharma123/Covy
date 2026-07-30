@@ -1,5 +1,20 @@
 use super::*;
 
+/// Compact proof that one task exists in an already-loaded registry authority.
+///
+/// The token borrows the registry snapshot that admitted it, preventing the
+/// daemon persistence owner from accidentally pairing an admission with a
+/// different in-memory image. It contains no registry bytes and is intended
+/// for the single owner after the corresponding checkpoint/WAL revision is
+/// durable.
+#[derive(Debug)]
+pub struct TaskEventAdmission<'registry> {
+    task_id: TaskStorageId,
+    root: &'registry Path,
+    lease: &'registry crate::task_store_lease::TaskStoreLease,
+    _record: &'registry packet28_daemon_protocol::task::TaskRecord,
+}
+
 /// Former bounded suffix window retained for public API compatibility.
 ///
 /// Strict event-log integrity validation now streams from byte zero. This
@@ -184,14 +199,7 @@ pub fn append_next_task_event(
     event: &DaemonEvent,
 ) -> Result<DaemonEventFrame> {
     let task_id = checked_task_storage_id(root, task_id)?;
-    // Use the widest possible decimal sequence during preflight so successful
-    // admission guarantees that the final encoded line fits the same bound.
-    let preflight = DaemonEventFrame {
-        seq: u64::MAX,
-        task_id: task_id.as_str().to_string(),
-        event: event.clone(),
-    };
-    let _ = encode_task_event_frame(root, &task_id, &preflight)?;
+    preflight_task_event(root, &task_id, event)?;
 
     let writer_lease = acquire_task_store_writer_lease(root)?;
     with_registered_task_storage_id(root, &task_id, || {
@@ -205,6 +213,73 @@ pub fn append_next_task_event(
             append_next_task_event_portable(root, &task_id, event)
         }
     })
+}
+
+/// Admits one task from an already-loaded task registry without filesystem I/O.
+///
+/// The caller must retain the returned token only while `registry` remains the
+/// authoritative snapshot associated with its daemon task-store lease.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::InvalidTaskStorageIdentifier`] when `task_id`
+/// cannot name managed storage, or [`DaemonCoreError::InvalidTaskRegistry`]
+/// when the exact task record is absent or identifier-inconsistent.
+pub fn admit_task_event_from_registry<'registry>(
+    root: &'registry Path,
+    registry: &'registry TaskRegistry,
+    lease: &'registry crate::task_store_lease::TaskStoreLease,
+    task_id: &str,
+) -> Result<TaskEventAdmission<'registry>> {
+    require_daemon_lifecycle_lease(root, lease)?;
+    let task_id = checked_task_storage_id(root, task_id)?;
+    require_registered_task_storage_id(registry, &task_registry_path(root), &task_id)?;
+    let record = &registry.tasks[task_id.as_str()];
+    Ok(TaskEventAdmission {
+        task_id,
+        root,
+        lease,
+        _record: record,
+    })
+}
+
+/// Appends an event using compact in-memory registry admission.
+///
+/// This avoids rereading and decoding the complete task-registry checkpoint
+/// for every daemon event. The admission must come from the persistence
+/// owner's current durable checkpoint-plus-WAL image, and `lease` must be the
+/// daemon-lifecycle lease for `root`.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] when the lease does not own the requested
+/// daemon task-store namespace. Other errors match [`append_next_task_event`].
+pub fn append_next_task_event_with_admission(
+    admission: TaskEventAdmission<'_>,
+    event: &DaemonEvent,
+) -> Result<DaemonEventFrame> {
+    require_daemon_lifecycle_lease(admission.root, admission.lease)?;
+    preflight_task_event(admission.root, &admission.task_id, event)?;
+    #[cfg(unix)]
+    {
+        append_next_task_event_admitted(admission.root, &admission.task_id, admission.lease, event)
+    }
+    #[cfg(not(unix))]
+    {
+        append_next_task_event_portable(admission.root, &admission.task_id, event)
+    }
+}
+
+fn preflight_task_event(root: &Path, task_id: &TaskStorageId, event: &DaemonEvent) -> Result<()> {
+    // Use the widest possible decimal sequence during preflight so successful
+    // admission guarantees that the final encoded line fits the same bound.
+    let preflight = DaemonEventFrame {
+        seq: u64::MAX,
+        task_id: task_id.as_str().to_string(),
+        event: event.clone(),
+    };
+    let _ = encode_task_event_frame(root, task_id, &preflight)?;
+    Ok(())
 }
 
 #[derive(Debug)]

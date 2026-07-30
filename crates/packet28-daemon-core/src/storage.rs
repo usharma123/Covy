@@ -42,9 +42,9 @@ mod event_tail;
 mod registry_delta;
 
 pub use event_tail::{
-    append_next_task_event, load_task_registry_with_event_tails,
-    load_task_watch_registry_checkpoint_with_event_tails, task_event_log_tail_sequence,
-    MAX_TASK_EVENT_TAIL_SCAN_BYTES,
+    admit_task_event_from_registry, append_next_task_event, append_next_task_event_with_admission,
+    load_task_registry_with_event_tails, load_task_watch_registry_checkpoint_with_event_tails,
+    task_event_log_tail_sequence, TaskEventAdmission, MAX_TASK_EVENT_TAIL_SCAN_BYTES,
 };
 #[cfg(all(test, unix))]
 use event_tail::{
@@ -6759,6 +6759,93 @@ mod tests {
         assert!(matches!(error, DaemonCoreError::InvalidTaskRegistry { .. }));
         assert_eq!(fs::read(&path).unwrap(), b"orphan-before\n");
         assert!(!task_registry_path(root.path()).exists());
+    }
+
+    #[test]
+    fn compact_event_admission_uses_wal_authority_without_a_checkpoint_read() {
+        let root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let task_id = "wal-admitted";
+        let delta = RegistryDeltaBatch::default().upsert_task(TaskRecord {
+            task_id: task_id.to_string(),
+            ..TaskRecord::default()
+        });
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::new(RegistryRevision::new(1), RegistryRevision::new(1)).unwrap(),
+            &delta,
+        )
+        .unwrap();
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        assert!(!task_registry_path(root.path()).exists());
+        let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
+        let admission =
+            admit_task_event_from_registry(root.path(), &loaded.tasks, &lease, task_id).unwrap();
+
+        let frame =
+            append_next_task_event_with_admission(admission, &task_event_frame(task_id, 1).event)
+                .unwrap();
+
+        assert_eq!(frame.seq, 1);
+        assert_eq!(frame.task_id, task_id);
+        assert!(!task_registry_path(root.path()).exists());
+        drop(lease);
+
+        let (recovered, tails) =
+            load_task_watch_registry_with_deltas_and_event_tails(root.path()).unwrap();
+        assert!(recovered.tasks.tasks.contains_key(task_id));
+        assert_eq!(recovered.replayed_revision, RegistryRevision::new(1));
+        assert_eq!(tails[task_id], Some(1));
+        assert!(!task_registry_path(root.path()).exists());
+    }
+
+    #[test]
+    fn compact_event_admission_rejects_missing_task_without_event_mutation() {
+        let root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let task_id = "not-admitted";
+        let event_path = task_event_path(root.path(), task_id);
+        fs::create_dir_all(event_path.parent().unwrap()).unwrap();
+        fs::write(&event_path, b"sentinel\n").unwrap();
+        let lease = crate::task_store_lease::acquire_daemon_task_store_lease(root.path()).unwrap();
+
+        let error =
+            admit_task_event_from_registry(root.path(), &TaskRegistry::default(), &lease, task_id)
+                .unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::InvalidTaskRegistry { .. }));
+        assert_eq!(fs::read(event_path).unwrap(), b"sentinel\n");
+    }
+
+    #[test]
+    fn compact_event_admission_requires_the_matching_daemon_lifecycle_lease() {
+        let root = tempdir().unwrap();
+        let other_root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        ensure_daemon_dir(other_root.path()).unwrap();
+        let registry = TaskRegistry {
+            tasks: BTreeMap::from([(
+                "lease-bound".to_string(),
+                TaskRecord {
+                    task_id: "lease-bound".to_string(),
+                    ..TaskRecord::default()
+                },
+            )]),
+        };
+        let writer_lease = acquire_task_store_writer_lease(root.path()).unwrap();
+        let wrong_role =
+            admit_task_event_from_registry(root.path(), &registry, &writer_lease, "lease-bound")
+                .unwrap_err();
+        assert!(matches!(wrong_role, DaemonCoreError::Io { .. }));
+        drop(writer_lease);
+
+        let other_lease =
+            crate::task_store_lease::acquire_daemon_task_store_lease(other_root.path()).unwrap();
+        let wrong_root =
+            admit_task_event_from_registry(root.path(), &registry, &other_lease, "lease-bound")
+                .unwrap_err();
+        assert!(matches!(wrong_root, DaemonCoreError::Io { .. }));
+        assert!(!task_event_path(root.path(), "lease-bound").exists());
     }
 
     #[test]
