@@ -434,13 +434,12 @@ dependencies = [
  "fs2",
  "libc",
  "packet28-binary-codec",
+ "packet28-state-fs",
  "serde",
  "serde_json",
  "suite-packet-core",
  "tempfile",
  "thiserror",
- "winapi-util",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1365,6 +1364,7 @@ dependencies = [
  "ignore",
  "packet28-binary-codec",
  "packet28-search-core",
+ "packet28-state-fs",
  "regex",
  "serde",
  "serde_json",
@@ -1606,11 +1606,20 @@ dependencies = [
  "memmap2",
  "packet28-binary-codec",
  "packet28-reducer-core",
+ "packet28-state-fs",
  "regex",
  "regex-syntax 0.8.5",
  "serde",
  "serde_json",
  "syn 2.0.116",
+ "tempfile",
+]
+
+[[package]]
+name = "packet28-state-fs"
+version = "0.2.63"
+dependencies = [
+ "rustix",
  "tempfile",
 ]
 

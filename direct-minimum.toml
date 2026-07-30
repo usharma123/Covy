@@ -1,6 +1,6 @@
 format = 1
 toolchain = "nightly-2026-07-27"
-manifest-sha256 = "5cd069b2fb408b166e0aabce35665663cf9d55d4214155218ead23b4bd242c52"
+manifest-sha256 = "4077f434bec9554e9f38300b67037dc4862daa9a3c44e6121c48d3c33a5d2e0e"
 
 [[transitive-pins]]
 package = "wincode-derive"
