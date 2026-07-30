@@ -105,9 +105,9 @@ fn preload_bridge_preserves_open_arities_modes_and_errno() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
-        stderr.matches("reason=daemon_socket_missing").count(),
+        stderr.matches("p28 passthrough path=").count(),
         4,
-        "all four interposed open variants must reach the fixed Rust callbacks\n{stderr}"
+        "all four interposed open variants must reach the Rust callbacks\n{stderr}"
     );
 
     assert_mode(&fixture_root.path().join("created.txt"), 0o601);
