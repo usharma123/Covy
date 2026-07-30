@@ -1590,33 +1590,6 @@ fn indexed_search_handles_non_ascii_ignore_case_fixed_queries() {
     assert_eq!(result.paths, vec!["src/lib.rs".to_string()]);
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn full_rebuild_skips_non_utf8_paths_that_alias_utf8_index_keys() {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt as _;
-
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    fs::create_dir_all(root.join("src")).unwrap();
-    let mut invalid_name = b"collision_".to_vec();
-    invalid_name.push(0xff);
-    invalid_name.extend_from_slice(b".rs");
-    fs::write(
-        root.join("src").join(OsString::from_vec(invalid_name)),
-        b"raw path\n",
-    )
-    .unwrap();
-    fs::write(root.join("src/collision_\u{fffd}.rs"), b"utf8 path\n").unwrap();
-
-    let runtime = rebuild_full_index(root, true).unwrap();
-    let loaded = runtime.loaded.as_ref().expect("loaded index");
-    assert_eq!(
-        loaded.all_indexed_paths(None),
-        BTreeSet::from(["src/collision_\u{fffd}.rs".to_string()])
-    );
-}
-
 #[test]
 fn indexed_search_matches_reducer_for_common_queries() {
     let dir = tempfile::tempdir().unwrap();

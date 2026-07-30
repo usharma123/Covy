@@ -486,6 +486,33 @@ fn absolute_requested_child_resolves_under_a_relative_repository_root() {
     assert_eq!(result.match_count, 1);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn full_rebuild_skips_non_utf8_paths_that_alias_utf8_index_keys() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let directory = tempdir().unwrap();
+    let root = directory.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    let invalid_name = OsString::from_vec(b"collision_\xff.rs".to_vec());
+    fs::write(root.join("src").join(invalid_name), b"raw marker\n").unwrap();
+    fs::write(root.join("src/collision_\u{fffd}.rs"), b"valid\n").unwrap();
+
+    let runtime = rebuild_full_index(root, true).unwrap();
+    let result = indexed_search(
+        root,
+        &runtime,
+        &SearchRequest {
+            query: "raw marker".to_string(),
+            fixed_string: true,
+            ..SearchRequest::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.match_count, 0);
+}
+
 #[cfg(unix)]
 #[test]
 fn full_rebuild_rejects_a_dirty_git_workspace_without_replacing_the_ready_generation() {
