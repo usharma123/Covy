@@ -19,15 +19,18 @@ const MAX_BUILD_ATTESTATION_BYTES: u64 = 512 * 1024 * 1024;
 struct AttestationLimits {
     entries: usize,
     bytes: u64,
+    allow_oversized: bool,
 }
 
 const QUERY_ATTESTATION_LIMITS: AttestationLimits = AttestationLimits {
     entries: MAX_ATTESTED_WORKSPACE_ENTRIES,
     bytes: MAX_ATTESTED_WORKSPACE_BYTES,
+    allow_oversized: false,
 };
 const BUILD_ATTESTATION_LIMITS: AttestationLimits = AttestationLimits {
     entries: MAX_BUILD_ATTESTATION_ENTRIES,
     bytes: MAX_BUILD_ATTESTATION_BYTES,
+    allow_oversized: true,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,7 +140,13 @@ fn git_workspace_snapshot_with_limits(
         }
         states.insert(
             path.clone(),
-            attest_workspace_path(root, path, &mut budget, limits.bytes)?,
+            attest_workspace_path(
+                root,
+                path,
+                &mut budget,
+                limits.bytes,
+                limits.allow_oversized,
+            )?,
         );
     }
     let entries = dirty_paths
@@ -213,6 +222,7 @@ fn attest_workspace_path(
     path: &str,
     budget: &mut u64,
     max_budget: u64,
+    allow_oversized: bool,
 ) -> std::result::Result<WorkspacePathAttestation, String> {
     let inspection = inspect_workspace_path(root, Path::new(path))
         .map_err(|error| format!("failed to inspect workspace path '{path}': {error}"))?;
@@ -235,6 +245,12 @@ fn attest_workspace_path(
         }
     };
     if metadata.len() > MAX_INDEXED_FILE_BYTES as u64 {
+        if !allow_oversized {
+            return Err(format!(
+                "workspace file '{path}' exceeds the {}-byte attestation limit",
+                MAX_INDEXED_FILE_BYTES
+            ));
+        }
         return Ok(WorkspacePathAttestation {
             digest: format!("oversized:{}", metadata.len()),
             indexable: false,
