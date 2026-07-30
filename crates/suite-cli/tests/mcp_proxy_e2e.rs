@@ -1,3 +1,10 @@
+#[expect(
+    dead_code,
+    reason = "shared lifecycle fixtures support native and proxy MCP test binaries"
+)]
+#[cfg(unix)]
+#[path = "support/mcp_lifecycle.rs"]
+mod mcp_lifecycle;
 #[path = "support/mcp_proxy.rs"]
 mod mcp_proxy;
 #[path = "support/mcp_proxy_fake.rs"]
@@ -11,7 +18,8 @@ mod process_harness;
 
 use mcp_proxy_fake::{
     write_bidirectional_server, write_colliding_tool_server, write_compact_read_server,
-    write_concurrent_tool_server, write_newline_only_server, write_upstream_batch_server,
+    write_concurrent_tool_server, write_newline_only_server, write_slow_initialize_server,
+    write_upstream_batch_server,
 };
 use packet28_daemon_protocol::context_store::{ContextStoreGetRequest, ContextStoreListRequest};
 use process_harness::McpHarness;
@@ -21,6 +29,12 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use mcp_lifecycle::{
+    corrupt_task_event_log, large_response_batch, read_content_length_message,
+    small_buffered_stdout_pair, wait_for_child, wait_for_file, wait_for_stdout_backpressure,
+    write_content_length_message,
+};
 use mcp_proxy::{
     close_mcp_stdin, ensure_packet28d_built, init_repo, initialize_mcp_session,
     read_mcp_message_for_id, start_mcp_proxy_server, start_mcp_proxy_server_with_tool,
@@ -991,6 +1005,236 @@ fn test_mcp_proxy_overload_preserves_single_and_batch_request_ids() {
     }
 
     stop_mcp_server(server);
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_exits_when_poller_fails_during_upstream_initialize() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let marker = dir.path().join("upstream-initialize-started");
+    let script_path = dir.path().join("slow_initialize_mcp.py");
+    write_slow_initialize_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "slow-init": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length",
+                    "env": {
+                        "P28_TEST_INIT_MARKER": marker.to_str().unwrap()
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let task_id = "task-proxy-poller-failed-during-init";
+    let mut server = start_mcp_proxy_server(dir.path(), &config_path, task_id);
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{
+                "protocolVersion":"2025-03-26",
+                "capabilities":{},
+                "clientInfo":{"name":"poller-init-test","version":"1"}
+            }
+        }),
+    );
+    wait_for_file(&marker, MCP_RESPONSE_TIMEOUT);
+    corrupt_task_event_log(dir.path(), task_id);
+
+    let output = server
+        .wait(Duration::from_secs(4))
+        .expect("proxy ignored poller failure while upstream initialize was blocked");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("MCP notification event-log read failed"),
+        "unexpected proxy failure: {stderr}"
+    );
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_exits_when_poller_fails_during_upstream_tool_call() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let marker = dir.path().join("upstream-tool-started");
+    let script_path = dir.path().join("slow_tool_mcp.py");
+    write_concurrent_tool_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "concurrent": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let task_id = "task-proxy-poller-failed-during-tool";
+    let mut server = start_mcp_proxy_server(dir.path(), &config_path, task_id);
+    initialize_mcp_session(&mut server);
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{
+                "name":"concurrent.echo",
+                "arguments":{
+                    "delay_ms":30_000,
+                    "started_path":marker.to_str().unwrap(),
+                    "value":"must be cancelled"
+                }
+            }
+        }),
+    );
+    wait_for_file(&marker, MCP_RESPONSE_TIMEOUT);
+    corrupt_task_event_log(dir.path(), task_id);
+
+    let output = server
+        .wait(Duration::from_secs(4))
+        .expect("proxy ignored poller failure while an upstream tool call was active");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("MCP notification event-log read failed"),
+        "unexpected proxy failure: {stderr}"
+    );
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_fatal_poller_cleanup_aborts_backpressured_stdout() {
+    use std::io::{BufReader, BufWriter, Read as _};
+    use std::os::fd::OwnedFd;
+    use std::process::{Command, Stdio};
+
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script_path = dir.path().join("backpressured_stdout_mcp.py");
+    write_concurrent_tool_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "concurrent": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length"
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let task_id = "task-proxy-poller-failed-with-blocked-stdout";
+    let (child_stdout, parent_stdout) = small_buffered_stdout_pair();
+    let child_stdout: OwnedFd = child_stdout.into();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command
+        .current_dir(dir.path())
+        .args([
+            "mcp",
+            "proxy",
+            "--root",
+            dir.path().to_str().unwrap(),
+            "--upstream-config",
+            config_path.to_str().unwrap(),
+            "--task-id",
+            task_id,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(child_stdout))
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let mut stdin = BufWriter::new(child.stdin.take().unwrap());
+    let mut stdout = BufReader::new(parent_stdout);
+
+    write_content_length_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{
+                "protocolVersion":"2025-03-26",
+                "capabilities":{},
+                "clientInfo":{"name":"stdout-backpressure-test","version":"1"}
+            }
+        }),
+    );
+    assert_eq!(read_content_length_message(&mut stdout)["id"], 1);
+
+    let batch = large_response_batch();
+    let response_lower_bound = write_content_length_message(&mut stdin, &batch);
+    wait_for_stdout_backpressure(
+        stdout.get_ref(),
+        response_lower_bound,
+        Duration::from_secs(3),
+    );
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "proxy exited before the poller failure was injected"
+    );
+    corrupt_task_event_log(dir.path(), task_id);
+
+    let status = wait_for_child(&mut child, Duration::from_secs(4));
+    assert!(!status.success());
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(
+        stderr.contains("MCP notification event-log read failed"),
+        "unexpected proxy failure: {stderr}"
+    );
+
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
         .assert()

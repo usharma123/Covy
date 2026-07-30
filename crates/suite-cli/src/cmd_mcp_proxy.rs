@@ -10,6 +10,7 @@ use crate::cmd_mcp::proxy_upstream::{
 
 const MAX_PROXY_INFLIGHT: usize = 64;
 const PROXY_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+const PROXY_FATAL_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 
 pub(crate) fn load_proxy_config(path: &Path) -> Result<McpProxyConfig> {
     let bytes = fs::read(path)
@@ -30,12 +31,14 @@ pub(crate) fn serve_proxy_stdio(
     config: McpProxyConfig,
     task_id: String,
 ) -> Result<()> {
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("packet28-mcp-proxy")
         .build()
-        .context("failed to start MCP proxy runtime")?
-        .block_on(serve_proxy_stdio_async(root, config, task_id))
+        .context("failed to start MCP proxy runtime")?;
+    let result = runtime.block_on(serve_proxy_stdio_async(root, config, task_id));
+    runtime.shutdown_timeout(MCP_RUNTIME_SHUTDOWN_TIMEOUT);
+    result
 }
 
 async fn serve_proxy_stdio_async(
@@ -97,34 +100,38 @@ async fn serve_proxy_stdio_async(
         if serve_result.is_err() {
             break;
         }
-        let next = if let Some(writer_task) = writer.as_mut() {
-            tokio::select! {
-                message = crate::cmd_mcp::transport::read_message_async(&mut reader) => message,
-                result = writer_task => {
-                    writer = None;
-                    serve_result = Err(proxy_writer_error(result));
-                    break;
+        let input = async {
+            if let Some(writer_task) = writer.as_mut() {
+                tokio::select! {
+                    message = crate::cmd_mcp::transport::read_message_async(&mut reader) => message,
+                    result = writer_task => {
+                        writer = None;
+                        Err(proxy_writer_error(result))
+                    }
                 }
+            } else {
+                Err(anyhow!("MCP stdout writer stopped"))
             }
-        } else {
-            serve_result = Err(anyhow!("MCP stdout writer stopped"));
-            break;
         };
-        let Some((request, framing)) = (match next {
-            Ok(message) => message,
+        let next = match notification_task.supervise_result(input).await {
+            Ok(next) => next,
             Err(error) => {
                 serve_result = Err(error);
                 break;
             }
-        }) else {
+        };
+        let Some((request, framing)) = next else {
             break;
         };
         if let Ok(mut guard) = session.lock() {
             guard.framing = Some(framing);
         }
         if request.is_array() && is_client_response_payload(&request) {
-            let response =
-                dispatch_proxy_payload(&root, &session, &upstreams, &catalog, request).await;
+            let response = notification_task
+                .supervise_result(dispatch_proxy_payload(
+                    &root, &session, &upstreams, &catalog, request,
+                ))
+                .await;
             let response = match response {
                 Ok(response) => response,
                 Err(error) => {
@@ -133,7 +140,10 @@ async fn serve_proxy_stdio_async(
                 }
             };
             if let Some(response) = response {
-                if let Err(error) = output.send(response, framing).await {
+                if let Err(error) = notification_task
+                    .supervise_result(output.send(response, framing))
+                    .await
+                {
                     serve_result = Err(error);
                     break;
                 }
@@ -145,8 +155,11 @@ async fn serve_proxy_stdio_async(
         let process_inline = !request.is_array()
             && (method.is_none() || request.get("id").is_none() || method == Some("initialize"));
         if process_inline {
-            let response =
-                dispatch_proxy_message(&root, &session, &upstreams, &catalog, request).await;
+            let response = notification_task
+                .supervise_result(dispatch_proxy_message(
+                    &root, &session, &upstreams, &catalog, request,
+                ))
+                .await;
             let response = match response {
                 Ok(response) => response,
                 Err(error) => {
@@ -155,7 +168,10 @@ async fn serve_proxy_stdio_async(
                 }
             };
             if let Some(response) = response {
-                if let Err(error) = output.send(response, framing).await {
+                if let Err(error) = notification_task
+                    .supervise_result(output.send(response, framing))
+                    .await
+                {
                     serve_result = Err(error);
                     break;
                 }
@@ -169,12 +185,18 @@ async fn serve_proxy_stdio_async(
         let permit = match inflight.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(tokio::sync::TryAcquireError::NoPermits) => {
-                if let Err(error) = forward_overload_client_responses(&upstreams, &request).await {
+                if let Err(error) = notification_task
+                    .supervise_result(forward_overload_client_responses(&upstreams, &request))
+                    .await
+                {
                     serve_result = Err(error);
                     break;
                 }
                 if let Some(response) = proxy_overload_response(&request) {
-                    if let Err(error) = output.send(response, framing).await {
+                    if let Err(error) = notification_task
+                        .supervise_result(output.send(response, framing))
+                        .await
+                    {
                         serve_result = Err(error);
                         break;
                     }
@@ -206,28 +228,30 @@ async fn serve_proxy_stdio_async(
     }
 
     notification_task.request_shutdown();
-    let mut drain_error = None;
-    let drained = tokio::time::timeout(PROXY_SHUTDOWN_GRACE, async {
-        while let Some(joined) = requests.join_next().await {
-            if let Err(error) = flatten_proxy_task(joined) {
-                drain_error.get_or_insert(error);
-            }
-        }
-    })
-    .await
-    .is_ok();
-    if !drained {
+    if serve_result.is_err() {
         requests.abort_all();
-        if serve_result.is_ok() {
+    } else {
+        let mut drain_error = None;
+        let drained = tokio::time::timeout(PROXY_SHUTDOWN_GRACE, async {
+            while let Some(joined) = requests.join_next().await {
+                if let Err(error) = flatten_proxy_task(joined) {
+                    drain_error.get_or_insert(error);
+                }
+            }
+        })
+        .await
+        .is_ok();
+        if !drained {
+            requests.abort_all();
             serve_result = Err(anyhow!(
                 "MCP proxy requests did not finish within {}ms shutdown grace",
                 PROXY_SHUTDOWN_GRACE.as_millis()
             ));
+        } else {
+            serve_result = drain_error.map_or(Ok(()), Err);
         }
-    } else if serve_result.is_ok() {
-        serve_result = drain_error.map_or(Ok(()), Err);
     }
-    upstreams.shutdown().await;
+
     while let Some(joined) = requests.join_next().await {
         if let Err(error) = joined {
             if !error.is_cancelled() && serve_result.is_ok() {
@@ -239,24 +263,70 @@ async fn serve_proxy_stdio_async(
             ));
         }
     }
-    if let Err(error) = notification_task.join().await {
+
+    if let Err(error) = notification_task
+        .shutdown(MCP_NOTIFICATION_SHUTDOWN_GRACE)
+        .await
+    {
         if serve_result.is_ok() {
             serve_result = Err(error);
         }
     }
+
+    upstreams.request_shutdown();
+    let upstream_shutdown = if serve_result.is_err() {
+        tokio::time::timeout(PROXY_FATAL_SHUTDOWN_GRACE, upstreams.shutdown())
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "MCP upstreams did not stop within {}ms fatal shutdown grace",
+                    PROXY_FATAL_SHUTDOWN_GRACE.as_millis()
+                )
+            })
+    } else {
+        upstreams.shutdown().await;
+        Ok(())
+    };
+    if let Err(error) = upstream_shutdown {
+        if serve_result.is_ok() {
+            serve_result = Err(error);
+        }
+    }
+
     drop(upstreams);
     drop(output);
     if let Some(writer) = writer {
-        match writer.await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) if serve_result.is_ok() => serve_result = Err(error),
-            Err(error) if serve_result.is_ok() => {
-                serve_result = Err(anyhow!("MCP stdout writer task failed: {error}"))
+        let writer_result = finish_proxy_writer(writer, serve_result.is_err()).await;
+        if let Err(error) = writer_result {
+            if serve_result.is_ok() {
+                serve_result = Err(error);
             }
-            _ => {}
         }
     }
     serve_result
+}
+
+async fn finish_proxy_writer(
+    mut writer: tokio::task::JoinHandle<Result<()>>,
+    fatal: bool,
+) -> Result<()> {
+    if !fatal {
+        return writer
+            .await
+            .map_err(|error| anyhow!("MCP stdout writer task failed: {error}"))?;
+    }
+
+    match tokio::time::timeout(MCP_NOTIFICATION_SHUTDOWN_GRACE, &mut writer).await {
+        Ok(result) => result.map_err(|error| anyhow!("MCP stdout writer task failed: {error}"))?,
+        Err(_) => {
+            writer.abort();
+            let _ = tokio::time::timeout(MCP_NOTIFICATION_SHUTDOWN_GRACE, &mut writer).await;
+            Err(anyhow!(
+                "MCP stdout writer did not stop within {}ms; task aborted",
+                MCP_NOTIFICATION_SHUTDOWN_GRACE.as_millis()
+            ))
+        }
+    }
 }
 
 async fn dispatch_proxy_payload(
@@ -1042,6 +1112,18 @@ fn classify_tool_operation(name: &str, arguments: &Value) -> suite_packet_core::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn fatal_cleanup_aborts_a_blocked_stdout_writer_after_the_grace() {
+        let writer = tokio::spawn(std::future::pending::<Result<()>>());
+        let mut finish = Box::pin(finish_proxy_writer(writer, true));
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(MCP_NOTIFICATION_SHUTDOWN_GRACE).await;
+        let error = finish.as_mut().await.unwrap_err();
+
+        assert!(error.to_string().contains("task aborted"));
+    }
 
     #[test]
     fn proxy_overload_preserves_each_request_id_and_skips_non_requests() {

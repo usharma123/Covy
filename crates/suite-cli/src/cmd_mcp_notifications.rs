@@ -30,18 +30,55 @@ impl NotificationTask {
         self.shutdown.send_replace(true);
     }
 
-    pub(super) async fn shutdown(mut self) -> Result<()> {
+    pub(super) async fn supervise<F, T>(&mut self, operation: F) -> Result<T>
+    where
+        F: Future<Output = T>,
+    {
+        tokio::select! {
+            output = operation => Ok(output),
+            result = self.join() => Err(unexpected_notification_exit(result)),
+        }
+    }
+
+    pub(super) async fn supervise_result<F, T>(&mut self, operation: F) -> Result<T>
+    where
+        F: Future<Output = Result<T>>,
+    {
+        self.supervise(operation).await?
+    }
+
+    pub(super) async fn shutdown(mut self, grace: Duration) -> Result<()> {
+        if self.task.is_none() {
+            return Ok(());
+        }
         self.request_shutdown();
-        self.join().await
+        match tokio::time::timeout(grace, self.join()).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.abort();
+                let _ = tokio::time::timeout(grace, self.join()).await;
+                Err(anyhow!(
+                    "MCP notification task did not stop within {}ms; task aborted",
+                    grace.as_millis()
+                ))
+            }
+        }
     }
 
     pub(super) async fn join(&mut self) -> Result<()> {
-        let task = self
+        let joined = self
             .task
-            .take()
+            .as_mut()
             .ok_or_else(|| anyhow!("MCP notification task was already joined"))?;
-        task.await
-            .map_err(|error| anyhow!("MCP notification task failed: {error}"))?
+        let result = joined.await;
+        self.task.take();
+        result.map_err(|error| anyhow!("MCP notification task failed: {error}"))?
+    }
+
+    fn abort(&mut self) {
+        if let Some(task) = self.task.as_mut() {
+            task.abort();
+        }
     }
 }
 
@@ -50,6 +87,13 @@ impl Drop for NotificationTask {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+    }
+}
+
+fn unexpected_notification_exit(result: Result<()>) -> anyhow::Error {
+    match result {
+        Ok(()) => anyhow!("MCP notification task stopped unexpectedly"),
+        Err(error) => error,
     }
 }
 
@@ -373,7 +417,7 @@ mod tests {
         tokio::time::advance(Duration::from_millis(1)).await;
         let message = receiver.recv().await.unwrap();
         assert_eq!(message.value["params"]["event_seq"], 1);
-        task.shutdown().await.unwrap();
+        task.shutdown(Duration::from_secs(1)).await.unwrap();
     }
 
     #[tokio::test(start_paused = true)]
@@ -393,6 +437,130 @@ mod tests {
         assert_eq!(session.lock().unwrap().tracked_task_offsets[TASK_ID], 0);
         task.request_shutdown();
         task.join().await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn supervision_join_remains_owned_when_the_wait_is_cancelled() {
+        let (root, session, _) = fixture(0, true);
+        let mut task = start_deterministic_notification_task(
+            root.path().to_path_buf(),
+            session,
+            |_notification, _framing| async {
+                panic!("empty event log must not deliver a notification")
+            },
+        );
+
+        let mut supervised = Box::pin(task.supervise(std::future::pending::<()>()));
+        tokio::select! {
+            biased;
+            result = &mut supervised => {
+                panic!("notification supervision stopped before cancellation: {result:?}");
+            }
+            _ = tokio::task::yield_now() => {}
+        }
+        drop(supervised);
+
+        task.shutdown(Duration::from_secs(1)).await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn supervision_propagates_notification_reader_errors() {
+        let (root, session, _) = fixture(0, true);
+        let mut task = start_notification_task_with_reader(
+            root.path().to_path_buf(),
+            session,
+            super::super::MCP_NOTIFICATION_POLL_INTERVAL,
+            |_root, _task_id, _offset| async {
+                Err::<Option<TaskEventLogRead>, _>(anyhow!("reader exploded"))
+            },
+            |_notification, _framing| async {
+                panic!("failed notification read must not attempt delivery")
+            },
+        );
+
+        let error = task
+            .supervise(std::future::pending::<()>())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "reader exploded");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn supervision_propagates_notification_delivery_errors() {
+        let (root, session, _) = fixture(1, true);
+        let mut task = start_deterministic_notification_task(
+            root.path().to_path_buf(),
+            session.clone(),
+            |_notification, _framing| async {
+                Err::<NotificationDelivery, _>(anyhow!("stdout exploded"))
+            },
+        );
+
+        let error = task
+            .supervise(std::future::pending::<()>())
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("MCP notification delivery failed"));
+        assert_eq!(session.lock().unwrap().tracked_tasks[TASK_ID], 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn supervision_reports_notification_task_panics() {
+        let (shutdown, _shutdown_receiver) = watch::channel(false);
+        let mut task = NotificationTask {
+            shutdown,
+            task: Some(tokio::spawn(async {
+                panic!("notification panic fixture");
+                #[expect(unreachable_code, reason = "panic drives the task failure")]
+                Ok(())
+            })),
+        };
+
+        let error = task
+            .supervise(std::future::pending::<()>())
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("MCP notification task failed"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn supervision_rejects_an_unexpected_clean_poller_exit() {
+        let (shutdown, _shutdown_receiver) = watch::channel(false);
+        let mut task = NotificationTask {
+            shutdown,
+            task: Some(tokio::spawn(async { Ok(()) })),
+        };
+
+        let error = task
+            .supervise(std::future::pending::<()>())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "MCP notification task stopped unexpectedly"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bounded_shutdown_aborts_a_task_that_ignores_its_signal() {
+        let (shutdown, _shutdown_receiver) = watch::channel(false);
+        let task = NotificationTask {
+            shutdown,
+            task: Some(tokio::spawn(std::future::pending::<Result<()>>())),
+        };
+        let mut shutdown = Box::pin(task.shutdown(Duration::from_secs(1)));
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let error = shutdown.as_mut().await.unwrap_err();
+
+        assert!(error.to_string().contains("task aborted"));
     }
 
     #[tokio::test(start_paused = true)]
@@ -469,7 +637,7 @@ mod tests {
             session.lock().unwrap().tracked_task_offsets[TASK_ID],
             event_log_len
         );
-        task.shutdown().await.unwrap();
+        task.shutdown(Duration::from_secs(1)).await.unwrap();
     }
 
     #[tokio::test(start_paused = true)]
@@ -483,7 +651,7 @@ mod tests {
         );
         tokio::task::yield_now().await;
 
-        task.shutdown().await.unwrap();
+        task.shutdown(Duration::from_secs(1)).await.unwrap();
 
         assert_eq!(tokio::time::Instant::now(), started_at);
     }
@@ -509,7 +677,7 @@ mod tests {
         );
         entered_receiver.await.unwrap();
 
-        task.shutdown().await.unwrap();
+        task.shutdown(Duration::from_secs(1)).await.unwrap();
 
         assert_eq!(tokio::time::Instant::now(), started_at);
     }

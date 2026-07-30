@@ -83,6 +83,8 @@ const MCP_PROTOCOL_VERSION_2024_11_05: &str = "2024-11-05";
 const MCP_PROTOCOL_VERSION_2025_03_26: &str = "2025-03-26";
 const MCP_LATEST_PROTOCOL_VERSION: &str = MCP_PROTOCOL_VERSION_2025_03_26;
 const MCP_NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const MCP_NOTIFICATION_SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
+const MCP_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 
 fn validated_task_storage_id(task_id: &str) -> Result<TaskStorageId> {
     Ok(TaskStorageId::try_from(task_id)?)
@@ -264,12 +266,14 @@ fn run_smoke_test(args: McpSmokeTestArgs) -> Result<i32> {
 }
 
 fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("packet28-mcp")
         .build()
-        .context("failed to start MCP runtime")?
-        .block_on(serve_stdio_async(root, toolset))
+        .context("failed to start MCP runtime")?;
+    let result = runtime.block_on(serve_stdio_async(root, toolset));
+    runtime.shutdown_timeout(MCP_RUNTIME_SHUTDOWN_TIMEOUT);
+    result
 }
 
 async fn serve_stdio_async(root: PathBuf, toolset: McpToolset) -> Result<()> {
@@ -280,7 +284,7 @@ async fn serve_stdio_async(root: PathBuf, toolset: McpToolset) -> Result<()> {
         ..McpSessionState::default()
     }));
     let notification_writer = writer.clone();
-    let notification_task = start_notification_task(
+    let mut notification_task = start_notification_task(
         root.clone(),
         session.clone(),
         MCP_NOTIFICATION_POLL_INTERVAL,
@@ -294,21 +298,45 @@ async fn serve_stdio_async(root: PathBuf, toolset: McpToolset) -> Result<()> {
         },
     );
 
-    loop {
-        let Some((request, framing)) = read_message_async(&mut reader).await? else {
-            break;
+    let serve_result = loop {
+        let next = match notification_task
+            .supervise_result(read_message_async(&mut reader))
+            .await
+        {
+            Ok(next) => next,
+            Err(error) => break Err(error),
+        };
+        let Some((request, framing)) = next else {
+            break Ok(());
         };
         if let Ok(mut guard) = session.lock() {
             guard.framing = Some(framing);
         }
-        if let Some(response) = dispatch_local_payload(&root, &session, request).await? {
-            let mut guard = writer.lock().await;
-            write_message_async(&mut *guard, &response, framing).await?;
+        let response = match notification_task
+            .supervise_result(dispatch_local_payload(&root, &session, request))
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => break Err(error),
+        };
+        if let Some(response) = response {
+            let write = async {
+                let mut guard = writer.lock().await;
+                write_message_async(&mut *guard, &response, framing).await
+            };
+            if let Err(error) = notification_task.supervise_result(write).await {
+                break Err(error);
+            }
         }
-    }
+    };
 
-    notification_task.shutdown().await?;
-    Ok(())
+    let shutdown_result = notification_task
+        .shutdown(MCP_NOTIFICATION_SHUTDOWN_GRACE)
+        .await;
+    if serve_result.is_ok() {
+        shutdown_result?;
+    }
+    serve_result
 }
 
 async fn dispatch_local_payload(

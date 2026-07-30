@@ -788,6 +788,12 @@ impl UpstreamPool {
         }
     }
 
+    pub(crate) fn request_shutdown(&self) {
+        for client in self.clients.values() {
+            client.request_shutdown();
+        }
+    }
+
     pub(crate) async fn forward_client_response(&self, response: &Value) -> Result<bool> {
         for client in self.clients.values() {
             if client.forward_client_response(response).await? {

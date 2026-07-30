@@ -132,6 +132,9 @@ def respond_to_tool(message):
         os._exit(17)
     if arguments.get("barrier"):
         RACE_BARRIER.wait(timeout=5)
+    if arguments.get("started_path"):
+        with open(arguments["started_path"], "w", encoding="utf-8") as marker:
+            marker.write("started")
     time.sleep(arguments.get("delay_ms", 0) / 1000.0)
     write_message({
         "jsonrpc": "2.0",
@@ -153,13 +156,57 @@ while True:
     if method == "initialize":
         write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}, "resources": {}}, "serverInfo": {"name": "concurrent", "version": "1"}}})
     elif method == "tools/list":
-        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": [{"name": "concurrent.echo", "description": "concurrent test tool", "inputSchema": {"type": "object", "properties": {"delay_ms": {"type": "integer"}, "value": {"type": "string"}}}}]}})
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": [{"name": "concurrent.echo", "description": "concurrent test tool", "inputSchema": {"type": "object", "properties": {"delay_ms": {"type": "integer"}, "value": {"type": "string"}, "started_path": {"type": "string"}}}}]}})
     elif method == "resources/list":
         write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"resources": []}})
     elif method == "resources/templates/list":
         write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"resourceTemplates": []}})
     elif method == "tools/call":
         threading.Thread(target=respond_to_tool, args=(message,), daemon=True).start()
+    else:
+        write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": "unknown method"}})
+"#,
+    )
+    .unwrap();
+}
+
+pub fn write_slow_initialize_server(path: &Path) {
+    fs::write(
+        path,
+        r#"import json, os, sys, time
+
+def read_message():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, value = line.decode("utf-8").split(":", 1)
+        headers[name.lower().strip()] = value.strip()
+    length = int(headers.get("content-length", "0"))
+    return json.loads(sys.stdin.buffer.read(length))
+
+def write_message(value):
+    body = json.dumps(value).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+while True:
+    message = read_message()
+    if message is None:
+        break
+    msg_id = message.get("id")
+    if msg_id is None:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        with open(os.environ["P28_TEST_INIT_MARKER"], "w", encoding="utf-8") as marker:
+            marker.write("started")
+        time.sleep(30)
+        write_message({"jsonrpc": "2.0", "id": msg_id, "result": {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "slow-init", "version": "1"}}})
     else:
         write_message({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": "unknown method"}})
 "#,

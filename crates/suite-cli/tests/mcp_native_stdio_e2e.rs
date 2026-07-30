@@ -1,5 +1,12 @@
 #[expect(
     dead_code,
+    reason = "shared lifecycle fixtures support native and proxy MCP test binaries"
+)]
+#[cfg(unix)]
+#[path = "support/mcp_lifecycle.rs"]
+mod mcp_lifecycle;
+#[expect(
+    dead_code,
     reason = "this protocol fixture uses the shared build and command harness"
 )]
 #[path = "support/process_harness.rs"]
@@ -11,6 +18,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use mcp_lifecycle::{
+    corrupt_task_event_log, large_response_batch, read_newline_message, small_buffered_stdout_pair,
+    wait_for_child, wait_for_stdout_backpressure, write_newline_message,
+};
 use process_harness::{HarnessLimits, McpHarness};
 
 const MCP_IO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -148,6 +160,105 @@ fn test_idle_mcp_session_releases_task_store_for_retention() {
     server
         .finish(MCP_SHUTDOWN_TIMEOUT)
         .unwrap_or_else(|error| panic!("failed to stop newline MCP server: {error}"));
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_native_poller_failure_cancels_a_backpressured_stdout_write() {
+    use std::io::{BufReader, BufWriter, Read as _};
+    use std::os::fd::OwnedFd;
+    use std::process::{Command, Stdio};
+
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+
+    let task_id = "task-native-poller-failed-with-blocked-stdout";
+    let (child_stdout, parent_stdout) = small_buffered_stdout_pair();
+    let child_stdout: OwnedFd = child_stdout.into();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_Packet28"));
+    command
+        .current_dir(dir.path())
+        .args(["mcp", "serve", "--root", dir.path().to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(child_stdout))
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let mut stdin = BufWriter::new(child.stdin.take().unwrap());
+    let mut stdout = BufReader::new(parent_stdout);
+
+    write_newline_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{
+                "protocolVersion":"2025-03-26",
+                "capabilities":{},
+                "clientInfo":{"name":"stdout-backpressure-test","version":"1"}
+            }
+        }),
+    );
+    assert_eq!(read_newline_message(&mut stdout)["id"], 1);
+    write_newline_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":2,
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.task_status",
+                "arguments":{
+                    "task_id":task_id
+                }
+            }
+        }),
+    );
+    let write_response = read_newline_message(&mut stdout);
+    assert_eq!(write_response["id"], 2);
+    assert!(
+        write_response.get("result").is_some(),
+        "task_status failed: {write_response}"
+    );
+
+    let batch = large_response_batch();
+    let response_lower_bound = write_newline_message(&mut stdin, &batch);
+    wait_for_stdout_backpressure(
+        stdout.get_ref(),
+        response_lower_bound,
+        Duration::from_secs(3),
+    );
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "native MCP server exited before the poller failure was injected"
+    );
+    corrupt_task_event_log(dir.path(), task_id);
+
+    let status = wait_for_child(&mut child, Duration::from_secs(4));
+    assert!(!status.success());
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(
+        stderr.contains("MCP notification event-log read failed"),
+        "unexpected native MCP failure: {stderr}"
+    );
+
+    let stop = mcp_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        stop.status.success(),
+        "daemon stop failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&stop.stdout),
+        String::from_utf8_lossy(&stop.stderr)
+    );
 }
 
 #[test]
