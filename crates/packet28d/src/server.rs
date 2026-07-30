@@ -2,7 +2,8 @@ use super::*;
 use crate::broker::{
     broker_decompose, broker_estimate_context, broker_get_context, broker_prepare_handoff,
     broker_task_status, broker_validate_plan, broker_write_state, broker_write_state_batch,
-    build_status, kernel_for_context_root, kernel_for_request, mark_handoff_consumed,
+    build_registry_status_v1, build_status, kernel_for_context_root, kernel_for_request,
+    mark_handoff_consumed,
 };
 use crate::instruction_files::resolve_context;
 use crate::runtime::{BlockingPool, DaemonRuntimeConfig};
@@ -10,14 +11,29 @@ use crate::state::TaskSubscriber;
 use crate::watch::WatchIngress;
 use packet28_daemon_protocol::frame::{FrameError, MAX_SOCKET_MESSAGE_BYTES};
 use packet28_daemon_protocol::message::DaemonTransportAuth;
-use packet28_daemon_protocol::task::TaskMarkHandoffConsumedResponse;
-use serde::Serialize;
+use packet28_daemon_protocol::registry::{
+    DaemonRegistryRequestV1, DaemonRegistryResponseV1, RegistryRevisionV1, TaskListPageRequestV1,
+    TaskListPageV1, WatchListPageRequestV1, WatchListPageV1, MAX_REGISTRY_PAGE_ITEM_BYTES,
+    MAX_REGISTRY_PAGE_LIMIT, MAX_REGISTRY_PAGE_RESPONSE_BYTES,
+};
+use packet28_daemon_protocol::task::{
+    TaskMarkHandoffConsumedResponse, TaskRecord, WatchRegistration,
+};
+use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 static NEXT_SUBSCRIBER_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_TRANSPORT_AUTH_FRAME_BYTES: usize = 4 * 1024;
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum IncomingDaemonRequest {
+    Registry(DaemonRegistryRequestV1),
+    Legacy(Box<DaemonRequest>),
+}
 
 #[derive(Debug)]
 enum FrameReadError {
@@ -148,7 +164,7 @@ where
         };
         let request = match blocking_pool
             .run_control(move || {
-                serde_json::from_slice::<DaemonRequest>(&frame)
+                serde_json::from_slice::<IncomingDaemonRequest>(&frame)
                     .map_err(|error| anyhow!("invalid daemon request frame: {error}"))
             })
             .await
@@ -167,6 +183,31 @@ where
                 .await?;
                 return Ok(());
             }
+        };
+        let request = match request {
+            IncomingDaemonRequest::Registry(request) => {
+                let request_state = state.clone();
+                let response = blocking_pool
+                    .run(move || handle_registry_request_v1(request_state, request))
+                    .await;
+                let response = match response {
+                    Ok(response) => response,
+                    Err(error) => {
+                        let message = format!("{error:#}");
+                        daemon_log(&format!("daemon registry request failed: {message}"));
+                        DaemonRegistryResponseV1::Error { message }
+                    }
+                };
+                write_async_frame(
+                    &mut stream,
+                    response,
+                    config.frame_write_timeout,
+                    &blocking_pool,
+                )
+                .await?;
+                continue;
+            }
+            IncomingDaemonRequest::Legacy(request) => *request,
         };
         if matches!(&request, DaemonRequest::Stop) {
             write_control_frame(
@@ -761,7 +802,9 @@ fn handle_request(
                 .tasks
                 .get(&task_id)
                 .cloned();
-            Ok(DaemonResponse::TaskStatus { task })
+            let response = DaemonResponse::TaskStatus { task };
+            ensure_legacy_response_fits(&response, "task_status", "task_list_page_v1")?;
+            Ok(response)
         }
         DaemonRequest::TaskAwaitHandoff { .. } => Err(anyhow!(
             "task await-handoff must run on the daemon async orchestration boundary"
@@ -800,7 +843,9 @@ fn handle_request(
                 })
                 .cloned()
                 .collect();
-            Ok(DaemonResponse::WatchList { watches })
+            let response = DaemonResponse::WatchList { watches };
+            ensure_legacy_response_fits(&response, "watch_list", "watch_list_page_v1")?;
+            Ok(response)
         }
         DaemonRequest::WatchRemove { watch_id } => {
             let removed = remove_watch(state, &watch_id)?;
@@ -920,6 +965,343 @@ fn handle_request(
     }
 }
 
+const MAX_REGISTRY_PAGE_COLLECTION_BYTES: usize = MAX_REGISTRY_PAGE_RESPONSE_BYTES / 2;
+
+fn handle_registry_request_v1(
+    state: Arc<Mutex<DaemonState>>,
+    request: DaemonRegistryRequestV1,
+) -> Result<DaemonRegistryResponseV1> {
+    let mut state = state.lock().map_err(lock_err)?;
+    match request {
+        DaemonRegistryRequestV1::Status => Ok(DaemonRegistryResponseV1::Status {
+            status: Box::new(build_registry_status_v1(&state)?),
+        }),
+        DaemonRegistryRequestV1::TaskListPage { request } => {
+            let revision = state.registry_revision();
+            Ok(DaemonRegistryResponseV1::TaskListPage {
+                page: build_task_list_page(&state.tasks.tasks, &revision, &request)?,
+            })
+        }
+        DaemonRegistryRequestV1::WatchListPage { request } => {
+            let revision = state.registry_revision();
+            validate_registry_snapshot("watch", &revision, request.snapshot_revision.as_ref())?;
+            ensure_registry_page_index(&mut state, &revision)?;
+            let index = state
+                .registry_page_index
+                .as_ref()
+                .ok_or_else(|| anyhow!("watch registry page index is unavailable"))?;
+            Ok(DaemonRegistryResponseV1::WatchListPage {
+                page: build_watch_list_page(&state.watches.watches, index, &revision, &request)?,
+            })
+        }
+    }
+}
+
+fn ensure_registry_page_index(
+    state: &mut DaemonState,
+    revision: &RegistryRevisionV1,
+) -> Result<()> {
+    if state
+        .registry_page_index
+        .as_ref()
+        .is_some_and(|index| &index.revision == revision)
+    {
+        return Ok(());
+    }
+    let mut index = crate::state::RegistryPageIndex {
+        revision: revision.clone(),
+        ..crate::state::RegistryPageIndex::default()
+    };
+    for (position, watch) in state.watches.watches.iter().enumerate() {
+        if index
+            .watch_positions
+            .insert(watch.watch_id.clone(), position)
+            .is_some()
+        {
+            anyhow::bail!(
+                "watch registry contains duplicate identifier '{}'",
+                watch.watch_id
+            );
+        }
+        index
+            .watch_ids_by_task
+            .entry(watch.spec.task_id.clone())
+            .or_default()
+            .insert(watch.watch_id.clone());
+    }
+    state.registry_page_index = Some(index);
+    Ok(())
+}
+
+fn build_task_list_page(
+    tasks: &BTreeMap<String, TaskRecord>,
+    revision: &RegistryRevisionV1,
+    request: &TaskListPageRequestV1,
+) -> Result<TaskListPageV1> {
+    validate_registry_page_request(
+        "task",
+        request.limit,
+        request.after_task_id.as_deref(),
+        None,
+    )?;
+    validate_registry_snapshot("task", revision, request.snapshot_revision.as_ref())?;
+    if let Some(cursor) = request.after_task_id.as_ref() {
+        if !tasks.contains_key(cursor) {
+            anyhow::bail!("task page cursor '{cursor}' is not present in the live registry");
+        }
+    }
+
+    let mut page = TaskListPageV1 {
+        snapshot_revision: revision.clone(),
+        tasks: Vec::new(),
+        next_after_task_id: None,
+        total: tasks.len(),
+    };
+    let mut collection_bytes = 0_usize;
+    let mut has_more = false;
+    let start = request
+        .after_task_id
+        .as_ref()
+        .map_or(Unbounded, |cursor| Excluded(cursor.clone()));
+    for (task_id, task) in tasks.range((start, Unbounded)) {
+        if page.tasks.len() == request.limit {
+            has_more = true;
+            break;
+        }
+        let item_bytes = encoded_registry_page_item_bytes(task, "task", task_id)?;
+        let separator = usize::from(!page.tasks.is_empty());
+        let Some(next_bytes) = collection_bytes
+            .checked_add(item_bytes)
+            .and_then(|bytes| bytes.checked_add(separator))
+        else {
+            anyhow::bail!("task page byte accounting overflow");
+        };
+        if next_bytes > MAX_REGISTRY_PAGE_COLLECTION_BYTES {
+            if page.tasks.is_empty() {
+                anyhow::bail!(
+                    "task record '{task_id}' cannot fit within the \
+                     {MAX_REGISTRY_PAGE_COLLECTION_BYTES}-byte page collection bound"
+                );
+            }
+            has_more = true;
+            break;
+        }
+        collection_bytes = next_bytes;
+        page.tasks.push(task.clone());
+    }
+    if has_more {
+        page.next_after_task_id = page.tasks.last().map(|task| task.task_id.clone());
+    }
+    ensure_registry_page_response_fits(
+        &DaemonRegistryResponseV1::TaskListPage { page: page.clone() },
+        "task",
+    )?;
+    Ok(page)
+}
+
+fn build_watch_list_page(
+    watches: &[WatchRegistration],
+    index: &crate::state::RegistryPageIndex,
+    revision: &RegistryRevisionV1,
+    request: &WatchListPageRequestV1,
+) -> Result<WatchListPageV1> {
+    validate_registry_page_request(
+        "watch",
+        request.limit,
+        request.after_watch_id.as_deref(),
+        request.task_id.as_deref(),
+    )?;
+    validate_registry_snapshot("watch", revision, request.snapshot_revision.as_ref())?;
+    let start = request
+        .after_watch_id
+        .as_ref()
+        .map_or(Unbounded, |cursor| Excluded(cursor.clone()));
+    let empty = BTreeSet::new();
+    let filtered_ids = request
+        .task_id
+        .as_ref()
+        .map(|task_id| index.watch_ids_by_task.get(task_id).unwrap_or(&empty));
+    if let Some(cursor) = request.after_watch_id.as_ref() {
+        let contains_cursor = filtered_ids.map_or_else(
+            || index.watch_positions.contains_key(cursor),
+            |ids| ids.contains(cursor),
+        );
+        if !contains_cursor {
+            anyhow::bail!(
+                "watch page cursor '{cursor}' is not present in the filtered live registry"
+            );
+        }
+    }
+
+    match filtered_ids {
+        Some(ids) => collect_watch_list_page(
+            ids.range((start, Unbounded)),
+            ids.len(),
+            watches,
+            index,
+            revision,
+            request.limit,
+        ),
+        None => collect_watch_list_page(
+            index
+                .watch_positions
+                .range((start, Unbounded))
+                .map(|(id, _)| id),
+            index.watch_positions.len(),
+            watches,
+            index,
+            revision,
+            request.limit,
+        ),
+    }
+}
+
+fn collect_watch_list_page<'a>(
+    ids: impl Iterator<Item = &'a String>,
+    total: usize,
+    watches: &[WatchRegistration],
+    index: &crate::state::RegistryPageIndex,
+    revision: &RegistryRevisionV1,
+    limit: usize,
+) -> Result<WatchListPageV1> {
+    let mut page = WatchListPageV1 {
+        snapshot_revision: revision.clone(),
+        watches: Vec::new(),
+        next_after_watch_id: None,
+        total,
+    };
+    let mut collection_bytes = 0_usize;
+    let mut has_more = false;
+    for watch_id in ids {
+        if page.watches.len() == limit {
+            has_more = true;
+            break;
+        }
+        let position = index.watch_positions.get(watch_id).ok_or_else(|| {
+            anyhow!("watch page index lost identifier '{watch_id}' at revision {revision}")
+        })?;
+        let watch = watches.get(*position).ok_or_else(|| {
+            anyhow!("watch page index position for '{watch_id}' is out of bounds")
+        })?;
+        let item_bytes = encoded_registry_page_item_bytes(watch, "watch", watch_id)?;
+        let separator = usize::from(!page.watches.is_empty());
+        let Some(next_bytes) = collection_bytes
+            .checked_add(item_bytes)
+            .and_then(|bytes| bytes.checked_add(separator))
+        else {
+            anyhow::bail!("watch page byte accounting overflow");
+        };
+        if next_bytes > MAX_REGISTRY_PAGE_COLLECTION_BYTES {
+            if page.watches.is_empty() {
+                anyhow::bail!(
+                    "watch record '{}' cannot fit within the \
+                     {MAX_REGISTRY_PAGE_COLLECTION_BYTES}-byte page collection bound",
+                    watch.watch_id
+                );
+            }
+            has_more = true;
+            break;
+        }
+        collection_bytes = next_bytes;
+        page.watches.push(watch.clone());
+    }
+    if has_more {
+        page.next_after_watch_id = page.watches.last().map(|watch| watch.watch_id.clone());
+    }
+    ensure_registry_page_response_fits(
+        &DaemonRegistryResponseV1::WatchListPage { page: page.clone() },
+        "watch",
+    )?;
+    Ok(page)
+}
+
+fn validate_registry_snapshot(
+    kind: &str,
+    current_revision: &RegistryRevisionV1,
+    requested_revision: Option<&RegistryRevisionV1>,
+) -> Result<()> {
+    if let Some(requested_revision) = requested_revision {
+        if requested_revision != current_revision {
+            anyhow::bail!(
+                "{kind} registry changed during pagination: requested revision \
+                 {requested_revision}, current revision {current_revision}; restart pagination"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_registry_page_request(
+    kind: &str,
+    limit: usize,
+    cursor: Option<&str>,
+    filter: Option<&str>,
+) -> Result<()> {
+    if !(1..=MAX_REGISTRY_PAGE_LIMIT).contains(&limit) {
+        anyhow::bail!(
+            "{kind} page limit must be between 1 and {MAX_REGISTRY_PAGE_LIMIT}; found {limit}"
+        );
+    }
+    for (name, value) in [("cursor", cursor), ("task filter", filter)] {
+        if value.is_some_and(|value| value.len() > MAX_REGISTRY_PAGE_ITEM_BYTES) {
+            anyhow::bail!(
+                "{kind} page {name} exceeds the {MAX_REGISTRY_PAGE_ITEM_BYTES}-byte request bound"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn encoded_registry_page_item_bytes(
+    item: &impl Serialize,
+    kind: &str,
+    identifier: &str,
+) -> Result<usize> {
+    let item_bytes = serde_json::to_vec(item)
+        .with_context(|| format!("failed to encode {kind} page record '{identifier}'"))?
+        .len();
+    if item_bytes > MAX_REGISTRY_PAGE_ITEM_BYTES {
+        anyhow::bail!(
+            "{kind} record '{identifier}' encodes to {item_bytes} bytes; maximum paginated record \
+             size is {MAX_REGISTRY_PAGE_ITEM_BYTES}"
+        );
+    }
+    Ok(item_bytes)
+}
+
+fn ensure_registry_page_response_fits(
+    response: &DaemonRegistryResponseV1,
+    kind: &str,
+) -> Result<()> {
+    let bytes = serde_json::to_vec(response)
+        .with_context(|| format!("failed to encode bounded {kind} page response"))?
+        .len();
+    if bytes > MAX_REGISTRY_PAGE_RESPONSE_BYTES {
+        anyhow::bail!(
+            "{kind} page response encoded to {bytes} bytes; maximum is \
+             {MAX_REGISTRY_PAGE_RESPONSE_BYTES}"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_legacy_response_fits(
+    response: &DaemonResponse,
+    request_name: &str,
+    paginated_request_name: &str,
+) -> Result<()> {
+    let bytes = serde_json::to_vec(response)
+        .with_context(|| format!("failed to encode legacy {request_name} response"))?
+        .len();
+    if bytes > MAX_SOCKET_MESSAGE_BYTES {
+        anyhow::bail!(
+            "{request_name} response is {bytes} bytes and exceeds the \
+             {MAX_SOCKET_MESSAGE_BYTES}-byte transport limit; use {paginated_request_name}"
+        );
+    }
+    Ok(())
+}
+
 fn rollback_initial_task_admission(
     state: Arc<Mutex<DaemonState>>,
     task_id: &str,
@@ -992,6 +1374,329 @@ mod tests {
             selected.iter().map(|frame| frame.seq).collect::<Vec<_>>(),
             vec![3, 4]
         );
+    }
+
+    fn registry_revision(revision: u64) -> RegistryRevisionV1 {
+        RegistryRevisionV1 {
+            instance_id: "test-registry-instance".to_string(),
+            revision,
+        }
+    }
+
+    #[test]
+    fn task_registry_pages_are_ordered_and_cursor_forward() {
+        let tasks = ["task-c", "task-a", "task-b"]
+            .into_iter()
+            .map(|task_id| {
+                (
+                    task_id.to_string(),
+                    TaskRecord {
+                        task_id: task_id.to_string(),
+                        ..TaskRecord::default()
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let first = build_task_list_page(
+            &tasks,
+            &registry_revision(7),
+            &TaskListPageRequestV1 {
+                snapshot_revision: None,
+                after_task_id: None,
+                limit: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(first.total, 3);
+        assert_eq!(
+            first
+                .tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-a", "task-b"]
+        );
+        assert_eq!(first.snapshot_revision, registry_revision(7));
+        assert_eq!(first.next_after_task_id.as_deref(), Some("task-b"));
+
+        let second = build_task_list_page(
+            &tasks,
+            &registry_revision(7),
+            &TaskListPageRequestV1 {
+                snapshot_revision: Some(first.snapshot_revision),
+                after_task_id: first.next_after_task_id,
+                limit: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            second
+                .tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-c"]
+        );
+        assert_eq!(second.next_after_task_id, None);
+    }
+
+    fn registry_page_index(
+        watches: &[WatchRegistration],
+        revision: RegistryRevisionV1,
+    ) -> crate::state::RegistryPageIndex {
+        let mut index = crate::state::RegistryPageIndex {
+            revision,
+            ..crate::state::RegistryPageIndex::default()
+        };
+        for (position, watch) in watches.iter().enumerate() {
+            assert!(index
+                .watch_positions
+                .insert(watch.watch_id.clone(), position)
+                .is_none());
+            index
+                .watch_ids_by_task
+                .entry(watch.spec.task_id.clone())
+                .or_default()
+                .insert(watch.watch_id.clone());
+        }
+        index
+    }
+
+    #[test]
+    fn watch_registry_pages_filter_then_sort() {
+        let watch = |watch_id: &str, task_id: &str| WatchRegistration {
+            watch_id: watch_id.to_string(),
+            spec: WatchSpec {
+                task_id: task_id.to_string(),
+                ..WatchSpec::default()
+            },
+            ..WatchRegistration::default()
+        };
+        let watches = vec![
+            watch("watch-c", "task-a"),
+            watch("watch-a", "task-b"),
+            watch("watch-b", "task-a"),
+        ];
+        let index = registry_page_index(&watches, registry_revision(9));
+
+        let page = build_watch_list_page(
+            &watches,
+            &index,
+            &registry_revision(9),
+            &WatchListPageRequestV1 {
+                snapshot_revision: None,
+                task_id: Some("task-a".to_string()),
+                after_watch_id: None,
+                limit: MAX_REGISTRY_PAGE_LIMIT,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(page.total, 2);
+        assert_eq!(
+            page.watches
+                .iter()
+                .map(|watch| watch.watch_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["watch-b", "watch-c"]
+        );
+        assert_eq!(page.next_after_watch_id, None);
+    }
+
+    #[test]
+    fn registry_pages_reject_invalid_limits_and_stale_cursors() {
+        let tasks = BTreeMap::from([(
+            "task-a".to_string(),
+            TaskRecord {
+                task_id: "task-a".to_string(),
+                ..TaskRecord::default()
+            },
+        )]);
+        for limit in [0, MAX_REGISTRY_PAGE_LIMIT + 1] {
+            let error = build_task_list_page(
+                &tasks,
+                &registry_revision(7),
+                &TaskListPageRequestV1 {
+                    snapshot_revision: None,
+                    after_task_id: None,
+                    limit,
+                },
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("page limit"));
+        }
+
+        let error = build_task_list_page(
+            &tasks,
+            &registry_revision(7),
+            &TaskListPageRequestV1 {
+                snapshot_revision: None,
+                after_task_id: Some("task-missing".to_string()),
+                limit: 1,
+            },
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not present in the live registry"));
+
+        let error = build_task_list_page(
+            &tasks,
+            &registry_revision(8),
+            &TaskListPageRequestV1 {
+                snapshot_revision: Some(registry_revision(7)),
+                after_task_id: None,
+                limit: 1,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("changed during pagination"));
+        assert!(error.to_string().contains("restart pagination"));
+
+        let error = build_task_list_page(
+            &tasks,
+            &RegistryRevisionV1 {
+                instance_id: "replacement-daemon".to_string(),
+                revision: 7,
+            },
+            &TaskListPageRequestV1 {
+                snapshot_revision: Some(registry_revision(7)),
+                after_task_id: None,
+                limit: 1,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("changed during pagination"));
+    }
+
+    #[test]
+    fn registry_snapshot_rejects_same_cardinality_in_place_mutation() {
+        let state = crate::tests::support::daemon_test_state();
+        {
+            let mut guard = state.lock().unwrap();
+            guard.tasks.tasks.insert(
+                "task-a".to_string(),
+                TaskRecord {
+                    task_id: "task-a".to_string(),
+                    last_error: Some("before".to_string()),
+                    ..TaskRecord::default()
+                },
+            );
+            persist_state(&guard).unwrap();
+        }
+        let first = handle_registry_request_v1(
+            state.clone(),
+            DaemonRegistryRequestV1::TaskListPage {
+                request: TaskListPageRequestV1 {
+                    snapshot_revision: None,
+                    after_task_id: None,
+                    limit: 1,
+                },
+            },
+        )
+        .unwrap();
+        let first_revision = match first {
+            DaemonRegistryResponseV1::TaskListPage { page } => page.snapshot_revision,
+            other => panic!("unexpected first page response: {other:?}"),
+        };
+
+        {
+            let mut guard = state.lock().unwrap();
+            guard.tasks.tasks.get_mut("task-a").unwrap().last_error = Some("after".to_string());
+            assert_eq!(guard.tasks.tasks.len(), 1);
+            persist_state(&guard).unwrap();
+        }
+        let error = handle_registry_request_v1(
+            state.clone(),
+            DaemonRegistryRequestV1::TaskListPage {
+                request: TaskListPageRequestV1 {
+                    snapshot_revision: Some(first_revision),
+                    after_task_id: None,
+                    limit: 1,
+                },
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("changed during pagination"));
+        crate::tests::support::shutdown_test_persistence(&state);
+    }
+
+    #[test]
+    fn registry_pages_reject_an_individually_oversized_record() {
+        let task_id = "task-oversized";
+        let tasks = BTreeMap::from([(
+            task_id.to_string(),
+            TaskRecord {
+                task_id: task_id.to_string(),
+                last_error: Some("x".repeat(MAX_REGISTRY_PAGE_ITEM_BYTES)),
+                ..TaskRecord::default()
+            },
+        )]);
+
+        let error = build_task_list_page(
+            &tasks,
+            &registry_revision(7),
+            &TaskListPageRequestV1 {
+                snapshot_revision: None,
+                after_task_id: None,
+                limit: 1,
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("maximum paginated record size"));
+    }
+
+    #[test]
+    fn task_registry_page_stops_at_its_byte_budget_before_the_item_limit() {
+        let tasks = (0..3)
+            .map(|index| {
+                let task_id = format!("task-{index}");
+                (
+                    task_id.clone(),
+                    TaskRecord {
+                        task_id,
+                        last_error: Some("x".repeat(800 * 1024)),
+                        ..TaskRecord::default()
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let page = build_task_list_page(
+            &tasks,
+            &registry_revision(7),
+            &TaskListPageRequestV1 {
+                snapshot_revision: None,
+                after_task_id: None,
+                limit: 3,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(page.tasks.len(), 2);
+        assert_eq!(page.next_after_task_id.as_deref(), Some("task-1"));
+        let response = DaemonRegistryResponseV1::TaskListPage { page };
+        assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_REGISTRY_PAGE_RESPONSE_BYTES);
+    }
+
+    #[test]
+    fn legacy_registry_responses_fail_before_an_oversized_frame_write() {
+        let response = DaemonResponse::WatchList {
+            watches: vec![WatchRegistration {
+                watch_id: "watch-oversized".to_string(),
+                last_error: Some("x".repeat(MAX_SOCKET_MESSAGE_BYTES)),
+                ..WatchRegistration::default()
+            }],
+        };
+
+        let error =
+            ensure_legacy_response_fits(&response, "watch_list", "watch_list_page_v1").unwrap_err();
+
+        assert!(error.to_string().contains("exceeds the"));
+        assert!(error.to_string().contains("use watch_list_page_v1"));
     }
 
     fn deadline_config() -> DaemonRuntimeConfig {

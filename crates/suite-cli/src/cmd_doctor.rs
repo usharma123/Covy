@@ -931,49 +931,35 @@ fn build_windsurf_report(root: &Path) -> DoctorReport {
 }
 
 fn check_daemon(root: &Path) -> DoctorCheck {
-    match crate::cmd_daemon::ensure_daemon(root) {
-        Ok(_) => match crate::cmd_daemon::send_request(root, &DaemonRequest::Status) {
-            Ok(DaemonResponse::Status { status }) => {
-                let cli_version = env!("PACKET28_VERSION");
-                let daemon_version = status.version.trim();
-                let version_ok = daemon_version == cli_version;
-                DoctorCheck {
-                    name: "daemon",
-                    ok: version_ok,
-                    required: true,
-                    detail: if version_ok {
-                        format!(
-                            "daemon ready pid={} version={} socket={}",
-                            status.pid, daemon_version, status.socket_path
-                        )
-                    } else {
-                        format!(
-                            "daemon version skew: cli={} daemon={} pid={} socket={}; restart the daemon",
-                            cli_version,
-                            if daemon_version.is_empty() {
-                                "<unknown>"
-                            } else {
-                                daemon_version
-                            },
-                            status.pid,
-                            status.socket_path
-                        )
-                    },
-                }
+    match crate::cmd_daemon::daemon_status_v1(root) {
+        Ok(status) => {
+            let cli_version = env!("PACKET28_VERSION");
+            let daemon_version = status.version.trim();
+            let version_ok = daemon_version == cli_version;
+            DoctorCheck {
+                name: "daemon",
+                ok: version_ok,
+                required: true,
+                detail: if version_ok {
+                    format!(
+                        "daemon ready pid={} version={} socket={}",
+                        status.pid, daemon_version, status.socket_path
+                    )
+                } else {
+                    format!(
+                        "daemon version skew: cli={} daemon={} pid={} socket={}; restart the daemon",
+                        cli_version,
+                        if daemon_version.is_empty() {
+                            "<unknown>"
+                        } else {
+                            daemon_version
+                        },
+                        status.pid,
+                        status.socket_path
+                    )
+                },
             }
-            Ok(other) => DoctorCheck {
-                name: "daemon",
-                ok: false,
-                required: true,
-                detail: format!("unexpected daemon status response: {other:?}"),
-            },
-            Err(err) => DoctorCheck {
-                name: "daemon",
-                ok: false,
-                required: true,
-                detail: err.to_string(),
-            },
-        },
+        }
         Err(err) => DoctorCheck {
             name: "daemon",
             ok: false,

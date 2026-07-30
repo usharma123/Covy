@@ -1,5 +1,6 @@
 use super::*;
 use crate::broker::emit_task_event_for_generation;
+use packet28_daemon_protocol::registry::RegistryRevisionV1;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Condvar;
 
@@ -85,6 +86,13 @@ pub(crate) struct TaskSubscriber {
     pub(crate) sender: tokio::sync::mpsc::Sender<DaemonEventFrame>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct RegistryPageIndex {
+    pub(crate) revision: RegistryRevisionV1,
+    pub(crate) watch_positions: BTreeMap<String, usize>,
+    pub(crate) watch_ids_by_task: BTreeMap<String, BTreeSet<String>>,
+}
+
 pub(crate) struct DaemonState {
     pub(crate) root: PathBuf,
     pub(crate) kernel: Arc<Kernel>,
@@ -94,6 +102,8 @@ pub(crate) struct DaemonState {
     pub(crate) task_generations: TaskGenerationRegistry,
     pub(crate) agent_snapshots: BTreeMap<String, suite_packet_core::AgentSnapshotPayload>,
     pub(crate) watches: WatchRegistry,
+    pub(crate) registry_instance_id: String,
+    pub(crate) registry_page_index: Option<RegistryPageIndex>,
     pub(crate) watcher_handles: HashMap<String, PollWatcher>,
     pub(crate) subscribers: HashMap<String, Vec<TaskSubscriber>>,
     pub(crate) source_file_cache: BTreeMap<String, CachedSourceFile>,
@@ -106,6 +116,15 @@ pub(crate) struct DaemonState {
     pub(crate) shutdown: crate::runtime::ShutdownSignal,
     pub(crate) changes: crate::runtime::StateChangeSignal,
     pub(crate) shutting_down: bool,
+}
+
+impl DaemonState {
+    pub(crate) fn registry_revision(&self) -> RegistryRevisionV1 {
+        RegistryRevisionV1 {
+            instance_id: self.registry_instance_id.clone(),
+            revision: self.persistence.latest_revision(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

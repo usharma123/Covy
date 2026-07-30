@@ -25,6 +25,7 @@ use packet28_daemon_protocol::message::{
 use packet28_daemon_protocol::paths::{
     log_path, ready_path, resolve_workspace_root, socket_path, workspace_socket_path,
 };
+use packet28_daemon_protocol::registry::{DaemonRegistryRequestV1, DaemonRegistryResponseV1};
 use packet28_reducer_core::{parse_region_for_path, SearchRequest, SearchResult};
 use packet28_reducer_core::{SearchEngineStats, SearchGroup, SearchMatch};
 use packet28_search_core::{
@@ -1315,12 +1316,45 @@ fn wait_for_daemon(root: &Path, timeout: Duration) -> Result<()> {
 
 #[cfg(unix)]
 fn daemon_status_existing(root: &Path) -> Result<()> {
-    match send_request_existing_daemon(root, &DaemonRequest::Status) {
-        Ok(DaemonResponse::Status { .. }) => Ok(()),
-        Ok(DaemonResponse::Error { message }) => Err(anyhow!(message)),
-        Ok(other) => Err(anyhow!("unexpected daemon status response: {other:?}")),
-        Err(err) => Err(err),
+    match send_registry_request_existing_daemon(root, &DaemonRegistryRequestV1::Status) {
+        Ok(DaemonRegistryResponseV1::Status { .. }) => Ok(()),
+        Ok(DaemonRegistryResponseV1::Error { message })
+            if daemon_error_indicates_protocol_mismatch(&message) =>
+        {
+            match send_request_existing_daemon(root, &DaemonRequest::Status) {
+                Ok(DaemonResponse::Status { .. }) => Ok(()),
+                Ok(DaemonResponse::Error { message }) => Err(anyhow!(message)),
+                Ok(other) => Err(anyhow!(
+                    "unexpected legacy daemon status response: {other:?}"
+                )),
+                Err(error) => Err(error),
+            }
+        }
+        Ok(DaemonRegistryResponseV1::Error { message }) => Err(anyhow!(message)),
+        Ok(other) => Err(anyhow!(
+            "unexpected daemon registry status response: {other:?}"
+        )),
+        Err(error) => Err(error),
     }
+}
+
+#[cfg(unix)]
+fn daemon_error_indicates_protocol_mismatch(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("unknown variant") && lower.contains("expected one of")
+}
+
+#[cfg(unix)]
+fn send_registry_request_existing_daemon(
+    root: &Path,
+    request: &DaemonRegistryRequestV1,
+) -> Result<DaemonRegistryResponseV1> {
+    let stream = packet28_daemon_client::transport::connect(root, DAEMON_SOCKET_TIMEOUT)?;
+    let reader_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(reader_stream);
+    write_frame(&mut writer, request)?;
+    Ok(read_frame(&mut reader)?)
 }
 
 #[cfg(unix)]

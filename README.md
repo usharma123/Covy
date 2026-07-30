@@ -371,13 +371,25 @@ live in `packet28-daemon-client`, while persistence and recovery live in
 | `Execute` | `Execute` | Run single kernel request |
 | `ExecuteSequence` | `ExecuteSequence` | Submit multi-step task with watches |
 | `TaskStatus` | `TaskStatus` | Query task state |
+| `TaskListPage` (registry V1) | `TaskListPage` (registry V1) | Retrieve revision-fenced, bounded task pages in task-ID order |
 | `TaskCancel` | `TaskCancel` | Generation-fence work, remove watches, reap process groups, quiesce, and persist cancellation |
 | `TaskSubscribe` | `TaskSubscribeAck` + streaming events | Live per-step lifecycle events |
 | `WatchList` / `WatchRemove` | Watch metadata | Manage file watchers |
+| `WatchListPage` (registry V1) | `WatchListPage` (registry V1) | Retrieve revision-fenced, optionally task-filtered watch pages |
 | `CoverCheck` | `CoverCheck` | Direct cover check (no kernel overhead) |
 | `ContextRecall` | `ContextRecall` | Recall from daemon's persistent cache |
 | `ContextStore*` | Store metadata | List/get/prune/stats on cache |
-| `Status` / `Stop` | `Status` / `Ack` | Daemon lifecycle |
+| `Status` / `Stop` | `Status` / `Ack` | Legacy exhaustive status / lifecycle control |
+| `Status` (registry V1) | `Status` (registry V1) | Bounded liveness metadata, registry counts, and a pagination revision |
+
+Registry V1 is an additive envelope in the protocol crate's `registry`
+module. Its wire tags are `registry_status_v1`, `task_list_page_v1`, and
+`watch_list_page_v1`; every page after the first echoes the returned
+`snapshot_revision`. That token combines a random daemon-instance identifier
+with a monotonic mutation counter, so an intervening mutation or restart fails
+explicitly instead of mixing snapshots. The frozen legacy `Status` shape remains
+exhaustive when it fits its bounded response and otherwise returns an explicit
+error directing callers to registry V1.
 
 Watch kinds: `File` (glob pattern), `Git` (ref changes), `TestReport` (test result files).
 

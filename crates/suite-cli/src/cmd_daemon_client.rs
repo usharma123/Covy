@@ -17,10 +17,9 @@ use packet28_daemon_protocol::{
         ContextStoreStatsResponse,
     },
     frame::{read_frame, write_frame},
-    message::{
-        ContextResolveRequest, ContextResolveResponse, DaemonRequest, DaemonResponse, DaemonStatus,
-    },
+    message::{ContextResolveRequest, ContextResolveResponse, DaemonRequest, DaemonResponse},
     paths::{log_path, ready_path, resolve_workspace_root, socket_path, workspace_socket_path},
+    registry::{DaemonRegistryRequestV1, DaemonRegistryResponseV1, DaemonStatusV1},
 };
 
 #[cfg(unix)]
@@ -313,6 +312,14 @@ impl PersistentDaemonClient {
         Ok(read_frame(&mut self.reader)?)
     }
 
+    pub fn send_registry_request(
+        &mut self,
+        request: &DaemonRegistryRequestV1,
+    ) -> Result<DaemonRegistryResponseV1> {
+        write_frame(&mut self.writer, request)?;
+        Ok(read_frame(&mut self.reader)?)
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -430,13 +437,58 @@ fn send_request_existing_daemon(root: &Path, request: &DaemonRequest) -> Result<
 }
 
 #[cfg(unix)]
-fn daemon_status_existing(root: &Path) -> Result<DaemonStatus> {
-    match send_request_existing_daemon(root, &DaemonRequest::Status) {
-        Ok(DaemonResponse::Status { status }) => Ok(status),
-        Ok(DaemonResponse::Error { message }) => Err(anyhow!(message)),
-        Ok(other) => Err(anyhow!("unexpected daemon status response: {other:?}")),
-        Err(err) => Err(err),
+fn send_registry_request_existing_daemon(
+    root: &Path,
+    request: &DaemonRegistryRequestV1,
+) -> Result<DaemonRegistryResponseV1> {
+    let endpoint = daemon_endpoint(root)?;
+    let stream = connect_daemon_endpoint(&endpoint)?;
+    let reader_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(reader_stream);
+    write_frame(&mut writer, request)?;
+    Ok(read_frame(&mut reader)?)
+}
+
+#[cfg(unix)]
+fn daemon_status_existing(root: &Path) -> Result<DaemonStatusV1> {
+    match send_registry_request_existing_daemon(root, &DaemonRegistryRequestV1::Status) {
+        Ok(DaemonRegistryResponseV1::Status { status }) => Ok(*status),
+        Ok(DaemonRegistryResponseV1::Error { message })
+            if daemon_error_indicates_protocol_mismatch(&message) =>
+        {
+            legacy_daemon_status_existing(root)
+        }
+        Ok(DaemonRegistryResponseV1::Error { message }) => Err(anyhow!(message)),
+        Ok(other) => Err(anyhow!(
+            "unexpected daemon registry status response: {other:?}"
+        )),
+        Err(error) => Err(error),
     }
+}
+
+#[cfg(unix)]
+fn legacy_daemon_status_existing(root: &Path) -> Result<DaemonStatusV1> {
+    match send_request_existing_daemon(root, &DaemonRequest::Status) {
+        Ok(DaemonResponse::Status { status }) => Ok(DaemonStatusV1::from_legacy(status)),
+        Ok(DaemonResponse::Error { message }) => Err(anyhow!(message)),
+        Ok(other) => Err(anyhow!(
+            "unexpected legacy daemon status response: {other:?}"
+        )),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn daemon_status_v1(root: &Path) -> Result<DaemonStatusV1> {
+    let root = normalize_daemon_root(root);
+    ensure_daemon(&root)?;
+    daemon_status_existing(&root)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn daemon_status_v1(_root: &Path) -> Result<DaemonStatusV1> {
+    daemon_not_supported()
 }
 
 #[cfg(unix)]

@@ -35,6 +35,8 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
         task_generations: TaskGenerationRegistry::default(),
         agent_snapshots: BTreeMap::new(),
         watches: WatchRegistry::default(),
+        registry_instance_id: "test-registry-instance".to_string(),
+        registry_page_index: None,
         watcher_handles: HashMap::new(),
         subscribers: HashMap::new(),
         source_file_cache: BTreeMap::new(),

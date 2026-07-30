@@ -73,6 +73,13 @@ Step IDs are auto-generated if blank or missing (via `normalize_sequence_request
 DaemonRequest::TaskStatus { task_id }
 → DaemonResponse::TaskStatus { task: TaskRecord }
 
+DaemonRegistryRequestV1::TaskListPage {
+  request: { snapshot_revision, after_task_id, limit }
+}
+→ DaemonRegistryResponseV1::TaskListPage {
+  page: { snapshot_revision, tasks, next_after_task_id, total }
+}
+
 DaemonRequest::TaskCancel { task_id }
 → DaemonResponse::TaskCancel { task, removed_watch_ids }
 ```
@@ -112,9 +119,39 @@ sequence.
 DaemonRequest::WatchList { task_id }
 → DaemonResponse::WatchList { watches }
 
+DaemonRegistryRequestV1::WatchListPage {
+  request: { snapshot_revision, task_id, after_watch_id, limit }
+}
+→ DaemonRegistryResponseV1::WatchListPage {
+  page: { snapshot_revision, watches, next_after_watch_id, total }
+}
+
 DaemonRequest::WatchRemove { watch_id }
 → DaemonResponse::WatchRemove { removed }
 ```
+
+Task and watch pages are additive registry V1 messages with the wire tags
+`task_list_page_v1` and `watch_list_page_v1`. They are ordered by identifier
+and use the last returned identifier as an exclusive cursor. Limits must be
+between 1 and 256. Every continuation echoes the first response's
+`snapshot_revision`, which carries a random daemon-instance ID and monotonic
+mutation counter. A mutation or daemon restart between pages is rejected
+rather than mixing registry states. Pages reject stale cursors and individual records above
+1 MiB explicitly, and the complete response stays below 4 MiB. The CLI uses
+one authenticated connection for a complete traversal while preserving the
+existing `daemon watch list` output.
+
+### Liveness Status
+
+The frozen legacy `DaemonRequest::Status` response remains exhaustive when its
+task and watch vectors fit the 1 MiB response budget. Otherwise it returns an
+explicit error; it never returns an undisclosed prefix.
+
+`DaemonRegistryRequestV1::Status` (`registry_status_v1` on the wire) is the
+bounded liveness surface. `task_count` and `watch_count` report the full live
+registry sizes, `registry_revision` fences the page requests above, and
+`index_truncated` discloses omitted index detail. New clients can still decode
+an old daemon's exhaustive legacy status by deriving counts from its vectors.
 
 Watch kinds:
 - `File`: Glob pattern matching (e.g. `src/**/*.rs`)

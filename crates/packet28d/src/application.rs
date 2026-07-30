@@ -81,6 +81,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
     let config = DaemonRuntimeConfig::from_env()?;
     let daemon_log_path = log_path(&root);
     let listener = bind_daemon_listener(&root)?;
+    let registry_instance_id = generate_daemon_registry_instance_id()?;
 
     let runtime = DaemonRuntimeInfo {
         pid: std::process::id(),
@@ -154,6 +155,8 @@ pub fn serve(root: PathBuf) -> Result<()> {
         task_generations: TaskGenerationRegistry::default(),
         agent_snapshots: BTreeMap::new(),
         watches,
+        registry_instance_id,
+        registry_page_index: None,
         watcher_handles: HashMap::new(),
         subscribers: HashMap::new(),
         source_file_cache: BTreeMap::new(),
@@ -1274,10 +1277,25 @@ pub(crate) fn bind_tcp_listener(reason: &str) -> Result<DaemonListener> {
 }
 
 fn generate_daemon_transport_auth() -> Result<DaemonTransportAuth> {
+    Ok(DaemonTransportAuth::from_secret_bytes(
+        read_daemon_random_bytes("TCP capability")?,
+    ))
+}
+
+fn generate_daemon_registry_instance_id() -> Result<String> {
+    let random = read_daemon_random_bytes("registry instance identifier")?;
+    Ok(blake3::hash(&random).to_hex().to_string())
+}
+
+fn read_daemon_random_bytes(purpose: &str) -> Result<[u8; DAEMON_TRANSPORT_SECRET_BYTES]> {
     let mut secret = [0_u8; DAEMON_TRANSPORT_SECRET_BYTES];
     fs::File::open("/dev/urandom")
-        .context("failed to open operating-system random source for daemon TCP capability")?
+        .with_context(|| {
+            format!("failed to open operating-system random source for daemon {purpose}")
+        })?
         .read_exact(&mut secret)
-        .context("failed to read daemon TCP capability from operating-system random source")?;
-    Ok(DaemonTransportAuth::from_secret_bytes(secret))
+        .with_context(|| {
+            format!("failed to read daemon {purpose} from operating-system random source")
+        })?;
+    Ok(secret)
 }

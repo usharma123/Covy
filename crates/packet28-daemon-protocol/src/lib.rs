@@ -26,6 +26,7 @@ pub mod hooks;
 pub mod index;
 pub mod message;
 pub mod paths;
+pub mod registry;
 pub mod task;
 
 use broker::*;

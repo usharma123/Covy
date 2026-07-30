@@ -11,7 +11,10 @@ use packet28_daemon_protocol::broker::{
     BrokerAction, BrokerGetContextRequest, BrokerResponseMode, BrokerWriteOp,
     BrokerWriteStateRequest,
 };
-use packet28_daemon_protocol::message::{DaemonEvent, DaemonStatus};
+use packet28_daemon_protocol::message::{DaemonEvent, DaemonResponse, DaemonStatus};
+use packet28_daemon_protocol::registry::{
+    DaemonRegistryResponseV1, DaemonStatusV1, MAX_DAEMON_STATUS_V1_RESPONSE_BYTES,
+};
 use packet28_daemon_protocol::task::{TaskRecord, TaskRegistry};
 use serde_json::{json, Value};
 
@@ -21,6 +24,7 @@ use crate::{daemon_log, lock_err, mark_state_dirty, persist_state, resolve_root}
 
 const DEFAULT_CONTEXT_MANAGE_BUDGET_TOKENS: u64 = 5_000;
 const DEFAULT_CONTEXT_MANAGE_BUDGET_BYTES: usize = 32_000;
+const MAX_LEGACY_STATUS_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn kernel_for_request(
     state: &Arc<Mutex<DaemonState>>,
@@ -64,7 +68,7 @@ fn persist_root_override(target: &str, policy_context: &Value) -> Option<String>
 }
 
 pub(crate) fn build_status(state: &DaemonState) -> Result<DaemonStatus> {
-    Ok(DaemonStatus {
+    let mut status = DaemonStatus {
         pid: state.runtime.pid,
         version: state.runtime.version.clone(),
         socket_path: state.runtime.socket_path.clone(),
@@ -73,10 +77,112 @@ pub(crate) fn build_status(state: &DaemonState) -> Result<DaemonStatus> {
         ready_at_unix: state.runtime.ready_at_unix,
         log_path: state.runtime.log_path.clone(),
         uptime_secs: now_unix().saturating_sub(state.runtime.started_at_unix),
-        tasks: state.tasks.tasks.values().cloned().collect(),
-        watches: state.watches.watches.clone(),
+        tasks: Vec::new(),
+        watches: Vec::new(),
         index: Some(build_index_status(&state.interactive_index)),
+    };
+    let mut encoded_bytes = encoded_legacy_status_response_bytes(&status)?;
+    ensure_legacy_status_size(encoded_bytes)?;
+    for task in state.tasks.tasks.values() {
+        encoded_bytes =
+            add_legacy_status_item_size(encoded_bytes, status.tasks.len(), task, "task")?;
+        status.tasks.push(task.clone());
+    }
+    for watch in &state.watches.watches {
+        encoded_bytes =
+            add_legacy_status_item_size(encoded_bytes, status.watches.len(), watch, "watch")?;
+        status.watches.push(watch.clone());
+    }
+    debug_assert_eq!(
+        encoded_legacy_status_response_bytes(&status)?,
+        encoded_bytes
+    );
+    Ok(status)
+}
+
+pub(crate) fn build_registry_status_v1(state: &DaemonState) -> Result<DaemonStatusV1> {
+    let mut status = DaemonStatusV1 {
+        pid: state.runtime.pid,
+        version: state.runtime.version.clone(),
+        socket_path: state.runtime.socket_path.clone(),
+        workspace_root: state.runtime.workspace_root.clone(),
+        started_at_unix: state.runtime.started_at_unix,
+        ready_at_unix: state.runtime.ready_at_unix,
+        log_path: state.runtime.log_path.clone(),
+        uptime_secs: now_unix().saturating_sub(state.runtime.started_at_unix),
+        task_count: state.tasks.tasks.len(),
+        watch_count: state.watches.watches.len(),
+        registry_revision: Some(state.registry_revision()),
+        index_truncated: false,
+        index: Some(build_index_status(&state.interactive_index)),
+    };
+    bound_registry_status_index_details(&mut status)?;
+    Ok(status)
+}
+
+fn bound_registry_status_index_details(status: &mut DaemonStatusV1) -> Result<()> {
+    if encoded_registry_status_response_bytes(status)? <= MAX_DAEMON_STATUS_V1_RESPONSE_BYTES {
+        return Ok(());
+    }
+    if let Some(index) = status.index.as_mut() {
+        index.manifest.dirty_paths.clear();
+        index.manifest.queued_paths.clear();
+        status.index_truncated = true;
+    }
+    if encoded_registry_status_response_bytes(status)? <= MAX_DAEMON_STATUS_V1_RESPONSE_BYTES {
+        return Ok(());
+    }
+    status.index = None;
+    status.index_truncated = true;
+    if encoded_registry_status_response_bytes(status)? <= MAX_DAEMON_STATUS_V1_RESPONSE_BYTES {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "daemon registry status metadata exceeds its liveness response bound even without index details"
+    ))
+}
+
+fn encoded_legacy_status_response_bytes(status: &DaemonStatus) -> Result<usize> {
+    serde_json::to_vec(&DaemonResponse::Status {
+        status: status.clone(),
     })
+    .map(|bytes| bytes.len())
+    .context("failed to size legacy daemon status response")
+}
+
+fn encoded_registry_status_response_bytes(status: &DaemonStatusV1) -> Result<usize> {
+    serde_json::to_vec(&DaemonRegistryResponseV1::Status {
+        status: Box::new(status.clone()),
+    })
+    .map(|bytes| bytes.len())
+    .context("failed to size daemon registry status response")
+}
+
+fn add_legacy_status_item_size(
+    encoded_bytes: usize,
+    preceding_items: usize,
+    item: &impl serde::Serialize,
+    kind: &str,
+) -> Result<usize> {
+    let item_bytes = serde_json::to_vec(item)
+        .with_context(|| format!("failed to size legacy daemon status {kind} record"))?
+        .len();
+    let encoded_bytes = encoded_bytes
+        .checked_add(item_bytes)
+        .and_then(|bytes| bytes.checked_add(usize::from(preceding_items != 0)))
+        .ok_or_else(|| anyhow!("legacy daemon status size overflow"))?;
+    ensure_legacy_status_size(encoded_bytes)?;
+    Ok(encoded_bytes)
+}
+
+fn ensure_legacy_status_size(encoded_bytes: usize) -> Result<()> {
+    if encoded_bytes > MAX_LEGACY_STATUS_RESPONSE_BYTES {
+        anyhow::bail!(
+            "legacy status requires more than {MAX_LEGACY_STATUS_RESPONSE_BYTES} bytes; \
+             use registry_status_v1 and the versioned registry page requests"
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn emit_task_event(

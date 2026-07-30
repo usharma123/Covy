@@ -100,6 +100,7 @@ PACKET28D_PUBLIC_DOC_INVENTORY = (
     ("packet28-daemon-protocol", "index", "excluded", "index-state-process-tests"),
     ("packet28-daemon-protocol", "message", "excluded", "request-response-json-tests"),
     ("packet28-daemon-protocol", "paths", "excluded", "path-endpoint-tests"),
+    ("packet28-daemon-protocol", "registry", "excluded", "registry-v1-json-compat-tests"),
     ("packet28-daemon-protocol", "task", "covered", "protocol-task-lifecycle-runnable+compile_fail"),
     ("packet28-daemon-core", "integrity", "excluded", "integrity-corruption-tests"),
     ("packet28-daemon-core", "retention", "excluded", "retention-recovery-process-tests"),

@@ -1,4 +1,8 @@
 use super::*;
+use packet28_daemon_protocol::registry::{
+    DaemonRegistryRequestV1, DaemonRegistryResponseV1, DaemonStatusV1, RegistryRevisionV1,
+    TaskListPageRequestV1, WatchListPageRequestV1, MAX_REGISTRY_PAGE_LIMIT,
+};
 
 pub(crate) fn prompt_descriptors() -> Vec<Value> {
     vec![
@@ -198,10 +202,156 @@ pub(crate) fn resolve_current_task_id(
 pub(crate) fn daemon_status(
     root: &Path,
 ) -> Result<packet28_daemon_protocol::message::DaemonStatus> {
+    let mut client = crate::cmd_daemon::PersistentDaemonClient::connect(root)?;
+    let status = match client.send_registry_request(&DaemonRegistryRequestV1::Status)? {
+        DaemonRegistryResponseV1::Status { status } => *status,
+        DaemonRegistryResponseV1::Error { message }
+            if registry_extension_is_unsupported(&message) =>
+        {
+            return legacy_daemon_status(root);
+        }
+        DaemonRegistryResponseV1::Error { message } => return Err(anyhow!(message)),
+        other => return Err(anyhow!("unexpected daemon registry response: {other:?}")),
+    };
+    let DaemonStatusV1 {
+        pid,
+        version,
+        socket_path,
+        workspace_root,
+        started_at_unix,
+        ready_at_unix,
+        log_path,
+        uptime_secs,
+        task_count,
+        watch_count,
+        registry_revision,
+        index_truncated: _,
+        index,
+    } = status;
+    let revision =
+        registry_revision.ok_or_else(|| anyhow!("daemon registry status omitted its revision"))?;
+    let tasks = load_all_task_pages(&mut client, &revision, task_count)?;
+    let watches = load_all_watch_pages(&mut client, &revision, watch_count)?;
+    Ok(packet28_daemon_protocol::message::DaemonStatus {
+        pid,
+        version,
+        socket_path,
+        workspace_root,
+        started_at_unix,
+        ready_at_unix,
+        log_path,
+        uptime_secs,
+        tasks,
+        watches,
+        index,
+    })
+}
+
+fn legacy_daemon_status(root: &Path) -> Result<packet28_daemon_protocol::message::DaemonStatus> {
     match crate::cmd_daemon::send_request(root, &DaemonRequest::Status)? {
         DaemonResponse::Status { status } => Ok(status),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+        other => Err(anyhow!(
+            "unexpected legacy daemon status response: {other:?}"
+        )),
+    }
+}
+
+fn registry_extension_is_unsupported(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("unknown variant") && lower.contains("expected one of")
+}
+
+fn load_all_task_pages(
+    client: &mut crate::cmd_daemon::PersistentDaemonClient,
+    snapshot_revision: &RegistryRevisionV1,
+    expected_total: usize,
+) -> Result<Vec<TaskRecord>> {
+    let mut tasks = Vec::new();
+    let mut after_task_id = None;
+    loop {
+        let response = client.send_registry_request(&DaemonRegistryRequestV1::TaskListPage {
+            request: TaskListPageRequestV1 {
+                snapshot_revision: Some(snapshot_revision.clone()),
+                after_task_id: after_task_id.clone(),
+                limit: MAX_REGISTRY_PAGE_LIMIT,
+            },
+        })?;
+        let page = match response {
+            DaemonRegistryResponseV1::TaskListPage { page } => page,
+            DaemonRegistryResponseV1::Error { message } => return Err(anyhow!(message)),
+            other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+        };
+        if &page.snapshot_revision != snapshot_revision || page.total != expected_total {
+            return Err(anyhow!(
+                "daemon task registry changed during pagination; retry the request"
+            ));
+        }
+        tasks.extend(page.tasks);
+        let Some(next) = page.next_after_task_id else {
+            if tasks.len() != expected_total {
+                return Err(anyhow!(
+                    "daemon task registry changed during pagination; retry the request"
+                ));
+            }
+            return Ok(tasks);
+        };
+        if after_task_id
+            .as_ref()
+            .is_some_and(|cursor| next.as_str() <= cursor.as_str())
+        {
+            return Err(anyhow!(
+                "daemon task pagination returned non-advancing cursor '{next}'"
+            ));
+        }
+        after_task_id = Some(next);
+    }
+}
+
+fn load_all_watch_pages(
+    client: &mut crate::cmd_daemon::PersistentDaemonClient,
+    snapshot_revision: &RegistryRevisionV1,
+    expected_total: usize,
+) -> Result<Vec<packet28_daemon_protocol::task::WatchRegistration>> {
+    let mut watches = Vec::new();
+    let mut after_watch_id = None;
+    loop {
+        let response = client.send_registry_request(&DaemonRegistryRequestV1::WatchListPage {
+            request: WatchListPageRequestV1 {
+                snapshot_revision: Some(snapshot_revision.clone()),
+                task_id: None,
+                after_watch_id: after_watch_id.clone(),
+                limit: MAX_REGISTRY_PAGE_LIMIT,
+            },
+        })?;
+        let page = match response {
+            DaemonRegistryResponseV1::WatchListPage { page } => page,
+            DaemonRegistryResponseV1::Error { message } => return Err(anyhow!(message)),
+            other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+        };
+        if &page.snapshot_revision != snapshot_revision || page.total != expected_total {
+            return Err(anyhow!(
+                "daemon watch registry changed during pagination; retry the request"
+            ));
+        }
+        watches.extend(page.watches);
+        let Some(next) = page.next_after_watch_id else {
+            if watches.len() != expected_total {
+                return Err(anyhow!(
+                    "daemon watch registry changed during pagination; retry the request"
+                ));
+            }
+            return Ok(watches);
+        };
+        if after_watch_id
+            .as_ref()
+            .is_some_and(|cursor| next.as_str() <= cursor.as_str())
+        {
+            return Err(anyhow!(
+                "daemon watch pagination returned non-advancing cursor '{next}'"
+            ));
+        }
+        after_watch_id = Some(next);
     }
 }
 

@@ -5,7 +5,13 @@ use packet28_daemon_protocol::index::{
     DaemonIndexClearRequest, DaemonIndexRebuildRequest, DaemonIndexStatusRequest,
 };
 use packet28_daemon_protocol::message::{DaemonEventFrame, DaemonRequest, DaemonResponse};
-use packet28_daemon_protocol::task::{TaskAwaitHandoffRequest, TaskLaunchAgentRequest};
+use packet28_daemon_protocol::registry::{
+    DaemonRegistryRequestV1, DaemonRegistryResponseV1, WatchListPageRequestV1,
+    MAX_REGISTRY_PAGE_LIMIT,
+};
+use packet28_daemon_protocol::task::{
+    TaskAwaitHandoffRequest, TaskLaunchAgentRequest, WatchRegistration,
+};
 
 #[cfg(unix)]
 use std::io::BufReader;
@@ -13,9 +19,9 @@ use std::io::BufReader;
 #[cfg(not(unix))]
 use crate::cmd_daemon::daemon_not_supported;
 use crate::cmd_daemon::{
-    ensure_daemon, resolve_root_arg, send_request, send_request_without_start, subscribe_task,
-    IndexArgs, IndexCommands, JsonRootArgs, StatusRootArgs, TaskArgs, TaskCommands, WatchArgs,
-    WatchCommands,
+    daemon_status_v1, ensure_daemon, resolve_root_arg, send_request, send_request_without_start,
+    subscribe_task, IndexArgs, IndexCommands, JsonRootArgs, PersistentDaemonClient, StatusRootArgs,
+    TaskArgs, TaskCommands, WatchArgs, WatchCommands,
 };
 
 pub(crate) fn run_start(args: StatusRootArgs) -> Result<i32> {
@@ -43,32 +49,27 @@ pub(crate) fn run_stop(args: StatusRootArgs) -> Result<i32> {
 
 pub(crate) fn run_status(args: JsonRootArgs) -> Result<i32> {
     let root = resolve_root_arg(&args.root);
-    match send_request(&root, &DaemonRequest::Status)? {
-        DaemonResponse::Status { status } => {
-            if args.json {
-                crate::cmd_common::emit_json(&serde_json::to_value(status)?, args.pretty)?;
-            } else {
-                println!("pid={}", status.pid);
-                println!("root={}", status.workspace_root);
-                println!("socket={}", status.socket_path);
-                println!("log={}", status.log_path);
-                println!("tasks={}", status.tasks.len());
-                println!("watches={}", status.watches.len());
-                if let Some(index) = status.index {
-                    println!(
-                        "index={} generation={} ready={} dirty={}",
-                        index.manifest.status,
-                        index.manifest.generation,
-                        index.ready,
-                        index.dirty_file_count
-                    );
-                }
-            }
-            Ok(0)
+    let status = daemon_status_v1(&root)?;
+    if args.json {
+        crate::cmd_common::emit_json(&serde_json::to_value(status)?, args.pretty)?;
+    } else {
+        println!("pid={}", status.pid);
+        println!("root={}", status.workspace_root);
+        println!("socket={}", status.socket_path);
+        println!("log={}", status.log_path);
+        println!("tasks={}", status.task_count);
+        println!("watches={}", status.watch_count);
+        if let Some(index) = status.index {
+            println!(
+                "index={} generation={} ready={} dirty={}",
+                index.manifest.status,
+                index.manifest.generation,
+                index.ready,
+                index.dirty_file_count
+            );
         }
-        DaemonResponse::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
     }
+    Ok(0)
 }
 
 pub(crate) fn run_index(args: IndexArgs) -> Result<i32> {
@@ -441,31 +442,21 @@ pub(crate) fn run_watch(args: WatchArgs) -> Result<i32> {
         WatchCommands::List(args) => {
             let root = resolve_root_arg(&args.root);
             ensure_daemon(&root)?;
-            match send_request(
-                &root,
-                &DaemonRequest::WatchList {
-                    task_id: args.task_id,
-                },
-            )? {
-                DaemonResponse::WatchList { watches } => {
-                    if args.json {
-                        crate::cmd_common::emit_json(&serde_json::to_value(watches)?, args.pretty)?;
-                    } else {
-                        for watch in watches {
-                            println!(
-                                "watch_id={} task_id={} kind={:?} paths={}",
-                                watch.watch_id,
-                                watch.spec.task_id,
-                                watch.spec.kind,
-                                watch.spec.paths.join(",")
-                            );
-                        }
-                    }
-                    Ok(0)
+            let watches = load_all_watch_pages(&root, args.task_id)?;
+            if args.json {
+                crate::cmd_common::emit_json(&serde_json::to_value(watches)?, args.pretty)?;
+            } else {
+                for watch in watches {
+                    println!(
+                        "watch_id={} task_id={} kind={:?} paths={}",
+                        watch.watch_id,
+                        watch.spec.task_id,
+                        watch.spec.kind,
+                        watch.spec.paths.join(",")
+                    );
                 }
-                DaemonResponse::Error { message } => Err(anyhow!(message)),
-                other => Err(anyhow!("unexpected daemon response: {other:?}")),
             }
+            Ok(0)
         }
         WatchCommands::Remove(args) => {
             let root = resolve_root_arg(&args.root);
@@ -491,4 +482,79 @@ pub(crate) fn run_watch(args: WatchArgs) -> Result<i32> {
             }
         }
     }
+}
+
+fn load_all_watch_pages(
+    root: &std::path::Path,
+    task_id: Option<String>,
+) -> Result<Vec<WatchRegistration>> {
+    let mut client = PersistentDaemonClient::connect(root)?;
+    let mut watches = Vec::new();
+    let mut after_watch_id = None;
+    let mut expected_total = None;
+    let mut snapshot_revision = None;
+    loop {
+        let response = client.send_registry_request(&DaemonRegistryRequestV1::WatchListPage {
+            request: WatchListPageRequestV1 {
+                snapshot_revision: snapshot_revision.clone(),
+                task_id: task_id.clone(),
+                after_watch_id: after_watch_id.clone(),
+                limit: MAX_REGISTRY_PAGE_LIMIT,
+            },
+        })?;
+        let page = match response {
+            DaemonRegistryResponseV1::WatchListPage { page } => page,
+            DaemonRegistryResponseV1::Error { message }
+                if snapshot_revision.is_none()
+                    && after_watch_id.is_none()
+                    && registry_extension_is_unsupported(&message) =>
+            {
+                return match send_request(root, &DaemonRequest::WatchList { task_id })? {
+                    DaemonResponse::WatchList { watches } => Ok(watches),
+                    DaemonResponse::Error { message } => Err(anyhow!(message)),
+                    other => Err(anyhow!("unexpected legacy daemon response: {other:?}")),
+                };
+            }
+            DaemonRegistryResponseV1::Error { message } => return Err(anyhow!(message)),
+            other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+        };
+        if snapshot_revision
+            .as_ref()
+            .is_some_and(|revision| revision != &page.snapshot_revision)
+        {
+            return Err(anyhow!(
+                "daemon watch pagination changed snapshot revision; retry the list request"
+            ));
+        }
+        snapshot_revision = Some(page.snapshot_revision);
+        if expected_total.is_some_and(|total| total != page.total) {
+            return Err(anyhow!(
+                "daemon watch registry changed during pagination; retry the list request"
+            ));
+        }
+        expected_total = Some(page.total);
+        watches.extend(page.watches);
+        let Some(next) = page.next_after_watch_id else {
+            if watches.len() != page.total {
+                return Err(anyhow!(
+                    "daemon watch registry changed during pagination; retry the list request"
+                ));
+            }
+            return Ok(watches);
+        };
+        if after_watch_id
+            .as_ref()
+            .is_some_and(|cursor| next.as_str() <= cursor.as_str())
+        {
+            return Err(anyhow!(
+                "daemon watch pagination returned a non-advancing cursor '{next}'"
+            ));
+        }
+        after_watch_id = Some(next);
+    }
+}
+
+fn registry_extension_is_unsupported(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("unknown variant") && lower.contains("expected one of")
 }

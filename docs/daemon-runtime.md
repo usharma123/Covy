@@ -39,6 +39,7 @@ not an undocumented omission.
 | packet28-daemon-protocol | index | excluded | index-state-process-tests |
 | packet28-daemon-protocol | message | excluded | request-response-json-tests |
 | packet28-daemon-protocol | paths | excluded | path-endpoint-tests |
+| packet28-daemon-protocol | registry | excluded | registry-v1-json-compat-tests |
 | packet28-daemon-protocol | task | covered | protocol-task-lifecycle-runnable+compile_fail |
 | packet28-daemon-core | integrity | excluded | integrity-corruption-tests |
 | packet28-daemon-core | retention | excluded | retention-recovery-process-tests |
@@ -56,6 +57,7 @@ not an undocumented omission.
 <!-- packet28d-public owner=packet28-daemon-protocol item=index classification=excluded evidence=index-state-process-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=message classification=excluded evidence=request-response-json-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=paths classification=excluded evidence=path-endpoint-tests -->
+<!-- packet28d-public owner=packet28-daemon-protocol item=registry classification=excluded evidence=registry-v1-json-compat-tests -->
 <!-- packet28d-public owner=packet28-daemon-protocol item=task classification=covered evidence=protocol-task-lifecycle-runnable+compile_fail -->
 <!-- packet28d-public owner=packet28-daemon-core item=integrity classification=excluded evidence=integrity-corruption-tests -->
 <!-- packet28d-public owner=packet28-daemon-core item=retention classification=excluded evidence=retention-recovery-process-tests -->
@@ -205,6 +207,27 @@ Subscriber and watch queues are bounded. A slow subscriber is disconnected
 after its queued frames drain and resumes from its last sequence with
 `TaskSubscribe.after_seq`. Watch overflow is coalesced for the current
 generation and reported on the next trigger before conservative replanning.
+
+The frozen legacy `Status` wire shape remains an exhaustive task/watch dump
+when it fits its 1 MiB response budget. If the complete vectors do not fit, it
+returns an explicit error directing callers to registry V1; it never returns a
+prefix that looks exhaustive.
+
+Bounded liveness uses `DaemonRegistryRequestV1::Status`
+(`registry_status_v1` on the wire). Its response always reports complete
+task/watch counts and a registry revision. Large index path vectors are
+omitted with `index_truncated` set. Clients that need complete state use the
+lexicographically ordered registry V1 `TaskListPage` and `WatchListPage`
+requests. Each accepts 1–256 records, caps individual encoded records at
+1 MiB and responses at 4 MiB, and returns an exclusive last-ID cursor plus
+`snapshot_revision`. Every request after the first must echo that revision;
+the token combines a random daemon-instance ID with a monotonic mutation
+counter. Any intervening mutation or daemon restart is rejected so pages from
+different registry states cannot be combined. Invalid limits, stale cursors, and records too large for
+the bounded page contract produce an explicit error frame. The legacy
+`WatchList` and `TaskStatus` requests retain their ordinary small-response
+shape, but return an explicit pagination/size error rather than attempting an
+oversized transport write.
 
 `packet28-daemon-client` is the preferred connection dependency;
 `packet28-daemon-protocol` remains the implementation-free wire dependency.

@@ -426,7 +426,7 @@ impl PersistenceHandle {
             .map_err(anyhow::Error::msg)
     }
 
-    fn latest_revision(&self) -> u64 {
+    pub(crate) fn latest_revision(&self) -> u64 {
         lock_unpoisoned(&self.state.pending).next_revision
     }
 

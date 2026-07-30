@@ -9,11 +9,34 @@ Use explicit modules for new code:
 use packet28_daemon_protocol::frame::{read_frame, write_frame};
 use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
 use packet28_daemon_protocol::paths::socket_path;
+use packet28_daemon_protocol::registry::{
+    DaemonRegistryRequestV1, DaemonRegistryResponseV1,
+};
 ```
 
 The crate contains serializable messages, length-prefixed JSON framing, and
 deterministic endpoint paths. It does not contain daemon persistence, kernel,
 memory, reducer, search, or transport-loop implementations.
+
+The legacy `message::DaemonStatus`, `DaemonRequest`, and `DaemonResponse`
+remain frozen for source and wire compatibility in the `0.2.x` line. Legacy
+`Status` therefore remains an exhaustive registry dump when it fits its
+bounded response; when it does not, the daemon returns an explicit error
+instead of a misleading prefix.
+
+Bounded liveness and large-registry traversal use the additive `registry`
+module. `DaemonRegistryRequestV1::Status` reports authoritative task/watch
+counts and a `registry_revision`; versioned task/watch page requests carry
+that value as `snapshot_revision` on every subsequent request. The revision
+contains both an opaque daemon-instance ID and a monotonic mutation counter,
+preventing restart ABA as well as in-process page mixing. A mutation or restart
+between pages is rejected so records from different snapshots cannot be mixed.
+Page limits, individual-record limits, and the page-response byte bound fail
+explicitly instead of closing a connection with an oversized frame.
+Cursors name the last returned ID and are exclusive; a missing cursor is also
+rejected so clients can restart their traversal. New clients normalize a
+legacy exhaustive `Status` by deriving counts from its vectors and leave the
+revision unset.
 
 Loopback TCP uses `message::DaemonTransportAuth` as a mandatory first frame.
 The daemon publishes that per-instance 256-bit capability only inside its

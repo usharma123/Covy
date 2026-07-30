@@ -88,6 +88,18 @@ pub const MAX_AUTHORITY_JSON_CONTAINER_ENTRIES: usize = 262_144;
 pub const MAX_AUTHORITY_JSON_ENTRIES_PER_CONTAINER: usize = 65_536;
 /// Maximum aggregate value and object-key tokens in authority JSON.
 pub const MAX_AUTHORITY_JSON_TOKENS: usize = 524_288;
+/// Task-registry value-node budget for the declared multi-thousand-record
+/// registry surface.
+///
+/// Task records contain substantially more scalar fields than the other
+/// authority documents. This remains bounded well below the 64 MiB byte limit
+/// while allowing at least 5,000 fully materialized records.
+pub const MAX_TASK_REGISTRY_AUTHORITY_JSON_VALUE_NODES: usize = MAX_AUTHORITY_JSON_VALUE_NODES * 2;
+/// Task-registry aggregate container-entry budget.
+pub const MAX_TASK_REGISTRY_AUTHORITY_JSON_CONTAINER_ENTRIES: usize =
+    MAX_AUTHORITY_JSON_CONTAINER_ENTRIES * 2;
+/// Task-registry aggregate key/value token budget.
+pub const MAX_TASK_REGISTRY_AUTHORITY_JSON_TOKENS: usize = MAX_AUTHORITY_JSON_TOKENS * 2;
 /// Maximum task records accepted in one persisted task registry.
 pub const MAX_TASK_REGISTRY_RECORDS: usize = 65_536;
 /// Maximum watch records accepted in one persisted watch registry.
@@ -2273,6 +2285,36 @@ impl AuthorityJsonProfile {
             | Self::RetentionJournal { .. } => MAX_TASK_REGISTRY_RECORDS,
         }
     }
+
+    const fn max_value_nodes(self) -> usize {
+        match self {
+            Self::TaskRegistry => MAX_TASK_REGISTRY_AUTHORITY_JSON_VALUE_NODES,
+            Self::ActiveTask
+            | Self::WatchRegistry
+            | Self::TaskEventFrame
+            | Self::RetentionJournal { .. } => MAX_AUTHORITY_JSON_VALUE_NODES,
+        }
+    }
+
+    const fn max_container_entries(self) -> usize {
+        match self {
+            Self::TaskRegistry => MAX_TASK_REGISTRY_AUTHORITY_JSON_CONTAINER_ENTRIES,
+            Self::ActiveTask
+            | Self::WatchRegistry
+            | Self::TaskEventFrame
+            | Self::RetentionJournal { .. } => MAX_AUTHORITY_JSON_CONTAINER_ENTRIES,
+        }
+    }
+
+    const fn max_tokens(self) -> usize {
+        match self {
+            Self::TaskRegistry => MAX_TASK_REGISTRY_AUTHORITY_JSON_TOKENS,
+            Self::ActiveTask
+            | Self::WatchRegistry
+            | Self::TaskEventFrame
+            | Self::RetentionJournal { .. } => MAX_AUTHORITY_JSON_TOKENS,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2325,10 +2367,10 @@ impl AuthorityJsonLimits {
     const fn for_profile(profile: AuthorityJsonProfile) -> Self {
         Self {
             max_depth: MAX_AUTHORITY_JSON_DEPTH,
-            max_value_nodes: MAX_AUTHORITY_JSON_VALUE_NODES,
-            max_container_entries: MAX_AUTHORITY_JSON_CONTAINER_ENTRIES,
+            max_value_nodes: profile.max_value_nodes(),
+            max_container_entries: profile.max_container_entries(),
             max_entries_per_container: MAX_AUTHORITY_JSON_ENTRIES_PER_CONTAINER,
-            max_tokens: MAX_AUTHORITY_JSON_TOKENS,
+            max_tokens: profile.max_tokens(),
             max_decoded_string_bytes: profile.max_decoded_string_bytes(),
             max_registry_records: profile.max_registry_records(),
         }
