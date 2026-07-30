@@ -90,12 +90,11 @@ async fn processor_failure_is_fatal_bounded_and_detached_work_retains_its_lease(
     let root = state.lock().unwrap().root.clone();
     let daemon_instance_lease =
         packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease(&root).unwrap();
-    let (_, task_store_lease) =
-        packet28_daemon_core::retention::recover_task_store_quarantine_and_acquire_daemon_lease(
-            &root,
-            &daemon_instance_lease,
-        )
-        .unwrap();
+    // `daemon_test_state` has already completed startup recovery and its
+    // persistence owner retains a shared lifecycle lease. Re-entering the
+    // exclusive recovery phase here would wait on that owner forever.
+    let task_store_lease =
+        packet28_daemon_core::task_store_lease::acquire_daemon_task_store_lease(&root).unwrap();
     let shutdown = state.lock().unwrap().shutdown.clone();
     let blocking_pool = BlockingPool::with_lifecycle_leases(
         1,
