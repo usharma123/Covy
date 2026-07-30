@@ -263,6 +263,7 @@ pub(crate) struct PersistenceOwner {
 }
 
 impl PersistenceOwner {
+    #[cfg(test)]
     pub(crate) fn start(
         root: PathBuf,
         task_store_lease: TaskStoreLease,
@@ -272,12 +273,32 @@ impl PersistenceOwner {
         checkpoint_revision: RegistryRevision,
         replayed_revision: RegistryRevision,
     ) -> Result<(Self, PersistenceHandle)> {
+        Self::start_owned(
+            root,
+            task_store_lease,
+            debounce,
+            durable_tasks.clone(),
+            durable_watches.clone(),
+            checkpoint_revision,
+            replayed_revision,
+        )
+    }
+
+    pub(crate) fn start_owned(
+        root: PathBuf,
+        task_store_lease: TaskStoreLease,
+        debounce: Duration,
+        durable_tasks: TaskRegistry,
+        durable_watches: WatchRegistry,
+        checkpoint_revision: RegistryRevision,
+        replayed_revision: RegistryRevision,
+    ) -> Result<(Self, PersistenceHandle)> {
         Self::start_with_backend(
             root,
             Some(task_store_lease),
             debounce,
-            durable_tasks.clone(),
-            durable_watches.clone(),
+            durable_tasks,
+            durable_watches,
             RegistryRecoveryRevisions {
                 checkpoint: checkpoint_revision,
                 replayed: replayed_revision,

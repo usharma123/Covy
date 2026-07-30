@@ -119,18 +119,22 @@ pub fn serve(root: PathBuf) -> Result<()> {
         load_task_watch_registry_with_deltas_and_event_tails(&root)?;
     let checkpoint_revision = loaded_registry.checkpoint_revision;
     let replayed_revision = loaded_registry.replayed_revision;
-    let mut tasks = loaded_registry.tasks;
-    let mut watches = loaded_registry.watches;
+    let durable_tasks = loaded_registry.tasks;
+    let durable_watches = loaded_registry.watches;
+    // Reconciliation is a new delta. Keep the replayed image intact until the
+    // persistence owner has authenticated it and assumed revision ownership.
+    let mut tasks = durable_tasks.clone();
+    let mut watches = durable_watches.clone();
     preflight_restart_recovery(&tasks)?;
     let event_high_water_changes = reconcile_task_event_high_waters(&mut tasks, &event_tails)?;
     let restart_reconciliation =
         reconcile_interrupted_task_lifecycles(&mut tasks, &mut watches, now_unix())?;
-    let (persistence_owner, persistence) = PersistenceOwner::start(
+    let (persistence_owner, persistence) = PersistenceOwner::start_owned(
         root.clone(),
         task_store_lease.clone(),
         Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
-        &tasks,
-        &watches,
+        durable_tasks,
+        durable_watches,
         checkpoint_revision,
         replayed_revision,
     )?;
