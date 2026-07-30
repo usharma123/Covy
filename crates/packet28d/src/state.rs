@@ -120,6 +120,7 @@ pub(crate) struct OwnedChildProcess {
 #[derive(Debug, Default)]
 struct TaskGenerationActivityState {
     active_operations: usize,
+    child_launch_in_progress: bool,
     children: HashMap<u32, OwnedChildProcess>,
 }
 
@@ -164,6 +165,25 @@ impl TaskGenerationToken {
         }
         activity.active_operations = activity.active_operations.saturating_add(1);
         Some(TaskActivityLease {
+            activity: self.activity.clone(),
+        })
+    }
+
+    pub(crate) fn acquire_child_launch(&self) -> Option<TaskChildLaunchLease> {
+        if self.is_cancelled() {
+            return None;
+        }
+        let mut activity = self
+            .activity
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.is_cancelled() || activity.child_launch_in_progress || !activity.children.is_empty()
+        {
+            return None;
+        }
+        activity.child_launch_in_progress = true;
+        Some(TaskChildLaunchLease {
             activity: self.activity.clone(),
         })
     }
@@ -243,6 +263,22 @@ impl TaskGenerationToken {
 
 pub(crate) struct TaskActivityLease {
     activity: Arc<TaskGenerationActivity>,
+}
+
+pub(crate) struct TaskChildLaunchLease {
+    activity: Arc<TaskGenerationActivity>,
+}
+
+impl Drop for TaskChildLaunchLease {
+    fn drop(&mut self) {
+        let mut activity = self
+            .activity
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        activity.child_launch_in_progress = false;
+        self.activity.changed.notify_all();
+    }
 }
 
 impl Drop for TaskActivityLease {

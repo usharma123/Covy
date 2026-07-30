@@ -260,6 +260,67 @@ fn stop_terminates_term_resistant_process_group_before_releasing_leases() {
 }
 
 #[test]
+fn active_delegated_launch_rejects_overlap_for_the_same_task() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let task_id = "reject-overlapping-agent";
+    seed_ready_handoff(workspace.path(), task_id);
+    let mut daemon = spawn_daemon(workspace.path());
+    let runtime = wait_for_ready(&mut daemon, workspace.path());
+    let child_ready = workspace.path().join("first-agent-ready");
+
+    let first = request(
+        &runtime,
+        &DaemonRequest::TaskLaunchAgent {
+            request: TaskLaunchAgentRequest {
+                task_id: task_id.to_string(),
+                command: vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "printf ready > \"$1\"; sleep 30".to_string(),
+                    "packet28-first-agent".to_string(),
+                    child_ready.to_string_lossy().to_string(),
+                ],
+                ..TaskLaunchAgentRequest::default()
+            },
+        },
+    );
+    assert!(
+        matches!(first, DaemonResponse::TaskLaunchAgent { .. }),
+        "first delegated launch failed: {first:?}"
+    );
+    wait_for_path(&child_ready);
+
+    let overlap = request(
+        &runtime,
+        &DaemonRequest::TaskLaunchAgent {
+            request: TaskLaunchAgentRequest {
+                task_id: task_id.to_string(),
+                command: vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()],
+                ..TaskLaunchAgentRequest::default()
+            },
+        },
+    );
+    assert!(
+        matches!(
+            overlap,
+            DaemonResponse::Error { ref message }
+                if message.contains("already has an active delegated agent launch")
+        ),
+        "overlapping delegated launch was not rejected: {overlap:?}"
+    );
+
+    assert!(matches!(
+        request(&runtime, &DaemonRequest::Stop),
+        DaemonResponse::Ack { ref message } if message == "stopping"
+    ));
+    let status = daemon
+        .0
+        .wait()
+        .expect("join daemon after overlap rejection");
+    assert!(status.success(), "daemon Stop completed with {status}");
+}
+
+#[test]
 fn held_secondary_owner_lock_cannot_block_bounded_daemon_shutdown() {
     let workspace = tempfile::tempdir().expect("temporary workspace");
     let secondary = tempfile::tempdir().expect("secondary persistent root");

@@ -423,7 +423,7 @@ pub(crate) fn task_launch_agent(
             "daemon task launch-agent handoff waiting must run on the async orchestration boundary"
         );
     }
-    let (root, generation, _launch_lease) = {
+    let (root, generation, _launch_lease, _child_launch_lease) = {
         let mut guard = state.lock().map_err(lock_err)?;
         ensure_task_record_mut(&mut guard.tasks, &request.task_id);
         let generation = guard.task_generations.ensure(&request.task_id)?;
@@ -433,8 +433,26 @@ pub(crate) fn task_launch_agent(
                 request.task_id
             )
         })?;
+        let child_launch_lease = generation.acquire_child_launch().ok_or_else(|| {
+            if generation.is_cancelled() {
+                anyhow!(
+                    "task '{}' was cancelled before delegated agent launch",
+                    request.task_id
+                )
+            } else {
+                anyhow!(
+                    "task '{}' already has an active delegated agent launch",
+                    request.task_id
+                )
+            }
+        })?;
         persist_state(&guard)?;
-        (guard.root.clone(), generation, launch_lease)
+        (
+            guard.root.clone(),
+            generation,
+            launch_lease,
+            child_launch_lease,
+        )
     };
     let bootstrap = task_prepare_launch_bootstrap(state.clone(), &request)?;
     if generation.is_cancelled() {
