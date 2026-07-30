@@ -2,13 +2,13 @@
   "schema_version": 1,
   "captured_at": "2026-07-30",
   "source": {
-    "snapshot_commit": "bf157e1628f7f80d25f444080d31a2fbcaa3f030",
-    "snapshot_tree": "897cc8e3634ab3f5cb0807e71d5fcd587fcbb7ac",
+    "snapshot_commit": "b30c02ab6a7205e291d858666d60c95093025d62",
+    "snapshot_tree": "030ffa81b282282d3c8b5d873d6e773afe099400",
     "files": {
       "crates/mapy-core/examples/per03_incremental_index.rs": "ec9f288c8b7161d7344171940d5565bc736c88ae1f4fc4211e45c725c63cf4b6",
       "crates/mapy-core/src/generation.rs": "88729ec25083274106696785195bfc404f3cf42f81af6eac5c579637c13165af",
       "crates/packet28-state-fs/src/lib.rs": "eda392e61ddc26547b400318ecd1416827044d11c531f3d5c82666b67a77157c",
-      "crates/packet28-state-fs/src/platform.rs": "151d657da92fc381676e8ac0e42e1a1a8eb96245b3bf83db4669f68d0474bc23",
+      "crates/packet28-state-fs/src/platform.rs": "299f21f9db7aedcd1e6d5fe5ba6330ed37c5d97cf0cb28addf822e4dc1a0a6d9",
       "crates/packet28-state-fs/src/platform_fallback.rs": "ce77b6fd64b58b5167210bb29e56823ff00108604ba837fd76f76806c0ea28f0",
       "crates/packet28-search-core/src/generation.rs": "a5705da3e8adda41a43b4ebbb76549bc061ee9444fc155b9ef9eb1fc1b74f430",
       "crates/packet28-search-core/src/layer.rs": "95178bdc21b6030f14afca64939c2982179514424da40861da6887b0fc9cd4f5",
@@ -23,28 +23,28 @@
   },
   "invocations": [
     {
-      "mapy_whole_snapshot_us": 5057,
-      "mapy_incremental_us": 72799,
-      "mapy_compaction_us": 61535,
-      "regex_full_overlay_us": 375404,
-      "regex_incremental_us": 115233,
-      "regex_compaction_us": 416567
+      "mapy_whole_snapshot_us": 5193,
+      "mapy_incremental_us": 73193,
+      "mapy_compaction_us": 72367,
+      "regex_full_overlay_us": 381958,
+      "regex_incremental_us": 130326,
+      "regex_compaction_us": 406161
     },
     {
-      "mapy_whole_snapshot_us": 5187,
-      "mapy_incremental_us": 67587,
-      "mapy_compaction_us": 75531,
-      "regex_full_overlay_us": 389313,
-      "regex_incremental_us": 125802,
-      "regex_compaction_us": 384180
+      "mapy_whole_snapshot_us": 5190,
+      "mapy_incremental_us": 69686,
+      "mapy_compaction_us": 73012,
+      "regex_full_overlay_us": 386586,
+      "regex_incremental_us": 121273,
+      "regex_compaction_us": 404773
     },
     {
-      "mapy_whole_snapshot_us": 6116,
-      "mapy_incremental_us": 54406,
-      "mapy_compaction_us": 67746,
-      "regex_full_overlay_us": 418017,
-      "regex_incremental_us": 126504,
-      "regex_compaction_us": 402451
+      "mapy_whole_snapshot_us": 4845,
+      "mapy_incremental_us": 69677,
+      "mapy_compaction_us": 70437,
+      "regex_full_overlay_us": 380140,
+      "regex_incremental_us": 122038,
+      "regex_compaction_us": 409553
     }
   ],
   "published_bytes": {

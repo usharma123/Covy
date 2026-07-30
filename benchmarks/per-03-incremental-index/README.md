@@ -130,7 +130,7 @@ incremental invocation median improved from 16,965 to 4,764 µs (-71.92%, or
 
 ### Final-base durable-state decision
 
-The current source snapshot `bf157e16` was measured after extending the byte
+The current source snapshot `b30c02ab` was measured after extending the byte
 snapshot from `mapy-v1/` to the complete `.packet28/index/` publication scope.
 That correction includes the changed
 `.mapy-v1.generation-high-water.json` durability leaf. State publication
@@ -139,10 +139,10 @@ release invocations reported:
 
 | Revision/path | Invocation medians (µs) | Median (µs) | Delta versus paired legacy |
 | --- | --- | ---: | ---: |
-| current whole snapshot | 5,057; 5,187; 6,116 | 5,187 | baseline |
-| current incremental generation | 72,799; 67,587; 54,406 | 67,587 | +1,203.01% |
+| current whole snapshot | 5,193; 5,190; 4,845 | 5,190 | baseline |
+| current incremental generation | 73,193; 69,686; 69,677 | 69,686 | +1,242.52% |
 
-The per-invocation deltas were +1,339.56%, +1,203.00%, and +789.51%.
+The per-invocation deltas were +1,309.31%, +1,242.52%, and +1,337.98%.
 Therefore the elapsed-time decision gate fails on the durable state base.
 The whole-snapshot comparator uses a plain `fs::write`; the incremental
 transaction durably publishes the high-water mark, immutable segment,
@@ -197,13 +197,13 @@ the immutable base generation.
 
 | Path | Median compaction (µs) | Published bytes |
 | --- | ---: | ---: |
-| Mapy | 67,746 | 328,862 |
-| Regex | 402,451 | 223,531 |
+| Mapy | 72,367 | 328,862 |
+| Regex | 406,161 | 223,531 |
 
-Current Mapy compaction observations were 61,535, 75,531, and 67,746 µs
-(median 67,746 µs); the published-byte scope includes the generation high-water
-leaf. Current regex observations were 416,567, 384,180, and 402,451 µs
-(median 402,451 µs). The historical regex observations were 301,916, 348,383,
+Current Mapy compaction observations were 72,367, 73,012, and 70,437 µs
+(median 72,367 µs); the published-byte scope includes the generation high-water
+leaf. Current regex observations were 406,161, 404,773, and 409,553 µs
+(median 406,161 µs). The historical regex observations were 301,916, 348,383,
 and 307,572 µs. The regex compaction
 cost is approximately one former full-overlay update, but occurs once per eight
 segment publications; ordinary updates retain the measured incremental
