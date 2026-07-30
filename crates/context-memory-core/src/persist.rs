@@ -457,35 +457,38 @@ impl PacketCache {
     }
 
     pub(crate) fn write_checkpoint(&self, config: &PersistConfig) -> Result<u64, io::Error> {
-        self.write_checkpoint_inner(config, || Ok(()))
+        self.write_checkpoint_inner(config, now_unix(), || Ok(()))
     }
 
     fn write_checkpoint_inner<F>(
         &self,
         config: &PersistConfig,
+        checkpoint_now_unix: u64,
         after_backup: F,
     ) -> Result<u64, io::Error>
     where
         F: FnOnce() -> Result<(), io::Error>,
     {
         let path = persist_cache_path_v3(&config.root_dir);
-        let live_entries = self.collect_live_entries(config.ttl_secs);
+        let live_entries = self.collect_live_entries_at(config.ttl_secs, checkpoint_now_unix);
         let live_keys = live_entries
             .iter()
             .map(|entry| entry.cache_key.clone())
             .collect::<BTreeSet<_>>();
+        let recall_docs = self
+            .recall_docs
+            .iter()
+            .filter(|(cache_key, _)| live_keys.contains(*cache_key))
+            .map(|(_, doc)| doc.clone())
+            .collect::<Vec<_>>();
+        let recall_avg_doc_length = average_recall_doc_length(&recall_docs);
         let envelope = PersistEnvelopeV3 {
             version: PERSIST_CACHE_VERSION,
             applied_wal_sequence: self.persisted_sequence,
             entries: live_entries,
-            recall_docs: self
-                .recall_docs
-                .iter()
-                .filter(|(cache_key, _)| live_keys.contains(*cache_key))
-                .map(|(_, doc)| doc.clone())
-                .collect(),
+            recall_docs,
             recall_postings: filter_postings_for_live_keys(&self.recall_postings, &live_keys),
-            recall_avg_doc_length: self.recall_avg_doc_length,
+            recall_avg_doc_length,
             file_ref_index: filter_ref_index_for_live_keys(&self.file_ref_index, &live_keys),
             basename_alias_index: filter_basename_alias_index_for_live_keys(
                 &self.basename_alias_index,
@@ -517,22 +520,39 @@ impl PacketCache {
         &self,
         config: &PersistConfig,
     ) -> Result<u64, io::Error> {
-        self.write_checkpoint_inner(config, || {
+        self.write_checkpoint_inner(config, now_unix(), || {
             Err(io::Error::other(
                 "injected crash after durable backup and before primary replace",
             ))
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn write_checkpoint_at(
+        &self,
+        config: &PersistConfig,
+        checkpoint_now_unix: u64,
+    ) -> Result<u64, io::Error> {
+        self.write_checkpoint_inner(config, checkpoint_now_unix, || Ok(()))
+    }
+
     pub fn persist_file_path(root: &Path) -> PathBuf {
         persist_cache_path_v3(root)
     }
 
+    #[cfg(test)]
     pub(crate) fn collect_live_entries(&self, ttl_secs: u64) -> Vec<PersistPacketCacheEntry> {
-        let now = now_unix();
+        self.collect_live_entries_at(ttl_secs, now_unix())
+    }
+
+    pub(crate) fn collect_live_entries_at(
+        &self,
+        ttl_secs: u64,
+        now_unix: u64,
+    ) -> Vec<PersistPacketCacheEntry> {
         self.entries_by_hash
             .values()
-            .filter(|entry| !is_expired(entry.created_at_unix, ttl_secs, now))
+            .filter(|entry| !is_expired(entry.created_at_unix, ttl_secs, now_unix))
             .map(PersistPacketCacheEntry::from_entry)
             .collect()
     }
@@ -905,18 +925,20 @@ fn validate_v3_envelope(envelope: &PersistEnvelopeV3) -> Result<(), io::Error> {
             "cache checkpoint has an invalid average document length",
         ));
     }
-    let expected_average = envelope
-        .recall_docs
-        .iter()
-        .map(|doc| doc.doc_length)
-        .sum::<usize>() as f64
-        / envelope.recall_docs.len() as f64;
+    let expected_average = average_recall_doc_length(&envelope.recall_docs);
     if (envelope.recall_avg_doc_length - expected_average).abs() > f64::EPSILON {
         return Err(invalid_checkpoint(
             "cache checkpoint average document length does not match recall documents",
         ));
     }
     Ok(())
+}
+
+fn average_recall_doc_length(docs: &[RecallDocument]) -> f64 {
+    if docs.is_empty() {
+        return 0.0;
+    }
+    docs.iter().map(|doc| doc.doc_length).sum::<usize>() as f64 / docs.len() as f64
 }
 
 fn validate_recall_postings(
@@ -1293,6 +1315,71 @@ mod tests {
     #[cfg(unix)]
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
+
+    fn insert_checkpoint_entry(
+        cache: &mut PacketCache,
+        id: &str,
+        created_at_unix: u64,
+        summary: String,
+    ) -> PacketCacheEntry {
+        let target = format!("checkpoint.reducer.{id}");
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache.lookup_with_hooks(&target, &serde_json::json!({"id": id}), &mut hooks);
+        let entry = PacketCache::prepare_entry_at(
+            &target,
+            &lookup,
+            vec![CachePacket {
+                body: serde_json::json!({
+                    "summary": summary,
+                    "files": [{"path": format!("src/{id}.rs")}],
+                }),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+            created_at_unix,
+        );
+        cache.insert_entry(entry)
+    }
+
+    #[test]
+    fn checkpoint_average_uses_only_documents_live_at_the_expiry_boundary() {
+        const CHECKPOINT_NOW: u64 = 10_000;
+        const TTL_SECS: u64 = 60;
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf()).with_ttl_secs(TTL_SECS);
+        let mut cache = PacketCache::new();
+        let live = insert_checkpoint_entry(
+            &mut cache,
+            "live",
+            CHECKPOINT_NOW - TTL_SECS,
+            "live boundary document".to_string(),
+        );
+        let expired = insert_checkpoint_entry(
+            &mut cache,
+            "expired",
+            CHECKPOINT_NOW - TTL_SECS - 1,
+            "expired document ".repeat(100),
+        );
+
+        cache.write_checkpoint_at(&config, CHECKPOINT_NOW).unwrap();
+        let raw = fs::read(persist_cache_path_v3(dir.path())).unwrap();
+        let envelope = decode_checkpoint_envelope_v3(&raw).unwrap();
+
+        assert_eq!(envelope.entries.len(), 1);
+        assert_eq!(envelope.entries[0].cache_key, live.cache_key);
+        assert_eq!(envelope.recall_docs.len(), 1);
+        assert_eq!(envelope.recall_docs[0].cache_key, live.cache_key);
+        assert_eq!(
+            envelope.recall_avg_doc_length,
+            envelope.recall_docs[0].doc_length as f64
+        );
+        assert_ne!(envelope.entries[0].cache_key, expired.cache_key);
+        assert!(envelope
+            .recall_postings
+            .values()
+            .flatten()
+            .all(|(cache_key, _)| cache_key == &live.cache_key));
+    }
 
     #[cfg(unix)]
     fn has_unsafe_path_violation(

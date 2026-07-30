@@ -4153,4 +4153,45 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn shutdown_checkpoint_drops_expired_documents_and_reloads_empty() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf()).with_ttl_secs(1);
+        let owner = CachePersistence::open(config.clone()).unwrap();
+        let memory = owner.shared_cache();
+        let entry = {
+            let mut cache = lock_recover(&memory);
+            let mut hooks = NoopDeltaReuseHooks;
+            let target = "expired-shutdown.reducer";
+            let lookup = cache.lookup_with_hooks(target, &json!({"expired": true}), &mut hooks);
+            let entry = PacketCache::prepare_entry_at(
+                target,
+                &lookup,
+                vec![CachePacket {
+                    body: json!({"summary":"expired before shutdown"}),
+                    ..CachePacket::default()
+                }],
+                Value::Null,
+                0,
+            );
+            let reservation = owner.reserve_mutation(1).unwrap();
+            owner
+                .record_update_reserved(&entry, Vec::new(), reservation)
+                .unwrap();
+            cache.insert_entry(entry.clone());
+            entry
+        };
+
+        let metrics = owner.shutdown(Duration::from_secs(2)).unwrap();
+        assert_eq!(metrics.checkpoints, 1);
+        drop(memory);
+        drop(owner);
+
+        let reopened = CachePersistence::open(config).unwrap();
+        assert!(lock_recover(&reopened.shared_cache())
+            .get(&entry.cache_key)
+            .is_none());
+        reopened.shutdown(Duration::from_secs(2)).unwrap();
+    }
 }
