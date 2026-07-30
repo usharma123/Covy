@@ -331,16 +331,11 @@ impl PersistenceOwner {
                     revisions.replayed.get()
                 );
             }
-            let authority_task_ids = authority.task_ids().collect::<BTreeSet<_>>();
-            let durable_task_ids = durable_tasks
-                .tasks
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            if authority_task_ids != durable_task_ids {
-                anyhow::bail!(
-                    "daemon registry authority task membership does not match replayed registry"
-                );
+            if !authority
+                .matches_registry(&durable_tasks, &durable_watches)
+                .context("failed to compare daemon registry authority")?
+            {
+                anyhow::bail!("daemon registry authority image does not match replayed registry");
             }
         }
         let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
@@ -1331,8 +1326,50 @@ mod tests {
 
         assert!(error
             .to_string()
-            .contains("task membership does not match replayed registry"));
+            .contains("authority image does not match replayed registry"));
         assert!(!registry_delta_wal_path(root.path()).exists());
+    }
+
+    #[test]
+    fn start_rejects_stale_same_revision_registry_content() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let durable = TaskRegistry {
+            tasks: std::collections::BTreeMap::from([(
+                "task".to_string(),
+                task_record("task", "durable"),
+            )]),
+        };
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &RegistryDeltaBatch::default().upsert_task(durable.tasks["task"].clone()),
+        )
+        .unwrap();
+        let stale = TaskRegistry {
+            tasks: std::collections::BTreeMap::from([(
+                "task".to_string(),
+                task_record("task", "stale"),
+            )]),
+        };
+        let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
+
+        let error = match PersistenceOwner::start(
+            root.path().to_path_buf(),
+            lease,
+            Duration::from_secs(1),
+            &stale,
+            &WatchRegistry::default(),
+            RegistryRevision::ZERO,
+            RegistryRevision::new(1),
+        ) {
+            Ok(_) => panic!("stale same-revision registry unexpectedly started persistence"),
+            Err(error) => error,
+        };
+
+        assert!(error
+            .to_string()
+            .contains("authority image does not match replayed registry"));
     }
 
     fn task_record_with_watch(task_id: &str, task_marker: &str, watch_id: &str) -> TaskRecord {

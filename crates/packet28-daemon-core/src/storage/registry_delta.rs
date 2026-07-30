@@ -531,6 +531,33 @@ impl RegistryAdmissionAuthority {
         self.tasks.tasks.keys().map(String::as_str)
     }
 
+    /// Returns whether `tasks` and `watches` are the exact registry image
+    /// authenticated when this authority was acquired.
+    ///
+    /// Watch ordering is part of the durable image and is compared exactly.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JSON encoding error if either registry cannot be represented
+    /// for an exact structural comparison.
+    pub fn matches_registry(&self, tasks: &TaskRegistry, watches: &WatchRegistry) -> Result<bool> {
+        let expected = serde_json::to_value((&self.tasks, &self.watches)).map_err(|source| {
+            DaemonCoreError::json(
+                "failed to compare authenticated task/watch registry for",
+                task_registry_path(&self.root),
+                source,
+            )
+        })?;
+        let supplied = serde_json::to_value((tasks, watches)).map_err(|source| {
+            DaemonCoreError::json(
+                "failed to compare supplied task/watch registry for",
+                task_registry_path(&self.root),
+                source,
+            )
+        })?;
+        Ok(expected == supplied)
+    }
+
     fn matches_root(&self, root: &Path) -> bool {
         self.root == root
     }
