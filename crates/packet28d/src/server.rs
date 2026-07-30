@@ -855,7 +855,8 @@ fn rollback_initial_task_admission(
     replaced_task: Option<TaskRecord>,
     admission_error: anyhow::Error,
 ) -> anyhow::Error {
-    match rollback_failed_task_admission(state.clone(), task_id, generation, replaced_task) {
+    match rollback_failed_initial_task_admission(state.clone(), task_id, generation, replaced_task)
+    {
         Ok(()) => admission_error,
         Err(rollback_error) => {
             if let Ok(guard) = state.lock().map_err(lock_err) {

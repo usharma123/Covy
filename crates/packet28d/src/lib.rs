@@ -127,11 +127,11 @@ use crate::state::{
     PendingWatchEvent, TaskGenerationId, TaskGenerationToken, TaskSequenceObserver, WatchEventMsg,
 };
 use crate::watch::{
-    cancel_task, register_task_and_watches, remove_watch, rollback_failed_task_admission,
+    cancel_task, register_task_and_watches, remove_watch, rollback_failed_initial_task_admission,
     run_initial_sequence_for_task, TaskAdmission,
 };
 #[cfg(test)]
-use crate::watch::{run_sequence_for_task, WatchIngress};
+use crate::watch::{rollback_failed_task_admission, run_sequence_for_task, WatchIngress};
 
 pub use application::serve;
 

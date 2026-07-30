@@ -9,20 +9,21 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use context_kernel_core::KernelRequest;
+use context_kernel_core::{KernelRequest, KernelSequenceRequest, KernelStepRequest};
 use fs2::FileExt;
-use packet28_daemon_core::storage::save_task_registry;
+use packet28_daemon_core::storage::{load_task_registry, save_task_registry};
 use packet28_daemon_core::task_store_lease::{
     acquire_daemon_instance_lease, try_acquire_task_store_retention_lease,
 };
 use packet28_daemon_protocol::broker::{
     BrokerGetContextResponse, BrokerHandoffDescriptor, BrokerHandoffStatus, BrokerResponseMode,
 };
+use packet28_daemon_protocol::commands::TaskSubmitSpec;
 use packet28_daemon_protocol::frame::{read_frame, write_frame};
 use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse, DaemonRuntimeInfo};
 use packet28_daemon_protocol::paths::{
-    ready_path, runtime_path, task_version_json_path, task_versions_dir, ContextVersionStorageId,
-    TaskStorageId,
+    ready_path, runtime_path, task_artifact_dir, task_event_log_path, task_version_json_path,
+    task_versions_dir, ContextVersionStorageId, TaskStorageId,
 };
 use packet28_daemon_protocol::task::{TaskLaunchAgentRequest, TaskRecord, TaskRegistry};
 use serde_json::json;
@@ -313,4 +314,79 @@ fn held_secondary_owner_lock_cannot_block_bounded_daemon_shutdown() {
             .is_err(),
         "blocked request unexpectedly completed after the daemon exited"
     );
+}
+
+#[test]
+fn failed_initial_submission_can_retry_the_same_task_id() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let task_id = "retry-failed-initial";
+    let storage_id = TaskStorageId::try_from(task_id).expect("valid task storage id");
+    let mut daemon = spawn_daemon(workspace.path());
+    let runtime = wait_for_ready(&mut daemon, workspace.path());
+
+    let failed = request(
+        &runtime,
+        &DaemonRequest::ExecuteSequence {
+            spec: TaskSubmitSpec {
+                task_id: task_id.to_string(),
+                sequence: KernelSequenceRequest {
+                    steps: vec![KernelStepRequest {
+                        id: "invalid".to_string(),
+                        target: "missing.reducer".to_string(),
+                        ..KernelStepRequest::default()
+                    }],
+                    ..KernelSequenceRequest::default()
+                },
+                ..TaskSubmitSpec::default()
+            },
+        },
+    );
+    assert!(
+        matches!(&failed, DaemonResponse::Error { .. }),
+        "invalid first submission unexpectedly succeeded: {failed:?}"
+    );
+    assert!(
+        !load_task_registry(workspace.path())
+            .expect("load registry after failed first submission")
+            .tasks
+            .contains_key(task_id),
+        "failed first submission remained durably admitted"
+    );
+    assert!(
+        !task_artifact_dir(workspace.path(), &storage_id).exists(),
+        "failed first submission left an artifact namespace"
+    );
+    assert!(
+        !task_event_log_path(workspace.path(), &storage_id).exists(),
+        "failed first submission left an event namespace"
+    );
+
+    let retried = request(
+        &runtime,
+        &DaemonRequest::ExecuteSequence {
+            spec: TaskSubmitSpec {
+                task_id: task_id.to_string(),
+                sequence: KernelSequenceRequest {
+                    steps: vec![KernelStepRequest {
+                        id: "valid".to_string(),
+                        target: "contextq.correlate".to_string(),
+                        ..KernelStepRequest::default()
+                    }],
+                    ..KernelSequenceRequest::default()
+                },
+                ..TaskSubmitSpec::default()
+            },
+        },
+    );
+    assert!(
+        matches!(&retried, DaemonResponse::ExecuteSequence { .. }),
+        "valid same-ID retry did not succeed: {retried:?}"
+    );
+
+    assert!(matches!(
+        request(&runtime, &DaemonRequest::Stop),
+        DaemonResponse::Ack { ref message } if message == "stopping"
+    ));
+    let status = daemon.0.wait().expect("join daemon after retry");
+    assert!(status.success(), "daemon Stop completed with {status}");
 }

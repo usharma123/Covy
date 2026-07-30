@@ -11,12 +11,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use fs2::FileExt;
 use packet28_daemon_protocol::hooks::ActiveTaskRecord;
 use packet28_daemon_protocol::message::{DaemonEvent, DaemonEventFrame, DaemonRuntimeInfo};
+#[cfg(any(not(unix), test))]
+use packet28_daemon_protocol::paths::task_artifact_dir;
 use packet28_daemon_protocol::paths::{
     active_task_path, agent_runtime_dir, daemon_dir, pid_path, ready_path, runtime_path,
     socket_path, task_artifacts_dir, task_event_log_path, task_events_dir, task_registry_path,
     watch_registry_path, workspace_socket_path, TaskStorageId, AGENT_ACTIVE_TASK_FILE_NAME,
-    MAX_TASK_STORAGE_ID_BYTES, TASK_EVENT_LOG_SUFFIX, TASK_REGISTRY_FILE_NAME,
-    WATCH_REGISTRY_FILE_NAME,
+    MAX_TASK_STORAGE_ID_BYTES, TASK_ARTIFACTS_DIR_NAME, TASK_EVENTS_DIR_NAME,
+    TASK_EVENT_LOG_SUFFIX, TASK_REGISTRY_FILE_NAME, WATCH_REGISTRY_FILE_NAME,
 };
 use packet28_daemon_protocol::task::{TaskRegistry, WatchRegistry};
 use unicode_casefold::UnicodeCaseFold as _;
@@ -2443,6 +2445,40 @@ pub fn validate_task_storage_identifier(root: &Path, task_id: &str) -> Result<()
     validate_task_identifier_for_path(&path, task_id)
 }
 
+/// Removes storage created by the failed first run of a newly admitted task.
+///
+/// The task must still be present in the durable registry. The registry
+/// admission check and removal are serialized against supported event and
+/// checkpoint writers, so this operation cannot adopt or erase an
+/// unregistered namespace. On Unix, exact entries are removed relative to
+/// retained no-follow directory capabilities and are never followed through
+/// symbolic links.
+///
+/// Callers must remove the task from the durable registry only after this
+/// operation succeeds. A failure therefore leaves the task admitted, even if
+/// one of its two optional storage entries was already removed.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::InvalidTaskStorageIdentifier`] when `task_id`
+/// violates the portable storage contract, [`DaemonCoreError::InvalidTaskRegistry`]
+/// when it is not durably admitted, or [`DaemonCoreError::Io`] when the writer
+/// lease, registry lock, capability validation, or exact removal fails.
+pub fn remove_failed_initial_task_storage(root: &Path, task_id: &str) -> Result<()> {
+    let task_id = checked_task_storage_id(root, task_id)?;
+    let _writer_lease = acquire_task_store_writer_lease(root)?;
+    with_exclusively_registered_task_storage_id(root, &task_id, || {
+        #[cfg(unix)]
+        {
+            remove_failed_initial_task_storage_anchored(root, &task_id)
+        }
+        #[cfg(not(unix))]
+        {
+            remove_failed_initial_task_storage_portable(root, &task_id)
+        }
+    })
+}
+
 fn validate_task_identifier_for_path(path: &Path, task_id: &str) -> Result<()> {
     if let Some(message) = task_identifier_shape_error(task_id) {
         return Err(DaemonCoreError::InvalidTaskStorageIdentifier {
@@ -3139,12 +3175,29 @@ fn with_registered_task_storage_id<T>(
     task_id: &TaskStorageId,
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
+    with_registered_task_storage_id_lock(root, task_id, RegistryLockMode::Shared, operation)
+}
+
+fn with_exclusively_registered_task_storage_id<T>(
+    root: &Path,
+    task_id: &TaskStorageId,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    with_registered_task_storage_id_lock(root, task_id, RegistryLockMode::Exclusive, operation)
+}
+
+fn with_registered_task_storage_id_lock<T>(
+    root: &Path,
+    task_id: &TaskStorageId,
+    mode: RegistryLockMode,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     let path = task_registry_path(root);
     #[cfg(unix)]
     {
         with_anchored_task_registry_lock(
             root,
-            RegistryLockMode::Shared,
+            mode,
             || Ok(()),
             |daemon| {
                 let registry = match daemon
@@ -3163,7 +3216,7 @@ fn with_registered_task_storage_id<T>(
     }
     #[cfg(not(unix))]
     {
-        with_registry_lock(root, &path, RegistryLockMode::Shared, || {
+        with_registry_lock(root, &path, mode, || {
             let registry = match read_task_registry_portable(&path)? {
                 Some(raw) => decode_task_registry(&path, &raw)?,
                 None => TaskRegistry::default(),
@@ -3171,6 +3224,131 @@ fn with_registered_task_storage_id<T>(
             require_registered_task_storage_id(&registry, &path, task_id)?;
             operation()
         })
+    }
+}
+
+#[cfg(unix)]
+fn remove_failed_initial_task_storage_anchored(root: &Path, task_id: &TaskStorageId) -> Result<()> {
+    let workspace = CapabilityDir::open_workspace(root).map_err(|source| {
+        DaemonCoreError::io(
+            "failed to open workspace for failed initial task cleanup",
+            root,
+            source,
+        )
+    })?;
+    let Some(state) = open_optional_cleanup_directory(&workspace, OsStr::new(".packet28"))? else {
+        return Ok(());
+    };
+
+    if let Some(artifacts) =
+        open_optional_cleanup_directory(&state, OsStr::new(TASK_ARTIFACTS_DIR_NAME))?
+    {
+        remove_optional_cleanup_entry(&artifacts, OsStr::new(task_id.as_str()))?;
+    }
+
+    let Some(daemon) = open_optional_cleanup_directory(&state, OsStr::new("daemon"))? else {
+        return Ok(());
+    };
+    let Some(events) = open_optional_cleanup_directory(&daemon, OsStr::new(TASK_EVENTS_DIR_NAME))?
+    else {
+        return Ok(());
+    };
+    let event_name = event_log_file_name(task_id);
+    remove_optional_cleanup_entry(&events, OsStr::new(&event_name))
+}
+
+#[cfg(unix)]
+fn open_optional_cleanup_directory(
+    parent: &CapabilityDir,
+    name: &OsStr,
+) -> Result<Option<CapabilityDir>> {
+    let path = parent.display_path().join(name);
+    let directory = match parent.open_dir(name) {
+        Ok(directory) => directory,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(DaemonCoreError::io(
+                "failed to open directory for failed initial task cleanup",
+                &path,
+                source,
+            ));
+        }
+    };
+    ensure_capability_same_device(
+        parent,
+        &directory,
+        &path,
+        "failed initial task cleanup crossed a filesystem boundary",
+    )?;
+    Ok(Some(directory))
+}
+
+#[cfg(unix)]
+fn remove_optional_cleanup_entry(parent: &CapabilityDir, name: &OsStr) -> Result<()> {
+    let path = parent.display_path().join(name);
+    let Some(identity) = parent.entry_identity(name).map_err(|source| {
+        DaemonCoreError::io(
+            "failed to inspect failed initial task storage",
+            &path,
+            source,
+        )
+    })?
+    else {
+        return Ok(());
+    };
+    parent
+        .remove_tree_entry_verified(name, identity)
+        .map_err(|source| {
+            DaemonCoreError::io(
+                "failed to remove failed initial task storage",
+                &path,
+                source,
+            )
+        })
+}
+
+#[cfg(not(unix))]
+fn remove_failed_initial_task_storage_portable(root: &Path, task_id: &TaskStorageId) -> Result<()> {
+    remove_portable_cleanup_entry(
+        &task_artifact_dir(root, task_id),
+        true,
+        "failed to remove failed initial task artifacts",
+    )?;
+    remove_portable_cleanup_entry(
+        &task_event_log_path(root, task_id),
+        false,
+        "failed to remove failed initial task event log",
+    )
+}
+
+#[cfg(not(unix))]
+fn remove_portable_cleanup_entry(
+    path: &Path,
+    expect_directory: bool,
+    operation: &'static str,
+) -> Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(DaemonCoreError::io(operation, path, source)),
+    };
+    if metadata.file_type().is_symlink()
+        || (expect_directory && !metadata.is_dir())
+        || (!expect_directory && !metadata.is_file())
+    {
+        return Err(DaemonCoreError::io(
+            operation,
+            path,
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "failed initial task storage entry has an unsupported file type",
+            ),
+        ));
+    }
+    if expect_directory {
+        fs::remove_dir_all(path).map_err(|source| DaemonCoreError::io(operation, path, source))
+    } else {
+        fs::remove_file(path).map_err(|source| DaemonCoreError::io(operation, path, source))
     }
 }
 
@@ -4109,6 +4287,80 @@ mod tests {
                 ..WatchRegistration::default()
             }],
         }
+    }
+
+    #[test]
+    fn failed_initial_cleanup_removes_only_the_admitted_tasks_exact_namespace() {
+        let root = tempdir().unwrap();
+        save_task_registry(root.path(), &registry_for_tasks(&["retry", "keep"])).unwrap();
+        for task_id in ["retry", "keep"] {
+            let artifact = task_artifact_dir(root.path(), &task_storage_id(task_id));
+            fs::create_dir_all(&artifact).unwrap();
+            fs::write(artifact.join("payload.bin"), task_id.as_bytes()).unwrap();
+            let event = task_event_path(root.path(), task_id);
+            fs::create_dir_all(event.parent().unwrap()).unwrap();
+            fs::write(event, format!("{task_id}\n")).unwrap();
+        }
+
+        remove_failed_initial_task_storage(root.path(), "retry").unwrap();
+
+        assert!(!task_artifact_dir(root.path(), &task_storage_id("retry")).exists());
+        assert!(!task_event_path(root.path(), "retry").exists());
+        assert!(task_artifact_dir(root.path(), &task_storage_id("keep")).exists());
+        assert!(task_event_path(root.path(), "keep").exists());
+        assert!(load_task_registry(root.path())
+            .unwrap()
+            .tasks
+            .contains_key("retry"));
+    }
+
+    #[test]
+    fn failed_initial_cleanup_rejects_unregistered_preexisting_storage() {
+        let root = tempdir().unwrap();
+        save_task_registry(root.path(), &TaskRegistry::default()).unwrap();
+        let artifact = task_artifact_dir(root.path(), &task_storage_id("unregistered"));
+        fs::create_dir_all(&artifact).unwrap();
+        fs::write(artifact.join("payload.bin"), b"preserve").unwrap();
+        let event = task_event_path(root.path(), "unregistered");
+        fs::create_dir_all(event.parent().unwrap()).unwrap();
+        fs::write(&event, b"preserve\n").unwrap();
+
+        let error = remove_failed_initial_task_storage(root.path(), "unregistered").unwrap_err();
+
+        assert!(matches!(error, DaemonCoreError::InvalidTaskRegistry { .. }));
+        assert_eq!(fs::read(artifact.join("payload.bin")).unwrap(), b"preserve");
+        assert_eq!(fs::read(event).unwrap(), b"preserve\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_initial_cleanup_unlinks_symlinks_without_following_targets() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        admit_task(root.path(), "linked");
+        fs::write(outside.path().join("artifact.bin"), b"outside-artifact").unwrap();
+        fs::write(outside.path().join("event.jsonl"), b"outside-event").unwrap();
+        fs::create_dir_all(task_artifacts_dir(root.path())).unwrap();
+        let artifact = task_artifact_dir(root.path(), &task_storage_id("linked"));
+        symlink(outside.path(), &artifact).unwrap();
+        let event = task_event_path(root.path(), "linked");
+        fs::create_dir_all(event.parent().unwrap()).unwrap();
+        symlink(outside.path().join("event.jsonl"), &event).unwrap();
+
+        remove_failed_initial_task_storage(root.path(), "linked").unwrap();
+
+        assert!(!artifact.exists());
+        assert!(!event.exists());
+        assert_eq!(
+            fs::read(outside.path().join("artifact.bin")).unwrap(),
+            b"outside-artifact"
+        );
+        assert_eq!(
+            fs::read(outside.path().join("event.jsonl")).unwrap(),
+            b"outside-event"
+        );
     }
 
     fn set_checkpoint_generation(path: &Path, generation: u64) {

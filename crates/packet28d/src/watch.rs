@@ -4,6 +4,7 @@ use crate::broker::{
     refresh_broker_context_for_task, refresh_task_context_summary_for_generation,
     set_context_reason_for_generation,
 };
+use packet28_daemon_core::storage::remove_failed_initial_task_storage;
 use std::collections::HashSet;
 
 const TASK_CANCELLATION_QUIESCE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -816,6 +817,32 @@ pub(crate) fn rollback_failed_task_admission(
     expected_generation: TaskGenerationId,
     replaced_task: Option<TaskRecord>,
 ) -> Result<()> {
+    rollback_failed_task_admission_inner(state, task_id, expected_generation, replaced_task, false)
+}
+
+pub(crate) fn rollback_failed_initial_task_admission(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    expected_generation: TaskGenerationId,
+    replaced_task: Option<TaskRecord>,
+) -> Result<()> {
+    let remove_fresh_storage = replaced_task.is_none();
+    rollback_failed_task_admission_inner(
+        state,
+        task_id,
+        expected_generation,
+        replaced_task,
+        remove_fresh_storage,
+    )
+}
+
+fn rollback_failed_task_admission_inner(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    expected_generation: TaskGenerationId,
+    replaced_task: Option<TaskRecord>,
+    remove_fresh_storage: bool,
+) -> Result<()> {
     let (generation, persistence) = {
         let mut guard = state.lock().map_err(lock_err)?;
         let Some(generation) = guard.task_generations.current(task_id) else {
@@ -847,6 +874,27 @@ pub(crate) fn rollback_failed_task_admission(
     }
 
     let _event_guard = persistence.event_guard();
+    if remove_fresh_storage && persistence.task_is_durably_admitted(task_id) {
+        let root =
+            {
+                let guard = state.lock().map_err(lock_err)?;
+                let Some(current_generation) = guard.task_generations.current(task_id) else {
+                    return Ok(());
+                };
+                if current_generation.id() != expected_generation {
+                    return Ok(());
+                }
+                if guard.tasks.tasks.get(task_id).is_some_and(|task| {
+                    task.lifecycle.is_cancelling() || task.lifecycle.is_cancelled()
+                }) {
+                    return Ok(());
+                }
+                guard.root.clone()
+            };
+        remove_failed_initial_task_storage(&root, task_id).with_context(|| {
+            format!("failed to remove storage for failed initial task '{task_id}'")
+        })?;
+    }
     {
         let mut guard = state.lock().map_err(lock_err)?;
         let Some(current_generation) = guard.task_generations.current(task_id) else {
