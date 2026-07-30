@@ -192,6 +192,7 @@ pub(super) struct CapabilityFileRead {
     pub(super) logical_bytes: u64,
     pub(super) allocated_bytes: u64,
     pub(super) identity: FileIdentity,
+    pub(super) mode: RawMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1208,6 +1209,7 @@ impl CapabilityDir {
             logical_bytes,
             allocated_bytes,
             identity: identity_from_stat(&stat),
+            mode: (stat.st_mode as RawMode) & 0o777,
         })
     }
 

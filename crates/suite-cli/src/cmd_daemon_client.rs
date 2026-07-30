@@ -17,8 +17,12 @@ use packet28_daemon_protocol::{
     frame::{read_frame, write_frame},
     message::{
         ContextResolveRequest, ContextResolveResponse, DaemonRequest, DaemonResponse, DaemonStatus,
+        DaemonTransportAuth,
     },
-    paths::{log_path, ready_path, resolve_workspace_root, socket_path, workspace_socket_path},
+    paths::{
+        log_path, ready_path, resolve_workspace_root, runtime_path, socket_path,
+        workspace_socket_path,
+    },
 };
 
 #[cfg(unix)]
@@ -40,6 +44,13 @@ use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 const DAEMON_SOCKET_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[cfg(unix)]
+#[derive(Clone)]
+struct DaemonEndpoint {
+    address: String,
+    transport_auth: Option<DaemonTransportAuth>,
+}
 
 #[cfg(unix)]
 pub struct PersistentDaemonClient {
@@ -297,7 +308,8 @@ pub(crate) fn subscribe_task(
     replay_last: usize,
     after_seq: Option<u64>,
 ) -> Result<(DaemonStream, usize)> {
-    let stream = connect_daemon_endpoint(&daemon_endpoint(root))?;
+    let endpoint = daemon_endpoint(root)?;
+    let stream = connect_daemon_endpoint(&endpoint)?;
     let mut writer = BufWriter::new(stream.try_clone()?);
     let mut reader = BufReader::new(stream.try_clone()?);
     write_frame(
@@ -342,7 +354,8 @@ impl PersistentDaemonClient {
     pub fn connect(root: &Path) -> Result<Self> {
         let root = normalize_daemon_root(root);
         ensure_daemon(&root)?;
-        let stream = connect_daemon_endpoint(&daemon_endpoint(&root))?;
+        let endpoint = daemon_endpoint(&root)?;
+        let stream = connect_daemon_endpoint(&endpoint)?;
         let reader_stream = stream.try_clone()?;
         Ok(Self {
             root,
@@ -367,7 +380,7 @@ pub(crate) fn ensure_daemon(root: &Path) -> Result<()> {
     if daemon_status_existing(&root).is_ok() {
         return Ok(());
     }
-    let endpoint = daemon_endpoint(&root);
+    let endpoint = daemon_endpoint(&root)?;
     if endpoint_may_have_stale_socket(&endpoint) && connect_daemon_endpoint(&endpoint).is_err() {
         cleanup_unreachable_runtime_files(&root)?;
     }
@@ -463,7 +476,8 @@ fn daemon_error_indicates_protocol_mismatch(message: &str) -> bool {
 
 #[cfg(unix)]
 fn send_request_existing_daemon(root: &Path, request: &DaemonRequest) -> Result<DaemonResponse> {
-    let stream = connect_daemon_endpoint(&daemon_endpoint(root))?;
+    let endpoint = daemon_endpoint(root)?;
+    let stream = connect_daemon_endpoint(&endpoint)?;
     let reader_stream = stream.try_clone()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(reader_stream);
@@ -506,7 +520,7 @@ fn connect_daemon_socket(socket: &Path) -> Result<DaemonStream> {
 
 #[cfg(unix)]
 fn stop_daemon_if_running(root: &Path) -> Result<()> {
-    let endpoint = daemon_endpoint(root);
+    let endpoint = daemon_endpoint(root)?;
     if !endpoint_may_have_stale_socket(&endpoint) {
         return Ok(());
     }
@@ -542,7 +556,7 @@ fn cleanup_unreachable_runtime_files(root: &Path) -> Result<()> {
 fn wait_for_daemon_shutdown(root: &Path, timeout: Duration) -> Result<()> {
     let start = Instant::now();
     while start.elapsed() < timeout {
-        let endpoint = daemon_endpoint(root);
+        let endpoint = daemon_endpoint(root)?;
         if !endpoint_may_have_stale_socket(&endpoint) || connect_daemon_endpoint(&endpoint).is_err()
         {
             return Ok(());
@@ -551,41 +565,112 @@ fn wait_for_daemon_shutdown(root: &Path, timeout: Duration) -> Result<()> {
     }
     Err(anyhow!(
         "packet28d did not stop; socket still reachable at '{}'",
-        daemon_endpoint(root)
+        daemon_endpoint(root)?.address
     ))
 }
 
 #[cfg(unix)]
-fn daemon_endpoint(root: &Path) -> String {
-    read_runtime_info(root)
-        .ok()
-        .map(|runtime| runtime.socket_path)
-        .filter(|endpoint| !endpoint.is_empty())
-        .unwrap_or_else(|| socket_path(root).to_string_lossy().to_string())
+fn daemon_endpoint(root: &Path) -> Result<DaemonEndpoint> {
+    match read_runtime_info(root) {
+        Ok(runtime) if !runtime.socket_path.is_empty() => {
+            if runtime.socket_path.starts_with("tcp://") && runtime.transport_auth.is_none() {
+                anyhow::bail!(
+                    "refusing legacy unauthenticated daemon TCP endpoint '{}'; stop that daemon \
+                     with its matching Packet28 version and start it again",
+                    runtime.socket_path
+                );
+            }
+            Ok(DaemonEndpoint {
+                address: runtime.socket_path,
+                transport_auth: runtime.transport_auth,
+            })
+        }
+        Ok(_) => Ok(default_daemon_endpoint(root)),
+        Err(error) => match std::fs::symlink_metadata(runtime_path(root)) {
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                Ok(default_daemon_endpoint(root))
+            }
+            _ => Err(anyhow!(
+                "failed to authenticate daemon runtime discovery '{}': {error}",
+                runtime_path(root).display()
+            )),
+        },
+    }
 }
 
 #[cfg(unix)]
-fn endpoint_may_have_stale_socket(endpoint: &str) -> bool {
+fn default_daemon_endpoint(root: &Path) -> DaemonEndpoint {
+    DaemonEndpoint {
+        address: socket_path(root).to_string_lossy().to_string(),
+        transport_auth: None,
+    }
+}
+
+#[cfg(unix)]
+fn endpoint_may_have_stale_socket(endpoint: &DaemonEndpoint) -> bool {
     endpoint
+        .address
         .strip_prefix("tcp://")
         .map(|_| true)
-        .unwrap_or_else(|| Path::new(endpoint).exists())
+        .unwrap_or_else(|| Path::new(&endpoint.address).exists())
 }
 
 #[cfg(unix)]
-fn connect_daemon_endpoint(endpoint: &str) -> Result<DaemonStream> {
-    if let Some(addr) = endpoint.strip_prefix("tcp://") {
-        let stream = TcpStream::connect(addr)
-            .with_context(|| format!("failed to connect to daemon endpoint '{endpoint}'"))?;
+fn connect_daemon_endpoint(endpoint: &DaemonEndpoint) -> Result<DaemonStream> {
+    if let Some(addr) = endpoint.address.strip_prefix("tcp://") {
+        let auth = endpoint.transport_auth.as_ref().ok_or_else(|| {
+            anyhow!(
+                "daemon TCP endpoint '{}' has no owner capability",
+                endpoint.address
+            )
+        })?;
+        let stream = TcpStream::connect(addr).with_context(|| {
+            format!(
+                "failed to connect to daemon endpoint '{}'",
+                endpoint.address
+            )
+        })?;
         stream
             .set_read_timeout(Some(DAEMON_SOCKET_TIMEOUT))
-            .with_context(|| format!("failed to configure read timeout for '{endpoint}'"))?;
+            .with_context(|| {
+                format!(
+                    "failed to configure read timeout for '{}'",
+                    endpoint.address
+                )
+            })?;
         stream
             .set_write_timeout(Some(DAEMON_SOCKET_TIMEOUT))
-            .with_context(|| format!("failed to configure write timeout for '{endpoint}'"))?;
+            .with_context(|| {
+                format!(
+                    "failed to configure write timeout for '{}'",
+                    endpoint.address
+                )
+            })?;
+        let mut stream = stream;
+        write_frame(&mut stream, auth).with_context(|| {
+            format!(
+                "failed to write authentication prelude to '{}'",
+                endpoint.address
+            )
+        })?;
+        match read_frame(&mut stream).with_context(|| {
+            format!(
+                "failed to read authentication response from '{}'",
+                endpoint.address
+            )
+        })? {
+            DaemonResponse::Ack { message } if message == "authenticated" => {}
+            DaemonResponse::Error { message } => return Err(anyhow!(message)),
+            response => {
+                return Err(anyhow!(
+                    "unexpected daemon authentication response from '{}': {response:?}",
+                    endpoint.address
+                ));
+            }
+        }
         return Ok(DaemonStream::Tcp(stream));
     }
-    connect_daemon_socket(Path::new(endpoint))
+    connect_daemon_socket(Path::new(&endpoint.address))
 }
 
 #[cfg(unix)]
@@ -642,6 +727,47 @@ mod tests {
             message: "prepare_handoff did not return a ready handoff".to_string(),
         };
         assert!(!daemon_response_indicates_protocol_mismatch(&response));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_tcp_runtime_without_owner_capability_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        packet28_daemon_core::storage::write_runtime_info(
+            root.path(),
+            &packet28_daemon_protocol::message::DaemonRuntimeInfo {
+                socket_path: "tcp://127.0.0.1:4242".to_string(),
+                ..packet28_daemon_protocol::message::DaemonRuntimeInfo::default()
+            },
+        )
+        .unwrap();
+
+        let error = daemon_endpoint(root.path())
+            .err()
+            .expect("legacy unauthenticated TCP discovery unexpectedly succeeded");
+
+        assert!(error
+            .to_string()
+            .contains("refusing legacy unauthenticated daemon TCP endpoint"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_discovery_symlink_is_not_treated_as_missing() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let runtime = runtime_path(root.path());
+        std::fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+        symlink(root.path().join("missing-runtime-target"), &runtime).unwrap();
+
+        let error = daemon_endpoint(root.path())
+            .err()
+            .expect("unauthenticated runtime symlink unexpectedly fell back to a Unix endpoint");
+
+        assert!(error
+            .to_string()
+            .contains("failed to authenticate daemon runtime discovery"));
     }
 
     #[cfg(unix)]

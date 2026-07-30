@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read as _};
 use std::net::TcpListener;
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -15,7 +16,9 @@ use packet28_daemon_core::storage::{
     remove_runtime_files, write_runtime_info,
 };
 use packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease;
-use packet28_daemon_protocol::message::DaemonRuntimeInfo;
+use packet28_daemon_protocol::message::{
+    DaemonRuntimeInfo, DaemonTransportAuth, DAEMON_TRANSPORT_SECRET_BYTES,
+};
 use packet28_daemon_protocol::paths::{log_path, ready_path, socket_path, workspace_socket_path};
 use packet28_daemon_protocol::task::{TaskLaunchAgentRequest, TaskLifecycle};
 
@@ -25,7 +28,7 @@ use crate::launch::task_launch_agent;
 use crate::persistence::PersistenceOwner;
 use crate::runtime::{BlockingPool, DaemonRuntimeConfig, ShutdownSignal, StateChangeSignal};
 use crate::runtime_files::{load_index_manifest_file, load_index_runtime_files};
-use crate::server::handle_connection;
+use crate::server::{authenticate_tcp_connection, handle_connection};
 use crate::state::{
     BackgroundCommand, DaemonState, IndexCommand, TaskGenerationRegistry, WatchEventMsg,
 };
@@ -86,6 +89,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
         socket_path: listener.endpoint(),
         workspace_root: root.to_string_lossy().to_string(),
         log_path: daemon_log_path.to_string_lossy().to_string(),
+        transport_auth: listener.transport_auth(),
     };
     write_runtime_info(&root, &runtime)?;
     daemon_log(&format!(
@@ -812,6 +816,9 @@ pub(crate) async fn run_transport(
 ) -> Result<()> {
     let listener = listener.into_async()?;
     let permits = Arc::new(tokio::sync::Semaphore::new(config.max_connections));
+    let authentication_permits = Arc::new(tokio::sync::Semaphore::new(
+        config.max_pending_tcp_authentications,
+    ));
     let mut shutdown = state.lock().map_err(lock_err)?.shutdown.subscribe();
     let mut connections = tokio::task::JoinSet::new();
 
@@ -830,13 +837,13 @@ pub(crate) async fn run_transport(
                 log_connection_join(joined);
             }
             accepted = listener.accept() => {
-                let stream = accepted.context("daemon listener accept failed")?;
-                let Ok(permit) = permits.clone().try_acquire_owned() else {
-                    daemon_log(&format!(
-                        "connection rejected: active connection cap {} reached",
-                        config.max_connections
-                    ));
-                    continue;
+                let accepted = accepted.context("daemon listener accept failed")?;
+                let stream = match accepted {
+                    DaemonAcceptOutcome::Accepted(stream) => stream,
+                    DaemonAcceptOutcome::Rejected { reason } => {
+                        daemon_log(&format!("connection rejected before request dispatch: {reason}"));
+                        continue;
+                    }
                 };
                 let connection_state = state.clone();
                 let connection_watch_tx = watch_tx.clone();
@@ -844,6 +851,13 @@ pub(crate) async fn run_transport(
                 let connection_config = config.clone();
                 match stream {
                     DaemonAcceptedStream::Unix(stream) => {
+                        let Ok(permit) = permits.clone().try_acquire_owned() else {
+                            daemon_log(&format!(
+                                "connection rejected: active connection cap {} reached",
+                                config.max_connections
+                            ));
+                            continue;
+                        };
                         connections.spawn(async move {
                             let _permit = permit;
                             handle_connection(
@@ -856,8 +870,55 @@ pub(crate) async fn run_transport(
                             .await
                         });
                     }
-                    DaemonAcceptedStream::Tcp(stream) => {
+                    DaemonAcceptedStream::Tcp { mut stream, auth } => {
+                        let Ok(authentication_permit) =
+                            authentication_permits.clone().try_acquire_owned()
+                        else {
+                            daemon_log(&format!(
+                                "TCP connection rejected: pending authentication cap {} reached",
+                                config.max_pending_tcp_authentications
+                            ));
+                            continue;
+                        };
+                        let connection_permits = permits.clone();
                         connections.spawn(async move {
+                            let mut connection_shutdown = connection_state
+                                .lock()
+                                .map_err(lock_err)?
+                                .shutdown
+                                .subscribe();
+                            let authenticated = tokio::select! {
+                                biased;
+                                changed = connection_shutdown.changed() => {
+                                    if changed.is_err() || *connection_shutdown.borrow() {
+                                        return Ok(());
+                                    }
+                                    false
+                                }
+                                authenticated = tokio::time::timeout(
+                                    connection_config.transport_auth_timeout,
+                                    authenticate_tcp_connection(
+                                        &mut stream,
+                                        &auth,
+                                        &connection_config,
+                                        &connection_pool,
+                                    ),
+                                ) => match authenticated {
+                                    Ok(authenticated) => authenticated?,
+                                    Err(_) => false,
+                                },
+                            };
+                            drop(authentication_permit);
+                            if !authenticated {
+                                return Ok(());
+                            }
+                            let Ok(permit) = connection_permits.try_acquire_owned() else {
+                                daemon_log(&format!(
+                                    "authenticated connection rejected: active connection cap {} reached",
+                                    connection_config.max_connections
+                                ));
+                                return Ok(());
+                            };
                             let _permit = permit;
                             handle_connection(
                                 connection_state,
@@ -973,21 +1034,37 @@ pub(crate) enum DaemonListener {
     Unix {
         endpoint: PathBuf,
         listener: UnixListener,
+        owner_uid: u32,
     },
     Tcp {
         endpoint: String,
         listener: TcpListener,
+        auth: DaemonTransportAuth,
     },
 }
 
 enum DaemonAcceptedStream {
     Unix(tokio::net::UnixStream),
-    Tcp(tokio::net::TcpStream),
+    Tcp {
+        stream: tokio::net::TcpStream,
+        auth: DaemonTransportAuth,
+    },
+}
+
+enum DaemonAcceptOutcome {
+    Accepted(DaemonAcceptedStream),
+    Rejected { reason: String },
 }
 
 enum AsyncDaemonListener {
-    Unix(tokio::net::UnixListener),
-    Tcp(tokio::net::TcpListener),
+    Unix {
+        listener: tokio::net::UnixListener,
+        owner_uid: u32,
+    },
+    Tcp {
+        listener: tokio::net::TcpListener,
+        auth: DaemonTransportAuth,
+    },
 }
 
 impl DaemonListener {
@@ -998,34 +1075,73 @@ impl DaemonListener {
         }
     }
 
+    pub(crate) fn transport_auth(&self) -> Option<DaemonTransportAuth> {
+        match self {
+            Self::Unix { .. } => None,
+            Self::Tcp { auth, .. } => Some(auth.clone()),
+        }
+    }
+
     fn into_async(self) -> Result<AsyncDaemonListener> {
         match self {
-            DaemonListener::Unix { listener, .. } => {
+            DaemonListener::Unix {
+                listener,
+                owner_uid,
+                ..
+            } => {
                 listener.set_nonblocking(true)?;
-                Ok(AsyncDaemonListener::Unix(
-                    tokio::net::UnixListener::from_std(listener)?,
-                ))
+                Ok(AsyncDaemonListener::Unix {
+                    listener: tokio::net::UnixListener::from_std(listener)?,
+                    owner_uid,
+                })
             }
-            DaemonListener::Tcp { listener, .. } => {
+            DaemonListener::Tcp { listener, auth, .. } => {
                 listener.set_nonblocking(true)?;
-                Ok(AsyncDaemonListener::Tcp(tokio::net::TcpListener::from_std(
-                    listener,
-                )?))
+                Ok(AsyncDaemonListener::Tcp {
+                    listener: tokio::net::TcpListener::from_std(listener)?,
+                    auth,
+                })
             }
         }
     }
 }
 
 impl AsyncDaemonListener {
-    async fn accept(&self) -> std::io::Result<DaemonAcceptedStream> {
+    async fn accept(&self) -> std::io::Result<DaemonAcceptOutcome> {
         match self {
-            Self::Unix(listener) => {
+            Self::Unix {
+                listener,
+                owner_uid,
+            } => {
                 let (stream, _) = listener.accept().await?;
-                Ok(DaemonAcceptedStream::Unix(stream))
+                let credentials = match stream.peer_cred() {
+                    Ok(credentials) => credentials,
+                    Err(error) => {
+                        return Ok(DaemonAcceptOutcome::Rejected {
+                            reason: format!(
+                                "Unix peer credentials could not be authenticated: {error}"
+                            ),
+                        });
+                    }
+                };
+                if credentials.uid() != *owner_uid {
+                    return Ok(DaemonAcceptOutcome::Rejected {
+                        reason: format!(
+                            "Unix peer uid {} does not own daemon uid {owner_uid}",
+                            credentials.uid()
+                        ),
+                    });
+                }
+                Ok(DaemonAcceptOutcome::Accepted(DaemonAcceptedStream::Unix(
+                    stream,
+                )))
             }
-            Self::Tcp(listener) => {
+            Self::Tcp { listener, auth } => {
                 let (stream, _) = listener.accept().await?;
-                Ok(DaemonAcceptedStream::Tcp(stream))
+                Ok(DaemonAcceptOutcome::Accepted(DaemonAcceptedStream::Tcp {
+                    stream,
+                    auth: auth.clone(),
+                }))
             }
         }
     }
@@ -1041,10 +1157,14 @@ fn bind_daemon_listener(root: &Path) -> Result<DaemonListener> {
     let primary = socket_path(root);
     cleanup_socket_before_bind(&primary)?;
     match UnixListener::bind(&primary) {
-        Ok(listener) => Ok(DaemonListener::Unix {
-            endpoint: primary,
-            listener,
-        }),
+        Ok(listener) => {
+            let owner_uid = unix_socket_owner_uid(&primary)?;
+            Ok(DaemonListener::Unix {
+                endpoint: primary,
+                listener,
+                owner_uid,
+            })
+        }
         Err(primary_err) if bind_io_error_is_permission_denied(&primary_err) => {
             let fallback = workspace_socket_path(root);
             daemon_log(&format!(
@@ -1053,10 +1173,14 @@ fn bind_daemon_listener(root: &Path) -> Result<DaemonListener> {
             ));
             cleanup_socket_before_bind(&fallback)?;
             match UnixListener::bind(&fallback) {
-                Ok(listener) => Ok(DaemonListener::Unix {
-                    endpoint: fallback,
-                    listener,
-                }),
+                Ok(listener) => {
+                    let owner_uid = unix_socket_owner_uid(&fallback)?;
+                    Ok(DaemonListener::Unix {
+                        endpoint: fallback,
+                        listener,
+                        owner_uid,
+                    })
+                }
                 Err(fallback_err) => {
                     daemon_log(&format!(
                         "falling back to TCP after workspace socket bind failed: {fallback_err}"
@@ -1083,8 +1207,33 @@ pub(crate) fn bind_tcp_listener(reason: &str) -> Result<DaemonListener> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .with_context(|| format!("failed to bind TCP fallback after {reason}"))?;
     let endpoint = format!("tcp://{}", listener.local_addr()?);
+    let auth = generate_daemon_transport_auth()?;
     daemon_log(&format!(
         "using TCP daemon endpoint '{endpoint}' ({reason})"
     ));
-    Ok(DaemonListener::Tcp { endpoint, listener })
+    Ok(DaemonListener::Tcp {
+        endpoint,
+        listener,
+        auth,
+    })
+}
+
+fn generate_daemon_transport_auth() -> Result<DaemonTransportAuth> {
+    let mut secret = [0_u8; DAEMON_TRANSPORT_SECRET_BYTES];
+    fs::File::open("/dev/urandom")
+        .context("failed to open operating-system random source for daemon TCP capability")?
+        .read_exact(&mut secret)
+        .context("failed to read daemon TCP capability from operating-system random source")?;
+    Ok(DaemonTransportAuth::from_secret_bytes(secret))
+}
+
+fn unix_socket_owner_uid(socket: &Path) -> Result<u32> {
+    fs::symlink_metadata(socket)
+        .with_context(|| {
+            format!(
+                "failed to inspect Unix daemon socket '{}'",
+                socket.display()
+            )
+        })
+        .map(|metadata| metadata.uid())
 }

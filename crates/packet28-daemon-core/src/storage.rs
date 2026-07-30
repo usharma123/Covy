@@ -6,6 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{BufRead, BufReader, Read as _, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+#[cfg(any(not(unix), test))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fs2::FileExt;
@@ -17,8 +18,8 @@ use packet28_daemon_protocol::paths::{
     active_task_path, agent_runtime_dir, daemon_dir, pid_path, ready_path, runtime_path,
     socket_path, task_artifacts_dir, task_event_log_path, task_events_dir, task_registry_path,
     watch_registry_path, workspace_socket_path, TaskStorageId, AGENT_ACTIVE_TASK_FILE_NAME,
-    MAX_TASK_STORAGE_ID_BYTES, TASK_ARTIFACTS_DIR_NAME, TASK_EVENTS_DIR_NAME,
-    TASK_EVENT_LOG_SUFFIX, TASK_REGISTRY_FILE_NAME, WATCH_REGISTRY_FILE_NAME,
+    MAX_TASK_STORAGE_ID_BYTES, PID_FILE_NAME, RUNTIME_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
+    TASK_EVENTS_DIR_NAME, TASK_EVENT_LOG_SUFFIX, TASK_REGISTRY_FILE_NAME, WATCH_REGISTRY_FILE_NAME,
 };
 use packet28_daemon_protocol::task::{TaskRegistry, WatchRegistry};
 use unicode_casefold::UnicodeCaseFold as _;
@@ -47,6 +48,7 @@ use event_tail::{
     task_event_log_tail_sequence_admitted_with_observer,
 };
 
+#[cfg(any(not(unix), test))]
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Maximum supported encoded size of the task registry.
 ///
@@ -106,6 +108,11 @@ pub(crate) const TASK_REGISTRY_LOCK_FILE_NAME: &str = ".task-registry-v1.json.lo
 const WATCH_REGISTRY_LOCK_FILE_NAME: &str = ".watch-registry-v1.json.lock";
 #[cfg(unix)]
 const WATCH_REGISTRY_WRITE_TEMP_PREFIX: &str = ".watch-registry-v1.json.packet28-write.";
+#[cfg(unix)]
+const RUNTIME_INFO_WRITE_TEMP_PREFIX: &str = ".runtime.json.packet28-write.";
+#[cfg(unix)]
+const PID_WRITE_TEMP_PREFIX: &str = ".pid.packet28-write.";
+const MAX_DAEMON_RUNTIME_INFO_BYTES: usize = 64 * 1024;
 pub(crate) const ACTIVE_TASK_LOCK_FILE_NAME: &str = ".active-task.json.lock";
 const REGISTRY_CHECKPOINT_GENERATION_FIELD: &str = "task_watch_checkpoint_generation";
 
@@ -569,13 +576,48 @@ fn ensure_capability_same_device(
 /// [`DaemonCoreError::Json`] if `info` cannot be encoded.
 pub fn write_runtime_info(root: &Path, info: &DaemonRuntimeInfo) -> Result<()> {
     ensure_daemon_dir(root)?;
-    write_atomically(&pid_path(root), format!("{}\n", info.pid).as_bytes())?;
     let path = runtime_path(root);
     let bytes = serde_json::to_vec_pretty(info).map_err(|source| {
         DaemonCoreError::json("failed to encode runtime metadata for", &path, source)
     })?;
-    write_atomically(&path, &bytes)?;
-    Ok(())
+    if bytes.len() > MAX_DAEMON_RUNTIME_INFO_BYTES {
+        return Err(DaemonCoreError::io(
+            "refused oversized daemon runtime metadata",
+            &path,
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "runtime metadata is {} bytes; maximum is {MAX_DAEMON_RUNTIME_INFO_BYTES}",
+                    bytes.len()
+                ),
+            ),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let daemon = open_daemon_runtime_capability(root, true)?;
+        write_anchored_runtime_file(
+            &daemon,
+            PID_FILE_NAME,
+            &pid_path(root),
+            format!("{}\n", info.pid).as_bytes(),
+            PID_WRITE_TEMP_PREFIX,
+            "daemon pid",
+        )?;
+        write_anchored_runtime_file(
+            &daemon,
+            RUNTIME_FILE_NAME,
+            &path,
+            &bytes,
+            RUNTIME_INFO_WRITE_TEMP_PREFIX,
+            "daemon runtime metadata",
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        write_atomically(&pid_path(root), format!("{}\n", info.pid).as_bytes())?;
+        write_atomically(&path, &bytes)
+    }
 }
 
 /// Loads persisted runtime discovery metadata for a daemon.
@@ -586,11 +628,130 @@ pub fn write_runtime_info(root: &Path, info: &DaemonRuntimeInfo) -> Result<()> {
 /// [`DaemonCoreError::Json`] if it is not valid runtime metadata.
 pub fn read_runtime_info(root: &Path) -> Result<DaemonRuntimeInfo> {
     let path = runtime_path(root);
+    #[cfg(unix)]
+    let authenticated_read = {
+        let daemon = open_daemon_runtime_capability(root, false)?;
+        daemon
+            .read_file_limited_with_metadata(
+                OsStr::new(RUNTIME_FILE_NAME),
+                MAX_DAEMON_RUNTIME_INFO_BYTES,
+            )
+            .map_err(|source| {
+                DaemonCoreError::io(
+                    "failed to read authenticated runtime metadata",
+                    &path,
+                    source,
+                )
+            })?
+    };
+    #[cfg(unix)]
+    let raw = authenticated_read.bytes;
+    #[cfg(not(unix))]
     let raw = fs::read(&path)
         .map_err(|source| DaemonCoreError::io("failed to read runtime metadata", &path, source))?;
-    serde_json::from_slice(&raw).map_err(|source| {
+    let runtime: DaemonRuntimeInfo = serde_json::from_slice(&raw).map_err(|source| {
         DaemonCoreError::json("failed to decode runtime metadata from", &path, source)
-    })
+    })?;
+    #[cfg(unix)]
+    if runtime.transport_auth.is_some() && (authenticated_read.mode & 0o077) != 0 {
+        return Err(DaemonCoreError::io(
+            "refused non-owner-readable daemon transport capability",
+            &path,
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "runtime metadata containing transport authentication has mode {:o}; \
+                     group and other permission bits must be zero",
+                    authenticated_read.mode
+                ),
+            ),
+        ));
+    }
+    Ok(runtime)
+}
+
+#[cfg(unix)]
+fn open_daemon_runtime_capability(root: &Path, create: bool) -> Result<CapabilityDir> {
+    let canonical_root = fs::canonicalize(root).map_err(|source| {
+        DaemonCoreError::io(
+            "failed to resolve workspace for daemon runtime discovery",
+            root,
+            source,
+        )
+    })?;
+    let workspace = CapabilityDir::open_workspace(&canonical_root).map_err(|source| {
+        DaemonCoreError::io(
+            "failed to open workspace capability for daemon runtime discovery",
+            &canonical_root,
+            source,
+        )
+    })?;
+    let state_path = canonical_root.join(".packet28");
+    let state = if create {
+        workspace.ensure_dir_open(OsStr::new(".packet28"), 0o755)
+    } else {
+        workspace.open_dir(OsStr::new(".packet28"))
+    }
+    .map_err(|source| {
+        DaemonCoreError::io(
+            "failed to open Packet28 state for daemon runtime discovery",
+            &state_path,
+            source,
+        )
+    })?;
+    ensure_capability_same_device(
+        &workspace,
+        &state,
+        &state_path,
+        "Packet28 runtime discovery state is on another filesystem",
+    )?;
+    let daemon_path = daemon_dir(&canonical_root);
+    let daemon = if create {
+        state.ensure_dir_open(OsStr::new("daemon"), 0o755)
+    } else {
+        state.open_dir(OsStr::new("daemon"))
+    }
+    .map_err(|source| {
+        DaemonCoreError::io(
+            "failed to open daemon runtime discovery capability",
+            &daemon_path,
+            source,
+        )
+    })?;
+    ensure_capability_same_device(
+        &state,
+        &daemon,
+        &daemon_path,
+        "daemon runtime discovery state is on another filesystem",
+    )?;
+    Ok(daemon)
+}
+
+#[cfg(unix)]
+fn write_anchored_runtime_file(
+    daemon: &CapabilityDir,
+    name: &str,
+    path: &Path,
+    bytes: &[u8],
+    temporary_prefix: &str,
+    description: &'static str,
+) -> Result<()> {
+    daemon
+        .write_json_atomically(OsStr::new(name), bytes, temporary_prefix)
+        .map_err(|error| {
+            DaemonCoreError::io(
+                if error.renamed {
+                    "failed to synchronize authenticated daemon runtime publication"
+                } else {
+                    "failed to publish authenticated daemon runtime file"
+                },
+                path,
+                std::io::Error::new(
+                    error.source.kind(),
+                    format!("{description}: {}", error.source),
+                ),
+            )
+        })
 }
 
 /// Removes daemon socket and runtime discovery files that currently exist.
@@ -3797,6 +3958,7 @@ pub fn now_unix() -> u64 {
         .as_secs()
 }
 
+#[cfg(any(not(unix), test))]
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     let temp_path = atomic_temp_path(path);
     let mut file = fs::File::create(&temp_path).map_err(|source| {
@@ -3824,6 +3986,7 @@ pub(crate) fn inject_parent_sync_failure_once(path: &Path) {
     });
 }
 
+#[cfg(any(not(unix), test))]
 fn sync_parent_directory(path: &Path) -> Result<()> {
     #[cfg(test)]
     if INJECT_PARENT_SYNC_FAILURE_FOR.with(|configured| {
@@ -4200,6 +4363,7 @@ fn registry_lock_path(registry_path: &Path) -> PathBuf {
     registry_path.with_file_name(format!(".{file_name}.lock"))
 }
 
+#[cfg(any(not(unix), test))]
 fn atomic_temp_path(path: &Path) -> PathBuf {
     let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let file_name = path
@@ -4216,7 +4380,9 @@ fn atomic_temp_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use packet28_daemon_protocol::message::DaemonEvent;
+    use packet28_daemon_protocol::message::{
+        DaemonEvent, DaemonTransportAuth, DAEMON_TRANSPORT_SECRET_BYTES,
+    };
     use packet28_daemon_protocol::task::{TaskLifecycle, TaskRecord, WatchRegistration};
     #[cfg(unix)]
     use std::process::{Command, Stdio};
@@ -4233,6 +4399,114 @@ mod tests {
 
     fn task_event_path(root: &Path, task_id: &str) -> PathBuf {
         task_event_log_path(root, &task_storage_id(task_id))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_discovery_publication_is_owner_only_and_round_trips_tcp_capability() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempdir().unwrap();
+        let auth = DaemonTransportAuth::from_secret_bytes([0x2a; DAEMON_TRANSPORT_SECRET_BYTES]);
+        let runtime = DaemonRuntimeInfo {
+            pid: 4242,
+            socket_path: "tcp://127.0.0.1:4242".to_string(),
+            transport_auth: Some(auth.clone()),
+            ..DaemonRuntimeInfo::default()
+        };
+
+        write_runtime_info(root.path(), &runtime).unwrap();
+
+        let runtime_mode = fs::metadata(runtime_path(root.path()))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let pid_mode = fs::metadata(pid_path(root.path()))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!((runtime_mode, pid_mode), (0o600, 0o600));
+        let loaded = read_runtime_info(root.path()).unwrap();
+        assert!(loaded
+            .transport_auth
+            .as_ref()
+            .is_some_and(|candidate| auth.authenticates(candidate)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_discovery_publication_replaces_symlink_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let target = root.path().join("outside-runtime");
+        fs::write(&target, b"keep").unwrap();
+        symlink(&target, runtime_path(root.path())).unwrap();
+        let runtime = DaemonRuntimeInfo {
+            pid: 7,
+            socket_path: socket_path(root.path()).to_string_lossy().to_string(),
+            ..DaemonRuntimeInfo::default()
+        };
+
+        write_runtime_info(root.path(), &runtime).unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+        assert!(fs::symlink_metadata(runtime_path(root.path()))
+            .unwrap()
+            .file_type()
+            .is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_discovery_rejects_non_owner_write_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempdir().unwrap();
+        write_runtime_info(root.path(), &DaemonRuntimeInfo::default()).unwrap();
+        fs::set_permissions(runtime_path(root.path()), fs::Permissions::from_mode(0o622)).unwrap();
+
+        let error = read_runtime_info(root.path()).unwrap_err();
+
+        assert!(format!("{error:#}").contains("non-owner write authority"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_discovery_rejects_readable_tcp_capability_but_accepts_legacy_unix_metadata() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempdir().unwrap();
+        let auth = DaemonTransportAuth::from_secret_bytes([0x3c; DAEMON_TRANSPORT_SECRET_BYTES]);
+        write_runtime_info(
+            root.path(),
+            &DaemonRuntimeInfo {
+                socket_path: "tcp://127.0.0.1:4242".to_string(),
+                transport_auth: Some(auth),
+                ..DaemonRuntimeInfo::default()
+            },
+        )
+        .unwrap();
+        fs::set_permissions(runtime_path(root.path()), fs::Permissions::from_mode(0o644)).unwrap();
+
+        let error = read_runtime_info(root.path()).unwrap_err();
+
+        assert!(format!("{error:#}").contains("non-owner-readable daemon transport capability"));
+
+        write_runtime_info(
+            root.path(),
+            &DaemonRuntimeInfo {
+                socket_path: socket_path(root.path()).to_string_lossy().to_string(),
+                ..DaemonRuntimeInfo::default()
+            },
+        )
+        .unwrap();
+        fs::set_permissions(runtime_path(root.path()), fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(read_runtime_info(root.path()).is_ok());
     }
 
     #[cfg(unix)]

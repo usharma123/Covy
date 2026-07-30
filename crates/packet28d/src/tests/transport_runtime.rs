@@ -2,6 +2,8 @@ use super::support::{daemon_test_state, insert_admitted_task_record, shutdown_te
 use super::*;
 use fs2::FileExt;
 use packet28_daemon_core::storage::load_task_registry;
+use packet28_daemon_protocol::message::{DaemonTransportAuth, DAEMON_TRANSPORT_SECRET_BYTES};
+use std::os::unix::fs::MetadataExt as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 static TCP_TRANSPORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -23,8 +25,16 @@ async fn exchange<S>(stream: &mut S, request: &DaemonRequest) -> DaemonResponse
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    exchange_value(stream, request).await
+}
+
+async fn exchange_value<S, T>(stream: &mut S, value: &T) -> DaemonResponse
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    T: serde::Serialize,
+{
     let mut encoded = Vec::new();
-    write_frame(&mut encoded, request).unwrap();
+    write_frame(&mut encoded, value).unwrap();
     stream.write_all(&encoded).await.unwrap();
 
     let mut header = [0_u8; 8];
@@ -365,6 +375,7 @@ async fn tcp_stop_acknowledges_stops_accepting_and_joins_connection() {
     let _tcp_test_guard = TCP_TRANSPORT_TEST_LOCK.lock().await;
     let state = daemon_test_state();
     let listener = bind_tcp_listener("transport parity test").unwrap();
+    let auth = listener.transport_auth().unwrap();
     let endpoint = listener.endpoint();
     let address = endpoint
         .strip_prefix("tcp://")
@@ -386,6 +397,10 @@ async fn tcp_stop_acknowledges_stops_accepting_and_joins_connection() {
     ));
     let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
 
+    assert!(matches!(
+        exchange_value(&mut client, &auth).await,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
     assert!(matches!(
         exchange(&mut client, &DaemonRequest::Status).await,
         DaemonResponse::Status { .. }
@@ -412,6 +427,100 @@ async fn tcp_stop_acknowledges_stops_accepting_and_joins_connection() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tcp_transport_rejects_unauthenticated_stop_before_dispatch() {
+    let _tcp_test_guard = TCP_TRANSPORT_TEST_LOCK.lock().await;
+    let state = daemon_test_state();
+    let listener = bind_tcp_listener("unauthenticated request test").unwrap();
+    let auth = listener.transport_auth().unwrap();
+    let address = listener
+        .endpoint()
+        .strip_prefix("tcp://")
+        .unwrap()
+        .parse::<std::net::SocketAddr>()
+        .unwrap();
+    let (watch_tx, _watch_rx) = WatchIngress::new(8);
+    let server_state = state.clone();
+    let server = tokio::spawn(run_transport(
+        listener,
+        server_state,
+        watch_tx,
+        BlockingPool::new(2),
+        DaemonRuntimeConfig::default(),
+    ));
+    let mut unauthenticated = tokio::net::TcpStream::connect(address).await.unwrap();
+
+    let rejected = exchange(&mut unauthenticated, &DaemonRequest::Stop).await;
+
+    assert!(matches!(
+        rejected,
+        DaemonResponse::Error { ref message }
+            if message == "daemon transport authentication failed"
+    ));
+    assert!(!state.lock().unwrap().shutdown.is_requested());
+
+    let mut authorized = tokio::net::TcpStream::connect(address).await.unwrap();
+    assert!(matches!(
+        exchange_value(&mut authorized, &auth).await,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
+    assert!(matches!(
+        exchange(&mut authorized, &DaemonRequest::Stop).await,
+        DaemonResponse::Ack { ref message } if message == "stopping"
+    ));
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("TCP transport did not stop after authenticated cleanup")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tcp_transport_rejects_wrong_capability_before_dispatch() {
+    let _tcp_test_guard = TCP_TRANSPORT_TEST_LOCK.lock().await;
+    let state = daemon_test_state();
+    let listener = bind_tcp_listener("wrong capability test").unwrap();
+    let auth = listener.transport_auth().unwrap();
+    let address = listener
+        .endpoint()
+        .strip_prefix("tcp://")
+        .unwrap()
+        .parse::<std::net::SocketAddr>()
+        .unwrap();
+    let (watch_tx, _watch_rx) = WatchIngress::new(8);
+    let server_state = state.clone();
+    let server = tokio::spawn(run_transport(
+        listener,
+        server_state,
+        watch_tx,
+        BlockingPool::new(2),
+        DaemonRuntimeConfig::default(),
+    ));
+    let wrong = DaemonTransportAuth::from_secret_bytes([0xff; DAEMON_TRANSPORT_SECRET_BYTES]);
+    let mut unauthorized = tokio::net::TcpStream::connect(address).await.unwrap();
+
+    let rejected = exchange_value(&mut unauthorized, &wrong).await;
+
+    assert!(matches!(
+        rejected,
+        DaemonResponse::Error { ref message }
+            if message == "daemon transport authentication failed"
+    ));
+    assert!(!state.lock().unwrap().shutdown.is_requested());
+
+    let mut authorized = tokio::net::TcpStream::connect(address).await.unwrap();
+    assert!(matches!(
+        exchange_value(&mut authorized, &auth).await,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
+    let _ = exchange(&mut authorized, &DaemonRequest::Stop).await;
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("TCP transport did not stop after wrong-capability test")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unix_transport_matches_tcp_status_and_stop_semantics() {
     let state = daemon_test_state();
     let directory = tempfile::TempDir::new().unwrap();
@@ -419,6 +528,7 @@ async fn unix_transport_matches_tcp_status_and_stop_semantics() {
     let listener = DaemonListener::Unix {
         endpoint: socket.clone(),
         listener: UnixListener::bind(&socket).unwrap(),
+        owner_uid: std::fs::symlink_metadata(&socket).unwrap().uid(),
     };
     let (watch_tx, _watch_rx) = WatchIngress::new(8);
     let config = DaemonRuntimeConfig {
@@ -455,10 +565,71 @@ async fn unix_transport_matches_tcp_status_and_stop_semantics() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn connection_cap_rejects_excess_idle_peer() {
+async fn unix_transport_rejects_peer_that_does_not_match_daemon_owner() {
+    let state = daemon_test_state();
+    let directory = tempfile::TempDir::new().unwrap();
+    let socket = directory.path().join("packet28d.sock");
+    let unix_listener = UnixListener::bind(&socket).unwrap();
+    let current_uid = std::fs::symlink_metadata(&socket).unwrap().uid();
+    let listener = DaemonListener::Unix {
+        endpoint: socket.clone(),
+        listener: unix_listener,
+        owner_uid: current_uid ^ 1,
+    };
+    let (watch_tx, _watch_rx) = WatchIngress::new(8);
+    let server_state = state.clone();
+    let server = tokio::spawn(run_transport(
+        listener,
+        server_state,
+        watch_tx,
+        BlockingPool::new(2),
+        DaemonRuntimeConfig::default(),
+    ));
+    let mut client = tokio::net::UnixStream::connect(&socket).await.unwrap();
+    let mut encoded = Vec::new();
+    write_frame(&mut encoded, &DaemonRequest::Stop).unwrap();
+    let rejected = match client.write_all(&encoded).await {
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+            ) =>
+        {
+            true
+        }
+        Err(error) => panic!("unexpected Unix peer rejection write error: {error}"),
+        Ok(()) => {
+            let mut byte = [0_u8; 1];
+            let read = tokio::time::timeout(Duration::from_secs(1), client.read(&mut byte))
+                .await
+                .expect("owner-mismatched Unix peer was not rejected");
+            match read {
+                Ok(0) => true,
+                Err(error) => matches!(
+                    error.kind(),
+                    ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+                ),
+                Ok(_) => false,
+            }
+        }
+    };
+    assert!(rejected, "owner-mismatched Unix peer received data");
+    assert!(!state.lock().unwrap().shutdown.is_requested());
+
+    state.lock().unwrap().shutdown.request();
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("Unix transport did not stop after peer-owner test")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unauthenticated_tcp_peer_does_not_consume_authenticated_connection_budget() {
     let _tcp_test_guard = TCP_TRANSPORT_TEST_LOCK.lock().await;
     let state = daemon_test_state();
-    let listener = bind_tcp_listener("connection cap test").unwrap();
+    let listener = bind_tcp_listener("pre-authentication isolation test").unwrap();
+    let auth = listener.transport_auth().unwrap();
     let endpoint = listener.endpoint();
     let address = endpoint
         .strip_prefix("tcp://")
@@ -468,7 +639,144 @@ async fn connection_cap_rejects_excess_idle_peer() {
     let (watch_tx, _watch_rx) = WatchIngress::new(8);
     let config = DaemonRuntimeConfig {
         max_connections: 1,
+        max_pending_tcp_authentications: 2,
         frame_header_timeout: Duration::from_secs(5),
+        transport_auth_timeout: Duration::from_secs(2),
+        shutdown_grace: Duration::from_secs(2),
+        ..DaemonRuntimeConfig::default()
+    };
+    let server_state = state.clone();
+    let server = tokio::spawn(run_transport(
+        listener,
+        server_state,
+        watch_tx,
+        BlockingPool::new(1),
+        config,
+    ));
+
+    let mut stalled = tokio::net::TcpStream::connect(address).await.unwrap();
+    stalled.write_all(&[0_u8]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut authorized = tokio::net::TcpStream::connect(address).await.unwrap();
+    assert!(matches!(
+        exchange_value(&mut authorized, &auth).await,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
+    assert!(matches!(
+        exchange(&mut authorized, &DaemonRequest::Status).await,
+        DaemonResponse::Status { .. }
+    ));
+    assert!(matches!(
+        exchange(&mut authorized, &DaemonRequest::Stop).await,
+        DaemonResponse::Ack { ref message } if message == "stopping"
+    ));
+
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("transport did not join with a stalled unauthenticated peer")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_tcp_authentication_cap_is_bounded_and_times_out() {
+    let _tcp_test_guard = TCP_TRANSPORT_TEST_LOCK.lock().await;
+    let state = daemon_test_state();
+    let listener = bind_tcp_listener("pending authentication cap test").unwrap();
+    let auth = listener.transport_auth().unwrap();
+    let address = listener
+        .endpoint()
+        .strip_prefix("tcp://")
+        .unwrap()
+        .parse::<std::net::SocketAddr>()
+        .unwrap();
+    let (watch_tx, _watch_rx) = WatchIngress::new(8);
+    let config = DaemonRuntimeConfig {
+        max_connections: 1,
+        max_pending_tcp_authentications: 1,
+        frame_header_timeout: Duration::from_secs(5),
+        transport_auth_timeout: Duration::from_millis(500),
+        shutdown_grace: Duration::from_secs(2),
+        ..DaemonRuntimeConfig::default()
+    };
+    let server_state = state.clone();
+    let server = tokio::spawn(run_transport(
+        listener,
+        server_state,
+        watch_tx,
+        BlockingPool::new(1),
+        config,
+    ));
+
+    let mut stalled = tokio::net::TcpStream::connect(address).await.unwrap();
+    stalled.write_all(&[0_u8]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut excess = tokio::net::TcpStream::connect(address).await.unwrap();
+    let mut encoded = Vec::new();
+    write_frame(&mut encoded, &auth).unwrap();
+    let rejected = match excess.write_all(&encoded).await {
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+            ) =>
+        {
+            true
+        }
+        Err(error) => panic!("unexpected excess authentication write error: {error}"),
+        Ok(()) => {
+            let mut byte = [0_u8; 1];
+            let read = tokio::time::timeout(Duration::from_secs(1), excess.read(&mut byte))
+                .await
+                .expect("excess pending authentication was neither rejected nor serviced");
+            match read {
+                Ok(0) => true,
+                Err(error) => matches!(
+                    error.kind(),
+                    ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+                ),
+                Ok(_) => false,
+            }
+        }
+    };
+    assert!(
+        rejected,
+        "pending authentication cap admitted an excess peer"
+    );
+
+    tokio::time::sleep(Duration::from_millis(550)).await;
+    let mut authorized = tokio::net::TcpStream::connect(address).await.unwrap();
+    assert!(matches!(
+        exchange_value(&mut authorized, &auth).await,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
+    assert!(matches!(
+        exchange(&mut authorized, &DaemonRequest::Stop).await,
+        DaemonResponse::Ack { ref message } if message == "stopping"
+    ));
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("transport did not recover after pending authentication timeout")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connection_cap_rejects_excess_authenticated_peer() {
+    let _tcp_test_guard = TCP_TRANSPORT_TEST_LOCK.lock().await;
+    let state = daemon_test_state();
+    let listener = bind_tcp_listener("authenticated connection cap test").unwrap();
+    let auth = listener.transport_auth().unwrap();
+    let address = listener
+        .endpoint()
+        .strip_prefix("tcp://")
+        .unwrap()
+        .parse::<std::net::SocketAddr>()
+        .unwrap();
+    let (watch_tx, _watch_rx) = WatchIngress::new(8);
+    let config = DaemonRuntimeConfig {
+        max_connections: 1,
         shutdown_grace: Duration::from_secs(2),
         ..DaemonRuntimeConfig::default()
     };
@@ -482,33 +790,56 @@ async fn connection_cap_rejects_excess_idle_peer() {
     ));
 
     let mut first = tokio::net::TcpStream::connect(address).await.unwrap();
-    first.write_all(&[0_u8]).await.unwrap();
+    assert!(matches!(
+        exchange_value(&mut first, &auth).await,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
     tokio::time::sleep(Duration::from_millis(50)).await;
+
     let mut excess = tokio::net::TcpStream::connect(address).await.unwrap();
+    assert!(matches!(
+        exchange_value(&mut excess, &auth).await,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
     let mut encoded = Vec::new();
     write_frame(&mut encoded, &DaemonRequest::Status).unwrap();
-    excess.write_all(&encoded).await.unwrap();
-    let mut byte = [0_u8; 1];
-    let read = tokio::time::timeout(Duration::from_secs(1), excess.read(&mut byte))
-        .await
-        .expect("excess connection was neither rejected nor serviced");
-    let rejected = match &read {
-        Ok(0) => true,
-        Err(error) => matches!(
-            error.kind(),
-            ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
-        ),
-        Ok(_) => false,
+    let rejected = match excess.write_all(&encoded).await {
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+            ) =>
+        {
+            true
+        }
+        Err(error) => panic!("unexpected capped connection write error: {error}"),
+        Ok(()) => {
+            let mut byte = [0_u8; 1];
+            let read = tokio::time::timeout(Duration::from_secs(1), excess.read(&mut byte))
+                .await
+                .expect("excess authenticated connection was neither rejected nor serviced");
+            match read {
+                Ok(0) => true,
+                Err(error) => matches!(
+                    error.kind(),
+                    ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+                ),
+                Ok(_) => false,
+            }
+        }
     };
     assert!(
         rejected,
-        "excess connection unexpectedly received data: {read:?}"
+        "authenticated connection cap admitted an excess peer"
     );
 
-    state.lock().unwrap().shutdown.request();
+    assert!(matches!(
+        exchange(&mut first, &DaemonRequest::Stop).await,
+        DaemonResponse::Ack { ref message } if message == "stopping"
+    ));
     tokio::time::timeout(Duration::from_secs(2), server)
         .await
-        .expect("capped transport did not join")
+        .expect("authenticated connection cap transport did not join")
         .unwrap()
         .unwrap();
 }

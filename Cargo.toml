@@ -43,6 +43,7 @@ testy-core = { version = "0.2.0", path = "crates/testy-core" }
 # Core
 roaring = "0.10"
 blake3 = "1"
+constant_time_eq = "0.4"
 sha2 = "0.10"
 thiserror = "2"
 anyhow = "1"

@@ -382,6 +382,73 @@ pub enum DaemonResponse {
     },
 }
 
+/// Current version of the loopback TCP transport authentication prelude.
+pub const DAEMON_TRANSPORT_AUTH_SCHEMA_VERSION: u32 = 1;
+/// Entropy carried by each daemon-instance transport capability.
+pub const DAEMON_TRANSPORT_SECRET_BYTES: usize = 32;
+
+/// Owner-only capability sent before any request on loopback TCP transports.
+///
+/// The secret is deliberately redacted from [`Debug`]. It is serialized only
+/// into the owner-authenticated runtime discovery file and the first framed
+/// TCP message.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DaemonTransportAuth {
+    schema_version: u32,
+    secret: String,
+}
+
+impl DaemonTransportAuth {
+    /// Constructs a versioned capability from 256 bits of operating-system
+    /// randomness.
+    pub fn from_secret_bytes(secret: [u8; DAEMON_TRANSPORT_SECRET_BYTES]) -> Self {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = String::with_capacity(DAEMON_TRANSPORT_SECRET_BYTES * 2);
+        for byte in secret {
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        Self {
+            schema_version: DAEMON_TRANSPORT_AUTH_SCHEMA_VERSION,
+            secret: encoded,
+        }
+    }
+
+    /// Returns the transport authentication schema version.
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    /// Compares a client prelude with this capability without
+    /// secret-dependent early exit.
+    pub fn authenticates(&self, candidate: &Self) -> bool {
+        let schema_matches = self.has_supported_shape() && candidate.has_supported_shape();
+        let secret_matches =
+            constant_time_eq::constant_time_eq(self.secret.as_bytes(), candidate.secret.as_bytes());
+        schema_matches & secret_matches
+    }
+
+    fn has_supported_shape(&self) -> bool {
+        self.schema_version == DAEMON_TRANSPORT_AUTH_SCHEMA_VERSION
+            && self.secret.len() == DAEMON_TRANSPORT_SECRET_BYTES * 2
+            && self
+                .secret
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    }
+}
+
+impl std::fmt::Debug for DaemonTransportAuth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DaemonTransportAuth")
+            .field("schema_version", &self.schema_version)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct DaemonRuntimeInfo {
@@ -392,6 +459,12 @@ pub struct DaemonRuntimeInfo {
     pub socket_path: String,
     pub workspace_root: String,
     pub log_path: String,
+    /// Capability required before a loopback TCP client may issue requests.
+    ///
+    /// Unix transports leave this unset and authenticate the peer through
+    /// operating-system credentials.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport_auth: Option<DaemonTransportAuth>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1011,5 +1084,42 @@ mod tests {
         assert!(stable_config_sha256.is_empty());
         assert_eq!(snapshot_sha256, None);
         assert!(rendered_sha256.is_empty());
+    }
+
+    #[test]
+    fn daemon_transport_auth_accepts_only_the_same_versioned_capability() {
+        let expected =
+            DaemonTransportAuth::from_secret_bytes([0x5a; DAEMON_TRANSPORT_SECRET_BYTES]);
+        let wrong_secret =
+            DaemonTransportAuth::from_secret_bytes([0xa5; DAEMON_TRANSPORT_SECRET_BYTES]);
+        let wrong_version: DaemonTransportAuth = serde_json::from_value(serde_json::json!({
+            "schema_version": DAEMON_TRANSPORT_AUTH_SCHEMA_VERSION + 1,
+            "secret": "5a".repeat(DAEMON_TRANSPORT_SECRET_BYTES)
+        }))
+        .unwrap();
+
+        assert!(expected.authenticates(&expected));
+        assert!(!expected.authenticates(&wrong_secret));
+        assert!(!expected.authenticates(&wrong_version));
+    }
+
+    #[test]
+    fn daemon_transport_auth_debug_output_redacts_the_secret() {
+        let auth = DaemonTransportAuth::from_secret_bytes([0x5a; DAEMON_TRANSPORT_SECRET_BYTES]);
+        let rendered = format!("{auth:?}");
+
+        assert!(rendered.contains("[REDACTED]"));
+        assert!(!rendered.contains(&"5a".repeat(DAEMON_TRANSPORT_SECRET_BYTES)));
+    }
+
+    #[test]
+    fn legacy_runtime_metadata_defaults_to_unix_peer_authentication() {
+        let runtime: DaemonRuntimeInfo = serde_json::from_value(serde_json::json!({
+            "pid": 42,
+            "socket_path": "/tmp/packet28d.sock"
+        }))
+        .unwrap();
+
+        assert!(runtime.transport_auth.is_none());
     }
 }

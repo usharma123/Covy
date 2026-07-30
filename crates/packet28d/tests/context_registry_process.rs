@@ -71,6 +71,17 @@ fn request(runtime: &DaemonRuntimeInfo, request: &DaemonRequest) -> DaemonRespon
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
         .expect("set daemon request write timeout");
+    let auth = runtime
+        .transport_auth
+        .as_ref()
+        .expect("forced TCP runtime authentication capability");
+    write_frame(&mut stream, auth).expect("write daemon authentication prelude");
+    let auth_response: DaemonResponse =
+        read_frame(&mut stream).expect("read daemon authentication response");
+    assert!(matches!(
+        auth_response,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
     write_frame(&mut stream, request).expect("write daemon request");
     read_frame(&mut stream).expect("read daemon response")
 }

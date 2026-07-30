@@ -9,6 +9,7 @@ use crate::runtime::{BlockingPool, DaemonRuntimeConfig};
 use crate::state::TaskSubscriber;
 use crate::watch::WatchIngress;
 use packet28_daemon_protocol::frame::{FrameError, MAX_SOCKET_MESSAGE_BYTES};
+use packet28_daemon_protocol::message::DaemonTransportAuth;
 use packet28_daemon_protocol::task::TaskMarkHandoffConsumedResponse;
 use serde::Serialize;
 use std::fmt;
@@ -16,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 static NEXT_SUBSCRIBER_ID: AtomicU64 = AtomicU64::new(1);
+const MAX_TRANSPORT_AUTH_FRAME_BYTES: usize = 4 * 1024;
 
 #[derive(Debug)]
 enum FrameReadError {
@@ -44,6 +46,65 @@ impl std::error::Error for FrameReadError {
             Self::Deadline(_) => None,
         }
     }
+}
+
+pub(crate) async fn authenticate_tcp_connection<S>(
+    stream: &mut S,
+    expected: &DaemonTransportAuth,
+    config: &DaemonRuntimeConfig,
+    blocking_pool: &BlockingPool,
+) -> Result<bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let candidate =
+        match read_frame_bytes_with_limit(stream, config, MAX_TRANSPORT_AUTH_FRAME_BYTES).await {
+            Ok(frame) => blocking_pool
+                .run_control(move || {
+                    serde_json::from_slice::<DaemonTransportAuth>(&frame)
+                        .map_err(|_| anyhow!("invalid daemon transport authentication prelude"))
+                })
+                .await
+                .ok(),
+            Err(_) => None,
+        };
+    let Some(candidate) = candidate else {
+        write_tcp_auth_rejection(stream, config, blocking_pool).await?;
+        return Ok(false);
+    };
+    if !expected.authenticates(&candidate) {
+        write_tcp_auth_rejection(stream, config, blocking_pool).await?;
+        return Ok(false);
+    }
+    write_control_frame(
+        stream,
+        DaemonResponse::Ack {
+            message: "authenticated".to_string(),
+        },
+        config.frame_write_timeout,
+        blocking_pool,
+    )
+    .await?;
+    Ok(true)
+}
+
+async fn write_tcp_auth_rejection<S>(
+    stream: &mut S,
+    config: &DaemonRuntimeConfig,
+    blocking_pool: &BlockingPool,
+) -> Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    write_control_frame(
+        stream,
+        DaemonResponse::Error {
+            message: "daemon transport authentication failed".to_string(),
+        },
+        config.frame_write_timeout,
+        blocking_pool,
+    )
+    .await
 }
 
 pub(crate) async fn handle_connection<S>(
@@ -496,6 +557,17 @@ async fn read_frame_bytes<R>(
 where
     R: AsyncRead + Unpin,
 {
+    read_frame_bytes_with_limit(reader, config, MAX_SOCKET_MESSAGE_BYTES).await
+}
+
+async fn read_frame_bytes_with_limit<R>(
+    reader: &mut R,
+    config: &DaemonRuntimeConfig,
+    max_bytes: usize,
+) -> std::result::Result<Vec<u8>, FrameReadError>
+where
+    R: AsyncRead + Unpin,
+{
     let mut len_bytes = [0_u8; 8];
     read_exact_with_deadline(
         reader,
@@ -510,10 +582,10 @@ where
     if len == 0 {
         return Err(FrameReadError::Protocol(FrameError::Empty));
     }
-    if len > MAX_SOCKET_MESSAGE_BYTES {
+    if len > max_bytes {
         return Err(FrameReadError::Protocol(FrameError::TooLarge {
             actual: declared,
-            limit: MAX_SOCKET_MESSAGE_BYTES,
+            limit: max_bytes,
         }));
     }
     let mut body = vec![0_u8; len];

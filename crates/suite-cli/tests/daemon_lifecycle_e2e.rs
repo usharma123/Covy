@@ -5,6 +5,8 @@ use daemon_lifecycle::{ensure_packet28d_built, init_repo, suite_cmd, write_repo_
 use serde_json::Value;
 use std::fs;
 use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -107,6 +109,16 @@ fn test_daemon_lifecycle_forced_tcp_stop_exits_and_releases_endpoint() {
         .strip_prefix("tcp://")
         .expect("forced TCP daemon did not publish a TCP endpoint")
         .to_string();
+    let runtime_path = dir.path().join(".packet28/daemon/runtime.json");
+    let runtime_mode = fs::metadata(&runtime_path).unwrap().permissions().mode() & 0o777;
+    let runtime: Value = serde_json::from_slice(&fs::read(&runtime_path).unwrap()).unwrap();
+    assert_eq!(runtime_mode, 0o600);
+    assert!(runtime
+        .get("transport_auth")
+        .and_then(|auth| auth.get("secret"))
+        .and_then(Value::as_str)
+        .is_some_and(|secret| secret.len() == 64));
+    assert!(status.get("transport_auth").is_none());
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

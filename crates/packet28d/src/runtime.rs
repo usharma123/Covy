@@ -7,6 +7,7 @@ use packet28_daemon_core::task_store_lease::TaskStoreLease;
 use tokio::sync::{watch, Notify, OwnedSemaphorePermit, Semaphore};
 
 const DEFAULT_MAX_CONNECTIONS: usize = 128;
+const DEFAULT_MAX_PENDING_TCP_AUTHENTICATIONS: usize = 16;
 const DEFAULT_MAX_BLOCKING_OPERATIONS: usize = 8;
 pub(crate) const CONTROL_BLOCKING_OPERATIONS: usize = 2;
 pub(crate) const CANCELLATION_BLOCKING_OPERATIONS: usize = 2;
@@ -16,11 +17,13 @@ const DEFAULT_WATCH_QUEUE_CAPACITY: usize = 1_024;
 const DEFAULT_BACKGROUND_QUEUE_CAPACITY: usize = 64;
 const DEFAULT_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_FRAME_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_TRANSPORT_AUTH_TIMEOUT: Duration = Duration::from_secs(1);
 const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DaemonRuntimeConfig {
     pub(crate) max_connections: usize,
+    pub(crate) max_pending_tcp_authentications: usize,
     pub(crate) max_blocking_operations: usize,
     pub(crate) max_persistent_roots: usize,
     pub(crate) subscriber_queue_capacity: usize,
@@ -29,6 +32,7 @@ pub(crate) struct DaemonRuntimeConfig {
     pub(crate) frame_header_timeout: Duration,
     pub(crate) frame_body_timeout: Duration,
     pub(crate) frame_write_timeout: Duration,
+    pub(crate) transport_auth_timeout: Duration,
     pub(crate) shutdown_grace: Duration,
 }
 
@@ -36,6 +40,7 @@ impl Default for DaemonRuntimeConfig {
     fn default() -> Self {
         Self {
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            max_pending_tcp_authentications: DEFAULT_MAX_PENDING_TCP_AUTHENTICATIONS,
             max_blocking_operations: DEFAULT_MAX_BLOCKING_OPERATIONS,
             max_persistent_roots: DEFAULT_MAX_PERSISTENT_ROOTS,
             subscriber_queue_capacity: DEFAULT_SUBSCRIBER_QUEUE_CAPACITY,
@@ -44,6 +49,7 @@ impl Default for DaemonRuntimeConfig {
             frame_header_timeout: DEFAULT_FRAME_READ_TIMEOUT,
             frame_body_timeout: DEFAULT_FRAME_READ_TIMEOUT,
             frame_write_timeout: DEFAULT_FRAME_WRITE_TIMEOUT,
+            transport_auth_timeout: DEFAULT_TRANSPORT_AUTH_TIMEOUT,
             shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
         }
     }
@@ -56,6 +62,10 @@ impl DaemonRuntimeConfig {
             max_connections: env_nonzero_usize(
                 "PACKET28D_MAX_CONNECTIONS",
                 defaults.max_connections,
+            )?,
+            max_pending_tcp_authentications: env_nonzero_usize(
+                "PACKET28D_MAX_PENDING_TCP_AUTHENTICATIONS",
+                defaults.max_pending_tcp_authentications,
             )?,
             max_blocking_operations: env_nonzero_usize(
                 "PACKET28D_MAX_BLOCKING_OPERATIONS",
@@ -88,6 +98,10 @@ impl DaemonRuntimeConfig {
             frame_write_timeout: env_nonzero_duration_ms(
                 "PACKET28D_FRAME_WRITE_TIMEOUT_MS",
                 defaults.frame_write_timeout,
+            )?,
+            transport_auth_timeout: env_nonzero_duration_ms(
+                "PACKET28D_TRANSPORT_AUTH_TIMEOUT_MS",
+                defaults.transport_auth_timeout,
             )?,
             shutdown_grace: env_nonzero_duration_ms(
                 "PACKET28D_SHUTDOWN_GRACE_MS",
@@ -463,6 +477,7 @@ mod tests {
     fn runtime_defaults_are_nonzero_and_bounded() {
         let config = DaemonRuntimeConfig::default();
         assert!(config.max_connections > 0);
+        assert!(config.max_pending_tcp_authentications > 0);
         assert!(config.max_blocking_operations > 0);
         assert!(config.max_persistent_roots > 0);
         assert!(config.subscriber_queue_capacity > 0);
@@ -471,6 +486,7 @@ mod tests {
         assert!(!config.frame_header_timeout.is_zero());
         assert!(!config.frame_body_timeout.is_zero());
         assert!(!config.frame_write_timeout.is_zero());
+        assert!(!config.transport_auth_timeout.is_zero());
         assert!(!config.shutdown_grace.is_zero());
     }
 

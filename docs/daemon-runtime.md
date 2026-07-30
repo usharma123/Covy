@@ -102,8 +102,9 @@ order:
    recover task-store quarantine under authority, and retain the task-store
    lease.
 2. Ensure the daemon directory, load runtime configuration, bind the preferred
-   Unix transport or its fallback, and write initial `runtime.json` metadata
-   with no readiness timestamp.
+   Unix transport or its fallback, generate a fresh owner capability when TCP
+   is selected, and write initial owner-only `runtime.json` metadata with no
+   readiness timestamp.
 3. Construct the persistent kernel registry, load task/watch registries and
    authenticated event-log tails, start the single persistence owner, and
    reconcile lagging registry high-water marks.
@@ -112,7 +113,8 @@ order:
 5. Rewrite `runtime.json` with `ready_at_unix`, publish the readiness file, then
    create the Tokio runtime and start the transport, watch, background, and
    index owners.
-6. Decode a bounded protocol frame, dispatch it in `server`, cross the bounded
+6. Authenticate the accepted Unix peer UID or the TCP capability prelude,
+   decode a bounded protocol frame, dispatch it in `server`, cross the bounded
    blocking pool for synchronous filesystem/kernel/index work, flush request
    persistence, and encode one response frame.
 
@@ -147,11 +149,29 @@ is the permission fallback; forced TCP and Unix-permission failure use a
 loopback TCP listener. Both transports use an eight-byte big-endian length
 followed by one bounded JSON value, the same cancellation signal, connection
 cap, read/write deadlines, and owned Tokio connection task set.
+TCP authentication has its own smaller pending-connection cap and one-second
+default deadline. An unauthenticated peer therefore cannot consume the normal
+authenticated connection budget; both controls are independently configurable.
 
 Clients must discover the endpoint from `.packet28/daemon/runtime.json` after
 the readiness file appears. Its `socket_path` field is the selected endpoint:
 either a Unix path or `tcp://127.0.0.1:<port>`. The conventional socket path is
-not authoritative when fallback transport is active.
+not authoritative when fallback transport is active. Runtime discovery is
+published as an authenticated owner-only regular file. A TCP runtime also
+contains `transport_auth`, a redacted-in-debug 256-bit per-instance capability.
+Capability-bearing metadata is rejected if any group or other permission bit
+is present, including read-only exposure; legacy secret-free Unix metadata may
+remain owner-readable with conventional `0644` permissions.
+The client sends that value as the first framed message and waits for an
+authentication acknowledgement before sending any `DaemonRequest`.
+
+Unix accepts fail closed unless the operating-system peer credential UID
+matches the daemon's effective UID. TCP accepts fail closed on a missing,
+malformed, stale, or incorrect capability; authentication failures all use the
+same response and cannot dispatch commands. A `0.2.x` runtime file that names a
+TCP endpoint without `transport_auth` is treated as a legacy insecure daemon:
+the upgraded client reports an explicit stop-and-restart migration error
+instead of using it.
 
 Subscriber and watch queues are bounded. A slow subscriber is disconnected
 after its queued frames drain and resumes from its last sequence with
@@ -242,7 +262,9 @@ python3 scripts/check_architecture.py
 python3 -m unittest scripts.tests.test_check_architecture
 ```
 
-The daemon tests include TCP/Unix stop parity, connection caps and deadlines,
+The daemon tests include authenticated TCP success, missing/wrong TCP
+capability rejection, Unix peer-owner enforcement, endpoint metadata
+permissions, TCP/Unix stop parity, connection caps and deadlines,
 slow-subscriber replay, cancellation generation fencing, process-group reap,
 persistence failure and bounded shutdown, startup high-water reconciliation,
 artifact-admission ordering, and task-store corruption/recovery cases.

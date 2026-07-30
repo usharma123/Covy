@@ -190,12 +190,28 @@ fn wait_for_startup_failure(daemon: &mut ChildGuard, root: &Path) -> String {
     }
 }
 
-fn stop_and_wait(daemon: &mut ChildGuard, runtime: &DaemonRuntimeInfo) {
+fn connect_authenticated(runtime: &DaemonRuntimeInfo) -> TcpStream {
     let endpoint = runtime
         .socket_path
         .strip_prefix("tcp://")
         .expect("forced TCP endpoint");
     let mut stream = TcpStream::connect(endpoint).expect("connect to packet28d");
+    let auth = runtime
+        .transport_auth
+        .as_ref()
+        .expect("forced TCP runtime authentication capability");
+    write_frame(&mut stream, auth).expect("write daemon authentication prelude");
+    let response: DaemonResponse =
+        read_frame(&mut stream).expect("read daemon authentication response");
+    assert!(matches!(
+        response,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ));
+    stream
+}
+
+fn stop_and_wait(daemon: &mut ChildGuard, runtime: &DaemonRuntimeInfo) {
+    let mut stream = connect_authenticated(runtime);
     write_frame(&mut stream, &DaemonRequest::Stop).expect("write stop request");
     let response: DaemonResponse = read_frame(&mut stream).expect("read stop response");
     assert!(matches!(
@@ -208,11 +224,7 @@ fn stop_and_wait(daemon: &mut ChildGuard, runtime: &DaemonRuntimeInfo) {
 }
 
 fn wait_for_task_completion(runtime: &DaemonRuntimeInfo, expected_task_id: &str) {
-    let endpoint = runtime
-        .socket_path
-        .strip_prefix("tcp://")
-        .expect("forced TCP endpoint");
-    let mut stream = TcpStream::connect(endpoint).expect("connect to packet28d");
+    let mut stream = connect_authenticated(runtime);
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("set completion read timeout");

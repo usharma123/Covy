@@ -111,11 +111,13 @@ runtime path has been benchmarked or revalidated.
   coalesced per watch generation and surfaced on the next `watch_triggered`
   event as `queue_overflowed=true` before conservative replanning.
 - Runtime limits have nonzero defaults and can be tuned with
-  `PACKET28D_MAX_CONNECTIONS`, `PACKET28D_MAX_BLOCKING_OPERATIONS`,
+  `PACKET28D_MAX_CONNECTIONS`, `PACKET28D_MAX_PENDING_TCP_AUTHENTICATIONS`,
+  `PACKET28D_MAX_BLOCKING_OPERATIONS`,
   `PACKET28D_SUBSCRIBER_QUEUE_CAPACITY`, `PACKET28D_WATCH_QUEUE_CAPACITY`,
   `PACKET28D_BACKGROUND_QUEUE_CAPACITY`,
   `PACKET28D_FRAME_HEADER_TIMEOUT_MS`, `PACKET28D_FRAME_BODY_TIMEOUT_MS`,
-  `PACKET28D_FRAME_WRITE_TIMEOUT_MS`, and `PACKET28D_SHUTDOWN_GRACE_MS`.
+  `PACKET28D_FRAME_WRITE_TIMEOUT_MS`, `PACKET28D_TRANSPORT_AUTH_TIMEOUT_MS`,
+  and `PACKET28D_SHUTDOWN_GRACE_MS`.
 - `cmd_daemon.rs` defines the CLI surface; `cmd_daemon_client.rs` and
   `cmd_daemon_commands.rs` own client transport/lifecycle and command handlers.
 - Large route-registry and hook unit suites are in

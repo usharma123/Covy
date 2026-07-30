@@ -15,6 +15,12 @@ The crate contains serializable messages, length-prefixed JSON framing, and
 deterministic endpoint paths. It does not contain daemon persistence, kernel,
 memory, reducer, search, or transport-loop implementations.
 
+Loopback TCP uses `message::DaemonTransportAuth` as a mandatory first frame.
+The daemon publishes that per-instance 256-bit capability only inside its
+owner-authenticated `runtime.json`; Unix sockets authenticate the peer through
+operating-system credentials instead. Clients must never fall back to sending
+ordinary requests on a TCP connection when the capability is absent.
+
 ## Migrating from `packet28-daemon-core`
 
 Existing root imports continue to compile through daemon-core's unconditional

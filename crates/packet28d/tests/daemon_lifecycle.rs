@@ -97,6 +97,22 @@ fn try_request(
     stream
         .set_write_timeout(Some(Duration::from_secs(10)))
         .map_err(|error| format!("set daemon request write timeout: {error}"))?;
+    let auth = runtime
+        .transport_auth
+        .as_ref()
+        .ok_or_else(|| "forced TCP runtime has no authentication capability".to_string())?;
+    write_frame(&mut stream, auth)
+        .map_err(|error| format!("write daemon authentication prelude: {error}"))?;
+    let auth_response: DaemonResponse = read_frame(&mut stream)
+        .map_err(|error| format!("read daemon authentication response: {error}"))?;
+    if !matches!(
+        auth_response,
+        DaemonResponse::Ack { ref message } if message == "authenticated"
+    ) {
+        return Err(format!(
+            "unexpected daemon authentication response: {auth_response:?}"
+        ));
+    }
     write_frame(&mut stream, request).map_err(|error| format!("write daemon request: {error}"))?;
     read_frame(&mut stream).map_err(|error| format!("read daemon response: {error}"))
 }
