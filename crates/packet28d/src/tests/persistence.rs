@@ -248,7 +248,11 @@ fn recovered_replan_claim_is_pending_only_generation_fenced_and_shutdown_safe() 
     let mut kernel = Kernel::new();
     kernel.register_reducer("recovery.count", move |_ctx, _packets| {
         assert_eq!(
-            load_task_registry(&durable_root).unwrap().tasks["recovered-claim"].lifecycle,
+            load_task_watch_registry_with_deltas(&durable_root)
+                .unwrap()
+                .tasks
+                .tasks["recovered-claim"]
+                .lifecycle,
             TaskLifecycle::RunningRecoveredReplan,
             "the recovered claim must be durable before reducer entry"
         );
