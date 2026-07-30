@@ -44,6 +44,33 @@ struct GlobalWatchSweep {
     after_watch_id: Option<String>,
 }
 
+pub(crate) struct TaskAdmission {
+    pub(crate) task: TaskRecord,
+    pub(crate) watches: Vec<WatchRegistration>,
+    pub(crate) generation: TaskGenerationId,
+    pub(crate) replaced_task: Option<TaskRecord>,
+}
+
+#[derive(Clone, Copy)]
+enum TaskRunFence {
+    Unfenced,
+    Initial(TaskGenerationId),
+    RecoveredReplan(TaskGenerationId),
+}
+
+impl TaskRunFence {
+    const fn expected_generation(self) -> Option<TaskGenerationId> {
+        match self {
+            Self::Unfenced => None,
+            Self::Initial(generation) | Self::RecoveredReplan(generation) => Some(generation),
+        }
+    }
+
+    const fn is_fenced(self) -> bool {
+        !matches!(self, Self::Unfenced)
+    }
+}
+
 impl WatchIngress {
     pub(crate) fn new(capacity: usize) -> (Self, tokio::sync::mpsc::Receiver<WatchEventMsg>) {
         Self::with_overflow_limits(
@@ -178,7 +205,7 @@ pub(crate) fn register_task_and_watches(
     state: Arc<Mutex<DaemonState>>,
     watch_tx: WatchIngress,
     spec: TaskSubmitSpec,
-) -> Result<(TaskRecord, Vec<WatchRegistration>)> {
+) -> Result<TaskAdmission> {
     let root = {
         let guard = state.lock().map_err(lock_err)?;
         guard.root.clone()
@@ -194,7 +221,8 @@ pub(crate) fn register_task_and_watches(
     }
 
     let mut registrations = Vec::new();
-    {
+    let mut replaced_task = None;
+    let generation = {
         let mut guard = state.lock().map_err(lock_err)?;
         if let Some(existing) = guard.tasks.tasks.get(&spec.task_id) {
             if !existing.lifecycle.is_cancelled() {
@@ -203,9 +231,10 @@ pub(crate) fn register_task_and_watches(
                     spec.task_id
                 );
             }
-            guard.tasks.tasks.remove(&spec.task_id);
+            replaced_task = Some(existing.clone());
         }
-        guard.task_generations.create(&spec.task_id)?;
+        let generation = guard.task_generations.create(&spec.task_id)?.id();
+        guard.tasks.tasks.remove(&spec.task_id);
         let watch_ids = spec
             .watches
             .iter()
@@ -235,59 +264,88 @@ pub(crate) fn register_task_and_watches(
             ..TaskRecord::default()
         };
         guard.tasks.tasks.insert(spec.task_id.clone(), task.clone());
-    }
+        generation
+    };
 
-    let mut installed_watch_ids: Vec<String> = Vec::new();
-    for registration in &registrations {
-        if let Err(err) = install_watch(
-            state.clone(),
-            watch_tx.clone(),
-            registration.watch_id.clone(),
-        ) {
-            let _ = remove_watch(state.clone(), &registration.watch_id);
-            for watch_id in &installed_watch_ids {
-                let _ = remove_watch(state.clone(), watch_id);
-            }
-            let mut guard = state.lock().map_err(lock_err)?;
-            guard.tasks.tasks.remove(&spec.task_id);
-            if let Some(generation) = guard.task_generations.current(&spec.task_id) {
-                guard
-                    .task_generations
-                    .remove_if_current(&spec.task_id, generation.id());
-            }
-            guard.watches.watches.retain(|watch| {
-                !registrations
-                    .iter()
-                    .any(|candidate| candidate.watch_id == watch.watch_id)
-            });
-            persist_state(&guard)?;
-            return Err(err);
+    let admission = (|| -> Result<TaskRecord> {
+        for registration in &registrations {
+            install_watch(
+                state.clone(),
+                watch_tx.clone(),
+                registration.watch_id.clone(),
+            )?;
         }
-        installed_watch_ids.push(registration.watch_id.clone());
-    }
 
-    {
+        {
+            let guard = state.lock().map_err(lock_err)?;
+            persist_state(&guard)?;
+        }
+
         let guard = state.lock().map_err(lock_err)?;
-        persist_state(&guard)?;
-    }
-
-    let task = state
-        .lock()
-        .map_err(lock_err)?
-        .tasks
-        .tasks
-        .get(&spec.task_id)
-        .cloned()
-        .ok_or_else(|| anyhow!("task disappeared after registration"))?;
-    Ok((task, registrations))
+        if !guard.task_generations.matches(&spec.task_id, generation) {
+            anyhow::bail!(
+                "task '{}' generation changed during registration",
+                spec.task_id
+            );
+        }
+        guard
+            .tasks
+            .tasks
+            .get(&spec.task_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("task disappeared after registration"))
+    })();
+    let task = match admission {
+        Ok(task) => task,
+        Err(admission_error) => {
+            if let Err(rollback_error) = rollback_failed_task_admission(
+                state.clone(),
+                &spec.task_id,
+                generation,
+                replaced_task,
+            ) {
+                state.lock().map_err(lock_err)?.shutdown.request();
+                return Err(rollback_error.context(format!(
+                    "task '{}' admission failed ({admission_error:#}) and rollback also failed",
+                    spec.task_id
+                )));
+            }
+            return Err(admission_error);
+        }
+    };
+    Ok(TaskAdmission {
+        task,
+        watches: registrations,
+        generation,
+        replaced_task,
+    })
 }
 
 pub(crate) fn run_sequence_for_task(
     state: Arc<Mutex<DaemonState>>,
     task_id: &str,
 ) -> Result<context_kernel_core::KernelSequenceResponse> {
-    run_sequence_for_task_with_generation_fence(state, task_id, None)?
+    run_sequence_for_task_with_generation_fence(state, task_id, TaskRunFence::Unfenced)?
         .ok_or_else(|| anyhow!("unfenced task run was not admitted"))
+}
+
+pub(crate) fn run_initial_sequence_for_task(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    expected_generation: TaskGenerationId,
+) -> Result<context_kernel_core::KernelSequenceResponse> {
+    let Some(response) = run_sequence_for_task_with_generation_fence(
+        state,
+        task_id,
+        TaskRunFence::Initial(expected_generation),
+    )?
+    else {
+        return Err(context_kernel_core::KernelError::SequenceCancelled {
+            task_id: Some(task_id.to_string()),
+        }
+        .into());
+    };
+    Ok(response)
 }
 
 pub(crate) fn run_recovered_replan_for_task(
@@ -295,25 +353,28 @@ pub(crate) fn run_recovered_replan_for_task(
     task_id: &str,
     expected_generation: TaskGenerationId,
 ) -> Result<bool> {
-    Ok(
-        run_sequence_for_task_with_generation_fence(state, task_id, Some(expected_generation))?
-            .is_some(),
-    )
+    Ok(run_sequence_for_task_with_generation_fence(
+        state,
+        task_id,
+        TaskRunFence::RecoveredReplan(expected_generation),
+    )?
+    .is_some())
 }
 
 fn run_sequence_for_task_with_generation_fence(
     state: Arc<Mutex<DaemonState>>,
     task_id: &str,
-    expected_generation: Option<TaskGenerationId>,
+    fence: TaskRunFence,
 ) -> Result<Option<context_kernel_core::KernelSequenceResponse>> {
-    run_sequence_for_task_with_executor(
+    run_sequence_for_task_with_executor_fence(
         state,
         task_id,
-        expected_generation,
+        fence,
         |kernel, sequence, observer| kernel.execute_sequence_with_observer(sequence, observer),
     )
 }
 
+#[cfg(test)]
 pub(crate) fn run_sequence_for_task_with_executor<F>(
     state: Arc<Mutex<DaemonState>>,
     task_id: &str,
@@ -330,25 +391,37 @@ where
         context_kernel_core::KernelError,
     >,
 {
+    let fence = expected_generation.map_or(TaskRunFence::Unfenced, TaskRunFence::RecoveredReplan);
+    run_sequence_for_task_with_executor_fence(state, task_id, fence, execute_sequence)
+}
+
+fn run_sequence_for_task_with_executor_fence<F>(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    fence: TaskRunFence,
+    execute_sequence: F,
+) -> Result<Option<context_kernel_core::KernelSequenceResponse>>
+where
+    F: Fn(
+        &Kernel,
+        context_kernel_core::KernelSequenceRequest,
+        &mut dyn SequenceObserver,
+    ) -> std::result::Result<
+        context_kernel_core::KernelSequenceResponse,
+        context_kernel_core::KernelError,
+    >,
+{
     loop {
         let fence_pending_replan = {
             let guard = state.lock().map_err(lock_err)?;
             if guard.shutting_down {
-                if expected_generation.is_some() {
+                if fence.is_fenced() {
                     return Ok(None);
                 }
                 anyhow::bail!("daemon is shutting down");
             }
-            if let Some(expected_generation) = expected_generation {
-                let is_pending_generation = guard
-                    .tasks
-                    .tasks
-                    .get(task_id)
-                    .is_some_and(|task| task.lifecycle == TaskLifecycle::ReplanPending)
-                    && guard.task_generations.matches(task_id, expected_generation);
-                if !is_pending_generation {
-                    return Ok(None);
-                }
+            if !task_run_fence_matches(&guard, task_id, fence) {
+                return Ok(None);
             }
             let task = guard
                 .tasks
@@ -375,21 +448,13 @@ where
         let (kernel, sequence, generation, _sequence_lease, durable_replan_claim) = {
             let mut guard = state.lock().map_err(lock_err)?;
             if guard.shutting_down {
-                if expected_generation.is_some() {
+                if fence.is_fenced() {
                     return Ok(None);
                 }
                 anyhow::bail!("daemon is shutting down");
             }
-            if let Some(expected_generation) = expected_generation {
-                let is_pending_generation = guard
-                    .tasks
-                    .tasks
-                    .get(task_id)
-                    .is_some_and(|task| task.lifecycle == TaskLifecycle::ReplanPending)
-                    && guard.task_generations.matches(task_id, expected_generation);
-                if !is_pending_generation {
-                    return Ok(None);
-                }
+            if !task_run_fence_matches(&guard, task_id, fence) {
+                return Ok(None);
             }
             let (sequence, running_lifecycle, durable_replan_claim) = {
                 let task = guard
@@ -410,7 +475,7 @@ where
                     .ok_or_else(|| anyhow!("task '{}' has no stored sequence", task_id))?;
                 (sequence, running_lifecycle, durable_replan_claim)
             };
-            let generation = match expected_generation {
+            let generation = match fence.expected_generation() {
                 Some(expected_generation) => {
                     let Some(generation) = guard.task_generations.current(task_id) else {
                         return Ok(None);
@@ -423,7 +488,7 @@ where
                 None => guard.task_generations.ensure(task_id)?,
             };
             let Some(sequence_lease) = generation.acquire_operation() else {
-                if expected_generation.is_some() {
+                if fence.is_fenced() {
                     return Ok(None);
                 }
                 return Err(context_kernel_core::KernelError::SequenceCancelled {
@@ -685,6 +750,27 @@ where
     }
 }
 
+fn task_run_fence_matches(state: &DaemonState, task_id: &str, fence: TaskRunFence) -> bool {
+    let Some(expected_generation) = fence.expected_generation() else {
+        return true;
+    };
+    let lifecycle_matches = state
+        .tasks
+        .tasks
+        .get(task_id)
+        .is_some_and(|task| match fence {
+            TaskRunFence::Unfenced => true,
+            TaskRunFence::Initial(_) => {
+                matches!(
+                    task.lifecycle,
+                    TaskLifecycle::Idle | TaskLifecycle::ReplanPending
+                )
+            }
+            TaskRunFence::RecoveredReplan(_) => task.lifecycle == TaskLifecycle::ReplanPending,
+        });
+    lifecycle_matches && state.task_generations.matches(task_id, expected_generation)
+}
+
 pub(crate) fn cancel_task(
     state: Arc<Mutex<DaemonState>>,
     task_id: &str,
@@ -722,6 +808,97 @@ pub(crate) fn cancel_task(
     let terminal =
         complete_task_cancellation_for_generation(state, task_id, generation.id(), &watch_ids)?;
     Ok((terminal, watch_ids))
+}
+
+pub(crate) fn rollback_failed_task_admission(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    expected_generation: TaskGenerationId,
+    replaced_task: Option<TaskRecord>,
+) -> Result<()> {
+    let (generation, persistence) = {
+        let mut guard = state.lock().map_err(lock_err)?;
+        let Some(generation) = guard.task_generations.current(task_id) else {
+            return Ok(());
+        };
+        if generation.id() != expected_generation {
+            return Ok(());
+        }
+        generation.request_cancel();
+        let watch_ids = guard
+            .watches
+            .watches
+            .iter()
+            .filter(|watch| watch.spec.task_id == task_id)
+            .map(|watch| watch.watch_id.clone())
+            .collect::<Vec<_>>();
+        for watch_id in watch_ids {
+            guard.watcher_handles.remove(&watch_id);
+        }
+        (generation, guard.persistence.clone())
+    };
+
+    crate::launch::terminate_generation_processes(&generation)?;
+    if !generation.wait_until_idle(TASK_CANCELLATION_QUIESCE_TIMEOUT) {
+        anyhow::bail!(
+            "timed out waiting for failed task '{}' generation to become idle",
+            task_id
+        );
+    }
+
+    let _event_guard = persistence.event_guard();
+    {
+        let mut guard = state.lock().map_err(lock_err)?;
+        let Some(current_generation) = guard.task_generations.current(task_id) else {
+            return Ok(());
+        };
+        if current_generation.id() != expected_generation {
+            return Ok(());
+        }
+        if guard
+            .tasks
+            .tasks
+            .get(task_id)
+            .is_some_and(|task| task.lifecycle.is_cancelling() || task.lifecycle.is_cancelled())
+        {
+            return Ok(());
+        }
+
+        let watch_ids = guard
+            .watches
+            .watches
+            .iter()
+            .filter(|watch| watch.spec.task_id == task_id)
+            .map(|watch| watch.watch_id.clone())
+            .collect::<Vec<_>>();
+        for watch_id in &watch_ids {
+            guard.watcher_handles.remove(watch_id);
+        }
+        guard
+            .watches
+            .watches
+            .retain(|watch| watch.spec.task_id != task_id);
+        let failed_high_water = guard
+            .tasks
+            .tasks
+            .remove(task_id)
+            .map(|task| task.last_event_seq)
+            .unwrap_or_default();
+        if let Some(mut replaced_task) = replaced_task {
+            replaced_task.last_event_seq = replaced_task.last_event_seq.max(failed_high_water);
+            guard.tasks.tasks.insert(task_id.to_string(), replaced_task);
+        }
+        guard.subscribers.remove(task_id);
+        guard
+            .task_generations
+            .remove_if_current(task_id, expected_generation);
+        persist_state(&guard)?;
+        guard.changes.notify();
+    }
+    persistence
+        .flush()
+        .with_context(|| format!("failed to persist rollback for task '{task_id}'"))?;
+    Ok(())
 }
 
 pub(crate) fn remove_watch(
@@ -825,15 +1002,26 @@ pub(crate) fn install_watch(
     }
 
     let mut guard = state.lock().map_err(lock_err)?;
-    if let Some(watch) = guard
+    let Some(current_generation) = guard.task_generations.current(&spec.task_id) else {
+        anyhow::bail!(
+            "task '{}' generation disappeared during watch installation",
+            spec.task_id
+        );
+    };
+    if current_generation.id() != generation || current_generation.is_cancelled() {
+        anyhow::bail!(
+            "task '{}' generation changed during watch installation",
+            spec.task_id
+        );
+    }
+    let watch = guard
         .watches
         .watches
         .iter_mut()
         .find(|watch| watch.watch_id == watch_id)
-    {
-        watch.active = true;
-        watch.last_error = None;
-    }
+        .ok_or_else(|| anyhow!("watch '{watch_id}' was removed during installation"))?;
+    watch.active = true;
+    watch.last_error = None;
     guard.watcher_handles.insert(watch_id.clone(), watcher);
     persist_state(&guard)?;
     daemon_log(&format!(

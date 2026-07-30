@@ -618,18 +618,29 @@ fn handle_request(
             Ok(DaemonResponse::Execute { response })
         }
         DaemonRequest::ExecuteSequence { spec } => {
-            let (task, watches) = register_task_and_watches(state.clone(), watch_tx, spec)?;
-            let response = match run_sequence_for_task(state.clone(), &task.task_id) {
-                Ok(response) => response,
-                Err(err) => {
-                    daemon_log(&format!(
-                        "initial task run failed task_id={} error={err}",
-                        task.task_id
-                    ));
-                    let _ = cancel_task(state.clone(), &task.task_id);
-                    return Err(err);
-                }
-            };
+            let TaskAdmission {
+                task,
+                watches,
+                generation,
+                replaced_task,
+            } = register_task_and_watches(state.clone(), watch_tx, spec)?;
+            let response =
+                match run_initial_sequence_for_task(state.clone(), &task.task_id, generation) {
+                    Ok(response) => response,
+                    Err(err) => {
+                        daemon_log(&format!(
+                            "initial task run failed task_id={} error={err}",
+                            task.task_id
+                        ));
+                        return Err(rollback_initial_task_admission(
+                            state,
+                            &task.task_id,
+                            generation,
+                            replaced_task,
+                            err,
+                        ));
+                    }
+                };
             if let Some(failure) = response
                 .step_results
                 .iter()
@@ -640,8 +651,13 @@ fn handle_request(
                     "initial task run failed task_id={} error={message}",
                     task.task_id
                 ));
-                let _ = cancel_task(state.clone(), &task.task_id);
-                return Err(anyhow!(message));
+                return Err(rollback_initial_task_admission(
+                    state,
+                    &task.task_id,
+                    generation,
+                    replaced_task,
+                    anyhow!(message),
+                ));
             }
             let task = state
                 .lock()
@@ -828,6 +844,27 @@ fn handle_request(
         DaemonRequest::DaemonIndexClear { request: _ } => {
             let response = daemon_index_clear(state)?;
             Ok(DaemonResponse::DaemonIndexClear { response })
+        }
+    }
+}
+
+fn rollback_initial_task_admission(
+    state: Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    generation: TaskGenerationId,
+    replaced_task: Option<TaskRecord>,
+    admission_error: anyhow::Error,
+) -> anyhow::Error {
+    match rollback_failed_task_admission(state.clone(), task_id, generation, replaced_task) {
+        Ok(()) => admission_error,
+        Err(rollback_error) => {
+            if let Ok(guard) = state.lock().map_err(lock_err) {
+                guard.shutdown.request();
+            }
+            rollback_error.context(format!(
+                "initial task admission for '{task_id}' failed ({admission_error:#}) and rollback \
+                 also failed"
+            ))
         }
     }
 }
