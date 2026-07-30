@@ -41,6 +41,7 @@ const REPO_INDEX_COMPACTION_SEGMENTS: usize = 8;
 const REPO_INDEX_SEGMENT_VERSION: u32 = 1;
 const MAX_REPO_INDEX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_REPO_INDEX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_GENERATION_RECORD_BYTES: u64 = 64 * 1024;
 
 /// Metadata for an atomically published repository-index generation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -163,6 +164,7 @@ pub struct PreparedRepoIndexRuntime {
     root: PathBuf,
     _writer: GenerationWriterLock,
     previous: Option<RepoIndexRuntimeManifest>,
+    previous_record: Option<RepoIndexGenerationRecord>,
     previous_current_bytes: Option<Vec<u8>>,
     previous_previous_bytes: Option<Vec<u8>>,
     record: RepoIndexGenerationRecord,
@@ -244,7 +246,7 @@ impl PreparedRepoIndexRuntime {
                 "prepared repository generation must be published before commit",
             ));
         }
-        let _ = prune_generation_artifacts(&self.root, &self.record, self.previous.as_ref());
+        let _ = prune_generation_artifacts(&self.root, &self.record, self.previous_record.as_ref());
         self.committed = true;
         Ok(self.runtime.clone())
     }
@@ -329,8 +331,53 @@ struct ArtifactStamp {
 struct ValidatedArtifactStamps {
     base: ArtifactStamp,
     segments: Vec<ArtifactStamp>,
+    pins: Vec<PinnedArtifact>,
     metadata_checks: usize,
     bytes_hashed: usize,
+}
+
+struct PinnedArtifact {
+    path: PathBuf,
+    file: StateFile,
+    stamp: ArtifactStamp,
+    expected_digest: String,
+}
+
+struct PinnedGenerationRecord {
+    root: PathBuf,
+    path: PathBuf,
+    file: StateFile,
+    stamp: ArtifactStamp,
+    expected_manifest: RepoIndexRuntimeManifest,
+}
+
+struct AuthenticatedRecovery {
+    manifest: RepoIndexRuntimeManifest,
+    record: RepoIndexGenerationRecord,
+}
+
+#[derive(Default)]
+struct PublicationFenceWork {
+    publication_metadata_bytes_decoded: usize,
+    repository_artifact_bytes_hashed: usize,
+    repository_artifact_metadata_checks: usize,
+}
+
+struct IncrementalPublication<'a> {
+    root: &'a Path,
+    previous: &'a RepoIndexRuntimeManifest,
+    current: &'a RepoIndexRuntimeManifest,
+    record_pins: &'a [PinnedGenerationRecord],
+    artifact_pins: &'a [PinnedArtifact],
+    previous_current_bytes: Option<&'a [u8]>,
+    previous_previous_bytes: Option<&'a [u8]>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IncrementalPublicationStage {
+    BeforeCurrent,
+    AfterCurrent,
+    AfterPrevious,
 }
 
 /// Builds and manifest-last publishes a new immutable base generation.
@@ -379,7 +426,7 @@ fn publish_rebuilt_runtime(
     include_tests: bool,
     snapshot: RepoIndexSnapshot,
 ) -> Result<RepoIndexRuntime, CovyError> {
-    let previous = load_recovery_manifest(root)?;
+    let previous = load_authenticated_recovery(root)?;
     let generation = reserve_generation(root)?;
     let base_file = base_file_name(generation);
     let base_bytes = wincode::serialize(&snapshot)
@@ -411,8 +458,16 @@ fn publish_rebuilt_runtime(
     bind_generation_record(&mut manifest, &mut record)?;
     persist_generation_record(root, &record)?;
     let runtime = load_generation(root, &manifest)?;
-    publish_manifest(root, previous.as_ref(), &manifest)?;
-    let _ = prune_generation_artifacts(root, &record, previous.as_ref());
+    publish_manifest(
+        root,
+        previous.as_ref().map(|recovery| &recovery.manifest),
+        &manifest,
+    )?;
+    let _ = prune_generation_artifacts(
+        root,
+        &record,
+        previous.as_ref().map(|recovery| &recovery.record),
+    );
     Ok(runtime)
 }
 
@@ -425,7 +480,7 @@ pub(crate) fn prepare_repo_index_runtime_with_writer(
 ) -> Result<PreparedRepoIndexRuntime, CovyError> {
     let previous_current_bytes = read_optional_file(&manifest_path(root))?;
     let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
-    let previous = load_recovery_manifest(root)?;
+    let previous = load_authenticated_recovery(root)?;
     let generation = reserve_generation(root)?;
     let base_file = base_file_name(generation);
     let base_bytes = wincode::serialize(&snapshot)
@@ -459,7 +514,8 @@ pub(crate) fn prepare_repo_index_runtime_with_writer(
     Ok(PreparedRepoIndexRuntime {
         root: root.to_path_buf(),
         _writer: writer,
-        previous,
+        previous: previous.as_ref().map(|recovery| recovery.manifest.clone()),
+        previous_record: previous.map(|recovery| recovery.record),
         previous_current_bytes,
         previous_previous_bytes,
         record,
@@ -519,6 +575,19 @@ pub fn update_repo_index_runtime(
     changed_paths: &[String],
     include_tests: bool,
 ) -> Result<(RepoIndexRuntime, RepoIndexUpdateSummary), CovyError> {
+    update_repo_index_runtime_with_hook(root, current, changed_paths, include_tests, |_| Ok(()))
+}
+
+fn update_repo_index_runtime_with_hook<F>(
+    root: &Path,
+    current: &RepoIndexRuntime,
+    changed_paths: &[String],
+    include_tests: bool,
+    mut publication_hook: F,
+) -> Result<(RepoIndexRuntime, RepoIndexUpdateSummary), CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
     let loaded = current
         .generation
         .as_ref()
@@ -538,7 +607,9 @@ pub fn update_repo_index_runtime(
     let normalized = normalize_changed_paths(root, changed_paths)?;
     let changed_paths_considered = normalized.len();
     let _writer = acquire_writer_lock(root)?;
-    let (published, manifest_bytes_decoded) = load_published_manifest_with_decoded_bytes(root)?;
+    let (published, previous_current_bytes) = load_published_manifest_with_bytes(root)?;
+    let manifest_bytes_decoded = previous_current_bytes.as_ref().map_or(0, Vec::len);
+    let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
     let published_identity = publication_identity(&published)?;
     let current_identity = &loaded.publication_identity;
     if &published_identity != current_identity {
@@ -550,13 +621,13 @@ pub fn update_repo_index_runtime(
             published_identity.generation_record_digest
         )));
     }
-    let (_, generation_record_bytes_decoded) =
-        load_authenticated_generation_record_with_decoded_bytes(root, &published)?;
-    let publication_metadata_bytes_decoded =
+    let (published_record, published_record_pin, generation_record_bytes_decoded) =
+        pin_authenticated_generation_record(root, &published)?;
+    let mut publication_metadata_bytes_decoded =
         manifest_bytes_decoded.saturating_add(generation_record_bytes_decoded);
     let validated_artifacts = validate_loaded_artifact_stamps(root, loaded)?;
-    let repository_artifact_metadata_checks = validated_artifacts.metadata_checks;
-    let repository_artifact_bytes_hashed = validated_artifacts.bytes_hashed;
+    let mut repository_artifact_metadata_checks = validated_artifacts.metadata_checks;
+    let mut repository_artifact_bytes_hashed = validated_artifacts.bytes_hashed;
     if policy_changed {
         let snapshot = build_repo_index_with_progress(root, include_tests, |_, _| {})?;
         let rebuilt = publish_rebuilt_runtime(root, include_tests, snapshot)?;
@@ -576,6 +647,12 @@ pub fn update_repo_index_runtime(
             },
         ));
     }
+    let ValidatedArtifactStamps {
+        base: validated_base_stamp,
+        segments: mut segment_stamps,
+        pins: mut artifact_pins,
+        ..
+    } = validated_artifacts;
     let generation = reserve_generation(root)?;
     let mut segment = RepoIndexSegment {
         version: REPO_INDEX_SEGMENT_VERSION,
@@ -603,7 +680,6 @@ pub fn update_repo_index_runtime(
     let mut segments = loaded.segments.clone();
     let mut segment_files = loaded.segment_files.clone();
     let mut segment_digests = loaded.segment_digests.clone();
-    let mut segment_stamps = validated_artifacts.segments;
     let segment_file = segment_file_name(generation);
     let (segment, segment_digest, segment_stamp) = persist_segment(root, &segment_file, &segment)?;
     let segment = Arc::new(segment);
@@ -657,6 +733,35 @@ pub fn update_repo_index_runtime(
     };
     bind_generation_record(&mut manifest, &mut record)?;
     persist_generation_record(root, &record)?;
+    let (persisted_record, next_record_pin, next_record_bytes_decoded) =
+        pin_authenticated_generation_record(root, &manifest)?;
+    publication_metadata_bytes_decoded =
+        publication_metadata_bytes_decoded.saturating_add(next_record_bytes_decoded);
+    record = persisted_record;
+
+    let previously_pinned = loaded
+        .segment_files
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for ((file_name, expected_digest), stamp) in segment_files
+        .iter()
+        .zip(&segment_digests)
+        .zip(&mut segment_stamps)
+    {
+        if previously_pinned.contains(file_name.as_str()) {
+            continue;
+        }
+        let (authenticated_stamp, pin) = pin_loaded_artifact(
+            &repo_index_dir(root).join(file_name),
+            stamp,
+            expected_digest,
+            &mut repository_artifact_metadata_checks,
+            &mut repository_artifact_bytes_hashed,
+        )?;
+        *stamp = authenticated_stamp;
+        artifact_pins.push(pin);
+    }
 
     let runtime = RepoIndexRuntime {
         manifest: manifest.clone(),
@@ -665,7 +770,7 @@ pub fn update_repo_index_runtime(
             base: Arc::clone(&loaded.base),
             base_file: loaded.base_file.clone(),
             base_digest: loaded.base_digest.clone(),
-            base_stamp: validated_artifacts.base,
+            base_stamp: validated_base_stamp,
             segments,
             segment_files,
             segment_digests,
@@ -674,8 +779,26 @@ pub fn update_repo_index_runtime(
         })),
     };
     validate_runtime(&runtime)?;
-    publish_manifest(root, Some(&published), &manifest)?;
-    let _ = prune_generation_artifacts(root, &record, Some(&published));
+    let record_pins = [published_record_pin, next_record_pin];
+    let fence_work = publish_incremental_manifests(
+        IncrementalPublication {
+            root,
+            previous: &published,
+            current: &manifest,
+            record_pins: &record_pins,
+            artifact_pins: &artifact_pins,
+            previous_current_bytes: previous_current_bytes.as_deref(),
+            previous_previous_bytes: previous_previous_bytes.as_deref(),
+        },
+        &mut publication_hook,
+    )?;
+    publication_metadata_bytes_decoded = publication_metadata_bytes_decoded
+        .saturating_add(fence_work.publication_metadata_bytes_decoded);
+    repository_artifact_bytes_hashed = repository_artifact_bytes_hashed
+        .saturating_add(fence_work.repository_artifact_bytes_hashed);
+    repository_artifact_metadata_checks = repository_artifact_metadata_checks
+        .saturating_add(fence_work.repository_artifact_metadata_checks);
+    let _ = prune_generation_artifacts(root, &record, Some(&published_record));
     Ok((
         runtime,
         RepoIndexUpdateSummary {
@@ -851,11 +974,122 @@ fn load_authenticated_generation_record_with_decoded_bytes(
     root: &Path,
     expected_manifest: &RepoIndexRuntimeManifest,
 ) -> Result<(RepoIndexGenerationRecord, usize), CovyError> {
+    pin_authenticated_generation_record(root, expected_manifest)
+        .map(|(record, _, decoded_bytes)| (record, decoded_bytes))
+}
+
+fn pin_authenticated_generation_record(
+    root: &Path,
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<(RepoIndexGenerationRecord, PinnedGenerationRecord, usize), CovyError> {
     validate_manifest(expected_manifest)?;
     let record_path =
         repo_index_dir(root).join(generation_record_file_name(expected_manifest.generation));
-    let raw = read_state_file(&record_path, MAX_REPO_INDEX_METADATA_BYTES)?;
-    let record = serde_json::from_slice::<RepoIndexGenerationRecord>(&raw).map_err(|error| {
+    let (directory, name) = repo_state_location(&record_path, false)?;
+    let Some(mut file) = directory
+        .open_existing(&name, FileAccess::ReadOnly)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to open generation record '{}': {error}",
+                record_path.display()
+            ))
+        })?
+    else {
+        return Err(cache_error(format!(
+            "generation record '{}' does not exist",
+            record_path.display()
+        )));
+    };
+    let before_metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    ensure_regular_artifact(&record_path, &before_metadata)?;
+    if before_metadata.len() > MAX_GENERATION_RECORD_BYTES {
+        return Err(cache_error(format!(
+            "generation record '{}' is {} bytes; maximum is {MAX_GENERATION_RECORD_BYTES}",
+            record_path.display(),
+            before_metadata.len()
+        )));
+    }
+    let before = artifact_stamp_from_metadata(&before_metadata);
+    let capacity = usize::try_from(before_metadata.len()).map_err(|_| {
+        cache_error(format!(
+            "generation record '{}' exceeds the platform allocation limit",
+            record_path.display()
+        ))
+    })?;
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(capacity).map_err(|error| {
+        cache_error(format!(
+            "failed to reserve generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    file.file_mut().seek(SeekFrom::Start(0)).map_err(|error| {
+        cache_error(format!(
+            "failed to seek generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    Read::by_ref(file.file_mut())
+        .take(MAX_GENERATION_RECORD_BYTES.saturating_add(1))
+        .read_to_end(&mut raw)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to read generation record '{}': {error}",
+                record_path.display()
+            ))
+        })?;
+    if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_GENERATION_RECORD_BYTES {
+        return Err(cache_error(format!(
+            "generation record '{}' exceeds the {MAX_GENERATION_RECORD_BYTES}-byte limit",
+            record_path.display()
+        )));
+    }
+    let after_metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to re-inspect generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    ensure_regular_artifact(&record_path, &after_metadata)?;
+    let after = artifact_stamp_from_metadata(&after_metadata);
+    if before != after {
+        return Err(cache_error(format!(
+            "generation record '{}' changed while it was being authenticated",
+            record_path.display()
+        )));
+    }
+    file.validate_attachment().map_err(|error| {
+        cache_error(format!(
+            "generation record '{}' was replaced while it was being authenticated: {error}",
+            record_path.display()
+        ))
+    })?;
+    let record = authenticate_generation_record_bytes(&record_path, &raw, expected_manifest)?;
+    let decoded_bytes = raw.len();
+    Ok((
+        record,
+        PinnedGenerationRecord {
+            root: root.to_path_buf(),
+            path: record_path,
+            file,
+            stamp: after,
+            expected_manifest: expected_manifest.clone(),
+        },
+        decoded_bytes,
+    ))
+}
+
+fn authenticate_generation_record_bytes(
+    record_path: &Path,
+    raw: &[u8],
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<RepoIndexGenerationRecord, CovyError> {
+    let record = serde_json::from_slice::<RepoIndexGenerationRecord>(raw).map_err(|error| {
         cache_error(format!(
             "failed to decode generation record '{}': {error}",
             record_path.display()
@@ -870,6 +1104,18 @@ fn load_authenticated_generation_record_with_decoded_bytes(
     {
         return Err(cache_error(format!(
             "generation record '{}' does not match its published manifest or digest metadata",
+            record_path.display()
+        )));
+    }
+    let persisted_encoding = serde_json::to_vec_pretty(&record).map_err(|error| {
+        cache_error(format!(
+            "failed to encode generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    if raw != persisted_encoding {
+        return Err(cache_error(format!(
+            "generation record '{}' is not in its authenticated canonical persisted encoding",
             record_path.display()
         )));
     }
@@ -889,7 +1135,7 @@ fn load_authenticated_generation_record_with_decoded_bytes(
             record_path.display()
         )));
     }
-    Ok((record, raw.len()))
+    Ok(record)
 }
 
 fn validate_manifest(manifest: &RepoIndexRuntimeManifest) -> Result<(), CovyError> {
@@ -1203,16 +1449,152 @@ fn publish_manifest(
     current: &RepoIndexRuntimeManifest,
 ) -> Result<(), CovyError> {
     if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
-        let encoded = serde_json::to_vec_pretty(&durable_manifest(previous)).map_err(|error| {
-            cache_error(format!(
-                "failed to encode previous repository manifest: {error}"
-            ))
-        })?;
-        write_atomic(previous_manifest_path(root), &encoded)?;
+        publish_previous_manifest(root, previous)?;
     }
+    publish_current_manifest(root, current)
+}
+
+fn publish_current_manifest(
+    root: &Path,
+    current: &RepoIndexRuntimeManifest,
+) -> Result<(), CovyError> {
     let encoded = serde_json::to_vec_pretty(current)
         .map_err(|error| cache_error(format!("failed to encode repository manifest: {error}")))?;
     write_atomic(manifest_path(root), &encoded)
+}
+
+fn publish_previous_manifest(
+    root: &Path,
+    previous: &RepoIndexRuntimeManifest,
+) -> Result<(), CovyError> {
+    let encoded = serde_json::to_vec_pretty(&durable_manifest(previous)).map_err(|error| {
+        cache_error(format!(
+            "failed to encode previous repository manifest: {error}"
+        ))
+    })?;
+    write_atomic(previous_manifest_path(root), &encoded)
+}
+
+fn publish_incremental_manifests<F>(
+    publication: IncrementalPublication<'_>,
+    publication_hook: &mut F,
+) -> Result<PublicationFenceWork, CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
+    let result = (|| {
+        publication_hook(IncrementalPublicationStage::BeforeCurrent)?;
+        publish_current_manifest(publication.root, publication.current)?;
+        publication_hook(IncrementalPublicationStage::AfterCurrent)?;
+        let mut work =
+            revalidate_publication_fence(publication.record_pins, publication.artifact_pins)?;
+        publish_previous_manifest(publication.root, publication.previous)?;
+        publication_hook(IncrementalPublicationStage::AfterPrevious)?;
+        let final_work =
+            revalidate_publication_fence(publication.record_pins, publication.artifact_pins)?;
+        work.publication_metadata_bytes_decoded = work
+            .publication_metadata_bytes_decoded
+            .saturating_add(final_work.publication_metadata_bytes_decoded);
+        work.repository_artifact_bytes_hashed = work
+            .repository_artifact_bytes_hashed
+            .saturating_add(final_work.repository_artifact_bytes_hashed);
+        work.repository_artifact_metadata_checks = work
+            .repository_artifact_metadata_checks
+            .saturating_add(final_work.repository_artifact_metadata_checks);
+        Ok(work)
+    })();
+    match result {
+        Ok(work) => Ok(work),
+        Err(error) => Err(rollback_incremental_manifests(
+            publication.root,
+            publication.previous_current_bytes,
+            publication.previous_previous_bytes,
+            error,
+        )),
+    }
+}
+
+fn revalidate_publication_fence(
+    record_pins: &[PinnedGenerationRecord],
+    artifact_pins: &[PinnedArtifact],
+) -> Result<PublicationFenceWork, CovyError> {
+    let mut work = PublicationFenceWork::default();
+    for pin in record_pins {
+        revalidate_pinned_leaf(&pin.path, &pin.file, &pin.stamp, "generation record")?;
+        if !cfg!(unix) {
+            let (_, decoded_bytes) = load_authenticated_generation_record_with_decoded_bytes(
+                &pin.root,
+                &pin.expected_manifest,
+            )?;
+            work.publication_metadata_bytes_decoded = work
+                .publication_metadata_bytes_decoded
+                .saturating_add(decoded_bytes);
+        }
+    }
+    for pin in artifact_pins {
+        revalidate_pinned_leaf(&pin.path, &pin.file, &pin.stamp, "artifact")?;
+        work.repository_artifact_metadata_checks =
+            work.repository_artifact_metadata_checks.saturating_add(1);
+        if !cfg!(unix) {
+            let (raw, _) = read_authenticated_artifact(&pin.path, &pin.expected_digest)?;
+            work.repository_artifact_bytes_hashed = work
+                .repository_artifact_bytes_hashed
+                .saturating_add(raw.len());
+        }
+    }
+    Ok(work)
+}
+
+fn revalidate_pinned_leaf(
+    path: &Path,
+    file: &StateFile,
+    expected_stamp: &ArtifactStamp,
+    kind: &str,
+) -> Result<(), CovyError> {
+    let metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect pinned repository index {kind} '{}': {error}",
+            path.display()
+        ))
+    })?;
+    ensure_regular_artifact(path, &metadata)?;
+    let descriptor_stamp = artifact_stamp_from_metadata(&metadata);
+    file.validate_attachment().map_err(|error| {
+        cache_error(format!(
+            "pinned repository index {kind} '{}' was replaced during publication: {error}",
+            path.display()
+        ))
+    })?;
+    if descriptor_stamp != *expected_stamp {
+        return Err(cache_error(format!(
+            "repository index {kind} '{}' changed during publication",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn rollback_incremental_manifests(
+    root: &Path,
+    previous_current_bytes: Option<&[u8]>,
+    previous_previous_bytes: Option<&[u8]>,
+    publication_error: CovyError,
+) -> CovyError {
+    let previous_restore =
+        restore_optional_file(previous_manifest_path(root), previous_previous_bytes);
+    let current_restore = restore_optional_file(manifest_path(root), previous_current_bytes);
+    match (previous_restore, current_restore) {
+        (Ok(()), Ok(())) => publication_error,
+        (previous, current) => cache_error(format!(
+            "incremental repository publication failed ({publication_error}); restoring previous manifest: {}; restoring current manifest: {}",
+            previous
+                .err()
+                .map_or_else(|| "ok".to_string(), |error| error.to_string()),
+            current
+                .err()
+                .map_or_else(|| "ok".to_string(), |error| error.to_string())
+        )),
+    }
 }
 
 fn durable_manifest(manifest: &RepoIndexRuntimeManifest) -> RepoIndexRuntimeManifest {
@@ -1222,11 +1604,14 @@ fn durable_manifest(manifest: &RepoIndexRuntimeManifest) -> RepoIndexRuntimeMani
     durable
 }
 
-fn load_recovery_manifest(root: &Path) -> Result<Option<RepoIndexRuntimeManifest>, CovyError> {
+fn load_authenticated_recovery(root: &Path) -> Result<Option<AuthenticatedRecovery>, CovyError> {
     let runtime = load_repo_index_runtime(root)?;
-    Ok(runtime
-        .is_loaded()
-        .then(|| durable_manifest(&runtime.manifest)))
+    if !runtime.is_loaded() {
+        return Ok(None);
+    }
+    let manifest = durable_manifest(&runtime.manifest);
+    let record = load_authenticated_generation_record(root, &manifest)?;
+    Ok(Some(AuthenticatedRecovery { manifest, record }))
 }
 
 fn load_published_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
@@ -1236,13 +1621,19 @@ fn load_published_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, Covy
 fn load_published_manifest_with_decoded_bytes(
     root: &Path,
 ) -> Result<(RepoIndexRuntimeManifest, usize), CovyError> {
+    load_published_manifest_with_bytes(root)
+        .map(|(manifest, bytes)| (manifest, bytes.as_ref().map_or(0, Vec::len)))
+}
+
+fn load_published_manifest_with_bytes(
+    root: &Path,
+) -> Result<(RepoIndexRuntimeManifest, Option<Vec<u8>>), CovyError> {
     let path = manifest_path(root);
     let Some(raw) = read_optional_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)? else {
-        return Ok((RepoIndexRuntimeManifest::default(), 0));
+        return Ok((RepoIndexRuntimeManifest::default(), None));
     };
-    let decoded_bytes = raw.len();
     let manifest = decode_manifest_path(&path, &raw)?;
-    Ok((manifest, decoded_bytes))
+    Ok((manifest, Some(raw)))
 }
 
 fn load_previous_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
@@ -1457,12 +1848,10 @@ pub(crate) fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock, C
     Ok(GenerationWriterLock(file))
 }
 
-#[cfg(feature = "shared-repository-scan")]
 fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, CovyError> {
     read_optional_state_file(path, MAX_REPO_INDEX_METADATA_BYTES)
 }
 
-#[cfg(feature = "shared-repository-scan")]
 fn restore_optional_file(path: PathBuf, bytes: Option<&[u8]>) -> Result<(), CovyError> {
     match bytes {
         Some(bytes) => write_atomic(path, bytes),
@@ -1474,6 +1863,7 @@ fn artifact_digest(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
+#[cfg(test)]
 fn artifact_stamp(path: &Path) -> Result<ArtifactStamp, CovyError> {
     let metadata = fs::metadata(path).map_err(|error| {
         cache_error(format!(
@@ -1481,7 +1871,18 @@ fn artifact_stamp(path: &Path) -> Result<ArtifactStamp, CovyError> {
             path.display()
         ))
     })?;
+    ensure_regular_artifact(path, &metadata)?;
     Ok(artifact_stamp_from_metadata(&metadata))
+}
+
+fn ensure_regular_artifact(path: &Path, metadata: &fs::Metadata) -> Result<(), CovyError> {
+    if !metadata.is_file() {
+        return Err(cache_error(format!(
+            "repository index artifact '{}' is not a regular file",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn artifact_stamp_from_metadata(metadata: &fs::Metadata) -> ArtifactStamp {
@@ -1521,6 +1922,14 @@ fn read_authenticated_artifact(
             path.display()
         )));
     };
+    read_authenticated_pinned_artifact(&mut file, path, expected_digest)
+}
+
+fn read_authenticated_pinned_artifact(
+    file: &mut StateFile,
+    path: &Path,
+    expected_digest: &str,
+) -> Result<(Vec<u8>, ArtifactStamp), CovyError> {
     let before = file
         .file()
         .metadata()
@@ -1598,7 +2007,7 @@ fn validate_loaded_artifact_stamps(
 ) -> Result<ValidatedArtifactStamps, CovyError> {
     let mut metadata_checks = 0usize;
     let mut bytes_hashed = 0usize;
-    let base = validate_loaded_artifact_stamp(
+    let (base, base_pin) = pin_loaded_artifact(
         &repo_index_dir(root).join(&loaded.base_file),
         &loaded.base_stamp,
         &loaded.base_digest,
@@ -1606,44 +2015,87 @@ fn validate_loaded_artifact_stamps(
         &mut bytes_hashed,
     )?;
     let mut segments = Vec::with_capacity(loaded.segment_stamps.len());
+    let mut pins = Vec::with_capacity(loaded.segment_stamps.len().saturating_add(1));
+    pins.push(base_pin);
     for ((file_name, expected_digest), expected_stamp) in loaded
         .segment_files
         .iter()
         .zip(&loaded.segment_digests)
         .zip(&loaded.segment_stamps)
     {
-        segments.push(validate_loaded_artifact_stamp(
+        let (stamp, pin) = pin_loaded_artifact(
             &repo_index_dir(root).join(file_name),
             expected_stamp,
             expected_digest,
             &mut metadata_checks,
             &mut bytes_hashed,
-        )?);
+        )?;
+        segments.push(stamp);
+        pins.push(pin);
     }
     Ok(ValidatedArtifactStamps {
         base,
         segments,
+        pins,
         metadata_checks,
         bytes_hashed,
     })
 }
 
-fn validate_loaded_artifact_stamp(
+fn pin_loaded_artifact(
     path: &Path,
     expected_stamp: &ArtifactStamp,
     expected_digest: &str,
     metadata_checks: &mut usize,
     bytes_hashed: &mut usize,
-) -> Result<ArtifactStamp, CovyError> {
+) -> Result<(ArtifactStamp, PinnedArtifact), CovyError> {
     *metadata_checks = metadata_checks.saturating_add(1);
-    let current = artifact_stamp(path)?;
-    #[cfg(unix)]
-    if current == *expected_stamp {
-        return Ok(current);
-    }
-    let (raw, authenticated_stamp) = read_authenticated_artifact(path, expected_digest)?;
-    *bytes_hashed = bytes_hashed.saturating_add(raw.len());
-    Ok(authenticated_stamp)
+    let (directory, name) = repo_state_location(path, false)?;
+    let Some(mut file) = directory
+        .open_bounded(&name, FileAccess::ReadOnly, MAX_REPO_INDEX_ARTIFACT_BYTES)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to pin repository index artifact '{}': {error}",
+                path.display()
+            ))
+        })?
+    else {
+        return Err(cache_error(format!(
+            "repository index artifact '{}' does not exist",
+            path.display()
+        )));
+    };
+    let before_metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect pinned repository index artifact '{}': {error}",
+            path.display()
+        ))
+    })?;
+    ensure_regular_artifact(path, &before_metadata)?;
+    let before = artifact_stamp_from_metadata(&before_metadata);
+    file.validate_attachment().map_err(|error| {
+        cache_error(format!(
+            "repository index artifact '{}' was replaced while it was being pinned: {error}",
+            path.display()
+        ))
+    })?;
+    let stamp = if !cfg!(unix) || before != *expected_stamp {
+        let (raw, authenticated_stamp) =
+            read_authenticated_pinned_artifact(&mut file, path, expected_digest)?;
+        *bytes_hashed = bytes_hashed.saturating_add(raw.len());
+        authenticated_stamp
+    } else {
+        before
+    };
+    Ok((
+        stamp.clone(),
+        PinnedArtifact {
+            path: path.to_path_buf(),
+            file,
+            stamp,
+            expected_digest: expected_digest.to_string(),
+        },
+    ))
 }
 
 fn verify_artifact_digest(path: &Path, bytes: &[u8], expected: &str) -> Result<(), CovyError> {
@@ -1660,7 +2112,7 @@ fn verify_artifact_digest(path: &Path, bytes: &[u8], expected: &str) -> Result<(
 fn prune_generation_artifacts(
     root: &Path,
     current: &RepoIndexGenerationRecord,
-    previous: Option<&RepoIndexRuntimeManifest>,
+    previous: Option<&RepoIndexGenerationRecord>,
 ) -> Result<(), CovyError> {
     let mut retained = BTreeSet::from([
         REPO_INDEX_MANIFEST_FILE.to_string(),
@@ -1669,11 +2121,10 @@ fn prune_generation_artifacts(
         current.base_file.clone(),
     ]);
     retained.extend(current.segment_files.iter().cloned());
-    if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
-        let record = load_generation_record(root, previous.generation)?;
-        retained.insert(generation_record_file_name(record.generation));
-        retained.insert(record.base_file);
-        retained.extend(record.segment_files);
+    if let Some(previous) = previous.filter(|record| record.generation > 0) {
+        retained.insert(generation_record_file_name(previous.generation));
+        retained.insert(previous.base_file.clone());
+        retained.extend(previous.segment_files.iter().cloned());
     }
     let directory = repo_index_dir(root);
     let state = StateDir::open(root, &[".packet28", "index", REPO_INDEX_DIR_NAME], false).map_err(
@@ -1705,6 +2156,7 @@ fn prune_generation_artifacts(
     Ok(())
 }
 
+#[cfg(test)]
 fn load_generation_record(
     root: &Path,
     generation: u64,
@@ -1830,7 +2282,6 @@ fn read_optional_state_file(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8
     })
 }
 
-#[cfg(feature = "shared-repository-scan")]
 fn remove_state_file_if_exists(path: &Path) -> Result<(), CovyError> {
     let (root, components, name) = repo_state_spec(path)?;
     let directory = match StateDir::open(root, components, false) {
@@ -1923,6 +2374,8 @@ fn cache_error(message: impl Into<String>) -> CovyError {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
+    use std::io::Write;
     use std::sync::Barrier;
 
     use super::*;
@@ -2262,7 +2715,7 @@ mod tests {
             summary.work.repository_artifact_bytes_hashed > 0,
             "platforms without a stable file identity must rehash retained artifacts"
         );
-        assert_eq!(summary.work.repository_artifact_metadata_checks, 5);
+        assert_eq!(summary.work.repository_artifact_metadata_checks, 18);
         assert_eq!(summary.work.changed_paths_considered, 1);
         assert!(
             (1..=4_096).contains(&summary.work.publication_metadata_bytes_decoded),
@@ -2528,6 +2981,207 @@ mod tests {
                 .generation,
             first.manifest.generation
         );
+    }
+
+    #[test]
+    fn incremental_publication_fence_restores_both_manifests_before_pruning() {
+        let dir = fixture();
+        let root = dir.path();
+        let mut current = rebuild_repo_index_runtime(root, true).expect("base");
+        for revision in 0..7 {
+            fs::write(
+                root.join("src/a.rs"),
+                format!("pub fn alpha_revision_{revision}() {{}}\n"),
+            )
+            .expect("seed segment");
+            current = update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+                .expect("seed update")
+                .0;
+        }
+        assert_eq!(current.manifest.segment_count, 7);
+        let recovery_manifest = load_previous_manifest(root).expect("recovery manifest");
+        let recovery_record =
+            load_authenticated_generation_record(root, &recovery_manifest).expect("recovery");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            fs::read(previous_manifest_path(root)).expect("previous bytes");
+        let current_record_path =
+            repo_index_dir(root).join(generation_record_file_name(current.manifest.generation));
+        fs::write(root.join("src/a.rs"), "pub fn compacted_update() {}\n").expect("changed path");
+
+        let error = update_repo_index_runtime_with_hook(
+            root,
+            &current,
+            &[String::from("src/a.rs")],
+            true,
+            |stage| {
+                if stage == IncrementalPublicationStage::AfterPrevious {
+                    let mut swapped =
+                        load_generation_record(root, current.manifest.generation).expect("record");
+                    swapped.segment_files.clear();
+                    swapped.segment_digests.clear();
+                    fs::write(
+                        &current_record_path,
+                        serde_json::to_vec_pretty(&swapped).expect("swapped record"),
+                    )
+                    .expect("swap retained record");
+                }
+                Ok(())
+            },
+        )
+        .expect_err("post-rotation record swap must fail");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            fs::read(previous_manifest_path(root)).expect("restored previous"),
+            previous_manifest_bytes
+        );
+        let recovered = load_repo_index_runtime(root).expect("recover retained generation");
+        assert_eq!(recovered.manifest.generation, recovery_manifest.generation);
+        for file_name in
+            std::iter::once(&recovery_record.base_file).chain(recovery_record.segment_files.iter())
+        {
+            assert!(
+                repo_index_dir(root).join(file_name).exists(),
+                "recovery artifact {file_name} must not be pruned"
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_publication_authenticates_the_new_record_before_returning() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            read_optional_file(&previous_manifest_path(root)).expect("previous bytes");
+        let next_record_path = repo_index_dir(root).join(generation_record_file_name(
+            current.manifest.generation.checked_add(1).expect("next"),
+        ));
+        fs::write(root.join("src/a.rs"), "pub fn attempted_update() {}\n").expect("changed path");
+
+        let error = update_repo_index_runtime_with_hook(
+            root,
+            &current,
+            &[String::from("src/a.rs")],
+            true,
+            |stage| {
+                if stage == IncrementalPublicationStage::BeforeCurrent {
+                    OpenOptions::new()
+                        .append(true)
+                        .open(&next_record_path)
+                        .expect("open next record")
+                        .write_all(b"\n")
+                        .expect("pad next record");
+                }
+                Ok(())
+            },
+        )
+        .expect_err("mutated new record must fail");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            read_optional_file(&previous_manifest_path(root)).expect("restored previous"),
+            previous_manifest_bytes
+        );
+    }
+
+    #[test]
+    fn incremental_publication_fence_pins_the_new_segment_through_publication() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            read_optional_file(&previous_manifest_path(root)).expect("previous bytes");
+        let next_segment_path = repo_index_dir(root).join(segment_file_name(
+            current.manifest.generation.checked_add(1).expect("next"),
+        ));
+        fs::write(root.join("src/a.rs"), "pub fn attempted_update() {}\n").expect("changed path");
+
+        let error = update_repo_index_runtime_with_hook(
+            root,
+            &current,
+            &[String::from("src/a.rs")],
+            true,
+            |stage| {
+                if stage == IncrementalPublicationStage::AfterCurrent {
+                    let mut bytes = fs::read(&next_segment_path).expect("next segment");
+                    bytes[0] ^= 0xff;
+                    fs::write(&next_segment_path, bytes).expect("mutate next segment");
+                }
+                Ok(())
+            },
+        )
+        .expect_err("mutated new segment must fail");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            read_optional_file(&previous_manifest_path(root)).expect("restored previous"),
+            previous_manifest_bytes
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load restored current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn generation_record_padding_is_bounded_and_noncanonical() {
+        for padding in [1usize, MAX_GENERATION_RECORD_BYTES as usize + 1] {
+            let dir = fixture();
+            let root = dir.path();
+            let current = rebuild_repo_index_runtime(root, true).expect("current");
+            let record_path =
+                repo_index_dir(root).join(generation_record_file_name(current.manifest.generation));
+            OpenOptions::new()
+                .append(true)
+                .open(&record_path)
+                .expect("open record")
+                .write_all(&vec![b' '; padding])
+                .expect("pad record");
+            let loaded = load_repo_index_runtime(root).expect("bounded corrupt load");
+            assert!(!loaded.is_loaded());
+            let load_error = loaded.manifest.last_error.as_deref().unwrap_or_default();
+            if padding == 1 {
+                assert!(load_error.contains("canonical persisted encoding"));
+            } else {
+                assert!(load_error.contains("maximum"));
+            }
+            fs::write(root.join("src/a.rs"), "pub fn attempted() {}\n").expect("changed path");
+            let counter_before =
+                fs::read(generation_high_water_path(root)).expect("counter before");
+
+            let error =
+                update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+                    .expect_err("padded record must fail");
+
+            if padding == 1 {
+                assert!(error.to_string().contains("canonical persisted encoding"));
+            } else {
+                assert!(error.to_string().contains("maximum"));
+            }
+            assert_eq!(
+                fs::read(generation_high_water_path(root)).expect("counter after"),
+                counter_before
+            );
+        }
     }
 
     #[test]
