@@ -67,7 +67,11 @@ fn read_header_framed_message(
         line.clear();
         let read = read_line_limited(reader, &mut line, MAX_MCP_HEADER_BYTES + 1)?;
         if read == 0 {
-            return Ok(None);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "MCP Content-Length header ended before its blank-line terminator",
+            )
+            .into());
         }
         header_bytes = header_bytes.saturating_add(read);
         if header_bytes > MAX_MCP_HEADER_BYTES {
@@ -220,7 +224,11 @@ where
         line.clear();
         let read = read_line_limited_async(reader, &mut line, MAX_MCP_HEADER_BYTES + 1).await?;
         if read == 0 {
-            return Ok(None);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "MCP Content-Length header ended before its blank-line terminator",
+            )
+            .into());
         }
         header_bytes = header_bytes.saturating_add(read);
         if header_bytes > MAX_MCP_HEADER_BYTES {
@@ -335,6 +343,19 @@ mod async_tests {
     }
 
     #[test]
+    fn sync_reader_rejects_eof_before_content_length_header_terminator() {
+        let input = b"Content-Length: 2\r\nX-Test: incomplete";
+        let error = read_message(&mut std::io::BufReader::new(&input[..])).unwrap_err();
+
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::UnexpectedEof)
+        );
+    }
+
+    #[test]
     fn sync_line_reader_stops_at_limit_without_buffering_unbounded_input() {
         let mut line = String::new();
         let error = read_line_limited(&mut std::io::BufReader::new(&b"12345"[..]), &mut line, 4)
@@ -342,6 +363,27 @@ mod async_tests {
 
         assert!(error.to_string().contains("4 byte limit"));
         assert!(line.is_empty());
+    }
+
+    #[test]
+    fn async_reader_rejects_eof_before_content_length_header_terminator() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let error = runtime.block_on(async {
+            let input = b"Content-Length: 2\r\nX-Test: incomplete";
+            read_message_async(&mut tokio::io::BufReader::new(&input[..]))
+                .await
+                .unwrap_err()
+        });
+
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::UnexpectedEof)
+        );
     }
 
     #[test]
