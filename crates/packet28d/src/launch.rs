@@ -3,15 +3,31 @@ use crate::broker::{
     broker_prepare_handoff, broker_task_status, emit_task_event_for_generation,
     ensure_task_record_mut, mark_handoff_consumed,
 };
+use std::io::Write as _;
 use std::os::unix::process::CommandExt;
-use std::process::Child;
+use std::process::{Child, ChildStdin};
 
 const CHILD_TERMINATION_GRACE: Duration = Duration::from_millis(250);
 const CHILD_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+const DELEGATED_LAUNCH_GATE_SCRIPT: &str = "printf '%s\n' \
+    'packet28 delegated launch gate ready'; \
+    if IFS= read -r _; then exec </dev/null; exec \"$@\"; fi";
 
 struct ChildRegistration {
     generation: TaskGenerationToken,
     pid: u32,
+}
+
+struct DelegatedLaunchGate {
+    writer: ChildStdin,
+}
+
+impl DelegatedLaunchGate {
+    fn release(mut self) -> Result<()> {
+        self.writer
+            .write_all(b"launch\n")
+            .context("failed to release delegated child launch gate")
+    }
 }
 
 impl Drop for ChildRegistration {
@@ -503,10 +519,13 @@ pub(crate) fn task_launch_agent(
     let stderr_log = stdout_log
         .try_clone()
         .with_context(|| format!("failed to clone '{}'", log_path.display()))?;
-    let mut child = Command::new(&request.command[0]);
+    let mut child = Command::new("/bin/sh");
     child
-        .args(&request.command[1..])
-        .stdin(std::process::Stdio::null())
+        .arg("-c")
+        .arg(DELEGATED_LAUNCH_GATE_SCRIPT)
+        .arg("packet28-delegated-launch-gate")
+        .args(&request.command)
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::from(stdout_log))
         .stderr(std::process::Stdio::from(stderr_log))
         .env("PACKET28_BOOTSTRAP_MODE", bootstrap.mode)
@@ -567,6 +586,14 @@ pub(crate) fn task_launch_agent(
     let mut child = child
         .spawn()
         .with_context(|| format!("failed to spawn delegated command '{}'", request.command[0]))?;
+    let Some(gate_writer) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        anyhow::bail!("delegated child launch gate was not created");
+    };
+    let launch_gate = DelegatedLaunchGate {
+        writer: gate_writer,
+    };
     let pid = child.id();
     let process_group = match i32::try_from(pid) {
         Ok(process_group) => process_group,
@@ -587,40 +614,81 @@ pub(crate) fn task_launch_agent(
         );
     }
     let ownership_result = (|| -> Result<()> {
-        let mut guard = state.lock().map_err(lock_err)?;
-        if !guard
-            .task_generations
-            .matches(&bootstrap.task_id, generation.id())
-            || generation.is_cancelled()
-        {
+        let (persistence, tasks, watches) = {
+            let mut guard = state.lock().map_err(lock_err)?;
+            if !guard
+                .task_generations
+                .matches(&bootstrap.task_id, generation.id())
+                || generation.is_cancelled()
+            {
+                anyhow::bail!(
+                    "task '{}' generation changed while launching delegated agent",
+                    bootstrap.task_id
+                );
+            }
+            let task = guard
+                .tasks
+                .tasks
+                .get_mut(&bootstrap.task_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "task '{}' disappeared while launching delegated agent",
+                        bootstrap.task_id
+                    )
+                })?;
+            task.latest_agent_pid = Some(pid);
+            task.latest_agent_bootstrap_mode = Some(bootstrap.mode.to_string());
+            task.latest_agent_log_path = Some(log_path.to_string_lossy().to_string());
+            task.latest_agent_started_at_unix = Some(started_at_unix);
+            task.latest_agent_completed_at_unix = None;
+            task.latest_agent_exit_code = None;
+            task.latest_agent_context_version = Some(bootstrap.response.context_version.clone());
+            task.latest_agent_handoff_artifact_id = bootstrap.handoff_artifact_id.clone();
+            task.latest_agent_handoff_checkpoint_id = bootstrap.handoff_checkpoint_id.clone();
+            (
+                guard.persistence.clone(),
+                Arc::new(guard.tasks.clone()),
+                Arc::new(guard.watches.clone()),
+            )
+        };
+        persistence.checkpoint(tasks, watches)
+    })();
+    if let Err(error) = ownership_result {
+        let reap_result = terminate_and_reap_child(&mut child, owned_process);
+        generation.complete_child(pid);
+        reap_result?;
+        return Err(error);
+    }
+    let started_event = emit_task_event_for_generation(
+        state.clone(),
+        &bootstrap.task_id,
+        generation.id(),
+        "task.agent_launch_started",
+        json!({
+            "summary": format!("spawned delegated agent pid={pid} mode={}", bootstrap.mode),
+            "pid": pid,
+            "bootstrap_mode": bootstrap.mode,
+            "log_path": log_path.to_string_lossy().to_string(),
+        }),
+    );
+    match started_event {
+        Ok(true) => {}
+        Ok(false) => {
+            terminate_and_reap_child(&mut child, owned_process)?;
+            generation.complete_child(pid);
             anyhow::bail!(
-                "task '{}' generation changed while launching delegated agent",
+                "task '{}' generation changed before delegated agent launch was recorded",
                 bootstrap.task_id
             );
         }
-        let task = guard
-            .tasks
-            .tasks
-            .get_mut(&bootstrap.task_id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "task '{}' disappeared while launching delegated agent",
-                    bootstrap.task_id
-                )
-            })?;
-        task.latest_agent_pid = Some(pid);
-        task.latest_agent_bootstrap_mode = Some(bootstrap.mode.to_string());
-        task.latest_agent_log_path = Some(log_path.to_string_lossy().to_string());
-        task.latest_agent_started_at_unix = Some(started_at_unix);
-        task.latest_agent_completed_at_unix = None;
-        task.latest_agent_exit_code = None;
-        task.latest_agent_context_version = Some(bootstrap.response.context_version.clone());
-        task.latest_agent_handoff_artifact_id = bootstrap.handoff_artifact_id.clone();
-        task.latest_agent_handoff_checkpoint_id = bootstrap.handoff_checkpoint_id.clone();
-        persist_state(&guard)?;
-        Ok(())
-    })();
-    if let Err(error) = ownership_result {
+        Err(error) => {
+            let reap_result = terminate_and_reap_child(&mut child, owned_process);
+            generation.complete_child(pid);
+            reap_result?;
+            return Err(error);
+        }
+    }
+    if let Err(error) = launch_gate.release() {
         let reap_result = terminate_and_reap_child(&mut child, owned_process);
         generation.complete_child(pid);
         reap_result?;
@@ -651,18 +719,6 @@ pub(crate) fn task_launch_agent(
         }
         return Err(error);
     }
-    let _ = emit_task_event_for_generation(
-        state.clone(),
-        &bootstrap.task_id,
-        generation.id(),
-        "task.agent_launch_started",
-        json!({
-            "summary": format!("spawned delegated agent pid={pid} mode={}", bootstrap.mode),
-            "pid": pid,
-            "bootstrap_mode": bootstrap.mode,
-            "log_path": log_path.to_string_lossy().to_string(),
-        }),
-    );
     Ok(TaskLaunchAgentResponse {
         task_id: bootstrap.task_id,
         pid,

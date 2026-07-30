@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use context_kernel_core::{KernelRequest, KernelSequenceRequest, KernelStepRequest};
 use fs2::FileExt;
-use packet28_daemon_core::storage::{load_task_registry, save_task_registry};
+use packet28_daemon_core::storage::{load_task_events, load_task_registry, save_task_registry};
 use packet28_daemon_core::task_store_lease::{
     acquire_daemon_instance_lease, try_acquire_task_store_retention_lease,
 };
@@ -60,10 +60,12 @@ fn wait_for_ready(daemon: &mut ChildGuard, root: &Path) -> DaemonRuntimeInfo {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if ready_path(root).exists() {
-            return serde_json::from_slice(
-                &fs::read(runtime_path(root)).expect("read daemon runtime"),
-            )
-            .expect("decode daemon runtime");
+            let runtime: DaemonRuntimeInfo =
+                serde_json::from_slice(&fs::read(runtime_path(root)).expect("read daemon runtime"))
+                    .expect("decode daemon runtime");
+            if runtime.pid == daemon.0.id() {
+                return runtime;
+            }
         }
         assert!(
             daemon.0.try_wait().expect("probe daemon").is_none(),
@@ -174,6 +176,64 @@ fn wait_for_path(path: &Path) {
         assert!(
             Instant::now() < deadline,
             "delegated child did not publish readiness"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_launch_gate(root: &Path, task_id: &str) {
+    let storage_id = TaskStorageId::try_from(task_id).expect("valid task storage id");
+    let agent_dir = task_artifact_dir(root, &storage_id).join("agent");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let gate_is_ready = fs::read_dir(&agent_dir).is_ok_and(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("launch-") && name.ends_with(".log"))
+                })
+                .any(|entry| {
+                    fs::read_to_string(entry.path())
+                        .is_ok_and(|log| log.contains("packet28 delegated launch gate ready"))
+                })
+        });
+        if gate_is_ready {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "delegated launch gate did not become ready"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_agent_launch_events(root: &Path, task_id: &str) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let kinds = load_task_events(root, task_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|frame| {
+                frame
+                    .event
+                    .kind
+                    .starts_with("task.agent_launch_")
+                    .then_some(frame.event.kind)
+            })
+            .collect::<Vec<_>>();
+        if kinds
+            .iter()
+            .any(|kind| kind == "task.agent_launch_completed")
+        {
+            return kinds;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "delegated launch did not publish its completion event"
         );
         thread::sleep(Duration::from_millis(10));
     }
@@ -318,6 +378,141 @@ fn active_delegated_launch_rejects_overlap_for_the_same_task() {
         .wait()
         .expect("join daemon after overlap rejection");
     assert!(status.success(), "daemon Stop completed with {status}");
+}
+
+#[test]
+fn immediate_delegated_exit_records_started_before_completed() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let task_id = "immediate-agent-exit";
+    seed_ready_handoff(workspace.path(), task_id);
+    let mut daemon = spawn_daemon(workspace.path());
+    let runtime = wait_for_ready(&mut daemon, workspace.path());
+
+    let response = request(
+        &runtime,
+        &DaemonRequest::TaskLaunchAgent {
+            request: TaskLaunchAgentRequest {
+                task_id: task_id.to_string(),
+                command: vec!["sh".to_string(), "-c".to_string(), "exit 0".to_string()],
+                ..TaskLaunchAgentRequest::default()
+            },
+        },
+    );
+    assert!(
+        matches!(response, DaemonResponse::TaskLaunchAgent { .. }),
+        "immediate delegated launch failed: {response:?}"
+    );
+
+    assert_eq!(
+        wait_for_agent_launch_events(workspace.path(), task_id),
+        vec![
+            "task.agent_launch_started".to_string(),
+            "task.agent_launch_completed".to_string(),
+        ]
+    );
+
+    assert!(matches!(
+        request(&runtime, &DaemonRequest::Stop),
+        DaemonResponse::Ack { ref message } if message == "stopping"
+    ));
+    let status = daemon
+        .0
+        .wait()
+        .expect("join daemon after immediate delegated exit");
+    assert!(status.success(), "daemon Stop completed with {status}");
+}
+
+#[test]
+fn crash_between_spawn_and_ownership_checkpoint_never_releases_delegated_work() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let task_id = "spawn-checkpoint-crash";
+    seed_ready_handoff(workspace.path(), task_id);
+    let mut daemon = spawn_daemon(workspace.path());
+    let runtime = wait_for_ready(&mut daemon, workspace.path());
+    let registry_lock_path = workspace
+        .path()
+        .join(".packet28/daemon/.task-registry-v1.json.lock");
+    let registry_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&registry_lock_path)
+        .expect("open task registry checkpoint lock");
+    FileExt::lock_exclusive(&registry_lock).expect("fault-inject blocked ownership checkpoint");
+
+    let delegated_work = workspace.path().join("delegated-work-ran");
+    let launch_runtime = runtime.clone();
+    let delegated_work_arg = delegated_work.to_string_lossy().to_string();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let launch = thread::spawn(move || {
+        let response = try_request(
+            &launch_runtime,
+            &DaemonRequest::TaskLaunchAgent {
+                request: TaskLaunchAgentRequest {
+                    task_id: task_id.to_string(),
+                    command: vec![
+                        "sh".to_string(),
+                        "-c".to_string(),
+                        "printf ran > \"$1\"".to_string(),
+                        "packet28-crash-window-agent".to_string(),
+                        delegated_work_arg,
+                    ],
+                    ..TaskLaunchAgentRequest::default()
+                },
+            },
+        );
+        finished_tx.send(()).ok();
+        response
+    });
+
+    wait_for_launch_gate(workspace.path(), task_id);
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        matches!(finished_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "launch bypassed the blocked ownership checkpoint"
+    );
+    assert!(
+        !delegated_work.exists(),
+        "delegated command ran before ownership became durable"
+    );
+
+    daemon.0.kill().expect("crash daemon in launch window");
+    let crash_status = daemon.0.wait().expect("reap crashed daemon");
+    assert!(
+        !crash_status.success(),
+        "fault injection did not crash daemon"
+    );
+    FileExt::unlock(&registry_lock).expect("release task registry checkpoint lock");
+    assert!(
+        launch
+            .join()
+            .expect("join interrupted launch request")
+            .is_err(),
+        "launch request unexpectedly survived daemon crash"
+    );
+    thread::sleep(Duration::from_millis(250));
+    assert!(
+        !delegated_work.exists(),
+        "delegated command escaped its closed crash-window gate"
+    );
+    assert_eq!(
+        load_task_registry(workspace.path())
+            .expect("load pre-crash task registry")
+            .tasks[task_id]
+            .latest_agent_pid,
+        None
+    );
+
+    let mut restarted = spawn_daemon(workspace.path());
+    let restarted_runtime = wait_for_ready(&mut restarted, workspace.path());
+    assert!(matches!(
+        request(&restarted_runtime, &DaemonRequest::Stop),
+        DaemonResponse::Ack { ref message } if message == "stopping"
+    ));
+    let restart_status = restarted.0.wait().expect("join restarted daemon");
+    assert!(
+        restart_status.success(),
+        "daemon restart failed after gated launch crash: {restart_status}"
+    );
 }
 
 #[test]

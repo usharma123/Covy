@@ -139,6 +139,15 @@ then either reconciles a lagging registry from valid event tails or fails
 closed if a registry is ahead of its log, a durable frame is corrupt, or
 recovery authority is conflicted.
 
+Each task generation admits at most one delegated agent launch at a time. The
+daemon starts a process-group leader in a launch-gate shim, registers that
+owned child, synchronously checkpoints its PID and launch metadata, and
+durably appends `task.agent_launch_started` before releasing the requested
+command. A concurrent launch for the same task is rejected until the owned
+child waiter has recorded completion and removed the child. If the daemon
+crashes or persistence fails between spawn and checkpoint, closing the gate
+pipe makes the shim exit without executing delegated work.
+
 Detailed retention, journal, corruption, and descriptor-confinement guarantees
 are in [Task-store retention](task-store-retention.md).
 
