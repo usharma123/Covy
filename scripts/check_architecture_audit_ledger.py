@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Validate the observation-level architecture-audit ledger."""
+"""Validate the architecture-audit ledger and its optional finalization record."""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import re
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -206,10 +209,201 @@ ALIAS_BEGIN = "<!-- BEGIN: LEGACY-AUDIT-ID-ALIASES -->"
 ALIAS_END = "<!-- END: LEGACY-AUDIT-ID-ALIASES -->"
 RELATIONSHIP_BEGIN = "<!-- BEGIN: SOURCE-AUDIT-RELATIONSHIPS -->"
 RELATIONSHIP_END = "<!-- END: SOURCE-AUDIT-RELATIONSHIPS -->"
+SNAPSHOT_BEGIN = "<!-- BEGIN GENERATED: LEDGER-SNAPSHOT -->"
+SNAPSHOT_END = "<!-- END GENERATED: LEDGER-SNAPSHOT -->"
+FINAL_GATE_BEGIN = "<!-- BEGIN GENERATED: FINAL-GATE -->"
+FINAL_GATE_END = "<!-- END GENERATED: FINAL-GATE -->"
+SNAPSHOT_HEADER = ("Field", "Value")
+FINAL_GATE_HEADER = ("Gate", "Exact command", "Result", "Artifact / timestamp")
+REQUIRED_FINAL_GATES = (
+    "Ledger/source-anchor validation",
+    "README generated statistics",
+    "Formatting",
+    "Workspace check",
+    "Workspace build",
+    "Strict Clippy",
+    "Full all-feature tests",
+    "Doctests",
+    "Strict rustdoc",
+    "Architecture rules",
+    "Supply-chain policy",
+    "Exact MSRV",
+    "Packaging/release dry-run",
+    "Cargo publication policy",
+    "Performance/cache experiments",
+    "Runtime-starvation evidence",
+    "Current-source index benchmark",
+)
+PLACEHOLDER_RE = re.compile(
+    r"^(?:PENDING|TBD|TODO|N/?A)(?:\b|$)",
+    re.IGNORECASE,
+)
 
 
 def markdown_cells(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def generated_block(
+    ledger: str,
+    begin: str,
+    end: str,
+    label: str,
+) -> tuple[str | None, list[str]]:
+    if ledger.count(begin) != 1 or ledger.count(end) != 1:
+        return None, [f"ledger must contain exactly one generated {label} block"]
+    begin_offset = ledger.find(begin)
+    end_offset = ledger.find(end)
+    if end_offset < begin_offset:
+        return None, [f"generated {label} markers are out of order"]
+    block_start = begin_offset + len(begin)
+    block = ledger[block_start:end_offset]
+    return block, []
+
+
+def markdown_table(
+    block: str,
+    expected_header: tuple[str, ...],
+    label: str,
+) -> tuple[list[list[str]], list[str]]:
+    errors: list[str] = []
+    lines = [line for line in block.splitlines() if line.startswith("|")]
+    if len(lines) < 2:
+        return [], [f"generated {label} block has no Markdown table"]
+    header = tuple(markdown_cells(lines[0]))
+    if header != expected_header:
+        errors.append(
+            f"generated {label} table header is {header}, expected {expected_header}"
+        )
+    separator = markdown_cells(lines[1])
+    if len(separator) != len(expected_header) or any(
+        re.fullmatch(r":?-{3,}:?", cell) is None for cell in separator
+    ):
+        errors.append(f"generated {label} table has an invalid separator row")
+
+    rows: list[list[str]] = []
+    for offset, line in enumerate(lines[2:], start=3):
+        cells = markdown_cells(line)
+        if len(cells) != len(expected_header):
+            errors.append(
+                f"generated {label} table row {offset} has {len(cells)} cells, "
+                f"expected {len(expected_header)}"
+            )
+            continue
+        rows.append(cells)
+    return rows, errors
+
+
+def markdown_value(value: str) -> str:
+    return value.strip().strip("`*").strip()
+
+
+def is_placeholder(value: str) -> bool:
+    normalized = markdown_value(value)
+    return (
+        not normalized
+        or normalized in {"-", "—"}
+        or PLACEHOLDER_RE.search(normalized) is not None
+    )
+
+
+def validate_finalization(
+    ledger: str,
+    expected_commit: str,
+    expected_tree: str,
+) -> list[str]:
+    errors: list[str] = []
+
+    snapshot_block, block_errors = generated_block(
+        ledger,
+        SNAPSHOT_BEGIN,
+        SNAPSHOT_END,
+        "ledger-snapshot",
+    )
+    errors.extend(block_errors)
+    snapshot_rows: list[list[str]] = []
+    if snapshot_block is not None:
+        snapshot_rows, table_errors = markdown_table(
+            snapshot_block,
+            SNAPSHOT_HEADER,
+            "ledger-snapshot",
+        )
+        errors.extend(table_errors)
+
+    snapshot_fields: dict[str, str] = {}
+    snapshot_seen: Counter[str] = Counter()
+    for field, value in snapshot_rows:
+        snapshot_seen[field] += 1
+        snapshot_fields[field] = value
+    duplicate_snapshot_fields = sorted(
+        field for field, count in snapshot_seen.items() if count != 1
+    )
+    if duplicate_snapshot_fields:
+        errors.append(
+            "duplicate ledger-snapshot fields: "
+            + ", ".join(duplicate_snapshot_fields)
+        )
+
+    for field, expected in (
+        ("Integration commit", expected_commit),
+        ("Integration tree", expected_tree),
+    ):
+        if field not in snapshot_fields:
+            errors.append(f"missing ledger-snapshot field: {field}")
+            continue
+        actual = markdown_value(snapshot_fields[field])
+        if is_placeholder(snapshot_fields[field]):
+            errors.append(f"ledger-snapshot {field} is not finalized: {actual}")
+        elif actual != expected:
+            errors.append(
+                f"ledger-snapshot {field} is {actual}, expected {expected}"
+            )
+
+    gate_block, block_errors = generated_block(
+        ledger,
+        FINAL_GATE_BEGIN,
+        FINAL_GATE_END,
+        "final-gate",
+    )
+    errors.extend(block_errors)
+    gate_rows: list[list[str]] = []
+    if gate_block is not None:
+        gate_rows, table_errors = markdown_table(
+            gate_block,
+            FINAL_GATE_HEADER,
+            "final-gate",
+        )
+        errors.extend(table_errors)
+
+    gates: dict[str, tuple[str, str, str]] = {}
+    gate_seen: Counter[str] = Counter()
+    for gate, command, result, artifact in gate_rows:
+        gate_seen[gate] += 1
+        gates[gate] = (command, result, artifact)
+
+    required = set(REQUIRED_FINAL_GATES)
+    actual = set(gates)
+    missing = sorted(required - actual)
+    unexpected = sorted(actual - required)
+    duplicates = sorted(gate for gate, count in gate_seen.items() if count != 1)
+    if missing:
+        errors.append(f"missing required final gates: {', '.join(missing)}")
+    if unexpected:
+        errors.append(f"unexpected final gates: {', '.join(unexpected)}")
+    if duplicates:
+        errors.append(f"duplicate final gates: {', '.join(duplicates)}")
+
+    for gate in REQUIRED_FINAL_GATES:
+        if gate not in gates:
+            continue
+        command, result, artifact = gates[gate]
+        if is_placeholder(command):
+            errors.append(f"final gate {gate} has a placeholder exact command")
+        if markdown_value(result) != "PASS":
+            errors.append(f"final gate {gate} result is not PASS: {result}")
+        if is_placeholder(artifact):
+            errors.append(f"final gate {gate} has a placeholder artifact/timestamp")
+    return errors
 
 
 def validate_text(ledger: str, audit_bytes: bytes) -> list[str]:
@@ -435,15 +629,76 @@ def validate_source_relationships(ledger: str) -> list[str]:
     return errors
 
 
-def main() -> int:
-    errors = validate_text(
-        LEDGER_PATH.read_text(encoding="utf-8"),
-        AUDIT_PATH.read_bytes(),
+def resolve_source_revision(revision: str) -> tuple[str, str]:
+    def git_rev_parse(value: str) -> str:
+        return subprocess.run(
+            ["git", "rev-parse", "--verify", value],
+            cwd=ROOT,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout.strip()
+
+    commit = git_rev_parse(f"{revision}^{{commit}}")
+    tree = git_rev_parse(f"{revision}^{{tree}}")
+    return commit, tree
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Validate the architecture-audit ledger.",
+        epilog=(
+            "Strict finalization binds the ledger to the caller-selected source "
+            "revision. A tracked ledger cannot contain the commit/tree hash of "
+            "the commit that contains itself, so a ledger-only final commit "
+            "should normally validate its recorded source snapshot with "
+            "--source-rev HEAD^."
+        ),
     )
+    parser.add_argument(
+        "--final",
+        action="store_true",
+        help="also require completed snapshot metadata and all final gates",
+    )
+    parser.add_argument(
+        "--source-rev",
+        metavar="REV",
+        help="Git revision whose exact commit and tree strict finalization records",
+    )
+    args = parser.parse_args(argv)
+    if args.final != (args.source_rev is not None):
+        parser.error("--final and --source-rev must be used together")
+
+    ledger = LEDGER_PATH.read_text(encoding="utf-8")
+    errors = validate_text(ledger, AUDIT_PATH.read_bytes())
     if errors:
         for error in errors:
             print(f"audit ledger invariant failed: {error}", file=sys.stderr)
         return 1
+
+    if args.final:
+        try:
+            source_commit, source_tree = resolve_source_revision(args.source_rev)
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr.strip() or str(error)
+            print(
+                "audit ledger finalization failed: "
+                f"cannot resolve source revision {args.source_rev}: {detail}",
+                file=sys.stderr,
+            )
+            return 1
+        errors = validate_finalization(ledger, source_commit, source_tree)
+        if errors:
+            for error in errors:
+                print(f"audit ledger finalization failed: {error}", file=sys.stderr)
+            return 1
+        print(
+            "architecture audit ledger finalization passed: "
+            f"source commit {source_commit}, tree {source_tree}"
+        )
+        return 0
+
     print(
         "architecture audit ledger invariant passed: "
         f"{len(EXPECTED_IDS)} source rows, {len(LEGACY_ALIASES)} legacy aliases, "

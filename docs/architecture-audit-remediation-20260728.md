@@ -401,7 +401,21 @@ as recovered HTML observations or used to rewrite baseline facts.
 ## Generated integration records
 
 Do not hand-edit content between generated markers. The integration owner
-replaces it after applying this ledger patch to the intended clean tree.
+replaces it after all source changes and final evidence land on the intended
+clean tree. The normal ledger checker deliberately permits provisional records
+so it remains useful throughout remediation. Finalization is an explicit,
+strict check against a caller-selected source revision:
+
+```text
+python3 scripts/check_architecture_audit_ledger.py --final --source-rev <rev>
+```
+
+A tracked ledger cannot contain the commit or tree hash of the commit that
+contains the ledger itself. To make final validation rerunnable, land the
+generated ledger synchronization as a ledger-only commit and select its source
+parent, normally `--source-rev HEAD^`. The strict checker resolves that revision
+and requires the recorded integration commit/tree and all required final gates
+to be complete and exact.
 
 <!-- BEGIN GENERATED: LEDGER-SNAPSHOT -->
 | Field | Value |
