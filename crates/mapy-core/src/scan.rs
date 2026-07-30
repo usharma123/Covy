@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ignore::WalkBuilder;
+use packet28_state_fs::StateDir;
 use suite_packet_core::CovyError;
+
+const MAX_REPO_SCAN_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(crate) struct RepoScanAccumulator {
     root: PathBuf,
@@ -187,20 +190,23 @@ fn discover_source_paths(root: &Path, include_tests: bool) -> Result<Vec<String>
     Ok(out)
 }
 
-pub(crate) fn scan_cache_path(root: &Path) -> PathBuf {
-    root.join(MAP_CACHE_DIR).join(MAP_CACHE_FILE)
-}
-
 pub(crate) fn load_scan_cache(root: &Path) -> RepoScanCache {
-    let path = scan_cache_path(root);
-    let raw = if let Ok(raw) = std::fs::read(&path) {
-        raw
-    } else {
-        let legacy_path = root.join(MAP_CACHE_DIR).join(MAP_CACHE_FILE_LEGACY);
-        let Ok(raw) = std::fs::read(legacy_path) else {
+    let Ok(directory) = StateDir::open(root, &[MAP_CACHE_DIR], false) else {
+        return empty_cache();
+    };
+    let raw = match directory.read_bounded(MAP_CACHE_FILE, MAX_REPO_SCAN_CACHE_BYTES) {
+        Ok(Some(raw)) => raw,
+        Ok(None) => {
+            let Ok(Some(raw)) =
+                directory.read_bounded(MAP_CACHE_FILE_LEGACY, MAX_REPO_SCAN_CACHE_BYTES)
+            else {
+                return empty_cache();
+            };
+            raw
+        }
+        Err(_) => {
             return empty_cache();
-        };
-        raw
+        }
     };
 
     let cache = if let Ok(cache) = wincode::deserialize::<RepoScanCache>(&raw) {
@@ -219,18 +225,13 @@ pub(crate) fn load_scan_cache(root: &Path) -> RepoScanCache {
 }
 
 pub(crate) fn write_scan_cache(root: &Path, cache: &RepoScanCache) {
-    let path = scan_cache_path(root);
-    if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            return;
-        }
-    }
-
     let Ok(encoded) = wincode::serialize(cache) else {
         return;
     };
-
-    let _ = std::fs::write(path, encoded);
+    let Ok(directory) = StateDir::open(root, &[MAP_CACHE_DIR], true) else {
+        return;
+    };
+    let _ = directory.write_atomic(MAP_CACHE_FILE, &encoded);
 }
 
 pub(crate) fn empty_cache() -> RepoScanCache {
@@ -441,6 +442,35 @@ pub(crate) fn extract_token_lines(
 #[cfg(test)]
 mod path_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_cache_write_rejects_a_symlinked_parent_without_touching_the_victim() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = tempfile::tempdir().unwrap();
+        let sentinel = victim.path().join("sentinel");
+        std::fs::write(&sentinel, b"outside-must-survive").unwrap();
+        std::os::unix::fs::symlink(victim.path(), dir.path().join(MAP_CACHE_DIR)).unwrap();
+
+        write_scan_cache(dir.path(), &empty_cache());
+
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"outside-must-survive");
+        assert!(!victim.path().join(MAP_CACHE_FILE).exists());
+    }
+
+    #[test]
+    fn scan_cache_rejects_an_oversized_sparse_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateDir::open(dir.path(), &[MAP_CACHE_DIR], true).unwrap();
+        let path = state.path().join(MAP_CACHE_FILE);
+        let file = std::fs::File::create(path).unwrap();
+        file.set_len(MAX_REPO_SCAN_CACHE_BYTES + 1).unwrap();
+
+        let loaded = load_scan_cache(dir.path());
+
+        assert_eq!(loaded.version, MAP_CACHE_VERSION);
+        assert!(loaded.files.is_empty());
+    }
 
     #[cfg(unix)]
     #[test]

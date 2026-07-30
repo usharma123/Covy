@@ -14,13 +14,12 @@
 //! power-loss durability.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use fs2::FileExt;
+use packet28_state_fs::{FileAccess, StateDir, StateFile};
 use serde::{Deserialize, Serialize};
 use suite_packet_core::CovyError;
 
@@ -38,8 +37,8 @@ const REPO_INDEX_WRITER_LOCK_FILE: &str = ".mapy-v1.writer.lock";
 const REPO_INDEX_GENERATION_HIGH_WATER_FILE: &str = ".mapy-v1.generation-high-water.json";
 const REPO_INDEX_COMPACTION_SEGMENTS: usize = 8;
 const REPO_INDEX_SEGMENT_VERSION: u32 = 1;
-
-static TEMP_FILE_NONCE: AtomicU64 = AtomicU64::new(0);
+const MAX_REPO_INDEX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_REPO_INDEX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Metadata for an atomically published repository-index generation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -462,14 +461,20 @@ pub fn clear_repo_index_runtime(root: &Path) -> Result<(), CovyError> {
     let _writer = acquire_writer_lock(root)?;
     ensure_generation_high_water(root)?;
     let path = repo_index_dir(root);
-    if path.exists() {
-        fs::remove_dir_all(&path).map_err(|error| {
+    let parent = StateDir::open(root, &[".packet28", "index"], false).map_err(|error| {
+        cache_error(format!(
+            "failed to open repository index parent '{}': {error}",
+            repo_index_parent(root).display()
+        ))
+    })?;
+    parent
+        .remove_tree_if_exists(REPO_INDEX_DIR_NAME)
+        .map_err(|error| {
             cache_error(format!(
                 "failed to remove repository index directory '{}': {error}",
                 path.display()
             ))
         })?;
-    }
     Ok(())
 }
 
@@ -659,8 +664,12 @@ pub fn load_repo_index_runtime(root: &Path) -> Result<RepoIndexRuntime, CovyErro
         }
     };
     if current.schema_version == 0 {
-        let current_exists = manifest_path(root).exists();
-        let previous_exists = previous_manifest_path(root).exists();
+        let current_exists =
+            read_optional_state_file(&manifest_path(root), MAX_REPO_INDEX_METADATA_BYTES)?
+                .is_some();
+        let previous_exists =
+            read_optional_state_file(&previous_manifest_path(root), MAX_REPO_INDEX_METADATA_BYTES)?
+                .is_some();
         let recovered = recover_previous(
             root,
             None,
@@ -716,12 +725,7 @@ fn load_generation(
     let record = load_authenticated_generation_record(root, expected_manifest)?;
     validate_artifact_name(&record.base_file)?;
     let base_path = repo_index_dir(root).join(&record.base_file);
-    let base_raw = fs::read(&base_path).map_err(|error| {
-        cache_error(format!(
-            "failed to read repository base '{}': {error}",
-            base_path.display()
-        ))
-    })?;
+    let base_raw = read_state_file(&base_path, MAX_REPO_INDEX_ARTIFACT_BYTES)?;
     verify_artifact_digest(&base_path, &base_raw, &record.base_digest)?;
     let base = wincode::deserialize::<RepoIndexSnapshot>(&base_raw).map_err(|error| {
         cache_error(format!(
@@ -746,12 +750,7 @@ fn load_generation(
             )));
         }
         let path = repo_index_dir(root).join(file_name);
-        let raw = fs::read(&path).map_err(|error| {
-            cache_error(format!(
-                "failed to read repository segment '{}': {error}",
-                path.display()
-            ))
-        })?;
+        let raw = read_state_file(&path, MAX_REPO_INDEX_ARTIFACT_BYTES)?;
         verify_artifact_digest(&path, &raw, expected_digest)?;
         let segment = wincode::deserialize::<RepoIndexSegment>(&raw).map_err(|error| {
             cache_error(format!(
@@ -798,12 +797,7 @@ fn load_authenticated_generation_record(
     validate_manifest(expected_manifest)?;
     let record_path =
         repo_index_dir(root).join(generation_record_file_name(expected_manifest.generation));
-    let raw = fs::read(&record_path).map_err(|error| {
-        cache_error(format!(
-            "failed to read generation record '{}': {error}",
-            record_path.display()
-        ))
-    })?;
+    let raw = read_state_file(&record_path, MAX_REPO_INDEX_METADATA_BYTES)?;
     let record = serde_json::from_slice::<RepoIndexGenerationRecord>(&raw).map_err(|error| {
         cache_error(format!(
             "failed to decode generation record '{}': {error}",
@@ -1176,10 +1170,10 @@ fn load_recovery_manifest(root: &Path) -> Result<Option<RepoIndexRuntimeManifest
 
 fn load_published_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
     let path = manifest_path(root);
-    if !path.exists() {
+    let Some(raw) = read_optional_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)? else {
         return Ok(RepoIndexRuntimeManifest::default());
-    }
-    load_manifest_path(&path)
+    };
+    decode_manifest_path(&path, &raw)
 }
 
 fn load_previous_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
@@ -1187,13 +1181,12 @@ fn load_previous_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, CovyE
 }
 
 fn load_manifest_path(path: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
-    let raw = fs::read(path).map_err(|error| {
-        cache_error(format!(
-            "failed to read repository manifest '{}': {error}",
-            path.display()
-        ))
-    })?;
-    serde_json::from_slice(&raw).map_err(|error| {
+    let raw = read_state_file(path, MAX_REPO_INDEX_METADATA_BYTES)?;
+    decode_manifest_path(path, &raw)
+}
+
+fn decode_manifest_path(path: &Path, raw: &[u8]) -> Result<RepoIndexRuntimeManifest, CovyError> {
+    serde_json::from_slice(raw).map_err(|error| {
         cache_error(format!(
             "failed to decode repository manifest '{}': {error}",
             path.display()
@@ -1237,15 +1230,8 @@ fn ensure_generation_high_water(root: &Path) -> Result<u64, CovyError> {
 
 fn load_generation_high_water(root: &Path) -> Result<Option<u64>, CovyError> {
     let path = generation_high_water_path(root);
-    let raw = match fs::read(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(cache_error(format!(
-                "failed to read repository generation high-water '{}': {error}",
-                path.display()
-            )));
-        }
+    let Some(raw) = read_optional_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)? else {
+        return Ok(None);
     };
     let high_water =
         serde_json::from_slice::<RepoIndexGenerationHighWater>(&raw).map_err(|error| {
@@ -1281,24 +1267,15 @@ fn persist_generation_high_water(root: &Path, generation: u64) -> Result<(), Cov
 fn discover_generation_high_water(root: &Path) -> Result<u64, CovyError> {
     let mut generation = 0;
     for path in [manifest_path(root), previous_manifest_path(root)] {
-        match fs::read(&path) {
-            Ok(raw) => {
-                if let Ok(manifest) = serde_json::from_slice::<RepoIndexRuntimeManifest>(&raw) {
-                    generation = generation.max(manifest.generation);
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(cache_error(format!(
-                    "failed to inspect repository manifest '{}': {error}",
-                    path.display()
-                )));
+        if let Some(raw) = read_optional_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)? {
+            if let Ok(manifest) = serde_json::from_slice::<RepoIndexRuntimeManifest>(&raw) {
+                generation = generation.max(manifest.generation);
             }
         }
     }
     let directory = repo_index_dir(root);
-    let entries = match fs::read_dir(&directory) {
-        Ok(entries) => entries,
+    let state = match StateDir::open(root, &[".packet28", "index", REPO_INDEX_DIR_NAME], false) {
+        Ok(state) => state,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(generation),
         Err(error) => {
             return Err(cache_error(format!(
@@ -1307,17 +1284,16 @@ fn discover_generation_high_water(root: &Path) -> Result<u64, CovyError> {
             )));
         }
     };
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            cache_error(format!(
-                "failed to inspect repository index entry in '{}': {error}",
-                directory.display()
-            ))
-        })?;
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+    for entry in state.names().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect repository index directory '{}': {error}",
+            directory.display()
+        ))
+    })? {
+        let Some(name) = entry.to_str() else {
             continue;
         };
-        if let Some(observed) = managed_artifact_generation(&name)? {
+        if let Some(observed) = managed_artifact_generation(name)? {
             generation = generation.max(observed);
         }
     }
@@ -1364,68 +1340,58 @@ fn managed_artifact_generation(name: &str) -> Result<Option<u64>, CovyError> {
     Ok(Some(generation))
 }
 
-pub(crate) struct GenerationWriterLock(File);
+pub(crate) struct GenerationWriterLock(StateFile);
 
 impl Drop for GenerationWriterLock {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.0);
+        let _ = FileExt::unlock(self.0.file());
     }
 }
 
 pub(crate) fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock, CovyError> {
     let parent = repo_index_parent(root);
-    fs::create_dir_all(&parent).map_err(|error| {
+    let directory = StateDir::open(root, &[".packet28", "index"], true).map_err(|error| {
         cache_error(format!(
-            "failed to create repository index parent '{}': {error}",
+            "failed to open repository index parent '{}': {error}",
             parent.display()
         ))
     })?;
     let path = parent.join(REPO_INDEX_WRITER_LOCK_FILE);
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&path)
+    let file = directory
+        .open_or_create(REPO_INDEX_WRITER_LOCK_FILE, FileAccess::ReadWrite)
         .map_err(|error| {
             cache_error(format!(
                 "failed to open repository index writer lock '{}': {error}",
                 path.display()
             ))
-        })?;
-    FileExt::lock_exclusive(&file).map_err(|error| {
+        })?
+        .file;
+    FileExt::lock_exclusive(file.file()).map_err(|error| {
         cache_error(format!(
             "failed to acquire repository index writer lock '{}': {error}",
             path.display()
         ))
     })?;
+    if let Err(error) = file.validate_attachment() {
+        let _ = FileExt::unlock(file.file());
+        return Err(cache_error(format!(
+            "repository index writer lock '{}' was replaced while acquiring it: {error}",
+            path.display()
+        )));
+    }
     Ok(GenerationWriterLock(file))
 }
 
 #[cfg(feature = "shared-repository-scan")]
 fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, CovyError> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(cache_error(format!(
-            "failed to preserve index manifest '{}': {error}",
-            path.display()
-        ))),
-    }
+    read_optional_state_file(path, MAX_REPO_INDEX_METADATA_BYTES)
 }
 
 #[cfg(feature = "shared-repository-scan")]
 fn restore_optional_file(path: PathBuf, bytes: Option<&[u8]>) -> Result<(), CovyError> {
     match bytes {
         Some(bytes) => write_atomic(path, bytes),
-        None => match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(cache_error(format!(
-                "failed to remove rolled-back manifest '{}': {error}",
-                path.display()
-            ))),
-        },
+        None => remove_state_file_if_exists(&path),
     }
 }
 
@@ -1463,26 +1429,28 @@ fn prune_generation_artifacts(
         retained.extend(record.segment_files);
     }
     let directory = repo_index_dir(root);
-    for entry in fs::read_dir(&directory).map_err(|error| {
+    let state = StateDir::open(root, &[".packet28", "index", REPO_INDEX_DIR_NAME], false).map_err(
+        |error| {
+            cache_error(format!(
+                "failed to inspect repository index directory '{}': {error}",
+                directory.display()
+            ))
+        },
+    )?;
+    for entry in state.names().map_err(|error| {
         cache_error(format!(
             "failed to inspect repository index directory '{}': {error}",
             directory.display()
         ))
     })? {
-        let entry = entry.map_err(|error| {
-            cache_error(format!(
-                "failed to inspect repository index entry in '{}': {error}",
-                directory.display()
-            ))
-        })?;
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+        let Some(name) = entry.to_str() else {
             continue;
         };
-        if is_managed_generation_artifact(&name) && !retained.contains(&name) {
-            fs::remove_file(entry.path()).map_err(|error| {
+        if is_managed_generation_artifact(name) && !retained.contains(name) {
+            state.remove_file_if_exists(name).map_err(|error| {
                 cache_error(format!(
                     "failed to prune repository index artifact '{}': {error}",
-                    entry.path().display()
+                    directory.join(name).display()
                 ))
             })?;
         }
@@ -1495,12 +1463,7 @@ fn load_generation_record(
     generation: u64,
 ) -> Result<RepoIndexGenerationRecord, CovyError> {
     let path = repo_index_dir(root).join(generation_record_file_name(generation));
-    let raw = fs::read(&path).map_err(|error| {
-        cache_error(format!(
-            "failed to read repository generation record '{}': {error}",
-            path.display()
-        ))
-    })?;
+    let raw = read_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)?;
     serde_json::from_slice(&raw).map_err(|error| {
         cache_error(format!(
             "failed to decode repository generation record '{}': {error}",
@@ -1516,127 +1479,148 @@ fn is_managed_generation_artifact(name: &str) -> bool {
         || (name.starts_with('.') && name.ends_with(".tmp"))
 }
 
-fn write_immutable(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| cache_error(format!("artifact '{}' has no parent", path.display())))?
-        .to_path_buf();
-    fs::create_dir_all(&parent).map_err(|error| {
+fn repo_state_spec(path: &Path) -> Result<(&Path, &'static [&'static str], String), CovyError> {
+    let parent = path.parent().ok_or_else(|| {
         cache_error(format!(
-            "failed to create repository index directory '{}': {error}",
-            parent.display()
-        ))
-    })?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|error| {
-            cache_error(format!(
-                "failed to create immutable repository artifact '{}': {error}",
-                path.display()
-            ))
-        })?;
-    let result = (|| -> Result<(), CovyError> {
-        file.write_all(bytes).map_err(|error| {
-            cache_error(format!(
-                "failed to write immutable repository artifact '{}': {error}",
-                path.display()
-            ))
-        })?;
-        file.flush().map_err(|error| {
-            cache_error(format!(
-                "failed to flush immutable repository artifact '{}': {error}",
-                path.display()
-            ))
-        })
-    })();
-    drop(file);
-    if result.is_err() {
-        let _ = fs::remove_file(path);
-    }
-    result
-}
-
-fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| cache_error(format!("artifact '{}' has no parent", path.display())))?
-        .to_path_buf();
-    fs::create_dir_all(&parent).map_err(|error| {
-        cache_error(format!(
-            "failed to create repository index directory '{}': {error}",
-            parent.display()
-        ))
-    })?;
-    let target_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact")
-        .to_string();
-    let temporary_paths = (0..128).map(|_| {
-        let nonce = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
-        parent.join(format!(".{target_name}.{}.{nonce}.tmp", std::process::id()))
-    });
-    write_atomic_with_temporary_paths(path, bytes, temporary_paths)
-}
-
-fn write_atomic_with_temporary_paths(
-    path: PathBuf,
-    bytes: &[u8],
-    temporary_paths: impl IntoIterator<Item = PathBuf>,
-) -> Result<(), CovyError> {
-    let mut created = None;
-    for temporary_path in temporary_paths {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)
-        {
-            Ok(file) => {
-                created = Some((temporary_path, file));
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(cache_error(format!(
-                    "failed to create temporary artifact '{}': {error}",
-                    temporary_path.display()
-                )));
-            }
-        }
-    }
-    let (tmp, mut file) = created.ok_or_else(|| {
-        cache_error(format!(
-            "temporary namespace exhausted while publishing repository artifact '{}'",
+            "repository state path '{}' has no parent",
             path.display()
         ))
     })?;
-    let result = (|| -> Result<(), CovyError> {
-        file.write_all(bytes).map_err(|error| {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
             cache_error(format!(
-                "failed to write temporary artifact '{}': {error}",
-                tmp.display()
+                "repository state path '{}' has an invalid leaf",
+                path.display()
+            ))
+        })?
+        .to_string();
+    let (root, components): (&Path, &'static [&'static str]) = if parent
+        .file_name()
+        .is_some_and(|name| name == REPO_INDEX_DIR_NAME)
+    {
+        let index = parent
+            .parent()
+            .filter(|path| path.file_name().is_some_and(|name| name == "index"));
+        let packet28 = index
+            .and_then(Path::parent)
+            .filter(|path| path.file_name().is_some_and(|name| name == ".packet28"));
+        let root = packet28.and_then(Path::parent).ok_or_else(|| {
+            cache_error(format!(
+                "repository state path '{}' is outside the managed index",
+                path.display()
             ))
         })?;
-        file.flush().map_err(|error| {
+        (root, &[".packet28", "index", REPO_INDEX_DIR_NAME])
+    } else if parent.file_name().is_some_and(|name| name == "index") {
+        let packet28 = parent
+            .parent()
+            .filter(|path| path.file_name().is_some_and(|name| name == ".packet28"));
+        let root = packet28.and_then(Path::parent).ok_or_else(|| {
             cache_error(format!(
-                "failed to flush temporary artifact '{}': {error}",
-                tmp.display()
+                "repository state path '{}' is outside the managed index",
+                path.display()
             ))
         })?;
-        drop(file);
-        fs::rename(&tmp, &path).map_err(|error| {
+        (root, &[".packet28", "index"])
+    } else {
+        return Err(cache_error(format!(
+            "repository state path '{}' is outside the managed index",
+            path.display()
+        )));
+    };
+    Ok((root, components, name))
+}
+
+fn repo_state_location(path: &Path, create: bool) -> Result<(StateDir, String), CovyError> {
+    let (root, components, name) = repo_state_spec(path)?;
+    let directory = StateDir::open(root, components, create).map_err(|error| {
+        cache_error(format!(
+            "failed to open repository state directory for '{}': {error}",
+            path.display()
+        ))
+    })?;
+    Ok((directory, name))
+}
+
+fn read_state_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>, CovyError> {
+    let (directory, name) = repo_state_location(path, false)?;
+    directory
+        .read_bounded(&name, max_bytes)
+        .map_err(|error| {
             cache_error(format!(
-                "failed to publish repository artifact '{}': {error}",
+                "failed to read repository state '{}': {error}",
+                path.display()
+            ))
+        })?
+        .ok_or_else(|| {
+            cache_error(format!(
+                "repository state '{}' does not exist",
                 path.display()
             ))
         })
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(tmp);
-    }
-    result
+}
+
+fn read_optional_state_file(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>, CovyError> {
+    let (root, components, name) = repo_state_spec(path)?;
+    let directory = match StateDir::open(root, components, false) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to open repository state directory for '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    directory.read_bounded(&name, max_bytes).map_err(|error| {
+        cache_error(format!(
+            "failed to read repository state '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn remove_state_file_if_exists(path: &Path) -> Result<(), CovyError> {
+    let (root, components, name) = repo_state_spec(path)?;
+    let directory = match StateDir::open(root, components, false) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to open repository state directory for '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    directory.remove_file_if_exists(&name).map_err(|error| {
+        cache_error(format!(
+            "failed to remove repository state '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn write_immutable(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
+    let (directory, name) = repo_state_location(&path, true)?;
+    directory.write_immutable(&name, bytes).map_err(|error| {
+        cache_error(format!(
+            "failed to create immutable repository artifact '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
+    let (directory, name) = repo_state_location(&path, true)?;
+    directory.write_atomic(&name, bytes).map_err(|error| {
+        cache_error(format!(
+            "failed to publish repository artifact '{}': {error}",
+            path.display()
+        ))
+    })
 }
 
 fn validate_artifact_name(name: &str) -> Result<(), CovyError> {
@@ -2145,20 +2129,81 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn atomic_write_skips_a_precreated_temporary_symlink_without_following_it() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let target = dir.path().join("manifest.json");
+        let dir = fixture();
+        let target = manifest_path(dir.path());
         let outside = dir.path().join("outside");
         fs::write(&outside, b"sentinel").expect("outside sentinel");
-        let collision = dir.path().join(".manifest.collision.tmp");
-        std::os::unix::fs::symlink(&outside, &collision).expect("temporary symlink");
-        let owned = dir.path().join(".manifest.owned.tmp");
-
-        write_atomic_with_temporary_paths(target.clone(), b"published", [collision.clone(), owned])
+        let (state, name) = repo_state_location(&target, true).expect("state");
+        let mut collision = None;
+        state
+            .write_atomic_with_observers(
+                &name,
+                b"published",
+                |candidate| {
+                    if collision.is_none() {
+                        std::os::unix::fs::symlink(&outside, candidate)?;
+                        collision = Some(candidate.to_path_buf());
+                    }
+                    Ok(())
+                },
+                |_| Ok(()),
+                |_, _| Ok(()),
+            )
             .expect("atomic write");
 
         assert_eq!(fs::read(outside).expect("outside bytes"), b"sentinel");
-        assert!(collision.is_symlink());
+        assert!(collision.expect("collision").is_symlink());
         assert_eq!(fs::read(target).expect("published bytes"), b"published");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rebuild_rejects_a_symlinked_state_parent_without_touching_the_victim() {
+        let dir = fixture();
+        let victim = tempfile::tempdir().expect("victim");
+        let sentinel = victim.path().join("sentinel");
+        fs::write(&sentinel, b"outside-must-survive").expect("sentinel");
+        std::os::unix::fs::symlink(victim.path(), dir.path().join(".packet28"))
+            .expect("symlink parent");
+
+        let error = rebuild_repo_index_runtime(dir.path(), true).expect_err("unsafe parent");
+
+        assert!(error.to_string().contains("repository index parent"));
+        assert_eq!(
+            fs::read(&sentinel).expect("sentinel bytes"),
+            b"outside-must-survive"
+        );
+        assert!(!victim.path().join("index").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_map_state_rejects_an_ancestor_swap_without_touching_the_victim() {
+        let dir = fixture();
+        let victim = tempfile::tempdir().expect("victim");
+        let target = manifest_path(dir.path());
+        let (state, name) = repo_state_location(&target, true).expect("state capability");
+        let held = dir.path().join("held-packet28");
+        let sentinel = victim.path().join("sentinel");
+        fs::write(&sentinel, b"outside-must-survive").expect("sentinel");
+        fs::rename(dir.path().join(".packet28"), &held).expect("hold state");
+        std::os::unix::fs::symlink(victim.path(), dir.path().join(".packet28"))
+            .expect("swap ancestor");
+
+        let error = state
+            .write_atomic(&name, b"replacement")
+            .expect_err("substituted ancestor");
+
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::NotADirectory | std::io::ErrorKind::PermissionDenied
+        ));
+        assert_eq!(
+            fs::read(&sentinel).expect("sentinel bytes"),
+            b"outside-must-survive"
+        );
+        assert!(!victim.path().join(REPO_INDEX_MANIFEST_FILE).exists());
+        assert!(!held.join("index/mapy-v1/manifest.json").exists());
     }
 
     #[test]

@@ -1288,6 +1288,7 @@ dependencies = [
  "ignore",
  "packet28-binary-codec",
  "packet28-search-core",
+ "packet28-state-fs",
  "regex",
  "serde",
  "serde_json",

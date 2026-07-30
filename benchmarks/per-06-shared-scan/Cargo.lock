@@ -727,6 +727,7 @@ dependencies = [
  "fs2",
  "ignore",
  "packet28-binary-codec",
+ "packet28-state-fs",
  "regex",
  "serde",
  "serde_json",
