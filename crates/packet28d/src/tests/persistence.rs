@@ -694,6 +694,116 @@ fn durable_event_io_does_not_hold_the_daemon_state_mutex() {
 }
 
 #[test]
+fn watch_checkpoint_boundary_releases_the_daemon_state_mutex() {
+    let state = super::support::daemon_test_state();
+    let persistence = state.lock().unwrap().persistence.clone();
+    let (checkpoint_reached, release_checkpoint) = persistence.gate_checkpoint_for_test(1);
+    {
+        let mut guard = state.lock().unwrap();
+        guard.tasks.tasks.insert(
+            "watch-lock-split".to_string(),
+            TaskRecord {
+                task_id: "watch-lock-split".to_string(),
+                watch_ids: vec!["watch-lock-split-1".to_string()],
+                ..TaskRecord::default()
+            },
+        );
+        guard.watches.watches.push(WatchRegistration {
+            watch_id: "watch-lock-split-1".to_string(),
+            spec: WatchSpec {
+                task_id: "watch-lock-split".to_string(),
+                ..WatchSpec::default()
+            },
+            active: true,
+            ..WatchRegistration::default()
+        });
+        persist_state(&guard).unwrap();
+    }
+
+    checkpoint_reached
+        .recv_timeout(Duration::from_secs(2))
+        .expect("persistence owner did not reach the watch checkpoint boundary");
+    assert!(
+        state.try_lock().is_ok(),
+        "daemon state mutex remained held at the watch checkpoint I/O boundary"
+    );
+    release_checkpoint.send(()).unwrap();
+    flush_persistence(&state).unwrap();
+
+    let root = super::support::daemon_test_root(&state);
+    let recovered_tasks = load_task_registry(&root).unwrap();
+    let recovered_watches = packet28_daemon_core::storage::load_watch_registry(&root).unwrap();
+    assert_eq!(
+        recovered_tasks.tasks["watch-lock-split"].watch_ids,
+        vec!["watch-lock-split-1".to_string()]
+    );
+    assert_eq!(
+        serde_json::to_value(&recovered_watches).unwrap(),
+        serde_json::to_value(&state.lock().unwrap().watches).unwrap()
+    );
+    super::support::shutdown_test_persistence(&state);
+}
+
+#[test]
+fn concurrent_task_and_watch_mutations_coalesce_to_one_exact_checkpoint() {
+    const MUTATIONS: usize = 24;
+
+    let state = super::support::daemon_test_state();
+    let start = Arc::new(Barrier::new(MUTATIONS + 1));
+    let mut workers = Vec::new();
+    for ordinal in 0..MUTATIONS {
+        let state = state.clone();
+        let start = start.clone();
+        workers.push(thread::spawn(move || {
+            let task_id = format!("concurrent-watch-task-{ordinal:02}");
+            let watch_id = format!("concurrent-watch-{ordinal:02}");
+            start.wait();
+            let mut guard = state.lock().unwrap();
+            guard.tasks.tasks.insert(
+                task_id.clone(),
+                TaskRecord {
+                    task_id: task_id.clone(),
+                    watch_ids: vec![watch_id.clone()],
+                    ..TaskRecord::default()
+                },
+            );
+            guard.watches.watches.push(WatchRegistration {
+                watch_id,
+                spec: WatchSpec {
+                    task_id,
+                    ..WatchSpec::default()
+                },
+                active: true,
+                ..WatchRegistration::default()
+            });
+            persist_state(&guard).unwrap();
+        }));
+    }
+    start.wait();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+
+    flush_persistence(&state).unwrap();
+    let root = super::support::daemon_test_root(&state);
+    let recovered_tasks = load_task_registry(&root).unwrap();
+    let recovered_watches = packet28_daemon_core::storage::load_watch_registry(&root).unwrap();
+    let guard = state.lock().unwrap();
+    assert_eq!(
+        serde_json::to_value(&recovered_tasks).unwrap(),
+        serde_json::to_value(&guard.tasks).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(&recovered_watches).unwrap(),
+        serde_json::to_value(&guard.watches).unwrap()
+    );
+    let metrics = guard.persistence.metrics();
+    assert!(metrics.checkpoints_written < metrics.snapshots_submitted);
+    drop(guard);
+    super::support::shutdown_test_persistence(&state);
+}
+
+#[test]
 fn concurrent_event_publication_is_contiguous_and_registry_checkpoints_coalesce() {
     let state = super::support::daemon_test_state();
     super::support::insert_admitted_task_record(
