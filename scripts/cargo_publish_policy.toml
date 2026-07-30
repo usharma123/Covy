@@ -35,6 +35,7 @@ packages = [
   "packet28-reducer-core",
   "packet28-search-cli",
   "packet28-search-core",
+  "packet28-state-fs",
   "packet28d",
   "stacky-core",
   "suite-cli",

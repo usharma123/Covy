@@ -1526,6 +1526,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "packet28-state-fs"
+version = "0.2.63"
+dependencies = [
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "packet28d"
 version = "0.2.63"
 dependencies = [

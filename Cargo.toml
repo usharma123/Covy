@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/covy-core", "crates/covy-ingest", "crates/covy-cli", "crates/diffy-cli", "crates/testy-cli", "crates/packet28-binary-codec", "crates/suite-packet-core", "crates/suite-foundation-core", "crates/suite-policy-core", "crates/suite-proxy-core", "crates/suite-ingest", "crates/mapy-core", "crates/diffy-core", "crates/testy-core", "crates/suite-cli", "crates/testy-cli-common", "crates/guardy-core", "crates/contextq-core", "crates/context-kernel-builtins", "crates/context-kernel-core", "crates/context-kernel-mechanism", "crates/context-memory-core", "crates/context-scheduler-core", "crates/stacky-core", "crates/buildy-core", "crates/context-instruct-shim", "crates/packet28-daemon-client", "crates/packet28-daemon-core", "crates/packet28-daemon-protocol", "crates/packet28-reducer-core", "crates/packet28-search-core", "crates/packet28-search-cli", "crates/packet28d"]
+members = ["crates/covy-core", "crates/covy-ingest", "crates/covy-cli", "crates/diffy-cli", "crates/testy-cli", "crates/packet28-binary-codec", "crates/packet28-state-fs", "crates/suite-packet-core", "crates/suite-foundation-core", "crates/suite-policy-core", "crates/suite-proxy-core", "crates/suite-ingest", "crates/mapy-core", "crates/diffy-core", "crates/testy-core", "crates/suite-cli", "crates/testy-cli-common", "crates/guardy-core", "crates/contextq-core", "crates/context-kernel-builtins", "crates/context-kernel-core", "crates/context-kernel-mechanism", "crates/context-memory-core", "crates/context-scheduler-core", "crates/stacky-core", "crates/buildy-core", "crates/context-instruct-shim", "crates/packet28-daemon-client", "crates/packet28-daemon-core", "crates/packet28-daemon-protocol", "crates/packet28-reducer-core", "crates/packet28-search-core", "crates/packet28-search-cli", "crates/packet28d"]
 resolver = "2"
 
 [workspace.package]
@@ -27,6 +27,7 @@ diffy-core = { version = "0.2.0", path = "crates/diffy-core" }
 guardy-core = { version = "0.2.0", path = "crates/guardy-core" }
 mapy-core = { version = "0.2.0", path = "crates/mapy-core" }
 packet28-binary-codec = { version = "0.2.0", path = "crates/packet28-binary-codec" }
+packet28-state-fs = { version = "0.2.0", path = "crates/packet28-state-fs" }
 packet28-daemon-client = { version = "0.2.0", path = "crates/packet28-daemon-client" }
 packet28-daemon-core = { version = "0.2.0", path = "crates/packet28-daemon-core" }
 packet28-daemon-protocol = { version = "0.2.0", path = "crates/packet28-daemon-protocol" }
