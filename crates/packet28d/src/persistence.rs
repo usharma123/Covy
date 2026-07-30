@@ -1018,7 +1018,7 @@ fn append_pending(
             Ok(appended_bytes) => {
                 if let Err(error) = pending_delta
                     .delta
-                    .apply_to(&mut image.tasks, &mut image.watches)
+                    .apply_to_authenticated(&mut image.tasks, &mut image.watches)
                 {
                     let message = format!(
                         "durable daemon registry delta could not be materialized in memory: {error}"

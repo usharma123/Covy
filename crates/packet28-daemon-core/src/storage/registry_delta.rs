@@ -377,6 +377,46 @@ impl RegistryDeltaBatch {
         Ok(())
     }
 
+    /// Applies this batch to a registry whose task/watch relationships have
+    /// already been authenticated.
+    ///
+    /// Relationship-neutral task updates avoid scanning the watch registry.
+    /// Relationship-changing batches retain the full failure-atomic validation
+    /// performed by [`Self::apply_to`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::apply_to`].
+    #[doc(hidden)]
+    pub fn apply_to_authenticated(
+        &self,
+        tasks: &mut TaskRegistry,
+        watches: &mut WatchRegistry,
+    ) -> std::result::Result<bool, RegistryDeltaValidationError> {
+        self.validate()?;
+        if self.preserves_authenticated_relationships(tasks) {
+            for (task_id, task) in &self.task_upserts {
+                tasks.tasks.insert(task_id.clone(), task.clone());
+            }
+            return Ok(true);
+        }
+        self.apply_to(tasks, watches)?;
+        Ok(false)
+    }
+
+    fn preserves_authenticated_relationships(&self, tasks: &TaskRegistry) -> bool {
+        self.task_removals.is_empty()
+            && self.watch_upserts.is_empty()
+            && self.watch_upsert_order.is_empty()
+            && self.watch_removals.is_empty()
+            && self.task_upserts.iter().all(|(task_id, candidate)| {
+                tasks
+                    .tasks
+                    .get(task_id)
+                    .is_some_and(|current| current.watch_ids == candidate.watch_ids)
+            })
+    }
+
     fn validate(&self) -> std::result::Result<(), RegistryDeltaValidationError> {
         for (task_id, task) in &self.task_upserts {
             validate_task_identifier(task_id)?;
@@ -466,7 +506,8 @@ pub struct LoadedTaskWatchRegistry {
 #[derive(Debug)]
 pub struct RegistryAdmissionAuthority {
     root: PathBuf,
-    task_ids: BTreeSet<String>,
+    tasks: TaskRegistry,
+    watches: WatchRegistry,
     revision: RegistryRevision,
     lease: crate::task_store_lease::TaskStoreLease,
     _registry_authority_lease: crate::task_store_lease::TaskStoreLease,
@@ -482,12 +523,12 @@ impl RegistryAdmissionAuthority {
     /// Returns whether the authenticated durable registry contains `task_id`.
     #[must_use]
     pub fn contains_task(&self, task_id: &str) -> bool {
-        self.task_ids.contains(task_id)
+        self.tasks.tasks.contains_key(task_id)
     }
 
     /// Returns the authenticated task identifiers in stable order.
     pub fn task_ids(&self) -> impl Iterator<Item = &str> {
-        self.task_ids.iter().map(String::as_str)
+        self.tasks.tasks.keys().map(String::as_str)
     }
 
     fn matches_root(&self, root: &Path) -> bool {
@@ -498,7 +539,7 @@ impl RegistryAdmissionAuthority {
         if !self.matches_root(root) {
             return Err(invalid_registry_authority_root(root));
         }
-        if self.task_ids.contains(task_id.as_str()) {
+        if self.tasks.tasks.contains_key(task_id.as_str()) {
             return Ok(());
         }
         Err(DaemonCoreError::InvalidTaskRegistry {
@@ -518,11 +559,17 @@ impl RegistryAdmissionAuthority {
         &mut self,
         revisions: RegistryRevisionRange,
         batch: &RegistryDeltaBatch,
+        candidate: Option<(TaskRegistry, WatchRegistry)>,
     ) {
-        for task_id in &batch.task_removals {
-            self.task_ids.remove(task_id);
+        if let Some((tasks, watches)) = candidate {
+            self.tasks = tasks;
+            self.watches = watches;
+        } else {
+            debug_assert!(batch.preserves_authenticated_relationships(&self.tasks));
+            for (task_id, task) in &batch.task_upserts {
+                self.tasks.tasks.insert(task_id.clone(), task.clone());
+            }
         }
-        self.task_ids.extend(batch.task_upserts.keys().cloned());
         self.revision = revisions.last;
     }
 }
@@ -553,7 +600,8 @@ pub fn load_registry_admission_authority(
     let loaded = load_task_watch_registry_with_deltas_under_admission(root)?;
     Ok(RegistryAdmissionAuthority {
         root: root.to_path_buf(),
-        task_ids: loaded.tasks.tasks.keys().cloned().collect(),
+        tasks: loaded.tasks,
+        watches: loaded.watches,
         revision: loaded.replayed_revision,
         lease,
         _registry_authority_lease: registry_authority_lease,
@@ -587,11 +635,8 @@ pub fn append_task_watch_registry_delta(
             || Ok(()),
             |daemon| {
                 let current = load_under_task_lock_anchored(root, daemon)?;
-                validate_registry_delta_namespace_admission(
-                    root,
-                    |task_id| current.tasks.tasks.contains_key(task_id),
-                    batch,
-                )?;
+                validate_registry_delta_namespace_admission(root, &current.tasks, batch)?;
+                prepare_registry_delta_candidate(root, &current.tasks, &current.watches, batch)?;
                 append_under_task_lock(
                     root,
                     revisions,
@@ -608,11 +653,8 @@ pub fn append_task_watch_registry_delta(
         let task_path = task_registry_path(root);
         with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
             let current = load_under_task_lock_portable(root)?;
-            validate_registry_delta_namespace_admission(
-                root,
-                |task_id| current.tasks.tasks.contains_key(task_id),
-                batch,
-            )?;
+            validate_registry_delta_namespace_admission(root, &current.tasks, batch)?;
+            prepare_registry_delta_candidate(root, &current.tasks, &current.watches, batch)?;
             append_under_task_lock(
                 root,
                 revisions,
@@ -663,15 +705,17 @@ pub fn append_task_watch_registry_delta_with_authority(
     }
 
     #[cfg(unix)]
-    let result = {
+    let candidate = {
         with_anchored_task_registry_lock(
             root,
             RegistryLockMode::Exclusive,
             || Ok(()),
             |_daemon| {
-                validate_registry_delta_namespace_admission(
+                validate_registry_delta_namespace_admission(root, &authority.tasks, batch)?;
+                let candidate = prepare_registry_delta_candidate(
                     root,
-                    |task_id| authority.task_ids.contains(task_id),
+                    &authority.tasks,
+                    &authority.watches,
                     batch,
                 )?;
                 append_under_task_lock(
@@ -681,17 +725,20 @@ pub fn append_task_watch_registry_delta_with_authority(
                     &prepared.payload,
                     &prepared.footer,
                     || Ok(authority.revision),
-                )
+                )?;
+                Ok(candidate)
             },
         )
     };
     #[cfg(not(unix))]
-    let result = {
+    let candidate = {
         let task_path = task_registry_path(root);
         with_registry_lock(root, &task_path, RegistryLockMode::Exclusive, || {
-            validate_registry_delta_namespace_admission(
+            validate_registry_delta_namespace_admission(root, &authority.tasks, batch)?;
+            let candidate = prepare_registry_delta_candidate(
                 root,
-                |task_id| authority.task_ids.contains(task_id),
+                &authority.tasks,
+                &authority.watches,
                 batch,
             )?;
             append_under_task_lock(
@@ -701,11 +748,12 @@ pub fn append_task_watch_registry_delta_with_authority(
                 &prepared.payload,
                 &prepared.footer,
                 || Ok(authority.revision),
-            )
+            )?;
+            Ok(candidate)
         })
     };
-    result?;
-    authority.apply_committed_batch(revisions, batch);
+    let candidate = candidate?;
+    authority.apply_committed_batch(revisions, batch, candidate);
     Ok(())
 }
 
@@ -748,26 +796,69 @@ fn prepare_registry_delta(
 
 fn validate_registry_delta_namespace_admission(
     root: &Path,
-    contains_task: impl Fn(&str) -> bool,
+    current: &TaskRegistry,
     batch: &RegistryDeltaBatch,
 ) -> Result<()> {
+    for task_id in batch.task_upserts.keys().chain(batch.task_removals.iter()) {
+        if let Some(message) = task_identifier_shape_error(task_id) {
+            return Err(DaemonCoreError::InvalidTaskRegistry {
+                path: task_registry_path(root),
+                message,
+            });
+        }
+    }
     let new_tasks = batch
         .task_upserts
         .iter()
-        .filter(|(task_id, _)| !contains_task(task_id))
+        .filter(|(task_id, _)| !current.tasks.contains_key(*task_id))
         .map(|(task_id, task)| (task_id.clone(), task.clone()))
         .collect();
     let new_registry = TaskRegistry { tasks: new_tasks };
     if new_registry.tasks.is_empty() {
         return Ok(());
     }
+    let mut alias_owners = current
+        .tasks
+        .keys()
+        .map(|task_id| (task_storage_key_alias_class(task_id), task_id.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for task_id in new_registry.tasks.keys() {
+        let alias = task_storage_key_alias_class(task_id);
+        if let Some(existing) = alias_owners.insert(alias, task_id) {
+            return Err(DaemonCoreError::InvalidTaskRegistry {
+                path: task_registry_path(root),
+                message: format!(
+                    "task identifiers {existing:?} and {task_id:?} derive filesystem-aliasing \
+                     storage keys"
+                ),
+            });
+        }
+    }
     validate_task_registry_namespace_bindings(
         root,
         &new_registry,
-        None,
+        Some(current),
         None,
         &task_registry_path(root),
     )
+}
+
+fn prepare_registry_delta_candidate(
+    root: &Path,
+    tasks: &TaskRegistry,
+    watches: &WatchRegistry,
+    batch: &RegistryDeltaBatch,
+) -> Result<Option<(TaskRegistry, WatchRegistry)>> {
+    if batch.preserves_authenticated_relationships(tasks) {
+        return Ok(None);
+    }
+    let mut candidate_tasks = tasks.clone();
+    let mut candidate_watches = watches.clone();
+    batch
+        .apply_to(&mut candidate_tasks, &mut candidate_watches)
+        .map_err(|error| invalid_batch(root, error))?;
+    validate_task_watch_registry_relationships(root, &candidate_tasks, &candidate_watches)?;
+    Ok(Some((candidate_tasks, candidate_watches)))
 }
 
 fn invalid_registry_authority_root(root: &Path) -> DaemonCoreError {
@@ -1068,11 +1159,13 @@ fn replay_wal_with_admissions(
                 ),
             ));
         }
-        batch
-            .apply_to(&mut tasks, &mut watches)
+        let relationships_unchanged = batch
+            .apply_to_authenticated(&mut tasks, &mut watches)
             .map_err(|error| invalid_wal(&path, error.to_string()))?;
-        validate_task_watch_registry_relationships(root, &tasks, &watches)
-            .map_err(|error| invalid_wal(&path, error.to_string()))?;
+        if !relationships_unchanged {
+            validate_task_watch_registry_relationships(root, &tasks, &watches)
+                .map_err(|error| invalid_wal(&path, error.to_string()))?;
+        }
         replayed_revision = revisions.last;
         Ok(())
     })?;
@@ -2108,6 +2201,42 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_task_only_apply_does_not_scan_or_index_watches() {
+        let watch_ids = (0..1_024)
+            .map(|ordinal| format!("watch-{ordinal}"))
+            .collect::<Vec<_>>();
+        let mut tasks = TaskRegistry {
+            tasks: BTreeMap::from([(
+                "task".to_string(),
+                TaskRecord {
+                    task_id: "task".to_string(),
+                    watch_ids: watch_ids.clone(),
+                    ..TaskRecord::default()
+                },
+            )]),
+        };
+        let mut watches = WatchRegistry {
+            watches: watch_ids
+                .iter()
+                .map(|watch_id| watch(watch_id, "task"))
+                .collect(),
+        };
+        let mut updated = tasks.tasks["task"].clone();
+        updated.last_event_seq = 9;
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| observed.set(0));
+
+        let relationships_unchanged = RegistryDeltaBatch::default()
+            .upsert_task(updated)
+            .apply_to_authenticated(&mut tasks, &mut watches)
+            .unwrap();
+
+        assert!(relationships_unchanged);
+        assert_eq!(tasks.tasks["task"].last_event_seq, 9);
+        assert_eq!(watches.watches.len(), 1_024);
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| assert_eq!(observed.get(), 0));
+    }
+
+    #[test]
     fn watch_mutation_validates_every_existing_watch_before_apply() {
         let mut tasks = TaskRegistry {
             tasks: BTreeMap::from([("task".to_string(), task("task", &["one", "two"]))]),
@@ -2331,6 +2460,31 @@ mod tests {
         assert!(matches!(error, DaemonCoreError::InvalidTaskRegistry { .. }));
         assert!(!wal_path.exists());
         assert_eq!(fs::read(managed).unwrap(), b"event-before\n");
+    }
+
+    #[test]
+    fn wal_append_rejects_nonportable_and_aliasing_task_identifiers() {
+        for (existing, rejected) in [(None, "Task"), (Some("task"), "TASK")] {
+            let root = tempdir().unwrap();
+            checkpoint(
+                root.path(),
+                existing.into_iter().map(|task_id| task(task_id, &[])),
+                [],
+            );
+            let wal_path = registry_delta_wal_path(root.path());
+            let before = fs::read(&wal_path).ok();
+            let delta = RegistryDeltaBatch::default().upsert_task(task(rejected, &[]));
+
+            let error = append_task_watch_registry_delta(
+                root.path(),
+                RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+                &delta,
+            )
+            .unwrap_err();
+
+            assert!(matches!(error, DaemonCoreError::InvalidTaskRegistry { .. }));
+            assert_eq!(fs::read(&wal_path).ok(), before);
+        }
     }
 
     #[test]
@@ -2726,27 +2880,93 @@ mod tests {
     }
 
     #[test]
-    fn relationship_invalid_complete_frame_fails_closed() {
+    fn relationship_invalid_delta_is_rejected_before_wal_mutation() {
         let root = tempdir().unwrap();
         checkpoint(root.path(), [task("task", &[])], []);
+        let path = registry_delta_wal_path(root.path());
+        let before = fs::read(&path).ok();
         let delta = RegistryDeltaBatch {
             watch_upserts: BTreeMap::from([("orphan".to_string(), watch("orphan", "task"))]),
             watch_upsert_order: vec!["orphan".to_string()],
             ..RegistryDeltaBatch::default()
         };
-        append_task_watch_registry_delta(
+        let error = append_task_watch_registry_delta(
             root.path(),
             RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
             &delta,
         )
-        .unwrap();
-
-        let error = load_task_watch_registry_with_deltas(root.path()).unwrap_err();
+        .unwrap_err();
 
         assert!(matches!(
             error,
-            DaemonCoreError::InvalidRegistryDeltaWal { .. }
+            DaemonCoreError::InvalidTaskWatchRegistry { .. }
         ));
+        assert_eq!(fs::read(path).ok(), before);
+    }
+
+    #[test]
+    fn relationship_breaking_task_and_watch_removals_leave_wal_unchanged() {
+        let cases = [
+            RegistryDeltaBatch::default().upsert_task(task("task", &["missing"])),
+            RegistryDeltaBatch::default().remove_task("task"),
+            RegistryDeltaBatch::default().remove_watch("one"),
+        ];
+        for delta in cases {
+            let root = tempdir().unwrap();
+            checkpoint(
+                root.path(),
+                [task("task", &["one"])],
+                [watch("one", "task")],
+            );
+            let path = registry_delta_wal_path(root.path());
+            let before = fs::read(&path).ok();
+
+            let error = append_task_watch_registry_delta(
+                root.path(),
+                RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+                &delta,
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                error,
+                DaemonCoreError::InvalidTaskWatchRegistry { .. }
+            ));
+            assert_eq!(fs::read(path).ok(), before);
+        }
+    }
+
+    #[test]
+    fn task_only_wal_replay_preserves_relationships_without_watch_scans() {
+        let watch_ids = (0..1_024)
+            .map(|ordinal| format!("watch-{ordinal}"))
+            .collect::<Vec<_>>();
+        let root = tempdir().unwrap();
+        checkpoint(
+            root.path(),
+            [TaskRecord {
+                task_id: "task".to_string(),
+                watch_ids: watch_ids.clone(),
+                ..TaskRecord::default()
+            }],
+            watch_ids.iter().map(|watch_id| watch(watch_id, "task")),
+        );
+        let mut updated = task("task", &[]);
+        updated.watch_ids = watch_ids;
+        updated.last_event_seq = 9;
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &RegistryDeltaBatch::default().upsert_task(updated),
+        )
+        .unwrap();
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| observed.set(0));
+
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+
+        assert_eq!(loaded.tasks.tasks["task"].last_event_seq, 9);
+        assert_eq!(loaded.watches.watches.len(), 1_024);
+        APPLY_WATCH_RECORDS_SCANNED.with(|observed| assert_eq!(observed.get(), 0));
     }
 
     #[test]
