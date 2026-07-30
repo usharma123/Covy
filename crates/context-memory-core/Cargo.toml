@@ -23,5 +23,5 @@ suite-packet-core.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-libc = "0.2"
+libc.workspace = true
 tempfile.workspace = true

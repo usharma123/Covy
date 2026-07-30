@@ -22,7 +22,7 @@ suite-packet-core.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
