@@ -603,6 +603,7 @@ fn path_is_map_traversable(path: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::process::Command;
 
     use super::*;
     use packet28_reducer_core::SearchRequest;
@@ -632,8 +633,6 @@ mod tests {
         fs::create_dir_all(root.join("tests")).unwrap();
         fs::create_dir_all(root.join("build")).unwrap();
         fs::create_dir_all(root.join("docs")).unwrap();
-        fs::create_dir_all(root.join(".git")).unwrap();
-        fs::write(root.join(".git/HEAD"), b"ref: refs/heads/test\n").unwrap();
         fs::write(
             root.join("src/lib.rs"),
             b"pub fn shared_visible_symbol() -> usize { 7 }\n",
@@ -650,7 +649,11 @@ mod tests {
         fs::write(root.join("src/empty.rs"), b"").unwrap();
         fs::write(root.join("src/nul.rs"), b"pub fn before() {}\0after\n").unwrap();
         fs::write(root.join("src/invalid.rs"), [0xff, 0xfe, b'a']).unwrap();
-        fs::write(root.join(".gitignore"), b"ignored.rs\n").unwrap();
+        fs::write(
+            root.join(".gitignore"),
+            b".packet28/\nignored.rs\nsrc/lib-link.rs\n",
+        )
+        .unwrap();
         fs::write(root.join("ignored.rs"), b"pub fn ignored_symbol() {}\n").unwrap();
         fs::write(
             root.join("src/regex_oversize.rs"),
@@ -678,6 +681,23 @@ mod tests {
         }
         #[cfg(unix)]
         std::os::unix::fs::symlink("lib.rs", root.join("src/lib-link.rs")).unwrap();
+
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?} failed with {status}");
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "packet28-tests@example.invalid"]);
+        git(&["config", "user.name", "Packet28 Tests"]);
+        git(&["add", "."]);
+        git(&["commit", "--quiet", "--message", "fixture"]);
     }
 
     fn manifest_bytes(root: &Path, engine: &str) -> BTreeMap<String, Vec<u8>> {
