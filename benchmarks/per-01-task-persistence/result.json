@@ -1,16 +1,30 @@
 {
-  "schema_version": 2,
-  "captured_at": "2026-07-29",
+  "schema_version": 3,
+  "captured_at": "2026-07-30",
   "source": {
-    "implementation_base": "14e1f4eadea91961c46a5fecb62e5cbc96778040",
+    "integration_base": "48024d28a2a6aa3a11a406230a61fcfb0af66356",
+    "implementation_head": "0d8933fa365198221284d0e954d5a7834b183788",
+    "implementation_tree": "184e9a1d82cac8679e9feff261f3a69e1b2e61ae",
     "files": {
-      "crates/packet28d/src/persistence.rs": "da930dc33aa0b1c1a17a63b982ef0b11696c2e601efdd20071bfb73700882057",
-      "crates/packet28d/src/broker/support.rs": "bfa15c0b94915ed3e350c015fd247c4ea4ad8cb55d6c8eaf89ebc78ab9d553cb",
-      "crates/packet28d/src/application.rs": "fe7dffc1a0c7138fb8d875db20b5602fec4e1fe8817897c074856ba417f03ef4",
-      "crates/packet28d/src/lib.rs": "822c45180a094626df195a8634898ccdbe0778283ddd9076d37320fcad52529a",
-      "crates/packet28d/src/server.rs": "ac1c218fae3ff86c23c1383c95367286133650f92e627f5a57ce46f31efd2476",
-      "crates/packet28-daemon-core/src/storage/event_tail.rs": "22b39f332ad8c5d93d653816269e82c314cb8da808c31308073fcd71114e2f88",
-      "crates/packet28d/src/tests/persistence.rs": "75254dff681f68921d25f090182413845118d8d3eb83fd63c1489244091e3c12"
+      "Cargo.lock": "03a7179589651838d5c44f6755a622b0dafaa51906ad9c0f0e76a4dd9cdb091c",
+      "crates/packet28-daemon-core/Cargo.toml": "93d2ab393cf6f3d3877a2caa6daba24a294635cd3a61eb49d5de0a9bb374e5c7",
+      "crates/packet28-daemon-core/src/error.rs": "79aae6a746b1c1292fc26feec20e2039916452138078feacf262912fc694ace4",
+      "crates/packet28-daemon-core/src/retention/capability.rs": "e597a8785e931d94628ef0cb74941635a85ad0a818737eb0f597f6a2e66b01f8",
+      "crates/packet28-daemon-core/src/storage.rs": "800c90900f0aea60ade6e93ea6d2126cb3acc385e1a85507d72d4c96b1da0ff6",
+      "crates/packet28-daemon-core/src/storage/checkpoint.rs": "0a609055250fa076442c3a50122553418e467b87c0d1e2719bdf5eb0f451e876",
+      "crates/packet28-daemon-core/src/storage/event_tail.rs": "5a95e250c6d907146adc47cadf6b623a35ac9167afb7506b3f6826f4c3b4d07e",
+      "crates/packet28-daemon-core/src/storage/registry_delta.rs": "95f4fcd773475bfffa4ec334dbee8759e5369a4511357955ce986c3323bc25d6",
+      "crates/packet28d/src/application.rs": "c2f97bb99e3d6cad1c7e7351304eedbc97692ebb821b613725a844e1f215f4fb",
+      "crates/packet28d/src/broker/support.rs": "7105d0cf1ed4b3449589810b25b7138be0fbcb80f857f5745ade078062896474",
+      "crates/packet28d/src/launch.rs": "406f82f592da8bb17032e57ef8ddcebf25a7da3c9b718bf0a7146d40317a6309",
+      "crates/packet28d/src/lib.rs": "31aea6b007b4e88e6f8ce461e783b81400dad42ab2168a9b69e9f3e300f135b6",
+      "crates/packet28d/src/persistence.rs": "67ec27f6bfdf0325fff2a4e0f3737223ea9bce4afb75594f9ee96b91aa4aa65a",
+      "crates/packet28d/src/server.rs": "30e685a2a07dfb8e308166806c7a997e295bfe6ab3c39a66e21c5296e2640664",
+      "crates/packet28d/src/tests/cancellation.rs": "71062ee1514e5b42bebd1f37732ecb7ca030aeedbc7b2191d86e36528c5dd24e",
+      "crates/packet28d/src/tests/persistence.rs": "cc7848016f9e11967f0ad039f406abf35ed84832200a8191fcd1f8459a62d088",
+      "crates/packet28d/src/tests/support.rs": "6812eab6d9fef70e6bd577a33a916cfe5b08c1b95f656f3863ad2c6fa2cf6a48",
+      "crates/packet28d/src/watch.rs": "e84e56ecdae9939aa55767bdcbe82f11ed163a19f12bda86afaf66725f59ff45",
+      "crates/packet28d/tests/daemon_lifecycle.rs": "d6ef286e3f46c2e1d97b4a427d2c6a0c0cc14d2d0c069af6605bd65d6c7210c7"
     }
   },
   "environment": {
@@ -24,19 +38,28 @@
   "measured_events": 32,
   "repeats": 3,
   "legacy_full_checkpoint_under_lock": {
-    "median_event_lock_ns": 64921416,
-    "median_elapsed_us": 2081749,
+    "median_event_lock_ns": 89229708,
+    "median_elapsed_us": 2881355,
     "median_published_bytes": 59150656,
     "median_checkpoints": 32
   },
-  "owned_coalesced_checkpoint_after_lock": {
-    "median_event_lock_ns": 116041,
-    "median_elapsed_us": 461802,
-    "median_published_bytes": 1852233,
-    "median_checkpoints": 1
+  "owned_wal_with_coalesced_checkpoint_after_lock": {
+    "median_event_lock_ns": 2792,
+    "median_elapsed_us": 670027,
+    "median_published_bytes": 193096,
+    "median_checkpoints": 0
   },
-  "lock_time_reduction_percent": 99.82125928984667,
-  "write_byte_reduction_percent": 96.86861799132033,
-  "elapsed_speedup": 4.507882165949909,
+  "registry_scaling": {
+    "small_fixture_tasks": 1,
+    "small_fixture_registry_bytes": 6186,
+    "large_fixture_tasks": 300,
+    "large_fixture_registry_bytes": 1848325,
+    "small_owned_median_published_bytes": 193096,
+    "large_owned_median_published_bytes": 193096,
+    "published_byte_ratio_large_over_small": 1.0
+  },
+  "lock_time_reduction_percent": 99.996870997269,
+  "write_byte_reduction_percent": 99.673552225693,
+  "elapsed_speedup": 4.300356552796,
   "parity_event_count": 33
 }

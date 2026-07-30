@@ -144,11 +144,28 @@ storage implementations.
 ## Persistence, admission, and recovery
 
 Task-event logs are the durable sequence authority. An append validates the
-existing authenticated tail, allocates the next sequence, synchronizes the
-frame, advances the in-memory high-water mark, and queues an immutable
-task/watch snapshot. The persistence owner serializes and publishes the latest
-snapshot after the daemon-state mutex has been released; its bounded debounce
-coalesces bursts without making failure invisible.
+existing authenticated tail, allocates the next sequence, and synchronizes the
+frame. Callers stage only the task/watch records changed while holding the
+daemon-state mutex. Staging assigns an ordered revision; one persistence owner
+coalesces same-key changes and appends a checksummed registry WAL batch after
+the mutex is released. Before an event append, the owner drains every required
+registry revision, so causally prior watch/task metadata is durable before the
+event. The post-event high-water update becomes a later keyed delta.
+
+Request barriers wait for the requested WAL revision, not for a complete
+registry rewrite. The owner debounces full paired checkpoints, forces them for
+new task namespace admission and explicit startup promotion, and writes one on
+orderly shutdown when the checkpoint trails the WAL. A failed WAL append stays
+pending; a failed checkpoint leaves the synchronized WAL replayable and is
+retried without re-appending it. WAL exhaustion checkpoints the current image
+before retrying the pending batch.
+
+Startup loads one authority composed from the paired checkpoint, contiguous WAL
+revisions, and authenticated event tails. A torn final WAL frame is truncated
+and synchronized; a complete checksum failure, changed exact-revision retry,
+revision gap, or invalid task/watch relationship fails closed. Startup
+reconciles event high-water marks in memory, forces the resulting authority
+through a full checkpoint, and only then publishes readiness.
 
 Task/watch snapshots use a recovery journal and a final commit manifest. The
 prior committed task and watch images plus their BLAKE3 descriptors are made
@@ -170,12 +187,15 @@ recovery authority is conflicted.
 
 Each task generation admits at most one delegated agent launch at a time. The
 daemon starts a process-group leader in a launch-gate shim, registers that
-owned child, synchronously checkpoints its PID and launch metadata, and
-durably appends `task.agent_launch_started` before releasing the requested
-command. A concurrent launch for the same task is rejected until the owned
-child waiter has recorded completion and removed the child. If the daemon
-crashes or persistence fails between spawn and checkpoint, closing the gate
-pipe makes the shim exit without executing delegated work.
+owned child, stages its task-scoped PID and launch metadata while the state lock
+is held, waits for that exact WAL revision, and durably appends
+`task.agent_launch_started` before releasing the requested command. A later
+task mutation receives a later revision, so a delayed launch durability wait
+cannot publish a stale full-registry snapshot over it. A concurrent launch for
+the same task is rejected until the owned child waiter has recorded completion
+and removed the child. If the daemon crashes or persistence fails between spawn
+and the ownership barrier, closing the gate pipe makes the shim exit without
+executing delegated work.
 
 Detailed retention, journal, corruption, and descriptor-confinement guarantees
 are in [Task-store retention](task-store-retention.md).

@@ -241,15 +241,20 @@ then appends its replacement frame. A newline-terminated malformed frame,
 cross-task frame, duplicate, conflict, or gap is durable corruption: both tail
 inspection and append-next return a typed error with the log bytes unchanged.
 
-Daemon persistence has one lifecycle owner. Callers submit immutable task/watch
-snapshots into a single replaceable pending slot and wake a capacity-one command
-lane. A fixed first-wake debounce coalesces bursts without extending the
-deadline indefinitely; serialization, atomic replacement, and synchronization
-run on the owner after the daemon state mutex is released. Request barriers and
-orderly shutdown flush through a requested revision. Failed checkpoints stay
-dirty, are retried, and are surfaced by the next barrier instead of being
-discarded. A timed-out shutdown detaches rather than blocking forever, but the
-worker retains its task-store lifecycle lease until it actually exits.
+Daemon persistence has one lifecycle owner. Callers submit keyed task/watch
+deltas while the daemon state mutex is held; no caller clones or serializes the
+complete registries there. A monotonically increasing revision orders each
+mutation. The owner coalesces later changes to the same key, appends one
+checksummed WAL range, and synchronizes it after the mutex is released. Request
+barriers flush through a requested WAL revision. Full paired checkpoints use a
+fixed debounce that coalesces bursts without extending the deadline
+indefinitely.
+
+A failed WAL append retains the exact pending range for retry. A failed full
+checkpoint leaves the already-synchronized WAL authoritative and retries the
+checkpoint without re-appending the delta. Orderly shutdown checkpoints a
+trailing WAL; a timed-out shutdown detaches rather than blocking forever, but
+the worker retains its task-store lifecycle lease until it actually exits.
 
 Each paired registry checkpoint first synchronizes exact copies of the prior
 committed task and watch images and a descriptor journal. It publishes the new
@@ -259,19 +264,30 @@ commit point. If a process stops earlier, startup accepts only the precise
 base/target combinations recorded by the journal and recovers the prior pair.
 Arbitrary mixed generations, malformed manifests, and altered journal images
 remain corruption. Existing generation-only and generation-free registry
-pairs migrate on their next successful checkpoint.
+pairs migrate at the explicit startup checkpoint before readiness.
+
+The registry WAL records a contiguous first/last revision, an atomic keyed
+task/watch delta, observable watch insertion order, and a checksum. Exact-tail
+retries with identical bytes are idempotent; a changed retry, complete
+corruption, revision gap, invalid relationship, or symlinked WAL fails closed.
+Only a final incomplete frame may be repaired, by truncating and synchronizing
+that suffix. A successful paired checkpoint binds the replayed revision and
+resets the WAL after the checkpoint commit.
 
 For task events, subscriber publication follows the synchronized event-log
-append and the in-memory high-water update. The derived full-registry snapshot
-is queued before publication but may be checkpointed later by the owner. This
-does not make the registry a second sequence authority: after a crash, startup
-loads the registry once and strictly streams every authenticated event log,
-advances lagging high-waters, and synchronously checkpoints reconciliation before
-serving requests. A registry ahead of its log, or a nonzero high-water with no
-log, fails startup as corruption. The event lane spans append acknowledgement,
-high-water update, snapshot submission, and bounded subscriber sends, so
-concurrent publications remain sequence ordered without holding the daemon
-state mutex during filesystem I/O.
+append and the in-memory high-water update. Before appending an event, the owner
+first synchronizes every causally prior registry revision; if the event append
+then fails, those registry deltas remain replayable without inventing an event.
+The derived high-water update is staged as a later task delta and may be
+checkpointed later. This does not make the registry a second sequence
+authority: after a crash, startup composes the checkpoint and WAL, strictly
+streams every authenticated event log, advances lagging high-waters, and
+synchronously checkpoints reconciliation before serving requests. A registry
+ahead of its log, or a nonzero high-water with no log, fails startup as
+corruption. The event lane spans the causal WAL barrier, append
+acknowledgement, high-water update, delta submission, and bounded subscriber
+sends, so concurrent publications remain sequence ordered without holding the
+daemon state mutex during filesystem I/O.
 
 The paginated event reader returns at most 4 MiB and 4,096 decoded frames per
 call; a line is capped at 1 MiB. A nonzero cursor also reads at most one bounded
