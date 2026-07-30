@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -12,6 +12,9 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::cache_file::{
+    open_or_create_regular_file, validate_file_attachment, CacheFileError, CachePathViolation,
+};
 use crate::persist::{
     append_wal_record, persist_cache_backup_path_v3, persist_cache_path_v1, persist_cache_path_v2,
     persist_cache_path_v3, replay_wal, reset_wal, truncate_wal_to, PersistDelta,
@@ -294,12 +297,12 @@ fn complete_root_shutdown(
 
 struct RootPersistenceLock {
     file: File,
-    #[cfg(test)]
     path: PathBuf,
 }
 
 struct LockedPersistenceRoot<'a> {
     file: &'a mut File,
+    path: &'a Path,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,21 +317,16 @@ impl RootPersistenceLock {
         std::fs::create_dir_all(&cache_dir)
             .map_err(|source| io_error("coordination lock open", source))?;
         let lock_path = cache_dir.join(PERSISTENCE_COORDINATION_FILE);
-        let created = !lock_path.exists();
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|source| io_error("coordination lock open", source))?;
-        if created {
+        let opened = open_or_create_regular_file(&lock_path)
+            .map_err(|error| cache_file_error("coordination lock open", error))?;
+        if opened.created {
             sync_directory(&cache_dir)
                 .map_err(|source| io_error("coordination lock open", source))?;
         }
+        validate_file_attachment(&opened.file, &lock_path)
+            .map_err(|error| cache_file_error("coordination lock open", error))?;
         Ok(Self {
-            file,
-            #[cfg(test)]
+            file: opened.file,
             path: lock_path,
         })
     }
@@ -338,8 +336,13 @@ impl RootPersistenceLock {
         signal_before_test_root_lock(&self.path);
         FileExt::lock_exclusive(&self.file)
             .map_err(|source| io_error("coordination lock acquire", source))?;
+        if let Err(error) = validate_file_attachment(&self.file, &self.path) {
+            let _ = FileExt::unlock(&self.file);
+            return Err(cache_file_error("coordination lock acquire", error));
+        }
         Ok(LockedPersistenceRoot {
             file: &mut self.file,
+            path: &self.path,
         })
     }
 }
@@ -370,10 +373,12 @@ impl LockedPersistenceRoot<'_> {
             .seek(SeekFrom::End(0))
             .map_err(|source| io_error("coordination generation read", source))?;
         if length == 0 {
-            return Ok(PersistenceCoordinationState {
+            let state = PersistenceCoordinationState {
                 generation: 0,
                 ttl_secs: None,
-            });
+            };
+            self.validate_attachment("coordination generation read")?;
+            return Ok(state);
         }
         let encoded_len = if length == LEGACY_COORDINATION_STATE_LEN as u64 {
             LEGACY_COORDINATION_STATE_LEN
@@ -404,10 +409,12 @@ impl LockedPersistenceRoot<'_> {
         } else {
             None
         };
-        Ok(PersistenceCoordinationState {
+        let state = PersistenceCoordinationState {
             generation: u64::from_le_bytes(generation_bytes),
             ttl_secs,
-        })
+        };
+        self.validate_attachment("coordination generation read")?;
+        Ok(state)
     }
 
     fn write_state(&mut self, generation: u64, ttl_secs: u64) -> Result<(), CachePersistenceError> {
@@ -423,7 +430,8 @@ impl LockedPersistenceRoot<'_> {
             .map_err(|source| io_error("coordination state write", source))?;
         self.file
             .sync_data()
-            .map_err(|source| io_error("coordination state write", source))
+            .map_err(|source| io_error("coordination state write", source))?;
+        self.validate_attachment("coordination state write")
     }
 
     fn bind_ttl(&mut self, requested_ttl_secs: u64) -> Result<u64, CachePersistenceError> {
@@ -461,6 +469,11 @@ impl LockedPersistenceRoot<'_> {
             })?;
         self.write_state(next, ttl_secs)?;
         Ok(next)
+    }
+
+    fn validate_attachment(&self, operation: &'static str) -> Result<(), CachePersistenceError> {
+        validate_file_attachment(self.file, self.path)
+            .map_err(|error| cache_file_error(operation, error))
     }
 }
 
@@ -528,6 +541,14 @@ pub enum CachePersistenceError {
     Io {
         operation: &'static str,
         detail: String,
+    },
+
+    /// A cache file path resolved to an unsafe filesystem entry.
+    #[error("cache persistence {operation} rejected unsafe path `{path}`: {violation}")]
+    UnsafePath {
+        operation: &'static str,
+        path: PathBuf,
+        violation: CachePathViolation,
     },
 
     /// The persistence worker panicked while it was being joined.
@@ -1462,9 +1483,33 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn io_error(operation: &'static str, source: std::io::Error) -> CachePersistenceError {
+    if let Some(CacheFileError::Unsafe { path, violation }) = source
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<CacheFileError>())
+    {
+        return CachePersistenceError::UnsafePath {
+            operation,
+            path: path.clone(),
+            violation: *violation,
+        };
+    }
     CachePersistenceError::Io {
         operation,
         detail: source.to_string(),
+    }
+}
+
+fn cache_file_error(operation: &'static str, error: CacheFileError) -> CachePersistenceError {
+    match error {
+        CacheFileError::Unsafe { path, violation } => CachePersistenceError::UnsafePath {
+            operation,
+            path,
+            violation,
+        },
+        error => CachePersistenceError::Io {
+            operation,
+            detail: error.to_string(),
+        },
     }
 }
 
@@ -1591,6 +1636,8 @@ fn timeout_error(operation: &'static str, timeout: Duration) -> CachePersistence
 mod tests {
     use std::fs::{self, OpenOptions};
     use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::process::Command;
     use std::sync::{Arc, Mutex};
 
@@ -1756,6 +1803,85 @@ mod tests {
                 u64::from_le_bytes(ttl_secs),
             ),
             (COORDINATION_STATE_LEN, 42, 7_200)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_coordination_lock_is_rejected_without_touching_its_target() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let cache_dir = dir.path().join(crate::PERSIST_CACHE_DIR);
+        let lock_path = cache_dir.join(PERSISTENCE_COORDINATION_FILE);
+        let sentinel = outside.path().join("sentinel");
+        fs::create_dir_all(&cache_dir).unwrap();
+        fs::write(&sentinel, b"outside-must-survive").unwrap();
+        symlink(&sentinel, &lock_path).unwrap();
+
+        let error = match CachePersistence::open(config) {
+            Ok(_) => panic!("symlinked coordination lock unexpectedly opened"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            (
+                error,
+                fs::read(&sentinel).unwrap(),
+                fs::symlink_metadata(&lock_path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+            ),
+            (
+                CachePersistenceError::UnsafePath {
+                    operation: "coordination lock open",
+                    path: lock_path,
+                    violation: CachePathViolation::SymbolicLink,
+                },
+                b"outside-must-survive".to_vec(),
+                true,
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn coordination_lock_create_collision_cannot_swap_in_an_outside_symlink() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let cache_dir = dir.path().join(crate::PERSIST_CACHE_DIR);
+        let lock_path = cache_dir.join(PERSISTENCE_COORDINATION_FILE);
+        let held = cache_dir.join("held-lock");
+        let sentinel = outside.path().join("sentinel");
+        fs::create_dir_all(&cache_dir).unwrap();
+        fs::write(&lock_path, b"original-lock").unwrap();
+        fs::write(&sentinel, b"outside-must-survive").unwrap();
+
+        let error = crate::cache_file::open_or_create_regular_file_for_test(&lock_path, || {
+            fs::rename(&lock_path, &held)?;
+            symlink(&sentinel, &lock_path)
+        })
+        .unwrap_err();
+        let rejected_symlink = matches!(
+            error,
+            CacheFileError::Unsafe {
+                path,
+                violation: CachePathViolation::SymbolicLink,
+            } if path == lock_path
+        );
+
+        assert_eq!(
+            (
+                rejected_symlink,
+                fs::read(&held).unwrap(),
+                fs::read(&sentinel).unwrap(),
+            ),
+            (
+                true,
+                b"original-lock".to_vec(),
+                b"outside-must-survive".to_vec(),
+            )
         );
     }
 

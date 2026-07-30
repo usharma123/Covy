@@ -21,5 +21,12 @@ packet28-binary-codec.workspace = true
 suite-packet-core.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1"
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tempfile.workspace = true

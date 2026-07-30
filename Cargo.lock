@@ -401,12 +401,15 @@ version = "0.2.63"
 dependencies = [
  "blake3",
  "fs2",
+ "libc",
  "packet28-binary-codec",
  "serde",
  "serde_json",
  "suite-packet-core",
  "tempfile",
  "thiserror",
+ "winapi-util",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

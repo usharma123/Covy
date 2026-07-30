@@ -3,6 +3,8 @@ use super::*;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 
+use crate::cache_file::{create_unique_cache_temp_with, CacheFileError};
+
 const PERSIST_WAL_VERSION: u32 = 1;
 const PERSIST_WAL_MAGIC: &[u8; 8] = b"P28CWAL1";
 const PERSIST_WAL_HEADER_LEN: usize = 8 + 8 + 32;
@@ -1017,16 +1019,37 @@ fn write_atomically_with<F>(path: &Path, bytes: &[u8], replace: F) -> Result<(),
 where
     F: FnOnce(&Path, &Path) -> Result<(), io::Error>,
 {
-    let temp_path = path.with_extension("tmp");
-    let mut temp_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&temp_path)?;
-    temp_file.write_all(bytes)?;
-    temp_file.sync_all()?;
-    drop(temp_file);
-    replace(&temp_path, path)?;
+    write_atomically_with_observers(path, bytes, |_| Ok(()), |_| Ok(()), replace)
+}
+
+fn write_atomically_with_observers<B, A, F>(
+    path: &Path,
+    bytes: &[u8],
+    before_temp_open: B,
+    after_temp_sync: A,
+    replace: F,
+) -> Result<(), io::Error>
+where
+    B: FnMut(&Path) -> Result<(), io::Error>,
+    A: FnOnce(&Path) -> Result<(), io::Error>,
+    F: FnOnce(&Path, &Path) -> Result<(), io::Error>,
+{
+    let mut temporary =
+        create_unique_cache_temp_with(path, before_temp_open).map_err(CacheFileError::into_io)?;
+    temporary
+        .file_mut()
+        .write_all(bytes)
+        .map_err(|source| CacheFileError::io(temporary.path(), source).into_io())?;
+    temporary
+        .file_mut()
+        .sync_all()
+        .map_err(|source| CacheFileError::io(temporary.path(), source).into_io())?;
+    after_temp_sync(temporary.path())?;
+    temporary
+        .validate_attachment()
+        .map_err(CacheFileError::into_io)?;
+    replace(temporary.path(), path)?;
+    temporary.mark_published();
     sync_parent_dir(path)
 }
 
@@ -1046,6 +1069,8 @@ fn sync_parent_dir(_path: &Path) -> Result<(), io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use tempfile::tempdir;
 
     #[test]
@@ -1061,5 +1086,92 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::Other);
         assert_eq!(fs::read(path).unwrap(), b"durable-old-checkpoint");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_retries_a_symlinked_temp_candidate_without_touching_its_target() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let path = dir.path().join("checkpoint.bin");
+        let sentinel = outside.path().join("sentinel");
+        fs::write(&sentinel, b"outside-must-survive").unwrap();
+        let mut planted = None;
+
+        write_atomically_with_observers(
+            &path,
+            b"new-checkpoint",
+            |candidate| {
+                if planted.is_none() {
+                    symlink(&sentinel, candidate)?;
+                    planted = Some(candidate.to_path_buf());
+                }
+                Ok(())
+            },
+            |_| Ok(()),
+            |source, destination| fs::rename(source, destination),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (
+                fs::read(&sentinel).unwrap(),
+                fs::read(&path).unwrap(),
+                fs::symlink_metadata(planted.unwrap())
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+            ),
+            (
+                b"outside-must-survive".to_vec(),
+                b"new-checkpoint".to_vec(),
+                true,
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_rejects_a_temp_symlink_swap_without_touching_its_target() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let path = dir.path().join("checkpoint.bin");
+        let held = dir.path().join("held-temp");
+        let sentinel = outside.path().join("sentinel");
+        fs::write(&path, b"durable-old-checkpoint").unwrap();
+        fs::write(&sentinel, b"outside-must-survive").unwrap();
+        let replace_called = std::cell::Cell::new(false);
+
+        let error = write_atomically_with_observers(
+            &path,
+            b"new-checkpoint",
+            |_| Ok(()),
+            |temporary| {
+                fs::rename(temporary, &held)?;
+                symlink(&sentinel, temporary)
+            },
+            |_source, _destination| {
+                replace_called.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (
+                error.kind(),
+                replace_called.get(),
+                fs::read(&sentinel).unwrap(),
+                fs::read(&path).unwrap(),
+                fs::read(&held).unwrap(),
+            ),
+            (
+                io::ErrorKind::PermissionDenied,
+                false,
+                b"outside-must-survive".to_vec(),
+                b"durable-old-checkpoint".to_vec(),
+                b"new-checkpoint".to_vec(),
+            )
+        );
     }
 }

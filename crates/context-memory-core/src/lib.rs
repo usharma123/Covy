@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod cache;
+mod cache_file;
 mod normalize;
 mod persist;
 mod persistence_owner;
@@ -18,6 +19,7 @@ mod types;
 
 pub use cache::PacketCache;
 pub(crate) use cache::*;
+pub use cache_file::CachePathViolation;
 pub(crate) use normalize::*;
 pub use normalize::{basename_alias, normalize_context_path};
 #[cfg(test)]
