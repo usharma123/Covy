@@ -205,7 +205,7 @@ fn emit_task_event_ordered(
 ) -> Result<bool> {
     let persistence = state.lock().map_err(lock_err)?.persistence.clone();
     let _event_guard = persistence.event_guard();
-    let (_activity_lease, required_revision, prepare_lock_hold) = {
+    let (_activity_lease, required_revision, require_checkpoint, prepare_lock_hold) = {
         let mut guard = state.lock().map_err(lock_err)?;
         let lock_acquired = Instant::now();
         if !guard.tasks.tasks.contains_key(task_id) {
@@ -236,14 +236,18 @@ fn emit_task_event_ordered(
         let Some(activity_lease) = generation.acquire_operation() else {
             return Ok(false);
         };
-        let required_revision = guard
-            .tasks
-            .tasks
-            .get(task_id)
-            .is_some_and(|task| task.last_event_seq == 0)
-            .then(|| mark_task_dirty(&guard, task_id))
-            .transpose()?;
-        (activity_lease, required_revision, lock_acquired.elapsed())
+        let require_checkpoint = !persistence.task_is_durably_admitted(task_id);
+        let required_revision = if require_checkpoint {
+            mark_task_dirty(&guard, task_id)?
+        } else {
+            persistence.latest_revision()
+        };
+        (
+            activity_lease,
+            required_revision,
+            require_checkpoint,
+            lock_acquired.elapsed(),
+        )
     };
     persistence.record_event_state_lock_hold(prepare_lock_hold);
 
@@ -255,6 +259,7 @@ fn emit_task_event_ordered(
             data,
         },
         required_revision,
+        require_checkpoint,
     )?;
 
     let mut guard = state.lock().map_err(lock_err)?;
@@ -317,7 +322,7 @@ pub(crate) fn complete_task_cancellation_for_generation(
 ) -> Result<Option<TaskRecord>> {
     let persistence = state.lock().map_err(lock_err)?.persistence.clone();
     let _event_guard = persistence.event_guard();
-    let (required_revision, prepare_lock_hold) = {
+    let (required_revision, require_checkpoint, prepare_lock_hold) = {
         let guard = state.lock().map_err(lock_err)?;
         let lock_acquired = Instant::now();
         let Some(task) = guard.tasks.tasks.get(task_id) else {
@@ -338,10 +343,17 @@ pub(crate) fn complete_task_cancellation_for_generation(
                 task.lifecycle
             );
         }
-        let required_revision = (task.last_event_seq == 0)
-            .then(|| mark_task_dirty(&guard, task_id))
-            .transpose()?;
-        (required_revision, lock_acquired.elapsed())
+        let require_checkpoint = !persistence.task_is_durably_admitted(task_id);
+        let required_revision = if require_checkpoint {
+            mark_task_dirty(&guard, task_id)?
+        } else {
+            persistence.latest_revision()
+        };
+        (
+            required_revision,
+            require_checkpoint,
+            lock_acquired.elapsed(),
+        )
     };
     persistence.record_event_state_lock_hold(prepare_lock_hold);
 
@@ -356,6 +368,7 @@ pub(crate) fn complete_task_cancellation_for_generation(
             }),
         },
         required_revision,
+        require_checkpoint,
     )?;
 
     let mut guard = state.lock().map_err(lock_err)?;

@@ -1,5 +1,6 @@
 use super::support::{daemon_test_root, daemon_test_state, insert_admitted_task_record};
 use super::*;
+use crate::broker::complete_task_cancellation_for_generation;
 use crate::watch::install_watch;
 use packet28_daemon_core::storage::{load_task_registry, load_watch_registry};
 use std::os::unix::process::CommandExt;
@@ -95,6 +96,35 @@ fn cancel_before_start_persists_terminal_history_and_rejects_stale_events() {
         .task_generations
         .current("task-cancel-before-start")
         .is_none());
+}
+
+#[test]
+fn admitted_zero_event_cancellation_skips_redundant_pre_event_registry_stage() {
+    let state = daemon_test_state();
+    let task_id = "task-cancel-admitted-zero-event";
+    insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: task_id.to_string(),
+            lifecycle: TaskLifecycle::Cancelling { was_running: false },
+            ..TaskRecord::default()
+        },
+    );
+    flush_persistence(&state).unwrap();
+    let generation = {
+        let mut guard = state.lock().unwrap();
+        let generation = guard.task_generations.create(task_id).unwrap();
+        generation.request_cancel();
+        generation
+    };
+    let before = state.lock().unwrap().persistence.metrics().deltas_submitted;
+
+    complete_task_cancellation_for_generation(state.clone(), task_id, generation.id(), &[])
+        .unwrap();
+
+    let after = state.lock().unwrap().persistence.metrics().deltas_submitted;
+    assert_eq!(after.saturating_sub(before), 1);
+    super::support::shutdown_test_persistence(&state);
 }
 
 #[test]

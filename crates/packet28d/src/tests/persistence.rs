@@ -2,7 +2,8 @@ use super::*;
 use crate::watch::{run_recovered_replan_for_task, run_sequence_for_task_with_executor};
 use packet28_daemon_core::storage::{
     append_next_task_event, append_task_event, load_task_registry,
-    load_task_registry_with_event_tails, save_task_registry, save_watch_registry,
+    load_task_registry_with_event_tails, load_task_watch_registry_with_deltas, save_task_registry,
+    save_watch_registry,
 };
 use std::fs::{self, OpenOptions};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -734,14 +735,13 @@ fn watch_checkpoint_boundary_releases_the_daemon_state_mutex() {
     flush_persistence(&state).unwrap();
 
     let root = super::support::daemon_test_root(&state);
-    let recovered_tasks = load_task_registry(&root).unwrap();
-    let recovered_watches = packet28_daemon_core::storage::load_watch_registry(&root).unwrap();
+    let recovered = load_task_watch_registry_with_deltas(&root).unwrap();
     assert_eq!(
-        recovered_tasks.tasks["watch-lock-split"].watch_ids,
+        recovered.tasks.tasks["watch-lock-split"].watch_ids,
         vec!["watch-lock-split-1".to_string()]
     );
     assert_eq!(
-        serde_json::to_value(&recovered_watches).unwrap(),
+        serde_json::to_value(&recovered.watches).unwrap(),
         serde_json::to_value(&state.lock().unwrap().watches).unwrap()
     );
     super::support::shutdown_test_persistence(&state);
@@ -789,15 +789,14 @@ fn concurrent_task_and_watch_mutations_coalesce_to_one_exact_checkpoint() {
 
     flush_persistence(&state).unwrap();
     let root = super::support::daemon_test_root(&state);
-    let recovered_tasks = load_task_registry(&root).unwrap();
-    let recovered_watches = packet28_daemon_core::storage::load_watch_registry(&root).unwrap();
+    let recovered = load_task_watch_registry_with_deltas(&root).unwrap();
     let guard = state.lock().unwrap();
     assert_eq!(
-        serde_json::to_value(&recovered_tasks).unwrap(),
+        serde_json::to_value(&recovered.tasks).unwrap(),
         serde_json::to_value(&guard.tasks).unwrap()
     );
     assert_eq!(
-        serde_json::to_value(&recovered_watches).unwrap(),
+        serde_json::to_value(&recovered.watches).unwrap(),
         serde_json::to_value(&guard.watches).unwrap()
     );
     let metrics = guard.persistence.metrics();
@@ -860,10 +859,57 @@ fn concurrent_event_publication_is_contiguous_and_registry_checkpoints_coalesce(
     );
     let root = super::support::daemon_test_root(&state);
     assert_eq!(
-        load_task_registry(&root).unwrap().tasks["publication-order"].last_event_seq,
+        load_task_watch_registry_with_deltas(&root)
+            .unwrap()
+            .tasks
+            .tasks["publication-order"]
+            .last_event_seq,
         16
     );
     super::support::shutdown_test_persistence(&state);
+}
+
+#[test]
+fn admitted_zero_event_task_skips_redundant_pre_event_registry_stage() {
+    let state = super::support::daemon_test_state();
+    super::support::insert_admitted_task_record(
+        &state,
+        TaskRecord {
+            task_id: "admitted-zero-event".to_string(),
+            ..TaskRecord::default()
+        },
+    );
+    flush_persistence(&state).unwrap();
+    let before = state.lock().unwrap().persistence.metrics().deltas_submitted;
+
+    emit_task_event(
+        state.clone(),
+        "admitted-zero-event",
+        "first-event",
+        json!({}),
+    )
+    .unwrap();
+
+    let after = state.lock().unwrap().persistence.metrics().deltas_submitted;
+    assert_eq!(after.saturating_sub(before), 1);
+    super::support::shutdown_test_persistence(&state);
+}
+
+#[test]
+fn daemon_startup_uses_checkpoint_plus_wal_registry_authority() {
+    let source = include_str!("../application.rs");
+
+    assert!(source.contains("load_task_watch_registry_with_deltas_and_event_tails"));
+    assert!(!source.contains("load_task_watch_registry_checkpoint_with_event_tails"));
+}
+
+#[test]
+fn daemon_startup_checkpoints_replayed_authority_before_readiness() {
+    let source = include_str!("../application.rs");
+    let checkpoint = source.find("persistence.checkpoint_current()?").unwrap();
+    let readiness = source.find("mark_ready(&state)?").unwrap();
+
+    assert!(checkpoint < readiness);
 }
 
 #[test]
@@ -890,6 +936,8 @@ fn packet28d_persistence_io_has_one_source_owner() {
             for forbidden in [
                 "save_task_registry(",
                 "save_watch_registry(",
+                "save_task_watch_registry_checkpoint_at_revision(",
+                "append_task_watch_registry_delta(",
                 "append_next_task_event(",
                 "append_task_event(",
             ] {
@@ -918,9 +966,9 @@ const BENCHMARK_EVENTS: u64 = 32;
 const BENCHMARK_REPEATS: usize = 3;
 const BENCHMARK_TARGET_REGISTRY_BYTES: usize = 1_848_193;
 
-fn benchmark_registry_with_padding(padding: usize) -> TaskRegistry {
+fn benchmark_registry_with_padding(task_count: usize, padding: usize) -> TaskRegistry {
     let marker = "x".repeat(padding);
-    let tasks = (0..BENCHMARK_TASKS)
+    let tasks = (0..task_count)
         .map(|ordinal| {
             let task_id = if ordinal == 0 {
                 "benchmark-target".to_string()
@@ -940,13 +988,13 @@ fn benchmark_registry_with_padding(padding: usize) -> TaskRegistry {
     TaskRegistry { tasks }
 }
 
-fn benchmark_registry() -> (TaskRegistry, usize) {
+fn benchmark_registry() -> (TaskRegistry, usize, usize) {
     let mut low = 0_usize;
     let mut high = 16 * 1024;
     let mut best = None::<(usize, usize)>;
     while low <= high {
         let padding = low + (high - low) / 2;
-        let registry = benchmark_registry_with_padding(padding);
+        let registry = benchmark_registry_with_padding(BENCHMARK_TASKS, padding);
         let bytes = serde_json::to_vec_pretty(&registry).unwrap().len();
         if best.as_ref().is_none_or(|(_, best_bytes)| {
             bytes.abs_diff(BENCHMARK_TARGET_REGISTRY_BYTES)
@@ -963,9 +1011,9 @@ fn benchmark_registry() -> (TaskRegistry, usize) {
         }
     }
     let (padding, _) = best.unwrap();
-    let registry = benchmark_registry_with_padding(padding);
+    let registry = benchmark_registry_with_padding(BENCHMARK_TASKS, padding);
     let bytes = serde_json::to_vec_pretty(&registry).unwrap().len();
-    (registry, bytes)
+    (registry, bytes, padding)
 }
 
 fn benchmark_event(sequence: u64) -> DaemonEventFrame {
@@ -1066,7 +1114,8 @@ fn run_legacy_persistence_sample(fixture: &TaskRegistry) -> PersistenceBenchmark
 }
 
 fn run_owned_persistence_sample(fixture: &TaskRegistry) -> PersistenceBenchmarkSample {
-    let state = super::support::daemon_test_state();
+    let state =
+        super::support::daemon_test_state_with_persistence_debounce(Duration::from_secs(60));
     {
         let mut guard = state.lock().unwrap();
         guard.tasks = fixture.clone();
@@ -1111,7 +1160,7 @@ fn run_owned_persistence_sample(fixture: &TaskRegistry) -> PersistenceBenchmarkS
     let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     let after = state.lock().unwrap().persistence.metrics();
     let root = super::support::daemon_test_root(&state);
-    let recovered = load_task_registry(&root).unwrap();
+    let recovered = load_task_watch_registry_with_deltas(&root).unwrap().tasks;
     let events = load_task_events(&root, "benchmark-target").unwrap();
     super::support::shutdown_test_persistence(&state);
     PersistenceBenchmarkSample {
@@ -1120,6 +1169,11 @@ fn run_owned_persistence_sample(fixture: &TaskRegistry) -> PersistenceBenchmarkS
         published_bytes: after
             .checkpoint_bytes_written
             .saturating_sub(before.checkpoint_bytes_written)
+            .saturating_add(
+                after
+                    .wal_bytes_appended
+                    .saturating_sub(before.wal_bytes_appended),
+            )
             .saturating_add(
                 after
                     .event_bytes_appended
@@ -1136,7 +1190,9 @@ fn run_owned_persistence_sample(fixture: &TaskRegistry) -> PersistenceBenchmarkS
 #[test]
 #[ignore = "release-only PER-01 persistence-owner benchmark; run explicitly with --ignored --nocapture"]
 fn benchmark_task_persistence_owner() {
-    let (fixture, fixture_registry_bytes) = benchmark_registry();
+    let (fixture, fixture_registry_bytes, padding) = benchmark_registry();
+    let small_fixture = benchmark_registry_with_padding(1, padding);
+    let small_fixture_registry_bytes = serde_json::to_vec_pretty(&small_fixture).unwrap().len();
     assert!(fixture_registry_bytes.abs_diff(BENCHMARK_TARGET_REGISTRY_BYTES) < 1024);
 
     let mut legacy_lock_nanos = Vec::new();
@@ -1146,12 +1202,15 @@ fn benchmark_task_persistence_owner() {
     let mut owned_elapsed_micros = Vec::new();
     let mut owned_published_bytes = Vec::new();
     let mut owned_checkpoints = Vec::new();
+    let mut small_owned_published_bytes = Vec::new();
     for _ in 0..BENCHMARK_REPEATS {
         let legacy = run_legacy_persistence_sample(&fixture);
         let owned = run_owned_persistence_sample(&fixture);
+        let small_owned = run_owned_persistence_sample(&small_fixture);
         assert_eq!(legacy.registry, owned.registry);
         assert_eq!(legacy.event_count, owned.event_count);
         assert_eq!(legacy.event_count, (BENCHMARK_EVENTS + 1) as usize);
+        assert_eq!(small_owned.event_count, legacy.event_count);
         legacy_lock_nanos.push(median(&mut legacy.lock_nanos.clone()));
         legacy_elapsed_micros.push(legacy.elapsed_micros);
         legacy_published_bytes.push(legacy.published_bytes);
@@ -1159,10 +1218,13 @@ fn benchmark_task_persistence_owner() {
         owned_elapsed_micros.push(owned.elapsed_micros);
         owned_published_bytes.push(owned.published_bytes);
         owned_checkpoints.push(owned.checkpoints);
+        small_owned_published_bytes.push(small_owned.published_bytes);
     }
 
+    let small_owned_median_published_bytes = median(&mut small_owned_published_bytes);
+    let large_owned_median_published_bytes = median(&mut owned_published_bytes);
     let result = json!({
-        "schema_version": 1,
+        "schema_version": 3,
         "fixture_tasks": BENCHMARK_TASKS,
         "fixture_registry_bytes": fixture_registry_bytes,
         "measured_events": BENCHMARK_EVENTS,
@@ -1173,11 +1235,22 @@ fn benchmark_task_persistence_owner() {
             "median_published_bytes": median(&mut legacy_published_bytes),
             "median_checkpoints": BENCHMARK_EVENTS,
         },
-        "owned_coalesced_checkpoint_after_lock": {
+        "owned_wal_with_coalesced_checkpoint_after_lock": {
             "median_event_lock_ns": median(&mut owned_lock_nanos),
             "median_elapsed_us": median(&mut owned_elapsed_micros),
-            "median_published_bytes": median(&mut owned_published_bytes),
+            "median_published_bytes": large_owned_median_published_bytes,
             "median_checkpoints": median(&mut owned_checkpoints),
+        },
+        "registry_scaling": {
+            "small_fixture_tasks": 1,
+            "small_fixture_registry_bytes": small_fixture_registry_bytes,
+            "large_fixture_tasks": BENCHMARK_TASKS,
+            "large_fixture_registry_bytes": fixture_registry_bytes,
+            "small_owned_median_published_bytes": small_owned_median_published_bytes,
+            "large_owned_median_published_bytes": large_owned_median_published_bytes,
+            "published_byte_ratio_large_over_small":
+                large_owned_median_published_bytes as f64
+                    / small_owned_median_published_bytes as f64,
         },
         "parity_event_count": BENCHMARK_EVENTS + 1,
     });

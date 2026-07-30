@@ -71,9 +71,11 @@ pub(crate) fn refresh_test_repo_runtime(state: &Arc<Mutex<DaemonState>>) {
 }
 
 pub(crate) fn insert_admitted_task_record(state: &Arc<Mutex<DaemonState>>, record: TaskRecord) {
+    let task_id = record.task_id.clone();
     let mut guard = state.lock().unwrap();
-    guard.tasks.tasks.insert(record.task_id.clone(), record);
-    persist_state_for_test(&guard).unwrap();
+    guard.tasks.tasks.insert(task_id.clone(), record);
+    drop(guard);
+    fence_task_namespace_admission(state, &task_id).unwrap();
 }
 
 pub(crate) fn shutdown_test_persistence(state: &Arc<Mutex<DaemonState>>) {

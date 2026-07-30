@@ -13,7 +13,7 @@ use context_kernel_core::{Kernel, PersistConfig};
 use packet28_daemon_core::retention::recover_task_store_quarantine_and_acquire_daemon_lease;
 use packet28_daemon_core::storage::{
     ensure_daemon_dir, ensure_daemon_socket_dir,
-    load_task_watch_registry_checkpoint_with_event_tails, now_unix, remove_runtime_files,
+    load_task_watch_registry_with_deltas_and_event_tails, now_unix, remove_runtime_files,
     write_runtime_info,
 };
 use packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease;
@@ -115,8 +115,12 @@ pub fn serve(root: PathBuf) -> Result<()> {
         kernel.clone(),
         config.max_persistent_roots,
     )?);
-    let (mut tasks, mut watches, event_tails) =
-        load_task_watch_registry_checkpoint_with_event_tails(&root)?;
+    let (loaded_registry, event_tails) =
+        load_task_watch_registry_with_deltas_and_event_tails(&root)?;
+    let checkpoint_revision = loaded_registry.checkpoint_revision;
+    let replayed_revision = loaded_registry.replayed_revision;
+    let mut tasks = loaded_registry.tasks;
+    let mut watches = loaded_registry.watches;
     preflight_restart_recovery(&tasks)?;
     let event_high_water_changes = reconcile_task_event_high_waters(&mut tasks, &event_tails)?;
     let restart_reconciliation =
@@ -127,6 +131,8 @@ pub fn serve(root: PathBuf) -> Result<()> {
         Duration::from_millis(TASK_PERSISTENCE_DEBOUNCE_MS),
         &tasks,
         &watches,
+        checkpoint_revision,
+        replayed_revision,
     )?;
     if restart_reconciliation.changed_tasks > 0 {
         daemon_log(&format!(

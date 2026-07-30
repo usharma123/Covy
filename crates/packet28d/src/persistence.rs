@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -6,11 +6,16 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use packet28_daemon_core::storage::{append_next_task_event, save_task_watch_registry_checkpoint};
+use packet28_daemon_core::storage::{
+    append_next_task_event, append_task_watch_registry_delta, registry_delta_wal_path,
+    save_task_watch_registry_checkpoint_at_revision, RegistryDeltaBatch, RegistryRevision,
+    RegistryRevisionRange,
+};
 use packet28_daemon_core::task_store_lease::TaskStoreLease;
+use packet28_daemon_core::DaemonCoreError;
 use packet28_daemon_protocol::message::{DaemonEvent, DaemonEventFrame};
 use packet28_daemon_protocol::paths::{task_registry_path, watch_registry_path};
-use packet28_daemon_protocol::task::{TaskRecord, TaskRegistry, WatchRegistration, WatchRegistry};
+use packet28_daemon_protocol::task::{TaskRegistry, WatchRegistry};
 
 const COMMAND_CAPACITY: usize = 1;
 
@@ -42,131 +47,7 @@ pub(crate) struct PersistenceMetrics {
 /// The batch owns only records whose keys changed. Later changes to the same
 /// key replace earlier pending values; distinct keys accumulate until the
 /// persistence owner appends one contiguous revision range.
-#[derive(Debug, Default)]
-pub(crate) struct RegistryDelta {
-    task_upserts: BTreeMap<String, TaskRecord>,
-    task_removals: BTreeSet<String>,
-    watch_upserts: BTreeMap<String, WatchRegistration>,
-    watch_upsert_order: Vec<String>,
-    watch_removals: BTreeSet<String>,
-}
-
-impl RegistryDelta {
-    pub(crate) fn upsert_task(mut self, task: TaskRecord) -> Self {
-        self.task_removals.remove(&task.task_id);
-        self.task_upserts.insert(task.task_id.clone(), task);
-        self
-    }
-
-    pub(crate) fn remove_task(mut self, task_id: impl Into<String>) -> Self {
-        let task_id = task_id.into();
-        self.task_upserts.remove(&task_id);
-        self.task_removals.insert(task_id);
-        self
-    }
-
-    pub(crate) fn upsert_watch(mut self, watch: WatchRegistration) -> Self {
-        let watch_id = watch.watch_id.clone();
-        if !self.watch_upserts.contains_key(&watch_id) {
-            self.watch_upsert_order.push(watch_id.clone());
-        }
-        // An overlapping removal is intentional: applying removals before
-        // upserts preserves remove-then-reinsert ordering.
-        self.watch_upserts.insert(watch_id, watch);
-        self
-    }
-
-    pub(crate) fn remove_watch(mut self, watch_id: impl Into<String>) -> Self {
-        let watch_id = watch_id.into();
-        self.watch_upserts.remove(&watch_id);
-        self.watch_upsert_order
-            .retain(|candidate| candidate != &watch_id);
-        self.watch_removals.insert(watch_id);
-        self
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.task_upserts.is_empty()
-            && self.task_removals.is_empty()
-            && self.watch_upserts.is_empty()
-            && self.watch_removals.is_empty()
-    }
-
-    fn task_key_count(&self) -> usize {
-        self.task_upserts
-            .len()
-            .saturating_add(self.task_removals.len())
-    }
-
-    fn watch_key_count(&self) -> usize {
-        self.watch_upserts
-            .len()
-            .saturating_add(self.watch_removals.len())
-    }
-
-    fn merge_later(&mut self, later: Self) {
-        for task_id in later.task_removals {
-            self.task_upserts.remove(&task_id);
-            self.task_removals.insert(task_id);
-        }
-        for (task_id, task) in later.task_upserts {
-            self.task_removals.remove(&task_id);
-            self.task_upserts.insert(task_id, task);
-        }
-        for watch_id in &later.watch_removals {
-            self.watch_upserts.remove(watch_id);
-            self.watch_upsert_order
-                .retain(|candidate| candidate != watch_id);
-            self.watch_removals.insert(watch_id.clone());
-        }
-        for watch_id in later.watch_upsert_order {
-            let watch = later
-                .watch_upserts
-                .get(&watch_id)
-                .expect("watch upsert order references a present record")
-                .clone();
-            let reinsertion =
-                self.watch_removals.contains(&watch_id) || later.watch_removals.contains(&watch_id);
-            if reinsertion {
-                self.watch_upserts.remove(&watch_id);
-                self.watch_upsert_order
-                    .retain(|candidate| candidate != &watch_id);
-                self.watch_removals.insert(watch_id.clone());
-            }
-            if !self.watch_upserts.contains_key(&watch_id) {
-                self.watch_upsert_order.push(watch_id.clone());
-            }
-            self.watch_upserts.insert(watch_id, watch);
-        }
-    }
-
-    fn apply_to(&self, tasks: &mut TaskRegistry, watches: &mut WatchRegistry) {
-        for task_id in &self.task_removals {
-            tasks.tasks.remove(task_id);
-        }
-        for (task_id, task) in &self.task_upserts {
-            tasks.tasks.insert(task_id.clone(), task.clone());
-        }
-        for watch_id in &self.watch_removals {
-            watches.watches.retain(|watch| watch.watch_id != *watch_id);
-        }
-        for watch_id in &self.watch_upsert_order {
-            let replacement = self
-                .watch_upserts
-                .get(watch_id)
-                .expect("watch upsert order references a present record");
-            if let Some(existing) = watches
-                .watches
-                .iter_mut()
-                .find(|watch| watch.watch_id == *watch_id)
-            {
-                existing.clone_from(replacement);
-            } else {
-                watches.watches.push(replacement.clone());
-            }
-        }
-    }
-}
+pub(crate) type RegistryDelta = RegistryDeltaBatch;
 
 struct PendingDelta {
     first_revision: u64,
@@ -175,10 +56,13 @@ struct PendingDelta {
 }
 
 impl PendingDelta {
-    fn merge_later(&mut self, revision: u64, delta: RegistryDelta) {
+    fn merge_later(&mut self, revision: u64, delta: RegistryDelta) -> Result<()> {
         debug_assert_eq!(revision, self.last_revision.saturating_add(1));
+        self.delta
+            .merge_later_wins(delta)
+            .context("failed to coalesce daemon registry deltas")?;
         self.last_revision = revision;
-        self.delta.merge_later(delta);
+        Ok(())
     }
 }
 
@@ -188,21 +72,37 @@ struct PendingState {
     durable_revision: u64,
     durable_task_ids: BTreeSet<String>,
     delta: Option<PendingDelta>,
-    last_error: Option<String>,
     unsurfaced_error: Option<String>,
+    fatal_error: Option<String>,
 }
 
 struct RegistryImage {
     tasks: TaskRegistry,
     watches: WatchRegistry,
+    durable_revision: u64,
+    checkpoint_revision: u64,
+}
+
+#[derive(Clone, Copy)]
+struct RegistryRecoveryRevisions {
+    checkpoint: RegistryRevision,
+    replayed: RegistryRevision,
 }
 
 trait PersistenceBackend: Send + Sync {
+    fn append_delta(
+        &self,
+        root: &Path,
+        revisions: RegistryRevisionRange,
+        delta: &RegistryDelta,
+    ) -> Result<u64>;
+
     fn save_checkpoint(
         &self,
         root: &Path,
         tasks: &TaskRegistry,
         watches: &WatchRegistry,
+        revision: RegistryRevision,
     ) -> Result<()>;
 
     fn append_event(
@@ -216,13 +116,33 @@ trait PersistenceBackend: Send + Sync {
 struct FilesystemBackend;
 
 impl PersistenceBackend for FilesystemBackend {
+    fn append_delta(
+        &self,
+        root: &Path,
+        revisions: RegistryRevisionRange,
+        delta: &RegistryDelta,
+    ) -> Result<u64> {
+        let wal_path = registry_delta_wal_path(root);
+        let before = std::fs::metadata(&wal_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or_default();
+        append_task_watch_registry_delta(root, revisions, delta)?;
+        let after = std::fs::metadata(wal_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or_default();
+        Ok(after.saturating_sub(before))
+    }
+
     fn save_checkpoint(
         &self,
         root: &Path,
         tasks: &TaskRegistry,
         watches: &WatchRegistry,
+        revision: RegistryRevision,
     ) -> Result<()> {
-        Ok(save_task_watch_registry_checkpoint(root, tasks, watches)?)
+        Ok(save_task_watch_registry_checkpoint_at_revision(
+            root, tasks, watches, revision,
+        )?)
     }
 
     fn append_event(
@@ -270,7 +190,8 @@ enum PersistenceCommand {
         reply: UnitReply,
     },
     AppendEvent {
-        required_revision: Option<u64>,
+        required_revision: u64,
+        require_checkpoint: bool,
         task_id: String,
         event: DaemonEvent,
         reply: EventReply,
@@ -299,6 +220,8 @@ impl PersistenceOwner {
         debounce: Duration,
         durable_tasks: &TaskRegistry,
         durable_watches: &WatchRegistry,
+        checkpoint_revision: RegistryRevision,
+        replayed_revision: RegistryRevision,
     ) -> Result<(Self, PersistenceHandle)> {
         Self::start_with_backend(
             root,
@@ -306,6 +229,10 @@ impl PersistenceOwner {
             debounce,
             durable_tasks.clone(),
             durable_watches.clone(),
+            RegistryRecoveryRevisions {
+                checkpoint: checkpoint_revision,
+                replayed: replayed_revision,
+            },
             Arc::new(FilesystemBackend),
         )
     }
@@ -321,6 +248,10 @@ impl PersistenceOwner {
             debounce,
             TaskRegistry::default(),
             WatchRegistry::default(),
+            RegistryRecoveryRevisions {
+                checkpoint: RegistryRevision::ZERO,
+                replayed: RegistryRevision::ZERO,
+            },
             Arc::new(FilesystemBackend),
         )
     }
@@ -331,14 +262,28 @@ impl PersistenceOwner {
         debounce: Duration,
         durable_tasks: TaskRegistry,
         durable_watches: WatchRegistry,
+        revisions: RegistryRecoveryRevisions,
         backend: Arc<dyn PersistenceBackend>,
     ) -> Result<(Self, PersistenceHandle)> {
+        if revisions.checkpoint > revisions.replayed {
+            anyhow::bail!(
+                "daemon checkpoint revision {} is ahead of replayed revision {}",
+                revisions.checkpoint.get(),
+                revisions.replayed.get()
+            );
+        }
         let (sender, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
-        let durable_task_ids = durable_tasks.tasks.keys().cloned().collect();
+        let durable_task_ids = if revisions.checkpoint == revisions.replayed {
+            durable_tasks.tasks.keys().cloned().collect()
+        } else {
+            BTreeSet::new()
+        };
         let state = Arc::new(PersistenceState {
             root,
             debounce,
             pending: Mutex::new(PendingState {
+                next_revision: revisions.replayed.get(),
+                durable_revision: revisions.replayed.get(),
                 durable_task_ids,
                 ..PendingState::default()
             }),
@@ -361,6 +306,8 @@ impl PersistenceOwner {
                     RegistryImage {
                         tasks: durable_tasks,
                         watches: durable_watches,
+                        durable_revision: revisions.replayed.get(),
+                        checkpoint_revision: revisions.checkpoint.get(),
                     },
                 );
             })
@@ -443,14 +390,16 @@ impl PersistenceHandle {
         let revision = {
             let mut pending = lock_unpoisoned(&self.state.pending);
             self.ensure_accepting()?;
-            pending.next_revision = pending
+            if let Some(error) = &pending.fatal_error {
+                anyhow::bail!("daemon persistence owner is unavailable: {error}");
+            }
+            let revision = pending
                 .next_revision
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("daemon persistence revision exhausted"))?;
-            let revision = pending.next_revision;
             let coalesced = pending.delta.is_some();
             match pending.delta.as_mut() {
-                Some(pending_delta) => pending_delta.merge_later(revision, delta),
+                Some(pending_delta) => pending_delta.merge_later(revision, delta)?,
                 None => {
                     pending.delta = Some(PendingDelta {
                         first_revision: revision,
@@ -459,14 +408,27 @@ impl PersistenceHandle {
                     });
                 }
             }
+            pending.next_revision = revision;
             let staged = pending
                 .delta
                 .as_ref()
                 .expect("pending delta exists after staging");
-            let pending_task_keys =
-                u64::try_from(staged.delta.task_key_count()).unwrap_or(u64::MAX);
-            let pending_watch_keys =
-                u64::try_from(staged.delta.watch_key_count()).unwrap_or(u64::MAX);
+            let pending_task_keys = u64::try_from(
+                staged
+                    .delta
+                    .task_upserts
+                    .len()
+                    .saturating_add(staged.delta.task_removals.len()),
+            )
+            .unwrap_or(u64::MAX);
+            let pending_watch_keys = u64::try_from(
+                staged
+                    .delta
+                    .watch_upserts
+                    .len()
+                    .saturating_add(staged.delta.watch_removals.len()),
+            )
+            .unwrap_or(u64::MAX);
             let mut metrics = lock_unpoisoned(&self.state.metrics);
             metrics.deltas_submitted = metrics.deltas_submitted.saturating_add(1);
             if coalesced {
@@ -506,8 +468,12 @@ impl PersistenceHandle {
     }
 
     pub(crate) fn checkpoint_current(&self) -> Result<()> {
-        self.ensure_accepting()?;
         let target_revision = self.latest_revision();
+        self.checkpoint_through(target_revision)
+    }
+
+    fn checkpoint_through(&self, target_revision: u64) -> Result<()> {
+        self.ensure_accepting()?;
         let (reply, completion) = mpsc::sync_channel(1);
         self.sender
             .send(PersistenceCommand::Checkpoint {
@@ -527,7 +493,8 @@ impl PersistenceHandle {
         &self,
         task_id: &str,
         event: DaemonEvent,
-        required_revision: Option<u64>,
+        required_revision: u64,
+        require_checkpoint: bool,
     ) -> Result<DaemonEventFrame> {
         self.ensure_accepting()?;
         {
@@ -538,6 +505,7 @@ impl PersistenceHandle {
         self.sender
             .send(PersistenceCommand::AppendEvent {
                 required_revision,
+                require_checkpoint,
                 task_id: task_id.to_string(),
                 event,
                 reply,
@@ -564,7 +532,7 @@ impl PersistenceHandle {
         if self.task_is_durably_admitted(task_id) {
             return Ok(());
         }
-        self.barrier(revision)?;
+        self.checkpoint_through(revision)?;
         if !self.task_is_durably_admitted(task_id) {
             anyhow::bail!(
                 "daemon persistence revision {revision} did not durably admit task '{task_id}'"
@@ -647,94 +615,168 @@ fn run_worker(
     _task_store_lease: Option<TaskStoreLease>,
     mut image: RegistryImage,
 ) {
-    let mut next = None;
+    let mut retry_delta = None;
+    let mut deadline = (image.durable_revision > image.checkpoint_revision)
+        .then(|| Instant::now() + state.debounce);
     loop {
-        let command = match next.take() {
-            Some(command) => command,
+        let command = match deadline {
+            Some(checkpoint_deadline) => {
+                let remaining = checkpoint_deadline.saturating_duration_since(Instant::now());
+                match receiver.recv_timeout(remaining) {
+                    Ok(command) => Some(command),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        flush_on_disconnect(&state, &mut image, &mut retry_delta);
+                        return;
+                    }
+                }
+            }
             None => match receiver.recv() {
-                Ok(command) => command,
+                Ok(command) => Some(command),
                 Err(_) => {
-                    let _ = persist_pending(&state, &mut image, None, false);
+                    flush_on_disconnect(&state, &mut image, &mut retry_delta);
                     return;
                 }
             },
         };
+        let Some(command) = command else {
+            service_deadline(&state, &mut image, &mut retry_delta, &mut deadline);
+            continue;
+        };
         match command {
-            PersistenceCommand::Wake => match command_after_debounce(&receiver, state.debounce) {
-                DebounceOutcome::Command(command) => next = Some(command),
-                DebounceOutcome::Elapsed => {
-                    let _ = persist_pending(&state, &mut image, None, false);
-                }
-                DebounceOutcome::Disconnected => {
-                    let _ = persist_pending(&state, &mut image, None, false);
-                    return;
-                }
-            },
+            PersistenceCommand::Wake => {
+                let before = image.durable_revision;
+                let result = append_pending(&state, &mut image, &mut retry_delta, None, false);
+                update_deadline_after_append(
+                    &state,
+                    &image,
+                    &retry_delta,
+                    before,
+                    result.is_ok(),
+                    &mut deadline,
+                );
+            }
             PersistenceCommand::Barrier {
                 target_revision,
                 reply,
             } => {
-                let result = persist_pending(&state, &mut image, Some(target_revision), true);
+                let before = image.durable_revision;
+                let result = append_pending(
+                    &state,
+                    &mut image,
+                    &mut retry_delta,
+                    Some(target_revision),
+                    true,
+                );
+                update_deadline_after_append(
+                    &state,
+                    &image,
+                    &retry_delta,
+                    before,
+                    result.is_ok(),
+                    &mut deadline,
+                );
                 if result.is_ok() {
                     let mut metrics = lock_unpoisoned(&state.metrics);
                     metrics.barriers_completed = metrics.barriers_completed.saturating_add(1);
                 }
-                let _ = reply.send(result.map_err(|error| error.to_string()));
+                let _ = reply.send(result.map(|_| ()).map_err(|error| error.to_string()));
             }
             PersistenceCommand::Checkpoint {
                 target_revision,
                 reply,
             } => {
-                let result = persist_pending(&state, &mut image, Some(target_revision), true)
-                    .and_then(|()| save_current_image(&state, &image));
+                let before = image.durable_revision;
+                let result = append_pending(
+                    &state,
+                    &mut image,
+                    &mut retry_delta,
+                    Some(target_revision),
+                    true,
+                )
+                .and_then(|_| save_current_image(&state, &mut image));
+                update_deadline_after_explicit_checkpoint(
+                    &state,
+                    &image,
+                    &retry_delta,
+                    before,
+                    result.is_ok(),
+                    &mut deadline,
+                );
                 let _ = reply.send(result.map_err(|error| error.to_string()));
             }
             PersistenceCommand::AppendEvent {
                 required_revision,
+                require_checkpoint,
                 task_id,
                 event,
                 reply,
             } => {
-                let result = required_revision
-                    .map_or_else(
-                        || Ok(()),
-                        |revision| persist_pending(&state, &mut image, Some(revision), true),
-                    )
-                    .and_then(|()| {
-                        {
+                let before = image.durable_revision;
+                let result = append_pending(
+                    &state,
+                    &mut image,
+                    &mut retry_delta,
+                    Some(required_revision),
+                    true,
+                )
+                .and_then(|_| {
+                    if require_checkpoint {
+                        save_current_image(&state, &mut image)
+                    } else {
+                        Ok(())
+                    }
+                })
+                .and_then(|()| {
+                    {
+                        let mut metrics = lock_unpoisoned(&state.metrics);
+                        metrics.events_started = metrics.events_started.saturating_add(1);
+                    }
+                    state
+                        .backend
+                        .append_event(&state.root, &task_id, &event)
+                        .inspect(|frame| {
+                            let encoded_bytes = serde_json::to_vec(frame)
+                                .map(|encoded| {
+                                    u64::try_from(encoded.len())
+                                        .unwrap_or(u64::MAX)
+                                        .saturating_add(1)
+                                })
+                                .unwrap_or_default();
                             let mut metrics = lock_unpoisoned(&state.metrics);
-                            metrics.events_started = metrics.events_started.saturating_add(1);
-                        }
-                        state
-                            .backend
-                            .append_event(&state.root, &task_id, &event)
-                            .inspect(|frame| {
-                                let encoded_bytes = serde_json::to_vec(frame)
-                                    .map(|encoded| {
-                                        u64::try_from(encoded.len())
-                                            .unwrap_or(u64::MAX)
-                                            .saturating_add(1)
-                                    })
-                                    .unwrap_or_default();
-                                let mut metrics = lock_unpoisoned(&state.metrics);
-                                metrics.events_appended = metrics.events_appended.saturating_add(1);
-                                metrics.event_bytes_appended =
-                                    metrics.event_bytes_appended.saturating_add(encoded_bytes);
-                            })
-                    });
-                if result.is_err() {
-                    let mut metrics = lock_unpoisoned(&state.metrics);
-                    metrics.failures = metrics.failures.saturating_add(1);
-                }
+                            metrics.events_appended = metrics.events_appended.saturating_add(1);
+                            metrics.event_bytes_appended =
+                                metrics.event_bytes_appended.saturating_add(encoded_bytes);
+                        })
+                        .inspect_err(|_| {
+                            let mut metrics = lock_unpoisoned(&state.metrics);
+                            metrics.failures = metrics.failures.saturating_add(1);
+                        })
+                });
+                update_deadline_after_append(
+                    &state,
+                    &image,
+                    &retry_delta,
+                    before,
+                    result.is_ok(),
+                    &mut deadline,
+                );
                 let _ = reply.send(result.map_err(|error| error.to_string()));
             }
             PersistenceCommand::Shutdown {
                 target_revision,
                 reply,
             } => {
-                let result = persist_pending(&state, &mut image, Some(target_revision), true)
-                    .map(|()| *lock_unpoisoned(&state.metrics))
-                    .map_err(|error| error.to_string());
+                let result = append_pending(
+                    &state,
+                    &mut image,
+                    &mut retry_delta,
+                    Some(target_revision),
+                    true,
+                )
+                .and_then(|_| save_current_image(&state, &mut image))
+                .map(|_| *lock_unpoisoned(&state.metrics))
+                .map_err(|error| error.to_string());
                 // This acknowledgement is the worker's final operation.
                 let _ = reply.send(result);
                 return;
@@ -743,124 +785,217 @@ fn run_worker(
     }
 }
 
-enum DebounceOutcome {
-    Command(PersistenceCommand),
-    Elapsed,
-    Disconnected,
-}
-
-fn command_after_debounce(
-    receiver: &Receiver<PersistenceCommand>,
-    debounce: Duration,
-) -> DebounceOutcome {
-    let deadline = Instant::now() + debounce;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match receiver.recv_timeout(remaining) {
-            Ok(PersistenceCommand::Wake) => {}
-            Ok(command) => return DebounceOutcome::Command(command),
-            Err(RecvTimeoutError::Timeout) => return DebounceOutcome::Elapsed,
-            Err(RecvTimeoutError::Disconnected) => return DebounceOutcome::Disconnected,
+fn service_deadline(
+    state: &PersistenceState,
+    image: &mut RegistryImage,
+    retry_delta: &mut Option<PendingDelta>,
+    deadline: &mut Option<Instant>,
+) {
+    let before = image.durable_revision;
+    match append_pending(state, image, retry_delta, None, false) {
+        Ok(true) => {
+            *deadline = Some(Instant::now() + state.debounce);
+        }
+        Ok(false) if image.durable_revision > image.checkpoint_revision => {
+            if save_current_image(state, image).is_ok() {
+                *deadline = None;
+            } else {
+                *deadline = Some(retry_at(state.debounce));
+            }
+        }
+        Ok(false) => {
+            *deadline = None;
+        }
+        Err(_) => {
+            debug_assert_eq!(image.durable_revision, before);
+            *deadline = Some(retry_at(state.debounce));
         }
     }
 }
 
-fn persist_pending(
+fn update_deadline_after_append(
+    state: &PersistenceState,
+    image: &RegistryImage,
+    retry_delta: &Option<PendingDelta>,
+    durable_revision_before: u64,
+    operation_succeeded: bool,
+    deadline: &mut Option<Instant>,
+) {
+    if image.durable_revision > durable_revision_before {
+        *deadline = Some(Instant::now() + state.debounce);
+    } else if retry_delta.is_some() || !operation_succeeded {
+        *deadline = Some(retry_at(state.debounce));
+    } else if image.durable_revision > image.checkpoint_revision && deadline.is_none() {
+        *deadline = Some(Instant::now() + state.debounce);
+    }
+}
+
+fn update_deadline_after_explicit_checkpoint(
+    state: &PersistenceState,
+    image: &RegistryImage,
+    retry_delta: &Option<PendingDelta>,
+    durable_revision_before: u64,
+    operation_succeeded: bool,
+    deadline: &mut Option<Instant>,
+) {
+    if operation_succeeded && image.durable_revision == image.checkpoint_revision {
+        *deadline = None;
+        return;
+    }
+    update_deadline_after_append(
+        state,
+        image,
+        retry_delta,
+        durable_revision_before,
+        operation_succeeded,
+        deadline,
+    );
+    if image.durable_revision > image.checkpoint_revision {
+        *deadline = Some(retry_at(state.debounce));
+    }
+}
+
+fn retry_at(debounce: Duration) -> Instant {
+    Instant::now() + debounce.max(Duration::from_millis(1))
+}
+
+fn flush_on_disconnect(
     state: &PersistenceState,
     image: &mut RegistryImage,
+    retry_delta: &mut Option<PendingDelta>,
+) {
+    let target_revision = lock_unpoisoned(&state.pending).next_revision;
+    if append_pending(state, image, retry_delta, Some(target_revision), false).is_ok() {
+        let _ = save_current_image(state, image);
+    }
+}
+
+fn append_pending(
+    state: &PersistenceState,
+    image: &mut RegistryImage,
+    retry_delta: &mut Option<PendingDelta>,
     required_revision: Option<u64>,
     surface_prior_error: bool,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut appended_any = false;
     loop {
-        let pending_delta = {
+        let pending_delta = retry_delta.take().or_else(|| {
             let mut pending = lock_unpoisoned(&state.pending);
+            if pending.fatal_error.is_some() {
+                return None;
+            }
             if required_revision.is_some_and(|required| pending.durable_revision >= required) {
-                pending.last_error = None;
-                return take_prior_error(&mut pending, surface_prior_error);
+                return None;
             }
             pending.delta.take()
-        };
+        });
         let Some(pending_delta) = pending_delta else {
             let mut pending = lock_unpoisoned(&state.pending);
+            if let Some(error) = &pending.fatal_error {
+                return Err(anyhow!("daemon persistence owner is unavailable: {error}"));
+            }
             return match required_revision {
                 Some(required) if pending.durable_revision < required => Err(anyhow!(
                     "daemon persistence revision {} is unavailable; durable revision is {}",
                     required,
                     pending.durable_revision
                 )),
-                _ => take_prior_error(&mut pending, surface_prior_error),
+                _ => take_prior_error(&mut pending, surface_prior_error).map(|()| appended_any),
             };
         };
         await_checkpoint_test_gate(state);
-        pending_delta
-            .delta
-            .apply_to(&mut image.tasks, &mut image.watches);
+        let revisions = RegistryRevisionRange::new(
+            RegistryRevision::new(pending_delta.first_revision),
+            RegistryRevision::new(pending_delta.last_revision),
+        )
+        .context("invalid daemon registry revision range")?;
         match state
             .backend
-            .save_checkpoint(&state.root, &image.tasks, &image.watches)
+            .append_delta(&state.root, revisions, &pending_delta.delta)
         {
-            Ok(()) => {
+            Ok(appended_bytes) => {
+                if let Err(error) = pending_delta
+                    .delta
+                    .apply_to(&mut image.tasks, &mut image.watches)
+                {
+                    let message = format!(
+                        "durable daemon registry delta could not be materialized in memory: {error}"
+                    );
+                    image.durable_revision = pending_delta.last_revision;
+                    let mut pending = lock_unpoisoned(&state.pending);
+                    pending.durable_revision = pending_delta.last_revision;
+                    pending.fatal_error = Some(message.clone());
+                    pending.unsurfaced_error = None;
+                    let mut metrics = lock_unpoisoned(&state.metrics);
+                    metrics.failures = metrics.failures.saturating_add(1);
+                    return Err(anyhow!(message));
+                }
+                image.durable_revision = pending_delta.last_revision;
                 {
                     let mut pending = lock_unpoisoned(&state.pending);
                     pending.durable_revision =
                         pending.durable_revision.max(pending_delta.last_revision);
-                    for task_id in &pending_delta.delta.task_removals {
-                        pending.durable_task_ids.remove(task_id);
-                    }
-                    for task_id in pending_delta.delta.task_upserts.keys() {
-                        pending.durable_task_ids.insert(task_id.clone());
-                    }
-                    pending.last_error = None;
                 }
                 let mut metrics = lock_unpoisoned(&state.metrics);
-                metrics.checkpoints_written = metrics.checkpoints_written.saturating_add(1);
-                let checkpoint_bytes = [
-                    task_registry_path(&state.root),
-                    watch_registry_path(&state.root),
-                ]
-                .into_iter()
-                .filter_map(|path| std::fs::metadata(path).ok())
-                .map(|metadata| metadata.len())
-                .sum::<u64>();
-                metrics.checkpoint_bytes_written = metrics
-                    .checkpoint_bytes_written
-                    .saturating_add(checkpoint_bytes);
+                metrics.wal_batches_appended = metrics.wal_batches_appended.saturating_add(1);
+                metrics.wal_bytes_appended =
+                    metrics.wal_bytes_appended.saturating_add(appended_bytes);
+                appended_any = true;
             }
             Err(error) => {
+                if matches!(
+                    error.downcast_ref::<DaemonCoreError>(),
+                    Some(DaemonCoreError::RegistryDeltaWalTooLarge { .. })
+                ) && image.durable_revision > image.checkpoint_revision
+                {
+                    *retry_delta = Some(pending_delta);
+                    if let Err(checkpoint_error) = save_current_image(state, image) {
+                        let message = checkpoint_error.to_string();
+                        let mut pending = lock_unpoisoned(&state.pending);
+                        pending.unsurfaced_error =
+                            (!surface_prior_error).then_some(message.clone());
+                        return Err(anyhow!(message));
+                    }
+                    continue;
+                }
                 let message = error.to_string();
                 {
                     let mut pending = lock_unpoisoned(&state.pending);
-                    if let Some(later) = pending.delta.take() {
-                        let mut failed = pending_delta;
-                        debug_assert_eq!(
-                            failed.last_revision.saturating_add(1),
-                            later.first_revision
-                        );
-                        failed.last_revision = later.last_revision;
-                        failed.delta.merge_later(later.delta);
-                        pending.delta = Some(failed);
-                    } else {
-                        pending.delta = Some(pending_delta);
-                    }
-                    pending.last_error = Some(message.clone());
                     pending.unsurfaced_error = Some(message.clone());
                     if surface_prior_error {
                         pending.unsurfaced_error = None;
                     }
                 }
+                *retry_delta = Some(pending_delta);
                 let mut metrics = lock_unpoisoned(&state.metrics);
                 metrics.failures = metrics.failures.saturating_add(1);
                 return Err(anyhow!(message));
             }
         }
+        if required_revision.is_none() {
+            return Ok(true);
+        }
     }
 }
 
-fn save_current_image(state: &PersistenceState, image: &RegistryImage) -> Result<()> {
+fn save_current_image(state: &PersistenceState, image: &mut RegistryImage) -> Result<()> {
+    if image.checkpoint_revision == image.durable_revision {
+        return Ok(());
+    }
     await_checkpoint_test_gate(state);
-    state
-        .backend
-        .save_checkpoint(&state.root, &image.tasks, &image.watches)?;
+    if let Err(error) = state.backend.save_checkpoint(
+        &state.root,
+        &image.tasks,
+        &image.watches,
+        RegistryRevision::new(image.durable_revision),
+    ) {
+        let mut metrics = lock_unpoisoned(&state.metrics);
+        metrics.failures = metrics.failures.saturating_add(1);
+        return Err(error);
+    }
+    image.checkpoint_revision = image.durable_revision;
+    let durable_task_ids = image.tasks.tasks.keys().cloned().collect();
+    lock_unpoisoned(&state.pending).durable_task_ids = durable_task_ids;
     let mut metrics = lock_unpoisoned(&state.metrics);
     metrics.checkpoints_written = metrics.checkpoints_written.saturating_add(1);
     let checkpoint_bytes = [
@@ -941,7 +1076,7 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use packet28_daemon_core::storage::{
-        ensure_daemon_dir, load_task_registry, load_watch_registry,
+        ensure_daemon_dir, load_task_registry, load_task_watch_registry_with_deltas,
     };
     use packet28_daemon_core::task_store_lease::acquire_daemon_task_store_lease;
     use packet28_daemon_protocol::task::{TaskRecord, WatchRegistration};
@@ -958,6 +1093,8 @@ mod tests {
             debounce,
             &TaskRegistry::default(),
             &WatchRegistry::default(),
+            RegistryRevision::ZERO,
+            RegistryRevision::ZERO,
         )
         .unwrap()
     }
@@ -968,6 +1105,95 @@ mod tests {
             last_error: Some(marker.to_string()),
             ..TaskRecord::default()
         }
+    }
+
+    #[test]
+    fn start_continues_after_the_replayed_registry_revision() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::new(RegistryRevision::new(1), RegistryRevision::new(7)).unwrap(),
+            &RegistryDelta::default(),
+        )
+        .unwrap();
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
+        let (owner, handle) = PersistenceOwner::start(
+            root.path().to_path_buf(),
+            lease,
+            Duration::from_secs(1),
+            &loaded.tasks,
+            &loaded.watches,
+            loaded.checkpoint_revision,
+            loaded.replayed_revision,
+        )
+        .unwrap();
+
+        assert_eq!(handle.latest_revision(), 7);
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn start_does_not_treat_wal_only_tasks_as_checkpoint_admitted() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::single(RegistryRevision::new(1)).unwrap(),
+            &RegistryDelta::default().upsert_task(task_record("wal-only", "replayed")),
+        )
+        .unwrap();
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
+        let (owner, handle) = PersistenceOwner::start(
+            root.path().to_path_buf(),
+            lease,
+            Duration::from_secs(1),
+            &loaded.tasks,
+            &loaded.watches,
+            loaded.checkpoint_revision,
+            loaded.replayed_revision,
+        )
+        .unwrap();
+
+        assert!(!handle.task_is_durably_admitted("wal-only"));
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn start_treats_checkpoint_tasks_as_durably_admitted_at_the_replayed_tail() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        append_task_watch_registry_delta(
+            root.path(),
+            RegistryRevisionRange::new(RegistryRevision::new(1), RegistryRevision::new(5)).unwrap(),
+            &RegistryDelta::default().upsert_task(task_record("checkpointed", "durable")),
+        )
+        .unwrap();
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        save_task_watch_registry_checkpoint_at_revision(
+            root.path(),
+            &loaded.tasks,
+            &loaded.watches,
+            loaded.replayed_revision,
+        )
+        .unwrap();
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
+        let (owner, handle) = PersistenceOwner::start(
+            root.path().to_path_buf(),
+            lease,
+            Duration::from_secs(1),
+            &loaded.tasks,
+            &loaded.watches,
+            loaded.checkpoint_revision,
+            loaded.replayed_revision,
+        )
+        .unwrap();
+
+        assert!(handle.task_is_durably_admitted("checkpointed"));
+        owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 
     fn task_record_with_watch(task_id: &str, task_marker: &str, watch_id: &str) -> TaskRecord {
@@ -1021,14 +1247,12 @@ mod tests {
             handle.stage(delta).unwrap();
         }
         let metrics = handle.flush().unwrap();
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
         assert_eq!(
-            load_task_registry(root.path()).unwrap().tasks["coalesced"].last_error,
+            loaded.tasks.tasks["coalesced"].last_error,
             Some("task-31".to_string())
         );
-        assert_eq!(
-            load_watch_registry(root.path()).unwrap().watches[0].watch_id,
-            "watch-31"
-        );
+        assert_eq!(loaded.watches.watches[0].watch_id, "watch-31");
         assert_eq!(metrics.max_pending_batches, 1);
         assert!(metrics.deltas_coalesced > 0);
         assert!(metrics.checkpoints_written < metrics.deltas_submitted);
@@ -1036,7 +1260,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_barrier_publishes_one_nonzero_paired_generation() {
+    fn filesystem_barrier_is_replayable_before_the_debounced_checkpoint() {
         let root = tempfile::tempdir().unwrap();
         let (owner, handle) = owner(root.path(), Duration::from_secs(1));
 
@@ -1046,10 +1270,56 @@ mod tests {
             )
             .unwrap();
 
-        let task_generation = checkpoint_generation(&task_registry_path(root.path())).unwrap();
-        let watch_generation = checkpoint_generation(&watch_registry_path(root.path())).unwrap();
-        assert!(task_generation > 0);
-        assert_eq!(watch_generation, task_generation);
+        assert!(!task_registry_path(root.path()).exists());
+        assert!(!watch_registry_path(root.path()).exists());
+        assert!(registry_delta_wal_path(root.path()).exists());
+        let loaded = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        assert_eq!(loaded.checkpoint_revision, RegistryRevision::ZERO);
+        assert_eq!(loaded.replayed_revision, RegistryRevision::new(1));
+        assert_eq!(
+            loaded.tasks.tasks["barrier-generation"]
+                .last_error
+                .as_deref(),
+            Some("durable")
+        );
+        owner.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn watch_runtime_metadata_is_replayable_before_the_next_checkpoint() {
+        let root = tempfile::tempdir().unwrap();
+        let (owner, handle) = owner(root.path(), Duration::from_secs(60));
+        let task = task_record_with_watch("watch-owner", "initial", "watch-runtime");
+        let mut initial_watch = watch_record("watch-owner", "watch-runtime");
+        initial_watch.active = false;
+        handle
+            .stage(
+                RegistryDelta::default()
+                    .upsert_task(task)
+                    .upsert_watch(initial_watch),
+            )
+            .unwrap();
+        handle.checkpoint_current().unwrap();
+
+        let mut updated_watch = watch_record("watch-owner", "watch-runtime");
+        updated_watch.active = true;
+        updated_watch.last_event_at_unix = Some(99);
+        updated_watch.last_error = Some("transient".to_string());
+        let revision = handle
+            .stage(RegistryDelta::default().upsert_watch(updated_watch))
+            .unwrap();
+        let frame = handle
+            .append_event("watch-owner", event(1), revision, false)
+            .unwrap();
+        assert_eq!(frame.seq, 1);
+
+        let checkpointed = packet28_daemon_core::storage::load_watch_registry(root.path()).unwrap();
+        assert!(!checkpointed.watches[0].active);
+        let replayed = load_task_watch_registry_with_deltas(root.path()).unwrap();
+        let replayed_watch = &replayed.watches.watches[0];
+        assert!(replayed_watch.active);
+        assert_eq!(replayed_watch.last_event_at_unix, Some(99));
+        assert_eq!(replayed_watch.last_error.as_deref(), Some("transient"));
         owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 
@@ -1100,18 +1370,22 @@ mod tests {
     fn event_lane_allocates_contiguous_sequences_under_concurrent_callers() {
         let root = tempfile::tempdir().unwrap();
         let (owner, handle) = owner(root.path(), Duration::from_millis(20));
-        handle
-            .stage_and_flush(
-                RegistryDelta::default().upsert_task(task_record("concurrent", "admitted")),
-            )
+        let revision = handle
+            .stage(RegistryDelta::default().upsert_task(task_record("concurrent", "admitted")))
             .unwrap();
+        handle.ensure_task_admitted("concurrent", revision).unwrap();
         let mut workers = Vec::new();
         for ordinal in 0..16 {
             let handle = handle.clone();
             workers.push(thread::spawn(move || {
                 let _event_guard = handle.event_guard();
                 handle
-                    .append_event("concurrent", event(ordinal), None)
+                    .append_event(
+                        "concurrent",
+                        event(ordinal),
+                        handle.latest_revision(),
+                        false,
+                    )
                     .unwrap()
                     .seq
             }));
@@ -1132,15 +1406,25 @@ mod tests {
     }
 
     impl PersistenceBackend for FailOnceBackend {
+        fn append_delta(
+            &self,
+            _root: &Path,
+            _revisions: RegistryRevisionRange,
+            _delta: &RegistryDelta,
+        ) -> Result<u64> {
+            if self.failures_remaining.swap(0, Ordering::AcqRel) > 0 {
+                anyhow::bail!("injected WAL append failure");
+            }
+            Ok(1)
+        }
+
         fn save_checkpoint(
             &self,
             _root: &Path,
             _tasks: &TaskRegistry,
             _watches: &WatchRegistry,
+            _revision: RegistryRevision,
         ) -> Result<()> {
-            if self.failures_remaining.swap(0, Ordering::AcqRel) > 0 {
-                anyhow::bail!("injected checkpoint failure");
-            }
             Ok(())
         }
 
@@ -1159,7 +1443,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_checkpoint_remains_dirty_and_the_next_barrier_retries_it() {
+    fn failed_wal_append_remains_dirty_and_the_next_barrier_retries_it() {
         let root = tempfile::tempdir().unwrap();
         ensure_daemon_dir(root.path()).unwrap();
         let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
@@ -1172,16 +1456,114 @@ mod tests {
             Duration::ZERO,
             TaskRegistry::default(),
             WatchRegistry::default(),
+            RegistryRecoveryRevisions {
+                checkpoint: RegistryRevision::ZERO,
+                replayed: RegistryRevision::ZERO,
+            },
             backend,
         )
         .unwrap();
         let error = handle
             .stage_and_flush(RegistryDelta::default().upsert_task(task_record("retry", "latest")))
             .unwrap_err();
-        assert!(error.to_string().contains("injected checkpoint failure"));
+        assert!(error.to_string().contains("injected WAL append failure"));
         let metrics = handle.flush().unwrap();
-        assert_eq!(metrics.checkpoints_written, 1);
+        assert_eq!(metrics.wal_batches_appended, 1);
         assert_eq!(metrics.failures, 1);
+        let metrics = owner.shutdown(Duration::from_secs(5)).unwrap();
+        assert_eq!(metrics.checkpoints_written, 1);
+    }
+
+    struct CheckpointFailOnceBackend {
+        failures_remaining: AtomicUsize,
+    }
+
+    impl PersistenceBackend for CheckpointFailOnceBackend {
+        fn append_delta(
+            &self,
+            root: &Path,
+            revisions: RegistryRevisionRange,
+            delta: &RegistryDelta,
+        ) -> Result<u64> {
+            FilesystemBackend.append_delta(root, revisions, delta)
+        }
+
+        fn save_checkpoint(
+            &self,
+            root: &Path,
+            tasks: &TaskRegistry,
+            watches: &WatchRegistry,
+            revision: RegistryRevision,
+        ) -> Result<()> {
+            if self.failures_remaining.swap(0, Ordering::AcqRel) > 0 {
+                anyhow::bail!("injected checkpoint failure");
+            }
+            FilesystemBackend.save_checkpoint(root, tasks, watches, revision)
+        }
+
+        fn append_event(
+            &self,
+            root: &Path,
+            task_id: &str,
+            event: &DaemonEvent,
+        ) -> Result<DaemonEventFrame> {
+            FilesystemBackend.append_event(root, task_id, event)
+        }
+    }
+
+    #[test]
+    fn checkpoint_failure_keeps_the_durable_wal_replayable_and_retries_without_reappend() {
+        let root = tempfile::tempdir().unwrap();
+        ensure_daemon_dir(root.path()).unwrap();
+        let lease = acquire_daemon_task_store_lease(root.path()).unwrap();
+        let backend = Arc::new(CheckpointFailOnceBackend {
+            failures_remaining: AtomicUsize::new(1),
+        });
+        let (owner, handle) = PersistenceOwner::start_with_backend(
+            root.path().to_path_buf(),
+            Some(lease),
+            Duration::from_secs(60),
+            TaskRegistry::default(),
+            WatchRegistry::default(),
+            RegistryRecoveryRevisions {
+                checkpoint: RegistryRevision::ZERO,
+                replayed: RegistryRevision::ZERO,
+            },
+            backend,
+        )
+        .unwrap();
+
+        handle
+            .stage_and_flush(
+                RegistryDelta::default()
+                    .upsert_task(task_record("checkpoint-retry", "wal-durable")),
+            )
+            .unwrap();
+        assert_eq!(handle.metrics().wal_batches_appended, 1);
+        assert!(!handle.task_is_durably_admitted("checkpoint-retry"));
+        assert_eq!(
+            load_task_watch_registry_with_deltas(root.path())
+                .unwrap()
+                .tasks
+                .tasks["checkpoint-retry"]
+                .last_error
+                .as_deref(),
+            Some("wal-durable")
+        );
+
+        let error = handle.checkpoint_current().unwrap_err();
+        assert!(error.to_string().contains("injected checkpoint failure"));
+        assert_eq!(handle.metrics().wal_batches_appended, 1);
+        assert!(!handle.task_is_durably_admitted("checkpoint-retry"));
+
+        handle.checkpoint_current().unwrap();
+        assert_eq!(handle.metrics().wal_batches_appended, 1);
+        assert_eq!(handle.metrics().checkpoints_written, 1);
+        assert!(handle.task_is_durably_admitted("checkpoint-retry"));
+        assert!(load_task_registry(root.path())
+            .unwrap()
+            .tasks
+            .contains_key("checkpoint-retry"));
         owner.shutdown(Duration::from_secs(5)).unwrap();
     }
 
@@ -1206,16 +1588,26 @@ mod tests {
     }
 
     impl PersistenceBackend for BlockingBackend {
+        fn append_delta(
+            &self,
+            _root: &Path,
+            _revisions: RegistryRevisionRange,
+            _delta: &RegistryDelta,
+        ) -> Result<u64> {
+            if let Some(started) = lock_unpoisoned(&self.started).take() {
+                let _ = started.send(());
+                let _ = lock_unpoisoned(&self.release).recv();
+            }
+            Ok(1)
+        }
+
         fn save_checkpoint(
             &self,
             _root: &Path,
             _tasks: &TaskRegistry,
             _watches: &WatchRegistry,
+            _revision: RegistryRevision,
         ) -> Result<()> {
-            if let Some(started) = lock_unpoisoned(&self.started).take() {
-                let _ = started.send(());
-                let _ = lock_unpoisoned(&self.release).recv();
-            }
             Ok(())
         }
 
@@ -1251,6 +1643,10 @@ mod tests {
             Duration::ZERO,
             TaskRegistry::default(),
             WatchRegistry::default(),
+            RegistryRecoveryRevisions {
+                checkpoint: RegistryRevision::ZERO,
+                replayed: RegistryRevision::ZERO,
+            },
             backend,
         )
         .unwrap();
