@@ -88,8 +88,8 @@ before returning success. A missing task is an idempotent success. See the
 ### Task Streaming
 
 ```
-DaemonRequest::TaskSubscribe { task_id, replay_last }
-→ DaemonResponse::TaskSubscribeAck { task_id, replayed }
+DaemonRequest::TaskSubscribe { task_id, replay_last, after_seq }
+→ DaemonResponse::TaskSubscribeAck { task_id, replayed, after_seq }
 → (streaming) step_started, step_completed, step_failed, replan_applied, context_updated
 ```
 
@@ -101,7 +101,10 @@ After the initial ack, the connection stays open and the daemon streams per-step
 - `replan_applied`: Reactive mutation applied to the sequence
 - `context_updated`: Summary of working set tokens and evictable tokens
 
-`replay_last: true` replays the most recent event for each completed step.
+`replay_last` is an integer tail count. `0` replays every event after the
+optional `after_seq` cursor; a positive value replays at most that many of the
+newest events after the cursor. Live events continue from the acknowledged
+sequence.
 
 ### Watch Management
 
