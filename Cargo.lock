@@ -1453,6 +1453,7 @@ version = "0.2.63"
 dependencies = [
  "blake3",
  "constant_time_eq",
+ "libc",
  "serde",
  "serde_json",
  "suite-packet-core",

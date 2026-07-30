@@ -3,7 +3,8 @@ use super::*;
 use fs2::FileExt;
 use packet28_daemon_core::storage::load_task_registry;
 use packet28_daemon_protocol::message::{DaemonTransportAuth, DAEMON_TRANSPORT_SECRET_BYTES};
-use std::os::unix::fs::MetadataExt as _;
+use packet28_daemon_protocol::paths::workspace_socket_path;
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 static TCP_TRANSPORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -43,6 +44,44 @@ where
     let mut body = vec![0_u8; len];
     stream.read_exact(&mut body).await.unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+#[test]
+fn bound_unix_socket_is_owner_only_and_owned_by_effective_user() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let socket = directory.path().join("packet28d.sock");
+
+    let listener = bind_unix_listener(&socket).unwrap();
+
+    let metadata = std::fs::symlink_metadata(&socket).unwrap();
+    assert!(metadata.file_type().is_socket());
+    assert_eq!(
+        (metadata.uid(), metadata.permissions().mode() & 0o777),
+        (effective_uid(), 0o600)
+    );
+    drop(listener);
+}
+
+#[test]
+fn denied_primary_unix_socket_falls_back_to_workspace_endpoint() {
+    if effective_uid() == 0 {
+        return;
+    }
+    let root = tempfile::TempDir::new().unwrap();
+    ensure_daemon_dir(root.path()).unwrap();
+    let denied_parent = root.path().join("denied-primary");
+    std::fs::create_dir(&denied_parent).unwrap();
+    std::fs::set_permissions(&denied_parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let primary = denied_parent.join("packet28d.sock");
+
+    let listener = bind_preferred_daemon_listener(root.path(), &primary).unwrap();
+
+    std::fs::set_permissions(&denied_parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        listener.endpoint(),
+        workspace_socket_path(root.path()).display().to_string()
+    );
+    drop(listener);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{BufRead, BufReader, Read as _, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 #[cfg(any(not(unix), test))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -133,19 +135,38 @@ pub struct TaskEventLogRead {
     pub next_offset: u64,
 }
 
-/// Creates the daemon state and socket directories for `root`.
+/// Creates the daemon state directory for `root`.
 ///
 /// # Errors
 ///
-/// Returns [`DaemonCoreError::Io`] if either directory cannot be created.
+/// Returns [`DaemonCoreError::Io`] if the directory cannot be created.
 pub fn ensure_daemon_dir(root: &Path) -> Result<PathBuf> {
     let dir = daemon_dir(root);
     fs::create_dir_all(&dir)
         .map_err(|source| DaemonCoreError::io("failed to create daemon directory", &dir, source))?;
+    #[cfg(not(unix))]
+    ensure_daemon_socket_dir(root)?;
+    Ok(dir)
+}
+
+/// Creates and authenticates the preferred daemon socket directory for `root`.
+///
+/// Unix endpoints use a private effective-user-specific directory with exact
+/// `0700` permissions. Existing directories are accepted only when their
+/// ownership, mode, ACL, file type, and namespace ancestry remain safe.
+///
+/// # Errors
+///
+/// Returns [`DaemonCoreError::Io`] when the directory cannot be created or its
+/// authority cannot be authenticated.
+pub fn ensure_daemon_socket_dir(root: &Path) -> Result<PathBuf> {
     let socket_dir = socket_path(root)
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(std::env::temp_dir);
+    #[cfg(unix)]
+    ensure_private_socket_directory(&socket_dir)?;
+    #[cfg(not(unix))]
     fs::create_dir_all(&socket_dir).map_err(|source| {
         DaemonCoreError::io(
             "failed to create daemon socket directory",
@@ -153,7 +174,108 @@ pub fn ensure_daemon_dir(root: &Path) -> Result<PathBuf> {
             source,
         )
     })?;
-    Ok(dir)
+    Ok(socket_dir)
+}
+
+#[cfg(unix)]
+fn ensure_private_socket_directory(path: &Path) -> Result<()> {
+    let created = match fs::DirBuilder::new().mode(0o700).create(path) {
+        Ok(()) => true,
+        Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(source) => {
+            return Err(DaemonCoreError::io(
+                "failed to create private daemon socket directory",
+                path,
+                source,
+            ));
+        }
+    };
+    if created {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|source| {
+            DaemonCoreError::io(
+                "failed to set private daemon socket directory permissions",
+                path,
+                source,
+            )
+        })?;
+    }
+    validate_socket_namespace_aliases(path).map_err(|source| {
+        DaemonCoreError::io(
+            "failed to authenticate daemon socket namespace ancestry",
+            path,
+            source,
+        )
+    })?;
+    let canonical_path = fs::canonicalize(path).map_err(|source| {
+        DaemonCoreError::io(
+            "failed to resolve daemon socket namespace ancestry",
+            path,
+            source,
+        )
+    })?;
+    validate_socket_namespace_aliases(&canonical_path).map_err(|source| {
+        DaemonCoreError::io(
+            "failed to authenticate resolved daemon socket namespace ancestry",
+            &canonical_path,
+            source,
+        )
+    })?;
+    CapabilityDir::open_private(path, 0o700)
+        .map(|_| ())
+        .map_err(|source| {
+            DaemonCoreError::io(
+                "failed to authenticate private daemon socket directory",
+                path,
+                source,
+            )
+        })
+}
+
+#[cfg(unix)]
+fn validate_socket_namespace_aliases(path: &Path) -> std::io::Result<()> {
+    let effective_uid = rustix::process::geteuid().as_raw();
+    let mut child_uid = fs::symlink_metadata(path)?.uid();
+    for ancestor in path.ancestors().skip(1) {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        let file_type = metadata.file_type();
+        if !file_type.is_dir() && !file_type.is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "daemon socket namespace ancestor is neither a directory nor a symlink: {}",
+                    ancestor.display()
+                ),
+            ));
+        }
+        let owner_uid = metadata.uid();
+        if owner_uid != effective_uid && owner_uid != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "daemon socket namespace ancestor is owned by uid {owner_uid}; \
+                     expected uid {effective_uid} or root: {}",
+                    ancestor.display()
+                ),
+            ));
+        }
+        if file_type.is_dir() {
+            let mode = metadata.mode();
+            let non_owner_writable = (mode & 0o022) != 0;
+            let sticky = (mode & 0o1000) != 0;
+            if non_owner_writable && !(sticky && child_uid == effective_uid) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "daemon socket namespace ancestor permits replacement without safe \
+                         sticky ownership semantics: {}",
+                        ancestor.display()
+                    ),
+                ));
+            }
+        }
+        child_uid = owner_uid;
+    }
+    Ok(())
 }
 
 /// Loads the workspace active-task record through the shared bounded contract.
@@ -4399,6 +4521,89 @@ mod tests {
 
     fn task_event_path(root: &Path, task_id: &str) -> PathBuf {
         task_event_log_path(root, &task_storage_id(task_id))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_socket_directory_is_created_with_exact_owner_only_permissions() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let root = tempdir().unwrap();
+        let socket_dir = root.path().join("socket-parent");
+
+        ensure_private_socket_directory(&socket_dir).unwrap();
+
+        let metadata = fs::symlink_metadata(&socket_dir).unwrap();
+        // SAFETY: `geteuid` has no preconditions and does not retain pointers.
+        let effective_uid = unsafe { libc::geteuid() };
+        assert_eq!(
+            (metadata.uid(), metadata.permissions().mode() & 0o777),
+            (effective_uid, 0o700)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_socket_directory_rejects_existing_permissive_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempdir().unwrap();
+        let socket_dir = root.path().join("socket-parent");
+        fs::create_dir(&socket_dir).unwrap();
+        fs::set_permissions(&socket_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = ensure_private_socket_directory(&socket_dir).unwrap_err();
+
+        assert!(format!("{error:#}").contains("expected mode 700"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_socket_directory_rejects_symlink_substitution() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let target = root.path().join("target");
+        let socket_dir = root.path().join("socket-parent");
+        fs::create_dir(&target).unwrap();
+        symlink(&target, &socket_dir).unwrap();
+
+        let error = ensure_private_socket_directory(&socket_dir).unwrap_err();
+
+        assert!(format!("{error:#}").contains("authenticate private daemon socket directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_socket_directory_rejects_replaceable_parent_ancestry() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempdir().unwrap();
+        let replaceable_parent = root.path().join("replaceable-parent");
+        let socket_dir = replaceable_parent.join("socket-parent");
+        fs::create_dir(&replaceable_parent).unwrap();
+        fs::set_permissions(&replaceable_parent, fs::Permissions::from_mode(0o777)).unwrap();
+
+        let error = ensure_private_socket_directory(&socket_dir).unwrap_err();
+
+        assert!(format!("{error:#}")
+            .contains("namespace ancestor permits replacement without safe sticky ownership"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_socket_directory_accepts_sticky_shared_parent_ancestry() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempdir().unwrap();
+        let sticky_parent = root.path().join("sticky-parent");
+        let socket_dir = sticky_parent.join("socket-parent");
+        fs::create_dir(&sticky_parent).unwrap();
+        fs::set_permissions(&sticky_parent, fs::Permissions::from_mode(0o1777)).unwrap();
+
+        ensure_private_socket_directory(&socket_dir).unwrap();
+
+        assert!(socket_dir.is_dir());
     }
 
     #[cfg(unix)]

@@ -452,6 +452,42 @@ impl CapabilityDir {
         Self::open_with_acl_policy(path, AclPolicy::StrictEmpty)
     }
 
+    pub(super) fn open_private(path: &Path, expected_mode: RawMode) -> io::Result<Self> {
+        let parent = path.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "private capability directory has no parent: {}",
+                    path.display()
+                ),
+            )
+        })?;
+        let name = path.file_name().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "private capability directory has no file name: {}",
+                    path.display()
+                ),
+            )
+        })?;
+        let canonical_parent = std::fs::canonicalize(parent)?;
+        let canonical = canonical_parent.join(name);
+        let fd = rfs::open(&canonical, DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)?;
+        let stat = rfs::fstat(&fd).map_err(io::Error::from)?;
+        validate_owned_directory(
+            &stat,
+            canonical.as_os_str(),
+            stat.st_dev as u64,
+            "private capability directory",
+        )?;
+        validate_workspace_namespace_ancestors(&canonical, &stat)?;
+        let directory = Self::from_fd(fd, canonical)?;
+        directory.validate_private(expected_mode)?;
+        directory.validate_display_path_attachment()?;
+        Ok(directory)
+    }
+
     pub(super) fn open_workspace(path: &Path) -> io::Result<Self> {
         #[cfg(test)]
         OPEN_WORKSPACE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
@@ -2493,7 +2529,7 @@ impl CapabilityDir {
         sync_directory_barrier(&self.fd)
     }
 
-    fn validate_private(&self, expected_mode: RawMode) -> io::Result<()> {
+    pub(super) fn validate_private(&self, expected_mode: RawMode) -> io::Result<()> {
         let stat = rfs::fstat(&self.fd).map_err(io::Error::from)?;
         let actual_mode = (stat.st_mode as u32) & 0o777;
         let expected_mode = (expected_mode as u32) & 0o777;

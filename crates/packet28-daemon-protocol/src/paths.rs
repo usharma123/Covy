@@ -177,6 +177,14 @@ pub fn daemon_dir(root: &Path) -> PathBuf {
     root.join(DAEMON_DIR_NAME)
 }
 
+#[cfg(unix)]
+fn socket_dir() -> PathBuf {
+    // SAFETY: `geteuid` has no preconditions and does not retain pointers.
+    let effective_uid = unsafe { libc::geteuid() };
+    std::env::temp_dir().join(format!("{SOCKET_DIR_NAME}-{effective_uid}"))
+}
+
+#[cfg(not(unix))]
 fn socket_dir() -> PathBuf {
     std::env::temp_dir().join(SOCKET_DIR_NAME)
 }
@@ -319,6 +327,22 @@ mod tests {
         );
         assert!(socket.to_string_lossy().len() < 104);
         assert_ne!(socket, daemon_dir(&root).join(SOCKET_FILE_NAME));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_path_uses_an_effective_user_specific_parent() {
+        let root = tempdir().unwrap();
+        let socket = socket_path(root.path());
+        // SAFETY: `geteuid` has no preconditions and does not retain pointers.
+        let effective_uid = unsafe { libc::geteuid() };
+
+        assert_eq!(
+            socket.parent().and_then(Path::file_name),
+            Some(std::ffi::OsStr::new(&format!(
+                "{SOCKET_DIR_NAME}-{effective_uid}"
+            )))
+        );
     }
 
     #[test]

@@ -32,6 +32,8 @@ use std::io::{BufReader, BufWriter, Read, Write};
 #[cfg(unix)]
 use std::net::TcpStream;
 #[cfg(unix)]
+use std::os::fd::AsRawFd as _;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
@@ -499,6 +501,12 @@ fn daemon_status_existing(root: &Path) -> Result<DaemonStatus> {
 fn connect_daemon_socket(socket: &Path) -> Result<DaemonStream> {
     let stream = UnixStream::connect(socket)
         .with_context(|| format!("failed to connect to '{}'", socket.display()))?;
+    verify_unix_server_peer(&stream, effective_uid()).with_context(|| {
+        format!(
+            "failed to authenticate Unix daemon endpoint '{}'",
+            socket.display()
+        )
+    })?;
     stream
         .set_read_timeout(Some(DAEMON_SOCKET_TIMEOUT))
         .with_context(|| {
@@ -516,6 +524,88 @@ fn connect_daemon_socket(socket: &Path) -> Result<DaemonStream> {
             )
         })?;
     Ok(DaemonStream::Unix(stream))
+}
+
+#[cfg(unix)]
+fn verify_unix_server_peer(stream: &UnixStream, expected_uid: u32) -> Result<()> {
+    let peer_uid = unix_peer_uid(stream)?;
+    if peer_uid != expected_uid {
+        anyhow::bail!(
+            "Unix daemon peer uid {peer_uid} does not match client effective uid {expected_uid}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
+    let mut credentials = std::mem::MaybeUninit::<libc::ucred>::uninit();
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `credentials` and `length` point to writable storage of the
+    // declared sizes, and `stream` owns a live connected Unix socket.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            credentials.as_mut_ptr().cast(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if length as usize != std::mem::size_of::<libc::ucred>() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Unix peer credential response had an unexpected size",
+        ));
+    }
+    // SAFETY: a successful `getsockopt(SO_PEERCRED)` initialized the complete
+    // `ucred` value after the exact returned length was validated.
+    Ok(unsafe { credentials.assume_init() }.uid)
+}
+
+#[cfg(any(
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
+    let mut uid = 0;
+    let mut gid = 0;
+    // SAFETY: `uid` and `gid` are valid writable outputs and `stream` owns a
+    // live connected Unix socket for the duration of the call.
+    let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+    if result == 0 {
+        Ok(uid)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_vendor = "apple",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)))]
+fn unix_peer_uid(_stream: &UnixStream) -> std::io::Result<u32> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Unix peer credential verification is unavailable on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn effective_uid() -> u32 {
+    // SAFETY: `geteuid` has no preconditions and does not retain pointers.
+    unsafe { libc::geteuid() }
 }
 
 #[cfg(unix)]
@@ -768,6 +858,38 @@ mod tests {
         assert!(error
             .to_string()
             .contains("failed to authenticate daemon runtime discovery"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_daemon_peer_authentication_accepts_the_effective_user() {
+        use std::os::unix::net::UnixListener;
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let stream = UnixStream::connect(&socket).unwrap();
+        let _accepted = listener.accept().unwrap();
+
+        verify_unix_server_peer(&stream, effective_uid()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_daemon_peer_authentication_rejects_substituted_owner() {
+        use std::os::unix::net::UnixListener;
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("daemon.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let stream = UnixStream::connect(&socket).unwrap();
+        let _accepted = listener.accept().unwrap();
+
+        let error = verify_unix_server_peer(&stream, effective_uid() ^ 1).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("does not match client effective uid"));
     }
 
     #[cfg(unix)]

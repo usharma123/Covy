@@ -18,8 +18,12 @@ memory, reducer, search, or transport-loop implementations.
 Loopback TCP uses `message::DaemonTransportAuth` as a mandatory first frame.
 The daemon publishes that per-instance 256-bit capability only inside its
 owner-authenticated `runtime.json`; Unix sockets authenticate the peer through
-operating-system credentials instead. Clients must never fall back to sending
-ordinary requests on a TCP connection when the capability is absent.
+operating-system credentials in both directions instead. The preferred Unix
+socket lives in an effective-user-specific, owner-only temporary directory;
+the daemon authenticates that directory's owner, mode, ACL, and safe ancestry
+before binding. Clients must authenticate the connected server UID before
+sending a frame and must never fall back to sending ordinary requests on a TCP
+connection when the capability is absent.
 
 ## Migrating from `packet28-daemon-core`
 

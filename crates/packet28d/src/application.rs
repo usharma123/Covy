@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::io::{ErrorKind, Read as _};
 use std::net::TcpListener;
-use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,8 +12,9 @@ use anyhow::{anyhow, Context, Result};
 use context_kernel_core::{Kernel, PersistConfig};
 use packet28_daemon_core::retention::recover_task_store_quarantine_and_acquire_daemon_lease;
 use packet28_daemon_core::storage::{
-    ensure_daemon_dir, load_task_watch_registry_checkpoint_with_event_tails, now_unix,
-    remove_runtime_files, write_runtime_info,
+    ensure_daemon_dir, ensure_daemon_socket_dir,
+    load_task_watch_registry_checkpoint_with_event_tails, now_unix, remove_runtime_files,
+    write_runtime_info,
 };
 use packet28_daemon_core::task_store_lease::acquire_daemon_instance_lease;
 use packet28_daemon_protocol::message::{
@@ -1155,52 +1156,106 @@ fn bind_daemon_listener(root: &Path) -> Result<DaemonListener> {
         return bind_tcp_listener("PACKET28D_FORCE_TCP requested TCP daemon transport");
     }
     let primary = socket_path(root);
-    cleanup_socket_before_bind(&primary)?;
-    match UnixListener::bind(&primary) {
-        Ok(listener) => {
-            let owner_uid = unix_socket_owner_uid(&primary)?;
-            Ok(DaemonListener::Unix {
-                endpoint: primary,
-                listener,
-                owner_uid,
-            })
+    if let Err(error) = ensure_daemon_socket_dir(root) {
+        daemon_log(&format!(
+            "falling back to workspace socket after private temp socket directory authentication failed: {error:#}"
+        ));
+        return bind_workspace_listener_or_tcp(root, &primary, &error.to_string());
+    }
+    bind_preferred_daemon_listener(root, &primary)
+}
+
+pub(crate) fn bind_preferred_daemon_listener(
+    root: &Path,
+    primary: &Path,
+) -> Result<DaemonListener> {
+    match bind_unix_listener(primary) {
+        Ok(listener) => Ok(listener),
+        Err(primary_error) if io_error_is_permission_denied(&primary_error) => {
+            bind_workspace_listener_or_tcp(root, primary, &primary_error.to_string())
         }
-        Err(primary_err) if bind_io_error_is_permission_denied(&primary_err) => {
-            let fallback = workspace_socket_path(root);
-            daemon_log(&format!(
-                "falling back to workspace socket '{}' after temp socket bind failed: {primary_err}",
-                fallback.display()
-            ));
-            cleanup_socket_before_bind(&fallback)?;
-            match UnixListener::bind(&fallback) {
-                Ok(listener) => {
-                    let owner_uid = unix_socket_owner_uid(&fallback)?;
-                    Ok(DaemonListener::Unix {
-                        endpoint: fallback,
-                        listener,
-                        owner_uid,
-                    })
-                }
-                Err(fallback_err) => {
-                    daemon_log(&format!(
-                        "falling back to TCP after workspace socket bind failed: {fallback_err}"
-                    ));
-                    bind_tcp_listener(&format!(
-                        "Unix sockets '{}' and '{}' were denied",
-                        primary.display(),
-                        fallback.display()
-                    ))
-                }
-            }
-        }
-        Err(err) => Err(err).with_context(|| format!("failed to bind '{}'", primary.display())),
+        Err(error) => Err(error),
     }
 }
 
-fn bind_io_error_is_permission_denied(err: &std::io::Error) -> bool {
-    err.kind() == ErrorKind::PermissionDenied
-        || err.raw_os_error() == Some(1)
-        || err.to_string().contains("Operation not permitted")
+fn bind_workspace_listener_or_tcp(
+    root: &Path,
+    primary: &Path,
+    primary_error: &str,
+) -> Result<DaemonListener> {
+    let fallback = workspace_socket_path(root);
+    daemon_log(&format!(
+        "falling back to workspace socket '{}' after temp socket '{}' failed: {primary_error}",
+        fallback.display(),
+        primary.display()
+    ));
+    match bind_unix_listener(&fallback) {
+        Ok(listener) => Ok(listener),
+        Err(fallback_error) => {
+            daemon_log(&format!(
+                "falling back to TCP after workspace socket bind failed: {fallback_error:#}"
+            ));
+            bind_tcp_listener(&format!(
+                "Unix sockets '{}' and '{}' were unavailable",
+                primary.display(),
+                fallback.display()
+            ))
+        }
+    }
+}
+
+pub(crate) fn bind_unix_listener(endpoint: &Path) -> Result<DaemonListener> {
+    cleanup_socket_before_bind(endpoint)?;
+    let listener = UnixListener::bind(endpoint)
+        .with_context(|| format!("failed to bind '{}'", endpoint.display()))?;
+    if let Err(error) = authenticate_bound_unix_socket(endpoint) {
+        drop(listener);
+        let _ = fs::remove_file(endpoint);
+        return Err(error);
+    }
+    Ok(DaemonListener::Unix {
+        endpoint: endpoint.to_path_buf(),
+        listener,
+        owner_uid: effective_uid(),
+    })
+}
+
+fn authenticate_bound_unix_socket(socket: &Path) -> Result<()> {
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to secure Unix daemon socket '{}'", socket.display()))?;
+    let metadata = fs::symlink_metadata(socket).with_context(|| {
+        format!(
+            "failed to authenticate Unix daemon socket '{}'",
+            socket.display()
+        )
+    })?;
+    let effective_uid = effective_uid();
+    let mode = metadata.permissions().mode() & 0o777;
+    if !metadata.file_type().is_socket() || metadata.uid() != effective_uid || mode != 0o600 {
+        anyhow::bail!(
+            "Unix daemon socket '{}' failed owner/mode authentication: \
+             socket={} uid={} mode={mode:o}; expected uid={effective_uid} mode=600",
+            socket.display(),
+            metadata.file_type().is_socket(),
+            metadata.uid()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn effective_uid() -> u32 {
+    // SAFETY: `geteuid` has no preconditions and does not retain pointers.
+    unsafe { libc::geteuid() }
+}
+
+fn io_error_is_permission_denied(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            error.kind() == ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(1)
+                || error.to_string().contains("Operation not permitted")
+        })
+    })
 }
 
 pub(crate) fn bind_tcp_listener(reason: &str) -> Result<DaemonListener> {
@@ -1225,15 +1280,4 @@ fn generate_daemon_transport_auth() -> Result<DaemonTransportAuth> {
         .read_exact(&mut secret)
         .context("failed to read daemon TCP capability from operating-system random source")?;
     Ok(DaemonTransportAuth::from_secret_bytes(secret))
-}
-
-fn unix_socket_owner_uid(socket: &Path) -> Result<u32> {
-    fs::symlink_metadata(socket)
-        .with_context(|| {
-            format!(
-                "failed to inspect Unix daemon socket '{}'",
-                socket.display()
-            )
-        })
-        .map(|metadata| metadata.uid())
 }

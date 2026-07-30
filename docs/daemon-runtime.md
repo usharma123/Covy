@@ -153,11 +153,15 @@ are in [Task-store retention](task-store-retention.md).
 
 ## Transport, endpoint discovery, and compatibility
 
-Unix domain sockets are the primary transport. A workspace-local Unix socket
-is the permission fallback; forced TCP and Unix-permission failure use a
-loopback TCP listener. Both transports use an eight-byte big-endian length
-followed by one bounded JSON value, the same cancellation signal, connection
-cap, read/write deadlines, and owned Tokio connection task set.
+Unix domain sockets are the primary transport. The preferred socket is placed
+under an effective-user-specific `0700` temporary directory whose owner, mode,
+ACL, and namespace ancestry are authenticated before bind. A workspace-local
+Unix socket is the permission fallback; forced TCP and Unix-permission failure
+use a loopback TCP listener. Bound Unix socket nodes are owner-authenticated
+and published with `0600` permissions. Both transports use an eight-byte
+big-endian length followed by one bounded JSON value, the same cancellation
+signal, connection cap, read/write deadlines, and owned Tokio connection task
+set.
 TCP authentication has its own smaller pending-connection cap and one-second
 default deadline. An unauthenticated peer therefore cannot consume the normal
 authenticated connection budget; both controls are independently configurable.
@@ -174,13 +178,14 @@ remain owner-readable with conventional `0644` permissions.
 The client sends that value as the first framed message and waits for an
 authentication acknowledgement before sending any `DaemonRequest`.
 
-Unix accepts fail closed unless the operating-system peer credential UID
-matches the daemon's effective UID. TCP accepts fail closed on a missing,
-malformed, stale, or incorrect capability; authentication failures all use the
-same response and cannot dispatch commands. A `0.2.x` runtime file that names a
-TCP endpoint without `transport_auth` is treated as a legacy insecure daemon:
-the upgraded client reports an explicit stop-and-restart migration error
-instead of using it.
+Unix authentication is mutual: accepts fail closed unless the client
+credential UID matches the daemon's effective UID, and clients verify the
+connected server credential UID before sending any frame. TCP accepts fail
+closed on a missing, malformed, stale, or incorrect capability; authentication
+failures all use the same response and cannot dispatch commands. A `0.2.x`
+runtime file that names a TCP endpoint without `transport_auth` is treated as a
+legacy insecure daemon: the upgraded client reports an explicit
+stop-and-restart migration error instead of using it.
 
 Subscriber and watch queues are bounded. A slow subscriber is disconnected
 after its queued frames drain and resumes from its last sequence with
