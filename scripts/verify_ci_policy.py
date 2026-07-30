@@ -603,6 +603,29 @@ def verify_release_package_smoke(errors: list[str]) -> None:
     )
 
 
+def audit_finalization_wiring_errors(full_gate: str) -> list[str]:
+    release_gate = re.search(
+        r'if \[\[ -n "\$release_tag" \]\]; then(?P<body>.*?)\nfi',
+        full_gate,
+        re.DOTALL,
+    )
+    release_body = (
+        release_gate.group("body").replace("\\\n", " ")
+        if release_gate is not None
+        else ""
+    )
+    if release_gate is not None and re.search(
+        r"run_cmd\s+python3\s+scripts/check_architecture_audit_ledger\.py\s+"
+        r"--final\s+--source-rev\s+HEAD\^",
+        release_body,
+    ):
+        return []
+    return [
+        "tag-aware canonical gate does not strictly finalize the audit "
+        "ledger against HEAD^"
+    ]
+
+
 def verify_workflow_wiring(errors: list[str]) -> None:
     build = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
     release = (WORKFLOW_DIR / "release.yml").read_text(encoding="utf-8")
@@ -625,6 +648,7 @@ def verify_workflow_wiring(errors: list[str]) -> None:
         errors.append("canonical gate does not run architecture-checker unit tests")
     if "run_cmd python3 scripts/check_architecture_audit_ledger.py" not in full_gate:
         errors.append("canonical gate does not run the architecture-audit ledger checker")
+    errors.extend(audit_finalization_wiring_errors(full_gate))
     if "run_cmd python3 scripts/check_instruction_claims.py" not in full_gate:
         errors.append("canonical gate does not run the instruction-claim checker")
     if "run_cmd python3 scripts/check_rust_hazards.py" not in full_gate:

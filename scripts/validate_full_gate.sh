@@ -81,6 +81,11 @@ run_cmd python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 run_cmd cargo test --locked -p packet28-search-core --test module_architecture --all-features
 
 if [[ -n "$release_tag" ]]; then
+  # A release tag must point at the ledger-only finalization commit. The
+  # immediately preceding revision is the exact source snapshot recorded by
+  # that ledger commit.
+  run_cmd python3 scripts/check_architecture_audit_ledger.py \
+    --final --source-rev HEAD^
   run_cmd python3 scripts/verify_release_version.py --root . --tag "$release_tag"
 fi
 

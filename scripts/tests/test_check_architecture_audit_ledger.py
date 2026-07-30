@@ -189,6 +189,11 @@ class ArchitectureAuditLedgerTests(unittest.TestCase):
                 "validate_finalization",
                 return_value=[],
             ) as validate_final,
+            mock.patch.object(
+                ledger,
+                "validate_closing_commits",
+                return_value=[],
+            ) as validate_commits,
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(
@@ -200,6 +205,10 @@ class ArchitectureAuditLedgerTests(unittest.TestCase):
             self.ledger_text,
             self.FINAL_COMMIT,
             self.FINAL_TREE,
+        )
+        validate_commits.assert_called_once_with(
+            self.ledger_text,
+            self.FINAL_COMMIT,
         )
 
     def test_source_revision_resolution_matches_git(self) -> None:
@@ -218,6 +227,59 @@ class ArchitectureAuditLedgerTests(unittest.TestCase):
             stdout=subprocess.PIPE,
         ).stdout.strip()
         self.assertEqual(ledger.resolve_source_revision("HEAD"), (commit, tree))
+
+    def test_finalization_rejects_an_unresolvable_closing_commit(self) -> None:
+        completed = self.completed_ledger().replace(
+            "`8e18750`",
+            "`deadbee`",
+            1,
+        )
+
+        def resolve(reference: str) -> str:
+            if reference == "deadbee":
+                raise subprocess.CalledProcessError(
+                    128,
+                    ["git", "rev-parse"],
+                    stderr="unknown revision",
+                )
+            return reference.ljust(40, "0")
+
+        errors = ledger.validate_closing_commits(
+            completed,
+            self.FINAL_COMMIT,
+            resolver=resolve,
+            ancestor_check=lambda _ancestor, _descendant: True,
+        )
+
+        self.assertTrue(
+            any(
+                "closing commit deadbee for rows API-01E does not resolve"
+                in error
+                for error in errors
+            )
+        )
+
+    def test_finalization_rejects_a_closing_commit_outside_source_history(
+        self,
+    ) -> None:
+        completed = self.completed_ledger()
+
+        errors = ledger.validate_closing_commits(
+            completed,
+            self.FINAL_COMMIT,
+            resolver=lambda reference: reference.ljust(40, "0"),
+            ancestor_check=lambda ancestor, _descendant: not ancestor.startswith(
+                "8e18750"
+            ),
+        )
+
+        self.assertTrue(
+            any(
+                "closing commit 8e18750 for rows API-01E is not reachable"
+                in error
+                for error in errors
+            )
+        )
 
     def test_missing_source_row_is_rejected(self) -> None:
         mutated = "\n".join(

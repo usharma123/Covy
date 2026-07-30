@@ -203,6 +203,7 @@ SOURCE_ID_RE = re.compile(r"^[A-Z]+-\d{2}(?:[A-Z])?$")
 COORDINATE_RE = re.compile(r"\bL(\d+)(?:[–-](\d+))?")
 ANCHOR_RE = re.compile(r"#([a-z][a-z0-9-]+)")
 COMMIT_RE = re.compile(r"`[0-9a-f]{7,40}`")
+COMMIT_TOKEN_RE = re.compile(r"`([0-9a-f]{7,40})`")
 SOURCE_ROWS_BEGIN = "<!-- BEGIN: SOURCE-DERIVED-AUDIT-ROWS -->"
 SOURCE_ROWS_END = "<!-- END: SOURCE-DERIVED-AUDIT-ROWS -->"
 ALIAS_BEGIN = "<!-- BEGIN: LEGACY-AUDIT-ID-ALIASES -->"
@@ -645,6 +646,82 @@ def resolve_source_revision(revision: str) -> tuple[str, str]:
     return commit, tree
 
 
+def resolve_commit_reference(reference: str) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "--verify", f"{reference}^{{commit}}"],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout.strip()
+
+
+def commit_is_ancestor(ancestor: str, descendant: str) -> bool:
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=ROOT,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode not in (0, 1):
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            stderr=result.stderr,
+        )
+    return result.returncode == 0
+
+
+def validate_closing_commits(
+    ledger: str,
+    source_commit: str,
+    *,
+    resolver=resolve_commit_reference,
+    ancestor_check=commit_is_ancestor,
+) -> list[str]:
+    """Require every DONE-row closing commit to resolve within the source history."""
+
+    errors: list[str] = []
+    references: dict[str, set[str]] = {}
+    for line in ledger.splitlines():
+        match = ROW_RE.match(line)
+        if match is None:
+            continue
+        cells = markdown_cells(line)
+        if len(cells) != 9 or cells[8] != "DONE":
+            continue
+        for reference in COMMIT_TOKEN_RE.findall(cells[7]):
+            references.setdefault(reference, set()).add(match.group(1))
+
+    for reference, row_ids in sorted(references.items()):
+        rows = ", ".join(sorted(row_ids))
+        try:
+            resolved = resolver(reference)
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or "").strip() or str(error)
+            errors.append(
+                f"closing commit {reference} for rows {rows} does not resolve: {detail}"
+            )
+            continue
+        try:
+            reachable = ancestor_check(resolved, source_commit)
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or "").strip() or str(error)
+            errors.append(
+                f"cannot verify closing commit {reference} for rows {rows}: {detail}"
+            )
+            continue
+        if not reachable:
+            errors.append(
+                f"closing commit {reference} for rows {rows} is not reachable "
+                f"from source commit {source_commit}"
+            )
+    return errors
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate the architecture-audit ledger.",
@@ -689,6 +766,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
         errors = validate_finalization(ledger, source_commit, source_tree)
+        errors.extend(validate_closing_commits(ledger, source_commit))
         if errors:
             for error in errors:
                 print(f"audit ledger finalization failed: {error}", file=sys.stderr)

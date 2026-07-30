@@ -68,6 +68,39 @@ class ReproducibleCargoPolicyTests(unittest.TestCase):
                 )
 
 
+class CanonicalGatePolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.full_gate = (
+            verify_ci_policy.ROOT / "scripts" / "validate_full_gate.sh"
+        ).read_text(encoding="utf-8")
+
+    def test_repository_release_gate_strictly_finalizes_the_audit_ledger(
+        self,
+    ) -> None:
+        self.assertEqual(
+            verify_ci_policy.audit_finalization_wiring_errors(self.full_gate),
+            [],
+        )
+
+    def test_rejects_release_gate_without_strict_ledger_finalization(
+        self,
+    ) -> None:
+        unsafe = self.full_gate.replace(
+            "  run_cmd python3 scripts/check_architecture_audit_ledger.py \\\n"
+            "    --final --source-rev HEAD^\n",
+            "",
+            1,
+        )
+        self.assertEqual(
+            verify_ci_policy.audit_finalization_wiring_errors(unsafe),
+            [
+                "tag-aware canonical gate does not strictly finalize the "
+                "audit ledger against HEAD^"
+            ],
+        )
+
+
 class AutofixSecurityPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
