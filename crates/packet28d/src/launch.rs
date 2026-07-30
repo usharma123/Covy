@@ -58,6 +58,12 @@ fn process_group_exists(process: OwnedChildProcess) -> Result<bool> {
     })
 }
 
+pub(crate) fn current_process_group() -> i32 {
+    // SAFETY: `getpgrp` has no preconditions and only reads the caller's
+    // current process-group id.
+    unsafe { libc::getpgrp() }
+}
+
 fn wait_for_process_group_exit(process: OwnedChildProcess, timeout: Duration) -> Result<bool> {
     let started = Instant::now();
     loop {
@@ -100,9 +106,7 @@ pub(crate) fn recovered_agent_process_group_exists(pid: u32) -> Result<bool> {
     }
     let process_group = i32::try_from(pid)
         .with_context(|| format!("recovered agent pid {pid} does not fit in a process-group id"))?;
-    // SAFETY: `getpgrp` has no preconditions and only reads the caller's
-    // current process-group id.
-    if process_group == unsafe { libc::getpgrp() } {
+    if process_group == current_process_group() {
         anyhow::bail!(
             "refusing to trust recovered agent process group {process_group} because it owns the \
              current daemon"

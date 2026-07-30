@@ -469,8 +469,7 @@ fn recovered_process_group_probe_rejects_unsafe_identifiers() {
     let zero_error = crate::launch::recovered_agent_process_group_exists(0).unwrap_err();
     assert!(zero_error.to_string().contains("greater than zero"));
 
-    // SAFETY: `getpgrp` has no preconditions and only reads process state.
-    let current_group = unsafe { libc::getpgrp() };
+    let current_group = crate::launch::current_process_group();
     let current_group = u32::try_from(current_group).unwrap();
     let group_error =
         crate::launch::recovered_agent_process_group_exists(current_group).unwrap_err();

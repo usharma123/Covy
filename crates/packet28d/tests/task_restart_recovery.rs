@@ -67,19 +67,20 @@ impl ProcessGroupGuard {
         u32::try_from(self.process_group).expect("positive process-group id")
     }
 
-    fn exists(&self) -> bool {
-        // SAFETY: signal 0 is a non-mutating existence probe for a positive,
-        // child-owned process-group id.
-        unsafe { libc::kill(-self.process_group, 0) == 0 }
+    fn exists(&mut self) -> bool {
+        self.child.as_mut().is_some_and(|child| {
+            child
+                .try_wait()
+                .expect("probe process-group leader")
+                .is_none()
+        })
     }
 
     fn terminate_and_reap(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
         };
-        // SAFETY: the process group was created by this test and the guard
-        // retains its child handle until it has been reaped.
-        let _ = unsafe { libc::kill(-self.process_group, libc::SIGKILL) };
+        let _ = child.kill();
         child.wait().expect("reap isolated process group leader");
     }
 }
