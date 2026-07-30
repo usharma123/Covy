@@ -1505,6 +1505,7 @@ async fn read_upstream(
                 .and_then(|guard| guard.framing)
                 .unwrap_or(McpMessageFraming::ContentLength);
             tokio::select! {
+                biased;
                 result = output.send(forwarded, framing) => {
                     if let Err(error) = result {
                         client.set_exit_reason(format!(
