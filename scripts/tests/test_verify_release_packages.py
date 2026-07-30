@@ -51,7 +51,7 @@ def write_platform_package(
     (package_dir / "package.json").write_text(
         json.dumps(manifest), encoding="utf-8"
     )
-    for name in verify_release_packages.BINARY_NAMES:
+    for name in verify_release_packages.platform_artifacts(platform_key):
         binary = bin_dir / name
         binary.write_bytes(binary_header)
         binary.chmod(0o755)
@@ -102,6 +102,49 @@ class BinaryHeaderTests(unittest.TestCase):
                 )
 
 
+class ReleaseArtifactContractTests(unittest.TestCase):
+    def test_public_executables_match_workspace_binary_targets(self) -> None:
+        completed = subprocess.run(
+            [
+                "cargo",
+                "metadata",
+                "--locked",
+                "--no-deps",
+                "--format-version",
+                "1",
+            ],
+            cwd=verify_release_packages.ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        metadata = json.loads(completed.stdout)
+        release_packages = {"suite-cli", "packet28d", "packet28-search-cli"}
+        binary_targets = {
+            target["name"]
+            for package in metadata["packages"]
+            if package["name"] in release_packages
+            for target in package["targets"]
+            if "bin" in target["kind"]
+        }
+
+        self.assertEqual(
+            set(verify_release_packages.EXECUTABLES),
+            binary_targets,
+        )
+
+    def test_linux_contract_adds_only_the_instruction_shim(self) -> None:
+        executables = verify_release_packages.EXECUTABLES
+        self.assertEqual(
+            verify_release_packages.platform_artifacts("darwin-arm64"),
+            executables,
+        )
+        self.assertEqual(
+            verify_release_packages.platform_artifacts("linux-x64"),
+            (*executables, "libcontext_instruct_shim.so"),
+        )
+
+
 class BinaryExecutionTests(unittest.TestCase):
     @mock.patch.object(verify_release_packages, "run_checked_binary")
     @mock.patch.object(
@@ -126,7 +169,7 @@ class BinaryExecutionTests(unittest.TestCase):
     @mock.patch.object(verify_release_packages, "run_checked_binary")
     @mock.patch.object(verify_release_packages.shutil, "which", return_value="/qemu")
     @mock.patch.object(verify_release_packages.sys, "platform", "linux")
-    def test_linux_arm64_uses_qemu_for_all_three_commands(
+    def test_linux_arm64_uses_qemu_for_all_four_executables(
         self,
         _which: mock.Mock,
         run_checked_binary: mock.Mock,
@@ -140,9 +183,38 @@ class BinaryExecutionTests(unittest.TestCase):
         )
 
         self.assertTrue(executed)
-        self.assertEqual(run_checked_binary.call_count, 3)
+        self.assertEqual(run_checked_binary.call_count, 4)
         for call in run_checked_binary.call_args_list:
             self.assertEqual(call.args[0][0], "/qemu")
+
+    @mock.patch.object(verify_release_packages, "run_checked_binary")
+    @mock.patch.object(
+        verify_release_packages, "host_platform_key", return_value="linux-x64"
+    )
+    def test_native_linux_executes_packaged_preload_smoke(
+        self,
+        _host_platform_key: mock.Mock,
+        run_checked_binary: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            package_dir = Path(temp)
+            bin_dir = package_dir / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "libcontext_instruct_shim.so").write_bytes(b"fixture")
+
+            executed = verify_release_packages.smoke_platform_binaries(
+                package_dir,
+                "linux-x64",
+                VERSION,
+                "native",
+                "",
+            )
+
+        self.assertTrue(executed)
+        self.assertEqual(run_checked_binary.call_count, 6)
+        preload = run_checked_binary.call_args_list[4].args[0]
+        self.assertEqual(preload[1:3], ["shell", "--root"])
+        self.assertEqual(preload[-1], "/bin/true")
 
     @mock.patch.object(
         verify_release_packages, "host_platform_key", return_value="linux-arm64"
@@ -253,6 +325,9 @@ class SourceDryRunTests(unittest.TestCase):
                 wrapper = root / "npm/packet28" / relative
                 wrapper.write_text("#!/usr/bin/env node\n", encoding="utf-8")
                 wrapper.chmod(0o644)
+            for relative in verify_release_packages.ROOT_SUPPORT_FILES:
+                support = root / "npm/packet28" / relative
+                support.write_text("export {};\n", encoding="utf-8")
             template = {
                 "name": "@packet28/PLATFORM",
                 "version": VERSION,

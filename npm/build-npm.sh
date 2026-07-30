@@ -31,7 +31,10 @@ declare -A PLATFORMS=(
   ["linux-arm64"]="aarch64-unknown-linux-musl|linux|arm64"
 )
 
-BINARIES=("Packet28" "packet28d" "p28")
+BINARIES=()
+while IFS= read -r binary; do
+  BINARIES+=("$binary")
+done < <(python3 "$REPO_ROOT/scripts/release_artifacts.py" executables)
 
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
@@ -48,15 +51,28 @@ for platform_key in "${!PLATFORMS[@]}"; do
     rustup target add "$target"
   fi
 
-  cargo build --locked --release --target "$target" 2>&1 | tail -3
+  binary_args=()
+  for binary in "${BINARIES[@]}"; do
+    binary_args+=(--bin "$binary")
+  done
+  cargo build --locked --release --target "$target" \
+    --workspace "${binary_args[@]}" 2>&1 | tail -3
+  if [[ "$os" == "linux" ]]; then
+    cargo build --locked --release --target "$target" \
+      --package context-instruct-shim 2>&1 | tail -3
+  fi
 
   # Create platform package
   pkg_dir="$DIST_DIR/@packet28/${platform_key}"
   mkdir -p "$pkg_dir/bin"
 
-  for bin in "${BINARIES[@]}"; do
-    cp "$REPO_ROOT/target/$target/release/$bin" "$pkg_dir/bin/"
-  done
+  while IFS= read -r artifact; do
+    cp "$REPO_ROOT/target/$target/release/$artifact" "$pkg_dir/bin/"
+    chmod +x "$pkg_dir/bin/$artifact"
+  done < <(
+    python3 "$REPO_ROOT/scripts/release_artifacts.py" platform \
+      --platform "$platform_key"
+  )
 
   # Generate package.json from template
   sed -e "s/PLATFORM/$platform_key/g" \
@@ -89,7 +105,11 @@ node -e '
   }
   fs.writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
 ' "$root_dir/package.json" "$VERSION"
-chmod +x "$root_dir/bin/packet28.js" "$root_dir/bin/packet28-mcp.js" "$root_dir/bin/p28.js"
+for wrapper in "${root_dir}"/bin/*.js; do
+  if [[ "$(basename "$wrapper")" != "native-launcher.js" ]]; then
+    chmod +x "$wrapper"
+  fi
+done
 
 # Also stage vendor/ with native platform binary as fallback
 native_key=""
@@ -102,9 +122,13 @@ esac
 
 if [[ -n "$native_key" ]]; then
   mkdir -p "$root_dir/vendor/$native_key"
-  for bin in "${BINARIES[@]}"; do
-    cp "$DIST_DIR/@packet28/$native_key/bin/$bin" "$root_dir/vendor/$native_key/"
-  done
+  while IFS= read -r artifact; do
+    cp "$DIST_DIR/@packet28/$native_key/bin/$artifact" \
+      "$root_dir/vendor/$native_key/"
+  done < <(
+    python3 "$REPO_ROOT/scripts/release_artifacts.py" platform \
+      --platform "$native_key"
+  )
   echo "  Vendored native binaries for $native_key"
 fi
 

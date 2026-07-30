@@ -10,6 +10,7 @@
   "homepage": "https://github.com/usharma123/Packet28",
   "bin": {
     "packet28": "bin/packet28.js",
+    "packet28-agent": "bin/packet28-agent.js",
     "packet28-mcp": "bin/packet28-mcp.js",
     "p28": "bin/p28.js"
   },

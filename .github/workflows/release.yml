@@ -174,10 +174,18 @@ jobs:
 
       - name: Build release binaries
         run: |
+          BIN_ARGS="$(python3 scripts/release_artifacts.py executables | sed 's/^/--bin /' | tr '\n' ' ')"
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            cross build --release --locked --target ${{ matrix.target }} --bin Packet28 --bin packet28d --bin p28
+            cross build --release --locked --target ${{ matrix.target }} --workspace $BIN_ARGS
           else
-            cargo build --release --locked --target ${{ matrix.target }} --bin Packet28 --bin packet28d --bin p28
+            cargo build --release --locked --target ${{ matrix.target }} --workspace $BIN_ARGS
+          fi
+          if [ "${{ matrix.npm_os }}" = "linux" ]; then
+            if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+              cross build --release --locked --target ${{ matrix.target }} --package context-instruct-shim
+            else
+              cargo build --release --locked --target ${{ matrix.target }} --package context-instruct-shim
+            fi
           fi
 
       - name: Stage platform package
@@ -185,16 +193,17 @@ jobs:
           PKG_DIR="dist/@packet28/${{ matrix.platform }}"
           mkdir -p "$PKG_DIR/bin"
 
-          cp target/${{ matrix.target }}/release/Packet28 "$PKG_DIR/bin/"
-          cp target/${{ matrix.target }}/release/packet28d "$PKG_DIR/bin/"
-          cp target/${{ matrix.target }}/release/p28 "$PKG_DIR/bin/"
+          while IFS= read -r artifact; do
+            cp "target/${{ matrix.target }}/release/$artifact" "$PKG_DIR/bin/"
+            chmod +x "$PKG_DIR/bin/$artifact"
+          done < <(
+            python3 scripts/release_artifacts.py platform \
+              --platform "${{ matrix.platform }}"
+          )
 
-          # Ensure binaries are executable
-          chmod +x "$PKG_DIR/bin/Packet28" "$PKG_DIR/bin/packet28d" "$PKG_DIR/bin/p28"
-
-          # Strip binaries to reduce size
+          # Strip runtime artifacts to reduce size.
           if command -v strip &> /dev/null; then
-            strip "$PKG_DIR/bin/Packet28" "$PKG_DIR/bin/packet28d" "$PKG_DIR/bin/p28" 2>/dev/null || true
+            strip "$PKG_DIR"/bin/* 2>/dev/null || true
           fi
 
           # Generate package.json from template
@@ -287,7 +296,11 @@ jobs:
           }
           fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
-          chmod +x "$ROOT_DIR/bin/packet28.js" "$ROOT_DIR/bin/packet28-mcp.js" "$ROOT_DIR/bin/p28.js"
+          for wrapper in "$ROOT_DIR"/bin/*.js; do
+            if [ "$(basename "$wrapper")" != "native-launcher.js" ]; then
+              chmod +x "$wrapper"
+            fi
+          done
 
       - name: Dry-run every npm package
         run: |

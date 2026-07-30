@@ -17,14 +17,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+try:
+    from scripts.release_artifacts import (
+        EXECUTABLES,
+        LINUX_RUNTIME_LIBRARIES,
+        ROOT_BINARIES,
+        ROOT_SUPPORT_FILES,
+        platform_artifacts,
+    )
+except ModuleNotFoundError:
+    from release_artifacts import (  # type: ignore[no-redef]
+        EXECUTABLES,
+        LINUX_RUNTIME_LIBRARIES,
+        ROOT_BINARIES,
+        ROOT_SUPPORT_FILES,
+        platform_artifacts,
+    )
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY_NAMES = ("Packet28", "packet28d", "p28")
-ROOT_BINARIES = {
-    "packet28": "bin/packet28.js",
-    "packet28-mcp": "bin/packet28-mcp.js",
-    "p28": "bin/p28.js",
-}
+BINARY_NAMES = EXECUTABLES
 NPM_TIMEOUT_SECONDS = 60
 BINARY_TIMEOUT_SECONDS = 20
 
@@ -208,30 +219,37 @@ def binary_identity(path: Path) -> tuple[str, str]:
 
 
 def validate_platform_binaries(package_dir: Path, platform_key: str) -> None:
-    """Validate file shape, mode, and architecture for all staged binaries."""
+    """Validate file shape, mode, and architecture for all staged artifacts."""
 
     spec = PLATFORMS[platform_key]
     bin_dir = package_dir / "bin"
     require(bin_dir.is_dir(), f"{bin_dir}: staged bin directory is missing")
     entries = {entry.name for entry in bin_dir.iterdir()}
+    expected_names = set(platform_artifacts(platform_key))
     require(
-        entries == set(BINARY_NAMES),
-        f"{bin_dir}: expected exactly {sorted(BINARY_NAMES)}, got {sorted(entries)}",
+        entries == expected_names,
+        f"{bin_dir}: expected exactly {sorted(expected_names)}, got {sorted(entries)}",
     )
-    for name in BINARY_NAMES:
-        binary = bin_dir / name
-        require(not binary.is_symlink(), f"{binary}: release binary may not be a symlink")
-        require(binary.is_file(), f"{binary}: release binary must be a regular file")
-        mode = binary.stat().st_mode
+    for name in platform_artifacts(platform_key):
+        artifact = bin_dir / name
+        require(
+            not artifact.is_symlink(),
+            f"{artifact}: release artifact may not be a symlink",
+        )
+        require(
+            artifact.is_file(),
+            f"{artifact}: release artifact must be a regular file",
+        )
+        mode = artifact.stat().st_mode
         require(
             bool(mode & stat.S_IXUSR),
-            f"{binary}: release binary is not owner-executable",
+            f"{artifact}: release artifact is not owner-executable",
         )
-        actual = binary_identity(binary)
+        actual = binary_identity(artifact)
         expected = (spec.binary_format, spec.architecture)
         require(
             actual == expected,
-            f"{binary}: expected {expected[0]} {expected[1]}, "
+            f"{artifact}: expected {expected[0]} {expected[1]}, "
             f"got {actual[0]} {actual[1]}",
         )
 
@@ -329,6 +347,12 @@ def smoke_platform_binaries(
             expected_version,
         ),
         ("p28 --help", bin_dir / "p28", ["--help"], "Usage:"),
+        (
+            "packet28-agent --help",
+            bin_dir / "packet28-agent",
+            ["--help"],
+            "Usage:",
+        ),
     )
     for label, binary, arguments, expected_text in commands:
         run_checked_binary(
@@ -336,6 +360,37 @@ def smoke_platform_binaries(
             expected_text,
             label,
         )
+
+    if platform_key.startswith("linux-") and run_mode == "native":
+        require(
+            (bin_dir / LINUX_RUNTIME_LIBRARIES[0]).is_file(),
+            "native Linux preload smoke requires the packaged instruction shim",
+        )
+        with tempfile.TemporaryDirectory(prefix="packet28-preload-smoke-") as temp:
+            try:
+                run_checked_binary(
+                    [
+                        str(bin_dir / "Packet28"),
+                        "shell",
+                        "--root",
+                        temp,
+                        "/bin/true",
+                    ],
+                    "",
+                    "Packet28 packaged Linux preload",
+                )
+            finally:
+                run_checked_binary(
+                    [
+                        str(bin_dir / "Packet28"),
+                        "daemon",
+                        "stop",
+                        "--root",
+                        temp,
+                    ],
+                    "",
+                    "Packet28 preload-smoke daemon stop",
+                )
     return True
 
 
@@ -411,6 +466,7 @@ def validate_npm_result(
     expected_version: str,
     expected_files: set[str],
     command_name: str,
+    executable_files: set[str] | None = None,
 ) -> None:
     """Validate npm's generated package metadata and file allowlist."""
 
@@ -443,8 +499,13 @@ def validate_npm_result(
         f"npm {command_name} dry-run expected files {sorted(expected_files)}, "
         f"got {sorted(file_modes)}",
     )
+    required_executables = (
+        {path for path in expected_files if path.startswith("bin/")}
+        if executable_files is None
+        else executable_files
+    )
     for path, mode in file_modes.items():
-        if path.startswith("bin/"):
+        if path in required_executables:
             require(
                 bool(mode & stat.S_IXUSR),
                 f"npm {command_name} dry-run would publish non-executable {path}",
@@ -462,10 +523,16 @@ def verify_npm_dry_run(package_dir: Path, expected_version: str) -> None:
         expected_files = {
             "package.json",
             *(f"bin/{Path(path).name}" for path in ROOT_BINARIES.values()),
+            *ROOT_SUPPORT_FILES,
         }
+        executable_files = set(ROOT_BINARIES.values())
     elif platform_key is not None:
         validate_platform_manifest(package_dir, platform_key, expected_version)
-        expected_files = {"package.json", *(f"bin/{name}" for name in BINARY_NAMES)}
+        expected_files = {
+            "package.json",
+            *(f"bin/{name}" for name in platform_artifacts(platform_key)),
+        }
+        executable_files = expected_files - {"package.json"}
     else:
         raise VerificationError(
             f"{package_dir / 'package.json'}: unsupported package name {name!r}"
@@ -490,8 +557,22 @@ def verify_npm_dry_run(package_dir: Path, expected_version: str) -> None:
             "publish",
         )
     require(isinstance(name, str), "validated npm package name must be a string")
-    validate_npm_result(pack, name, expected_version, expected_files, "pack")
-    validate_npm_result(publish, name, expected_version, expected_files, "publish")
+    validate_npm_result(
+        pack,
+        name,
+        expected_version,
+        expected_files,
+        "pack",
+        executable_files,
+    )
+    validate_npm_result(
+        publish,
+        name,
+        expected_version,
+        expected_files,
+        "publish",
+        executable_files,
+    )
     require(
         pack.get("integrity") == publish.get("integrity"),
         "npm pack and publish dry-runs produced different package integrity values",
@@ -545,6 +626,9 @@ def verify_source_dry_run(root: Path) -> None:
             script = root_package / relative
             require(script.is_file(), f"{script}: root npm CLI wrapper is missing")
             script.chmod(script.stat().st_mode | stat.S_IXUSR)
+        for relative in ROOT_SUPPORT_FILES:
+            support = root_package / relative
+            require(support.is_file(), f"{support}: root npm support file is missing")
         verify_npm_dry_run(root_package, version)
 
         for platform_key in PLATFORMS:
@@ -556,7 +640,7 @@ def verify_source_dry_run(root: Path) -> None:
                 f"{json.dumps(manifest, indent=2)}\n",
                 encoding="utf-8",
             )
-            for name in BINARY_NAMES:
+            for name in platform_artifacts(platform_key):
                 fixture = bin_dir / name
                 fixture.write_bytes(b"Packet28 release-package dry-run fixture\n")
                 fixture.chmod(0o755)
