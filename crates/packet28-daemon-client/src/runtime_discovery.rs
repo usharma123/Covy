@@ -290,8 +290,10 @@ mod platform {
                 "root path contains an interior NUL",
             )
         })?;
-        // SAFETY: `root` is a live NUL-terminated path, and the returned
-        // descriptor is checked before ownership is transferred to `OwnedFd`.
+        // SAFETY: `root` is a live NUL-terminated path, the flags request no
+        // creation operation (and therefore require no variadic mode
+        // argument), and the returned descriptor is checked before ownership
+        // is transferred to `OwnedFd`.
         let raw_fd = unsafe { libc::open(root.as_ptr(), DIRECTORY_OPEN_FLAGS) };
         let fd = owned_fd(raw_fd)?;
         let stat = fstat(fd.as_raw_fd())?;
@@ -359,7 +361,9 @@ mod platform {
         let expected = identity(&preflight);
 
         // SAFETY: `name` is live and NUL-terminated, `daemon` retains a valid
-        // directory descriptor, and the returned fd is immediately owned.
+        // directory descriptor, the flags request no creation operation (and
+        // therefore require no variadic mode argument), and the returned fd is
+        // immediately owned.
         let raw_fd = unsafe { libc::openat(daemon.fd.as_raw_fd(), name.as_ptr(), FILE_OPEN_FLAGS) };
         let fd = owned_fd(raw_fd)?;
         let opened = fstat(fd.as_raw_fd())?;
@@ -660,8 +664,9 @@ mod platform {
 
     fn openat_directory_cstr(parent: RawFd, name: &CString) -> io::Result<OwnedFd> {
         // SAFETY: `name` is live and NUL-terminated, `parent` is a retained
-        // directory descriptor, and the returned descriptor is immediately
-        // transferred to `OwnedFd`.
+        // directory descriptor, the flags request no creation operation (and
+        // therefore require no variadic mode argument), and the returned
+        // descriptor is immediately transferred to `OwnedFd`.
         let raw_fd = unsafe { libc::openat(parent, name.as_ptr(), DIRECTORY_OPEN_FLAGS) };
         owned_fd(raw_fd)
     }

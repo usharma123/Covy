@@ -77,6 +77,17 @@ implement descriptor-relative confinement. Its tests cover exact-name
 revalidation, symlink and hard-link rejection, case-folded alias rejection,
 bounded reads/writes, and non-mutation on failure.
 
+Authenticated daemon transport adds four production unsafe-bearing files and
+one test fixture without moving unsafe code into reusable algorithms.
+`packet28-daemon-client` owns descriptor-relative runtime discovery, ACL/xattr
+queries, and Unix peer-credential calls. `packet28-daemon-protocol::paths` and
+`packet28d::application` use the effective UID only to isolate the socket
+namespace and authenticate its owner and peer. The p28 daemon fixture uses the
+same value to force the unauthenticated-parent fallback path. Every call has a
+local `SAFETY` contract; transport tests cover authenticated Unix operation,
+forced TCP, workspace fallback, wrong-owner rejection, and runtime-entry
+replacement and special-file failures.
+
 After fallible paths were repaired, 13 reviewed lint expectations remain:
 four lint entries cover the two build scripts' intentional fatal exits, seven
 cover compile-time regex literals exercised by parser/filter tests, and two
@@ -94,7 +105,7 @@ and requires a reason on each expectation.
   reason, are checked for fulfillment, and are reconciled against an exact
   reviewed inventory. Production `#[allow]` overrides are rejected.
 - The same checker inventories unsafe syntax. Its reviewed allowlist currently
-  contains 18 files: ten production OS/FFI/mmap adapters and eight
+  contains 23 files: 14 production OS/FFI/mmap adapters and nine
   test/benchmark instrumentation files. A new unsafe-bearing file or stale
   allowlist entry fails the gate until the architectural inventory is
   reconciled explicitly.

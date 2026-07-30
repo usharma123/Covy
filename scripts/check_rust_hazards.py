@@ -23,13 +23,28 @@ ALLOWED_UNSAFE_FILES = {
     "crates/context-instruct-shim/src/linux.rs": "Linux preload FFI and syscalls",
     "crates/context-instruct-shim/src/macos.rs": "macOS interpose FFI and syscalls",
     "crates/covy-ingest/examples/ingest_allocation_probe.rs": "allocation-counting example",
+    "crates/packet28-daemon-client/src/runtime_discovery.rs": (
+        "descriptor-relative Unix runtime discovery and ACL/xattr FFI"
+    ),
+    "crates/packet28-daemon-client/src/transport.rs": (
+        "Unix peer-credential verification"
+    ),
     "crates/packet28-daemon-core/src/retention/capability.rs": (
         "task-store descriptor, ACL, and xattr capability adapter"
     ),
     "crates/packet28-daemon-core/src/storage.rs": (
         "test-only resident-memory bound instrumentation"
     ),
+    "crates/packet28-daemon-protocol/src/paths.rs": (
+        "effective-user-specific Unix socket namespace"
+    ),
     "crates/packet28-search-core/src/layer.rs": "read-only memory-mapped index layer",
+    "crates/packet28-search-cli/tests/support/daemon.rs": (
+        "effective-user-specific Unix socket fallback fixture"
+    ),
+    "crates/packet28d/src/application.rs": (
+        "Unix socket owner and peer-UID authentication"
+    ),
     "crates/packet28d/src/launch.rs": "Unix process-group signals",
     "crates/packet28d/src/runtime_files_unix.rs": "retained Unix dirfd capability filesystem operations",
     "crates/packet28d/src/tests/cancellation.rs": "Unix process-group test probe",
