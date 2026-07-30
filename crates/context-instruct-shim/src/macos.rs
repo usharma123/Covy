@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::ffi::{c_char, CStr, CString};
 use std::fs;
 use std::io::{BufReader, BufWriter};
+use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -193,17 +194,23 @@ fn resolve_absolute_path(raw_path: &str, dirfd: Option<libc::c_int>) -> Option<P
             Some(fd) if fd != libc::AT_FDCWD => resolve_dirfd_path(fd)?,
             _ => std::env::current_dir().ok()?,
         };
-        let base_dir = if base.is_dir() {
-            base
-        } else {
-            base.parent()?.to_path_buf()
-        };
-        base_dir.join(path)
+        base.join(path)
     };
     Some(normalize_path(&absolute))
 }
 
 fn resolve_dirfd_path(dirfd: libc::c_int) -> Option<PathBuf> {
+    let mut metadata = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `metadata` points to writable storage for one `stat` value, and
+    // `fstat(2)` reports an invalid descriptor through its return value.
+    if unsafe { libc::fstat(dirfd, metadata.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: a successful `fstat(2)` initialized the complete `stat` value.
+    let metadata = unsafe { metadata.assume_init() };
+    if !crate::open_semantics::is_directory_mode(metadata.st_mode) {
+        return None;
+    }
     let mut buffer = [0 as c_char; libc::PATH_MAX as usize];
     // SAFETY: `buffer` is writable for `PATH_MAX` bytes. `dirfd` comes from
     // the intercepted `openat(2)` call, and `fcntl` reports invalid

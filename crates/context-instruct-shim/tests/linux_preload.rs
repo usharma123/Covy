@@ -127,6 +127,11 @@ fn preload_virtualizes_only_sealed_readonly_instruction_opens() {
     let shim = build_shim(&fixture_root.path().join("cargo-target"));
     let instruction_path = fixture_root.path().join("AGENTS.md");
     fs::write(&instruction_path, "agents-original").unwrap();
+    fs::write(
+        fixture_root.path().join("not-a-directory.txt"),
+        "regular-file-dirfd",
+    )
+    .unwrap();
     let fixture_binary = fixture_root.path().join("linux-open-semantics");
     let fixture_source =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/linux_open_semantics.c");
@@ -163,7 +168,8 @@ fn preload_virtualizes_only_sealed_readonly_instruction_opens() {
 
     assert_eq!(
         requests, 8,
-        "only two pure-read opens for each interposed symbol may reach the daemon"
+        "only two pure-read opens for each interposed symbol may reach the daemon; regular-file \
+         dirfds must not"
     );
     assert!(
         output.status.success(),

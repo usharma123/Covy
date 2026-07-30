@@ -184,7 +184,9 @@ int main(int argc, char **argv) {
   require(argc == 2, "usage: macos_open_semantics FIXTURE_ROOT");
   const char *root = argv[1];
   char path[PATH_MAX];
+  char regular_path[PATH_MAX];
   make_path(path, sizeof(path), root, "AGENTS.md");
+  make_path(regular_path, sizeof(regular_path), root, "not-a-directory.txt");
   int dirfd = open(root, O_RDONLY | O_DIRECTORY);
   if (dirfd < 0) {
     fail("open fixture directory");
@@ -199,6 +201,14 @@ int main(int argc, char **argv) {
     expect_virtualized_read(&variants[index], path, dirfd,
                             O_RDONLY | O_CLOEXEC);
   }
+  int regular_fd = open(regular_path, O_RDONLY);
+  if (regular_fd < 0) {
+    fail("open regular-file dirfd fixture");
+  }
+  errno = 0;
+  require(openat(regular_fd, "AGENTS.md", O_RDONLY) == -1 && errno == ENOTDIR,
+          "openat regular-file dirfd did not preserve ENOTDIR");
+  close(regular_fd);
   expect_real_contents(path, ORIGINAL_CONTENT);
   for (size_t index = 0; index < variant_count; ++index) {
     exercise_real_semantics(&variants[index], path, dirfd);

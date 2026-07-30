@@ -53,6 +53,11 @@ fn interpose_virtualizes_only_readonly_instruction_opens() {
     let shim = build_shim(&fixture_root.path().join("cargo-target"));
     let instruction_path = fixture_root.path().join("AGENTS.md");
     fs::write(&instruction_path, "agents-original").expect("write instruction fixture");
+    fs::write(
+        fixture_root.path().join("not-a-directory.txt"),
+        "regular-file-dirfd",
+    )
+    .expect("write regular-file dirfd fixture");
     let fixture_binary = fixture_root.path().join("macos-open-semantics");
     let fixture_source =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/macos_open_semantics.c");
@@ -89,7 +94,8 @@ fn interpose_virtualizes_only_readonly_instruction_opens() {
 
     assert_eq!(
         requests, 4,
-        "only two pure-read opens for each interposed symbol may reach the daemon"
+        "only two pure-read opens for each interposed symbol may reach the daemon; regular-file \
+         dirfds must not"
     );
     assert!(
         output.status.success(),

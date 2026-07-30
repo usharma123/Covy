@@ -10,7 +10,12 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod open_semantics {
+    pub(super) fn is_directory_mode(mode: libc::mode_t) -> bool {
+        mode & libc::S_IFMT == libc::S_IFDIR
+    }
+
     pub(super) fn virtualized_read_flags(
         flags: libc::c_int,
         allowed_flags: libc::c_int,
@@ -50,6 +55,17 @@ fn instruction_mode_from_os_config(
 mod tests {
     use super::*;
     use packet28_daemon_protocol::message::InstructionRenderMode;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn dirfd_mode_validation_accepts_only_directories() {
+        assert!(open_semantics::is_directory_mode(
+            libc::S_IFDIR | libc::S_IRUSR
+        ));
+        assert!(!open_semantics::is_directory_mode(
+            libc::S_IFREG | libc::S_IRUSR
+        ));
+    }
 
     #[test]
     fn absent_instruction_mode_keeps_daemon_default() {
