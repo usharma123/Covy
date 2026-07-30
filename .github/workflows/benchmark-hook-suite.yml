@@ -60,6 +60,11 @@ jobs:
         with:
           toolchain: 1.93.1
 
+      - name: Install benchmark system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends ripgrep
+
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
