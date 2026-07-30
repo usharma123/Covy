@@ -17,7 +17,7 @@ use crate::cache_file::{
 };
 use crate::persist::{
     append_wal_record, persist_cache_backup_path_v3, persist_cache_path_v1, persist_cache_path_v2,
-    persist_cache_path_v3, replay_wal, reset_wal, truncate_wal_to, PersistDelta,
+    persist_cache_path_v3, replay_wal_for_repair, reset_wal, PersistDelta,
 };
 use crate::{PacketCache, PacketCacheEntry, PersistConfig};
 
@@ -543,7 +543,7 @@ pub enum CachePersistenceError {
         detail: String,
     },
 
-    /// A cache file path resolved to an unsafe filesystem entry.
+    /// A checkpoint, WAL, or coordination path resolved to an unsafe entry.
     #[error("cache persistence {operation} rejected unsafe path `{path}`: {violation}")]
     UnsafePath {
         operation: &'static str,
@@ -642,6 +642,8 @@ enum PersistenceCommand {
 /// Cache mutations remain immediately visible in the caller's in-memory cache.
 /// This owner coalesces per-key dirty deltas, appends a checksummed WAL record
 /// after a short debounce, and periodically folds the WAL into a checkpoint.
+/// WAL and coordination descriptors reject symbolic links, non-regular files,
+/// and path replacement; checkpoints publish verified exclusive temp files.
 pub struct CachePersistence {
     owner: Arc<CachePersistenceOwner>,
 }
@@ -1518,8 +1520,9 @@ fn repair_torn_wal_tail(
     cache: &PacketCache,
 ) -> Result<bool, CachePersistenceError> {
     let mut verification_cache = cache.clone();
-    let replay = replay_wal(&mut verification_cache, config)
+    let mut repair = replay_wal_for_repair(&mut verification_cache, config)
         .map_err(|source| io_error("WAL recovery", source))?;
+    let replay = repair.replay();
     if replay.baseline_mismatch {
         return Err(CachePersistenceError::Io {
             operation: "WAL recovery",
@@ -1538,7 +1541,8 @@ fn repair_torn_wal_tail(
                     .to_string(),
             });
         }
-        truncate_wal_to(config, replay.valid_bytes)
+        repair
+            .truncate_to(replay.valid_bytes)
             .map_err(|source| io_error("WAL recovery", source))?;
         return Ok(true);
     }
@@ -1637,7 +1641,7 @@ mod tests {
     use std::fs::{self, OpenOptions};
     use std::io::Write;
     #[cfg(unix)]
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::process::Command;
     use std::sync::{Arc, Mutex};
 
@@ -2087,6 +2091,67 @@ mod tests {
                 }
             ) && after == before
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn malformed_wal_recovery_rejects_a_symlink_without_truncating_its_target() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let config = PersistConfig::new(root.clone());
+        PacketCache::new().write_checkpoint(&config).unwrap();
+        let wal_path = persist_cache_wal_path_v3(&root);
+        let sentinel = outside.path().join("sentinel");
+        fs::write(&sentinel, b"P28CWAL1\x10\x00").unwrap();
+        symlink(&sentinel, &wal_path).unwrap();
+
+        let error = match CachePersistence::open(config) {
+            Ok(_) => panic!("symlinked WAL unexpectedly opened for recovery"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            (
+                error,
+                fs::read(&sentinel).unwrap(),
+                fs::symlink_metadata(&wal_path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+            ),
+            (
+                CachePersistenceError::UnsafePath {
+                    operation: "WAL recovery",
+                    path: wal_path,
+                    violation: CachePathViolation::SymbolicLink,
+                },
+                b"P28CWAL1\x10\x00".to_vec(),
+                true,
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clean_read_only_wal_remains_replayable_without_recovery_write_access() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let config = PersistConfig::new(root.clone());
+        PacketCache::new().write_checkpoint(&config).unwrap();
+        let mut cache = PacketCache::new();
+        let entry = put_entry(&mut cache, 84_000, 32);
+        append_wal_record(&config, 1, &[PersistDelta::upsert(&entry)]).unwrap();
+        let wal_path = persist_cache_wal_path_v3(&root);
+        fs::set_permissions(&wal_path, fs::Permissions::from_mode(0o400)).unwrap();
+
+        let owner = CachePersistence::open(config).unwrap();
+        let replayed = lock_recover(&owner.shared_cache())
+            .get(&entry.cache_key)
+            .is_some();
+        owner.shutdown(Duration::from_secs(2)).unwrap();
+
+        assert!(replayed);
     }
 
     fn test_persistence_handle(
@@ -2936,13 +3001,14 @@ mod tests {
         owner.record_update(&entry, Vec::new()).unwrap();
         let error = owner.flush(Duration::from_secs(2)).unwrap_err();
 
-        assert!(matches!(
+        assert_eq!(
             error,
-            CachePersistenceError::Io {
+            CachePersistenceError::UnsafePath {
                 operation: "WAL append",
-                ..
+                path: persist_cache_wal_path_v3(&root),
+                violation: CachePathViolation::NotRegularFile,
             }
-        ));
+        );
     }
 
     #[test]

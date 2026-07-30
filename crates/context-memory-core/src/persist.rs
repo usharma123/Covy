@@ -1,9 +1,14 @@
 use super::*;
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
 
-use crate::cache_file::{create_unique_cache_temp_with, CacheFileError};
+use crate::cache_file::{
+    create_unique_cache_temp_with, open_existing_regular_file,
+    open_existing_regular_file_read_only, open_or_create_regular_file,
+    open_or_create_regular_file_for_append, validate_file_attachment, validate_same_file,
+    CacheFileError,
+};
 
 const PERSIST_WAL_VERSION: u32 = 1;
 const PERSIST_WAL_MAGIC: &[u8; 8] = b"P28CWAL1";
@@ -120,6 +125,135 @@ pub(crate) struct WalReplay {
     pub(crate) valid_bytes: u64,
     pub(crate) recovered_corruption: bool,
     pub(crate) baseline_mismatch: bool,
+}
+
+struct OpenWal {
+    file: File,
+    path: PathBuf,
+    created: bool,
+}
+
+pub(crate) struct WalRepairSession {
+    wal: Option<OpenWal>,
+    replay: WalReplay,
+}
+
+impl OpenWal {
+    fn open_for_append(config: &PersistConfig) -> Result<Self, io::Error> {
+        let path = prepare_wal_path(config)?;
+        let opened =
+            open_or_create_regular_file_for_append(&path).map_err(CacheFileError::into_io)?;
+        Ok(Self {
+            file: opened.file,
+            path,
+            created: opened.created,
+        })
+    }
+
+    fn open_for_read(config: &PersistConfig) -> Result<Option<Self>, io::Error> {
+        Self::open_existing(config, open_existing_regular_file_read_only)
+    }
+
+    fn open_existing(
+        config: &PersistConfig,
+        open: fn(&Path) -> Result<File, CacheFileError>,
+    ) -> Result<Option<Self>, io::Error> {
+        let path = persist_cache_wal_path_v3(&config.root_dir);
+        match open(&path) {
+            Ok(file) => Ok(Some(Self {
+                file,
+                path,
+                created: false,
+            })),
+            Err(CacheFileError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            Err(error) => Err(error.into_io()),
+        }
+    }
+
+    fn reopen_for_write(&self) -> Result<Self, io::Error> {
+        let file = open_existing_regular_file(&self.path).map_err(CacheFileError::into_io)?;
+        Ok(Self {
+            file,
+            path: self.path.clone(),
+            created: false,
+        })
+    }
+
+    fn open_for_truncate(config: &PersistConfig) -> Result<Self, io::Error> {
+        let path = prepare_wal_path(config)?;
+        let opened = open_or_create_regular_file(&path).map_err(CacheFileError::into_io)?;
+        Ok(Self {
+            file: opened.file,
+            path,
+            created: opened.created,
+        })
+    }
+
+    fn append(&mut self, frame: &[u8]) -> Result<(), io::Error> {
+        self.validate_attachment()?;
+        self.file.write_all(frame)?;
+        self.file.sync_data()?;
+        self.validate_attachment()?;
+        self.sync_parent_if_created()
+    }
+
+    fn read_all(&mut self) -> Result<Vec<u8>, io::Error> {
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut raw = Vec::new();
+        self.file.read_to_end(&mut raw)?;
+        self.validate_attachment()?;
+        Ok(raw)
+    }
+
+    fn truncate(&mut self, length: u64) -> Result<(), io::Error> {
+        self.validate_attachment()?;
+        self.file.set_len(length)?;
+        self.file.sync_all()?;
+        self.validate_attachment()?;
+        self.sync_parent_if_created()
+    }
+
+    fn validate_attachment(&self) -> Result<(), io::Error> {
+        validate_file_attachment(&self.file, &self.path).map_err(CacheFileError::into_io)
+    }
+
+    fn sync_parent_if_created(&self) -> Result<(), io::Error> {
+        if self.created {
+            sync_parent_dir(&self.path)?;
+        }
+        Ok(())
+    }
+}
+
+impl WalRepairSession {
+    pub(crate) fn replay(&self) -> WalReplay {
+        self.replay
+    }
+
+    pub(crate) fn truncate_to(&mut self, length: u64) -> Result<(), io::Error> {
+        let wal = self.wal.as_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "cache WAL disappeared before recovery",
+            )
+        })?;
+        wal.validate_attachment()?;
+        let mut writable = wal.reopen_for_write()?;
+        validate_same_file(&wal.file, &writable.file, &wal.path)
+            .map_err(CacheFileError::into_io)?;
+        wal.validate_attachment()?;
+        writable.truncate(length)
+    }
+}
+
+fn prepare_wal_path(config: &PersistConfig) -> Result<PathBuf, io::Error> {
+    let path = persist_cache_wal_path_v3(&config.root_dir);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(path)
 }
 
 impl PersistPacketCacheEntry {
@@ -799,11 +933,18 @@ pub(crate) fn append_wal_record(
     sequence: u64,
     deltas: &[PersistDelta],
 ) -> Result<u64, io::Error> {
-    let path = persist_cache_wal_path_v3(&config.root_dir);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let created = !path.exists();
+    append_wal_record_with_observer(config, sequence, deltas, |_| Ok(()))
+}
+
+fn append_wal_record_with_observer<F>(
+    config: &PersistConfig,
+    sequence: u64,
+    deltas: &[PersistDelta],
+    after_open: F,
+) -> Result<u64, io::Error>
+where
+    F: FnOnce(&Path) -> Result<(), io::Error>,
+{
     let payload = serde_json::to_vec(&PersistWalRecord {
         version: PERSIST_WAL_VERSION,
         sequence,
@@ -831,12 +972,9 @@ pub(crate) fn append_wal_record(
     frame.extend_from_slice(blake3::hash(&payload).as_bytes());
     frame.extend_from_slice(&payload);
 
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(&frame)?;
-    file.sync_data()?;
-    if created {
-        sync_parent_dir(&persist_cache_wal_path_v3(&config.root_dir))?;
-    }
+    let mut wal = OpenWal::open_for_append(config)?;
+    after_open(&wal.path)?;
+    wal.append(&frame)?;
     Ok(frame.len() as u64)
 }
 
@@ -844,19 +982,38 @@ pub(crate) fn replay_wal(
     cache: &mut PacketCache,
     config: &PersistConfig,
 ) -> Result<WalReplay, io::Error> {
-    let path = persist_cache_wal_path_v3(&config.root_dir);
-    let mut file = match File::open(path) {
-        Ok(file) => file,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {
-            return Ok(WalReplay {
-                highest_sequence: cache.persisted_sequence,
-                ..WalReplay::default()
-            });
-        }
-        Err(source) => return Err(source),
+    let Some(mut wal) = OpenWal::open_for_read(config)? else {
+        return Ok(empty_wal_replay(cache));
     };
-    let mut raw = Vec::new();
-    file.read_to_end(&mut raw)?;
+    replay_open_wal(cache, &mut wal)
+}
+
+pub(crate) fn replay_wal_for_repair(
+    cache: &mut PacketCache,
+    config: &PersistConfig,
+) -> Result<WalRepairSession, io::Error> {
+    let Some(mut wal) = OpenWal::open_for_read(config)? else {
+        return Ok(WalRepairSession {
+            wal: None,
+            replay: empty_wal_replay(cache),
+        });
+    };
+    let replay = replay_open_wal(cache, &mut wal)?;
+    Ok(WalRepairSession {
+        wal: Some(wal),
+        replay,
+    })
+}
+
+fn empty_wal_replay(cache: &PacketCache) -> WalReplay {
+    WalReplay {
+        highest_sequence: cache.persisted_sequence,
+        ..WalReplay::default()
+    }
+}
+
+fn replay_open_wal(cache: &mut PacketCache, wal: &mut OpenWal) -> Result<WalReplay, io::Error> {
+    let raw = wal.read_all()?;
 
     let mut offset = 0usize;
     let mut highest_sequence = cache.persisted_sequence;
@@ -935,17 +1092,7 @@ pub(crate) fn reset_wal(config: &PersistConfig) -> Result<(), io::Error> {
 }
 
 pub(crate) fn truncate_wal_to(config: &PersistConfig, length: u64) -> Result<(), io::Error> {
-    let path = persist_cache_wal_path_v3(&config.root_dir);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(path)?;
-    file.set_len(length)?;
-    file.sync_all()
+    OpenWal::open_for_truncate(config)?.truncate(length)
 }
 
 pub(crate) fn filter_postings_for_live_keys(
@@ -1072,6 +1219,124 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    fn has_unsafe_path_violation(
+        error: &io::Error,
+        expected_path: &Path,
+        expected_violation: CachePathViolation,
+    ) -> bool {
+        matches!(
+            error
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<CacheFileError>()),
+            Some(CacheFileError::Unsafe { path, violation })
+                if path == expected_path && *violation == expected_violation
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_append_rejects_a_planted_symlink_without_touching_its_target() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let wal_path = persist_cache_wal_path_v3(dir.path());
+        let sentinel = outside.path().join("sentinel");
+        fs::create_dir_all(wal_path.parent().unwrap()).unwrap();
+        fs::write(&sentinel, b"outside-must-survive").unwrap();
+        symlink(&sentinel, &wal_path).unwrap();
+
+        let error = append_wal_record(
+            &config,
+            1,
+            &[PersistDelta::remove("planted-symlink".to_string())],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (
+                has_unsafe_path_violation(&error, &wal_path, CachePathViolation::SymbolicLink),
+                fs::read(&sentinel).unwrap(),
+                fs::symlink_metadata(&wal_path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+            ),
+            (true, b"outside-must-survive".to_vec(), true)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_append_rejects_a_path_swap_after_open_without_writing_either_target() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let wal_path = persist_cache_wal_path_v3(dir.path());
+        let held_wal = dir.path().join("held-wal");
+        let sentinel = outside.path().join("sentinel");
+        fs::create_dir_all(wal_path.parent().unwrap()).unwrap();
+        fs::write(&wal_path, b"durable-prefix").unwrap();
+        fs::write(&sentinel, b"outside-must-survive").unwrap();
+
+        let error = append_wal_record_with_observer(
+            &config,
+            1,
+            &[PersistDelta::remove("path-swap".to_string())],
+            |opened_path| {
+                fs::rename(opened_path, &held_wal)?;
+                symlink(&sentinel, opened_path)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            (
+                has_unsafe_path_violation(&error, &wal_path, CachePathViolation::SymbolicLink),
+                fs::read(&held_wal).unwrap(),
+                fs::read(&sentinel).unwrap(),
+            ),
+            (
+                true,
+                b"durable-prefix".to_vec(),
+                b"outside-must-survive".to_vec(),
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_recovery_rejects_a_regular_file_replacement_before_truncate() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let wal_path = persist_cache_wal_path_v3(dir.path());
+        let held_wal = dir.path().join("held-wal");
+        fs::create_dir_all(wal_path.parent().unwrap()).unwrap();
+        fs::write(&wal_path, b"P28CWAL1\x10\x00").unwrap();
+        let mut cache = PacketCache::new();
+        let mut repair = replay_wal_for_repair(&mut cache, &config).unwrap();
+        let replay = repair.replay();
+        fs::rename(&wal_path, &held_wal).unwrap();
+        fs::write(&wal_path, b"replacement-must-survive").unwrap();
+
+        let error = repair.truncate_to(replay.valid_bytes).unwrap_err();
+
+        assert_eq!(
+            (
+                replay.recovered_corruption,
+                has_unsafe_path_violation(&error, &wal_path, CachePathViolation::Replaced),
+                fs::read(&held_wal).unwrap(),
+                fs::read(&wal_path).unwrap(),
+            ),
+            (
+                true,
+                true,
+                b"P28CWAL1\x10\x00".to_vec(),
+                b"replacement-must-survive".to_vec(),
+            )
+        );
+    }
 
     #[test]
     fn failed_atomic_replace_never_truncates_existing_destination() {

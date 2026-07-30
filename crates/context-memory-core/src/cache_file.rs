@@ -80,6 +80,13 @@ pub(crate) struct OpenedCacheFile {
     pub(crate) created: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum CacheFileAccess {
+    ReadOnly,
+    ReadWrite,
+    Append,
+}
+
 #[derive(Debug)]
 pub(crate) struct ExclusiveCacheTemp {
     file: File,
@@ -134,7 +141,7 @@ where
             path: path.clone(),
             source,
         })?;
-        match create_new_regular_file(&path) {
+        match create_new_regular_file(&path, CacheFileAccess::ReadWrite) {
             Ok(file) => {
                 validate_file_attachment(&file, &path)?;
                 return Ok(ExclusiveCacheTemp {
@@ -159,17 +166,24 @@ where
 }
 
 pub(crate) fn open_or_create_regular_file(path: &Path) -> Result<OpenedCacheFile, CacheFileError> {
-    open_or_create_regular_file_with(path, || Ok(()))
+    open_or_create_regular_file_with(path, CacheFileAccess::ReadWrite, || Ok(()))
+}
+
+pub(crate) fn open_or_create_regular_file_for_append(
+    path: &Path,
+) -> Result<OpenedCacheFile, CacheFileError> {
+    open_or_create_regular_file_with(path, CacheFileAccess::Append, || Ok(()))
 }
 
 fn open_or_create_regular_file_with<F>(
     path: &Path,
+    access: CacheFileAccess,
     after_create_collision: F,
 ) -> Result<OpenedCacheFile, CacheFileError>
 where
     F: FnOnce() -> io::Result<()>,
 {
-    match create_new_regular_file(path) {
+    match create_new_regular_file(path, access) {
         Ok(file) => {
             validate_file_attachment(&file, path)?;
             Ok(OpenedCacheFile {
@@ -182,7 +196,7 @@ where
                 path: path.to_path_buf(),
                 source,
             })?;
-            let file = open_existing_regular_file(path)?;
+            let file = open_existing_regular_file_with(path, access)?;
             validate_file_attachment(&file, path)?;
             Ok(OpenedCacheFile {
                 file,
@@ -191,6 +205,14 @@ where
         }
         Err(error) => Err(error),
     }
+}
+
+pub(crate) fn open_existing_regular_file_read_only(path: &Path) -> Result<File, CacheFileError> {
+    open_existing_regular_file_with(path, CacheFileAccess::ReadOnly)
+}
+
+pub(crate) fn open_existing_regular_file(path: &Path) -> Result<File, CacheFileError> {
+    open_existing_regular_file_with(path, CacheFileAccess::ReadWrite)
 }
 
 #[cfg(unix)]
@@ -227,7 +249,7 @@ pub(crate) fn validate_file_attachment(file: &File, path: &Path) -> Result<(), C
 #[cfg(windows)]
 pub(crate) fn validate_file_attachment(file: &File, path: &Path) -> Result<(), CacheFileError> {
     let expected = file_identity(file, path)?;
-    let attached = match open_existing_regular_file(path) {
+    let attached = match open_existing_regular_file_read_only(path) {
         Ok(file) => file,
         Err(CacheFileError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
             return Err(unsafe_path(path, CachePathViolation::Replaced));
@@ -243,6 +265,33 @@ pub(crate) fn validate_file_attachment(file: &File, path: &Path) -> Result<(), C
 
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn validate_file_attachment(_file: &File, path: &Path) -> Result<(), CacheFileError> {
+    Err(CacheFileError::io(
+        path,
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "cache file identity checks are unsupported on this platform",
+        ),
+    ))
+}
+
+#[cfg(any(unix, windows))]
+pub(crate) fn validate_same_file(
+    expected: &File,
+    actual: &File,
+    path: &Path,
+) -> Result<(), CacheFileError> {
+    if file_identity(expected, path)? != file_identity(actual, path)? {
+        return Err(unsafe_path(path, CachePathViolation::Replaced));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn validate_same_file(
+    _expected: &File,
+    _actual: &File,
+    path: &Path,
+) -> Result<(), CacheFileError> {
     Err(CacheFileError::io(
         path,
         io::Error::new(
@@ -283,9 +332,10 @@ fn process_nonce() -> &'static [u64; 2] {
     })
 }
 
-fn create_new_regular_file(path: &Path) -> Result<File, CacheFileError> {
+fn create_new_regular_file(path: &Path, access: CacheFileAccess) -> Result<File, CacheFileError> {
     let mut options = OpenOptions::new();
-    options.read(true).write(true).create_new(true);
+    configure_access(&mut options, access);
+    options.create_new(true);
     configure_no_follow(&mut options);
     let file = options.open(path).map_err(|source| CacheFileError::Io {
         path: path.to_path_buf(),
@@ -295,9 +345,12 @@ fn create_new_regular_file(path: &Path) -> Result<File, CacheFileError> {
     Ok(file)
 }
 
-fn open_existing_regular_file(path: &Path) -> Result<File, CacheFileError> {
+fn open_existing_regular_file_with(
+    path: &Path,
+    access: CacheFileAccess,
+) -> Result<File, CacheFileError> {
     let mut options = OpenOptions::new();
-    options.read(true).write(true);
+    configure_access(&mut options, access);
     configure_no_follow(&mut options);
     let file = match options.open(path) {
         Ok(file) => file,
@@ -313,6 +366,20 @@ fn open_existing_regular_file(path: &Path) -> Result<File, CacheFileError> {
     };
     validate_regular_file(&file, path)?;
     Ok(file)
+}
+
+fn configure_access(options: &mut OpenOptions, access: CacheFileAccess) {
+    match access {
+        CacheFileAccess::ReadOnly => {
+            options.read(true);
+        }
+        CacheFileAccess::ReadWrite => {
+            options.read(true).write(true);
+        }
+        CacheFileAccess::Append => {
+            options.read(true).append(true);
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -463,5 +530,5 @@ pub(crate) fn open_or_create_regular_file_for_test<F>(
 where
     F: FnOnce() -> io::Result<()>,
 {
-    open_or_create_regular_file_with(path, after_create_collision)
+    open_or_create_regular_file_with(path, CacheFileAccess::ReadWrite, after_create_collision)
 }
