@@ -202,14 +202,8 @@ fn maybe_virtualize(
 }
 
 fn virtualized_read_flags(flags: libc::c_int) -> Option<libc::c_int> {
-    if flags & libc::O_ACCMODE != libc::O_RDONLY {
-        return None;
-    }
     let allowed = libc::O_CLOEXEC | libc::O_LARGEFILE;
-    if flags & !allowed != 0 {
-        return None;
-    }
-    Some(flags & allowed)
+    crate::open_semantics::virtualized_read_flags(flags, allowed)
 }
 
 fn detect_candidate(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<InterceptCandidate> {

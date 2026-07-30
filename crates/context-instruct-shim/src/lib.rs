@@ -10,6 +10,18 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+mod open_semantics {
+    pub(super) fn virtualized_read_flags(
+        flags: libc::c_int,
+        allowed_flags: libc::c_int,
+    ) -> Option<libc::c_int> {
+        if flags & libc::O_ACCMODE != libc::O_RDONLY || flags & !allowed_flags != 0 {
+            return None;
+        }
+        Some(flags & allowed_flags)
+    }
+}
+
 fn configured_instruction_mode() -> Option<packet28_daemon_protocol::message::InstructionRenderMode>
 {
     let value = std::env::var_os("PACKET28_INSTRUCTION_MODE");

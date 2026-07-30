@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::ffi::{c_char, CStr, CString};
 use std::fs;
 use std::io::{BufReader, BufWriter};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,7 +67,7 @@ pub unsafe extern "C" fn context_instruct_shim_open(
         // documented above and forwards the arguments without retaining them.
         return unsafe { libc::open(path, flags, libc::c_uint::from(mode)) };
     }
-    if let Some(fd) = maybe_virtualize(path, None) {
+    if let Some(fd) = maybe_virtualize(path, None, flags) {
         return fd;
     }
     // SAFETY: This exported hook inherits the caller's `open(2)` contract
@@ -91,7 +92,7 @@ pub unsafe extern "C" fn context_instruct_shim_openat(
         // contract documented above and forwards the arguments unchanged.
         return unsafe { libc::openat(dirfd, path, flags, libc::c_uint::from(mode)) };
     }
-    if let Some(fd) = maybe_virtualize(path, Some(dirfd)) {
+    if let Some(fd) = maybe_virtualize(path, Some(dirfd), flags) {
         return fd;
     }
     // SAFETY: This exported hook inherits the caller's `openat(2)` contract
@@ -99,7 +100,12 @@ pub unsafe extern "C" fn context_instruct_shim_openat(
     unsafe { libc::openat(dirfd, path, flags, libc::c_uint::from(mode)) }
 }
 
-fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<libc::c_int> {
+fn maybe_virtualize(
+    path: *const c_char,
+    dirfd: Option<libc::c_int>,
+    flags: libc::c_int,
+) -> Option<libc::c_int> {
+    let replacement_flags = crate::open_semantics::virtualized_read_flags(flags, libc::O_CLOEXEC)?;
     if path.is_null() || intercept_disabled() {
         return None;
     }
@@ -125,7 +131,11 @@ fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<l
             rewritten_bytes,
             ..
         } => {
-            let fd = create_temp_fd("context-instruct-shim", content.as_bytes())?;
+            let fd = create_readonly_temp_fd(
+                "context-instruct-shim",
+                content.as_bytes(),
+                replacement_flags,
+            )?;
             debug_log(&format!(
                 "p28 virtualized path={} task={} original_bytes={} rewritten_bytes={}",
                 candidate.absolute_path.display(),
@@ -313,38 +323,78 @@ fn resolve_instruction_file(
     }
 }
 
-fn create_temp_fd(name: &str, content: &[u8]) -> Option<libc::c_int> {
+fn create_readonly_temp_fd(
+    name: &str,
+    content: &[u8],
+    requested_flags: libc::c_int,
+) -> Option<libc::c_int> {
     let template = format!("{}/{}-XXXXXX", std::env::temp_dir().to_string_lossy(), name);
     let mut bytes = CString::new(template).ok()?.into_bytes_with_nul();
     // SAFETY: `bytes` is a writable NUL-terminated template containing the
     // six trailing `X` bytes required by `mkstemp(3)`.
-    let fd = unsafe { libc::mkstemp(bytes.as_mut_ptr().cast()) };
-    if fd < 0 {
+    let raw_fd = unsafe { libc::mkstemp(bytes.as_mut_ptr().cast()) };
+    if raw_fd < 0 {
         return None;
     }
-    // SAFETY: On success `mkstemp` replaced the template with the live
-    // NUL-terminated path. Unlinking it is safe while `fd` keeps the file open.
-    let _ = unsafe { libc::unlink(bytes.as_ptr().cast()) };
-    if !write_all_fd(fd, content) {
-        // SAFETY: `fd` was returned by `mkstemp` and is still owned here.
-        unsafe {
-            libc::close(fd);
-        }
+    // SAFETY: `raw_fd` is the new descriptor returned by `mkstemp(3)`.
+    let writable = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+    if !write_all_fd(writable.as_raw_fd(), content) {
+        unlink_temp_path(&bytes);
         return None;
     }
-    // SAFETY: `fd` remains an open descriptor owned by this function.
-    unsafe {
-        libc::lseek(fd, 0, libc::SEEK_SET);
+    let readonly = reopen_temp_readonly(&bytes, requested_flags);
+    if !unlink_temp_path(&bytes) {
+        return None;
     }
-    Some(fd)
+    let readonly = readonly?;
+    if !replacement_descriptor_matches(&readonly, requested_flags) {
+        return None;
+    }
+    Some(readonly.into_raw_fd())
+}
+
+fn reopen_temp_readonly(path: &[u8], requested_flags: libc::c_int) -> Option<OwnedFd> {
+    let raw_fd = with_intercept_disabled(|| {
+        // SAFETY: `path` is the live NUL-terminated name produced by
+        // `mkstemp(3)`, and read-only opens do not require a mode argument.
+        unsafe { libc::open(path.as_ptr().cast(), requested_flags) }
+    });
+    if raw_fd < 0 {
+        return None;
+    }
+    // SAFETY: a successful `open(2)` returns one new owned descriptor.
+    Some(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+}
+
+fn unlink_temp_path(path: &[u8]) -> bool {
+    // SAFETY: `path` is the live NUL-terminated name produced by `mkstemp(3)`.
+    unsafe { libc::unlink(path.as_ptr().cast()) == 0 }
+}
+
+fn replacement_descriptor_matches(fd: &OwnedFd, requested_flags: libc::c_int) -> bool {
+    // SAFETY: `fd` is live and both commands are descriptor-only queries.
+    let status_flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+    if status_flags < 0 || status_flags & libc::O_ACCMODE != libc::O_RDONLY {
+        return false;
+    }
+    // SAFETY: `fd` is live and `F_GETFD` takes no third argument.
+    let descriptor_flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
+    descriptor_flags >= 0
+        && (descriptor_flags & libc::FD_CLOEXEC != 0) == (requested_flags & libc::O_CLOEXEC != 0)
 }
 
 fn write_all_fd(fd: libc::c_int, mut bytes: &[u8]) -> bool {
     while !bytes.is_empty() {
         // SAFETY: `bytes` is readable for `bytes.len()` bytes, and callers
-        // supply the open descriptor owned by `create_temp_fd`.
+        // supply the open descriptor owned by `create_readonly_temp_fd`.
         let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
-        if written <= 0 {
+        if written < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if written == 0 {
             return false;
         }
         bytes = &bytes[written as usize..];
