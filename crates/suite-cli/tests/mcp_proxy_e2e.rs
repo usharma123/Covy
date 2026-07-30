@@ -13,9 +13,11 @@ use mcp_proxy_fake::{
     write_bidirectional_server, write_colliding_tool_server, write_compact_read_server,
     write_concurrent_tool_server, write_newline_only_server, write_upstream_batch_server,
 };
+use packet28_daemon_protocol::context_store::{ContextStoreGetRequest, ContextStoreListRequest};
 use process_harness::McpHarness;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::fs;
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
@@ -62,6 +64,86 @@ fn read_until(
             return value;
         }
     }
+}
+
+fn load_agent_state_events(root: &Path, task_id: &str) -> Vec<Value> {
+    let root_string = root.to_string_lossy().into_owned();
+    let entries = suite_cli::cmd_daemon::execute_context_store_list(
+        root,
+        ContextStoreListRequest {
+            root: root_string.clone(),
+            target: Some("agenty.state.write".to_string()),
+            limit: 100,
+            ..ContextStoreListRequest::default()
+        },
+    )
+    .unwrap()
+    .entries;
+
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            suite_cli::cmd_daemon::execute_context_store_get(
+                root,
+                ContextStoreGetRequest {
+                    root: root_string.clone(),
+                    key: entry.cache_key,
+                },
+            )
+            .unwrap()
+            .entry
+        })
+        .flat_map(|detail| detail.entry.packets)
+        .filter_map(|packet| packet.body["payload"].as_object().cloned())
+        .map(Value::Object)
+        .filter(|event| event["task_id"] == task_id)
+        .collect()
+}
+
+fn assert_failed_tool_lifecycle(
+    events: &[Value],
+    tool_name: &str,
+    error_class: &str,
+    retryable: bool,
+) {
+    let failed = events
+        .iter()
+        .find(|event| {
+            event["data"]["type"] == "tool_invocation_failed"
+                && event["data"]["tool_name"] == tool_name
+        })
+        .unwrap_or_else(|| panic!("missing failed lifecycle event for {tool_name}"));
+    let invocation_id = failed["data"]["invocation_id"].as_str().unwrap();
+    let started = events
+        .iter()
+        .find(|event| {
+            event["data"]["type"] == "tool_invocation_started"
+                && event["data"]["invocation_id"] == invocation_id
+        })
+        .unwrap_or_else(|| panic!("missing start event for failed invocation {invocation_id}"));
+
+    assert_eq!(started["data"]["sequence"], failed["data"]["sequence"]);
+    assert_eq!(started["data"]["tool_name"], failed["data"]["tool_name"]);
+    assert_eq!(
+        started["data"]["server_name"],
+        failed["data"]["server_name"]
+    );
+    assert_eq!(
+        started["data"]["request_fingerprint"],
+        failed["data"]["request_fingerprint"]
+    );
+    assert_eq!(failed["data"]["error_class"], error_class);
+    assert_eq!(failed["data"]["retryable"], retryable);
+    assert!(
+        failed["data"]["duration_ms"].as_u64().is_some(),
+        "failed invocation must record duration_ms"
+    );
+    assert!(
+        failed["data"]["error_message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "failed invocation must record a non-empty error message"
+    );
 }
 
 #[test]
@@ -659,6 +741,8 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
         status["result"]["structuredContent"]["task"]["last_event_seq"],
         6
     );
+    let events = load_agent_state_events(dir.path(), "task-proxy-concurrent");
+    assert_failed_tool_lifecycle(&events, "concurrent.echo", "timeout", true);
 
     write_mcp_message(
         &mut server,
@@ -797,6 +881,8 @@ fn test_mcp_proxy_records_failed_terminal_state_when_upstream_disconnects() {
         status["result"]["structuredContent"]["task"]["last_event_seq"],
         2
     );
+    let events = load_agent_state_events(dir.path(), "task-proxy-disconnect");
+    assert_failed_tool_lifecycle(&events, "concurrent.echo", "generic", false);
 
     stop_mcp_server(server);
     suite_cmd()
