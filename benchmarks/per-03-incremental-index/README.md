@@ -15,9 +15,12 @@ Keep the incremental architecture only when the median single-path update:
 2. reduces bytes published per update; and
 3. does not regress elapsed time on the deterministic release workload.
 
-The repeated measurements below pass all three conditions. The implementation
-therefore remains enabled. Compaction is measured separately because its cost is
-intentionally amortized over eight segment publications.
+The original 2026-07-28 measurements below passed all three conditions.
+Compaction is measured separately because its cost is intentionally amortized
+over eight segment publications. The final-base security revalidation in
+[BR-17 publication-fence revalidation](#br-17-publication-fence-revalidation)
+supersedes that elapsed-time result for the current integrated tree: correctness
+and published-byte gates still pass, but the wall-clock gate is now partial.
 
 ## Reproduce
 
@@ -91,45 +94,78 @@ published base and every segment while holding the publication lock. The
 benchmark also used `saturating_sub`, so a regression was printed as a
 `0.00%` reduction.
 
-Commit `9fc911d8` replaces that reload with a generation/digest comparison
-under the publication lock. Follow-up `2436983b` authenticates the persisted
-generation record, retains the already authenticated in-memory generation, and
-checks immutable artifacts using stable Unix file identity with digest
-validation whenever that identity changes. Platforms without a stable change
-token conservatively rehash retained artifacts. Benchmark deltas are signed
-`(after - before) / before` values, where a positive time delta is a regression.
+Rebased commit `a9e9c5f6` replaces that reload with a generation/digest
+comparison under the publication lock. Follow-ups `a150f514` and `252c8dbe`
+authenticate and pin the current and next generation records plus every
+referenced artifact through publication, retain the already authenticated
+in-memory generation, and prune only from authenticated records. Stable Unix
+file identity avoids unchanged-artifact hashing; platforms without a stable
+change token conservatively rehash retained artifacts. Commits `161ea15a` and
+`72a53bea` apply the same fence to direct, policy-change, and prepared/shared
+rebuilds, authenticate the exact bounded bytes written to both manifest files,
+restore both pre-publication files on failure, and carry the policy update's
+original authenticated prestate across its full scan. Benchmark deltas are
+signed `(after - before) / before` values, where a positive time delta is a
+regression.
 
-The exact release command under [Reproduce](#reproduce) was run three times
-before and after the change:
+### Historical pre-state-fs result
+
+The exact release command under [Reproduce](#reproduce) was originally run
+three times before and after the source-stack change:
 
 | Revision/path | Invocation medians (µs) | Median (µs) | Delta versus paired legacy |
 | --- | --- | ---: | ---: |
 | `43753c58` whole snapshot | 6,506; 5,251; 5,466 | 5,466 | baseline |
 | `43753c58` incremental generation | 16,965; 15,732; 18,205 | 16,965 | +210.37% |
-| `2436983b` whole snapshot | 6,967; 4,781; 4,603 | 4,781 | baseline |
-| `2436983b` incremental generation | 2,471; 2,705; 3,076 | 2,705 | -43.42% |
+| `fc134fe1` whole snapshot | 5,742; 4,871; 4,836 | 4,871 | baseline |
+| `fc134fe1` incremental generation | 4,345; 4,764; 5,651 | 4,764 | -2.20% |
 
-The incremental invocation median improved from 16,965 to 2,705 µs
-(-84.06%, or 6.27× faster). Each final run published 5,323 bytes versus
-3,490,797 bytes for the whole-snapshot model and reported the same bounded
-work:
+Those historical measurements preceded the descriptor-anchored
+`packet28-state-fs` publication substrate. In that evidence boundary, the
+incremental invocation median improved from 16,965 to 4,764 µs (-71.92%, or
+3.56× faster).
+
+### Final-base durable-state revalidation
+
+The rebased stack was then measured on final base `aaae2c7f`, where state
+publication synchronizes temporary files and parent directories. Three exact,
+uncontended release invocations reported:
+
+| Revision/path | Invocation medians (µs) | Median (µs) | Delta versus paired legacy |
+| --- | --- | ---: | ---: |
+| final-base whole snapshot | 5,120; 4,446; 4,585 | 4,585 | baseline |
+| final-base incremental generation | 50,960; 50,378; 52,537 | 50,960 | +1,011.45% |
+
+The per-invocation deltas were +895.25%, +1,032.92%, and +1,045.81%; the
+incremental path was 9.95–11.46× slower than the non-durable whole-snapshot
+comparator. Therefore the decoded-work defect is closed, but the elapsed-time
+decision gate is not re-established on the final base. A follow-up experiment
+must coalesce durability barriers without weakening descriptor anchoring,
+write-before-manifest ordering, or publication authentication before this
+objective can move from partial to done.
+
+Each final-base run still published 5,323 bytes versus 3,490,797 bytes for the
+whole-snapshot model and reported the same bounded work:
 
 ```text
-publication_metadata_bytes_decoded=1457
+publication_metadata_bytes_decoded=2711
 repository_artifact_bytes_decoded=0
 repository_artifacts_decoded=0
 repository_artifact_bytes_hashed=0
-repository_artifact_metadata_checks=6
+repository_artifact_metadata_checks=21
 changed_paths_considered=1
 ```
 
 The focused invariant seeds four retained segments and asserts zero
-repository-artifact decoding, five bounded metadata checks (base plus four
+repository-artifact decoding, 18 bounded metadata checks across initial
+pinning and two complete revalidation passes (base plus the retained and new
 segments), and exactly one considered changed path. It also asserts zero
 retained-artifact hashing on the Unix stable-identity fast path. Dedicated
-regressions corrupt the persisted generation record and apply same-size base
-corruption with the original mtime restored; both fail closed without
-displacing the retained recovery generation.
+regressions cover bounded canonical generation records, same-size base
+corruption with restored mtime, current/previous manifest-output replacement,
+policy-scan prestate mutation, and prepared publication mutation. Every case
+fails closed with exact manifest preservation or rollback and without pruning
+authenticated recovery artifacts.
 
 ## Compaction cost
 
@@ -161,7 +197,8 @@ CARGO_TARGET_DIR=/tmp/packet28-per03-daemon-final \
 ```
 
 This is a debug-profile integration measurement, so elapsed time is diagnostic;
-the artifact-size invariant is the decision evidence.
+the artifact-size invariant is the decision evidence. The original source-stack
+measurements were:
 
 | Path | Median update (µs) | Published bytes | Reference bytes | Byte reduction |
 | --- | ---: | ---: | ---: | ---: |
@@ -171,6 +208,13 @@ The three benchmark invocations reported 29,536, 44,033, and 29,767 µs. All
 three published 27,048 bytes for the measured update and reported
 `legacy_snapshot_written=false`.
 
+On final base `aaae2c7f`, three exact debug-profile invocations reported
+293,447, 298,521, and 282,387 µs (median 293,447 µs). All three published
+27,966 bytes, retained a 1,410,899-byte initial generation, and reported
+`legacy_snapshot_written=false`. The final-base artifact-size reduction is
+98.02%; the debug elapsed time is recorded for reproducibility and is not the
+release wall-clock decision gate.
+
 ## Integrity and ownership validation
 
 The final measurements include BLAKE3 artifact digests, a repository-local
@@ -179,13 +223,16 @@ artifact retention. Regression tests cover stale concurrent writers,
 structurally valid byte mutation, traversal attempts, bounded retention,
 restart recovery, deletion tombstones, retained readers, and daemon clear.
 These checks deliberately preserve the evidence boundary: pruning is
-best-effort after publication, and the persistence protocol does not claim
-power-loss durability.
+best-effort after publication. The original benchmark did not exercise durable
+state publication; the final-base revalidation includes the state layer's file
+and parent-directory synchronization, but this timing experiment is not itself
+a power-loss recovery proof.
 
 ## Interpretation
 
 The result supports immutable generations with manifest-last publication,
-bounded overlay segments, and reader-owned `Arc` layers. It does not establish
-power-loss durability: publication uses a flushed temporary file followed by an
-atomic rename, while recovery trusts only the current or explicitly retained
-previous manifest and never promotes orphan artifacts.
+bounded overlay segments, and reader-owned `Arc` layers. Recovery trusts only
+the current or explicitly retained previous manifest and never promotes orphan
+artifacts. On the final base, descriptor-anchored durable publication makes the
+wall-clock objective partial; retaining the architecture is not evidence that
+the elapsed-time decision gate passed.

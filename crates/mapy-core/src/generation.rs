@@ -10,8 +10,9 @@
 //! Publication is process-crash atomic on filesystems that provide atomic
 //! same-directory rename: generation identities are persistently reserved
 //! before create-once artifacts are written, and the manifest is renamed last.
-//! Files and parent directories are not `fsync`ed, so this module does not claim
-//! power-loss durability.
+//! The descriptor-anchored state layer synchronizes files and parent
+//! directories. This module's tests establish crash atomicity, not end-to-end
+//! power-loss behavior, so it makes no independent power-loss durability claim.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
