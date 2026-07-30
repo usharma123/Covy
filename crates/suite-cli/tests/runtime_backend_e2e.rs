@@ -6,6 +6,7 @@
 mod process_harness;
 
 use assert_cmd::Command;
+#[cfg(not(target_os = "linux"))]
 use predicates::prelude::*;
 #[cfg(target_os = "linux")]
 use std::fs;
