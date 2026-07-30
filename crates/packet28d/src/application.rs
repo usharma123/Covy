@@ -222,7 +222,7 @@ pub fn serve(root: PathBuf) -> Result<()> {
         daemon_instance_lease: daemon_instance_lease.clone(),
         task_store_lease: task_store_lease.clone(),
         recovered_replans,
-        config: config.clone(),
+        config,
     }));
     shutdown.request();
     let shutdown_deadline = runtime_outcome.deadline;

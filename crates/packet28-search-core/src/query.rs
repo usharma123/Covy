@@ -346,7 +346,7 @@ fn indexed_search_with_optional_scope(
                 ensure_workspace_fresh(root, runtime, loaded.as_ref())?;
             }
             return Err(SearchError::IndexNotReady {
-                reason: compiled.planner_fallback.clone().unwrap_or_else(|| {
+                reason: compiled.planner_fallback.unwrap_or_else(|| {
                     "planner could not derive a selective index plan".to_string()
                 }),
             });

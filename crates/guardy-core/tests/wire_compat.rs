@@ -15,7 +15,7 @@ fn legacy_governance_paths_are_the_shared_wire_types() {
         }],
     };
     let legacy: AuditResult = shared;
-    let _: AuditTotals = legacy.totals.clone();
+    let _: AuditTotals = legacy.totals;
     let finding: &AuditFinding = &legacy.findings[0];
 
     assert!(legacy.passed);

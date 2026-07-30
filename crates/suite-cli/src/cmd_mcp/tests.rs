@@ -214,13 +214,13 @@ fn tools_list_exposes_fff_search_strategy() {
 
     for name in ["packet28_search", "packet28_search_fast"] {
         let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
-        let strategies = tool["inputSchema"]["properties"]["search_strategy"]["enum"]
+        let has_fff = tool["inputSchema"]["properties"]["search_strategy"]["enum"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(strategies.contains(&"fff"));
+            .any(|strategy| strategy == "fff");
+        assert!(has_fff);
     }
 }
 

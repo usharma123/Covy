@@ -3900,7 +3900,7 @@ mod tests {
         Arc::make_mut(stale.generation.as_mut().expect("loaded generation"))
             .publication_identity
             .generation_record_digest = "stale-publication".to_string();
-        stale.manifest = current.manifest.clone();
+        stale.manifest = current.manifest;
         fs::write(root.join("src/a.rs"), "pub fn attempted() {}\n").expect("change");
         let before = generation_artifact_snapshot(root);
         let counter_before =

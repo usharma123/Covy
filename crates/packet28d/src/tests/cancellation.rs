@@ -470,7 +470,7 @@ fn cancel_between_steps_stops_the_next_reducer_and_suppresses_completion() {
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
-    let release_for_reducer = release_rx.clone();
+    let release_for_reducer = release_rx;
     let mut kernel = Kernel::new();
     kernel.register_reducer("step.blocking", move |_ctx, _packets| {
         first_calls.fetch_add(1, Ordering::SeqCst);
@@ -514,7 +514,7 @@ fn cancel_between_steps_stops_the_next_reducer_and_suppresses_completion() {
     let run_thread =
         thread::spawn(move || run_sequence_for_task(state_for_run, "task-between-steps"));
     started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    let state_for_cancel = state.clone();
+    let state_for_cancel = state;
     let cancel_thread = thread::spawn(move || cancel_task(state_for_cancel, "task-between-steps"));
     wait_until_cancelled(&generation);
     release_tx.send(()).unwrap();

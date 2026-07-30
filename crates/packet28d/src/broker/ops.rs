@@ -453,12 +453,7 @@ pub(crate) fn broker_write_state(
                 .unwrap_or_else(|| "state write accepted".to_string()),
         })
     };
-    let _ = emit_task_event(
-        state.clone(),
-        &request.task_id,
-        "context_updated",
-        event_payload,
-    );
+    let _ = emit_task_event(state, &request.task_id, "context_updated", event_payload);
 
     Ok(BrokerWriteStateResponse {
         event_id: event.event_id,

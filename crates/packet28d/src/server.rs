@@ -820,7 +820,7 @@ fn handle_request(
             Ok(DaemonResponse::TaskLaunchAgent { response })
         }
         DaemonRequest::TaskCancel { task_id } => {
-            let cancellation = cancel_task(state.clone(), &task_id)?;
+            let cancellation = cancel_task(state, &task_id)?;
             Ok(DaemonResponse::TaskCancel {
                 task: cancellation.0,
                 removed_watch_ids: cancellation.1,

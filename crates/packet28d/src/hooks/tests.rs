@@ -461,7 +461,7 @@ fn edit_invalidation_busts_fs_cache() {
     .unwrap();
 
     let after_edit = hook_ingest(
-        state.clone(),
+        state,
         HookIngestRequest {
             task_id: "task-edit".to_string(),
             reducer_packet: Some(packet("first read")),
@@ -885,7 +885,7 @@ fn threshold_level_returned_in_response() {
     pkt3.est_tokens = 30;
     pkt3.cache_fingerprint = Some("unique-level-3".to_string());
     let response = hook_ingest(
-        state.clone(),
+        state,
         HookIngestRequest {
             task_id: "task-level".to_string(),
             reducer_packet: Some(pkt3),
@@ -976,8 +976,7 @@ fn relaunch_requested_when_daemon_managed_with_command() {
 
     // Stop boundary should trigger handoff + relaunch.
     let response =
-        prepare_handoff_from_hooks(state.clone(), "task-relaunch", HookBoundaryKind::Stop, None)
-            .unwrap();
+        prepare_handoff_from_hooks(state, "task-relaunch", HookBoundaryKind::Stop, None).unwrap();
     assert!(response.handoff_ready);
     assert!(response.relaunch_requested);
     assert_eq!(
@@ -1138,13 +1137,9 @@ fn relaunch_not_requested_when_host_managed() {
     )
     .unwrap();
 
-    let response = prepare_handoff_from_hooks(
-        state.clone(),
-        "task-host-managed",
-        HookBoundaryKind::Stop,
-        None,
-    )
-    .unwrap();
+    let response =
+        prepare_handoff_from_hooks(state, "task-host-managed", HookBoundaryKind::Stop, None)
+            .unwrap();
     assert!(response.handoff_ready);
     assert!(!response.relaunch_requested);
     assert_eq!(

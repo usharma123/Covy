@@ -114,7 +114,7 @@ pub fn run(args: DoctorArgs, config_path: &str) -> Result<i32> {
             total: stats.total,
             mapped_pct: pct,
             unmapped_prefixes: stats.unmapped_prefixes.clone(),
-            suggested_strip_prefixes: stats.suggested_strip_prefixes.clone(),
+            suggested_strip_prefixes: stats.suggested_strip_prefixes,
             next_step: "run covy map-paths --learn --write".to_string(),
         };
         println!("{}", serde_json::to_string_pretty(&summary)?);

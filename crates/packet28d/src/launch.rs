@@ -266,7 +266,7 @@ pub(crate) fn spawn_owned_child_waiter(
                         if task.latest_agent_pid == Some(pid) {
                             task.latest_agent_completed_at_unix = Some(completed_at_unix);
                             task.latest_agent_exit_code = exit_code;
-                            if let Some(error) = error_text.clone() {
+                            if let Some(error) = error_text {
                                 task.last_error = Some(error);
                             }
                             let _ = persist_task(&guard, &task_id);

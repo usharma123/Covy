@@ -5774,7 +5774,7 @@ mod tests {
         fs::write(&outside_target, b"outside").unwrap();
         let staged_symlink = root.path().join("staged-symlink");
         std::os::unix::fs::symlink(&outside_target, &staged_symlink).unwrap();
-        let authority_for_hook = authority.clone();
+        let authority_for_hook = authority;
         inject_authenticated_read_after_open_once(name, move || {
             fs::rename(staged_symlink, authority_for_hook).unwrap();
         });
@@ -5800,7 +5800,7 @@ mod tests {
         fs::write(&linked_source, b"linked").unwrap();
         fs::set_permissions(&linked_source, fs::Permissions::from_mode(0o600)).unwrap();
         fs::hard_link(&linked_source, &staged_link).unwrap();
-        let authority_for_hook = authority.clone();
+        let authority_for_hook = authority;
         inject_authenticated_read_after_open_once(name, move || {
             fs::rename(staged_link, authority_for_hook).unwrap();
         });

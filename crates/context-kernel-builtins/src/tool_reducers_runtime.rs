@@ -80,7 +80,7 @@ pub(crate) fn run_guardy_check(
             payload_est_bytes: Some(payload_bytes),
         },
         provenance: suite_packet_core::Provenance {
-            inputs: vec![config_path.to_string()],
+            inputs: vec![config_path],
             git_base: None,
             git_head: None,
             generated_at_unix: now_unix(),
@@ -526,7 +526,7 @@ pub(crate) fn run_mapy_repo(
             "symbols_ranked": envelope.payload.symbols_ranked.len(),
             "focus_paths": effective_focus_paths,
             "focus_symbols": effective_focus_symbols,
-            "focus_hits": envelope.payload.focus_hits.clone(),
+            "focus_hits": envelope.payload.focus_hits,
         }),
     };
 
@@ -537,7 +537,7 @@ pub(crate) fn run_mapy_repo(
             "kind": "repo_map",
             "focus_paths": effective_focus_paths,
             "focus_symbols": effective_focus_symbols,
-            "focus_hits": envelope.payload.focus_hits.clone(),
+            "focus_hits": envelope.payload.focus_hits,
         }),
     })
 }

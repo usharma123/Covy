@@ -497,7 +497,7 @@ impl RecallArgs {
 
 pub(crate) fn load_cache(root: &str) -> Result<PacketCache> {
     let root_path = PathBuf::from(root);
-    let config = PersistConfig::new(root_path.clone());
+    let config = PersistConfig::new(root_path);
     Ok(PacketCache::load_from_disk(&config))
 }
 

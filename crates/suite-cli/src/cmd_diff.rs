@@ -181,7 +181,7 @@ pub fn run(args: AnalyzeArgs, config_path: &str) -> Result<i32> {
     let response = kernel.execute(context_kernel_core::KernelRequest {
         target: "diffy.analyze".to_string(),
         reducer_input: serde_json::to_value(kernel_input)?,
-        policy_context: policy_context.clone(),
+        policy_context,
         ..context_kernel_core::KernelRequest::default()
     })?;
 
@@ -433,7 +433,7 @@ pub fn run_remote(args: AnalyzeArgs, config_path: &str, daemon_root: &Path) -> R
         context_kernel_core::KernelRequest {
             target: "diffy.analyze".to_string(),
             reducer_input: serde_json::to_value(kernel_input)?,
-            policy_context: policy_context.clone(),
+            policy_context,
             ..context_kernel_core::KernelRequest::default()
         },
     )?;

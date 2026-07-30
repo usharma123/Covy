@@ -264,7 +264,7 @@ fn all_four_legacy_constructors_and_instance_methods_remain_available() {
     let builtins = Kernel::with_v1_reducers();
     assert_eq!(Kernel::reducer_names(&builtins).len(), 16);
 
-    let persistent = Kernel::with_persistence(persistence.clone());
+    let persistent = Kernel::with_persistence(persistence);
     let _ = Kernel::flush_cache_persistence(&persistent, Duration::from_millis(1));
     let _ = Kernel::context_store_prune(
         &persistent,

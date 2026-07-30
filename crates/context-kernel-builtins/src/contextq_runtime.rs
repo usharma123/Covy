@@ -459,7 +459,7 @@ pub(crate) fn run_contextq_manage(
         changed_paths_since_checkpoint: snapshot.changed_paths_since_checkpoint.clone(),
         changed_symbols_since_checkpoint: snapshot.changed_symbols_since_checkpoint.clone(),
         open_questions: snapshot.open_questions.clone(),
-        active_decisions: snapshot.active_decisions.clone(),
+        active_decisions: snapshot.active_decisions,
     };
 
     let (envelope, packet) = build_context_manage_packet(&ctx.target, payload)?;

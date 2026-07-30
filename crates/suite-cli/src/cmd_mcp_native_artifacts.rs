@@ -16,7 +16,7 @@ pub(crate) fn handle_packet28_fetch_tool_result(
         args.invocation_id.as_deref(),
     )?;
     if payload.get("artifact_id").is_none() {
-        payload["artifact_id"] = json!(artifact_id.clone());
+        payload["artifact_id"] = json!(artifact_id);
     }
     if payload.get("response_mode").is_none() {
         payload["response_mode"] = json!("full");

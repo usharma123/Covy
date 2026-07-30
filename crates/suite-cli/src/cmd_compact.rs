@@ -1035,7 +1035,7 @@ fn walk_tree(root: &Path, path: &Path, depth: usize, state: &mut TreeWalkState<'
             format!("{}{}", "  ".repeat(depth), relative)
         };
         state.rendered.push(name);
-        state.paths.push(relative.clone());
+        state.paths.push(relative);
     }
     if depth >= state.max_depth || !path.is_dir() {
         return Ok(());

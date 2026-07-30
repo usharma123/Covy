@@ -138,7 +138,7 @@ fn run_reducer_aware(root: &std::path::Path, cwd: &std::path::Path, args: &RunAr
     record_run_savings(
         root,
         &RunSavingsRecord {
-            command: command_text.clone(),
+            command: command_text,
             cwd: cwd.display().to_string(),
             family: reduction.family.clone(),
             canonical_kind: reduction.canonical_kind.clone(),

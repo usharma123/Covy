@@ -3523,7 +3523,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let config = PersistConfig::new(dir.path().to_path_buf());
         let first = CachePersistence::open(config.clone()).unwrap();
-        let second = CachePersistence::open(config.clone()).unwrap();
+        let second = CachePersistence::open(config).unwrap();
         let first_memory = first.shared_cache();
         let second_memory = second.shared_cache();
         assert!(Arc::ptr_eq(&first_memory, &second_memory));
@@ -4023,7 +4023,7 @@ mod tests {
         let checkpoint_bytes = fs::metadata(persist_cache_path_v3(dir.path()))
             .unwrap()
             .len();
-        let owner = CachePersistence::start(config.clone(), cache.clone()).unwrap();
+        let owner = CachePersistence::start(config, cache.clone()).unwrap();
         let entry = put_entry(&mut cache, 10_000, 512);
 
         owner.record_update(&entry, Vec::new()).unwrap();
@@ -4154,7 +4154,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let config = PersistConfig::new(dir.path().to_path_buf());
         let mut cache = PacketCache::new();
-        let owner = CachePersistence::start(config.clone(), cache.clone()).unwrap();
+        let owner = CachePersistence::start(config, cache.clone()).unwrap();
         let entry = put_entry(&mut cache, 5, 64);
         owner.record_update(&entry, Vec::new()).unwrap();
 

@@ -653,7 +653,7 @@ where
                             );
                             object.insert(
                                 "context_version".to_string(),
-                                Value::String(response.context_version.clone()),
+                                Value::String(response.context_version),
                             );
                             object.insert(
                                 "brief_path".to_string(),
@@ -696,7 +696,7 @@ where
             }
             Ok(response) => {
                 let emitted = emit_task_event_for_generation(
-                    state.clone(),
+                    state,
                     task_id,
                     generation.id(),
                     "task_completed",
@@ -738,7 +738,7 @@ where
             }
             Err(err) => {
                 let _ = emit_task_event_for_generation(
-                    state.clone(),
+                    state,
                     task_id,
                     generation.id(),
                     "task_failed",
@@ -1220,7 +1220,7 @@ fn process_watch_event(
 
     if let Some(error) = error_message {
         let _ = emit_task_event_for_generation(
-            state.clone(),
+            state,
             &task_id,
             generation.id(),
             "watch_error",

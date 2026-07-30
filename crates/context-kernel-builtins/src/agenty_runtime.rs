@@ -105,7 +105,7 @@ pub(crate) fn run_agenty_state_write(
     let (envelope, packet) = build_agent_state_packet(&ctx.target, &event, "agenty.state.write")?;
 
     ctx.set_shared("task_id", Value::String(event.task_id.clone()));
-    ctx.set_shared("event_id", Value::String(event.event_id.clone()));
+    ctx.set_shared("event_id", Value::String(event.event_id));
 
     Ok(ReducerResult {
         output_packets: vec![packet],

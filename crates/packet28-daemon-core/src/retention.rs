@@ -8376,7 +8376,7 @@ mod tests {
         })
         .unwrap();
         fs::write(&outside_path, &outside_bytes).unwrap();
-        let path_for_swap = path.clone();
+        let path_for_swap = path;
         inject_active_task_before_capability_read_once(move || {
             fs::rename(&path_for_swap, &held).unwrap();
             symlink(&outside_path, &path_for_swap).unwrap();
@@ -8403,7 +8403,7 @@ mod tests {
         let path = active_task_path(root.path());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"{}").unwrap();
-        let path_for_growth = path.clone();
+        let path_for_growth = path;
         inject_active_task_before_capability_read_once(move || {
             File::options()
                 .write(true)
@@ -8630,7 +8630,7 @@ mod tests {
         };
         let outside_bytes = serde_json::to_vec_pretty(&outside_registry).unwrap();
         fs::write(&outside_path, &outside_bytes).unwrap();
-        let path_for_swap = path.clone();
+        let path_for_swap = path;
         inject_registry_before_capability_read_once(move || {
             fs::rename(&path_for_swap, &held).unwrap();
             symlink(&outside_path, &path_for_swap).unwrap();
@@ -8654,7 +8654,7 @@ mod tests {
         let root = tempdir().unwrap();
         write_registry(root.path(), [inactive_record("inside", 10)]);
         let path = task_registry_path(root.path());
-        let path_for_growth = path.clone();
+        let path_for_growth = path;
         inject_registry_before_capability_read_once(move || {
             File::options()
                 .write(true)

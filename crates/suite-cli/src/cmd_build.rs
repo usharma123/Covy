@@ -274,7 +274,7 @@ fn handle_reduce_response(
         return Ok(0);
     }
 
-    let payload = packet.payload.clone();
+    let payload = packet.payload;
     println!(
         "summary: total={} unique={} duplicates_removed={}",
         payload.total_diagnostics, payload.unique_diagnostics, payload.duplicates_removed

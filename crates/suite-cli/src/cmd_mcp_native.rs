@@ -568,7 +568,7 @@ pub(crate) fn handle_packet28_search(
             command: None,
             paths: search_result.paths.clone(),
             regions: search_result.regions.clone(),
-            symbols: search_result.symbols.clone(),
+            symbols: search_result.symbols,
             artifact_id,
             raw_artifact_handle: None,
             duration_ms,

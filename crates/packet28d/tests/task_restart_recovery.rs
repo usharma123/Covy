@@ -496,7 +496,7 @@ fn live_recovered_cancellation_blocks_readiness_until_process_group_is_quiescent
     };
     let watches = WatchRegistry {
         watches: vec![WatchRegistration {
-            watch_id: watch_id.clone(),
+            watch_id,
             spec: WatchSpec {
                 task_id: "cancelling-live-agent".to_string(),
                 ..WatchSpec::default()

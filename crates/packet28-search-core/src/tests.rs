@@ -1075,7 +1075,7 @@ fn load_runtime_marks_weight_mismatch_stale() {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/lib.rs"), "pub struct Alpha;\n").unwrap();
     let runtime = rebuild_full_index(root, true).unwrap();
-    let mut manifest = runtime.manifest.clone();
+    let mut manifest = runtime.manifest;
     manifest.weight_table_version = manifest.weight_table_version.saturating_sub(1);
     save_manifest(root, &manifest).unwrap();
     let loaded = load_runtime(root).unwrap();

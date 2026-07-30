@@ -442,7 +442,7 @@ fn crash_between_spawn_and_ownership_checkpoint_never_releases_delegated_work() 
     FileExt::lock_exclusive(&registry_lock).expect("fault-inject blocked ownership checkpoint");
 
     let delegated_work = workspace.path().join("delegated-work-ran");
-    let launch_runtime = runtime.clone();
+    let launch_runtime = runtime;
     let delegated_work_arg = delegated_work.to_string_lossy().to_string();
     let (finished_tx, finished_rx) = mpsc::channel();
     let launch = thread::spawn(move || {

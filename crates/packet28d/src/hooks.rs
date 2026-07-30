@@ -539,7 +539,7 @@ pub(crate) fn hook_ingest(
                 paths: packet.paths.clone(),
                 regions: packet.regions.clone(),
                 symbols: packet.symbols.clone(),
-                artifact_id: artifact_id.clone(),
+                artifact_id,
                 raw_artifact_handle: packet.raw_artifact_handle.clone(),
                 raw_artifact_available: Some(packet.raw_artifact_available),
                 duration_ms: packet.duration_ms,

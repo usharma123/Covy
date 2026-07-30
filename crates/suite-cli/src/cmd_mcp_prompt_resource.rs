@@ -402,7 +402,7 @@ pub(crate) fn handle_resources_list(
     // Limit resource enumeration to the 5 most recent tasks to prevent
     // linear resource list growth from bloating context on every MCP init.
     // Only expose brief resources for non-current tasks (events/state on demand).
-    let mut tasks_by_recency = status.tasks.clone();
+    let mut tasks_by_recency = status.tasks;
     tasks_by_recency.sort_by_key(|task| std::cmp::Reverse(task_recency_key(task)));
     for task in tasks_by_recency
         .iter()

@@ -465,7 +465,7 @@ pub fn run_correlate(args: CorrelateArgs) -> Result<i32> {
         .map(suite_packet_core::JsonProfile::from)
         .unwrap_or(suite_packet_core::JsonProfile::Compact);
     let cwd = std::env::current_dir()?;
-    let kernel = build_kernel(true, cwd.clone());
+    let kernel = build_kernel(true, cwd);
     let input_packets = args
         .packets
         .iter()

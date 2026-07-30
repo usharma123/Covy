@@ -177,10 +177,7 @@ fn legacy_messages_remain_source_and_wire_compatible() {
         }],
         index: None,
     };
-    let wire = serde_json::to_value(DaemonResponse::Status {
-        status: status.clone(),
-    })
-    .unwrap();
+    let wire = serde_json::to_value(DaemonResponse::Status { status }).unwrap();
     assert_eq!(wire["type"], serde_json::json!("status"));
     assert!(wire["status"].get("task_count").is_none());
     assert_eq!(wire["status"]["tasks"].as_array().unwrap().len(), 1);

@@ -126,7 +126,7 @@ pub(crate) fn resolve_context(
     let response = kernel.execute(KernelRequest {
         target: "packet28.instruction.summarize".to_string(),
         reducer_input: serde_json::to_value(context_kernel_core::InstructionSummaryRequest {
-            path: display_path.clone(),
+            path: display_path,
             content: source_content.clone(),
             content_sha256: request.source_sha256.clone(),
             mode: render_mode,
@@ -258,7 +258,7 @@ pub(crate) fn resolve_instruction_file(
     )?;
 
     Ok(InstructionFileResolveResponse {
-        path: path.clone(),
+        path,
         outcome: match response.outcome {
             ContextResolveOutcome::Rewrite {
                 content,

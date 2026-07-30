@@ -249,10 +249,7 @@ fn run_bench(args: DebugSearchArgs) -> Result<()> {
     let packet28_hits = collect_hits(&packet28);
     let reducer_hits = collect_hits(&reducer);
 
-    println!(
-        "guard={}",
-        guard.clone().unwrap_or_else(|| "index".to_string())
-    );
+    println!("guard={}", guard.unwrap_or_else(|| "index".to_string()));
     println!(
         "parity={}",
         if packet28_hits == reducer_hits {

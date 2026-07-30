@@ -339,8 +339,7 @@ fn recovered_replan_claim_is_pending_only_generation_fenced_and_shutdown_safe() 
         guard.shutting_down = true;
     }
     assert!(
-        !run_recovered_replan_for_task(state.clone(), "recovered-claim", replacement_generation)
-            .unwrap(),
+        !run_recovered_replan_for_task(state, "recovered-claim", replacement_generation).unwrap(),
         "shutdown must prevent late recovery admission"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);

@@ -3285,6 +3285,6 @@ while True:
         for _ in 0..MAX_UPSTREAM_INFLIGHT {
             acquired.push(permits.clone().try_acquire_owned().unwrap());
         }
-        assert!(permits.clone().try_acquire_owned().is_err());
+        assert!(permits.try_acquire_owned().is_err());
     }
 }

@@ -138,7 +138,7 @@ pub(crate) fn run_packet28_instruction_summarize(
         rewritten_bytes: rendered.summary_text.len(),
         matched_terms: rendered.matched_terms.clone(),
         section_titles: rendered.section_titles.clone(),
-        summary_text: rendered.summary_text.clone(),
+        summary_text: rendered.summary_text,
     };
     let payload_bytes = serde_json::to_vec(&payload)
         .map_err(|source| KernelError::ReducerFailed {

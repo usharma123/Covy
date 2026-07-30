@@ -264,8 +264,8 @@ pub(crate) fn handle_packet28_glob(
         "resolved_paths": resolved_paths,
         "match_count": matches.len(),
         "truncated": truncated,
-        "paths": matched_paths.clone(),
-        "symbols": symbols.clone(),
+        "paths": matched_paths,
+        "symbols": symbols,
         "compact_preview": compact_preview,
         "response_mode": "full",
     });
@@ -278,13 +278,13 @@ pub(crate) fn handle_packet28_glob(
     let payload = match args.response_mode {
         Packet28SearchResponseMode::Full => {
             let mut payload = full_payload.clone();
-            payload["artifact_id"] = json!(artifact_id.clone());
+            payload["artifact_id"] = json!(artifact_id);
             payload
         }
         Packet28SearchResponseMode::Slim => json!({
             "match_count": matches.len(),
             "compact_preview": slim_preview,
-            "artifact_id": artifact_id.clone(),
+            "artifact_id": artifact_id,
             "response_mode": "slim",
         }),
     };

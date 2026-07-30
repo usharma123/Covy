@@ -125,7 +125,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
     };
     let input = suite_proxy_core::ProxyRunRequest {
         argv: args.command_argv.clone(),
-        cwd: resolved_cwd.clone(),
+        cwd: resolved_cwd,
         env_allowlist: args.env_allowlist.clone(),
         max_output_bytes: args.max_output_bytes,
         max_lines: args.max_lines,
@@ -187,7 +187,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
         .first()
         .ok_or_else(|| anyhow!("kernel returned no output packets"))?;
 
-    let governed_response = if let Some(context_config) = resolved_context_config.clone() {
+    let governed_response = if let Some(context_config) = resolved_context_config {
         Some(kernel.execute(context_kernel_core::KernelRequest {
             target: "governed.assemble".to_string(),
             input_packets: vec![output_packet.clone()],

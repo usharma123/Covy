@@ -808,7 +808,7 @@ fn persistent_retry_is_backed_off_and_an_explicit_command_interrupts_it() {
     state.lock().expect("state").index_tx = ingress.clone();
     let (attempt_tx, attempt_rx) = std::sync::mpsc::channel();
     let (delay_tx, delay_rx) = std::sync::mpsc::channel();
-    let worker_state = state.clone();
+    let worker_state = state;
     let worker = std::thread::spawn(move || {
         let mut attempts = 0;
         run_index_worker_with_processor_and_backoff(
@@ -1513,7 +1513,7 @@ fn queued_dirty_path_uses_live_search_and_forced_index_refuses_stale_results() {
         live.engine
     );
 
-    let mut alias_request = request.clone();
+    let mut alias_request = request;
     alias_request.requested_paths = vec!["src/nested/../a.rs".to_string()];
     let forced = daemon_packet28_search(
         fixture.state.clone(),
@@ -1890,7 +1890,7 @@ fn search_guard_reports_missing_stale_and_unsupported_states_even_when_forced() 
     let missing = daemon_test_state();
     let missing_root = daemon_test_root(&missing);
     let forced_missing = daemon_packet28_search_guard(
-        missing.clone(),
+        missing,
         packet28_daemon_protocol::message::Packet28SearchRequest {
             request: packet28_reducer_core::SearchRequest {
                 query: "alpha".to_string(),

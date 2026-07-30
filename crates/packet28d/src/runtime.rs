@@ -704,7 +704,7 @@ mod tests {
         let worker = tokio::spawn(async move {
             worker_pool
                 .run_cancellable(move |cancellation| {
-                    started_tx.send(cancellation.clone()).unwrap();
+                    started_tx.send(cancellation).unwrap();
                     release_rx.recv().unwrap();
                     Ok(())
                 })

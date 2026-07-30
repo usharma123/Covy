@@ -228,7 +228,7 @@ pub fn run(args: SliceArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    let payload = packet.payload.clone();
+    let payload = packet.payload;
     println!(
         "summary: total={} unique={} duplicates_removed={}",
         payload.total_failures, payload.unique_failures, payload.duplicates_removed
@@ -457,7 +457,7 @@ pub fn run_remote(args: SliceArgs, daemon_root: &Path) -> Result<i32> {
         return Ok(0);
     }
 
-    let payload = packet.payload.clone();
+    let payload = packet.payload;
     println!(
         "summary: total={} unique={} duplicates_removed={}",
         payload.total_failures, payload.unique_failures, payload.duplicates_removed

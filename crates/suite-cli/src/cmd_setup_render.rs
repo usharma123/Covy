@@ -43,8 +43,7 @@ pub(crate) fn render_setup_intro(
             "{}/{} runtimes on this machine",
             runtimes.iter().filter(|runtime| runtime.detected).count(),
             runtimes.len()
-        )
-        .to_string(),
+        ),
     );
     println!("  {}", setup_mode_summary(setup_choice).dimmed());
     println!();
