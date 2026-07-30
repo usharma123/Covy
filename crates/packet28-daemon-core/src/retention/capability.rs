@@ -3155,6 +3155,11 @@ fn has_namespace_authority_acl(fd: impl AsFd) -> io::Result<bool> {
     apple_acl::has_namespace_authority_acl(fd)
 }
 
+#[cfg(target_vendor = "apple")]
+fn has_active_namespace_authority_acl(fd: impl AsFd) -> io::Result<bool> {
+    has_namespace_authority_acl(fd)
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod posix_acl {
     use std::ffi::{c_char, c_void, CString};
@@ -3189,6 +3194,10 @@ mod posix_acl {
 
     pub(super) fn has_extended_acl(fd: impl AsFd) -> io::Result<bool> {
         Ok(acl_present(&fd, ACCESS_ACL)? || acl_present(fd, DEFAULT_ACL)?)
+    }
+
+    pub(super) fn has_default_acl(fd: impl AsFd) -> io::Result<bool> {
+        acl_present(fd, DEFAULT_ACL)
     }
 
     pub(super) fn path_has_extended_acl(path: &Path) -> io::Result<bool> {
@@ -3258,7 +3267,19 @@ fn has_extended_acl(fd: impl AsFd) -> io::Result<bool> {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn has_namespace_authority_acl(fd: impl AsFd) -> io::Result<bool> {
-    posix_acl::has_extended_acl(fd)
+    // Access-ACL write authority is reflected in the directory's mode bits
+    // through the POSIX ACL mask and is checked separately. A default ACL is
+    // relevant for a managed directory because it can grant authority to new
+    // children created beneath it.
+    posix_acl::has_default_acl(fd)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn has_active_namespace_authority_acl(_fd: impl AsFd) -> io::Result<bool> {
+    // Ancestor default ACLs affect future direct children, not an existing
+    // retained workspace component. Active access-ACL write authority is
+    // represented by mode bits and checked by the caller.
+    Ok(false)
 }
 
 #[cfg(all(
@@ -3280,6 +3301,17 @@ fn has_namespace_authority_acl(_fd: impl AsFd) -> io::Result<bool> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "descriptor namespace ACL verification is unavailable on this Unix platform",
+    ))
+}
+
+#[cfg(all(
+    not(target_vendor = "apple"),
+    not(any(target_os = "linux", target_os = "android"))
+))]
+fn has_active_namespace_authority_acl(_fd: impl AsFd) -> io::Result<bool> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor active namespace ACL verification is unavailable on this Unix platform",
     ))
 }
 
@@ -3486,7 +3518,7 @@ fn validate_workspace_namespace_ancestors(path: &Path, root_stat: &rfs::Stat) ->
                 ),
             ));
         }
-        if has_namespace_authority_acl(&ancestor_fd)? {
+        if has_active_namespace_authority_acl(&ancestor_fd)? {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
@@ -4032,9 +4064,20 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn set_test_access_acl(file: &fs::File) {
+        const ACCESS_ACL: &[u8] = b"system.posix_acl_access\0";
+        set_test_acl(file, ACCESS_ACL);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn set_test_default_acl(file: &fs::File) {
+        const DEFAULT_ACL: &[u8] = b"system.posix_acl_default\0";
+        set_test_acl(file, DEFAULT_ACL);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn set_test_acl(file: &fs::File, name: &'static [u8]) {
         use std::os::fd::AsRawFd as _;
 
-        const ACCESS_ACL: &[u8] = b"system.posix_acl_access\0";
         const ACL_UNDEFINED_ID: u32 = u32::MAX;
         let mut encoded = Vec::new();
         encoded.extend_from_slice(&2_u32.to_le_bytes());
@@ -4056,7 +4099,7 @@ mod tests {
         let result = unsafe {
             libc::fsetxattr(
                 file.as_raw_fd(),
-                ACCESS_ACL.as_ptr().cast(),
+                name.as_ptr().cast(),
                 encoded.as_ptr().cast(),
                 encoded.len(),
                 0,
@@ -4981,6 +5024,27 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ancestor_default_acl_does_not_taint_existing_workspace() {
+        let root = tempdir().unwrap();
+        let ancestor = root.path().join("acl-parent");
+        let workspace = ancestor.join("workspace");
+        fs::create_dir(&ancestor).unwrap();
+        fs::create_dir(&workspace).unwrap();
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&workspace, fs::Permissions::from_mode(0o755)).unwrap();
+        let ancestor_fd = fs::File::open(&ancestor).unwrap();
+        set_test_default_acl(&ancestor_fd);
+
+        let capability = CapabilityDir::open_workspace(&workspace)
+            .expect("ancestor inheritance policy must not taint an existing workspace");
+
+        capability
+            .ensure_dir_open(OsStr::new("managed"), 0o700)
+            .unwrap();
     }
 
     #[cfg(target_vendor = "apple")]

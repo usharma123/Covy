@@ -272,7 +272,11 @@ mod platform {
                     ),
                 ));
             }
-            require_no_namespace_acl(&ancestor.fd, &ancestor.path, "workspace namespace ancestor")?;
+            require_no_active_namespace_acl(
+                &ancestor.fd,
+                &ancestor.path,
+                "workspace namespace ancestor",
+            )?;
             let non_owner_writable = (stat.st_mode & 0o022) != 0;
             let sticky = (stat.st_mode & libc::S_ISVTX) != 0;
             if non_owner_writable && !(sticky && child_uid == effective_uid) {
@@ -622,6 +626,23 @@ mod platform {
         Ok(())
     }
 
+    fn require_no_active_namespace_acl(
+        fd: &impl AsRawFd,
+        path: &Path,
+        description: &str,
+    ) -> io::Result<()> {
+        if has_active_namespace_authority_acl(fd.as_raw_fd())? {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{description} has extended ACL namespace authority: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn fstat(fd: RawFd) -> io::Result<libc::stat> {
         let mut stat = MaybeUninit::<libc::stat>::uninit();
         // SAFETY: `stat` points to writable storage and `fd` is borrowed from
@@ -865,6 +886,10 @@ mod platform {
             }
         }
 
+        pub(super) fn has_active_namespace_authority_acl(fd: RawFd) -> io::Result<bool> {
+            has_namespace_authority_acl(fd)
+        }
+
         fn descriptor_acl(fd: RawFd) -> io::Result<Option<OwnedAcl>> {
             // SAFETY: `fd` is borrowed from a live descriptor. The returned
             // ACL is independently allocated and immediately owned.
@@ -904,7 +929,18 @@ mod platform {
         }
 
         pub(super) fn has_namespace_authority_acl(fd: RawFd) -> io::Result<bool> {
-            has_extended_acl(fd)
+            // Access-ACL write authority is reflected in the directory's
+            // group/other mode bits through the POSIX ACL mask and is checked
+            // separately. A default ACL matters here because it can grant
+            // authority to newly created runtime-state children.
+            acl_present(fd, DEFAULT_ACL)
+        }
+
+        pub(super) fn has_active_namespace_authority_acl(_fd: RawFd) -> io::Result<bool> {
+            // Ancestor default ACLs affect only future direct children, not
+            // the already-opened workspace component. Active access-ACL write
+            // authority is represented by mode bits and checked by the caller.
+            Ok(false)
         }
 
         fn acl_present(fd: RawFd, name: &'static [u8]) -> io::Result<bool> {
@@ -950,9 +986,16 @@ mod platform {
                 "descriptor namespace ACL verification is unavailable on this Unix platform",
             ))
         }
+
+        pub(super) fn has_active_namespace_authority_acl(_fd: RawFd) -> io::Result<bool> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "descriptor active namespace ACL verification is unavailable on this Unix platform",
+            ))
+        }
     }
 
-    use acl::{has_extended_acl, has_namespace_authority_acl};
+    use acl::{has_active_namespace_authority_acl, has_extended_acl, has_namespace_authority_acl};
 }
 
 #[cfg(not(unix))]
@@ -1292,6 +1335,28 @@ mod tests {
                 .to_string()
                 .contains("workspace has extended ACL namespace authority"));
             assert_eq!(fs::read(path).unwrap(), bytes_before);
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn linux_ancestor_default_acl_does_not_taint_existing_workspace() {
+            let root = TempDir::new().unwrap();
+            let ancestor = root.path().join("acl-parent");
+            let workspace = ancestor.join("workspace");
+            fs::create_dir(&ancestor).unwrap();
+            fs::create_dir(&workspace).unwrap();
+            fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(&workspace, fs::Permissions::from_mode(0o755)).unwrap();
+            let ancestor_fd = fs::File::open(&ancestor).unwrap();
+            set_linux_acl_xattr(&ancestor_fd, LINUX_DEFAULT_ACL, 0o755);
+            write_runtime(&workspace, &DaemonRuntimeInfo::default(), 0o600);
+
+            let runtime = read_runtime_info_if_present(&workspace)
+                .unwrap()
+                .expect("authenticated runtime metadata");
+
+            assert_eq!(runtime.pid, 0);
+            assert!(runtime.transport_auth.is_none());
         }
 
         #[test]
