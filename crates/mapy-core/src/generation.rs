@@ -397,6 +397,15 @@ struct AuthenticatedRecovery {
     runtime: RepoIndexRuntime,
 }
 
+struct RebuildPublicationPrestate {
+    previous: Option<RepoIndexRuntimeManifest>,
+    previous_record: Option<RepoIndexGenerationRecord>,
+    record_pins: Vec<PinnedGenerationRecord>,
+    artifact_pins: Vec<PinnedArtifact>,
+    previous_current_bytes: Option<Vec<u8>>,
+    previous_previous_bytes: Option<Vec<u8>>,
+}
+
 #[derive(Default)]
 struct PublicationFenceWork {
     publication_metadata_bytes_decoded: usize,
@@ -415,6 +424,7 @@ struct PublicationTransaction<'a> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IncrementalPublicationStage {
+    AfterRebuildScan,
     BeforeCurrent,
     AfterCurrent,
     AfterPrevious,
@@ -473,11 +483,18 @@ fn publish_rebuilt_runtime_with_hook<F>(
     root: &Path,
     include_tests: bool,
     snapshot: RepoIndexSnapshot,
-    mut publication_hook: F,
+    publication_hook: F,
 ) -> Result<RepoIndexRuntime, CovyError>
 where
     F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
 {
+    let prestate = capture_rebuild_publication_prestate(root)?;
+    publish_rebuilt_runtime_from_prestate(root, include_tests, snapshot, prestate, publication_hook)
+}
+
+fn capture_rebuild_publication_prestate(
+    root: &Path,
+) -> Result<RebuildPublicationPrestate, CovyError> {
     let previous_current_bytes = read_optional_file(&manifest_path(root))?;
     let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
     let previous = load_authenticated_recovery(root)?;
@@ -485,6 +502,38 @@ where
         .as_ref()
         .map(|recovery| pin_runtime_generation(root, &recovery.runtime, &recovery.manifest))
         .transpose()?;
+    let mut prestate = RebuildPublicationPrestate {
+        previous: previous.map(|recovery| recovery.manifest),
+        previous_record: None,
+        record_pins: Vec::with_capacity(2),
+        artifact_pins: Vec::new(),
+        previous_current_bytes,
+        previous_previous_bytes,
+    };
+    if let Some(pins) = previous_pins {
+        prestate.previous_record = Some(pins.record);
+        prestate.record_pins.push(pins.record_pin);
+        prestate.artifact_pins.extend(pins.artifact_pins);
+    }
+    Ok(prestate)
+}
+
+fn publish_rebuilt_runtime_from_prestate<F>(
+    root: &Path,
+    include_tests: bool,
+    snapshot: RepoIndexSnapshot,
+    mut prestate: RebuildPublicationPrestate,
+    mut publication_hook: F,
+) -> Result<RepoIndexRuntime, CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
+    authenticate_prepublication_manifest_snapshot(
+        root,
+        prestate.previous_current_bytes.as_deref(),
+        prestate.previous_previous_bytes.as_deref(),
+    )?;
+    revalidate_publication_fence(&prestate.record_pins, &prestate.artifact_pins)?;
     let generation = reserve_generation(root)?;
     let base_file = base_file_name(generation);
     let base_bytes = wincode::serialize(&snapshot)
@@ -517,36 +566,28 @@ where
     persist_generation_record(root, &record)?;
     let runtime = load_generation(root, &manifest)?;
     let current_pins = pin_runtime_generation(root, &runtime, &manifest)?;
-    let mut record_pins = Vec::with_capacity(2);
-    let mut artifact_pins = Vec::new();
-    let mut previous_record = None;
-    if let Some(pins) = previous_pins {
-        previous_record = Some(pins.record);
-        record_pins.push(pins.record_pin);
-        artifact_pins.extend(pins.artifact_pins);
-    }
     record = current_pins.record;
-    record_pins.push(current_pins.record_pin);
-    artifact_pins.extend(current_pins.artifact_pins);
+    prestate.record_pins.push(current_pins.record_pin);
+    prestate.artifact_pins.extend(current_pins.artifact_pins);
     let publication = publish_fenced_manifest_outputs(
         PublicationTransaction {
             root,
-            previous: previous.as_ref().map(|recovery| &recovery.manifest),
+            previous: prestate.previous.as_ref(),
             current: &manifest,
-            record_pins: &record_pins,
-            artifact_pins: &artifact_pins,
+            record_pins: &prestate.record_pins,
+            artifact_pins: &prestate.artifact_pins,
         },
         &mut publication_hook,
     );
     if let Err(error) = publication {
         return Err(rollback_publication_manifests(
             root,
-            previous_current_bytes.as_deref(),
-            previous_previous_bytes.as_deref(),
+            prestate.previous_current_bytes.as_deref(),
+            prestate.previous_previous_bytes.as_deref(),
             error,
         ));
     }
-    let _ = prune_generation_artifacts(root, &record, previous_record.as_ref());
+    let _ = prune_generation_artifacts(root, &record, prestate.previous_record.as_ref());
     Ok(runtime)
 }
 
@@ -726,9 +767,23 @@ where
     let mut repository_artifact_metadata_checks = validated_artifacts.metadata_checks;
     let mut repository_artifact_bytes_hashed = validated_artifacts.bytes_hashed;
     if policy_changed {
+        let prestate = RebuildPublicationPrestate {
+            previous: Some(published),
+            previous_record: Some(published_record),
+            record_pins: vec![published_record_pin],
+            artifact_pins: validated_artifacts.pins,
+            previous_current_bytes,
+            previous_previous_bytes,
+        };
         let snapshot = build_repo_index_with_progress(root, include_tests, |_, _| {})?;
-        let rebuilt =
-            publish_rebuilt_runtime_with_hook(root, include_tests, snapshot, publication_hook)?;
+        publication_hook(IncrementalPublicationStage::AfterRebuildScan)?;
+        let rebuilt = publish_rebuilt_runtime_from_prestate(
+            root,
+            include_tests,
+            snapshot,
+            prestate,
+            publication_hook,
+        )?;
         return Ok((
             rebuilt,
             RepoIndexUpdateSummary {
@@ -1652,6 +1707,61 @@ fn authenticate_manifest_outputs(
         )?;
     }
     Ok(())
+}
+
+fn authenticate_prepublication_manifest_snapshot(
+    root: &Path,
+    current: Option<&[u8]>,
+    previous: Option<&[u8]>,
+) -> Result<(), CovyError> {
+    authenticate_optional_manifest_snapshot(
+        &manifest_path(root),
+        current,
+        "pre-publication current manifest",
+    )?;
+    authenticate_optional_manifest_snapshot(
+        &previous_manifest_path(root),
+        previous,
+        "pre-publication previous manifest",
+    )
+}
+
+fn authenticate_optional_manifest_snapshot(
+    path: &Path,
+    expected: Option<&[u8]>,
+    kind: &str,
+) -> Result<(), CovyError> {
+    if let Some(expected) = expected {
+        return authenticate_manifest_output(path, expected, kind);
+    }
+    let (root, components, name) = repo_state_spec(path)?;
+    let directory = match StateDir::open(root, components, false) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to inspect absent repository index {kind} '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    let appeared = directory
+        .open_existing(&name, FileAccess::ReadOnly)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to inspect absent repository index {kind} '{}': {error}",
+                path.display()
+            ))
+        })?
+        .is_some();
+    if appeared {
+        Err(cache_error(format!(
+            "repository index {kind} '{}' appeared during publication",
+            path.display()
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 fn authenticate_current_manifest_output(
@@ -3416,6 +3526,58 @@ mod tests {
             read_optional_file(&previous_manifest_path(root)).expect("restored previous"),
             previous_manifest_bytes
         );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load restored current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn policy_rebuild_revalidates_the_outer_prestate_after_scanning() {
+        let dir = fixture();
+        let root = dir.path();
+        rebuild_repo_index_runtime(root, true).expect("recovery");
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            fs::read(previous_manifest_path(root)).expect("previous bytes");
+        let current_record_path =
+            repo_index_dir(root).join(generation_record_file_name(current.manifest.generation));
+        let current_record_bytes = fs::read(&current_record_path).expect("current record");
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before scan");
+
+        let error = update_repo_index_runtime_with_hook(root, &current, &[], false, |stage| {
+            if stage == IncrementalPublicationStage::AfterRebuildScan {
+                OpenOptions::new()
+                    .append(true)
+                    .open(&current_record_path)
+                    .expect("open outer record")
+                    .write_all(b"\n")
+                    .expect("mutate outer record");
+            }
+            Ok(())
+        })
+        .expect_err("policy rebuild must retain the outer authenticated prestate");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after rejection"),
+            counter_before,
+            "prestate authentication must fail before reserving N+1"
+        );
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("unchanged current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            fs::read(previous_manifest_path(root)).expect("unchanged previous"),
+            previous_manifest_bytes
+        );
+        fs::write(current_record_path, current_record_bytes).expect("restore attacked record");
         assert_eq!(
             load_repo_index_runtime(root)
                 .expect("load restored current")
