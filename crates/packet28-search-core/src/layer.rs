@@ -3,9 +3,11 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::fs::{self, File, OpenOptions};
+use std::hash::{BuildHasher, RandomState};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 
 use ignore::WalkBuilder;
 use memmap2::Mmap;
@@ -207,17 +209,14 @@ impl Drop for SegmentFiles {
 }
 
 pub(crate) fn write_segment_file(path: &Path, pairs: &[(u64, u32, PositionSummary)]) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    let mut file = File::create(&tmp)?;
-    for (hash, doc_id, summary) in pairs {
-        file.write_all(&hash.to_le_bytes())?;
-        file.write_all(&doc_id.to_le_bytes())?;
-        file.write_all(&summary.encode())?;
-    }
-    file.flush()?;
-    drop(file);
-    fs::rename(&tmp, path)?;
-    Ok(())
+    write_via_unique_temporary(path, |file| {
+        for (hash, doc_id, summary) in pairs {
+            file.write_all(&hash.to_le_bytes())?;
+            file.write_all(&doc_id.to_le_bytes())?;
+            file.write_all(&summary.encode())?;
+        }
+        Ok(())
+    })
 }
 
 pub(crate) fn merge_and_cleanup_segment_files(
@@ -401,31 +400,91 @@ pub(crate) fn load_layer(root: &Path, files: &LayerFiles) -> Result<LoadedLayer>
 }
 
 pub(crate) fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<()> {
+    write_via_unique_temporary(&path, |file| {
+        file.write_all(bytes)?;
+        Ok(())
+    })
+}
+
+fn write_via_unique_temporary(
+    path: &Path,
+    write: impl FnOnce(&mut File) -> Result<()>,
+) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         SearchError::corrupt(format!("index artifact '{}' has no parent", path.display()))
     })?;
     fs::create_dir_all(parent)?;
-    let nonce = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
-    let tmp = parent.join(format!(
-        ".{}.{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("artifact"),
-        std::process::id(),
-        nonce
-    ));
+    let target_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    let process_nonce = temporary_process_nonce();
+    let candidates = (0..128).map(|_| {
+        let counter = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
+        parent.join(format!(
+            ".{target_name}.tmp-{:016x}{:016x}-{}-{counter:016x}",
+            process_nonce[0],
+            process_nonce[1],
+            std::process::id(),
+        ))
+    });
+    write_via_temporary_candidates(path, candidates, write)
+}
+
+fn write_via_temporary_candidates(
+    path: &Path,
+    candidates: impl IntoIterator<Item = PathBuf>,
+    write: impl FnOnce(&mut File) -> Result<()>,
+) -> Result<()> {
+    let mut created = None;
+    for candidate in candidates {
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                created = Some((candidate, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to create unique regex index temporary file '{}'",
+                        candidate.display()
+                    )
+                });
+            }
+        }
+    }
+    let (temporary_path, mut file) = created.ok_or_else(|| {
+        SearchError::corrupt(format!(
+            "temporary namespace exhausted while publishing regex index artifact '{}'",
+            path.display()
+        ))
+    })?;
     let result = (|| -> Result<()> {
-        let mut file = File::create(&tmp)?;
-        file.write_all(bytes)?;
+        write(&mut file)?;
         file.flush()?;
         drop(file);
-        fs::rename(&tmp, &path)?;
+        fs::rename(&temporary_path, path)?;
         Ok(())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(tmp);
+        let _ = fs::remove_file(&temporary_path);
     }
     result
+}
+
+fn temporary_process_nonce() -> &'static [u64; 2] {
+    static PROCESS_NONCE: OnceLock<[u64; 2]> = OnceLock::new();
+    PROCESS_NONCE.get_or_init(|| {
+        [
+            RandomState::new().hash_one(0_u8),
+            RandomState::new().hash_one(1_u8),
+        ]
+    })
 }
 
 pub(crate) fn write_immutable(path: PathBuf, bytes: &[u8]) -> Result<()> {
@@ -602,4 +661,90 @@ pub(crate) fn validate_layer_files(
         postings_len.saturating_sub(expected_offset)
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Barrier};
+
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn segment_writer_does_not_follow_the_legacy_predictable_temp_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("generation.segment");
+        let legacy_temporary = path.with_extension("tmp");
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"outside").unwrap();
+        symlink(&outside, &legacy_temporary).unwrap();
+        write_segment_file(&path, &[(17, 3, PositionSummary::new(4))]).unwrap();
+
+        assert_eq!(fs::read(&outside).unwrap(), b"outside");
+        assert!(fs::symlink_metadata(&legacy_temporary)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::metadata(path).unwrap().len(),
+            SEGMENT_RECORD_BYTES as u64
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_writer_skips_a_planted_temp_symlink_without_removing_it() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("manifest.json");
+        let outside = dir.path().join("outside");
+        let planted = dir.path().join(".manifest.planted.tmp");
+        let fallback = dir.path().join(".manifest.owned.tmp");
+        fs::write(&outside, b"outside").unwrap();
+        symlink(&outside, &planted).unwrap();
+
+        write_via_temporary_candidates(&target, [planted.clone(), fallback], |file| {
+            file.write_all(b"published")?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(fs::read(&outside).unwrap(), b"outside");
+        assert_eq!(fs::read(&target).unwrap(), b"published");
+        assert!(fs::symlink_metadata(planted)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn concurrent_atomic_writers_use_disjoint_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("manifest.json");
+        let barrier = Arc::new(Barrier::new(9));
+
+        std::thread::scope(|scope| {
+            for writer in 0..8_u8 {
+                let barrier = Arc::clone(&barrier);
+                let target = target.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    write_atomic(target, &[writer; 16]).unwrap();
+                });
+            }
+            barrier.wait();
+        });
+
+        let published = fs::read(&target).unwrap();
+        assert_eq!(published.len(), 16);
+        assert!(published.iter().all(|byte| *byte == published[0]));
+        assert!(fs::read_dir(dir.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")));
+    }
 }
