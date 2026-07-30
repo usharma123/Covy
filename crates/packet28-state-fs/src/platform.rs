@@ -5,7 +5,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
-use rustix::fs::{self as rfs, AtFlags, Dir, FileType, Mode, OFlags};
+use rustix::fs::{self as rfs, AtFlags, Dev, Dir, FileType, Mode, OFlags};
 
 use super::FileAccess;
 
@@ -18,7 +18,7 @@ const MAX_REMOVE_ENTRIES: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Identity {
-    device: u64,
+    device: Dev,
     inode: u64,
 }
 
@@ -374,7 +374,7 @@ fn require_regular(stat: &rustix::fs::Stat, name: &OsStr) -> io::Result<()> {
 
 fn identity(stat: &rustix::fs::Stat) -> Identity {
     Identity {
-        device: stat.st_dev as u64,
+        device: stat.st_dev,
         inode: stat.st_ino,
     }
 }
