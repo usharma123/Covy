@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -13,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::cache_file::{
-    open_or_create_regular_file, validate_file_attachment, CacheFileError, CachePathViolation,
+    open_or_create_regular_file, validate_file_attachment, CacheFile, CacheFileError,
+    CachePathViolation,
 };
 use crate::persist::{
     append_wal_record, persist_cache_backup_path_v3, persist_cache_path_v1, persist_cache_path_v2,
@@ -296,12 +296,12 @@ fn complete_root_shutdown(
 }
 
 struct RootPersistenceLock {
-    file: File,
+    file: CacheFile,
     path: PathBuf,
 }
 
 struct LockedPersistenceRoot<'a> {
-    file: &'a mut File,
+    file: &'a mut CacheFile,
     path: &'a Path,
 }
 
@@ -314,14 +314,14 @@ struct PersistenceCoordinationState {
 impl RootPersistenceLock {
     fn open(config: &PersistConfig) -> Result<Self, CachePersistenceError> {
         let cache_dir = config.root_dir.join(crate::PERSIST_CACHE_DIR);
-        std::fs::create_dir_all(&cache_dir)
-            .map_err(|source| io_error("coordination lock open", source))?;
         let lock_path = cache_dir.join(PERSISTENCE_COORDINATION_FILE);
         let opened = open_or_create_regular_file(&lock_path)
             .map_err(|error| cache_file_error("coordination lock open", error))?;
         if opened.created {
-            sync_directory(&cache_dir)
-                .map_err(|source| io_error("coordination lock open", source))?;
+            opened
+                .file
+                .sync_parent()
+                .map_err(|error| cache_file_error("coordination lock open", error))?;
         }
         validate_file_attachment(&opened.file, &lock_path)
             .map_err(|error| cache_file_error("coordination lock open", error))?;
@@ -334,10 +334,10 @@ impl RootPersistenceLock {
     fn lock(&mut self) -> Result<LockedPersistenceRoot<'_>, CachePersistenceError> {
         #[cfg(test)]
         signal_before_test_root_lock(&self.path);
-        FileExt::lock_exclusive(&self.file)
+        FileExt::lock_exclusive(&*self.file)
             .map_err(|source| io_error("coordination lock acquire", source))?;
         if let Err(error) = validate_file_attachment(&self.file, &self.path) {
-            let _ = FileExt::unlock(&self.file);
+            let _ = FileExt::unlock(&*self.file);
             return Err(cache_file_error("coordination lock acquire", error));
         }
         Ok(LockedPersistenceRoot {
@@ -479,18 +479,8 @@ impl LockedPersistenceRoot<'_> {
 
 impl Drop for LockedPersistenceRoot<'_> {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(self.file);
+        let _ = FileExt::unlock(&**self.file);
     }
-}
-
-#[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), std::io::Error> {
-    File::open(path)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), std::io::Error> {
-    Ok(())
 }
 
 /// Failures reported by the context-cache persistence owner.
@@ -2709,7 +2699,7 @@ mod tests {
             CachePersistence::open(PersistConfig::new(first_dir.path().to_path_buf())).unwrap();
         let second_config = PersistConfig::new(second_dir.path().to_path_buf());
         let blocking_lock = RootPersistenceLock::open(&second_config).unwrap();
-        FileExt::lock_exclusive(&blocking_lock.file).unwrap();
+        FileExt::lock_exclusive(&*blocking_lock.file).unwrap();
 
         let (before_lock_sender, before_lock_receiver) = mpsc::channel();
         *lock_recover(root_lock_test_hook()) =
@@ -2728,7 +2718,7 @@ mod tests {
         });
         let unrelated_shutdown = shutdown_receiver.recv_timeout(Duration::from_secs(1));
 
-        FileExt::unlock(&blocking_lock.file).unwrap();
+        FileExt::unlock(&*blocking_lock.file).unwrap();
         let blocked_open_result = blocked_open.join().unwrap();
         shutdown.join().unwrap();
 

@@ -1,9 +1,11 @@
 extern crate packet28_binary_codec as wincode;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
+
+#[cfg(test)]
+use std::fs;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

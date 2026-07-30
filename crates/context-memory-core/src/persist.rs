@@ -1,12 +1,11 @@
 use super::*;
 
-use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::cache_file::{
-    create_unique_cache_temp_with, open_existing_regular_file,
-    open_existing_regular_file_read_only, open_or_create_regular_file,
-    open_or_create_regular_file_for_append, validate_file_attachment, validate_same_file,
+    open_existing_regular_file, open_existing_regular_file_read_only, open_or_create_regular_file,
+    open_or_create_regular_file_for_append, read_regular_file_bounded, regular_file_len,
+    validate_file_attachment, validate_same_file, write_regular_file_atomically, CacheFile,
     CacheFileError,
 };
 
@@ -14,6 +13,7 @@ const PERSIST_WAL_VERSION: u32 = 1;
 const PERSIST_WAL_MAGIC: &[u8; 8] = b"P28CWAL1";
 const PERSIST_WAL_HEADER_LEN: usize = 8 + 8 + 32;
 const MAX_PERSIST_WAL_RECORD_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PERSIST_WAL_BYTES: u64 = 512 * 1024 * 1024;
 const PERSIST_CHECKPOINT_MAGIC: &[u8; 8] = b"P28CCP31";
 const PERSIST_CHECKPOINT_HEADER_LEN: usize = 8 + 8 + 32;
 const MAX_PERSIST_CHECKPOINT_BYTES: usize = 512 * 1024 * 1024;
@@ -128,7 +128,7 @@ pub(crate) struct WalReplay {
 }
 
 struct OpenWal {
-    file: File,
+    file: CacheFile,
     path: PathBuf,
     created: bool,
 }
@@ -156,7 +156,7 @@ impl OpenWal {
 
     fn open_existing(
         config: &PersistConfig,
-        open: fn(&Path) -> Result<File, CacheFileError>,
+        open: fn(&Path) -> Result<CacheFile, CacheFileError>,
     ) -> Result<Option<Self>, io::Error> {
         let path = persist_cache_wal_path_v3(&config.root_dir);
         match open(&path) {
@@ -201,8 +201,30 @@ impl OpenWal {
 
     fn read_all(&mut self) -> Result<Vec<u8>, io::Error> {
         self.file.seek(SeekFrom::Start(0))?;
+        let length = self.file.metadata()?.len();
+        if length > MAX_PERSIST_WAL_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("cache WAL is {length} bytes; maximum is {MAX_PERSIST_WAL_BYTES}"),
+            ));
+        }
         let mut raw = Vec::new();
-        self.file.read_to_end(&mut raw)?;
+        raw.try_reserve_exact(usize::try_from(length).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cache WAL length is not addressable",
+            )
+        })?)
+        .map_err(|source| io::Error::new(io::ErrorKind::OutOfMemory, source))?;
+        Read::by_ref(&mut *self.file)
+            .take(MAX_PERSIST_WAL_BYTES.saturating_add(1))
+            .read_to_end(&mut raw)?;
+        if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_PERSIST_WAL_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("cache WAL exceeds {MAX_PERSIST_WAL_BYTES} bytes"),
+            ));
+        }
         self.validate_attachment()?;
         Ok(raw)
     }
@@ -221,7 +243,7 @@ impl OpenWal {
 
     fn sync_parent_if_created(&self) -> Result<(), io::Error> {
         if self.created {
-            sync_parent_dir(&self.path)?;
+            self.file.sync_parent().map_err(CacheFileError::into_io)?;
         }
         Ok(())
     }
@@ -249,11 +271,7 @@ impl WalRepairSession {
 }
 
 fn prepare_wal_path(config: &PersistConfig) -> Result<PathBuf, io::Error> {
-    let path = persist_cache_wal_path_v3(&config.root_dir);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    Ok(path)
+    Ok(persist_cache_wal_path_v3(&config.root_dir))
 }
 
 impl PersistPacketCacheEntry {
@@ -328,9 +346,11 @@ impl PacketCache {
         };
 
         let loaded_v3 = v3_cache.try_load_v3(config).is_some();
-        let wal_is_nonempty = fs::metadata(persist_cache_wal_path_v3(&config.root_dir))
-            .map(|metadata| metadata.len() > 0)
-            .unwrap_or(false);
+        let wal_is_nonempty = match regular_file_len(&persist_cache_wal_path_v3(&config.root_dir)) {
+            Ok(Some(length)) => length > 0,
+            Ok(None) => false,
+            Err(_) => true,
+        };
         if loaded_v3 {
             cache = v3_cache;
         } else if !wal_is_nonempty && v2_cache.try_load_v2(config).is_some() {
@@ -379,10 +399,6 @@ impl PacketCache {
         F: FnOnce() -> Result<(), io::Error>,
     {
         let path = persist_cache_path_v3(&config.root_dir);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
         let live_entries = self.collect_live_entries(config.ttl_secs);
         let live_keys = live_entries
             .iter()
@@ -515,7 +531,12 @@ impl PacketCache {
     }
 
     pub(crate) fn try_load_v2(&mut self, config: &PersistConfig) -> Option<()> {
-        let raw = fs::read(persist_cache_path_v2(&config.root_dir)).ok()?;
+        let raw = read_regular_file_bounded(
+            &persist_cache_path_v2(&config.root_dir),
+            MAX_PERSIST_CHECKPOINT_BYTES as u64,
+        )
+        .ok()
+        .flatten()?;
         let envelope = match wincode::deserialize::<PersistEnvelopeV2>(&raw) {
             Ok(envelope) => envelope,
             Err(_) => {
@@ -580,7 +601,12 @@ impl PacketCache {
     }
 
     pub(crate) fn try_load_v1(&mut self, config: &PersistConfig) -> Option<()> {
-        let raw = fs::read(persist_cache_path_v1(&config.root_dir)).ok()?;
+        let raw = read_regular_file_bounded(
+            &persist_cache_path_v1(&config.root_dir),
+            MAX_PERSIST_CHECKPOINT_BYTES as u64,
+        )
+        .ok()
+        .flatten()?;
         let envelope = match wincode::deserialize::<PersistEnvelopeV1>(&raw) {
             Ok(envelope) => envelope,
             Err(_) => {
@@ -675,9 +701,11 @@ fn decode_checkpoint_payload(raw: &[u8]) -> Result<&[u8], CheckpointLoadError> {
 }
 
 fn read_v3_envelope(path: &Path) -> Result<Option<PersistEnvelopeV3>, CheckpointLoadError> {
-    let raw = match fs::read(path) {
-        Ok(raw) => raw,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+    let max_frame_bytes =
+        (PERSIST_CHECKPOINT_HEADER_LEN as u64).saturating_add(MAX_PERSIST_CHECKPOINT_BYTES as u64);
+    let raw = match read_regular_file_bounded(path, max_frame_bytes) {
+        Ok(Some(raw)) => raw,
+        Ok(None) => return Ok(None),
         Err(_) => return Err(CheckpointLoadError::Corrupt),
     };
     let envelope = decode_checkpoint_envelope_v3(&raw).map_err(|_| CheckpointLoadError::Corrupt)?;
@@ -1157,9 +1185,7 @@ pub(crate) fn filter_basename_alias_index_for_live_keys(
 }
 
 pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), io::Error> {
-    write_atomically_with(path, bytes, |source, destination| {
-        fs::rename(source, destination)
-    })
+    write_atomically_with(path, bytes, |_source, _destination| Ok(()))
 }
 
 fn write_atomically_with<F>(path: &Path, bytes: &[u8], replace: F) -> Result<(), io::Error>
@@ -1181,36 +1207,8 @@ where
     A: FnOnce(&Path) -> Result<(), io::Error>,
     F: FnOnce(&Path, &Path) -> Result<(), io::Error>,
 {
-    let mut temporary =
-        create_unique_cache_temp_with(path, before_temp_open).map_err(CacheFileError::into_io)?;
-    temporary
-        .file_mut()
-        .write_all(bytes)
-        .map_err(|source| CacheFileError::io(temporary.path(), source).into_io())?;
-    temporary
-        .file_mut()
-        .sync_all()
-        .map_err(|source| CacheFileError::io(temporary.path(), source).into_io())?;
-    after_temp_sync(temporary.path())?;
-    temporary
-        .validate_attachment()
-        .map_err(CacheFileError::into_io)?;
-    replace(temporary.path(), path)?;
-    temporary.mark_published();
-    sync_parent_dir(path)
-}
-
-#[cfg(unix)]
-fn sync_parent_dir(path: &Path) -> Result<(), io::Error> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
-    File::open(parent)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_parent_dir(_path: &Path) -> Result<(), io::Error> {
-    Ok(())
+    write_regular_file_atomically(path, bytes, before_temp_open, after_temp_sync, replace)
+        .map_err(CacheFileError::into_io)
 }
 
 #[cfg(test)]
@@ -1218,6 +1216,12 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
+    #[cfg(unix)]
+    use std::process::{Command, Stdio};
+    #[cfg(unix)]
+    use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     #[cfg(unix)]
@@ -1338,6 +1342,203 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_write_rejects_a_symlinked_state_parent_without_touching_its_target() {
+        let dir = tempdir().unwrap();
+        let victim = tempdir().unwrap();
+        let sentinel = victim.path().join("sentinel");
+        fs::write(&sentinel, b"outside-must-survive").unwrap();
+        symlink(victim.path(), dir.path().join(crate::PERSIST_CACHE_DIR)).unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+
+        let error = PacketCache::new().save_to_disk(&config).unwrap_err();
+
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::NotADirectory | io::ErrorKind::PermissionDenied
+            ),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(fs::read(&sentinel).unwrap(), b"outside-must-survive");
+        assert!(!victim.path().join(PERSIST_CACHE_FILE_V3).exists());
+        assert!(!victim.path().join(PERSIST_CACHE_WAL_FILE_V3).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_write_rejects_an_ancestor_swap_without_touching_the_victim() {
+        let dir = tempdir().unwrap();
+        let victim = tempdir().unwrap();
+        let state_dir = dir.path().join(crate::PERSIST_CACHE_DIR);
+        let held_dir = dir.path().join("held-packet28");
+        let path = state_dir.join(PERSIST_CACHE_FILE_V3);
+        let sentinel = victim.path().join("sentinel");
+        fs::create_dir(&state_dir).unwrap();
+        fs::write(&path, b"durable-old-checkpoint").unwrap();
+        fs::write(&sentinel, b"outside-must-survive").unwrap();
+
+        let error = write_atomically_with_observers(
+            &path,
+            b"new-checkpoint",
+            |_| Ok(()),
+            |_| {
+                fs::rename(&state_dir, &held_dir)?;
+                symlink(victim.path(), &state_dir)
+            },
+            |_source, _destination| Ok(()),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::NotADirectory | io::ErrorKind::PermissionDenied
+            ),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(fs::read(&sentinel).unwrap(), b"outside-must-survive");
+        assert_eq!(
+            fs::read(held_dir.join(PERSIST_CACHE_FILE_V3)).unwrap(),
+            b"durable-old-checkpoint"
+        );
+        assert!(!victim.path().join(PERSIST_CACHE_FILE_V3).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistence_inputs_are_bounded_and_nonblocking_in_a_limited_child() {
+        const TEST_NAME: &str =
+            "persist::tests::persistence_inputs_are_bounded_and_nonblocking_in_a_limited_child";
+        const CHILD_CASE: &str = "PACKET28_PERSISTENCE_SAFETY_CASE";
+        const CHILD_ROOT: &str = "PACKET28_PERSISTENCE_SAFETY_ROOT";
+
+        if let Ok(case) = std::env::var(CHILD_CASE) {
+            let root = PathBuf::from(std::env::var_os(CHILD_ROOT).expect("child root"));
+            let cache = PacketCache::load_from_disk(&PersistConfig::new(root.clone()));
+            assert_eq!(cache.workspace_root.as_deref(), Some(root.as_path()));
+            assert!(
+                matches!(
+                    case.as_str(),
+                    "checkpoint-fifo"
+                        | "wal-fifo"
+                        | "checkpoint-symlink"
+                        | "wal-symlink"
+                        | "checkpoint-oversized"
+                        | "wal-oversized"
+                ),
+                "unknown persistence safety case: {case}"
+            );
+            return;
+        }
+
+        for case in [
+            "checkpoint-fifo",
+            "wal-fifo",
+            "checkpoint-symlink",
+            "wal-symlink",
+            "checkpoint-oversized",
+            "wal-oversized",
+        ] {
+            let dir = tempdir().unwrap();
+            let state_dir = dir.path().join(crate::PERSIST_CACHE_DIR);
+            fs::create_dir(&state_dir).unwrap();
+            let is_checkpoint = case.starts_with("checkpoint");
+            let target = state_dir.join(if is_checkpoint {
+                PERSIST_CACHE_FILE_V3
+            } else {
+                PERSIST_CACHE_WAL_FILE_V3
+            });
+            let victim = dir.path().join("victim");
+            match case.rsplit_once('-').unwrap().1 {
+                "fifo" => make_fifo(&target),
+                "symlink" => {
+                    fs::write(&victim, b"outside-must-survive").unwrap();
+                    symlink(&victim, &target).unwrap();
+                }
+                "oversized" => {
+                    let limit = if is_checkpoint {
+                        (PERSIST_CHECKPOINT_HEADER_LEN + MAX_PERSIST_CHECKPOINT_BYTES) as u64
+                    } else {
+                        MAX_PERSIST_WAL_BYTES
+                    };
+                    let file = std::fs::File::create(&target).unwrap();
+                    file.set_len(limit + 1).unwrap();
+                }
+                kind => panic!("unknown fixture kind: {kind}"),
+            }
+
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .arg("--exact")
+                .arg(TEST_NAME)
+                .arg("--nocapture")
+                .env(CHILD_CASE, case)
+                .env(CHILD_ROOT, dir.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            // SAFETY: this callback runs after fork and before exec, performs only
+            // async-signal-safe `setrlimit` calls, and captures no mutable state.
+            unsafe {
+                command.pre_exec(|| {
+                    let cpu_limit = libc::rlimit {
+                        rlim_cur: 3,
+                        rlim_max: 3,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_CPU, &cpu_limit) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        let address_limit = libc::rlimit {
+                            rlim_cur: 256 * 1024 * 1024,
+                            rlim_max: 256 * 1024 * 1024,
+                        };
+                        if libc::setrlimit(libc::RLIMIT_AS, &address_limit) != 0 {
+                            return Err(io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("persistence input case `{case}` exceeded the five-second deadline");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert!(status.success(), "persistence input case `{case}` failed");
+
+            if case.ends_with("symlink") {
+                assert_eq!(fs::read(&victim).unwrap(), b"outside-must-survive");
+                assert!(fs::symlink_metadata(&target)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink());
+            } else if case.ends_with("oversized") {
+                assert!(fs::metadata(&target).unwrap().len() > MAX_PERSIST_WAL_BYTES);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `path` is NUL terminated, points to live storage, and is not retained.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    }
+
     #[test]
     fn failed_atomic_replace_never_truncates_existing_destination() {
         let dir = tempdir().unwrap();
@@ -1374,7 +1575,7 @@ mod tests {
                 Ok(())
             },
             |_| Ok(()),
-            |source, destination| fs::rename(source, destination),
+            |_source, _destination| Ok(()),
         )
         .unwrap();
 

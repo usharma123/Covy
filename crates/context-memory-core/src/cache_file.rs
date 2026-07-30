@@ -1,18 +1,10 @@
-use std::collections::hash_map::RandomState;
-use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
-use std::hash::BuildHasher;
+use std::fs::File;
 use std::io;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
+use packet28_state_fs::{FileAccess, StateDir, StateFile};
 use thiserror::Error;
-
-const MAX_UNIQUE_TEMP_ATTEMPTS: usize = 16;
-
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-static PROCESS_NONCE: OnceLock<[u64; 2]> = OnceLock::new();
 
 /// The safety invariant violated by a cache filesystem entry.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -48,12 +40,6 @@ pub(crate) enum CacheFileError {
         #[source]
         source: io::Error,
     },
-
-    #[error(
-        "failed to allocate a unique cache temporary file in `{directory}` \
-         after {attempts} attempts"
-    )]
-    TempNameExhausted { directory: PathBuf, attempts: usize },
 }
 
 impl CacheFileError {
@@ -68,458 +54,251 @@ impl CacheFileError {
         let kind = match &self {
             Self::Unsafe { .. } => io::ErrorKind::PermissionDenied,
             Self::Io { source, .. } => source.kind(),
-            Self::TempNameExhausted { .. } => io::ErrorKind::AlreadyExists,
         };
         io::Error::new(kind, self)
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct OpenedCacheFile {
-    pub(crate) file: File,
-    pub(crate) created: bool,
+pub(crate) struct CacheFile {
+    retained: StateFile,
+    path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum CacheFileAccess {
-    ReadOnly,
-    ReadWrite,
-    Append,
+impl CacheFile {
+    pub(crate) fn validate_attachment(&self) -> Result<(), CacheFileError> {
+        self.retained
+            .validate_attachment()
+            .map_err(|source| map_state_error(&self.path, source))
+    }
+
+    pub(crate) fn ensure_same_file(&self, other: &Self) -> Result<(), CacheFileError> {
+        self.retained
+            .ensure_same_file(&other.retained)
+            .map_err(|source| map_state_error(&self.path, source))
+    }
+
+    pub(crate) fn sync_parent(&self) -> Result<(), CacheFileError> {
+        self.retained
+            .sync_parent()
+            .map_err(|source| map_state_error(&self.path, source))
+    }
+}
+
+impl Deref for CacheFile {
+    type Target = File;
+
+    fn deref(&self) -> &Self::Target {
+        self.retained.file()
+    }
+}
+
+impl DerefMut for CacheFile {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.retained.file_mut()
+    }
 }
 
 #[derive(Debug)]
-pub(crate) struct ExclusiveCacheTemp {
-    file: File,
-    path: PathBuf,
-    published: bool,
-}
-
-impl ExclusiveCacheTemp {
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub(crate) fn file_mut(&mut self) -> &mut File {
-        &mut self.file
-    }
-
-    pub(crate) fn validate_attachment(&self) -> Result<(), CacheFileError> {
-        validate_file_attachment(&self.file, &self.path)
-    }
-
-    pub(crate) fn mark_published(&mut self) {
-        self.published = true;
-    }
-}
-
-impl Drop for ExclusiveCacheTemp {
-    fn drop(&mut self) {
-        if !self.published {
-            // Removing a final-component symlink removes the link itself, not
-            // its target. Identity-safe cleanup against an actively writable
-            // parent directory requires descriptor-relative unlink support.
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
-
-pub(crate) fn create_unique_cache_temp_with<F>(
-    target: &Path,
-    mut before_open: F,
-) -> Result<ExclusiveCacheTemp, CacheFileError>
-where
-    F: FnMut(&Path) -> io::Result<()>,
-{
-    let directory = target.parent().ok_or_else(|| CacheFileError::Io {
-        path: target.to_path_buf(),
-        source: io::Error::new(io::ErrorKind::InvalidInput, "cache path has no parent"),
-    })?;
-
-    for _ in 0..MAX_UNIQUE_TEMP_ATTEMPTS {
-        let path = unique_temp_path(target)?;
-        before_open(&path).map_err(|source| CacheFileError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        match create_new_regular_file(&path, CacheFileAccess::ReadWrite) {
-            Ok(file) => {
-                validate_file_attachment(&file, &path)?;
-                return Ok(ExclusiveCacheTemp {
-                    file,
-                    path,
-                    published: false,
-                });
-            }
-            Err(CacheFileError::Io { source, .. })
-                if source.kind() == io::ErrorKind::AlreadyExists =>
-            {
-                continue;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-
-    Err(CacheFileError::TempNameExhausted {
-        directory: directory.to_path_buf(),
-        attempts: MAX_UNIQUE_TEMP_ATTEMPTS,
-    })
+pub(crate) struct OpenedCacheFile {
+    pub(crate) file: CacheFile,
+    pub(crate) created: bool,
 }
 
 pub(crate) fn open_or_create_regular_file(path: &Path) -> Result<OpenedCacheFile, CacheFileError> {
-    open_or_create_regular_file_with(path, CacheFileAccess::ReadWrite, || Ok(()))
+    open_or_create_regular_file_with(path, FileAccess::ReadWrite, || Ok(()))
 }
 
 pub(crate) fn open_or_create_regular_file_for_append(
     path: &Path,
 ) -> Result<OpenedCacheFile, CacheFileError> {
-    open_or_create_regular_file_with(path, CacheFileAccess::Append, || Ok(()))
+    open_or_create_regular_file_with(path, FileAccess::Append, || Ok(()))
 }
 
 fn open_or_create_regular_file_with<F>(
     path: &Path,
-    access: CacheFileAccess,
+    access: FileAccess,
     after_create_collision: F,
 ) -> Result<OpenedCacheFile, CacheFileError>
 where
     F: FnOnce() -> io::Result<()>,
 {
-    match create_new_regular_file(path, access) {
-        Ok(file) => {
-            validate_file_attachment(&file, path)?;
-            Ok(OpenedCacheFile {
-                file,
-                created: true,
-            })
-        }
-        Err(CacheFileError::Io { source, .. }) if source.kind() == io::ErrorKind::AlreadyExists => {
-            after_create_collision().map_err(|source| CacheFileError::Io {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            let file = open_existing_regular_file_with(path, access)?;
-            validate_file_attachment(&file, path)?;
-            Ok(OpenedCacheFile {
-                file,
-                created: false,
-            })
-        }
-        Err(error) => Err(error),
+    let (directory, name) = cache_directory(path, true)?;
+    if directory
+        .open_existing(&name, access)
+        .map_err(|source| map_state_error(path, source))?
+        .is_some()
+    {
+        after_create_collision().map_err(|source| CacheFileError::io(path, source))?;
     }
-}
-
-pub(crate) fn open_existing_regular_file_read_only(path: &Path) -> Result<File, CacheFileError> {
-    open_existing_regular_file_with(path, CacheFileAccess::ReadOnly)
-}
-
-pub(crate) fn open_existing_regular_file(path: &Path) -> Result<File, CacheFileError> {
-    open_existing_regular_file_with(path, CacheFileAccess::ReadWrite)
-}
-
-#[cfg(unix)]
-pub(crate) fn validate_file_attachment(file: &File, path: &Path) -> Result<(), CacheFileError> {
-    use std::os::unix::fs::MetadataExt;
-
-    let expected = file_identity(file, path)?;
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {
-            return Err(unsafe_path(path, CachePathViolation::Replaced));
-        }
-        Err(source) => return Err(CacheFileError::io(path, source)),
-    };
-    if metadata.file_type().is_symlink() {
-        return Err(unsafe_path(path, CachePathViolation::SymbolicLink));
-    }
-    if !metadata.is_file() {
-        return Err(unsafe_path(path, CachePathViolation::NotRegularFile));
-    }
-    if metadata.nlink() != 1 {
-        return Err(unsafe_path(path, CachePathViolation::MultipleHardLinks));
-    }
-    let actual = FileIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    };
-    if expected != actual {
-        return Err(unsafe_path(path, CachePathViolation::Replaced));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-pub(crate) fn validate_file_attachment(file: &File, path: &Path) -> Result<(), CacheFileError> {
-    let expected = file_identity(file, path)?;
-    let attached = match open_existing_regular_file_read_only(path) {
-        Ok(file) => file,
-        Err(CacheFileError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
-            return Err(unsafe_path(path, CachePathViolation::Replaced));
-        }
-        Err(error) => return Err(error),
-    };
-    let actual = file_identity(&attached, path)?;
-    if expected != actual {
-        return Err(unsafe_path(path, CachePathViolation::Replaced));
-    }
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn validate_file_attachment(_file: &File, path: &Path) -> Result<(), CacheFileError> {
-    Err(CacheFileError::io(
-        path,
-        io::Error::new(
-            io::ErrorKind::Unsupported,
-            "cache file identity checks are unsupported on this platform",
-        ),
-    ))
-}
-
-#[cfg(any(unix, windows))]
-pub(crate) fn validate_same_file(
-    expected: &File,
-    actual: &File,
-    path: &Path,
-) -> Result<(), CacheFileError> {
-    if file_identity(expected, path)? != file_identity(actual, path)? {
-        return Err(unsafe_path(path, CachePathViolation::Replaced));
-    }
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn validate_same_file(
-    _expected: &File,
-    _actual: &File,
-    path: &Path,
-) -> Result<(), CacheFileError> {
-    Err(CacheFileError::io(
-        path,
-        io::Error::new(
-            io::ErrorKind::Unsupported,
-            "cache file identity checks are unsupported on this platform",
-        ),
-    ))
-}
-
-fn unique_temp_path(target: &Path) -> Result<PathBuf, CacheFileError> {
-    let directory = target.parent().ok_or_else(|| CacheFileError::Io {
-        path: target.to_path_buf(),
-        source: io::Error::new(io::ErrorKind::InvalidInput, "cache path has no parent"),
-    })?;
-    let file_name = target.file_name().ok_or_else(|| CacheFileError::Io {
-        path: target.to_path_buf(),
-        source: io::Error::new(io::ErrorKind::InvalidInput, "cache path has no file name"),
-    })?;
-    let nonce = process_nonce();
-    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let mut temporary_name = OsString::from(".");
-    temporary_name.push(file_name);
-    temporary_name.push(format!(
-        ".tmp-{:016x}{:016x}-{}-{counter}",
-        nonce[0],
-        nonce[1],
-        std::process::id()
-    ));
-    Ok(directory.join(temporary_name))
-}
-
-fn process_nonce() -> &'static [u64; 2] {
-    PROCESS_NONCE.get_or_init(|| {
-        [
-            RandomState::new().hash_one(0_u8),
-            RandomState::new().hash_one(1_u8),
-        ]
+    let opened = directory
+        .open_or_create(&name, access)
+        .map_err(|source| map_state_error(path, source))?;
+    Ok(OpenedCacheFile {
+        file: CacheFile {
+            retained: opened.file,
+            path: path.to_path_buf(),
+        },
+        created: opened.created,
     })
 }
 
-fn create_new_regular_file(path: &Path, access: CacheFileAccess) -> Result<File, CacheFileError> {
-    let mut options = OpenOptions::new();
-    configure_access(&mut options, access);
-    options.create_new(true);
-    configure_no_follow(&mut options);
-    let file = options.open(path).map_err(|source| CacheFileError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    validate_regular_file(&file, path)?;
-    Ok(file)
+pub(crate) fn open_existing_regular_file_read_only(
+    path: &Path,
+) -> Result<CacheFile, CacheFileError> {
+    open_existing_regular_file_with(path, FileAccess::ReadOnly)
+}
+
+pub(crate) fn open_existing_regular_file(path: &Path) -> Result<CacheFile, CacheFileError> {
+    open_existing_regular_file_with(path, FileAccess::ReadWrite)
 }
 
 fn open_existing_regular_file_with(
     path: &Path,
-    access: CacheFileAccess,
-) -> Result<File, CacheFileError> {
-    let mut options = OpenOptions::new();
-    configure_access(&mut options, access);
-    configure_no_follow(&mut options);
-    let file = match options.open(path) {
-        Ok(file) => file,
-        Err(source) => {
-            if let Some(violation) = classify_path_violation(path) {
-                return Err(unsafe_path(path, violation));
-            }
-            return Err(CacheFileError::Io {
-                path: path.to_path_buf(),
-                source,
-            });
-        }
-    };
-    validate_regular_file(&file, path)?;
-    Ok(file)
-}
-
-fn configure_access(options: &mut OpenOptions, access: CacheFileAccess) {
-    match access {
-        CacheFileAccess::ReadOnly => {
-            options.read(true);
-        }
-        CacheFileAccess::ReadWrite => {
-            options.read(true).write(true);
-        }
-        CacheFileAccess::Append => {
-            options.read(true).append(true);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn configure_no_follow(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-}
-
-#[cfg(windows)]
-fn configure_no_follow(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-}
-
-#[cfg(not(any(unix, windows)))]
-fn configure_no_follow(_options: &mut OpenOptions) {}
-
-fn validate_regular_file(file: &File, path: &Path) -> Result<(), CacheFileError> {
-    let metadata = file.metadata().map_err(|source| CacheFileError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if !metadata.is_file() {
-        return Err(unsafe_path(path, CachePathViolation::NotRegularFile));
-    }
-    validate_platform_file(&metadata, file, path)
-}
-
-#[cfg(unix)]
-fn validate_platform_file(
-    metadata: &fs::Metadata,
-    _file: &File,
-    path: &Path,
-) -> Result<(), CacheFileError> {
-    use std::os::unix::fs::MetadataExt;
-
-    if metadata.nlink() != 1 {
-        return Err(unsafe_path(path, CachePathViolation::MultipleHardLinks));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn validate_platform_file(
-    metadata: &fs::Metadata,
-    file: &File,
-    path: &Path,
-) -> Result<(), CacheFileError> {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(unsafe_path(path, CachePathViolation::SymbolicLink));
-    }
-    let information =
-        winapi_util::file::information(file).map_err(|source| CacheFileError::Io {
-            path: path.to_path_buf(),
-            source,
+    access: FileAccess,
+) -> Result<CacheFile, CacheFileError> {
+    let (directory, name) = cache_directory(path, false)?;
+    let retained = directory
+        .open_existing(&name, access)
+        .map_err(|source| map_state_error(path, source))?
+        .ok_or_else(|| {
+            CacheFileError::io(
+                path,
+                io::Error::new(io::ErrorKind::NotFound, "cache file does not exist"),
+            )
         })?;
-    if information.number_of_links() != 1 {
-        return Err(unsafe_path(path, CachePathViolation::MultipleHardLinks));
-    }
-    Ok(())
+    Ok(CacheFile {
+        retained,
+        path: path.to_path_buf(),
+    })
 }
 
-#[cfg(not(any(unix, windows)))]
-fn validate_platform_file(
-    _metadata: &fs::Metadata,
-    _file: &File,
+pub(crate) fn read_regular_file_bounded(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<Option<Vec<u8>>, CacheFileError> {
+    let (directory, name) = cache_directory(path, false)?;
+    directory
+        .read_bounded(&name, max_bytes)
+        .map_err(|source| map_state_error(path, source))
+}
+
+pub(crate) fn regular_file_len(path: &Path) -> Result<Option<u64>, CacheFileError> {
+    let (directory, name) = cache_directory(path, false)?;
+    let Some(file) = directory
+        .open_existing(&name, FileAccess::ReadOnly)
+        .map_err(|source| map_state_error(path, source))?
+    else {
+        return Ok(None);
+    };
+    file.len()
+        .map(Some)
+        .map_err(|source| CacheFileError::io(path, source))
+}
+
+pub(crate) fn write_regular_file_atomically<B, A, P>(
+    path: &Path,
+    bytes: &[u8],
+    before_temp_open: B,
+    after_temp_sync: A,
+    before_publish: P,
+) -> Result<(), CacheFileError>
+where
+    B: FnMut(&Path) -> io::Result<()>,
+    A: FnOnce(&Path) -> io::Result<()>,
+    P: FnOnce(&Path, &Path) -> io::Result<()>,
+{
+    let (directory, name) = cache_directory(path, true)?;
+    directory
+        .write_atomic_with_observers(
+            &name,
+            bytes,
+            before_temp_open,
+            after_temp_sync,
+            before_publish,
+        )
+        .map_err(|source| map_state_error(path, source))
+}
+
+pub(crate) fn validate_file_attachment(
+    file: &CacheFile,
     _path: &Path,
 ) -> Result<(), CacheFileError> {
-    Ok(())
+    file.validate_attachment()
 }
 
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileIdentity {
-    device: u64,
-    inode: u64,
+pub(crate) fn validate_same_file(
+    expected: &CacheFile,
+    actual: &CacheFile,
+    _path: &Path,
+) -> Result<(), CacheFileError> {
+    expected.ensure_same_file(actual)
 }
 
-#[cfg(unix)]
-fn file_identity(file: &File, path: &Path) -> Result<FileIdentity, CacheFileError> {
-    use std::os::unix::fs::MetadataExt;
-
-    let metadata = file.metadata().map_err(|source| CacheFileError::Io {
-        path: path.to_path_buf(),
-        source,
+fn cache_directory(path: &Path, create: bool) -> Result<(StateDir, String), CacheFileError> {
+    let parent = path.parent().ok_or_else(|| {
+        CacheFileError::io(
+            path,
+            io::Error::new(io::ErrorKind::InvalidInput, "cache path has no parent"),
+        )
     })?;
-    Ok(FileIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    })
-}
-
-#[cfg(windows)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileIdentity {
-    volume: u64,
-    index: u64,
-}
-
-#[cfg(windows)]
-fn file_identity(file: &File, path: &Path) -> Result<FileIdentity, CacheFileError> {
-    let information =
-        winapi_util::file::information(file).map_err(|source| CacheFileError::Io {
-            path: path.to_path_buf(),
-            source,
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            CacheFileError::io(
+                path,
+                io::Error::new(io::ErrorKind::InvalidInput, "cache file name is not UTF-8"),
+            )
+        })?
+        .to_string();
+    let directory = if parent.file_name().is_some_and(|name| name == ".packet28") {
+        let root = parent.parent().ok_or_else(|| {
+            CacheFileError::io(
+                path,
+                io::Error::new(io::ErrorKind::InvalidInput, "cache root has no parent"),
+            )
         })?;
-    Ok(FileIdentity {
-        volume: information.volume_serial_number(),
-        index: information.file_index(),
-    })
+        StateDir::open(root, &[".packet28"], create)
+    } else {
+        StateDir::open(parent, &[], false)
+    }
+    .map_err(|source| map_state_error(path, source))?;
+    Ok((directory, name))
 }
 
-fn classify_path_violation(path: &Path) -> Option<CachePathViolation> {
-    let metadata = fs::symlink_metadata(path).ok()?;
-    if metadata.file_type().is_symlink() {
-        return Some(CachePathViolation::SymbolicLink);
+fn map_state_error(path: &Path, source: io::Error) -> CacheFileError {
+    if let Some(violation) = classify_path_violation(path, &source) {
+        CacheFileError::Unsafe {
+            path: path.to_path_buf(),
+            violation,
+        }
+    } else {
+        CacheFileError::io(path, source)
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+}
 
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+fn classify_path_violation(path: &Path, source: &io::Error) -> Option<CachePathViolation> {
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
             return Some(CachePathViolation::SymbolicLink);
         }
+        if !metadata.file_type().is_file() {
+            return Some(CachePathViolation::NotRegularFile);
+        }
     }
-    (!metadata.is_file()).then_some(CachePathViolation::NotRegularFile)
-}
-
-fn unsafe_path(path: &Path, violation: CachePathViolation) -> CacheFileError {
-    CacheFileError::Unsafe {
-        path: path.to_path_buf(),
-        violation,
+    let message = source.to_string();
+    if message.contains("multiple hard links") {
+        return Some(CachePathViolation::MultipleHardLinks);
     }
+    if message.contains("was replaced") || message.contains("do not have the same identity") {
+        return Some(CachePathViolation::Replaced);
+    }
+    if message.contains("not a regular file") {
+        return Some(CachePathViolation::NotRegularFile);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -530,5 +309,5 @@ pub(crate) fn open_or_create_regular_file_for_test<F>(
 where
     F: FnOnce() -> io::Result<()>,
 {
-    open_or_create_regular_file_with(path, CacheFileAccess::ReadWrite, after_create_collision)
+    open_or_create_regular_file_with(path, FileAccess::ReadWrite, after_create_collision)
 }

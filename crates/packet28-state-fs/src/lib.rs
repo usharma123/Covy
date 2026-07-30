@@ -168,6 +168,10 @@ impl StateDir {
             identity,
         };
         retained.validate_attachment()?;
+        if created {
+            self.inner.sync()?;
+            self.validate()?;
+        }
         Ok(OpenedStateFile {
             file: retained,
             created,
@@ -224,11 +228,44 @@ impl StateDir {
         bytes: &[u8],
         before_publish: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<()> {
+        self.write_atomic_with_observers(
+            name,
+            bytes,
+            |_| Ok(()),
+            |_| Ok(()),
+            |_, _| before_publish(),
+        )
+    }
+
+    /// Atomically replaces a file with fault-injection observers.
+    ///
+    /// This is intended for persistence protocol tests. Publication itself
+    /// always remains descriptor-relative; observers receive diagnostic paths
+    /// only so tests can simulate namespace substitution.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::write_atomic`] plus observer errors.
+    #[doc(hidden)]
+    pub fn write_atomic_with_observers<B, A, P>(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        mut before_temp_open: B,
+        after_temp_sync: A,
+        before_publish: P,
+    ) -> io::Result<()>
+    where
+        B: FnMut(&Path) -> io::Result<()>,
+        A: FnOnce(&Path) -> io::Result<()>,
+        P: FnOnce(&Path, &Path) -> io::Result<()>,
+    {
         self.validate()?;
         self.inner.validate_replace_target(name)?;
         let mut created = None;
         for _ in 0..MAX_TEMP_ATTEMPTS {
             let temporary = temporary_name(name);
+            before_temp_open(&self.path().join(&temporary))?;
             match self.inner.create_new(&temporary, FileAccess::ReadWrite) {
                 Ok((file, identity)) => {
                     created = Some((temporary, file, identity));
@@ -247,10 +284,11 @@ impl StateDir {
         let result = (|| {
             file.write_all(bytes)?;
             file.sync_all()?;
+            after_temp_sync(&self.path().join(&temporary))?;
             self.inner
                 .validate_entry(std::ffi::OsStr::new(&temporary), identity)?;
             self.validate()?;
-            before_publish()?;
+            before_publish(&self.path().join(&temporary), &self.path().join(name))?;
             self.inner.rename(&temporary, name)?;
             self.inner.sync()?;
             self.validate()?;
@@ -364,6 +402,16 @@ impl StateFile {
                 "retained state files do not have the same identity",
             ))
         }
+    }
+
+    /// Flushes the retained parent directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operating-system sync error or an ancestry validation error.
+    pub fn sync_parent(&self) -> io::Result<()> {
+        self.directory.sync()?;
+        self.directory.validate()
     }
 }
 

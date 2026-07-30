@@ -286,14 +286,12 @@ version = "0.2.63"
 dependencies = [
  "blake3",
  "fs2",
- "libc",
  "packet28-binary-codec",
+ "packet28-state-fs",
  "serde",
  "serde_json",
  "suite-packet-core",
  "thiserror",
- "winapi-util",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -890,6 +888,13 @@ dependencies = [
  "regex-syntax",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "packet28-state-fs"
+version = "0.2.63"
+dependencies = [
+ "rustix",
 ]
 
 [[package]]
