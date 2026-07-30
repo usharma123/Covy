@@ -144,7 +144,7 @@ fn collect_symbols(current_key: Option<&str>, value: &Value, symbols: &mut BTree
 
 pub(crate) fn classify_error_message(message: &str) -> String {
     let lower = message.to_ascii_lowercase();
-    if lower.contains("timeout") {
+    if lower.contains("timeout") || lower.contains("timed out") {
         "timeout".to_string()
     } else if lower.contains("not found") {
         "not_found".to_string()
@@ -158,6 +158,7 @@ pub(crate) fn classify_error_message(message: &str) -> String {
 pub(crate) fn is_retryable_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("timeout")
+        || lower.contains("timed out")
         || lower.contains("temporar")
         || lower.contains("unavailable")
         || lower.contains("try again")

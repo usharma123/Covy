@@ -101,7 +101,7 @@ while True:
 pub fn write_concurrent_tool_server(path: &Path) {
     fs::write(
         path,
-        r#"import json, sys, threading, time
+        r#"import json, os, sys, threading, time
 
 WRITE_LOCK = threading.Lock()
 RACE_BARRIER = threading.Barrier(2)
@@ -128,6 +128,8 @@ def write_message(value):
 
 def respond_to_tool(message):
     arguments = message.get("params", {}).get("arguments", {})
+    if arguments.get("exit"):
+        os._exit(17)
     if arguments.get("barrier"):
         RACE_BARRIER.wait(timeout=5)
     time.sleep(arguments.get("delay_ms", 0) / 1000.0)

@@ -711,7 +711,59 @@ async fn handle_proxy_tool_call(
                 "arguments": arguments.clone(),
             }
         }))
-        .await?;
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            let duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            let error_message = error.to_string();
+            let capture_root = root.to_path_buf();
+            let capture_task_id = task_id.clone();
+            let capture_invocation_id = invocation_id.clone();
+            let capture_name = name.to_string();
+            let capture_owner = owner.clone();
+            let capture_request_summary = request_summary.clone();
+            let capture_request_fingerprint = request_fingerprint.clone();
+            let capture_error_class = classify_error_message(&error_message);
+            let capture_error_message = error_message.clone();
+            let capture_paths = request_paths.clone();
+            let capture_symbols = request_symbols.clone();
+            let record_result = run_blocking(
+                "record failed upstream MCP transport invocation",
+                move || {
+                    write_auto_capture_state(
+                        &capture_root,
+                        BrokerWriteStateRequest {
+                            task_id: capture_task_id,
+                            op: Some(BrokerWriteOp::ToolInvocationFailed),
+                            invocation_id: Some(capture_invocation_id),
+                            tool_name: Some(capture_name),
+                            server_name: Some(capture_owner),
+                            operation_kind: Some(operation_kind),
+                            request_summary: Some(capture_request_summary),
+                            request_fingerprint: Some(capture_request_fingerprint),
+                            error_class: Some(capture_error_class),
+                            error_message: Some(capture_error_message.clone()),
+                            retryable: Some(is_retryable_error(&capture_error_message)),
+                            sequence: Some(sequence),
+                            duration_ms: Some(duration_ms),
+                            paths: capture_paths,
+                            symbols: capture_symbols,
+                            ..BrokerWriteStateRequest::default()
+                        },
+                    )
+                },
+            )
+            .await;
+            if let Err(record_error) = record_result {
+                return Err(anyhow!(
+                    "{error:#}; additionally failed to record terminal invocation state: \
+                     {record_error:#}"
+                ));
+            }
+            return Err(error);
+        }
+    };
     let duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
 
     let empty = Value::Null;

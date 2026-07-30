@@ -638,6 +638,27 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
         .as_str()
         .unwrap()
         .contains("500ms"));
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"timeout-status",
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.task_status",
+                "arguments":{"task_id":"task-proxy-concurrent"}
+            }
+        }),
+    );
+    let status = read_until(&mut server, |message| message["id"] == "timeout-status");
+    assert_eq!(
+        status["result"]["structuredContent"]["latest_context_reason"],
+        "state_write:tool_invocation_failed"
+    );
+    assert_eq!(
+        status["result"]["structuredContent"]["task"]["last_event_seq"],
+        6
+    );
 
     write_mcp_message(
         &mut server,
@@ -699,6 +720,85 @@ fn test_mcp_proxy_routes_concurrent_and_late_responses_by_id() {
     );
     stop_mcp_server(server);
 
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_mcp_proxy_records_failed_terminal_state_when_upstream_disconnects() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path());
+    write_repo_fixture(dir.path());
+
+    let script_path = dir.path().join("disconnecting_mcp.py");
+    write_concurrent_tool_server(&script_path);
+    let config_path = dir.path().join(".mcp.proxy.json");
+    fs::write(
+        &config_path,
+        json!({
+            "mcpServers": {
+                "concurrent": {
+                    "command": "python3",
+                    "args": ["-u", script_path.to_str().unwrap()],
+                    "framing": "content_length",
+                    "timeout_ms": 5_000
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (mut server, _) = start_mcp_proxy_server_with_tool(
+        dir.path(),
+        &config_path,
+        "task-proxy-disconnect",
+        "concurrent.echo",
+    );
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"will-disconnect",
+            "method":"tools/call",
+            "params":{
+                "name":"concurrent.echo",
+                "arguments":{"exit":true}
+            }
+        }),
+    );
+    let disconnected = read_until(&mut server, |message| message["id"] == "will-disconnect");
+    assert!(disconnected["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("exited")));
+
+    write_mcp_message(
+        &mut server,
+        &json!({
+            "jsonrpc":"2.0",
+            "id":"disconnect-status",
+            "method":"tools/call",
+            "params":{
+                "name":"packet28.task_status",
+                "arguments":{"task_id":"task-proxy-disconnect"}
+            }
+        }),
+    );
+    let status = read_until(&mut server, |message| message["id"] == "disconnect-status");
+    assert_eq!(
+        status["result"]["structuredContent"]["latest_context_reason"],
+        "state_write:tool_invocation_failed"
+    );
+    assert_eq!(
+        status["result"]["structuredContent"]["task"]["last_event_seq"],
+        2
+    );
+
+    stop_mcp_server(server);
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
         .assert()
