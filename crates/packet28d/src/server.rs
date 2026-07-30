@@ -1973,9 +1973,9 @@ mod tests {
             response,
             DaemonResponse::Ack { ref message } if message == "stopping"
         ));
+        server.await.unwrap().unwrap();
         assert!(state.lock().unwrap().shutdown.is_requested());
         assert!(pool.is_shutting_down());
-        server.await.unwrap().unwrap();
 
         release_tx.send(()).unwrap();
         data_worker.await.unwrap().unwrap();

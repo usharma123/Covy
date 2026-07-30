@@ -557,7 +557,9 @@ fn plan_entry(
         }
     };
     let map = is_file && map_wants_path(relative_path, &relative, include_tests);
-    let regex = !is_dir && packet28_search_core::shared_scan::wants_path(&relative);
+    let regex = !is_dir
+        && relative_path.to_str().is_some()
+        && packet28_search_core::shared_scan::wants_path(&relative);
     (map || regex).then(|| PlannedPath {
         path: entry.into_path(),
         relative,
@@ -778,8 +780,8 @@ mod tests {
                     .iter()
                     .filter(|path| path.as_str() == "src/collision_\u{fffd}.rs")
                     .count(),
-                2,
-                "regex parity must retain both standalone lossy-key documents"
+                1,
+                "regex indexing must reject a non-UTF-8 path that aliases a UTF-8 path"
             );
         }
         assert_eq!(shared.telemetry.walk_passes, 1);

@@ -512,12 +512,9 @@ mod tests {
         tokio::task::yield_now().await;
         assert_eq!(pool.available_permits(), 0);
         release_tx.send(()).unwrap();
-        for _ in 0..100 {
-            if pool.available_permits() == 1 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
+        tokio::time::timeout(Duration::from_secs(5), pool.wait_for_idle())
+            .await
+            .expect("blocking closure did not release its activity");
         assert_eq!(pool.available_permits(), 1);
     }
 

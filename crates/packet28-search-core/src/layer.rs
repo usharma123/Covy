@@ -71,7 +71,10 @@ pub(crate) fn discover_document_paths(root: &Path) -> Result<Vec<PathBuf>> {
         let Some(relative) = path.strip_prefix(root).ok() else {
             continue;
         };
-        let normalized = relative.to_string_lossy().replace('\\', "/");
+        let Some(relative) = relative.to_str() else {
+            continue;
+        };
+        let normalized = relative.replace('\\', "/");
         if normalized.starts_with(".git/")
             || normalized.starts_with(".packet28/")
             || normalized.starts_with("target/")
@@ -98,7 +101,10 @@ pub(crate) fn index_document(root: &Path, path: &Path) -> Result<Option<IndexedD
     let Some(relative) = path.strip_prefix(root).ok() else {
         return Ok(None);
     };
-    let normalized = relative.to_string_lossy().replace('\\', "/");
+    let Some(relative) = relative.to_str() else {
+        return Ok(None);
+    };
+    let normalized = relative.replace('\\', "/");
     if normalized.starts_with(".git/")
         || normalized.starts_with(".packet28/")
         || normalized.starts_with("target/")

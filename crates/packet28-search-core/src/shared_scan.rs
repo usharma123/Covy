@@ -62,9 +62,6 @@ impl RegexIndexRuntime {
     }
 
     /// Returns base-layer document paths in document-id order.
-    ///
-    /// Duplicate lossy path keys are retained so parity tests can prove that
-    /// non-UTF-8 names preserve the standalone regex scanner's behavior.
     pub fn shared_scan_document_paths(&self) -> Option<Vec<String>> {
         let loaded = self.loaded.as_ref()?;
         Some(
