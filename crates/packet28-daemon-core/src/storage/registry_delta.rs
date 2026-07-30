@@ -1232,12 +1232,17 @@ struct LoadedRegistryAuthority {
 pub(crate) struct RetainedRegistrySnapshot {
     pub(crate) registry: TaskRegistry,
     pub(crate) record_values: BTreeMap<String, serde_json::Value>,
+    pub(crate) revision: RegistryRevision,
+    pub(crate) checkpoint_generation: Option<u64>,
+    pub(crate) wal_file_bytes: u64,
+    pub(crate) wal_allocated_bytes: u64,
 }
 
 #[cfg(unix)]
 struct RetainedRegistryImage {
     authority: LoadedRegistryAuthority,
     record_values: BTreeMap<String, serde_json::Value>,
+    checkpoint_generation: Option<u64>,
 }
 
 #[cfg(unix)]
@@ -1246,9 +1251,23 @@ pub(crate) fn load_retained_registry_snapshot_under_task_lock(
     daemon: &CapabilityDir,
 ) -> Result<RetainedRegistrySnapshot> {
     let image = load_retained_registry_image_under_task_lock(root, daemon, false)?;
+    let (wal_file_bytes, wal_allocated_bytes) = daemon
+        .entry_storage_bytes(OsStr::new(REGISTRY_DELTA_WAL_FILE_NAME))
+        .map_err(|source| {
+            wal_io(
+                "failed to measure retained registry delta WAL",
+                registry_delta_wal_path(root),
+                source,
+            )
+        })?
+        .unwrap_or_default();
     Ok(RetainedRegistrySnapshot {
         registry: image.authority.loaded.tasks,
         record_values: image.record_values,
+        revision: image.authority.loaded.replayed_revision,
+        checkpoint_generation: image.checkpoint_generation,
+        wal_file_bytes,
+        wal_allocated_bytes,
     })
 }
 
@@ -1260,6 +1279,8 @@ fn load_retained_registry_image_under_task_lock(
 ) -> Result<RetainedRegistryImage> {
     let loaded =
         load_task_watch_registry_checkpoint_with_delta_revision_under_task_lock(root, daemon)?;
+    debug_assert_eq!(loaded.task_generation, loaded.watch_generation);
+    let checkpoint_generation = loaded.task_generation;
     let path = task_registry_path(root);
     let mut value = crate::storage::decode_json_value_without_duplicate_keys(
         &loaded.task_bytes,
@@ -1299,6 +1320,7 @@ fn load_retained_registry_image_under_task_lock(
     Ok(RetainedRegistryImage {
         authority,
         record_values: records.clone().into_iter().collect(),
+        checkpoint_generation,
     })
 }
 
@@ -1307,6 +1329,8 @@ pub(crate) fn remove_retained_registry_records_under_task_lock(
     root: &Path,
     daemon: &CapabilityDir,
     expected_records: &BTreeMap<String, serde_json::Value>,
+    expected_revision: Option<RegistryRevision>,
+    expected_checkpoint_generation: Option<u64>,
     allow_already_removed: bool,
     before_remove: impl FnOnce() -> Result<()>,
 ) -> Result<bool> {
@@ -1315,12 +1339,31 @@ pub(crate) fn remove_retained_registry_records_under_task_lock(
         return Ok(true);
     }
     let mut image = load_retained_registry_image_under_task_lock(root, daemon, true)?;
+    let current_revision = image.authority.loaded.replayed_revision;
     for (task_id, expected) in expected_records {
         match image.record_values.get(task_id) {
-            Some(current) if current == expected => {}
+            Some(current)
+                if current == expected
+                    && expected_revision.is_some_and(|revision| revision == current_revision)
+                    && expected_checkpoint_generation == image.checkpoint_generation
+                    && (!allow_already_removed || expected_checkpoint_generation.is_some()) => {}
             None if allow_already_removed => {}
             _ => return Ok(false),
         }
+    }
+    if allow_already_removed
+        && expected_revision.is_some_and(|revision| current_revision < revision)
+    {
+        return Ok(false);
+    }
+    if allow_already_removed
+        && expected_checkpoint_generation.is_some_and(|expected| {
+            image
+                .checkpoint_generation
+                .is_none_or(|current| current < expected)
+        })
+    {
+        return Ok(false);
     }
     for task_id in expected_records.keys() {
         image.authority.loaded.tasks.tasks.remove(task_id);

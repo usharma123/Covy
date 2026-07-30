@@ -26,8 +26,9 @@ decoded object keys and trailing input are corrupt authority, not
 last-value-wins input.
 
 The retention bound uses these stable logical file bytes. Reports also expose
-native allocated filesystem bytes for the whole state tree, registry, artifact
-tree, event tree, quarantine, and their managed total;
+native allocated filesystem bytes for the whole state tree, combined registry
+authority (checkpoint plus authenticated WAL), artifact tree, event tree,
+quarantine, and their managed total;
 `allocated_bytes_supported` is false when those fields must fall back to
 logical size. Quarantine logical/allocated bytes and group count make stranded
 transactions visible. Every report includes `observed_at_unix`, a schema
@@ -273,6 +274,22 @@ corruption, revision gap, invalid relationship, or symlinked WAL fails closed.
 Only a final incomplete frame may be repaired, by truncating and synchronizing
 that suffix. A successful paired checkpoint binds the replayed revision and
 resets the WAL after the checkpoint commit.
+
+On verified Unix targets, inspection, planning, revalidation, removal,
+recovery, and accounting all use the same checkpoint-plus-WAL authority.
+Portable read-only inspection currently measures WAL storage but treats the
+checkpoint as its record authority; retention apply remains unsupported there.
+A schema-v2 committed retention journal binds its task-record values to both
+the replayed registry revision and paired-checkpoint generation that were
+revalidated. Recovery may finish an already-absent removal after authority
+advances, but it never removes a present task that was re-admitted—even with
+byte-identical record data—through either a newer WAL revision or a
+same-revision checkpoint replacement. A legacy schema-v1 committed journal
+or a schema-v2 journal created from an unpaired legacy checkpoint has no
+checkpoint-generation fence: recovery completes it only when its records are
+already absent and otherwise reports a conflict for operator review. Recovery
+also refuses an absent-record completion if the current WAL revision or paired
+checkpoint generation is older than the journaled authority.
 
 For task events, subscriber publication follows the synchronized event-log
 append and the in-memory high-water update. Before appending an event, the owner

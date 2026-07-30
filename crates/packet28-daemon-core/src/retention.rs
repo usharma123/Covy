@@ -63,7 +63,8 @@ const STATE_DIR_NAME: &str = ".packet28";
 const QUARANTINE_DIR_NAME: &str = ".retention-trash";
 const QUARANTINE_JOURNAL_FILE_NAME: &str = "journal-v1.json";
 const QUARANTINE_JOURNAL_DELETION_FILE_NAME: &str = ".journal-v1.final-delete.json";
-const QUARANTINE_JOURNAL_SCHEMA_VERSION: u32 = 1;
+const LEGACY_QUARANTINE_JOURNAL_SCHEMA_VERSION: u32 = 1;
+const QUARANTINE_JOURNAL_SCHEMA_VERSION: u32 = 2;
 // A journal carries at most one complete registry record plus its storage key.
 // The registry already contains two copies of a task id (map key + record
 // field); a 2x bound covers the journal's additional storage-key copy while
@@ -238,9 +239,9 @@ pub struct TaskStoreMetrics {
     pub state_directories: u64,
     /// Symlinks encountered without following them.
     pub state_symlinks: u64,
-    /// Actual bytes in the serialized task-registry file.
+    /// Actual bytes in the task-registry checkpoint plus authenticated WAL.
     pub task_registry_file_bytes: u64,
-    /// Allocated filesystem bytes for the task-registry file.
+    /// Allocated bytes for the task-registry checkpoint plus authenticated WAL.
     pub task_registry_allocated_bytes: u64,
     /// Successfully decoded records in the task registry.
     pub task_registry_records: u64,
@@ -1272,6 +1273,7 @@ impl StoreSnapshot {
             .saturating_add(unattributed_protected_logical_bytes);
         let managed_task_allocated_bytes = registry_snapshot
             .allocated_bytes
+            .saturating_add(registry_snapshot.wal_allocated_bytes)
             .saturating_add(artifact_scan.allocated_bytes)
             .saturating_add(event_scan.allocated_bytes)
             .saturating_add(quarantine_scan.allocated_bytes);
@@ -1291,8 +1293,12 @@ impl StoreSnapshot {
             state_files: state_scan.files,
             state_directories: state_scan.directories,
             state_symlinks: state_scan.symlinks,
-            task_registry_file_bytes: registry_snapshot.file_bytes,
-            task_registry_allocated_bytes: registry_snapshot.allocated_bytes,
+            task_registry_file_bytes: registry_snapshot
+                .file_bytes
+                .saturating_add(registry_snapshot.wal_file_bytes),
+            task_registry_allocated_bytes: registry_snapshot
+                .allocated_bytes
+                .saturating_add(registry_snapshot.wal_allocated_bytes),
             task_registry_records: registry_snapshot.registry.tasks.len() as u64,
             task_registry_reliable: registry_snapshot.reliable,
             task_artifact_logical_bytes: artifact_scan.logical_bytes,
@@ -1451,6 +1457,7 @@ impl StoreSnapshot {
             .saturating_add(unattributed_protected_logical_bytes);
         let managed_task_allocated_bytes = registry_snapshot
             .allocated_bytes
+            .saturating_add(registry_snapshot.wal_allocated_bytes)
             .saturating_add(artifact_scan.allocated_bytes)
             .saturating_add(event_scan.allocated_bytes)
             .saturating_add(quarantine_scan.allocated_bytes);
@@ -1461,8 +1468,12 @@ impl StoreSnapshot {
             state_files: state_scan.files,
             state_directories: state_scan.directories,
             state_symlinks: state_scan.symlinks,
-            task_registry_file_bytes: registry_snapshot.file_bytes,
-            task_registry_allocated_bytes: registry_snapshot.allocated_bytes,
+            task_registry_file_bytes: registry_snapshot
+                .file_bytes
+                .saturating_add(registry_snapshot.wal_file_bytes),
+            task_registry_allocated_bytes: registry_snapshot
+                .allocated_bytes
+                .saturating_add(registry_snapshot.wal_allocated_bytes),
             task_registry_records: registry_snapshot.registry.tasks.len() as u64,
             task_registry_reliable: registry_snapshot.reliable,
             task_artifact_logical_bytes: artifact_scan.logical_bytes,
@@ -1566,6 +1577,8 @@ struct Candidate {
     storage_key: String,
     task_ids: Vec<String>,
     record_values: BTreeMap<String, serde_json::Value>,
+    registry_revision: Option<crate::storage::RegistryRevision>,
+    registry_checkpoint_generation: Option<u64>,
     record_logical_bytes: u64,
     artifact: Option<ManagedComponent>,
     event: Option<ManagedComponent>,
@@ -1713,6 +1726,10 @@ struct QuarantineJournal {
     phase: QuarantinePhase,
     storage_key: String,
     record_values: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    registry_revision: Option<crate::storage::RegistryRevision>,
+    #[serde(default)]
+    registry_checkpoint_generation: Option<u64>,
     components: Vec<JournalComponent>,
 }
 
@@ -1780,6 +1797,8 @@ pub(crate) fn validate_task_registry_retention_envelopes(
             phase: QuarantinePhase::Committed,
             storage_key: storage_key_for_task(Path::new(""), task_id),
             record_values: BTreeMap::from([(task_id.clone(), record_value)]),
+            registry_revision: Some(crate::storage::RegistryRevision::ZERO),
+            registry_checkpoint_generation: None,
             components: vec![
                 JournalComponent {
                     kind: JournalComponentKind::Artifacts,
@@ -1866,9 +1885,13 @@ impl JournalComponentKind {
 struct RegistrySnapshot {
     registry: TaskRegistry,
     record_values: BTreeMap<String, serde_json::Value>,
+    revision: Option<crate::storage::RegistryRevision>,
+    checkpoint_generation: Option<u64>,
     reliable: bool,
     file_bytes: u64,
     allocated_bytes: u64,
+    wal_file_bytes: u64,
+    wal_allocated_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -2571,6 +2594,15 @@ fn read_authority_snapshots_from_daemon(
         OsStr::new(TASK_REGISTRY_FILE_NAME),
         MAX_TASK_REGISTRY_BYTES,
     );
+    let wal_name = crate::storage::registry_delta_wal_path(root)
+        .file_name()
+        .expect("registry WAL path has a file name")
+        .to_os_string();
+    let (fallback_wal_file_bytes, fallback_wal_allocated_bytes) = daemon
+        .entry_storage_bytes(&wal_name)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let mut snapshot = match read {
         Ok(read) => match decode_registry_with_raw_values(&read.bytes) {
             Ok((fallback_registry, fallback_values)) => {
@@ -2579,9 +2611,13 @@ fn read_authority_snapshots_from_daemon(
                     Ok(loaded) => RegistrySnapshot {
                         registry: loaded.registry,
                         record_values: loaded.record_values,
+                        revision: Some(loaded.revision),
+                        checkpoint_generation: loaded.checkpoint_generation,
                         reliable: true,
                         file_bytes: read.logical_bytes,
                         allocated_bytes: read.allocated_bytes,
+                        wal_file_bytes: loaded.wal_file_bytes,
+                        wal_allocated_bytes: loaded.wal_allocated_bytes,
                     },
                     Err(source) => {
                         push_issue(
@@ -2595,9 +2631,13 @@ fn read_authority_snapshots_from_daemon(
                         RegistrySnapshot {
                             registry: fallback_registry,
                             record_values: fallback_values,
+                            revision: None,
+                            checkpoint_generation: None,
                             reliable: false,
                             file_bytes: read.logical_bytes,
                             allocated_bytes: read.allocated_bytes,
+                            wal_file_bytes: fallback_wal_file_bytes,
+                            wal_allocated_bytes: fallback_wal_allocated_bytes,
                         }
                     }
                 }
@@ -2612,9 +2652,13 @@ fn read_authority_snapshots_from_daemon(
                 RegistrySnapshot {
                     registry: TaskRegistry::default(),
                     record_values: BTreeMap::new(),
+                    revision: None,
+                    checkpoint_generation: None,
                     reliable: false,
                     file_bytes: read.logical_bytes,
                     allocated_bytes: read.allocated_bytes,
+                    wal_file_bytes: fallback_wal_file_bytes,
+                    wal_allocated_bytes: fallback_wal_allocated_bytes,
                 }
             }
         },
@@ -2623,9 +2667,13 @@ fn read_authority_snapshots_from_daemon(
                 Ok(loaded) => RegistrySnapshot {
                     registry: loaded.registry,
                     record_values: loaded.record_values,
+                    revision: Some(loaded.revision),
+                    checkpoint_generation: loaded.checkpoint_generation,
                     reliable: true,
                     file_bytes: 0,
                     allocated_bytes: 0,
+                    wal_file_bytes: loaded.wal_file_bytes,
+                    wal_allocated_bytes: loaded.wal_allocated_bytes,
                 },
                 Err(source) => {
                     push_issue(
@@ -2661,9 +2709,13 @@ fn read_authority_snapshots_from_daemon(
             RegistrySnapshot {
                 registry: TaskRegistry::default(),
                 record_values: BTreeMap::new(),
+                revision: None,
+                checkpoint_generation: None,
                 reliable: false,
                 file_bytes,
                 allocated_bytes,
+                wal_file_bytes: fallback_wal_file_bytes,
+                wal_allocated_bytes: fallback_wal_allocated_bytes,
             }
         }
     };
@@ -2705,9 +2757,13 @@ fn empty_registry_snapshot(reliable: bool) -> RegistrySnapshot {
     RegistrySnapshot {
         registry: TaskRegistry::default(),
         record_values: BTreeMap::new(),
+        revision: None,
+        checkpoint_generation: None,
         reliable,
         file_bytes: 0,
         allocated_bytes: 0,
+        wal_file_bytes: 0,
+        wal_allocated_bytes: 0,
     }
 }
 
@@ -2760,15 +2816,22 @@ fn reconcile_active_task_authority(
 #[cfg(not(unix))]
 fn read_registry(root: &Path, issues: &mut Vec<TaskStoreIssue>) -> Result<RegistrySnapshot> {
     let path = task_registry_path(root);
+    let wal_metadata = fs::symlink_metadata(crate::storage::registry_delta_wal_path(root)).ok();
+    let wal_file_bytes = wal_metadata.as_ref().map_or(0, fs::Metadata::len);
+    let wal_allocated_bytes = wal_metadata.as_ref().map_or(0, filesystem_allocated_bytes);
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
             return Ok(RegistrySnapshot {
                 registry: TaskRegistry::default(),
                 record_values: BTreeMap::new(),
+                revision: None,
+                checkpoint_generation: None,
                 reliable: true,
                 file_bytes: 0,
                 allocated_bytes: 0,
+                wal_file_bytes,
+                wal_allocated_bytes,
             });
         }
         Err(source) => {
@@ -2781,9 +2844,13 @@ fn read_registry(root: &Path, issues: &mut Vec<TaskStoreIssue>) -> Result<Regist
             return Ok(RegistrySnapshot {
                 registry: TaskRegistry::default(),
                 record_values: BTreeMap::new(),
+                revision: None,
+                checkpoint_generation: None,
                 reliable: false,
                 file_bytes: 0,
                 allocated_bytes: 0,
+                wal_file_bytes,
+                wal_allocated_bytes,
             });
         }
     };
@@ -2797,9 +2864,13 @@ fn read_registry(root: &Path, issues: &mut Vec<TaskStoreIssue>) -> Result<Regist
         return Ok(RegistrySnapshot {
             registry: TaskRegistry::default(),
             record_values: BTreeMap::new(),
+            revision: None,
+            checkpoint_generation: None,
             reliable: false,
             file_bytes: metadata.len(),
             allocated_bytes: filesystem_allocated_bytes(&metadata),
+            wal_file_bytes,
+            wal_allocated_bytes,
         });
     }
     if metadata.len() > MAX_TASK_REGISTRY_BYTES as u64 {
@@ -2814,9 +2885,13 @@ fn read_registry(root: &Path, issues: &mut Vec<TaskStoreIssue>) -> Result<Regist
         return Ok(RegistrySnapshot {
             registry: TaskRegistry::default(),
             record_values: BTreeMap::new(),
+            revision: None,
+            checkpoint_generation: None,
             reliable: false,
             file_bytes: metadata.len(),
             allocated_bytes: filesystem_allocated_bytes(&metadata),
+            wal_file_bytes,
+            wal_allocated_bytes,
         });
     }
     let raw = match fs::read(&path) {
@@ -2831,9 +2906,13 @@ fn read_registry(root: &Path, issues: &mut Vec<TaskStoreIssue>) -> Result<Regist
             return Ok(RegistrySnapshot {
                 registry: TaskRegistry::default(),
                 record_values: BTreeMap::new(),
+                revision: None,
+                checkpoint_generation: None,
                 reliable: false,
                 file_bytes: metadata.len(),
                 allocated_bytes: filesystem_allocated_bytes(&metadata),
+                wal_file_bytes,
+                wal_allocated_bytes,
             });
         }
     };
@@ -2841,9 +2920,13 @@ fn read_registry(root: &Path, issues: &mut Vec<TaskStoreIssue>) -> Result<Regist
         Ok((registry, record_values)) => Ok(RegistrySnapshot {
             registry,
             record_values,
+            revision: None,
+            checkpoint_generation: None,
             reliable: true,
             file_bytes: raw.len() as u64,
             allocated_bytes: filesystem_allocated_bytes(&metadata),
+            wal_file_bytes,
+            wal_allocated_bytes,
         }),
         Err(source) => {
             push_issue(
@@ -2855,9 +2938,13 @@ fn read_registry(root: &Path, issues: &mut Vec<TaskStoreIssue>) -> Result<Regist
             Ok(RegistrySnapshot {
                 registry: TaskRegistry::default(),
                 record_values: BTreeMap::new(),
+                revision: None,
+                checkpoint_generation: None,
                 reliable: false,
                 file_bytes: raw.len() as u64,
                 allocated_bytes: filesystem_allocated_bytes(&metadata),
+                wal_file_bytes,
+                wal_allocated_bytes,
             })
         }
     }
@@ -3116,6 +3203,8 @@ fn add_registry_candidates(
         candidate
             .record_values
             .insert(task_id.clone(), record_value.clone());
+        candidate.registry_revision = registry.revision;
+        candidate.registry_checkpoint_generation = registry.checkpoint_generation;
         candidate.record_logical_bytes = candidate
             .record_logical_bytes
             .saturating_add(record_bytes.len() as u64);
@@ -3506,6 +3595,8 @@ fn load_targeted_candidate_anchored(
         candidate
             .record_values
             .insert(task_id.clone(), record_value.clone());
+        candidate.registry_revision = registry_snapshot.revision;
+        candidate.registry_checkpoint_generation = registry_snapshot.checkpoint_generation;
         candidate.record_logical_bytes = candidate
             .record_logical_bytes
             .saturating_add(record_bytes.len() as u64);
@@ -4483,6 +4574,8 @@ fn remove_anchored_registry_records_if_unchanged_with_commit(
     daemon: &CapabilityDir,
     workspace_root: &Path,
     expected_records: &BTreeMap<String, serde_json::Value>,
+    expected_revision: Option<crate::storage::RegistryRevision>,
+    expected_checkpoint_generation: Option<u64>,
     before_remove: impl FnOnce() -> Result<()>,
 ) -> Result<bool> {
     if expected_records.is_empty() {
@@ -4494,6 +4587,8 @@ fn remove_anchored_registry_records_if_unchanged_with_commit(
             workspace_root,
             daemon,
             expected_records,
+            expected_revision,
+            expected_checkpoint_generation,
             false,
             before_remove,
         )
@@ -4505,6 +4600,8 @@ fn finish_anchored_committed_registry_removal(
     daemon: &CapabilityDir,
     workspace_root: &Path,
     expected_records: &BTreeMap<String, serde_json::Value>,
+    expected_revision: Option<crate::storage::RegistryRevision>,
+    expected_checkpoint_generation: Option<u64>,
 ) -> Result<bool> {
     if expected_records.is_empty() {
         return Ok(true);
@@ -4514,6 +4611,8 @@ fn finish_anchored_committed_registry_removal(
             workspace_root,
             daemon,
             expected_records,
+            expected_revision,
+            expected_checkpoint_generation,
             true,
             || Ok(()),
         )
@@ -4728,6 +4827,8 @@ fn apply_candidate_with_authority(
         &daemon,
         &snapshot.workspace_root,
         &expected_records,
+        candidate.registry_revision,
+        candidate.registry_checkpoint_generation,
         || transaction.mark_committed(),
     ) {
         Ok(removed) => removed,
@@ -4979,6 +5080,9 @@ fn candidate_remains_safe_after_staging_anchored(
                 && current.protected_reasons.is_empty()
                 && current.task_ids == candidate.task_ids
                 && current.record_values == candidate.record_values
+                && current.registry_revision == candidate.registry_revision
+                && current.registry_checkpoint_generation
+                    == candidate.registry_checkpoint_generation
                 && current.artifact.is_none()
                 && current.event.is_none()
         }
@@ -6197,6 +6301,8 @@ fn journal_for_candidate(
         phase: QuarantinePhase::Precommit,
         storage_key: candidate.storage_key.clone(),
         record_values: candidate.record_values.clone(),
+        registry_revision: candidate.registry_revision,
+        registry_checkpoint_generation: candidate.registry_checkpoint_generation,
         components,
     };
     validate_quarantine_journal(workspace_root, &journal)?;
@@ -6240,7 +6346,21 @@ fn validate_quarantine_journal(workspace_root: &Path, journal: &QuarantineJourna
             && storage_key_for_task(workspace_root, task_id) == journal.storage_key
             && value.get("task_id").and_then(serde_json::Value::as_str) == Some(task_id.as_str())
     });
-    let valid = journal.schema_version == QUARANTINE_JOURNAL_SCHEMA_VERSION
+    let schema_is_supported = matches!(
+        journal.schema_version,
+        LEGACY_QUARANTINE_JOURNAL_SCHEMA_VERSION | QUARANTINE_JOURNAL_SCHEMA_VERSION
+    );
+    let revision_matches_schema = match journal.schema_version {
+        QUARANTINE_JOURNAL_SCHEMA_VERSION => {
+            journal.record_values.is_empty() || journal.registry_revision.is_some()
+        }
+        LEGACY_QUARANTINE_JOURNAL_SCHEMA_VERSION => {
+            journal.registry_revision.is_none() && journal.registry_checkpoint_generation.is_none()
+        }
+        _ => false,
+    };
+    let valid = schema_is_supported
+        && revision_matches_schema
         && storage_key_is_safe(&journal.storage_key)
         && crate::storage::task_storage_key_is_portable(&journal.storage_key)
         && journal.components.len() <= MAX_QUARANTINE_COMPONENTS
@@ -7085,8 +7205,13 @@ fn finish_committed_group(
     // declared component, but unknown entries or replaced identities must
     // fail closed while the registry record is still intact.
     validate_committed_group(group, journal, true, Some(journal_identity))?;
-    if !finish_anchored_committed_registry_removal(daemon, workspace_root, &journal.record_values)?
-    {
+    if !finish_anchored_committed_registry_removal(
+        daemon,
+        workspace_root,
+        &journal.record_values,
+        journal.registry_revision,
+        journal.registry_checkpoint_generation,
+    )? {
         return Err(DaemonCoreError::RetentionCandidateChanged {
             path: task_registry_path(workspace_root),
         });
@@ -7117,8 +7242,13 @@ fn finish_finalized_committed_group(
         });
     }
     authenticate_quarantine_journal(group, final_name, journal, Some(journal_identity))?;
-    if !finish_anchored_committed_registry_removal(daemon, workspace_root, &journal.record_values)?
-    {
+    if !finish_anchored_committed_registry_removal(
+        daemon,
+        workspace_root,
+        &journal.record_values,
+        journal.registry_revision,
+        journal.registry_checkpoint_generation,
+    )? {
         return Err(DaemonCoreError::RetentionCandidateChanged {
             path: task_registry_path(workspace_root),
         });
@@ -7403,6 +7533,19 @@ mod tests {
         fs::write(
             task_registry_path(root),
             serde_json::to_vec_pretty(&registry).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn write_paired_registry(root: &Path, records: impl IntoIterator<Item = TaskRecord>) {
+        let mut registry = TaskRegistry::default();
+        for record in records {
+            registry.tasks.insert(record.task_id.clone(), record);
+        }
+        crate::storage::save_task_watch_registry_checkpoint(
+            root,
+            &registry,
+            &WatchRegistry::default(),
         )
         .unwrap();
     }
@@ -7989,6 +8132,50 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.kind == "registry_unreadable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_allocation_participates_in_managed_retention_accounting() {
+        let root = tempdir().unwrap();
+        crate::storage::save_task_watch_registry_checkpoint(
+            root.path(),
+            &TaskRegistry::default(),
+            &WatchRegistry::default(),
+        )
+        .unwrap();
+        let mut record = inactive_record("large-wal", 10);
+        record.last_error = Some("x".repeat(128 * 1024));
+        crate::storage::append_task_watch_registry_delta(
+            root.path(),
+            crate::storage::RegistryRevisionRange::single(crate::storage::RegistryRevision::new(1))
+                .unwrap(),
+            &crate::storage::RegistryDeltaBatch::default().upsert_task(record),
+        )
+        .unwrap();
+
+        let report = retain_task_store(
+            root.path(),
+            100,
+            RetentionOptions::dry_run(Some(20), None).apply(),
+        )
+        .unwrap();
+
+        assert_eq!(report.retention.removed_tasks, 1);
+        assert!(report.metrics_before.task_registry_file_bytes > 128 * 1024);
+        assert!(
+            report.metrics_before.managed_task_allocated_bytes
+                >= report.metrics_before.task_registry_allocated_bytes
+        );
+        assert!(
+            report.metrics_before.task_registry_allocated_bytes
+                > report.metrics_after.task_registry_allocated_bytes
+        );
+        assert_eq!(
+            report.metrics_after.task_registry_file_bytes,
+            fs::metadata(task_registry_path(root.path())).unwrap().len()
+                + crate::storage::REGISTRY_DELTA_WAL_HEADER_BYTES as u64
+        );
     }
 
     #[cfg(unix)]
@@ -9582,8 +9769,8 @@ mod tests {
     #[test]
     fn committed_crash_recovery_finishes_registry_and_deletion() {
         let root = tempdir().unwrap();
+        write_paired_registry(root.path(), [inactive_record("committed", 10)]);
         let artifact = write_artifact(root.path(), "committed", b"payload", 10);
-        write_registry(root.path(), [inactive_record("committed", 10)]);
         let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
         let candidate = snapshot.candidate("committed").unwrap();
         let mut transaction = StagingTransaction::new(&snapshot, candidate).unwrap();
@@ -9727,7 +9914,7 @@ mod tests {
     #[test]
     fn registry_only_committed_recovery_removes_record() {
         let root = tempdir().unwrap();
-        write_registry(root.path(), [inactive_record("registry-committed", 10)]);
+        write_paired_registry(root.path(), [inactive_record("registry-committed", 10)]);
         let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
         let candidate = snapshot.candidate("registry-committed").unwrap();
         let mut transaction = StagingTransaction::new(&snapshot, candidate).unwrap();
@@ -10178,10 +10365,10 @@ mod tests {
     fn committed_recovery_converges_hardlinked_staged_and_deleting() {
         let root = tempdir().unwrap();
         let task_id = "committed-staged-deleting-duplicate";
+        write_paired_registry(root.path(), [inactive_record(task_id, 10)]);
         let event = task_event_log_path(root.path(), task_id);
         fs::create_dir_all(event.parent().unwrap()).unwrap();
         fs::write(&event, b"event").unwrap();
-        write_registry(root.path(), [inactive_record(task_id, 10)]);
         let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
         let candidate = snapshot.candidate(task_id).unwrap();
         let mut transaction = StagingTransaction::new(&snapshot, candidate).unwrap();
@@ -10213,8 +10400,8 @@ mod tests {
     #[test]
     fn committed_marker_post_rename_sync_failure_defers_to_recovery() {
         let root = tempdir().unwrap();
+        write_paired_registry(root.path(), [inactive_record("marker-sync", 10)]);
         write_artifact(root.path(), "marker-sync", b"payload", 10);
-        write_registry(root.path(), [inactive_record("marker-sync", 10)]);
         let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
         let candidate = snapshot.candidate("marker-sync").unwrap();
         let mut transaction = StagingTransaction::new(&snapshot, candidate).unwrap();
@@ -10243,8 +10430,8 @@ mod tests {
     #[test]
     fn registry_post_rename_sync_failure_keeps_committed_journal_for_recovery() {
         let root = tempdir().unwrap();
+        write_paired_registry(root.path(), [inactive_record("registry-sync", 10)]);
         write_artifact(root.path(), "registry-sync", b"payload", 10);
-        write_registry(root.path(), [inactive_record("registry-sync", 10)]);
         let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
         let candidate = snapshot.candidate("registry-sync").unwrap();
         capability::inject_atomic_after_rename_failure_once(OsStr::new(TASK_REGISTRY_FILE_NAME));
@@ -10329,6 +10516,245 @@ mod tests {
                 .len(),
             crate::storage::REGISTRY_DELTA_WAL_HEADER_BYTES as u64
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_recovery_preserves_same_value_newer_wal_readmission() {
+        let root = tempdir().unwrap();
+        crate::storage::save_task_watch_registry_checkpoint(
+            root.path(),
+            &TaskRegistry::default(),
+            &WatchRegistry::default(),
+        )
+        .unwrap();
+        let record = inactive_record("readmitted", 10);
+        crate::storage::append_task_watch_registry_delta(
+            root.path(),
+            crate::storage::RegistryRevisionRange::single(crate::storage::RegistryRevision::new(1))
+                .unwrap(),
+            &crate::storage::RegistryDeltaBatch::default().upsert_task(record.clone()),
+        )
+        .unwrap();
+        write_artifact(root.path(), "readmitted", b"old", 10);
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("readmitted").unwrap().clone();
+        let mut transaction = StagingTransaction::new(&snapshot, &candidate).unwrap();
+        transaction.stage_all(&candidate).unwrap();
+        transaction.mark_committed().unwrap();
+        assert_eq!(
+            transaction.journal.registry_revision,
+            Some(crate::storage::RegistryRevision::new(1))
+        );
+        drop(transaction);
+
+        crate::storage::append_task_watch_registry_delta(
+            root.path(),
+            crate::storage::RegistryRevisionRange::single(crate::storage::RegistryRevision::new(2))
+                .unwrap(),
+            &crate::storage::RegistryDeltaBatch::default().upsert_task(record),
+        )
+        .unwrap();
+        write_artifact(root.path(), "readmitted", b"new", 101);
+
+        let recovery = recover_task_store_quarantine(root.path()).unwrap();
+
+        assert_eq!(recovery.completed_committed_groups, 0);
+        assert_eq!(recovery.conflicted_groups, 1);
+        assert!(
+            crate::storage::load_task_watch_registry_with_deltas(root.path())
+                .unwrap()
+                .tasks
+                .tasks
+                .contains_key("readmitted")
+        );
+        assert_eq!(
+            fs::read(task_artifact_dir(root.path(), "readmitted").join("payload.bin")).unwrap(),
+            b"new"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_recovery_preserves_same_revision_checkpoint_readmission() {
+        let root = tempdir().unwrap();
+        let record = inactive_record("checkpoint-readmitted", 10);
+        let tasks = TaskRegistry {
+            tasks: BTreeMap::from([(record.task_id.clone(), record)]),
+        };
+        let watches = WatchRegistry::default();
+        crate::storage::save_task_watch_registry_checkpoint(root.path(), &tasks, &watches).unwrap();
+        write_artifact(root.path(), "checkpoint-readmitted", b"old", 10);
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("checkpoint-readmitted").unwrap().clone();
+        let mut transaction = StagingTransaction::new(&snapshot, &candidate).unwrap();
+        transaction.stage_all(&candidate).unwrap();
+        transaction.mark_committed().unwrap();
+        let original_generation = transaction
+            .journal
+            .registry_checkpoint_generation
+            .expect("paired checkpoint has a generation");
+        drop(transaction);
+
+        crate::storage::save_task_watch_registry_checkpoint(root.path(), &tasks, &watches).unwrap();
+        write_artifact(root.path(), "checkpoint-readmitted", b"new", 101);
+        let current = StoreSnapshot::load(root.path(), 101).unwrap();
+        assert_eq!(
+            current
+                .candidate("checkpoint-readmitted")
+                .unwrap()
+                .registry_revision,
+            candidate.registry_revision
+        );
+        assert!(
+            current
+                .candidate("checkpoint-readmitted")
+                .unwrap()
+                .registry_checkpoint_generation
+                > Some(original_generation)
+        );
+
+        let recovery = recover_task_store_quarantine(root.path()).unwrap();
+
+        assert_eq!(recovery.completed_committed_groups, 0);
+        assert_eq!(recovery.conflicted_groups, 1);
+        assert!(
+            crate::storage::load_task_watch_registry_with_deltas(root.path())
+                .unwrap()
+                .tasks
+                .tasks
+                .contains_key("checkpoint-readmitted")
+        );
+        assert_eq!(
+            fs::read(task_artifact_dir(root.path(), "checkpoint-readmitted").join("payload.bin"))
+                .unwrap(),
+            b"new"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_recovery_rejects_absent_record_checkpoint_rollback() {
+        let root = tempdir().unwrap();
+        crate::storage::ensure_daemon_dir(root.path()).unwrap();
+        let record = inactive_record("generation-rollback", 10);
+        let task_path = task_registry_path(root.path());
+        let watch_path = watch_registry_path(root.path());
+        let mut task_value = serde_json::to_value(TaskRegistry {
+            tasks: BTreeMap::from([(record.task_id.clone(), record)]),
+        })
+        .unwrap();
+        task_value.as_object_mut().unwrap().insert(
+            "task_watch_checkpoint_generation".to_string(),
+            serde_json::json!(7),
+        );
+        fs::write(&task_path, serde_json::to_vec(&task_value).unwrap()).unwrap();
+        fs::write(
+            &watch_path,
+            serde_json::to_vec(&serde_json::json!({
+                "watches": [],
+                "task_watch_checkpoint_generation": 7,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        write_artifact(root.path(), "generation-rollback", b"old", 10);
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("generation-rollback").unwrap().clone();
+        assert_eq!(candidate.registry_checkpoint_generation, Some(7));
+        let mut transaction = StagingTransaction::new(&snapshot, &candidate).unwrap();
+        transaction.stage_all(&candidate).unwrap();
+        transaction.mark_committed().unwrap();
+        drop(transaction);
+
+        fs::write(
+            &task_path,
+            serde_json::to_vec(&serde_json::json!({
+                "tasks": {},
+                "task_watch_checkpoint_generation": 6,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            &watch_path,
+            serde_json::to_vec(&serde_json::json!({
+                "watches": [],
+                "task_watch_checkpoint_generation": 6,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let recovery = recover_task_store_quarantine(root.path()).unwrap();
+
+        assert_eq!(recovery.completed_committed_groups, 0);
+        assert_eq!(recovery.conflicted_groups, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_same_revision_checkpoint_readmission_fails_closed() {
+        let root = tempdir().unwrap();
+        let record = inactive_record("legacy-commit", 10);
+        write_registry(root.path(), [record.clone()]);
+        write_artifact(root.path(), "legacy-commit", b"old", 10);
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("legacy-commit").unwrap().clone();
+        let mut transaction = StagingTransaction::new(&snapshot, &candidate).unwrap();
+        transaction.journal.schema_version = LEGACY_QUARANTINE_JOURNAL_SCHEMA_VERSION;
+        transaction.journal.registry_revision = None;
+        transaction.journal.registry_checkpoint_generation = None;
+        transaction.persist_journal().unwrap();
+        transaction.stage_all(&candidate).unwrap();
+        transaction.mark_committed().unwrap();
+        drop(transaction);
+
+        crate::storage::save_task_registry(
+            root.path(),
+            &TaskRegistry {
+                tasks: BTreeMap::from([(record.task_id.clone(), record)]),
+            },
+        )
+        .unwrap();
+        write_artifact(root.path(), "legacy-commit", b"new", 101);
+        let recovery = recover_task_store_quarantine(root.path()).unwrap();
+
+        assert_eq!(recovery.completed_committed_groups, 0);
+        assert_eq!(recovery.conflicted_groups, 1);
+        let current = StoreSnapshot::load(root.path(), 101).unwrap();
+        let current = current.candidate("legacy-commit").unwrap();
+        assert_eq!(current.registry_revision, candidate.registry_revision);
+        assert_eq!(current.registry_checkpoint_generation, None);
+        assert_eq!(
+            fs::read(task_artifact_dir(root.path(), "legacy-commit").join("payload.bin")).unwrap(),
+            b"new"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_committed_journal_completes_when_record_is_already_absent() {
+        let root = tempdir().unwrap();
+        write_registry(root.path(), [inactive_record("legacy-absent", 10)]);
+        write_artifact(root.path(), "legacy-absent", b"old", 10);
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("legacy-absent").unwrap().clone();
+        let mut transaction = StagingTransaction::new(&snapshot, &candidate).unwrap();
+        transaction.journal.schema_version = LEGACY_QUARANTINE_JOURNAL_SCHEMA_VERSION;
+        transaction.journal.registry_revision = None;
+        transaction.journal.registry_checkpoint_generation = None;
+        transaction.persist_journal().unwrap();
+        transaction.stage_all(&candidate).unwrap();
+        transaction.mark_committed().unwrap();
+        drop(transaction);
+        crate::storage::save_task_registry(root.path(), &TaskRegistry::default()).unwrap();
+
+        let recovery = recover_task_store_quarantine(root.path()).unwrap();
+
+        assert_eq!(recovery.completed_committed_groups, 1);
+        assert_eq!(recovery.conflicted_groups, 0);
+        assert!(!task_artifact_dir(root.path(), "legacy-absent").exists());
     }
 
     #[cfg(unix)]
@@ -10706,10 +11132,20 @@ mod tests {
             record.task_id.clone(),
             serde_json::to_value(&tasks.tasks[&record.task_id]).unwrap(),
         )]);
+        let expected_generation = StoreSnapshot::load(root.path(), 100)
+            .unwrap()
+            .candidate("watched-recovery")
+            .unwrap()
+            .registry_checkpoint_generation;
 
-        let error =
-            finish_anchored_committed_registry_removal(&daemon, root.path(), &expected_records)
-                .unwrap_err();
+        let error = finish_anchored_committed_registry_removal(
+            &daemon,
+            root.path(),
+            &expected_records,
+            Some(crate::storage::RegistryRevision::ZERO),
+            expected_generation,
+        )
+        .unwrap_err();
 
         assert!(error
             .to_string()
@@ -10815,6 +11251,8 @@ mod tests {
             &daemon,
             root.path(),
             &expected_records,
+            candidate.registry_revision,
+            candidate.registry_checkpoint_generation,
             || transaction.mark_committed(),
         )
         .unwrap());
@@ -11106,6 +11544,8 @@ mod tests {
                 "other-record".to_string(),
                 serde_json::to_value(inactive_record("other-record", 10)).unwrap(),
             )]),
+            registry_revision: Some(crate::storage::RegistryRevision::ZERO),
+            registry_checkpoint_generation: None,
             components: Vec::new(),
         };
         group
@@ -11448,7 +11888,7 @@ mod tests {
     fn recovery_finishes_an_authenticated_final_journal_tombstone() {
         let root = tempdir().unwrap();
         let task_id = "final-journal-delete-crash";
-        write_registry(root.path(), [inactive_record(task_id, 10)]);
+        write_paired_registry(root.path(), [inactive_record(task_id, 10)]);
         let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
         let candidate = snapshot.candidate(task_id).unwrap();
         let mut transaction = StagingTransaction::new(&snapshot, candidate).unwrap();
@@ -11458,6 +11898,8 @@ mod tests {
             &transaction.daemon,
             root.path(),
             &transaction.journal.record_values,
+            transaction.journal.registry_revision,
+            transaction.journal.registry_checkpoint_generation,
         )
         .unwrap());
         let journal_name = OsStr::new(QUARANTINE_JOURNAL_FILE_NAME);
@@ -11683,6 +12125,8 @@ mod tests {
                     serde_json::to_value(inactive_record("a?b", 10)).unwrap(),
                 ),
             ]),
+            registry_revision: Some(crate::storage::RegistryRevision::ZERO),
+            registry_checkpoint_generation: None,
             components: Vec::new(),
         };
         let identity = FileIdentity {
@@ -11694,6 +12138,8 @@ mod tests {
             phase: QuarantinePhase::Precommit,
             storage_key,
             record_values: BTreeMap::new(),
+            registry_revision: None,
+            registry_checkpoint_generation: None,
             components: vec![
                 JournalComponent {
                     kind: JournalComponentKind::Artifacts,
@@ -11833,9 +12279,14 @@ mod tests {
         let task_before = serde_json::to_vec_pretty(&registry).unwrap();
         fs::write(&task_path, &task_before).unwrap();
         let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
-        let candidate = snapshot.candidate("one-sided-recovery").unwrap();
-        let mut transaction = StagingTransaction::new(&snapshot, candidate).unwrap();
-        transaction.stage_all(candidate).unwrap();
+        let mut candidate = snapshot.candidate("one-sided-recovery").unwrap().clone();
+        candidate.registry_revision = Some(crate::storage::RegistryRevision::ZERO);
+        let mut transaction = StagingTransaction::new(&snapshot, &candidate).unwrap();
+        transaction.journal.schema_version = LEGACY_QUARANTINE_JOURNAL_SCHEMA_VERSION;
+        transaction.journal.registry_revision = None;
+        transaction.journal.registry_checkpoint_generation = None;
+        transaction.persist_journal().unwrap();
+        transaction.stage_all(&candidate).unwrap();
         transaction.mark_committed().unwrap();
         std::mem::forget(transaction);
 
