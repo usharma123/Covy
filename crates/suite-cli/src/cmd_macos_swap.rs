@@ -9,13 +9,17 @@ use std::ffi::{CString, OsStr};
 #[cfg(target_os = "macos")]
 use std::fs;
 #[cfg(target_os = "macos")]
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(target_os = "macos")]
-use std::os::fd::AsRawFd;
+use std::net::Shutdown;
+#[cfg(target_os = "macos")]
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 #[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::MetadataExt;
+#[cfg(target_os = "macos")]
+use std::os::unix::net::UnixStream;
 #[cfg(target_os = "macos")]
 use std::os::unix::process::CommandExt;
 #[cfg(target_os = "macos")]
@@ -54,6 +58,20 @@ use signal_hook::iterator::{Handle as SignalHandle, Signals};
 const DEFAULT_BUDGET_TOKENS: u64 = 512;
 #[cfg(target_os = "macos")]
 const TARGET_FILES: [&str; 3] = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md"];
+#[cfg(target_os = "macos")]
+const INTERNAL_LAUNCH_GATE_ARG: &str = "__packet28-macos-swap-launch-gate";
+#[cfg(target_os = "macos")]
+const LAUNCH_GATE_READY: u8 = b'R';
+#[cfg(target_os = "macos")]
+const LAUNCH_GATE_RELEASE: u8 = b'G';
+#[cfg(target_os = "macos")]
+const LAUNCH_GATE_ERROR: u8 = b'E';
+#[cfg(target_os = "macos")]
+const MAX_LAUNCH_GATE_ERROR_BYTES: u64 = 8 * 1024;
+#[cfg(all(test, target_os = "macos"))]
+const TEST_LAUNCH_GATE_FD_ENV: &str = "PACKET28_TEST_MACOS_SWAP_GATE_FD";
+#[cfg(all(test, target_os = "macos"))]
+const TEST_LAUNCH_GATE_COMMAND_ENV: &str = "PACKET28_TEST_MACOS_SWAP_GATE_COMMAND";
 #[cfg(target_os = "macos")]
 static JOURNAL_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[cfg(target_os = "macos")]
@@ -94,10 +112,11 @@ struct SessionFileEntry {
     temp_path: Option<String>,
 }
 
-// The journal reaches `Staging` before any instruction path is replaced and
-// reaches `Active` only after the child identity has been captured. Fields
-// added after the original journal format use serde defaults so old sessions
-// remain recoverable without trusting unverifiable process identities.
+// The journal reaches `Staging` before any instruction path is replaced. The
+// target remains behind its launch gate until an `Active` report containing
+// the child identity is durable. Fields added after the original journal
+// format use serde defaults so old sessions remain recoverable without
+// trusting unverifiable process identities.
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionReport {
@@ -172,6 +191,281 @@ impl Drop for SignalRelay {
             let _ = thread.join();
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+struct PreparedChildLaunch {
+    command: Command,
+    parent_stream: UnixStream,
+    child_stream: UnixStream,
+}
+
+#[cfg(target_os = "macos")]
+impl PreparedChildLaunch {
+    fn new(target: &Command) -> Result<Self> {
+        let (parent_stream, child_stream) =
+            UnixStream::pair().context("failed to create macOS child launch gate")?;
+        let child_fd = child_stream.as_raw_fd();
+        let mut command = launch_gate_command(target, child_fd)?;
+        command.process_group(0);
+        // SAFETY: The closure performs only async-signal-safe `fcntl` calls
+        // after fork. The descriptor is owned by `child_stream`, which stays
+        // alive until `spawn` returns.
+        unsafe {
+            command.pre_exec(move || set_close_on_exec(child_fd, false));
+        }
+        Ok(Self {
+            command,
+            parent_stream,
+            child_stream,
+        })
+    }
+
+    fn spawn(mut self) -> Result<(Child, ChildLaunchGate)> {
+        let child = self
+            .command
+            .spawn()
+            .context("failed to launch macOS swap command gate")?;
+        drop(self.child_stream);
+        Ok((
+            child,
+            ChildLaunchGate {
+                stream: self.parent_stream,
+            },
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct ChildLaunchGate {
+    stream: UnixStream,
+}
+
+#[cfg(target_os = "macos")]
+impl ChildLaunchGate {
+    fn wait_ready(&mut self) -> Result<()> {
+        let mut message = [0_u8; 1];
+        self.stream
+            .read_exact(&mut message)
+            .context("macOS child launch gate exited before readiness")?;
+        match message[0] {
+            LAUNCH_GATE_READY => Ok(()),
+            LAUNCH_GATE_ERROR => Err(self.read_error()),
+            other => Err(anyhow!(
+                "macOS child launch gate sent unexpected readiness byte {other}"
+            )),
+        }
+    }
+
+    fn release_target(&mut self) -> Result<()> {
+        self.stream
+            .write_all(&[LAUNCH_GATE_RELEASE])
+            .context("failed to release macOS child launch gate")?;
+        self.stream
+            .shutdown(Shutdown::Write)
+            .context("failed to close macOS child launch gate release channel")?;
+
+        let mut response = Vec::new();
+        (&mut self.stream)
+            .take(MAX_LAUNCH_GATE_ERROR_BYTES + 2)
+            .read_to_end(&mut response)
+            .context("failed to confirm macOS swap command launch")?;
+        if response.is_empty() {
+            return Ok(());
+        }
+        if response.len() > usize::try_from(MAX_LAUNCH_GATE_ERROR_BYTES).unwrap_or(usize::MAX) + 1 {
+            return Err(anyhow!(
+                "macOS child launch gate error exceeded {} bytes",
+                MAX_LAUNCH_GATE_ERROR_BYTES
+            ));
+        }
+        if response[0] != LAUNCH_GATE_ERROR {
+            return Err(anyhow!(
+                "macOS child launch gate sent unexpected launch byte {}",
+                response[0]
+            ));
+        }
+        let detail = String::from_utf8_lossy(&response[1..]);
+        Err(anyhow!("failed to launch macOS swap command: {detail}"))
+    }
+
+    fn read_error(&mut self) -> anyhow::Error {
+        let mut detail = Vec::new();
+        let result = (&mut self.stream)
+            .take(MAX_LAUNCH_GATE_ERROR_BYTES + 1)
+            .read_to_end(&mut detail);
+        match result {
+            Ok(_) if detail.len() <= MAX_LAUNCH_GATE_ERROR_BYTES as usize => anyhow!(
+                "macOS child launch gate failed before readiness: {}",
+                String::from_utf8_lossy(&detail)
+            ),
+            Ok(_) => anyhow!(
+                "macOS child launch gate readiness error exceeded {} bytes",
+                MAX_LAUNCH_GATE_ERROR_BYTES
+            ),
+            Err(error) => anyhow!("failed to read macOS child launch gate error: {error}"),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn command_argv(command: &Command) -> Result<Vec<String>> {
+    std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(|argument| {
+            argument
+                .to_str()
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| anyhow!("macOS swap command arguments must be valid UTF-8"))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn apply_command_context(source: &Command, destination: &mut Command) {
+    for (key, value) in source.get_envs() {
+        match value {
+            Some(value) => {
+                destination.env(key, value);
+            }
+            None => {
+                destination.env_remove(key);
+            }
+        }
+    }
+    if let Some(directory) = source.get_current_dir() {
+        destination.current_dir(directory);
+    }
+}
+
+#[cfg(all(not(test), target_os = "macos"))]
+fn launch_gate_command(target: &Command, child_fd: RawFd) -> Result<Command> {
+    let argv = command_argv(target)?;
+    let executable =
+        std::env::current_exe().context("failed to locate Packet28 child launch gate")?;
+    let mut command = Command::new(executable);
+    command
+        .arg(INTERNAL_LAUNCH_GATE_ARG)
+        .arg(child_fd.to_string())
+        .arg("--")
+        .args(argv);
+    apply_command_context(target, &mut command);
+    Ok(command)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+fn launch_gate_command(target: &Command, child_fd: RawFd) -> Result<Command> {
+    let argv = command_argv(target)?;
+    let executable =
+        std::env::current_exe().context("failed to locate macOS launch-gate test process")?;
+    let mut command = Command::new(executable);
+    command
+        .arg("--exact")
+        .arg("cmd_macos_swap::tests::launch_gate_process")
+        .arg("--nocapture")
+        .env(TEST_LAUNCH_GATE_FD_ENV, child_fd.to_string())
+        .env(
+            TEST_LAUNCH_GATE_COMMAND_ENV,
+            serde_json::to_string(&argv).context("failed to encode launch-gate test command")?,
+        );
+    apply_command_context(target, &mut command);
+    Ok(command)
+}
+
+#[cfg(target_os = "macos")]
+fn set_close_on_exec(fd: RawFd, close_on_exec: bool) -> std::io::Result<()> {
+    // SAFETY: `fcntl(F_GETFD)` only inspects the caller-supplied descriptor.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let updated = if close_on_exec {
+        flags | libc::FD_CLOEXEC
+    } else {
+        flags & !libc::FD_CLOEXEC
+    };
+    // SAFETY: `updated` changes only the close-on-exec descriptor flag.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, updated) } == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn write_launch_gate_error(stream: &mut UnixStream, error: impl std::fmt::Display) {
+    let _ = stream.write_all(&[LAUNCH_GATE_ERROR]);
+    let _ = write!(stream, "{error}");
+}
+
+#[cfg(target_os = "macos")]
+fn run_launch_gate(fd: RawFd, argv: &[String]) -> i32 {
+    if fd < 0 || set_close_on_exec(fd, false).is_err() {
+        return 126;
+    }
+    // SAFETY: The gate descriptor is deliberately inherited by the helper
+    // process and ownership is transferred exactly once in that process.
+    let mut stream = unsafe { UnixStream::from_raw_fd(fd) };
+    let Some(program) = argv.first() else {
+        write_launch_gate_error(&mut stream, "target command is empty");
+        return 126;
+    };
+    if stream.write_all(&[LAUNCH_GATE_READY]).is_err() {
+        return 125;
+    }
+
+    let mut release = [0_u8; 1];
+    if stream.read_exact(&mut release).is_err() {
+        return 125;
+    }
+    if release[0] != LAUNCH_GATE_RELEASE {
+        write_launch_gate_error(
+            &mut stream,
+            format!("unexpected release byte {}", release[0]),
+        );
+        return 126;
+    }
+    if let Err(error) = set_close_on_exec(stream.as_raw_fd(), true) {
+        write_launch_gate_error(&mut stream, format!("failed to arm close-on-exec: {error}"));
+        return 126;
+    }
+
+    let mut command = Command::new(program);
+    command.args(&argv[1..]);
+    #[cfg(test)]
+    command
+        .env_remove(TEST_LAUNCH_GATE_FD_ENV)
+        .env_remove(TEST_LAUNCH_GATE_COMMAND_ENV);
+    let error = command.exec();
+    let exit_code = if error.kind() == std::io::ErrorKind::NotFound {
+        127
+    } else {
+        126
+    };
+    write_launch_gate_error(&mut stream, error);
+    exit_code
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn internal_launch_gate_exit_code(raw_args: &[String]) -> Option<i32> {
+    if raw_args.get(1).map(String::as_str) != Some(INTERNAL_LAUNCH_GATE_ARG) {
+        return None;
+    }
+    let Some(fd) = raw_args
+        .get(2)
+        .and_then(|value| value.parse::<RawFd>().ok())
+    else {
+        return Some(126);
+    };
+    if raw_args.get(3).map(String::as_str) != Some("--") {
+        return Some(126);
+    }
+    Some(run_launch_gate(fd, &raw_args[4..]))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn internal_launch_gate_exit_code(_raw_args: &[String]) -> Option<i32> {
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -286,6 +580,7 @@ struct SwapSession {
     relay: Option<SignalRelay>,
     files_restored: bool,
     ever_spawned: bool,
+    target_started: bool,
     cleanup_failures: Vec<String>,
     finalized: bool,
     process_group_cleaned: bool,
@@ -304,6 +599,7 @@ impl SwapSession {
             relay: None,
             files_restored: false,
             ever_spawned: false,
+            target_started: false,
             cleanup_failures: Vec::new(),
             finalized: false,
             process_group_cleaned: false,
@@ -413,7 +709,7 @@ impl SwapSession {
     }
 
     fn rollback(&mut self) -> Result<()> {
-        let state = if self.ever_spawned {
+        let state = if self.target_started {
             SessionState::Restored
         } else {
             SessionState::RolledBack
@@ -509,17 +805,25 @@ fn run_child_lifecycle(
     session.arm_signal_relay(hooks)?;
     session.interrupt_if_signalled()?;
     hooks.check(LifecyclePoint::Spawn)?;
-    command.process_group(0);
-    let child = command
-        .spawn()
-        .context("failed to launch macOS swap command")?;
+    let (child, mut launch_gate) = PreparedChildLaunch::new(command)?.spawn()?;
     session.adopt_child(child)?;
-    session.inject_signal(hooks, LifecyclePoint::AfterSpawn)?;
-    session.interrupt_if_signalled()?;
+    if let Err(error) = launch_gate.wait_ready() {
+        session.interrupt_if_signalled()?;
+        return Err(error);
+    }
 
     hooks.check(LifecyclePoint::ActiveReport)?;
     session.persist()?;
     session.inject_signal(hooks, LifecyclePoint::AfterActiveReport)?;
+    session.interrupt_if_signalled()?;
+
+    if let Err(error) = launch_gate.release_target() {
+        session.interrupt_if_signalled()?;
+        return Err(error);
+    }
+    session.target_started = true;
+    hooks.check(LifecyclePoint::AfterSpawn)?;
+    session.inject_signal(hooks, LifecyclePoint::AfterSpawn)?;
     session.interrupt_if_signalled()?;
 
     hooks.check(LifecyclePoint::Wait)?;
@@ -1613,16 +1917,20 @@ fn recover_stale_sessions(root: &Path) -> Result<()> {
         }
 
         let mut recovery_errors = Vec::new();
+        let child_group_terminated = if let (Some(child_pgid), Some(child_start_time_micros)) =
+            (report.child_pgid, report.child_start_time_micros)
         {
-            if let (Some(child_pgid), Some(child_start_time_micros)) =
-                (report.child_pgid, report.child_start_time_micros)
-            {
-                if let Err(err) =
-                    terminate_orphaned_process_group(child_pgid, child_start_time_micros)
-                {
+            match terminate_orphaned_process_group(child_pgid, child_start_time_micros) {
+                Ok(()) => true,
+                Err(err) => {
                     recovery_errors.push(format!("failed to terminate orphaned child: {err:#}"));
+                    false
                 }
             }
+        } else {
+            true
+        };
+        if child_group_terminated {
             if let Err(err) = recover_report_files(root, &report) {
                 recovery_errors.push(format!("failed to restore instruction files: {err:#}"));
             }
@@ -2144,11 +2452,55 @@ fn manual_repair_error(original: &Path, backup: &Path, temp: &Path, reason: &str
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::panic::{self, AssertUnwindSafe};
+    use std::process::Stdio;
     use std::sync::atomic::AtomicUsize;
 
     const ORIGINAL: &[u8] = b"original instruction\n";
     const REWRITTEN: &[u8] = b"rewritten instruction\n";
+    const TEST_HARD_EXIT_ROOT_ENV: &str = "PACKET28_TEST_MACOS_SWAP_HARD_EXIT_ROOT";
+    const TEST_HARD_EXIT_COMMAND_ENV: &str = "PACKET28_TEST_MACOS_SWAP_HARD_EXIT_COMMAND";
+    const HARD_EXIT_STATUS: i32 = 86;
+
+    #[test]
+    fn launch_gate_process() {
+        let Some(fd) = std::env::var(TEST_LAUNCH_GATE_FD_ENV)
+            .ok()
+            .and_then(|value| value.parse::<RawFd>().ok())
+        else {
+            return;
+        };
+        let argv: Vec<String> = serde_json::from_str(
+            &std::env::var(TEST_LAUNCH_GATE_COMMAND_ENV)
+                .expect("launch-gate test command is present"),
+        )
+        .expect("launch-gate test command is valid JSON");
+        std::process::exit(run_launch_gate(fd, &argv));
+    }
+
+    #[test]
+    fn hard_exit_after_spawn_process() {
+        let Some(root) = std::env::var_os(TEST_HARD_EXIT_ROOT_ENV).map(PathBuf::from) else {
+            return;
+        };
+        let command_path = PathBuf::from(
+            std::env::var_os(TEST_HARD_EXIT_COMMAND_ENV)
+                .expect("hard-exit test command is present"),
+        );
+        let heartbeat_path = root.join("child-heartbeat");
+        let termination_observation = root.join("termination-observation");
+        let (mut session, _) = staged_session(&root, "after-spawn-hard-exit");
+        let mut command = Command::new(command_path);
+        command
+            .current_dir(&root)
+            .env("P28_TEST_HEARTBEAT", &heartbeat_path)
+            .env("P28_TEST_TERMINATION_OBSERVATION", &termination_observation);
+        let hooks = HardExitAfterSpawn { heartbeat_path };
+
+        let outcome = run_child_lifecycle(&mut session, &mut command, &hooks);
+        panic!("hard-exit lifecycle unexpectedly returned: {outcome:?}");
+    }
 
     #[derive(Debug)]
     struct FailAt(LifecyclePoint);
@@ -2169,6 +2521,29 @@ mod tests {
     impl LifecycleHooks for InjectSignalAt {
         fn injected_signal(&self, point: LifecyclePoint) -> Option<i32> {
             (point == self.0).then_some(SIGTERM)
+        }
+    }
+
+    struct HardExitAfterSpawn {
+        heartbeat_path: PathBuf,
+    }
+
+    impl LifecycleHooks for HardExitAfterSpawn {
+        fn check(&self, point: LifecyclePoint) -> Result<()> {
+            if point == LifecyclePoint::AfterSpawn {
+                assert!(
+                    wait_until(Duration::from_secs(2), || self
+                        .heartbeat_path
+                        .metadata()
+                        .map(|metadata| metadata.len() > 0)
+                        .unwrap_or(false)),
+                    "child did not publish its heartbeat before the hard-exit checkpoint"
+                );
+                // SAFETY: This subprocess exists only to simulate an owner
+                // hard crash without running Rust destructors.
+                unsafe { libc::_exit(HARD_EXIT_STATUS) }
+            }
+            Ok(())
         }
     }
 
@@ -2419,7 +2794,7 @@ mod tests {
         }
         assert_eq!(
             read_report(&session.report_path).state,
-            if session.ever_spawned {
+            if session.target_started {
                 SessionState::Restored
             } else {
                 SessionState::RolledBack
@@ -2654,17 +3029,26 @@ mod tests {
     }
 
     #[test]
+    fn injected_after_spawn_failure_terminates_child_and_restores_files() {
+        assert_child_lifecycle_failure_restores(LifecyclePoint::AfterSpawn);
+    }
+
+    #[test]
     fn injected_active_report_failure_terminates_child_and_restores_files() {
         assert_child_lifecycle_failure_restores(LifecyclePoint::ActiveReport);
     }
 
     #[test]
-    fn actual_active_journal_write_failure_terminates_child_and_restores_files() {
+    fn actual_active_journal_write_failure_keeps_target_gated_and_restores_files() {
         let dir = tempfile::tempdir().unwrap();
         let (mut session, original) = staged_session(dir.path(), "journal-write-error");
+        let target_started = dir.path().join("target-started");
         session.journal_store = Box::new(FailOnceJournalStore::new(0));
-        let mut command = Command::new("/bin/sleep");
-        command.arg("30");
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("printf started > \"$P28_TARGET_STARTED\"; exec /bin/sleep 30")
+            .env("P28_TARGET_STARTED", &target_started);
 
         let error =
             run_child_lifecycle(&mut session, &mut command, &NOOP_LIFECYCLE_HOOKS).unwrap_err();
@@ -2676,10 +3060,11 @@ mod tests {
             .to_string()
             .contains("injected journal write failure"));
         assert_eq!(fs::read(&original).unwrap(), ORIGINAL);
+        assert!(!target_started.exists());
         assert!(!process_group_is_running(child_pgid).unwrap());
         assert_eq!(
             read_report(&session.report_path).state,
-            SessionState::Restored
+            SessionState::RolledBack
         );
     }
 
@@ -2689,7 +3074,7 @@ mod tests {
     }
 
     #[test]
-    fn signal_after_spawn_before_active_report_terminates_child_and_restores_files() {
+    fn signal_after_spawn_terminates_child_and_restores_files() {
         assert_child_lifecycle_failure_restores_with_hooks(&InjectSignalAt(
             LifecyclePoint::AfterSpawn,
         ));
@@ -2782,6 +3167,69 @@ mod tests {
         assert!(!process_is_running(child_pid));
         assert_eq!(fs::read(&original).unwrap(), ORIGINAL);
         assert_eq!(read_report(&report_path).state, SessionState::Restored);
+    }
+
+    #[test]
+    fn hard_exit_after_spawn_is_recovered_before_instruction_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let command_path = root.join("heartbeat-child");
+        fs::write(
+            &command_path,
+            "#!/bin/sh\n\
+             trap '/bin/cp AGENTS.md \"$P28_TEST_TERMINATION_OBSERVATION\"; exit 0' 15\n\
+             printf ready > \"$P28_TEST_HEARTBEAT\"\n\
+             while :; do :; done\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&command_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&command_path, permissions).unwrap();
+
+        let executable = std::env::current_exe().unwrap();
+        let mut owner = Command::new(executable)
+            .arg("--exact")
+            .arg("cmd_macos_swap::tests::hard_exit_after_spawn_process")
+            .arg("--nocapture")
+            .env(TEST_HARD_EXIT_ROOT_ENV, root)
+            .env(TEST_HARD_EXIT_COMMAND_ENV, &command_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = owner.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = owner.kill();
+                let _ = owner.wait();
+                let _ = recover_stale_sessions(root);
+                panic!("hard-exit owner did not reach the AfterSpawn checkpoint");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(status.code(), Some(HARD_EXIT_STATUS));
+
+        let report_path = session_report_path(root, "after-spawn-hard-exit");
+        let active = read_report(&report_path);
+        assert_eq!(active.state, SessionState::Active);
+        let child_pgid = active.child_pgid.unwrap();
+        assert!(process_group_is_running(child_pgid).unwrap());
+        assert!(fs::metadata(root.join("child-heartbeat")).unwrap().len() > 0);
+        let mut process_group_guard = TestProcessGroupGuard::new(child_pgid);
+
+        recover_stale_sessions(root).unwrap();
+
+        assert_eq!(
+            fs::read(root.join("termination-observation")).unwrap(),
+            REWRITTEN
+        );
+        assert_eq!(fs::read(root.join("AGENTS.md")).unwrap(), ORIGINAL);
+        assert!(!process_group_is_running(child_pgid).unwrap());
+        assert_eq!(read_report(&report_path).state, SessionState::Restored);
+        process_group_guard.disarm();
     }
 
     #[test]
@@ -2996,7 +3444,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_recovery_restores_files_even_when_orphan_cleanup_fails() {
+    fn stale_recovery_preserves_swapped_files_when_orphan_cleanup_fails() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let staged = installed_rewrite(root, "AGENTS.md", "orphan-error");
@@ -3013,8 +3461,8 @@ mod tests {
         assert!(error
             .to_string()
             .contains("failed to terminate orphaned child"));
-        assert_eq!(fs::read(&staged.original_path).unwrap(), ORIGINAL);
-        assert!(!staged.backup_path.exists());
+        assert_eq!(fs::read(&staged.original_path).unwrap(), REWRITTEN);
+        assert_eq!(fs::read(&staged.backup_path).unwrap(), ORIGINAL);
         assert_eq!(
             read_report(&report_path).state,
             SessionState::RecoveryFailed

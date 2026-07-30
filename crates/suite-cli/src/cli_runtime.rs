@@ -16,6 +16,9 @@ use crate::{
 
 pub fn main_entry() {
     let raw_args = std::env::args().collect::<Vec<_>>();
+    if let Some(exit_code) = crate::cmd_macos_swap::internal_launch_gate_exit_code(&raw_args) {
+        std::process::exit(exit_code);
+    }
     let cli = Cli::parse();
     let machine_error = machine_error_context(&cli);
     if let Err(e) = configure_stdout_output(cli.output.as_deref()) {
