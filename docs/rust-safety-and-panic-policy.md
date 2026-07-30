@@ -95,6 +95,14 @@ and join behavior. Each call is confined to the test helper, owns its socket
 descriptor for the duration of the call, and documents the pointer-lifetime
 contract at the unsafe boundary. No MCP production path requires unsafe Rust.
 
+Persistence path-safety tests add two reviewed Unix-only probes while the
+production state-filesystem API remains safe Rust. Context-memory subprocess
+fixtures use `pre_exec` with async-signal-safe `setrlimit` calls to enforce
+resource ceilings and `mkfifo` to prove special-file rejection.
+`packet28-state-fs` has a separate `mkfifo` rejection fixture. The pathname
+pointers are live, NUL-terminated, and never retained; all calls are confined
+to test configurations.
+
 After fallible paths were repaired, 13 reviewed lint expectations remain:
 four lint entries cover the two build scripts' intentional fatal exits, seven
 cover compile-time regex literals exercised by parser/filter tests, and two
@@ -112,7 +120,7 @@ and requires a reason on each expectation.
   reason, are checked for fulfillment, and are reconciled against an exact
   reviewed inventory. Production `#[allow]` overrides are rejected.
 - The same checker inventories unsafe syntax. Its reviewed allowlist currently
-  contains 24 files: 14 production OS/FFI/mmap adapters and ten
+  contains 26 files: 14 production OS/FFI/mmap adapters and twelve
   test/benchmark instrumentation files. A new unsafe-bearing file or stale
   allowlist entry fails the gate until the architectural inventory is
   reconciled explicitly.

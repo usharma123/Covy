@@ -22,6 +22,9 @@ ALLOWED_UNSAFE_FILES = {
     "benchmarks/per-06-shared-scan/src/lib.rs": "allocation-counting benchmark",
     "crates/context-instruct-shim/src/linux.rs": "Linux preload FFI and syscalls",
     "crates/context-instruct-shim/src/macos.rs": "macOS interpose FFI and syscalls",
+    "crates/context-memory-core/src/persist.rs": (
+        "test-only persistence resource-limit and FIFO probes"
+    ),
     "crates/covy-ingest/examples/ingest_allocation_probe.rs": "allocation-counting example",
     "crates/packet28-daemon-client/src/runtime_discovery.rs": (
         "descriptor-relative Unix runtime discovery and ACL/xattr FFI"
@@ -39,6 +42,7 @@ ALLOWED_UNSAFE_FILES = {
         "effective-user-specific Unix socket namespace"
     ),
     "crates/packet28-search-core/src/layer.rs": "read-only memory-mapped index layer",
+    "crates/packet28-state-fs/src/lib.rs": "test-only FIFO rejection probe",
     "crates/packet28-search-cli/tests/support/daemon.rs": (
         "effective-user-specific Unix socket fallback fixture"
     ),
