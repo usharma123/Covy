@@ -29,6 +29,11 @@ pub(super) const MAX_PROXY_OUTPUT_MESSAGES: usize = 64;
 
 type PendingReply = std::result::Result<Value, String>;
 
+struct PendingRequest {
+    original_id: Value,
+    reply: oneshot::Sender<PendingReply>,
+}
+
 struct ReverseRequestEntry {
     original_id: Value,
     original_id_bytes: usize,
@@ -804,7 +809,9 @@ impl Drop for UpstreamPool {
 pub(crate) struct UpstreamClient {
     pub(crate) name: String,
     stdin: AsyncMutex<ChildStdin>,
-    pending: Mutex<HashMap<String, oneshot::Sender<PendingReply>>>,
+    pending: Mutex<HashMap<String, PendingRequest>>,
+    request_id_prefix: String,
+    next_request_id: AtomicU64,
     reverse_requests: ReverseRequestTracker,
     inflight: Arc<Semaphore>,
     pub(crate) request_timeout: Duration,
@@ -824,10 +831,14 @@ impl UpstreamClient {
     }
 
     pub(crate) async fn send_request(&self, request: &Value) -> Result<Value> {
-        let request_id = request
+        let original_id = request
             .get("id")
+            .cloned()
             .ok_or_else(|| anyhow!("upstream request is missing id"))?;
-        let request_key = request_key(request_id)?;
+        let mut outbound = request.clone();
+        let outbound_object = outbound
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("upstream request must be an object"))?;
         let deadline = Instant::now() + self.request_timeout;
         let permit = timeout_at(deadline, self.inflight.clone().acquire_owned())
             .await
@@ -838,22 +849,10 @@ impl UpstreamClient {
         }
 
         let (sender, receiver) = oneshot::channel();
-        {
-            let mut pending = self
-                .pending
-                .lock()
-                .map_err(|_| anyhow!("failed to lock upstream '{}' pending map", self.name))?;
-            if pending.contains_key(&request_key) {
-                return Err(anyhow!(
-                    "duplicate in-flight request id {} for upstream '{}'",
-                    request_id,
-                    self.name
-                ));
-            }
-            pending.insert(request_key.clone(), sender);
-        }
+        let (proxy_id, request_key) = self.register_pending(original_id.clone(), sender)?;
+        outbound_object.insert("id".to_string(), proxy_id);
 
-        if let Err(error) = self.write_before(deadline, request).await {
+        if let Err(error) = self.write_before(deadline, &outbound).await {
             self.remove_pending(&request_key);
             return Err(error);
         }
@@ -862,7 +861,7 @@ impl UpstreamClient {
             Ok(Err(_)) => Err(anyhow!(
                 "upstream '{}' exited before response id {}",
                 self.name,
-                request_id
+                original_id
             )),
             Err(_) => {
                 self.remove_pending(&request_key);
@@ -871,6 +870,35 @@ impl UpstreamClient {
         };
         drop(permit);
         reply
+    }
+
+    fn register_pending(
+        &self,
+        original_id: Value,
+        reply: oneshot::Sender<PendingReply>,
+    ) -> Result<(Value, String)> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| anyhow!("failed to lock upstream '{}' pending map", self.name))?;
+        for _ in 0..=MAX_UPSTREAM_INFLIGHT {
+            let sequence = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+            let proxy_id = Value::String(format!(
+                "{}{}",
+                self.request_id_prefix,
+                sequence.wrapping_add(1)
+            ));
+            let proxy_key = request_key(&proxy_id)?;
+            if pending.contains_key(&proxy_key) {
+                continue;
+            }
+            pending.insert(proxy_key.clone(), PendingRequest { original_id, reply });
+            return Ok((proxy_id, proxy_key));
+        }
+        Err(anyhow!(
+            "upstream '{}' request id namespace is exhausted",
+            self.name
+        ))
     }
 
     async fn write_before(&self, deadline: Instant, request: &Value) -> Result<()> {
@@ -1178,22 +1206,26 @@ impl UpstreamClient {
 
     fn route_upstream_response(
         &self,
-        message: Value,
+        mut message: Value,
         id: &Value,
     ) -> Result<UpstreamMessageDispatch> {
-        if let Some(sender) = self.take_pending_response(id)? {
-            let _ = sender.send(Ok(message));
+        if let Some(pending) = self.take_pending_response(id)? {
+            message
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("upstream response must be an object"))?
+                .insert("id".to_string(), pending.original_id);
+            let _ = pending.reply.send(Ok(message));
         }
         Ok(UpstreamMessageDispatch::Routed)
     }
 
     fn fail_invalid_pending_response(&self, id: Option<&Value>, reason: &str) -> Result<()> {
-        if let Some(sender) = id
+        if let Some(pending) = id
             .map(|id| self.take_pending_response(id))
             .transpose()?
             .flatten()
         {
-            let _ = sender.send(Err(format!(
+            let _ = pending.reply.send(Err(format!(
                 "invalid response from upstream '{}': {reason}",
                 self.name
             )));
@@ -1201,7 +1233,7 @@ impl UpstreamClient {
         Ok(())
     }
 
-    fn take_pending_response(&self, id: &Value) -> Result<Option<oneshot::Sender<PendingReply>>> {
+    fn take_pending_response(&self, id: &Value) -> Result<Option<PendingRequest>> {
         let key = request_key(id)?;
         self.pending
             .lock()
@@ -1264,7 +1296,7 @@ impl UpstreamClient {
             .map(|mut pending| {
                 pending
                     .drain()
-                    .map(|(_, sender)| sender)
+                    .map(|(_, pending)| pending.reply)
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -1372,6 +1404,8 @@ async fn spawn_upstream_client(
         name: name.to_string(),
         stdin: AsyncMutex::new(stdin),
         pending: Mutex::new(HashMap::new()),
+        request_id_prefix: format!("packet28-proxy-request:{name}:"),
+        next_request_id: AtomicU64::new(0),
         reverse_requests: ReverseRequestTracker::new(name, timeout),
         inflight: Arc::new(Semaphore::new(MAX_UPSTREAM_INFLIGHT)),
         request_timeout: timeout,
@@ -1614,7 +1648,10 @@ def respond(message):
     write_message({
         "jsonrpc": "2.0",
         "id": message["id"],
-        "result": {"value": arguments.get("value")}
+        "result": {
+            "value": arguments.get("value"),
+            "wire_id": message["id"]
+        }
     })
 
 while True:
@@ -2833,6 +2870,37 @@ while True:
         assert_eq!(second["result"]["value"], "slow");
         client.shutdown().await;
         assert!(client.is_reaped());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[cfg(unix)]
+    async fn namespaces_duplicate_client_ids_on_the_upstream_wire() {
+        let (_directory, client, _output) = test_client(1_000).await;
+        let mut tasks = tokio::task::JoinSet::new();
+        for (delay_ms, value) in [(100, "first"), (5, "second")] {
+            let client = client.clone();
+            tasks.spawn(async move {
+                client
+                    .send_request(&request(json!("same-client-id"), delay_ms, value))
+                    .await
+            });
+        }
+
+        let first = tasks.join_next().await.unwrap().unwrap().unwrap();
+        let second = tasks.join_next().await.unwrap().unwrap().unwrap();
+        assert_eq!(first["id"], "same-client-id");
+        assert_eq!(second["id"], "same-client-id");
+        assert_ne!(
+            first["result"]["wire_id"], second["result"]["wire_id"],
+            "concurrent requests reused an upstream wire id"
+        );
+        assert!(first["result"]["wire_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("packet28-proxy-request:test:")));
+        assert!(second["result"]["wire_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("packet28-proxy-request:test:")));
+        client.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
