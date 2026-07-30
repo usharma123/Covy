@@ -21,6 +21,8 @@ const FRAME_FOOTER_MAGIC: [u8; 8] = *b"P28RDE01";
 const WAL_FORMAT_VERSION: u32 = 1;
 const FRAME_FORMAT_VERSION: u32 = 1;
 const WAL_HEADER_BYTES: usize = 56;
+#[cfg(test)]
+pub(crate) const REGISTRY_DELTA_WAL_HEADER_BYTES: usize = WAL_HEADER_BYTES;
 const FRAME_HEADER_BYTES: usize = 72;
 const FRAME_FOOTER_BYTES: usize = 56;
 
@@ -1191,6 +1193,8 @@ fn load_under_task_lock_anchored_with_admissions(
         loaded.tasks,
         loaded.watches,
         RegistryRevision::new(loaded.applied_delta_revision),
+        None,
+        true,
     )
 }
 
@@ -1214,6 +1218,8 @@ fn load_under_task_lock_portable_with_admissions(root: &Path) -> Result<LoadedRe
         loaded.tasks,
         loaded.watches,
         RegistryRevision::new(loaded.applied_delta_revision),
+        None,
+        true,
     )
 }
 
@@ -1222,12 +1228,132 @@ struct LoadedRegistryAuthority {
     wal_admitted_task_ids: BTreeSet<String>,
 }
 
+#[cfg(unix)]
+pub(crate) struct RetainedRegistrySnapshot {
+    pub(crate) registry: TaskRegistry,
+    pub(crate) record_values: BTreeMap<String, serde_json::Value>,
+}
+
+#[cfg(unix)]
+struct RetainedRegistryImage {
+    authority: LoadedRegistryAuthority,
+    record_values: BTreeMap<String, serde_json::Value>,
+}
+
+#[cfg(unix)]
+pub(crate) fn load_retained_registry_snapshot_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+) -> Result<RetainedRegistrySnapshot> {
+    let image = load_retained_registry_image_under_task_lock(root, daemon, false)?;
+    Ok(RetainedRegistrySnapshot {
+        registry: image.authority.loaded.tasks,
+        record_values: image.record_values,
+    })
+}
+
+#[cfg(unix)]
+fn load_retained_registry_image_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+    repair_torn_suffix: bool,
+) -> Result<RetainedRegistryImage> {
+    let loaded =
+        load_task_watch_registry_checkpoint_with_delta_revision_under_task_lock(root, daemon)?;
+    let path = task_registry_path(root);
+    let mut value = crate::storage::decode_json_value_without_duplicate_keys(
+        &loaded.task_bytes,
+        crate::storage::AuthorityJsonProfile::TaskRegistry,
+    )
+    .map_err(|error| {
+        crate::storage::map_authority_json_error(
+            &path,
+            crate::storage::AuthorityJsonProfile::TaskRegistry,
+            "failed to decode retained task registry from",
+            error,
+        )
+    })?;
+    if let Some(message) = crate::storage::task_registry_value_shape_error(&value) {
+        return Err(DaemonCoreError::InvalidTaskRegistry {
+            path,
+            message: message.to_string(),
+        });
+    }
+    let records = value
+        .get_mut("tasks")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| DaemonCoreError::InvalidTaskRegistry {
+            path: task_registry_path(root),
+            message: "retained task registry has no object-valued tasks field".to_string(),
+        })?;
+    let wal = open_anchored_registry_wal(daemon, root)?;
+    let authority = replay_wal_with_admissions(
+        root,
+        wal,
+        loaded.tasks,
+        loaded.watches,
+        RegistryRevision::new(loaded.applied_delta_revision),
+        Some(records),
+        repair_torn_suffix,
+    )?;
+    Ok(RetainedRegistryImage {
+        authority,
+        record_values: records.clone().into_iter().collect(),
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn remove_retained_registry_records_under_task_lock(
+    root: &Path,
+    daemon: &CapabilityDir,
+    expected_records: &BTreeMap<String, serde_json::Value>,
+    allow_already_removed: bool,
+    before_remove: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    if expected_records.is_empty() {
+        before_remove()?;
+        return Ok(true);
+    }
+    let mut image = load_retained_registry_image_under_task_lock(root, daemon, true)?;
+    for (task_id, expected) in expected_records {
+        match image.record_values.get(task_id) {
+            Some(current) if current == expected => {}
+            None if allow_already_removed => {}
+            _ => return Ok(false),
+        }
+    }
+    for task_id in expected_records.keys() {
+        image.authority.loaded.tasks.tasks.remove(task_id);
+    }
+    validate_task_watch_registry_relationships(
+        root,
+        &image.authority.loaded.tasks,
+        &image.authority.loaded.watches,
+    )?;
+    let task_bytes =
+        encode_task_registry(&task_registry_path(root), &image.authority.loaded.tasks)?;
+    before_remove()?;
+    save_task_watch_registry_checkpoint_anchored(
+        root,
+        daemon,
+        &image.authority.loaded.tasks,
+        &image.authority.loaded.watches,
+        task_bytes,
+        Some(image.authority.loaded.replayed_revision.get()),
+        Some(&image.authority.wal_admitted_task_ids),
+    )?;
+    reset_wal(root, daemon, image.authority.loaded.replayed_revision)?;
+    Ok(true)
+}
+
 fn replay_wal_with_admissions<W: RegistryWalFile>(
     root: &Path,
     wal: Option<W>,
     mut tasks: TaskRegistry,
     mut watches: WatchRegistry,
     checkpoint_revision: RegistryRevision,
+    mut raw_task_records: Option<&mut serde_json::Map<String, serde_json::Value>>,
+    repair_torn_suffix: bool,
 ) -> Result<LoadedRegistryAuthority> {
     let checkpoint_task_ids = tasks.tasks.keys().cloned().collect::<BTreeSet<_>>();
     let path = registry_delta_wal_path(root);
@@ -1244,7 +1370,7 @@ fn replay_wal_with_admissions<W: RegistryWalFile>(
     };
 
     let mut replayed_revision = checkpoint_revision;
-    let inspection = scan_wal(&mut wal, &path, true, |revisions, batch| {
+    let inspection = scan_wal(&mut wal, &path, repair_torn_suffix, |revisions, batch| {
         if revisions.last <= checkpoint_revision {
             return Ok(());
         }
@@ -1271,6 +1397,23 @@ fn replay_wal_with_admissions<W: RegistryWalFile>(
         if !relationships_unchanged {
             validate_task_watch_registry_relationships(root, &tasks, &watches)
                 .map_err(|error| invalid_wal(&path, error.to_string()))?;
+        }
+        if let Some(records) = raw_task_records.as_deref_mut() {
+            for task_id in &batch.task_removals {
+                records.remove(task_id);
+            }
+            for (task_id, task) in &batch.task_upserts {
+                records.insert(
+                    task_id.clone(),
+                    serde_json::to_value(task).map_err(|source| {
+                        DaemonCoreError::json(
+                            "failed to materialize registry delta task for",
+                            &path,
+                            source,
+                        )
+                    })?,
+                );
+            }
         }
         replayed_revision = revisions.last;
         Ok(())

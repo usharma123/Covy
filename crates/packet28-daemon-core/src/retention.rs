@@ -2573,13 +2573,35 @@ fn read_authority_snapshots_from_daemon(
     );
     let mut snapshot = match read {
         Ok(read) => match decode_registry_with_raw_values(&read.bytes) {
-            Ok((registry, record_values)) => RegistrySnapshot {
-                registry,
-                record_values,
-                reliable: true,
-                file_bytes: read.logical_bytes,
-                allocated_bytes: read.allocated_bytes,
-            },
+            Ok((fallback_registry, fallback_values)) => {
+                match crate::storage::load_retained_registry_snapshot_under_task_lock(root, daemon)
+                {
+                    Ok(loaded) => RegistrySnapshot {
+                        registry: loaded.registry,
+                        record_values: loaded.record_values,
+                        reliable: true,
+                        file_bytes: read.logical_bytes,
+                        allocated_bytes: read.allocated_bytes,
+                    },
+                    Err(source) => {
+                        push_issue(
+                            issues,
+                            "registry_unreadable",
+                            &path,
+                            format!(
+                                "failed to load checkpoint-plus-WAL registry authority: {source}"
+                            ),
+                        );
+                        RegistrySnapshot {
+                            registry: fallback_registry,
+                            record_values: fallback_values,
+                            reliable: false,
+                            file_bytes: read.logical_bytes,
+                            allocated_bytes: read.allocated_bytes,
+                        }
+                    }
+                }
+            }
             Err(source) => {
                 push_issue(
                     issues,
@@ -2596,13 +2618,26 @@ fn read_authority_snapshots_from_daemon(
                 }
             }
         },
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => RegistrySnapshot {
-            registry: TaskRegistry::default(),
-            record_values: BTreeMap::new(),
-            reliable: true,
-            file_bytes: 0,
-            allocated_bytes: 0,
-        },
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            match crate::storage::load_retained_registry_snapshot_under_task_lock(root, daemon) {
+                Ok(loaded) => RegistrySnapshot {
+                    registry: loaded.registry,
+                    record_values: loaded.record_values,
+                    reliable: true,
+                    file_bytes: 0,
+                    allocated_bytes: 0,
+                },
+                Err(source) => {
+                    push_issue(
+                        issues,
+                        "registry_unreadable",
+                        &path,
+                        format!("failed to load checkpoint-plus-WAL registry authority: {source}"),
+                    );
+                    empty_registry_snapshot(false)
+                }
+            }
+        }
         Err(source) => {
             let (file_bytes, allocated_bytes) = daemon
                 .entry_storage_bytes(OsStr::new(TASK_REGISTRY_FILE_NAME))
@@ -4455,21 +4490,13 @@ fn remove_anchored_registry_records_if_unchanged_with_commit(
         return Ok(true);
     }
     with_anchored_registry_lock(daemon, workspace_root, || {
-        let mut registry = read_anchored_registry_value(daemon, workspace_root)?;
-        let tasks = registry_tasks_mut(&mut registry, workspace_root)?;
-        for (task_id, expected) in expected_records {
-            if tasks.get(task_id) != Some(expected) {
-                return Ok(false);
-            }
-        }
-        for task_id in expected_records.keys() {
-            tasks.remove(task_id);
-        }
-        validate_anchored_registry_watch_relationships(daemon, workspace_root, &registry)?;
-        let bytes = encode_anchored_registry_value(workspace_root, &registry)?;
-        before_remove()?;
-        write_anchored_registry_bytes(daemon, workspace_root, &bytes)?;
-        Ok(true)
+        crate::storage::remove_retained_registry_records_under_task_lock(
+            workspace_root,
+            daemon,
+            expected_records,
+            false,
+            before_remove,
+        )
     })
 }
 
@@ -4483,24 +4510,13 @@ fn finish_anchored_committed_registry_removal(
         return Ok(true);
     }
     with_anchored_registry_lock(daemon, workspace_root, || {
-        let mut registry = read_anchored_registry_value(daemon, workspace_root)?;
-        let tasks = registry_tasks_mut(&mut registry, workspace_root)?;
-        for (task_id, expected) in expected_records {
-            let Some(current) = tasks.get(task_id) else {
-                continue;
-            };
-            if current != expected {
-                return Ok(false);
-            }
-            tasks.remove(task_id);
-        }
-        validate_anchored_registry_watch_relationships(daemon, workspace_root, &registry)?;
-        // A prior checkpoint attempt may have published both canonical
-        // registry images but stopped before its commit manifest. Rewriting
-        // the already-removed view completes the retention transaction
-        // without treating those uncommitted images as authority.
-        write_anchored_registry_value(daemon, workspace_root, &registry)?;
-        Ok(true)
+        crate::storage::remove_retained_registry_records_under_task_lock(
+            workspace_root,
+            daemon,
+            expected_records,
+            true,
+            || Ok(()),
+        )
     })
 }
 
@@ -4542,133 +4558,6 @@ fn with_anchored_registry_lock<T>(
             source,
         )),
     }
-}
-
-#[cfg(unix)]
-fn read_anchored_registry_value(
-    daemon: &CapabilityDir,
-    workspace_root: &Path,
-) -> Result<serde_json::Value> {
-    let path = task_registry_path(workspace_root);
-    let raw = daemon
-        .read_file_limited(OsStr::new(TASK_REGISTRY_FILE_NAME), MAX_TASK_REGISTRY_BYTES)
-        .map_err(|source| {
-            DaemonCoreError::io("failed to read anchored task registry", &path, source)
-        })?;
-    let value = crate::storage::decode_json_value_without_duplicate_keys(
-        &raw,
-        AuthorityJsonProfile::TaskRegistry,
-    )
-    .map_err(|error| {
-        crate::storage::map_authority_json_error(
-            &path,
-            AuthorityJsonProfile::TaskRegistry,
-            "failed to decode task registry from",
-            error,
-        )
-    })?;
-    if let Some(message) = crate::storage::task_registry_value_shape_error(&value) {
-        return Err(DaemonCoreError::io(
-            "failed to validate task registry from",
-            &path,
-            std::io::Error::new(std::io::ErrorKind::InvalidData, message),
-        ));
-    }
-    let registry: TaskRegistry = serde_json::from_value(value.clone()).map_err(|source| {
-        DaemonCoreError::json("failed to validate task registry from", &path, source)
-    })?;
-    if let Some(message) = crate::storage::task_registry_shape_error(&registry) {
-        return Err(DaemonCoreError::InvalidTaskRegistry { path, message });
-    }
-    Ok(value)
-}
-
-#[cfg(unix)]
-fn registry_tasks_mut<'a>(
-    registry: &'a mut serde_json::Value,
-    workspace_root: &Path,
-) -> Result<&'a mut serde_json::Map<String, serde_json::Value>> {
-    registry
-        .get_mut("tasks")
-        .and_then(serde_json::Value::as_object_mut)
-        .ok_or_else(|| {
-            DaemonCoreError::io(
-                "failed to locate task map in anchored registry",
-                task_registry_path(workspace_root),
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "task registry does not contain an object-valued tasks field",
-                ),
-            )
-        })
-}
-
-#[cfg(unix)]
-fn validate_anchored_registry_watch_relationships(
-    daemon: &CapabilityDir,
-    workspace_root: &Path,
-    registry: &serde_json::Value,
-) -> Result<()> {
-    let tasks: TaskRegistry = serde_json::from_value(registry.clone()).map_err(|source| {
-        DaemonCoreError::json(
-            "failed to validate retained task registry against watches from",
-            task_registry_path(workspace_root),
-            source,
-        )
-    })?;
-    crate::storage::validate_task_registry_against_persisted_watches_under_task_lock(
-        workspace_root,
-        daemon,
-        &tasks,
-    )
-}
-
-#[cfg(unix)]
-fn write_anchored_registry_value(
-    daemon: &CapabilityDir,
-    workspace_root: &Path,
-    registry: &serde_json::Value,
-) -> Result<()> {
-    let bytes = encode_anchored_registry_value(workspace_root, registry)?;
-    write_anchored_registry_bytes(daemon, workspace_root, &bytes)
-}
-
-#[cfg(unix)]
-fn encode_anchored_registry_value(
-    workspace_root: &Path,
-    registry: &serde_json::Value,
-) -> Result<Vec<u8>> {
-    let path = task_registry_path(workspace_root);
-    let bytes = serde_json::to_vec(registry).map_err(|source| {
-        DaemonCoreError::json("failed to encode task registry for", &path, source)
-    })?;
-    if bytes.len() > MAX_TASK_REGISTRY_BYTES {
-        return Err(DaemonCoreError::io(
-            "encoded task registry exceeds the supported write bound",
-            &path,
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "registry is {} bytes; maximum is {MAX_TASK_REGISTRY_BYTES}",
-                    bytes.len()
-                ),
-            ),
-        ));
-    }
-    Ok(bytes)
-}
-
-#[cfg(unix)]
-fn write_anchored_registry_bytes(
-    daemon: &CapabilityDir,
-    workspace_root: &Path,
-    bytes: &[u8],
-) -> Result<()> {
-    crate::storage::save_retained_task_registry_checkpoint_under_task_lock(
-        workspace_root,
-        daemon,
-        bytes.to_vec(),
-    )
 }
 
 #[cfg(not(unix))]
@@ -5718,21 +5607,14 @@ impl StagingTransaction {
     fn remaining_candidate_logical_bytes(&self, candidate: &Candidate) -> Result<u64> {
         let mut remaining = 0_u64;
         if !candidate.record_values.is_empty() {
-            let registry =
-                read_anchored_registry_value(&self.daemon, &self.journal_workspace_root())?;
-            let tasks = registry
-                .get("tasks")
-                .and_then(serde_json::Value::as_object)
-                .ok_or_else(|| {
-                    DaemonCoreError::io(
-                        "failed to locate task map while measuring committed retention",
-                        self.daemon.display_path().join(TASK_REGISTRY_FILE_NAME),
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "task registry does not contain an object-valued tasks field",
-                        ),
-                    )
-                })?;
+            let workspace_root = self.journal_workspace_root();
+            let tasks = with_anchored_registry_lock(&self.daemon, &workspace_root, || {
+                crate::storage::load_retained_registry_snapshot_under_task_lock(
+                    &workspace_root,
+                    &self.daemon,
+                )
+                .map(|snapshot| snapshot.record_values)
+            })?;
             for (task_id, expected) in &candidate.record_values {
                 match tasks.get(task_id) {
                     Some(current) if current == expected => {
@@ -8006,6 +7888,184 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn wal_only_task_participates_in_retention_planning() {
+        let root = tempdir().unwrap();
+        crate::storage::save_task_watch_registry_checkpoint(
+            root.path(),
+            &TaskRegistry::default(),
+            &WatchRegistry::default(),
+        )
+        .unwrap();
+        crate::storage::append_task_watch_registry_delta(
+            root.path(),
+            crate::storage::RegistryRevisionRange::single(crate::storage::RegistryRevision::new(1))
+                .unwrap(),
+            &crate::storage::RegistryDeltaBatch::default()
+                .upsert_task(inactive_record("wal-only", 10)),
+        )
+        .unwrap();
+
+        let report =
+            retain_task_store(root.path(), 100, RetentionOptions::dry_run(Some(20), None)).unwrap();
+
+        assert_eq!(report.retention.planned_tasks, 1);
+        assert_eq!(report.actions[0].storage_key, "wal-only");
+        assert_eq!(report.metrics_before.task_registry_records, 1);
+        assert!(report.metrics_before.task_registry_reliable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_updated_recency_prevents_stale_checkpoint_eviction() {
+        let root = tempdir().unwrap();
+        crate::storage::save_task_watch_registry_checkpoint(
+            root.path(),
+            &TaskRegistry {
+                tasks: BTreeMap::from([("updated".to_string(), inactive_record("updated", 10))]),
+            },
+            &WatchRegistry::default(),
+        )
+        .unwrap();
+        crate::storage::append_task_watch_registry_delta(
+            root.path(),
+            crate::storage::RegistryRevisionRange::single(crate::storage::RegistryRevision::new(1))
+                .unwrap(),
+            &crate::storage::RegistryDeltaBatch::default()
+                .upsert_task(inactive_record("updated", 95)),
+        )
+        .unwrap();
+
+        let report =
+            retain_task_store(root.path(), 100, RetentionOptions::dry_run(Some(20), None)).unwrap();
+
+        assert_eq!(report.retention.planned_tasks, 0);
+        assert_eq!(report.metrics_before.newest_task_timestamp_unix, Some(95));
+        assert!(report.metrics_before.task_registry_reliable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_inspection_does_not_repair_torn_wal_under_shared_lock() {
+        let root = tempdir().unwrap();
+        crate::storage::save_task_watch_registry_checkpoint(
+            root.path(),
+            &TaskRegistry {
+                tasks: BTreeMap::from([(
+                    "protected".to_string(),
+                    inactive_record("protected", 10),
+                )]),
+            },
+            &WatchRegistry::default(),
+        )
+        .unwrap();
+        crate::storage::append_task_watch_registry_delta(
+            root.path(),
+            crate::storage::RegistryRevisionRange::single(crate::storage::RegistryRevision::new(1))
+                .unwrap(),
+            &crate::storage::RegistryDeltaBatch::default()
+                .upsert_task(inactive_record("protected", 95)),
+        )
+        .unwrap();
+        let wal_path = crate::storage::registry_delta_wal_path(root.path());
+        let complete_len = fs::metadata(&wal_path).unwrap().len();
+        File::options()
+            .write(true)
+            .open(&wal_path)
+            .unwrap()
+            .set_len(complete_len - 1)
+            .unwrap();
+        let torn_bytes = fs::read(&wal_path).unwrap();
+
+        let report =
+            retain_task_store(root.path(), 100, RetentionOptions::dry_run(Some(20), None)).unwrap();
+
+        assert_eq!(fs::read(&wal_path).unwrap(), torn_bytes);
+        assert!(!report.metrics_before.task_registry_reliable);
+        assert_eq!(report.retention.planned_tasks, 0);
+        assert_eq!(report.retention.protected_tasks, 1);
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.kind == "registry_unreadable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_append_during_revalidation_is_serialized_after_cleanup() {
+        let root = tempdir().unwrap();
+        crate::storage::save_task_watch_registry_checkpoint(
+            root.path(),
+            &TaskRegistry {
+                tasks: BTreeMap::from([("wal-race".to_string(), inactive_record("wal-race", 10))]),
+            },
+            &WatchRegistry::default(),
+        )
+        .unwrap();
+        write_artifact(root.path(), "wal-race", b"old", 10);
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("wal-race").unwrap().clone();
+        let cleanup_root = root.path().to_path_buf();
+        let (staged_tx, staged_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let cleanup = thread::spawn(move || {
+            let lease = try_acquire_task_store_retention_lease(&cleanup_root)
+                .unwrap()
+                .unwrap();
+            let outcome = apply_candidate_with_observers(
+                &snapshot,
+                &candidate,
+                || {
+                    staged_tx.send(()).unwrap();
+                    continue_rx.recv().unwrap();
+                    Ok(())
+                },
+                || Ok(()),
+                || Ok(()),
+            );
+            drop(lease);
+            outcome
+        });
+        staged_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let writer_root = root.path().to_path_buf();
+        let (written_tx, written_rx) = mpsc::channel();
+        let writer = thread::spawn(move || {
+            crate::storage::append_task_watch_registry_delta(
+                &writer_root,
+                crate::storage::RegistryRevisionRange::single(
+                    crate::storage::RegistryRevision::new(1),
+                )
+                .unwrap(),
+                &crate::storage::RegistryDeltaBatch::default()
+                    .upsert_task(inactive_record("wal-race", 101)),
+            )
+            .unwrap();
+            write_artifact(&writer_root, "wal-race", b"new", 101);
+            written_tx.send(()).unwrap();
+        });
+        assert!(matches!(
+            written_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        continue_tx.send(()).unwrap();
+        assert_eq!(cleanup.join().unwrap().unwrap(), RetentionOutcome::Removed);
+        written_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        writer.join().unwrap();
+
+        let registry = crate::storage::load_task_watch_registry_with_deltas(root.path()).unwrap();
+        assert_eq!(
+            registry.tasks.tasks["wal-race"].last_completed_at_unix,
+            Some(101)
+        );
+        assert_eq!(
+            fs::read(task_artifact_dir(root.path(), "wal-race").join("payload.bin")).unwrap(),
+            b"new"
+        );
+    }
+
     #[test]
     fn mixed_timestamp_units_do_not_falsely_mark_completed_agent_active() {
         let root = tempdir().unwrap();
@@ -10210,6 +10270,65 @@ mod tests {
             .unwrap()
             .tasks
             .contains_key("registry-sync"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_reset_post_rename_failure_recovers_committed_retention() {
+        let root = tempdir().unwrap();
+        crate::storage::save_task_watch_registry_checkpoint(
+            root.path(),
+            &TaskRegistry::default(),
+            &WatchRegistry::default(),
+        )
+        .unwrap();
+        crate::storage::append_task_watch_registry_delta(
+            root.path(),
+            crate::storage::RegistryRevisionRange::single(crate::storage::RegistryRevision::new(1))
+                .unwrap(),
+            &crate::storage::RegistryDeltaBatch::default()
+                .upsert_task(inactive_record("wal-reset", 10)),
+        )
+        .unwrap();
+        write_artifact(root.path(), "wal-reset", b"payload", 10);
+        let snapshot = StoreSnapshot::load(root.path(), 100).unwrap();
+        let candidate = snapshot.candidate("wal-reset").unwrap();
+        capability::inject_atomic_after_rename_failure_once(OsStr::new(
+            crate::storage::registry_delta_wal_path(root.path())
+                .file_name()
+                .unwrap(),
+        ));
+
+        let error = apply_candidate(&snapshot, candidate).unwrap_err();
+
+        assert!(error.committed);
+        let committed = crate::storage::load_task_watch_registry_with_deltas(root.path()).unwrap();
+        assert!(!committed.tasks.tasks.contains_key("wal-reset"));
+        assert_eq!(
+            inspect_task_store(root.path(), 100)
+                .unwrap()
+                .metrics_before
+                .retention_quarantine_groups,
+            1
+        );
+
+        let recovery = recover_task_store_quarantine(root.path()).unwrap();
+
+        assert_eq!(recovery.conflicted_groups, 0);
+        assert_eq!(recovery.completed_committed_groups, 1);
+        assert!(
+            !crate::storage::load_task_watch_registry_with_deltas(root.path())
+                .unwrap()
+                .tasks
+                .tasks
+                .contains_key("wal-reset")
+        );
+        assert_eq!(
+            fs::metadata(crate::storage::registry_delta_wal_path(root.path()))
+                .unwrap()
+                .len(),
+            crate::storage::REGISTRY_DELTA_WAL_HEADER_BYTES as u64
+        );
     }
 
     #[cfg(unix)]
