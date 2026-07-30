@@ -12,10 +12,9 @@ use crate::layer::{
     scan_documents_with_progress, validate_layer_file_names, write_atomic, IndexedDocument,
 };
 use crate::model::{
-    git_workspace_snapshot, stable_clean_commit, workspace_freshness_reason, LayerFiles,
-    LoadedIndex, LoadedOverlaySegment, OverlaySegmentRecord, OverlayState, RegexGenerationRecord,
-    RegexIndexManifest, RegexIndexRuntime, MANIFEST_FILE_NAME, OVERLAY_COMPACTION_SEGMENTS,
-    PREVIOUS_MANIFEST_FILE_NAME, REGEX_INDEX_SCHEMA_VERSION,
+    LayerFiles, LoadedIndex, LoadedOverlaySegment, OverlaySegmentRecord, OverlayState,
+    RegexGenerationRecord, RegexIndexManifest, RegexIndexRuntime, MANIFEST_FILE_NAME,
+    OVERLAY_COMPACTION_SEGMENTS, PREVIOUS_MANIFEST_FILE_NAME, REGEX_INDEX_SCHEMA_VERSION,
 };
 use crate::paths::{
     generation_record_path, manifest_path, normalize_changed_paths, overlay_state_path,
@@ -29,6 +28,7 @@ use crate::publication::{
 };
 use crate::support::{ensure_valid_index, now_unix, ResultContext};
 use crate::weights::WEIGHT_TABLE_VERSION;
+use crate::workspace;
 
 /// Loads and validates the index beneath `root`.
 ///
@@ -101,27 +101,32 @@ pub(crate) fn load_runtime_from_manifest(
             publication_fingerprint: None,
         });
     }
-    if let Some(reason) = workspace_freshness_reason(root, &manifest) {
-        mark_manifest_unloaded(&mut manifest, "stale", reason);
-        return Ok(RegexIndexRuntime {
-            manifest,
-            loaded: None,
-            publication_fingerprint: None,
-        });
-    }
     let record_exists = generation_record_path(root, manifest.generation).exists();
     ensure_valid_index!(
         record_exists || manifest.publication_fingerprint.is_none(),
         "regex generation {} is missing its authenticated generation record",
         manifest.generation
     );
-    if record_exists {
+    let mut runtime = if record_exists {
         let record = load_generation_record(root, manifest.generation)?;
-        return load_recorded_generation(root, manifest, record);
+        load_recorded_generation(root, manifest, record)?
+    } else {
+        load_legacy_generation(root, manifest)?
+    };
+    let freshness_reason = runtime.loaded.as_ref().and_then(|loaded| {
+        workspace::workspace_freshness_reason(
+            root,
+            &runtime.manifest,
+            &loaded.overlay_state.workspace_entries,
+        )
+    });
+    if let Some(reason) = freshness_reason {
+        mark_manifest_unloaded(&mut runtime.manifest, "stale", reason);
+        runtime.loaded = None;
+        runtime.publication_fingerprint = None;
     }
-    load_legacy_generation(root, manifest)
+    Ok(runtime)
 }
-
 /// Rebuilds and manifest-last publishes every searchable file beneath `root`.
 ///
 /// A repository-local exclusive writer lock covers the complete build and
@@ -139,7 +144,6 @@ pub(crate) fn load_runtime_from_manifest(
 pub fn rebuild_full_index(root: &Path, include_tests: bool) -> Result<RegexIndexRuntime> {
     rebuild_full_index_with_progress(root, include_tests, |_, _| {})
 }
-
 /// Rebuilds the full index and reports `(indexed_files, total_files)` progress.
 ///
 /// The callback is invoked before scanning and after each discovered file.
@@ -158,7 +162,7 @@ where
     let _writer = acquire_writer_lock(root)?;
     let publication_snapshot = capture_manifest_files(root)?;
     let started = now_unix();
-    let workspace_before = git_workspace_snapshot(root).ok();
+    let workspace_before = workspace::git_workspace_snapshot(root, &[]).ok();
     let previous = load_published_runtime(root)
         .ok()
         .flatten()
@@ -184,13 +188,13 @@ where
     manifest.indexed_files = docs.len();
     manifest.overlay_files = 0;
     manifest.overlay_segments = 0;
-    let workspace_after = git_workspace_snapshot(root).ok();
+    let workspace_after = workspace::git_workspace_snapshot(root, &[]).ok();
     manifest.base_commit = workspace_after
         .as_ref()
         .map(|workspace| workspace.commit.clone())
         .or_else(|| current_git_commit(root));
     manifest.workspace_clean_commit =
-        stable_clean_commit(workspace_before.as_ref(), workspace_after.as_ref());
+        workspace::stable_clean_commit(workspace_before.as_ref(), workspace_after.as_ref());
     manifest.last_build_completed_at_unix = Some(now_unix());
     let mut record = RegexGenerationRecord {
         schema_version: REGEX_INDEX_SCHEMA_VERSION,
@@ -269,12 +273,19 @@ pub fn update_overlay_index(
             actual: published.manifest.generation,
         });
     }
+    let workspace_before = workspace::authenticate_incremental_workspace(
+        root,
+        &published.manifest,
+        &loaded.overlay_state.workspace_entries,
+        &normalized,
+    )?;
     let generation = reserve_generation(root, &_writer)?;
     let mut overlay_state = loaded.overlay_state.clone();
     let mut overlay_docs = Vec::<IndexedDocument>::new();
-    for path in normalized {
+    let mut indexed_fingerprints = BTreeMap::new();
+    for path in &normalized {
         overlay_state.shadowed_paths.insert(path.clone());
-        let full_path = root.join(&path);
+        let full_path = root.join(path);
         let indexed = if full_path.exists() {
             index_document(root, &full_path)?
         } else {
@@ -282,12 +293,13 @@ pub fn update_overlay_index(
         };
         if let Some(mut indexed) = indexed {
             indexed.doc_id = overlay_docs.len() as u32;
-            overlay_state.deleted_paths.remove(&path);
-            overlay_state.owners.insert(path, generation);
+            overlay_state.deleted_paths.remove(path);
+            overlay_state.owners.insert(path.clone(), generation);
+            indexed_fingerprints.insert(path.clone(), indexed.fingerprint.clone());
             overlay_docs.push(indexed);
         } else {
             overlay_state.deleted_paths.insert(path.clone());
-            overlay_state.owners.remove(&path);
+            overlay_state.owners.remove(path);
         }
     }
     overlay_docs.sort_by(|left, right| left.path.cmp(&right.path));
@@ -319,6 +331,14 @@ pub fn update_overlay_index(
             files,
         }];
     }
+    if let Some(entries) = workspace::authenticate_indexed_workspace_after(
+        root,
+        &normalized,
+        workspace_before,
+        &indexed_fingerprints,
+    )? {
+        overlay_state.workspace_entries = entries;
+    }
     let loaded_index = LoadedIndex {
         base: Arc::clone(&loaded.base),
         base_files: loaded.base_files.clone(),
@@ -326,7 +346,6 @@ pub fn update_overlay_index(
         overlay_state,
     };
     validate_loaded_overlay_state(&loaded_index)?;
-
     let mut manifest = durable_manifest(&published.manifest);
     manifest.generation = generation;
     manifest.status = "ready".to_string();
@@ -335,7 +354,6 @@ pub fn update_overlay_index(
     manifest.overlay_files = loaded_index.overlay_state.owners.len();
     manifest.overlay_segments = loaded_index.overlays.len();
     manifest.overlay_state_digest = Some(overlay_state_digest(&loaded_index.overlay_state)?);
-    manifest.workspace_clean_commit = None;
     manifest.stale_reason = None;
     manifest.last_error = None;
     manifest.last_build_completed_at_unix = Some(now_unix());
@@ -358,7 +376,6 @@ pub fn update_overlay_index(
         publication_fingerprint: Some(publication_fingerprint),
     })
 }
-
 /// Removes the persisted regex index beneath `root`.
 ///
 /// # Errors
@@ -375,7 +392,6 @@ pub fn clear_index(root: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 pub(crate) fn mark_manifest_unloaded(
     manifest: &mut RegexIndexManifest,
     status: &str,

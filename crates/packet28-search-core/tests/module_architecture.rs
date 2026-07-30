@@ -49,6 +49,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
                     "publication",
                     "support",
                     "weights",
+                    "workspace",
                 ],
             },
         ),
@@ -91,7 +92,14 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
             "query",
             ModulePolicy {
                 max_lines: 1_500,
-                allowed_dependencies: &["error", "model", "paths", "postings", "support"],
+                allowed_dependencies: &[
+                    "error",
+                    "model",
+                    "paths",
+                    "postings",
+                    "support",
+                    "workspace",
+                ],
             },
         ),
         (
@@ -108,6 +116,7 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
                     "publication",
                     "support",
                     "weights",
+                    "workspace",
                 ],
             },
         ),
@@ -123,6 +132,13 @@ fn policies() -> BTreeMap<&'static str, ModulePolicy> {
             ModulePolicy {
                 max_lines: 100,
                 allowed_dependencies: &[],
+            },
+        ),
+        (
+            "workspace",
+            ModulePolicy {
+                max_lines: 400,
+                allowed_dependencies: &["error", "model"],
             },
         ),
     ])

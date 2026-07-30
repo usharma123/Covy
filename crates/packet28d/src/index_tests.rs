@@ -1618,6 +1618,157 @@ fn cached_daemon_runtime_detects_an_out_of_band_tracked_edit() {
 }
 
 #[test]
+fn incremental_git_publication_serves_the_reported_tracked_edit() {
+    let fixture = IndexFixture::git(&[(
+        "src/candidate.rs",
+        "pub fn before_incremental_update() {}\n",
+    )]);
+    fs::write(
+        fixture.root.join("src/candidate.rs"),
+        "pub fn authenticated_incremental_needle() {}\n",
+    )
+    .expect("write reported source");
+    fixture.update(&["src/candidate.rs"]);
+    let restarted =
+        load_index_runtime_files(&fixture.root, load_index_manifest_file(&fixture.root));
+    fixture.state.lock().expect("state").interactive_index = restarted;
+
+    let result = daemon_packet28_search(
+        fixture.state.clone(),
+        packet28_daemon_protocol::message::Packet28SearchRequest {
+            request: packet28_reducer_core::SearchRequest {
+                query: "authenticated_incremental_needle".to_string(),
+                fixed_string: true,
+                ..packet28_reducer_core::SearchRequest::default()
+            },
+            force_indexed: true,
+        },
+    )
+    .expect("forced indexed search should accept the attested incremental edit");
+
+    assert_eq!(result.paths, vec!["src/candidate.rs"]);
+}
+
+#[test]
+fn incremental_git_publication_rejects_a_later_unreported_edit() {
+    let fixture = IndexFixture::git(&[
+        ("src/candidate.rs", "pub fn original_candidate() {}\n"),
+        ("src/unreported.rs", "pub fn original_unreported() {}\n"),
+    ]);
+    fs::write(
+        fixture.root.join("src/candidate.rs"),
+        "pub fn reported_incremental_needle() {}\n",
+    )
+    .expect("write reported source");
+    fixture.update(&["src/candidate.rs"]);
+    fs::write(
+        fixture.root.join("src/unreported.rs"),
+        "pub fn later_unreported_needle() {}\n",
+    )
+    .expect("write unreported source");
+
+    let error = daemon_packet28_search(
+        fixture.state.clone(),
+        packet28_daemon_protocol::message::Packet28SearchRequest {
+            request: packet28_reducer_core::SearchRequest {
+                query: "later_unreported_needle".to_string(),
+                fixed_string: true,
+                ..packet28_reducer_core::SearchRequest::default()
+            },
+            force_indexed: true,
+        },
+    )
+    .expect_err("forced indexed search accepted an unreported edit");
+
+    assert!(error.downcast_ref::<DaemonIndexSearchNotReady>().is_some());
+}
+
+#[test]
+fn git_index_flags_fail_workspace_attestation_closed() {
+    for flag in ["--assume-unchanged", "--skip-worktree"] {
+        let fixture = IndexFixture::git(&[(
+            "src/candidate.rs",
+            "pub fn original_flagged_candidate() {}\n",
+        )]);
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&fixture.root)
+            .args(["update-index", flag, "src/candidate.rs"])
+            .status()
+            .expect("set Git index flag");
+        assert!(status.success(), "failed to set {flag}");
+        fs::write(
+            fixture.root.join("src/candidate.rs"),
+            "pub fn hidden_by_git_index_flag() {}\n",
+        )
+        .expect("write flagged source");
+
+        let error = daemon_packet28_search(
+            fixture.state.clone(),
+            packet28_daemon_protocol::message::Packet28SearchRequest {
+                request: packet28_reducer_core::SearchRequest {
+                    query: "hidden_by_git_index_flag".to_string(),
+                    fixed_string: true,
+                    ..packet28_reducer_core::SearchRequest::default()
+                },
+                force_indexed: true,
+            },
+        )
+        .expect_err("Git index flag bypassed workspace freshness");
+        let not_ready = error
+            .downcast_ref::<DaemonIndexSearchNotReady>()
+            .expect("typed index-not-ready error");
+        assert!(not_ready.reason.contains("Git index flag"));
+    }
+}
+
+#[test]
+fn oversized_dirty_file_fails_bounded_workspace_attestation_closed() {
+    let fixture = IndexFixture::git(&[(
+        "src/candidate.rs",
+        "pub fn bounded_attestation_candidate() {}\n",
+    )]);
+    fs::write(
+        fixture.root.join("oversized-untracked.bin"),
+        vec![b'x'; 2 * 1024 * 1024 + 1],
+    )
+    .expect("write oversized dirty file");
+
+    let error = daemon_packet28_search(
+        fixture.state.clone(),
+        packet28_daemon_protocol::message::Packet28SearchRequest {
+            request: packet28_reducer_core::SearchRequest {
+                query: "bounded_attestation_candidate".to_string(),
+                fixed_string: true,
+                ..packet28_reducer_core::SearchRequest::default()
+            },
+            force_indexed: true,
+        },
+    )
+    .expect_err("oversized dirty file triggered unbounded workspace hashing");
+    let not_ready = error
+        .downcast_ref::<DaemonIndexSearchNotReady>()
+        .expect("typed index-not-ready error");
+    assert!(not_ready.reason.contains("attestation limit"));
+}
+
+#[test]
+fn incremental_directory_report_is_not_a_file_attestation() {
+    let fixture =
+        IndexFixture::git(&[("src/candidate.rs", "pub fn before_directory_report() {}\n")]);
+    fs::write(
+        fixture.root.join("src/candidate.rs"),
+        "pub fn changed_beneath_reported_directory() {}\n",
+    )
+    .expect("write nested change");
+
+    let error = perform_incremental_index_update(&fixture.state, &["src".to_string()], None, None)
+        .expect_err("directory report authenticated an unindexed descendant");
+
+    assert!(error.to_string().contains("neither Git-dirty nor tracked"));
+}
+
+#[test]
 fn restarted_daemon_rejects_an_index_after_an_out_of_band_rename() {
     let fixture = IndexFixture::git(&[(
         "src/original.rs",

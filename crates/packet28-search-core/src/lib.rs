@@ -11,6 +11,9 @@
 //! handles by both generation and validated publication fingerprint. A durable
 //! high-water mark outside the clearable index directory reserves each
 //! generation before artifact construction and is never rolled back.
+//! Incremental Git-backed generations authenticate the complete bounded
+//! dirty-path content set and refuse indexed queries after an unreported edit
+//! or when the workspace exceeds the attestation safety budget.
 //! Every generation record carries BLAKE3 digests for its artifacts. New
 //! manifests also bind the complete immutable generation record to a digest,
 //! while separately binding overlay ownership/tombstone state.
@@ -59,6 +62,7 @@ mod query;
 pub mod shared_scan;
 mod support;
 mod weights;
+mod workspace;
 
 pub use crate::error::{Result, SearchError};
 pub use crate::generation::{

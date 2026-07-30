@@ -19,9 +19,8 @@ use crate::generation::{
 };
 use crate::layer::{build_layer, IndexedDocument};
 use crate::model::{
-    git_workspace_snapshot, stable_clean_commit, GitWorkspaceSnapshot, LayerFiles, LoadedIndex,
-    OverlayState, RegexGenerationRecord, RegexIndexManifest, RegexIndexRuntime,
-    MAX_INDEXED_FILE_BYTES, REGEX_INDEX_SCHEMA_VERSION,
+    LayerFiles, LoadedIndex, OverlayState, RegexGenerationRecord, RegexIndexManifest,
+    RegexIndexRuntime, MAX_INDEXED_FILE_BYTES, REGEX_INDEX_SCHEMA_VERSION,
 };
 #[cfg(test)]
 use crate::paths::{manifest_path, previous_manifest_path};
@@ -33,6 +32,7 @@ use crate::publication::{
 };
 use crate::support::{mtime_secs, now_unix};
 use crate::weights::WEIGHT_TABLE_VERSION;
+use crate::workspace::{git_workspace_snapshot, stable_clean_commit, GitWorkspaceSnapshot};
 
 /// Maximum file size consumed by the regex full-index builder.
 pub const MAX_SHARED_SCAN_CONTENT_BYTES: usize = MAX_INDEXED_FILE_BYTES;
@@ -128,7 +128,7 @@ impl RegexIndexScanSession {
             return Err(SearchError::InvalidChangedPath { path: path.clone() });
         }
         let writer = acquire_writer_lock(root)?;
-        let workspace_before = git_workspace_snapshot(root).ok();
+        let workspace_before = git_workspace_snapshot(root, &[]).ok();
         let publication_snapshot = capture_manifest_files(root)?;
         let previous = load_published_runtime(root)
             .ok()
@@ -219,7 +219,7 @@ impl RegexIndexScanSession {
         let base_layer = build_layer(&self.root, &self.docs, &mut base_files)?;
         manifest.total_files = self.docs.len();
         manifest.indexed_files = self.docs.len();
-        let workspace_after = git_workspace_snapshot(&self.root).ok();
+        let workspace_after = git_workspace_snapshot(&self.root, &[]).ok();
         manifest.base_commit = workspace_after
             .as_ref()
             .map(|workspace| workspace.commit.clone())

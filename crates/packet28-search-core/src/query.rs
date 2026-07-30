@@ -1,8 +1,8 @@
-//! Query planning, candidate selection, and source verification.
+//! Query path resolution, candidate planning, and source verification.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use packet28_reducer_core::{
     infer_symbols_from_pattern, SearchEngineStats, SearchGroup, SearchMatch, SearchRequest,
@@ -14,18 +14,157 @@ use regex_syntax::hir::{Hir, HirKind};
 
 use crate::error::{Result, SearchError};
 use crate::model::{
-    path_allowed, workspace_freshness_reason, CompiledSearch, LayerKind, LiteralWindow,
-    LoadedIndex, LoadedLayer, PositionSummary, PostingEntry, QueryCache, RegexIndexRuntime,
-    SearchPlan, SparseCandidate, Verifier, MAX_GRAM_BYTES, MAX_INDEX_VERIFY_CANDIDATES,
-    MAX_INDEX_VERIFY_DENOMINATOR, MAX_INDEX_VERIFY_NUMERATOR, MAX_LITERAL_COVER, MIN_GRAM_BYTES,
-    POSITION_BUCKET_COUNT, SHORT_GRAM_BYTES,
+    CompiledSearch, LayerKind, LiteralWindow, LoadedIndex, LoadedLayer, PositionSummary,
+    PostingEntry, QueryCache, RegexIndexRuntime, SearchPlan, SparseCandidate, Verifier,
+    MAX_GRAM_BYTES, MAX_INDEX_VERIFY_CANDIDATES, MAX_INDEX_VERIFY_DENOMINATOR,
+    MAX_INDEX_VERIFY_NUMERATOR, MAX_LITERAL_COVER, MIN_GRAM_BYTES, POSITION_BUCKET_COUNT,
+    SHORT_GRAM_BYTES,
 };
-use crate::paths::resolve_requested_paths;
 use crate::postings::{
     build_covering_candidates, build_covering_hashes, checked_posting_bounds, decode_postings,
     hash_bytes, lookup_posting_range, normalize_for_index,
 };
 use crate::support::ResultContext;
+use crate::workspace::workspace_freshness_reason;
+
+impl LoadedIndex {
+    pub(super) fn all_indexed_paths(
+        &self,
+        requested_filter: Option<&BTreeSet<String>>,
+    ) -> BTreeSet<String> {
+        let mut paths = BTreeSet::new();
+        for doc in &self.base.docs {
+            if !self.overlay_state.shadowed_paths.contains(&doc.path)
+                && path_allowed(&doc.path, requested_filter)
+            {
+                paths.insert(doc.path.clone());
+            }
+        }
+        for segment in &self.overlays {
+            for doc in &segment.layer.docs {
+                if self.overlay_doc_is_active(segment.generation, &doc.path)
+                    && path_allowed(&doc.path, requested_filter)
+                {
+                    paths.insert(doc.path.clone());
+                }
+            }
+        }
+        paths
+    }
+
+    pub(super) fn overlay_doc_is_active(&self, generation: u64, path: &str) -> bool {
+        !self.overlay_state.deleted_paths.contains(path)
+            && self.overlay_state.owners.get(path) == Some(&generation)
+    }
+}
+
+fn path_allowed(path: &str, requested_filter: Option<&BTreeSet<String>>) -> bool {
+    requested_filter.is_none_or(|filters| {
+        filters
+            .iter()
+            .any(|filter| path == filter || path.starts_with(&format!("{filter}/")))
+    })
+}
+
+fn normalize_capture_path(root: &Path, text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') || matches!(trimmed, "." | "./") {
+        return String::new();
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        if let Ok(stripped) = path.strip_prefix(root) {
+            return stripped
+                .to_string_lossy()
+                .replace('\\', "/")
+                .trim_end_matches('/')
+                .to_string();
+        }
+    }
+    trimmed
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn resolve_requested_paths(root: &Path, requested_paths: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut resolved = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut seen = BTreeSet::new();
+    for original in requested_paths {
+        let normalized = normalize_capture_path(root, original);
+        if normalized.is_empty() {
+            let trimmed = original.trim();
+            if !matches!(trimmed, "." | "./") {
+                diagnostics.push(format!("ignored invalid path input: {trimmed}"));
+            }
+            continue;
+        }
+        let direct = root.join(&normalized);
+        let final_path = if direct.exists() {
+            normalized
+        } else if let Some(candidate) = resolve_capture_path_suffix(root, &normalized) {
+            diagnostics.push(format!(
+                "resolved missing path '{}' to '{}'",
+                original.trim(),
+                candidate
+            ));
+            candidate
+        } else {
+            diagnostics.push(format!(
+                "path '{}' does not exist under daemon root {}",
+                original.trim(),
+                root.display()
+            ));
+            continue;
+        };
+        if seen.insert(final_path.clone()) {
+            resolved.push(final_path);
+        }
+    }
+    (resolved, diagnostics)
+}
+
+fn resolve_capture_path_suffix(root: &Path, needle: &str) -> Option<String> {
+    let mut matches = BTreeSet::new();
+    collect_suffix_matches(root, root, needle, &mut matches);
+    (matches.len() == 1)
+        .then(|| matches.into_iter().next())
+        .flatten()
+}
+
+fn collect_suffix_matches(
+    root: &Path,
+    current: &Path,
+    needle: &str,
+    matches: &mut BTreeSet<String>,
+) {
+    let Ok(entries) = fs::read_dir(current) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_suffix_matches(root, &path, needle, matches);
+            if matches.len() > 1 {
+                return;
+            }
+            continue;
+        }
+        let Ok(stripped) = path.strip_prefix(root) else {
+            continue;
+        };
+        let normalized = stripped.to_string_lossy().replace('\\', "/");
+        if normalized == needle || normalized.ends_with(&format!("/{needle}")) {
+            matches.insert(normalized);
+            if matches.len() > 1 {
+                return;
+            }
+        }
+    }
+}
 
 /// Returns why a request should use the legacy search engine, if applicable.
 ///
@@ -48,10 +187,14 @@ pub fn guarded_fallback_reason(
             .unwrap_or_else(|| "regex search index is not ready".to_string());
         return Ok(Some(reason));
     }
-    if let Some(reason) = workspace_freshness_reason(root, &runtime.manifest) {
+    let loaded = runtime.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
+    if let Some(reason) = workspace_freshness_reason(
+        root,
+        &runtime.manifest,
+        &loaded.overlay_state.workspace_entries,
+    ) {
         return Ok(Some(reason));
     }
-    let loaded = runtime.loaded.as_ref().ok_or(SearchError::IndexNotLoaded)?;
     let compiled = compile_request(request, loaded.as_ref())?;
     if let Some(reason) = compiled.must_fallback_reason.clone() {
         return Ok(Some(reason));
@@ -135,7 +278,11 @@ pub fn indexed_search(
             reason: format!("regex index status is '{}'", runtime.manifest.status),
         });
     }
-    if let Some(reason) = workspace_freshness_reason(root, &runtime.manifest) {
+    if let Some(reason) = workspace_freshness_reason(
+        root,
+        &runtime.manifest,
+        &loaded.overlay_state.workspace_entries,
+    ) {
         return Err(SearchError::IndexNotReady { reason });
     }
     let query = request.query.trim();
@@ -242,7 +389,7 @@ pub fn indexed_search(
     let returned_match_count = returned_matches.len();
     let compact_preview = render_compact_preview(total_match_count, &groups);
 
-    Ok(SearchResult {
+    let result = SearchResult {
         query: query.to_string(),
         requested_paths: request.requested_paths.clone(),
         resolved_paths,
@@ -256,7 +403,15 @@ pub fn indexed_search(
         compact_preview,
         diagnostics,
         engine: Some(engine),
-    })
+    };
+    if let Some(reason) = workspace_freshness_reason(
+        root,
+        &runtime.manifest,
+        &loaded.overlay_state.workspace_entries,
+    ) {
+        return Err(SearchError::IndexNotReady { reason });
+    }
+    Ok(result)
 }
 
 pub(crate) fn build_verifier(request: &SearchRequest, query: &str) -> Result<Verifier> {

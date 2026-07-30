@@ -1,8 +1,6 @@
 //! Shared runtime and persisted-format model.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
@@ -90,95 +88,15 @@ pub struct RegexIndexManifest {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug)]
-pub(crate) struct GitWorkspaceSnapshot {
-    pub(crate) commit: String,
-    clean: bool,
-}
-
-pub(crate) fn git_workspace_snapshot(
-    root: &Path,
-) -> std::result::Result<GitWorkspaceSnapshot, String> {
-    let output = Command::new("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(root)
-        .args([
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "--untracked-files=normal",
-            "--ignore-submodules=none",
-        ])
-        .output()
-        .map_err(|error| format!("failed to run git status: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("git status failed: {}", stderr.trim()));
-    }
-    let status = String::from_utf8_lossy(&output.stdout);
-    let commit = status
-        .lines()
-        .find_map(|line| line.strip_prefix("# branch.oid "))
-        .filter(|value| *value != "(initial)")
-        .map(str::to_string)
-        .ok_or_else(|| "git status did not report a HEAD commit".to_string())?;
-    let clean = status.lines().all(|line| line.starts_with("# "));
-    Ok(GitWorkspaceSnapshot { commit, clean })
-}
-
-pub(crate) fn stable_clean_commit(
-    before: Option<&GitWorkspaceSnapshot>,
-    after: Option<&GitWorkspaceSnapshot>,
-) -> Option<String> {
-    match (before, after) {
-        (Some(before), Some(after))
-            if before.clean && after.clean && before.commit == after.commit =>
-        {
-            Some(after.commit.clone())
-        }
-        _ => None,
-    }
-}
-
-pub(crate) fn workspace_freshness_reason(
-    root: &Path,
-    manifest: &RegexIndexManifest,
-) -> Option<String> {
-    let expected_base = manifest.base_commit.as_deref()?;
-    let Some(expected_clean) = manifest.workspace_clean_commit.as_deref() else {
-        return Some(
-            "workspace freshness could not be authenticated; rebuild the regex index from a clean Git working tree"
-                .to_string(),
-        );
-    };
-    if expected_clean != expected_base {
-        return Some(format!(
-            "workspace freshness attestation does not match the indexed base commit (base={expected_base}, attested={expected_clean})"
-        ));
-    }
-    match git_workspace_snapshot(root) {
-        Ok(workspace) if workspace.commit != expected_clean => Some(format!(
-            "regex index base commit changed (indexed={expected_clean}, current={})",
-            workspace.commit
-        )),
-        Ok(workspace) if !workspace.clean => Some(
-            "workspace freshness could not be authenticated because the Git working tree has tracked, untracked, renamed, or deleted files"
-                .to_string(),
-        ),
-        Ok(_) => None,
-        Err(error) => Some(format!(
-            "workspace freshness could not be authenticated: {error}"
-        )),
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub(crate) struct OverlayState {
     pub(crate) shadowed_paths: BTreeSet<String>,
     pub(crate) deleted_paths: BTreeSet<String>,
     pub(crate) owners: BTreeMap<String, u64>,
+    /// Content digests for every Git-dirty path authenticated by an incremental publication.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) workspace_entries: BTreeMap<String, String>,
 }
 
 #[derive(
@@ -223,47 +141,6 @@ pub(crate) struct LoadedIndex {
     pub(crate) base_files: LayerFiles,
     pub(crate) overlays: Vec<LoadedOverlaySegment>,
     pub(crate) overlay_state: OverlayState,
-}
-
-impl LoadedIndex {
-    pub(super) fn all_indexed_paths(
-        &self,
-        requested_filter: Option<&BTreeSet<String>>,
-    ) -> BTreeSet<String> {
-        let mut paths = BTreeSet::new();
-        for doc in &self.base.docs {
-            if self.overlay_state.shadowed_paths.contains(&doc.path) {
-                continue;
-            }
-            if path_allowed(&doc.path, requested_filter) {
-                paths.insert(doc.path.clone());
-            }
-        }
-        for segment in &self.overlays {
-            for doc in &segment.layer.docs {
-                if !self.overlay_doc_is_active(segment.generation, &doc.path) {
-                    continue;
-                }
-                if path_allowed(&doc.path, requested_filter) {
-                    paths.insert(doc.path.clone());
-                }
-            }
-        }
-        paths
-    }
-
-    pub(super) fn overlay_doc_is_active(&self, generation: u64, path: &str) -> bool {
-        !self.overlay_state.deleted_paths.contains(path)
-            && self.overlay_state.owners.get(path) == Some(&generation)
-    }
-}
-
-pub(super) fn path_allowed(path: &str, requested_filter: Option<&BTreeSet<String>>) -> bool {
-    requested_filter.is_none_or(|filters| {
-        filters
-            .iter()
-            .any(|filter| path == filter || path.starts_with(&format!("{filter}/")))
-    })
 }
 
 #[derive(Debug, Clone)]
