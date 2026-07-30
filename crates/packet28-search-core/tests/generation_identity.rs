@@ -74,6 +74,30 @@ fn clear_preserves_generation_identity_and_rejects_a_retained_handle() {
 }
 
 #[test]
+fn legacy_clear_without_a_high_water_fences_the_retained_generation() {
+    let directory = tempdir().expect("temporary repository");
+    let root = directory.path();
+    write_source(root, "pub struct LegacyClear;\n");
+    let retained = rebuild_full_index(root, true).expect("legacy generation");
+    fs::remove_file(high_water_path(root)).expect("remove modern high-water mark");
+
+    clear_index(root).expect("clear legacy index");
+    assert_eq!(
+        serde_json::from_slice::<u64>(
+            &fs::read(high_water_path(root)).expect("reconstructed high-water mark")
+        )
+        .expect("high-water json"),
+        retained.manifest.generation
+    );
+    let rebuilt = rebuild_full_index(root, true).expect("post-clear generation");
+    let error = update_overlay_index(root, Some(&retained), &["src/lib.rs".to_string()])
+        .expect_err("retained legacy handle must be fenced");
+
+    assert!(rebuilt.manifest.generation > retained.manifest.generation);
+    assert!(matches!(error, SearchError::ConcurrentWriter { .. }));
+}
+
+#[test]
 fn corrupt_manifest_rebuild_never_reuses_a_retained_generation() {
     let directory = tempdir().expect("temporary repository");
     let root = directory.path();

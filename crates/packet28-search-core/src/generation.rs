@@ -23,9 +23,9 @@ use crate::paths::{
 };
 use crate::publication::{
     acquire_writer_lock, capture_manifest_files, ensure_manifest_files_unchanged,
-    generation_record_fingerprint, load_generation_record, read_generation_high_water,
-    reserve_generation, restore_owned_manifest_files, save_generation_record,
-    seal_generation_record, GenerationWriterLock, ManifestFilesSnapshot,
+    fence_generation_before_clear, generation_record_fingerprint, load_generation_record,
+    read_generation_high_water, reserve_generation, restore_owned_manifest_files,
+    save_generation_record, seal_generation_record, GenerationWriterLock, ManifestFilesSnapshot,
 };
 use crate::support::{ensure_valid_index, now_unix, ResultContext};
 use crate::weights::WEIGHT_TABLE_VERSION;
@@ -366,7 +366,8 @@ pub fn update_overlay_index(
 /// Returns [`SearchError::Context`] with a nested [`SearchError::Io`] when the
 /// index directory cannot be removed.
 pub fn clear_index(root: &Path) -> Result<()> {
-    let _writer = acquire_writer_lock(root)?;
+    let writer = acquire_writer_lock(root)?;
+    fence_generation_before_clear(root, &writer)?;
     let path = regex_index_dir(root);
     if path.exists() {
         fs::remove_dir_all(&path)

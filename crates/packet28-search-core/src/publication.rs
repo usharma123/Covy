@@ -147,15 +147,7 @@ pub(crate) fn seal_generation_record(
 }
 
 pub(crate) fn reserve_generation(root: &Path, _writer: &GenerationWriterLock) -> Result<u64> {
-    let persisted = read_generation_high_water(root)?;
-    let observed = observed_generation_high_water(root)?;
-    let high_water = persisted.unwrap_or(0).max(observed);
-    if observed > persisted.unwrap_or(0) {
-        write_atomic(
-            generation_high_water_path(root),
-            &serde_json::to_vec(&high_water)?,
-        )?;
-    }
+    let high_water = reconcile_generation_high_water(root)?;
     let generation = high_water.checked_add(1).ok_or_else(|| {
         SearchError::corrupt(format!(
             "regex index generation space is exhausted at {high_water}"
@@ -166,6 +158,26 @@ pub(crate) fn reserve_generation(root: &Path, _writer: &GenerationWriterLock) ->
         &serde_json::to_vec(&generation)?,
     )?;
     Ok(generation)
+}
+
+pub(crate) fn fence_generation_before_clear(
+    root: &Path,
+    _writer: &GenerationWriterLock,
+) -> Result<()> {
+    reconcile_generation_high_water(root).map(|_| ())
+}
+
+fn reconcile_generation_high_water(root: &Path) -> Result<u64> {
+    let persisted = read_generation_high_water(root)?;
+    let observed = observed_generation_high_water(root)?;
+    let high_water = persisted.unwrap_or(0).max(observed);
+    if observed > persisted.unwrap_or(0) {
+        write_atomic(
+            generation_high_water_path(root),
+            &serde_json::to_vec(&high_water)?,
+        )?;
+    }
+    Ok(high_water)
 }
 
 pub(crate) fn read_generation_high_water(root: &Path) -> Result<Option<u64>> {
