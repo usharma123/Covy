@@ -77,38 +77,33 @@ pub(crate) fn parse_source_language_name(raw: &str) -> Option<SourceLanguage> {
 pub(crate) fn symbol_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r"(?m)^\s*(?:(?P<kind>fn|struct|enum|trait|impl|class|interface|def|function)\s+)(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
         )
-        .expect("valid symbol regex")
     })
 }
 
 pub(crate) fn java_type_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r"(?m)^\s*(?:public|protected|private|abstract|static|final|sealed|non-sealed|\s)*\b(?P<kind>class|interface|enum|record)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
         )
-        .expect("valid java type regex")
     })
 }
 
 pub(crate) fn java_method_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r"(?m)^\s*(?:public|protected|private|static|final|abstract|synchronized|native|strictfp|\s)+(?:<[^>]+>\s*)?(?:[A-Za-z_][A-Za-z0-9_<>\[\],.?]*\s+)+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\([^;\n{}]*\)\s*(?:\{|throws\b)",
         )
-        .expect("valid java method regex")
     })
 }
 
 pub(crate) fn identifier_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?P<token>[A-Za-z_][A-Za-z0-9_]*)").expect("valid identifier regex")
-    })
+    RE.get_or_init(|| compile_literal_regex(r"(?P<token>[A-Za-z_][A-Za-z0-9_]*)"))
 }
 
 thread_local! {
@@ -811,9 +806,16 @@ pub(crate) fn is_reserved_word(name: &str) -> bool {
 pub(crate) fn import_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r#"(?m)^\s*(?:use|from|#include|import(?:\s+static)?)\s+(?:<|"|')?(?P<target>[A-Za-z0-9_./:-]+)"#,
         )
-            .expect("valid import regex")
     })
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "all callers pass compile-time regex literals covered by syntax-index tests"
+)]
+fn compile_literal_regex(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("hard-coded syntax regex must compile")
 }

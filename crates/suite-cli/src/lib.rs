@@ -21,6 +21,7 @@ pub mod cmd_cover;
 pub mod cmd_daemon;
 pub mod cmd_daemon_client;
 pub mod cmd_daemon_commands;
+mod cmd_daemon_storage;
 pub mod cmd_dashboard;
 pub mod cmd_diff;
 pub mod cmd_digest;

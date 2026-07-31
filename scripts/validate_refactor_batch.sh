@@ -85,9 +85,9 @@ run_filtered_cargo_test() {
   local test_target="$2"
   local filter="$3"
   if [[ "$parallel_tests" == true ]]; then
-    run_cmd cargo test -p "$package" --test "$test_target" --all-features "$filter"
+    run_cmd cargo test --locked -p "$package" --test "$test_target" --all-features "$filter"
   else
-    run_cmd cargo test -p "$package" --test "$test_target" --all-features "$filter" -- --test-threads=1
+    run_cmd cargo test --locked -p "$package" --test "$test_target" --all-features "$filter" -- --test-threads=1
   fi
 }
 
@@ -95,9 +95,9 @@ run_filtered_package_test() {
   local package="$1"
   local filter="$2"
   if [[ "$parallel_tests" == true ]]; then
-    run_cmd cargo test -p "$package" --all-features "$filter"
+    run_cmd cargo test --locked -p "$package" --all-features "$filter"
   else
-    run_cmd cargo test -p "$package" --all-features "$filter" -- --test-threads=1
+    run_cmd cargo test --locked -p "$package" --all-features "$filter" -- --test-threads=1
   fi
 }
 
@@ -861,7 +861,10 @@ else
   )
 fi
 
+run_cmd scripts/verify_workspace_policy.sh
+
 if [[ "$tests_only" == false ]]; then
+  # `cargo fmt` does not resolve dependencies and does not accept `--locked`.
   run_cmd cargo fmt --check
 else
   echo "Skipping cargo fmt because --tests-only was provided."
@@ -871,10 +874,10 @@ if [[ "$tests_only" == true ]]; then
   echo "Skipping cargo clippy because --tests-only was provided."
 else
   if [[ "$full" == true ]]; then
-    run_cmd cargo clippy --all-targets --all-features -- -D warnings
+    run_cmd cargo clippy --locked --all-targets --all-features -- -D warnings
   elif ((${#lint_packages[@]})); then
     for package in "${lint_packages[@]}"; do
-      run_cmd cargo clippy -p "$package" --all-targets --all-features -- -D warnings
+      run_cmd cargo clippy --locked -p "$package" --all-targets --all-features -- -D warnings
     done
     for spec in "${lint_test_specs[@]}"; do
       package="${spec%%:*}"
@@ -882,13 +885,13 @@ else
       if has_item "$package" "${lint_packages[@]}"; then
         continue
       fi
-      run_cmd cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
+      run_cmd cargo clippy --locked -p "$package" --test "$test_target" --all-features -- -D warnings
     done
   elif ((${#lint_test_specs[@]})); then
     for spec in "${lint_test_specs[@]}"; do
       package="${spec%%:*}"
       test_target="${spec#*:}"
-      run_cmd cargo clippy -p "$package" --test "$test_target" --all-features -- -D warnings
+      run_cmd cargo clippy --locked -p "$package" --test "$test_target" --all-features -- -D warnings
     done
   else
     echo "No Rust package changes detected; skipped cargo clippy."
@@ -919,15 +922,15 @@ for package in "${lib_packages[@]}"; do
   if has_item "$package" "${full_packages[@]}"; then
     continue
   fi
-  run_cmd cargo test -p "$package" --all-features --lib
+  run_cmd cargo test --locked -p "$package" --all-features --lib
 done
 
 for package in "${full_packages[@]}"; do
-  run_cmd cargo test -p "$package" --all-features
+  run_cmd cargo test --locked -p "$package" --all-features
 done
 
 if [[ "$full" == true ]]; then
-  run_cmd cargo test --all-features
+  run_cmd cargo test --locked --all-features
 elif ((
   ${#filtered_test_specs[@]} == 0 &&
   ${#filtered_specs[@]} == 0 &&

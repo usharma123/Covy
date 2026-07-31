@@ -421,3 +421,35 @@ policy:
         .iter()
         .any(|f| f.rule == "redaction" && f.subject == "packet.provenance.inputs[0]"));
 }
+
+#[test]
+fn policy_parser_preserves_explicit_string_scalars() {
+    let yaml = r#"
+version: !!int 1
+policy:
+  tools:
+    allowlist: [!!str true, !!str 001, on]
+  reducers:
+    allowlist: [!!str null]
+  paths:
+    include: [!!str src/**]
+  token_budget:
+    cap: !!int 300
+  redaction:
+    forbidden_patterns: [!!str "(?i)secret"]
+"#;
+
+    let config = parse_context_strict(yaml).unwrap();
+
+    assert_eq!(
+        config.policy.effective_allowed_tools(),
+        ["true", "001", "on"].map(str::to_string)
+    );
+}
+
+#[test]
+fn policy_parser_rejects_malformed_yaml() {
+    let result = validate_config_str("version: 1\npolicy:\n  tools:\n    allowlist: [diffy\n");
+
+    assert!(!result.valid);
+}

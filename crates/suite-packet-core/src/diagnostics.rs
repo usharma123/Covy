@@ -4,7 +4,20 @@ use std::collections::{BTreeMap, HashSet};
 use crate::diff::FileDiff;
 
 /// Severity of a diagnostic issue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 pub enum Severity {
     Error,
     Warning,
@@ -38,7 +51,17 @@ pub struct Issue {
 }
 
 /// Source format of diagnostics data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    wincode::SchemaRead,
+    wincode::SchemaWrite,
+)]
 pub enum DiagnosticsFormat {
     Sarif,
 }

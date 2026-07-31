@@ -1,5 +1,11 @@
 #[path = "support/diff_analyze.rs"]
 mod diff_analyze;
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use diff_analyze::{fixture, suite_cmd};
 use serde_json::Value;
@@ -47,12 +53,7 @@ enum Beta {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    process_harness::run_git(root, args);
 }
 
 fn setup_changed_repo(root: &Path) {

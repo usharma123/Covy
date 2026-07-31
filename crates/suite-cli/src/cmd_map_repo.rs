@@ -1,7 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const MAP_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq)]
 pub enum PacketDetailArg {
@@ -56,7 +59,7 @@ pub struct RepoArgs {
     #[arg(long)]
     pub debug: bool,
 
-    /// Persist kernel cache on disk under <repo-root>/.packet28
+    /// Persist kernel cache on disk under `<repo-root>/.packet28`.
     #[arg(long)]
     pub cache: bool,
 
@@ -130,10 +133,8 @@ pub fn run(args: RepoArgs) -> Result<i32> {
         return Ok(0);
     }
 
-    let kernel = build_kernel(
-        args.cache || args.task_id.is_some(),
-        PathBuf::from(&input.repo_root),
-    );
+    let persistence_enabled = args.cache || args.task_id.is_some();
+    let kernel = build_kernel(persistence_enabled, PathBuf::from(&input.repo_root));
     let response = kernel.execute(context_kernel_core::KernelRequest {
         target: "mapy.repo".to_string(),
         reducer_input: serde_json::to_value(input)?,
@@ -200,6 +201,16 @@ pub fn run(args: RepoArgs) -> Result<i32> {
     } else {
         None
     };
+    if persistence_enabled {
+        kernel
+            .shutdown_cache_persistence(MAP_PERSISTENCE_TIMEOUT)
+            .with_context(|| {
+                format!(
+                    "failed to durably finish repository map under '{}'",
+                    args.repo_root
+                )
+            })?;
+    }
 
     if let Some(profile) = machine_profile {
         let packet = packet_value(&envelope, detail_mode)?;

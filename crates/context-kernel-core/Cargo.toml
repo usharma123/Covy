@@ -1,6 +1,7 @@
 [package]
 name = "context-kernel-core"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -8,29 +9,17 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
-suite-foundation-core = { version = "0.2.0", path = "../suite-foundation-core" }
-guardy-core = { version = "0.2.0", path = "../guardy-core" }
-suite-policy-core = { version = "0.2.0", path = "../suite-policy-core" }
-contextq-core = { version = "0.2.0", path = "../contextq-core" }
-context-memory-core = { version = "0.2.0", path = "../context-memory-core" }
-context-scheduler-core = { version = "0.2.0", path = "../context-scheduler-core" }
-stacky-core = { version = "0.2.0", path = "../stacky-core" }
-buildy-core = { version = "0.2.0", path = "../buildy-core" }
-suite-proxy-core = { version = "0.2.0", path = "../suite-proxy-core" }
-mapy-core = { version = "0.2.0", path = "../mapy-core" }
-diffy-core = { version = "0.2.0", path = "../diffy-core" }
-testy-core = { version = "0.2.0", path = "../testy-core" }
-testy-cli-common = { version = "0.2.0", path = "../testy-cli-common" }
-covy-ingest = { version = "0.2.0", path = "../covy-ingest" }
-roaring.workspace = true
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-glob.workspace = true
-sha2.workspace = true
+context-kernel-builtins.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
+context-memory-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+suite-packet-core.workspace = true
 tempfile.workspace = true

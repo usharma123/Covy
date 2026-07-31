@@ -1,12 +1,14 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use suite_foundation_core::cache::DiagnosticsStateMetadata;
+
+pub use crate::error::DiffyError;
 
 use crate::config::GateConfig;
 use crate::diagnostics::DiagnosticsData;
 use crate::diff::git_diff;
+use crate::error::{CovyError, Result};
 use crate::gate::evaluate_full_gate;
 use crate::model::{CoverageData, CoverageFormat, FileDiff, QualityGateResult};
 
@@ -59,10 +61,15 @@ pub struct PipelineRequest {
 /// Ingest callbacks supplied by caller to avoid crate dependency cycles.
 #[derive(Clone, Copy)]
 pub struct PipelineIngestAdapters {
-    pub ingest_coverage_auto: fn(&Path) -> Result<CoverageData>,
-    pub ingest_coverage_with_format: fn(&Path, CoverageFormat) -> Result<CoverageData>,
-    pub ingest_coverage_stdin: fn(CoverageFormat) -> Result<CoverageData>,
-    pub ingest_diagnostics: fn(&Path) -> Result<DiagnosticsData>,
+    /// Ingest a coverage report using format detection.
+    pub ingest_coverage_auto: fn(&Path) -> std::result::Result<CoverageData, CovyError>,
+    /// Ingest a coverage report using an explicit format.
+    pub ingest_coverage_with_format:
+        fn(&Path, CoverageFormat) -> std::result::Result<CoverageData, CovyError>,
+    /// Ingest coverage from standard input using an explicit format.
+    pub ingest_coverage_stdin: fn(CoverageFormat) -> std::result::Result<CoverageData, CovyError>,
+    /// Ingest a diagnostics report using format detection.
+    pub ingest_diagnostics: fn(&Path) -> std::result::Result<DiagnosticsData, CovyError>,
 }
 
 /// Diff-oriented context computed from base/head.
@@ -81,7 +88,13 @@ pub struct PipelineOutput {
     pub gate_result: QualityGateResult,
 }
 
-/// Canonical orchestration entrypoint for diff analysis.
+/// Run coverage and diagnostics analysis against a Git diff.
+///
+/// # Errors
+///
+/// Returns [`DiffyError`] when input selection is invalid, a report or cached
+/// state cannot be loaded, a glob is invalid, or the requested Git diff cannot
+/// be computed.
 pub fn run_analysis(
     request: PipelineRequest,
     adapters: &PipelineIngestAdapters,
@@ -125,20 +138,28 @@ fn resolve_coverage_input(
 ) -> Result<CoverageData> {
     if input.stdin {
         if !input.paths.is_empty() {
-            anyhow::bail!("Cannot combine positional coverage paths with --stdin");
+            return Err(DiffyError::ConflictingInputs {
+                first: "positional coverage paths",
+                second: "--stdin",
+            });
         }
         if input.input_state_path.is_some() {
-            anyhow::bail!("Cannot combine --input with --stdin");
+            return Err(DiffyError::ConflictingInputs {
+                first: "--input",
+                second: "--stdin",
+            });
         }
-        let fmt = input.format.ok_or_else(|| {
-            anyhow::anyhow!("--format is required when reading from --stdin (can't auto-detect)")
-        })?;
-        return (adapters.ingest_coverage_stdin)(fmt);
+        let fmt = input.format.ok_or(DiffyError::MissingStdinFormat)?;
+        return (adapters.ingest_coverage_stdin)(fmt)
+            .map_err(|source| DiffyError::CoverageStdinIngest { source });
     }
 
     if !input.paths.is_empty() {
         if input.input_state_path.is_some() && input.reject_paths_with_input {
-            anyhow::bail!("Cannot combine positional coverage paths with --input");
+            return Err(DiffyError::ConflictingInputs {
+                first: "positional coverage paths",
+                second: "--input",
+            });
         }
         return ingest_coverage_paths(&input.paths, input.format, &input.strip_prefixes, adapters);
     }
@@ -146,10 +167,9 @@ fn resolve_coverage_input(
     if let Some(path) = input.input_state_path.as_deref() {
         let state_path = Path::new(path);
         if !state_path.exists() {
-            anyhow::bail!(
-                "No coverage data found at {}. Run `covy ingest` first or provide valid coverage paths.",
-                state_path.display()
-            );
+            return Err(DiffyError::CoverageStateNotFound {
+                path: state_path.to_path_buf(),
+            });
         }
         return load_coverage_state(state_path);
     }
@@ -157,15 +177,16 @@ fn resolve_coverage_input(
     if let Some(path) = input.default_input_state_path.as_deref() {
         let state_path = Path::new(path);
         if !state_path.exists() {
-            anyhow::bail!(
-                "No coverage files specified and no cached coverage state found at {}. Provide file paths, use --stdin, or run `covy ingest` first.",
-                state_path.display()
-            );
+            return Err(DiffyError::DefaultCoverageStateNotFound {
+                path: state_path.to_path_buf(),
+            });
         }
         return load_coverage_state(state_path);
     }
 
-    anyhow::bail!("{}", input.no_inputs_error);
+    Err(DiffyError::MissingCoverageInput {
+        message: input.no_inputs_error.clone(),
+    })
 }
 
 fn ingest_coverage_paths(
@@ -176,16 +197,20 @@ fn ingest_coverage_paths(
 ) -> Result<CoverageData> {
     let files = resolve_globs(patterns, "coverage")?;
     if files.is_empty() {
-        anyhow::bail!("No coverage files found");
+        return Err(DiffyError::NoCoverageFiles);
     }
 
     let mut combined = CoverageData::new();
     for file in &files {
         tracing::info!("Ingesting {}", file.display());
         let data = match format {
-            Some(fmt) => (adapters.ingest_coverage_with_format)(file, fmt)?,
-            None => (adapters.ingest_coverage_auto)(file)?,
-        };
+            Some(fmt) => (adapters.ingest_coverage_with_format)(file, fmt),
+            None => (adapters.ingest_coverage_auto)(file),
+        }
+        .map_err(|source| DiffyError::CoverageIngest {
+            path: file.clone(),
+            source,
+        })?;
         let data = if strip_prefixes.is_empty() {
             data
         } else {
@@ -198,8 +223,16 @@ fn ingest_coverage_paths(
 
 fn load_coverage_state(path: &Path) -> Result<CoverageData> {
     tracing::info!("Loading coverage from state {}", path.display());
-    let bytes = std::fs::read(path)?;
-    let data = suite_foundation_core::cache::deserialize_coverage(&bytes)?;
+    let bytes = std::fs::read(path).map_err(|source| DiffyError::CoverageStateRead {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let data = suite_foundation_core::cache::deserialize_coverage(&bytes).map_err(|source| {
+        DiffyError::CoverageStateDecode {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
     Ok(data)
 }
 
@@ -253,7 +286,11 @@ fn resolve_diagnostics_input(
         suite_foundation_core::cache::deserialize_diagnostics_for_paths_from_file(
             state_path,
             selected_paths,
-        )?;
+        )
+        .map_err(|source| DiffyError::DiagnosticsStateLoad {
+            path: state_path.to_path_buf(),
+            source,
+        })?;
     let needs_normalization = !state_metadata_compatible(meta.as_ref(), source_root);
     Ok(LoadedDiagnostics {
         data: Some(diagnostics),
@@ -267,7 +304,7 @@ fn ingest_issues_patterns(
 ) -> Result<DiagnosticsData> {
     let files = resolve_globs(patterns, "diagnostics")?;
     if files.is_empty() {
-        anyhow::bail!("No diagnostics files found");
+        return Err(DiffyError::NoDiagnosticsFiles);
     }
 
     let mut combined = DiagnosticsData::new();
@@ -288,19 +325,34 @@ fn load_diagnostics_input(
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("bin"))
     {
-        let bytes = std::fs::read(path)?;
-        let diagnostics = suite_foundation_core::cache::deserialize_diagnostics(&bytes)?;
+        let bytes = std::fs::read(path).map_err(|source| DiffyError::DiagnosticsStateRead {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let diagnostics =
+            suite_foundation_core::cache::deserialize_diagnostics(&bytes).map_err(|source| {
+                DiffyError::DiagnosticsStateDecode {
+                    path: path.to_path_buf(),
+                    source,
+                }
+            })?;
         return Ok(diagnostics);
     }
 
-    (adapters.ingest_diagnostics)(path)
+    (adapters.ingest_diagnostics)(path).map_err(|source| DiffyError::DiagnosticsIngest {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn resolve_globs(patterns: &[String], label: &str) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for pattern in patterns {
         let matches: Vec<_> = glob::glob(pattern)
-            .with_context(|| format!("Invalid glob pattern: {pattern}"))?
+            .map_err(|source| DiffyError::InvalidGlob {
+                pattern: pattern.clone(),
+                source,
+            })?
             .filter_map(|r| r.ok())
             .collect();
         if matches.is_empty() {
@@ -354,25 +406,39 @@ fn apply_strip_prefixes(data: CoverageData, prefixes: &[String]) -> CoverageData
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
 
     use crate::diagnostics::{Issue, Severity};
     use crate::model::FileCoverage;
 
-    fn ingest_cov_auto_stub(_path: &Path) -> Result<CoverageData> {
+    fn ingest_cov_auto_stub(_path: &Path) -> std::result::Result<CoverageData, CovyError> {
         Ok(make_coverage("src/from-paths.rs"))
     }
 
-    fn ingest_cov_with_format_stub(_path: &Path, _format: CoverageFormat) -> Result<CoverageData> {
+    fn ingest_cov_with_format_stub(
+        _path: &Path,
+        _format: CoverageFormat,
+    ) -> std::result::Result<CoverageData, CovyError> {
         Ok(make_coverage("src/from-paths-format.rs"))
     }
 
-    fn ingest_cov_stdin_stub(_format: CoverageFormat) -> Result<CoverageData> {
+    fn ingest_cov_stdin_stub(
+        _format: CoverageFormat,
+    ) -> std::result::Result<CoverageData, CovyError> {
         Ok(make_coverage("src/from-stdin.rs"))
     }
 
-    fn ingest_diag_stub(_path: &Path) -> Result<DiagnosticsData> {
+    fn ingest_diag_stub(_path: &Path) -> std::result::Result<DiagnosticsData, CovyError> {
         Ok(DiagnosticsData::new())
+    }
+
+    fn ingest_cov_auto_failure(_path: &Path) -> std::result::Result<CoverageData, CovyError> {
+        Err(CovyError::Parse {
+            format: "lcov".to_string(),
+            detail: "invalid fixture".to_string(),
+        })
     }
 
     fn adapters() -> PipelineIngestAdapters {
@@ -381,6 +447,13 @@ mod tests {
             ingest_coverage_with_format: ingest_cov_with_format_stub,
             ingest_coverage_stdin: ingest_cov_stdin_stub,
             ingest_diagnostics: ingest_diag_stub,
+        }
+    }
+
+    fn adapters_with_coverage_failure() -> PipelineIngestAdapters {
+        PipelineIngestAdapters {
+            ingest_coverage_auto: ingest_cov_auto_failure,
+            ..adapters()
         }
     }
 
@@ -435,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_coverage_rejects_paths_with_input_when_configured() {
+    fn resolve_coverage_rejects_paths_with_input_using_typed_variant() {
         let input = PipelineCoverageInput {
             paths: vec!["*.info".to_string()],
             format: None,
@@ -447,14 +520,19 @@ mod tests {
             no_inputs_error: "missing".to_string(),
         };
 
-        let err = resolve_coverage_input(&input, &adapters()).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Cannot combine positional coverage paths with --input"));
+        let error = resolve_coverage_input(&input, &adapters()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DiffyError::ConflictingInputs {
+                first: "positional coverage paths",
+                second: "--input"
+            }
+        ));
     }
 
     #[test]
-    fn test_resolve_coverage_missing_default_state_errors() {
+    fn resolve_coverage_missing_default_state_has_stable_display() {
         let temp = tempfile::tempdir().unwrap();
         let missing = temp.path().join("missing.bin");
 
@@ -469,10 +547,86 @@ mod tests {
             no_inputs_error: "missing".to_string(),
         };
 
-        let err = resolve_coverage_input(&input, &adapters()).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("No coverage files specified and no cached coverage state found"));
+        let error = resolve_coverage_input(&input, &adapters()).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "No coverage files specified and no cached coverage state found at {}. Provide file paths, use --stdin, or run `covy ingest` first.",
+                missing.display()
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_coverage_stdin_without_format_uses_typed_variant() {
+        let input = PipelineCoverageInput {
+            paths: Vec::new(),
+            format: None,
+            stdin: true,
+            input_state_path: None,
+            default_input_state_path: None,
+            strip_prefixes: Vec::new(),
+            reject_paths_with_input: true,
+            no_inputs_error: "missing".to_string(),
+        };
+
+        let error = resolve_coverage_input(&input, &adapters()).unwrap_err();
+
+        assert!(matches!(error, DiffyError::MissingStdinFormat));
+    }
+
+    #[test]
+    fn resolve_coverage_invalid_glob_preserves_pattern_source() {
+        let error =
+            resolve_globs(&["[".to_string()], "coverage").expect_err("invalid glob must fail");
+
+        let source = error.source().expect("invalid glob must have a source");
+
+        assert!(source.downcast_ref::<glob::PatternError>().is_some());
+    }
+
+    #[test]
+    fn resolve_coverage_ingest_failure_preserves_typed_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let report = temp.path().join("invalid.info");
+        std::fs::write(&report, "invalid").unwrap();
+        let input = PipelineCoverageInput {
+            paths: vec![report.display().to_string()],
+            format: None,
+            stdin: false,
+            input_state_path: None,
+            default_input_state_path: None,
+            strip_prefixes: Vec::new(),
+            reject_paths_with_input: true,
+            no_inputs_error: "missing".to_string(),
+        };
+
+        let error = resolve_coverage_input(&input, &adapters_with_coverage_failure()).unwrap_err();
+        let source = error.source().expect("ingestion error must have a source");
+
+        assert!(matches!(
+            source.downcast_ref::<CovyError>(),
+            Some(CovyError::Parse { format, detail })
+                if format == "lcov" && detail == "invalid fixture"
+        ));
+    }
+
+    #[test]
+    fn load_coverage_state_corruption_uses_decode_variant() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("invalid.bin");
+        std::fs::write(&state, [0_u8]).unwrap();
+
+        let error = load_coverage_state(&state).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DiffyError::CoverageStateDecode {
+                source: CovyError::Cache(_),
+                ..
+            }
+        ));
     }
 
     #[test]

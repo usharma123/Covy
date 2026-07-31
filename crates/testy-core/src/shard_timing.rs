@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use quick_xml::events::Event;
+
+use crate::error::{Result, TestyError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JunitIdGranularity {
@@ -15,18 +16,30 @@ pub struct TimingObservation {
     pub duration_ms: u64,
 }
 
+/// Parse timing observations from a JUnit XML file.
+///
+/// # Errors
+///
+/// Returns [`TestyError::Io`], [`TestyError::Xml`], or
+/// [`TestyError::XmlAttribute`] when the file cannot be read or parsed.
 pub fn parse_junit_xml_file(
     path: &Path,
     granularity: JunitIdGranularity,
 ) -> Result<Vec<TimingObservation>> {
     let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read JUnit XML file {}", path.display()))?;
+        .map_err(|source| TestyError::io("Failed to read JUnit XML file", path, source))?;
     parse_junit_xml_content(&content, granularity)
 }
 
+/// Parse timing observations from a JSONL file.
+///
+/// # Errors
+///
+/// Returns [`TestyError::Io`] when the file cannot be read or
+/// [`TestyError::Json`] when a non-empty record is malformed.
 pub fn parse_timing_jsonl_file(path: &Path) -> Result<Vec<TimingObservation>> {
     let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read timing JSONL file {}", path.display()))?;
+        .map_err(|source| TestyError::io("Failed to read timing JSONL file", path, source))?;
     parse_timing_jsonl_content(&content)
 }
 
@@ -52,7 +65,10 @@ fn parse_junit_xml_content(
                 let mut name: Option<String> = None;
                 let mut time: Option<String> = None;
                 for attr in e.attributes() {
-                    let attr = attr.context("Invalid XML attribute in testcase element")?;
+                    let attr = attr.map_err(|source| TestyError::XmlAttribute {
+                        context: "Invalid XML attribute in testcase element",
+                        source,
+                    })?;
                     let value = String::from_utf8_lossy(attr.value.as_ref())
                         .trim()
                         .to_string();
@@ -105,7 +121,12 @@ fn parse_junit_xml_content(
             }
             Ok(Event::Eof) => break,
             Ok(_) => {}
-            Err(e) => anyhow::bail!("Failed to parse JUnit XML: {e}"),
+            Err(source) => {
+                return Err(TestyError::Xml {
+                    context: "Failed to parse JUnit XML",
+                    source,
+                });
+            }
         }
     }
 
@@ -136,8 +157,13 @@ fn parse_timing_jsonl_content(content: &str) -> Result<Vec<TimingObservation>> {
         if line.is_empty() {
             continue;
         }
-        let rec: JsonlTimingRecord = serde_json::from_str(line)
-            .with_context(|| format!("Invalid JSONL timing record at line {}", line_no + 1))?;
+        let rec: JsonlTimingRecord = serde_json::from_str(line).map_err(|source| {
+            TestyError::json(
+                format!("Invalid JSONL timing record at line {}", line_no + 1),
+                source,
+                None,
+            )
+        })?;
         if rec.test_id.trim().is_empty() {
             continue;
         }

@@ -5,6 +5,7 @@ mod types;
 mod validate;
 
 pub use audit::{check_packet, check_packet_file};
+pub use suite_packet_core::governance::{AuditFinding, AuditResult, AuditTotals};
 pub use types::*;
 pub use validate::{validate_config_file, validate_config_str};
 

@@ -2,6 +2,21 @@ use super::support::*;
 use super::*;
 
 #[test]
+fn merged_unique_many_normalizes_all_groups_in_one_pass() {
+    let first = vec![" beta ".to_string(), String::new(), "alpha".to_string()];
+    let second = vec!["gamma".to_string(), "beta".to_string()];
+    let third = vec![" delta ".to_string(), "alpha".to_string()];
+
+    assert_eq!(
+        merged_unique_many([first.as_slice(), second.as_slice(), third.as_slice()]),
+        ["alpha", "beta", "delta", "gamma"]
+    );
+    assert_eq!(first, [" beta ", "", "alpha"]);
+    assert_eq!(second, ["gamma", "beta"]);
+    assert_eq!(third, [" delta ", "alpha"]);
+}
+
+#[test]
 fn normalize_plan_steps_trims_and_assigns_missing_ids() {
     let normalized = normalize_plan_steps(&[BrokerPlanStep {
         id: " ".to_string(),
@@ -38,6 +53,7 @@ fn validate_plan_requires_testmap_mapped_gate_for_uncovered_edits() {
     .unwrap();
     write_test_coverage_state(&root, "src/alpha.rs", false);
     write_testmap_state(&root, "src/alpha.rs", &["tests/alpha_test.rs"]);
+    refresh_test_repo_runtime(&state);
 
     let response = broker_validate_plan(
         state.clone(),
@@ -99,6 +115,7 @@ fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
         .unwrap();
         write_test_coverage_state(&root, "src/alpha.rs", false);
         write_testmap_state(&root, "src/alpha.rs", &["tests/alpha_test.rs"]);
+        refresh_test_repo_runtime(&state);
 
         let response = broker_validate_plan(
             state.clone(),
@@ -159,6 +176,7 @@ fn validate_plan_warns_when_testmap_has_no_mapping_for_uncovered_edit() {
     .unwrap();
     write_test_coverage_state(&root, "src/alpha.rs", false);
     write_testmap_state(&root, "src/beta.rs", &["tests/beta_test.rs"]);
+    refresh_test_repo_runtime(&state);
 
     let response = broker_validate_plan(
         state.clone(),
@@ -216,6 +234,7 @@ fn validate_plan_warns_when_cached_testmap_is_stale() {
     .unwrap();
     write_test_coverage_state(&root, "src/alpha.rs", false);
     write_testmap_state_with_generated_at(&root, "src/alpha.rs", &["tests/alpha_test.rs"], 1);
+    refresh_test_repo_runtime(&state);
 
     let response = broker_validate_plan(
         state.clone(),
@@ -270,6 +289,7 @@ fn validate_plan_warns_when_edit_relies_on_stale_evidence_after_checkpoint() {
             ..suite_packet_core::AgentSnapshotPayload::default()
         },
     );
+    refresh_test_repo_runtime(&state);
 
     let response = broker_validate_plan(
         state.clone(),

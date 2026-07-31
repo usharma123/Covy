@@ -1,4 +1,8 @@
 use super::*;
+use packet28_daemon_protocol::registry::{
+    DaemonRegistryRequestV1, DaemonRegistryResponseV1, DaemonStatusV1, RegistryRevisionV1,
+    TaskListPageRequestV1, WatchListPageRequestV1, MAX_REGISTRY_PAGE_LIMIT,
+};
 
 pub(crate) fn prompt_descriptors() -> Vec<Value> {
     vec![
@@ -61,8 +65,9 @@ pub(crate) fn handle_prompt_get(
         "packet28.start_task" => {
             let task = prompt_argument(&arguments, "task")
                 .ok_or_else(|| anyhow!("packet28.start_task requires task"))?;
-            let task_id = prompt_argument(&arguments, "task_id")
+            let task_id = prompt_task_id_argument(&arguments)
                 .unwrap_or_else(|| crate::broker_client::derive_task_id(&task));
+            validated_task_storage_id(&task_id)?;
             let prompt = format!(
                 "Start Packet28 task `{task_id}` for: {task}\n\n\
 Use Packet28 as the primary context broker for this task.\n\
@@ -81,7 +86,7 @@ Use Packet28 as the primary context broker for this task.\n\
             let task_id = resolve_requested_or_current_task_id(
                 root,
                 session,
-                prompt_argument(&arguments, "task_id").as_deref(),
+                prompt_task_id_argument(&arguments).as_deref(),
             )?;
             let status = broker_task_status_via_session(root, session, &task_id)?;
             // Return a lean pointer to the brief resource instead of embedding
@@ -97,7 +102,7 @@ Use Packet28 as the primary context broker for this task.\n\
             let task_id = resolve_requested_or_current_task_id(
                 root,
                 session,
-                prompt_argument(&arguments, "task_id").as_deref(),
+                prompt_task_id_argument(&arguments).as_deref(),
             )?;
             let prompt = format!(
                 "Summarize the current Packet28 context for task `{task_id}`. Focus on active decisions, discovered scope, recent tool activity, and the next recommended actions.\n\n\
@@ -150,14 +155,22 @@ fn prompt_argument(arguments: &Map<String, Value>, key: &str) -> Option<String> 
         .map(ToOwned::to_owned)
 }
 
+fn prompt_task_id_argument(arguments: &Map<String, Value>) -> Option<String> {
+    arguments
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
 pub(crate) fn resolve_requested_or_current_task_id(
     root: &Path,
     session: &Arc<Mutex<McpSessionState>>,
     requested_task_id: Option<&str>,
 ) -> Result<String> {
-    if let Some(task_id) = requested_task_id.filter(|value| !value.trim().is_empty()) {
+    if let Some(task_id) = requested_task_id {
+        validated_task_storage_id(task_id)?;
         track_task(session, root, task_id)?;
-        return Ok(task_id.trim().to_string());
+        return Ok(task_id.to_string());
     }
     resolve_current_task_id(root, session)
 }
@@ -168,10 +181,12 @@ pub(crate) fn resolve_current_task_id(
 ) -> Result<String> {
     if let Ok(guard) = session.lock() {
         if let Some(task_id) = guard.current_task_id.clone() {
+            validated_task_storage_id(&task_id)?;
             return Ok(task_id);
         }
     }
-    if let Some(active) = crate::task_runtime::load_active_task(root) {
+    if let Some(active) = crate::task_runtime::load_active_task(root)? {
+        validated_task_storage_id(&active.task_id)?;
         track_task(session, root, &active.task_id)?;
         return Ok(active.task_id);
     }
@@ -179,15 +194,164 @@ pub(crate) fn resolve_current_task_id(
     let current = select_current_task(&status.tasks)
         .map(|task| task.task_id.clone())
         .ok_or_else(|| anyhow!("no Packet28 task is available for current-task resources"))?;
+    validated_task_storage_id(&current)?;
     track_task(session, root, &current)?;
     Ok(current)
 }
 
-pub(crate) fn daemon_status(root: &Path) -> Result<packet28_daemon_core::DaemonStatus> {
+pub(crate) fn daemon_status(
+    root: &Path,
+) -> Result<packet28_daemon_protocol::message::DaemonStatus> {
+    let mut client = crate::cmd_daemon::PersistentDaemonClient::connect(root)?;
+    let status = match client.send_registry_request(&DaemonRegistryRequestV1::Status)? {
+        DaemonRegistryResponseV1::Status { status } => *status,
+        DaemonRegistryResponseV1::Error { message }
+            if registry_extension_is_unsupported(&message) =>
+        {
+            return legacy_daemon_status(root);
+        }
+        DaemonRegistryResponseV1::Error { message } => return Err(anyhow!(message)),
+        other => return Err(anyhow!("unexpected daemon registry response: {other:?}")),
+    };
+    let DaemonStatusV1 {
+        pid,
+        version,
+        socket_path,
+        workspace_root,
+        started_at_unix,
+        ready_at_unix,
+        log_path,
+        uptime_secs,
+        task_count,
+        watch_count,
+        registry_revision,
+        index_truncated: _,
+        index,
+    } = status;
+    let revision =
+        registry_revision.ok_or_else(|| anyhow!("daemon registry status omitted its revision"))?;
+    let tasks = load_all_task_pages(&mut client, &revision, task_count)?;
+    let watches = load_all_watch_pages(&mut client, &revision, watch_count)?;
+    Ok(packet28_daemon_protocol::message::DaemonStatus {
+        pid,
+        version,
+        socket_path,
+        workspace_root,
+        started_at_unix,
+        ready_at_unix,
+        log_path,
+        uptime_secs,
+        tasks,
+        watches,
+        index,
+    })
+}
+
+fn legacy_daemon_status(root: &Path) -> Result<packet28_daemon_protocol::message::DaemonStatus> {
     match crate::cmd_daemon::send_request(root, &DaemonRequest::Status)? {
         DaemonResponse::Status { status } => Ok(status),
         DaemonResponse::Error { message } => Err(anyhow!(message)),
-        other => Err(anyhow!("unexpected daemon response: {other:?}")),
+        other => Err(anyhow!(
+            "unexpected legacy daemon status response: {other:?}"
+        )),
+    }
+}
+
+fn registry_extension_is_unsupported(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("unknown variant") && lower.contains("expected one of")
+}
+
+fn load_all_task_pages(
+    client: &mut crate::cmd_daemon::PersistentDaemonClient,
+    snapshot_revision: &RegistryRevisionV1,
+    expected_total: usize,
+) -> Result<Vec<TaskRecord>> {
+    let mut tasks = Vec::new();
+    let mut after_task_id = None;
+    loop {
+        let response = client.send_registry_request(&DaemonRegistryRequestV1::TaskListPage {
+            request: TaskListPageRequestV1 {
+                snapshot_revision: Some(snapshot_revision.clone()),
+                after_task_id: after_task_id.clone(),
+                limit: MAX_REGISTRY_PAGE_LIMIT,
+            },
+        })?;
+        let page = match response {
+            DaemonRegistryResponseV1::TaskListPage { page } => page,
+            DaemonRegistryResponseV1::Error { message } => return Err(anyhow!(message)),
+            other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+        };
+        if &page.snapshot_revision != snapshot_revision || page.total != expected_total {
+            return Err(anyhow!(
+                "daemon task registry changed during pagination; retry the request"
+            ));
+        }
+        tasks.extend(page.tasks);
+        let Some(next) = page.next_after_task_id else {
+            if tasks.len() != expected_total {
+                return Err(anyhow!(
+                    "daemon task registry changed during pagination; retry the request"
+                ));
+            }
+            return Ok(tasks);
+        };
+        if after_task_id
+            .as_ref()
+            .is_some_and(|cursor| next.as_str() <= cursor.as_str())
+        {
+            return Err(anyhow!(
+                "daemon task pagination returned non-advancing cursor '{next}'"
+            ));
+        }
+        after_task_id = Some(next);
+    }
+}
+
+fn load_all_watch_pages(
+    client: &mut crate::cmd_daemon::PersistentDaemonClient,
+    snapshot_revision: &RegistryRevisionV1,
+    expected_total: usize,
+) -> Result<Vec<packet28_daemon_protocol::task::WatchRegistration>> {
+    let mut watches = Vec::new();
+    let mut after_watch_id = None;
+    loop {
+        let response = client.send_registry_request(&DaemonRegistryRequestV1::WatchListPage {
+            request: WatchListPageRequestV1 {
+                snapshot_revision: Some(snapshot_revision.clone()),
+                task_id: None,
+                after_watch_id: after_watch_id.clone(),
+                limit: MAX_REGISTRY_PAGE_LIMIT,
+            },
+        })?;
+        let page = match response {
+            DaemonRegistryResponseV1::WatchListPage { page } => page,
+            DaemonRegistryResponseV1::Error { message } => return Err(anyhow!(message)),
+            other => return Err(anyhow!("unexpected daemon response: {other:?}")),
+        };
+        if &page.snapshot_revision != snapshot_revision || page.total != expected_total {
+            return Err(anyhow!(
+                "daemon watch registry changed during pagination; retry the request"
+            ));
+        }
+        watches.extend(page.watches);
+        let Some(next) = page.next_after_watch_id else {
+            if watches.len() != expected_total {
+                return Err(anyhow!(
+                    "daemon watch registry changed during pagination; retry the request"
+                ));
+            }
+            return Ok(watches);
+        };
+        if after_watch_id
+            .as_ref()
+            .is_some_and(|cursor| next.as_str() <= cursor.as_str())
+        {
+            return Err(anyhow!(
+                "daemon watch pagination returned non-advancing cursor '{next}'"
+            ));
+        }
+        after_watch_id = Some(next);
     }
 }
 
@@ -197,7 +361,7 @@ pub(crate) fn select_current_task(tasks: &[TaskRecord]) -> Option<&TaskRecord> {
 
 fn task_recency_key(task: &TaskRecord) -> (u8, u64, u64, u64, u64, u64) {
     (
-        u8::from(task.running),
+        u8::from(task.lifecycle.is_running()),
         task.last_context_refresh_at_unix.unwrap_or(0),
         task.latest_brief_generated_at_unix.unwrap_or(0),
         task.last_completed_at_unix.unwrap_or(0),
@@ -238,7 +402,7 @@ pub(crate) fn handle_resources_list(
     // Limit resource enumeration to the 5 most recent tasks to prevent
     // linear resource list growth from bloating context on every MCP init.
     // Only expose brief resources for non-current tasks (events/state on demand).
-    let mut tasks_by_recency = status.tasks.clone();
+    let mut tasks_by_recency = status.tasks;
     tasks_by_recency.sort_by_key(|task| std::cmp::Reverse(task_recency_key(task)));
     for task in tasks_by_recency
         .iter()
@@ -295,10 +459,16 @@ pub(crate) fn handle_resource_read(
         }));
     }
     if kind == "brief" {
-        let path = task_brief_markdown_path(root, &task_id);
+        validated_task_storage_id(&task_id)?;
         materialize_task_artifacts(root, session, &task_id)?;
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        let (path, bytes) = read_validated_named_task_artifact(
+            root,
+            &task_id,
+            artifact_io::ArtifactLocation::TaskRoot,
+            "brief.md",
+        )?;
+        let text = String::from_utf8(bytes)
+            .with_context(|| format!("task brief '{}' is not UTF-8", path.display()))?;
         return Ok(json!({
             "contents": [
                 {
@@ -322,10 +492,16 @@ pub(crate) fn handle_resource_read(
         }));
     }
     if kind == "state" {
-        let path = task_state_json_path(root, &task_id);
+        validated_task_storage_id(&task_id)?;
         materialize_task_artifacts(root, session, &task_id)?;
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read '{}'", path.display()))?;
+        let (path, bytes) = read_validated_named_task_artifact(
+            root,
+            &task_id,
+            artifact_io::ArtifactLocation::TaskRoot,
+            "state.json",
+        )?;
+        let text = String::from_utf8(bytes)
+            .with_context(|| format!("task state '{}' is not UTF-8", path.display()))?;
         return Ok(json!({
             "contents": [
                 {
@@ -351,7 +527,7 @@ fn materialize_task_artifacts(
             BrokerPrepareHandoffRequest {
                 task_id: task_id.to_string(),
                 query: None,
-                response_mode: Some(packet28_daemon_core::BrokerResponseMode::Full),
+                response_mode: Some(packet28_daemon_protocol::broker::BrokerResponseMode::Full),
                 include_debug_memory: false,
             },
         )?;

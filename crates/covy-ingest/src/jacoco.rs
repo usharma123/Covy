@@ -55,7 +55,7 @@ fn parse_jacoco(data: &[u8]) -> Result<CoverageData, CovyError> {
                         // Flush previous sourcefile
                         if let (Some(pkg), Some(sf)) = (&current_package, current_sourcefile.take())
                         {
-                            let path = format!("{}/{}", pkg, sf);
+                            let path = format!("{pkg}/{sf}");
                             result
                                 .files
                                 .entry(path)
@@ -85,7 +85,7 @@ fn parse_jacoco(data: &[u8]) -> Result<CoverageData, CovyError> {
             Ok(Event::End(ref e)) => match e.name().as_ref() {
                 b"sourcefile" => {
                     if let (Some(pkg), Some(sf)) = (&current_package, current_sourcefile.take()) {
-                        let path = format!("{}/{}", pkg, sf);
+                        let path = format!("{pkg}/{sf}");
                         result
                             .files
                             .entry(path)

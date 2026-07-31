@@ -1,6 +1,7 @@
 [package]
 name = "suite-cli"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -8,50 +9,54 @@ description.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "Packet28"
 path = "src/main.rs"
 
 [dependencies]
-testy-cli-common = { version = "0.2.0", path = "../testy-cli-common" }
-diffy-core = { version = "0.2.0", path = "../diffy-core" }
-testy-core = { version = "0.2.0", path = "../testy-core" }
-guardy-core = { version = "0.2.0", path = "../guardy-core" }
-contextq-core = { version = "0.2.0", path = "../contextq-core" }
-context-kernel-core = { version = "0.2.0", path = "../context-kernel-core" }
-context-memory-core = { version = "0.2.0", path = "../context-memory-core" }
-stacky-core = { version = "0.2.0", path = "../stacky-core" }
-buildy-core = { version = "0.2.0", path = "../buildy-core" }
-mapy-core = { version = "0.2.0", path = "../mapy-core" }
-suite-proxy-core = { version = "0.2.0", path = "../suite-proxy-core" }
-suite-ingest = { version = "0.2.0", path = "../suite-ingest" }
-suite-policy-core = { version = "0.2.0", path = "../suite-policy-core" }
-suite-foundation-core = { version = "0.2.0", path = "../suite-foundation-core" }
-suite-packet-core = { version = "0.2.0", path = "../suite-packet-core" }
-packet28-daemon-core = { version = "0.2.0", path = "../packet28-daemon-core" }
-packet28-reducer-core = { version = "0.2.0", path = "../packet28-reducer-core" }
-covy-ingest = { version = "0.2.0", path = "../covy-ingest" }
+testy-cli-common.workspace = true
+diffy-core.workspace = true
+testy-core.workspace = true
+guardy-core.workspace = true
+contextq-core.workspace = true
+context-kernel-core.workspace = true
+context-memory-core.workspace = true
+stacky-core.workspace = true
+buildy-core.workspace = true
+mapy-core.workspace = true
+suite-proxy-core.workspace = true
+suite-ingest.workspace = true
+suite-foundation-core.workspace = true
+suite-packet-core.workspace = true
+packet28-daemon-client.workspace = true
+packet28-daemon-core.workspace = true
+packet28-daemon-protocol.workspace = true
+packet28-reducer-core.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 colored.workspace = true
-roaring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
+yaml_serde.workspace = true
 toml.workspace = true
-libc = "0.2"
+libc.workspace = true
 blake3.workspace = true
 shell-words.workspace = true
 glob.workspace = true
 sha2.workspace = true
-signal-hook = "0.3"
+signal-hook = "0.3.13"
 rusqlite.workspace = true
 regex.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
 predicates.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 toml.workspace = true

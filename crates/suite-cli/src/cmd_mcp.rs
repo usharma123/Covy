@@ -1,24 +1,30 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use packet28_daemon_core::{
-    load_task_events, load_task_events_from_offset, task_artifact_dir, task_brief_markdown_path,
-    task_event_log_len, task_state_json_path, task_version_json_path, BrokerAction,
-    BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
+use packet28_daemon_core::storage::{
+    load_task_events, load_task_events_from_offset, task_event_log_len,
+};
+use packet28_daemon_protocol::broker::{
+    BrokerAction, BrokerPrepareHandoffRequest, BrokerResponseMode, BrokerTaskStatusRequest,
     BrokerTaskStatusResponse, BrokerValidatePlanRequest, BrokerWriteOp,
     BrokerWriteStateBatchRequest, BrokerWriteStateBatchResponse, BrokerWriteStateRequest,
-    DaemonRequest, DaemonResponse, TaskRecord,
 };
+use packet28_daemon_protocol::message::{DaemonRequest, DaemonResponse};
+use packet28_daemon_protocol::paths::{
+    task_version_json_path, ContextVersionStorageId, TaskStorageId,
+};
+use packet28_daemon_protocol::task::TaskRecord;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+#[path = "cmd_mcp_artifact_io.rs"]
+mod artifact_io;
 #[path = "cmd_mcp_config.rs"]
 mod config;
 #[path = "cmd_mcp_core_tools.rs"]
@@ -27,17 +33,22 @@ mod core_tools;
 mod fff;
 #[path = "cmd_mcp_memory_tools.rs"]
 mod memory_tools;
-#[path = "cmd_mcp_native_dispatch.rs"]
-mod native_dispatch;
-#[allow(dead_code)]
 #[path = "cmd_mcp_native.rs"]
 mod native_tools;
+#[path = "cmd_mcp_notifications.rs"]
+mod notifications;
 #[path = "cmd_mcp_prompt_resource.rs"]
 mod prompt_resource;
 #[path = "cmd_mcp_proxy.rs"]
 mod proxy;
 #[path = "cmd_mcp_proxy_catalog.rs"]
 mod proxy_catalog;
+#[path = "cmd_mcp_proxy_catalog_pagination.rs"]
+mod proxy_catalog_pagination;
+#[path = "cmd_mcp_proxy_resource.rs"]
+mod proxy_resource;
+#[path = "cmd_mcp_proxy_resource_paging.rs"]
+mod proxy_resource_paging;
 #[path = "cmd_mcp_proxy_upstream.rs"]
 mod proxy_upstream;
 #[path = "cmd_mcp_response.rs"]
@@ -56,27 +67,13 @@ mod transport;
 use crate::cmd_mcp::config::McpProxyConfig;
 use crate::cmd_mcp::core_tools::handle_packet28_agent_status;
 use crate::cmd_mcp::fff::FffMcpClient;
-use crate::cmd_mcp::native_tools::{
-    handle_packet28_fetch_context, handle_packet28_fetch_raw_output,
-    handle_packet28_fetch_tool_result, handle_packet28_glob, handle_packet28_prepare_handoff,
-    handle_packet28_read_regions, handle_packet28_search, handle_packet28_search_fast,
-    handle_packet28_validate_plan, Packet28ActionCriticArgs, Packet28FetchContextArgs,
-    Packet28FetchRawOutputArgs, Packet28FetchToolResultArgs, Packet28GlobArgs,
-    Packet28HandoffCompressionArgs, Packet28HandoffDependencyLintArgs, Packet28HandoffDiffArgs,
-    Packet28HandoffEnvironmentLintArgs, Packet28HandoffFixPlanArgs, Packet28HandoffLintAllArgs,
-    Packet28HandoffLintRegressionArgs, Packet28HandoffLintTrendArgs, Packet28HandoffPathLintArgs,
-    Packet28HandoffRepairVerifyArgs, Packet28HandoffStaleCommandLintArgs,
-    Packet28HandoffTestLintArgs, Packet28PatchRiskArgs, Packet28PrepareHandoffArgs,
-    Packet28PromptPressureArgs, Packet28ReadRegionsArgs, Packet28RecommendNextToolArgs,
-    Packet28SearchArgs, Packet28SearchFastArgs, Packet28ValidatePlanArgs,
-    Packet28ValidateToolOutcomeArgs, Packet28VerifyHandoffArgs,
-};
+use crate::cmd_mcp::notifications::{start_notification_task, NotificationDelivery};
 use crate::cmd_mcp::prompt_resource::{
     handle_prompt_get, handle_resource_read, handle_resources_list, prompt_descriptors,
     resolve_current_task_id,
 };
 use crate::cmd_mcp::proxy::{load_proxy_config, serve_proxy_stdio};
-use crate::cmd_mcp::response::summarize_tool_payload;
+use crate::cmd_mcp::response::{shape_tool_response, summarize_tool_payload};
 pub(crate) use crate::cmd_mcp::smoke::smoke_test_agent_config;
 use crate::cmd_mcp::support::{
     broker_task_status_via_session, classify_error_message, extract_named_string, extract_paths,
@@ -84,12 +81,76 @@ use crate::cmd_mcp::support::{
     store_tool_artifact, summarize_json_value, track_task,
 };
 use crate::cmd_mcp::tool_catalog::{canonical_tool_name, tools_list_payload};
-use crate::cmd_mcp::transport::{read_message, write_message, McpMessageFraming};
+use crate::cmd_mcp::transport::{
+    read_message_async, write_message_async, McpMessageFraming, MAX_MCP_BATCH_MESSAGES,
+};
 
 const MCP_PROTOCOL_VERSION_2024_11_05: &str = "2024-11-05";
 const MCP_PROTOCOL_VERSION_2025_03_26: &str = "2025-03-26";
 const MCP_LATEST_PROTOCOL_VERSION: &str = MCP_PROTOCOL_VERSION_2025_03_26;
 const MCP_NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const MCP_NOTIFICATION_SHUTDOWN_GRACE: Duration = Duration::from_millis(250);
+const MCP_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+
+fn validated_task_storage_id(task_id: &str) -> Result<TaskStorageId> {
+    Ok(TaskStorageId::try_from(task_id)?)
+}
+
+fn validated_task_version_json_path(
+    root: &Path,
+    task_id: &str,
+    context_version: &str,
+) -> Result<PathBuf> {
+    let task_id = validated_task_storage_id(task_id)?;
+    let context_version = ContextVersionStorageId::try_from(context_version)?;
+    Ok(task_version_json_path(root, &task_id, &context_version))
+}
+
+fn read_validated_named_task_artifact(
+    root: &Path,
+    task_id: &str,
+    location: artifact_io::ArtifactLocation,
+    file_name: &str,
+) -> Result<(PathBuf, Vec<u8>)> {
+    let task_id = validated_task_storage_id(task_id)?;
+    let handle = artifact_io::ArtifactHandle::try_from(file_name)?;
+    artifact_io::read_task_artifact(root, &task_id, location, &handle)?.ok_or_else(|| {
+        anyhow!(
+            "stored task artifact {file_name:?} does not exist for task {:?}",
+            task_id.as_str()
+        )
+    })
+}
+
+fn read_validated_context_artifact(
+    root: &Path,
+    task_id: &str,
+    context_version: &str,
+) -> Result<(PathBuf, Vec<u8>)> {
+    let task_id = validated_task_storage_id(task_id)?;
+    let context_version = ContextVersionStorageId::try_from(context_version)?;
+    let handle = artifact_io::ArtifactHandle::from_json_stem(context_version.as_str())?;
+    read_validated_named_task_artifact(
+        root,
+        task_id.as_str(),
+        artifact_io::ArtifactLocation::Versions,
+        handle.as_str(),
+    )
+}
+
+fn validate_context_artifact_identity(payload: &Value, requested_version: &str) -> Result<()> {
+    for field in ["context_version", "artifact_id"] {
+        let persisted = payload.get(field).and_then(Value::as_str).ok_or_else(|| {
+            anyhow!("stored context artifact is missing required {field} identity")
+        })?;
+        if persisted != requested_version {
+            return Err(anyhow!(
+                "stored context artifact {field} identity {persisted:?} does not match requested version {requested_version:?}"
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[derive(Args)]
 pub struct McpArgs {
@@ -148,7 +209,6 @@ pub struct McpSmokeTestArgs {
 #[derive(Default)]
 struct McpSessionState {
     initialized: bool,
-    shutdown: bool,
     toolset: McpToolset,
     tracked_tasks: BTreeMap<String, u64>,
     tracked_task_offsets: BTreeMap<String, u64>,
@@ -158,11 +218,11 @@ struct McpSessionState {
     tool_forward_names: BTreeMap<String, String>,
     upstream_tools_cache: Vec<Value>,
     upstream_tools_loaded: bool,
-    resource_owners: BTreeMap<String, String>,
+    resource_routes: proxy_resource::ResourceRoutingTable,
     upstream_resources_cache: Vec<Value>,
-    upstream_resources_loaded: bool,
     upstream_resource_templates_cache: Vec<Value>,
-    upstream_resource_templates_loaded: bool,
+    upstream_resource_catalog_loaded: bool,
+    resource_catalog_epoch: u64,
     proxy_task_id: Option<String>,
     next_invocation_seq: u64,
     fff_client: Option<FffMcpClient>,
@@ -212,150 +272,148 @@ fn run_smoke_test(args: McpSmokeTestArgs) -> Result<i32> {
 }
 
 fn serve_stdio(root: PathBuf, toolset: McpToolset) -> Result<()> {
-    let stdin = io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-    let writer = Arc::new(Mutex::new(io::stdout()));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("packet28-mcp")
+        .build()
+        .context("failed to start MCP runtime")?;
+    let result = runtime.block_on(serve_stdio_async(root, toolset));
+    runtime.shutdown_timeout(MCP_RUNTIME_SHUTDOWN_TIMEOUT);
+    result
+}
+
+async fn serve_stdio_async(root: PathBuf, toolset: McpToolset) -> Result<()> {
+    let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
+    let writer = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
     let session = Arc::new(Mutex::new(McpSessionState {
         toolset,
         ..McpSessionState::default()
     }));
-    start_notification_thread(root.clone(), writer.clone(), session.clone());
+    let notification_writer = writer.clone();
+    let mut notification_task = start_notification_task(
+        root.clone(),
+        session.clone(),
+        MCP_NOTIFICATION_POLL_INTERVAL,
+        move |notification, framing| {
+            let writer = notification_writer.clone();
+            async move {
+                let mut guard = writer.lock().await;
+                write_message_async(&mut *guard, &notification, framing).await?;
+                Ok(NotificationDelivery::Delivered)
+            }
+        },
+    );
 
-    loop {
-        let Some((request, framing)) = read_message(&mut reader)? else {
-            break;
+    let serve_result = loop {
+        let next = match notification_task
+            .supervise_result(read_message_async(&mut reader))
+            .await
+        {
+            Ok(next) => next,
+            Err(error) => break Err(error),
+        };
+        let Some((request, framing)) = next else {
+            break Ok(());
         };
         if let Ok(mut guard) = session.lock() {
             guard.framing = Some(framing);
         }
-        let params = request.get("params").cloned().unwrap_or(Value::Null);
-        let id = request.get("id").cloned();
-        let Some(method) = request.get("method").and_then(Value::as_str) else {
-            if let Some(id) = id {
-                let response = mcp_error_response(id, -32600, "missing method");
-                let mut guard = writer
-                    .lock()
-                    .map_err(|_| anyhow!("failed to lock MCP stdout"))?;
-                write_message(&mut *guard, &response, framing)?;
+        let response = match notification_task
+            .supervise_result(dispatch_local_payload(&root, &session, request))
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => break Err(error),
+        };
+        if let Some(response) = response {
+            let write = async {
+                let mut guard = writer.lock().await;
+                write_message_async(&mut *guard, &response, framing).await
+            };
+            if let Err(error) = notification_task.supervise_result(write).await {
+                break Err(error);
             }
-            continue;
-        };
-
-        if id.is_none() {
-            let _ = handle_notification(&root, &session, method, params);
-            continue;
         }
+    };
 
-        let response = match handle_method(&root, &session, method, params) {
-            Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-            Err(err) => mcp_error_response(
-                id.unwrap_or(Value::Null),
-                mcp_error_code(&err),
-                &err.to_string(),
-            ),
-        };
-        let mut guard = writer
-            .lock()
-            .map_err(|_| anyhow!("failed to lock MCP stdout"))?;
-        write_message(&mut *guard, &response, framing)?;
+    let shutdown_result = notification_task
+        .shutdown(MCP_NOTIFICATION_SHUTDOWN_GRACE)
+        .await;
+    if serve_result.is_ok() {
+        shutdown_result?;
     }
-
-    if let Ok(mut guard) = session.lock() {
-        guard.shutdown = true;
-    }
-    Ok(())
+    serve_result
 }
 
-fn start_notification_thread(
-    root: PathBuf,
-    writer: Arc<Mutex<io::Stdout>>,
-    session: Arc<Mutex<McpSessionState>>,
-) {
-    thread::spawn(move || loop {
-        let (initialized, shutdown, tracked_tasks, tracked_task_offsets, framing) =
-            match session.lock() {
-                Ok(guard) => (
-                    guard.initialized,
-                    guard.shutdown,
-                    guard.tracked_tasks.clone(),
-                    guard.tracked_task_offsets.clone(),
-                    guard.framing,
-                ),
-                Err(_) => return,
-            };
-        if shutdown {
-            return;
+async fn dispatch_local_payload(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    payload: Value,
+) -> Result<Option<Value>> {
+    match payload {
+        Value::Array(requests) if requests.is_empty() => Ok(Some(mcp_error_response(
+            Value::Null,
+            -32600,
+            "empty JSON-RPC batch",
+        ))),
+        Value::Array(requests) if requests.len() > MAX_MCP_BATCH_MESSAGES => {
+            Ok(Some(Value::Array(vec![mcp_error_response(
+                Value::Null,
+                -32000,
+                &format!("JSON-RPC batch member limit exceeded ({MAX_MCP_BATCH_MESSAGES})"),
+            )])))
         }
-        if !initialized || framing.is_none() {
-            thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
-            continue;
+        Value::Array(requests) => {
+            let mut responses = Vec::new();
+            for request in requests {
+                if let Some(response) = dispatch_local_message(root, session, request).await? {
+                    responses.push(response);
+                }
+            }
+            Ok((!responses.is_empty()).then_some(Value::Array(responses)))
         }
-        let framing = framing.unwrap_or(McpMessageFraming::ContentLength);
+        request => dispatch_local_message(root, session, request).await,
+    }
+}
 
-        for (task_id, last_seen_seq) in tracked_tasks {
-            let previous_offset = tracked_task_offsets.get(&task_id).copied().unwrap_or(0);
-            let read = match load_task_events_from_offset(&root, &task_id, previous_offset) {
-                Ok(read) => read,
-                Err(_) => continue,
-            };
-            let mut newest_delivered_seq = last_seen_seq;
-            for frame in read
-                .events
-                .into_iter()
-                .filter(|frame| frame.seq > last_seen_seq)
-            {
-                if frame.event.kind != "context_updated" {
-                    newest_delivered_seq = newest_delivered_seq.max(frame.seq);
-                    continue;
-                }
-                let mut params = match frame.event.data {
-                    Value::Object(map) => map,
-                    other => {
-                        let mut map = Map::new();
-                        map.insert("data".to_string(), other);
-                        map
-                    }
-                };
-                params.insert("task_id".to_string(), Value::String(task_id.clone()));
-                params.insert(
-                    "context_version".to_string(),
-                    params
-                        .get("context_version")
-                        .cloned()
-                        .unwrap_or(Value::Null),
-                );
-                params.insert("event_seq".to_string(), Value::Number(frame.seq.into()));
-                let notification = json!({
-                    "jsonrpc":"2.0",
-                    "method":"notifications/packet28.context_updated",
-                    "params": Value::Object(params),
-                });
-                let write_ok = if let Ok(mut guard) = writer.lock() {
-                    write_message(&mut *guard, &notification, framing).is_ok()
-                } else {
-                    false
-                };
-                if !write_ok {
-                    if let Ok(mut guard) = session.lock() {
-                        guard.shutdown = true;
-                    }
-                    return;
-                }
-                newest_delivered_seq = newest_delivered_seq.max(frame.seq);
-            }
-            if newest_delivered_seq > last_seen_seq || read.next_offset != previous_offset {
-                if let Ok(mut guard) = session.lock() {
-                    if let Some(current) = guard.tracked_tasks.get_mut(&task_id) {
-                        *current = newest_delivered_seq;
-                    }
-                    guard
-                        .tracked_task_offsets
-                        .insert(task_id.clone(), read.next_offset);
-                }
-            }
-        }
-        thread::sleep(MCP_NOTIFICATION_POLL_INTERVAL);
-    });
+async fn dispatch_local_message(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    request: Value,
+) -> Result<Option<Value>> {
+    let Some(object) = request.as_object() else {
+        return Ok(Some(mcp_error_response(
+            Value::Null,
+            -32600,
+            "JSON-RPC request must be an object",
+        )));
+    };
+    let id = object.get("id").cloned();
+    let Some(method) = object.get("method").and_then(Value::as_str) else {
+        return Ok(Some(mcp_error_response(
+            id.unwrap_or(Value::Null),
+            -32600,
+            "missing method",
+        )));
+    };
+    let params = object.get("params").cloned().unwrap_or(Value::Null);
+    let Some(id) = id else {
+        let _ = handle_notification(root, session, method, params);
+        return Ok(None);
+    };
+
+    let method_root = root.to_path_buf();
+    let method_session = session.clone();
+    let method = method.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        handle_method(&method_root, &method_session, &method, params)
+    })
+    .await
+    .context("local MCP method worker failed")?;
+    Ok(Some(match result {
+        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+        Err(error) => mcp_error_response(id, mcp_error_code(&error), &error.to_string()),
+    }))
 }
 
 fn handle_notification(
@@ -495,11 +553,11 @@ fn handle_tool_call(
     let canonical_name = canonical_tool_name(requested_name);
     let name = canonical_name.as_str();
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-    let payload = if let Some(native_payload) =
-        native_dispatch::handle_native_tool_call(root, session, name, &arguments)?
+    if let Some(native_response) = native_tools::handle_tool_call(root, session, name, &arguments)?
     {
-        native_payload
-    } else if let Some(memory_payload) =
+        return Ok(native_response);
+    }
+    let payload = if let Some(memory_payload) =
         memory_tools::handle_memory_tool_call(root, name, &arguments)?
     {
         memory_payload
@@ -510,15 +568,8 @@ fn handle_tool_call(
     } else {
         return Err(anyhow!("unsupported tool '{name}'"));
     };
-    Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": summarize_tool_payload(name, &payload)
-            }
-        ],
-        "structuredContent": payload
-    }))
+    let summary = summarize_tool_payload(name, &payload);
+    Ok(shape_tool_response(payload, summary))
 }
 
 #[cfg(test)]

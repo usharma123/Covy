@@ -56,7 +56,7 @@ fn pretool_hook_output_surfaces_action_critic_without_rewrite() {
     let body = render_hook_output(
         HookEventKind::PreToolUse,
         None,
-        &packet28_daemon_core::HookIngestResponse::default(),
+        &packet28_daemon_protocol::hooks::HookIngestResponse::default(),
         None,
         &["destructive_command: inspect scope first".to_string()],
     )
@@ -132,7 +132,7 @@ fn pretool_hook_output_preserves_rewrite_with_action_critic() {
     let body = render_hook_output(
         HookEventKind::PreToolUse,
         Some(json!({"command": "Packet28 hook reducer-runner -- git status"})),
-        &packet28_daemon_core::HookIngestResponse::default(),
+        &packet28_daemon_protocol::hooks::HookIngestResponse::default(),
         None,
         &["broad_search: add focus_paths".to_string()],
     )
@@ -724,4 +724,75 @@ fn read_reducer_marks_read_operation() {
         packet.cache_fingerprint.as_deref(),
         Some("read:src/lib.rs:10:14")
     );
+}
+
+#[test]
+fn hook_runtime_config_defaults_to_enabled_when_file_is_missing() {
+    let root = tempfile::tempdir().unwrap();
+
+    let config = load_hook_runtime_config(root.path()).unwrap();
+
+    assert_eq!(
+        (
+            config.hooks_enabled,
+            config.rewrite_enabled,
+            config.fallback_post_tool_capture,
+        ),
+        (true, true, true)
+    );
+}
+
+#[test]
+fn hook_runtime_config_rejects_malformed_json_without_replacing_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = hook_runtime_config_path(root.path());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = b"{\"hooks_enabled\": tru".to_vec();
+    fs::write(&path, &original).unwrap();
+
+    let error = load_hook_runtime_config(root.path()).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to parse hook runtime config"),
+        "{error:#}"
+    );
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn hook_runtime_config_rejects_invalid_utf8_without_replacing_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = hook_runtime_config_path(root.path());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = vec![b'{', b'}', 0xff];
+    fs::write(&path, &original).unwrap();
+
+    let error = load_hook_runtime_config(root.path()).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read hook runtime config"),
+        "{error:#}"
+    );
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn hook_runtime_config_rejects_non_file_path_as_unreadable() {
+    let root = tempfile::tempdir().unwrap();
+    let path = hook_runtime_config_path(root.path());
+    fs::create_dir_all(&path).unwrap();
+
+    let error = load_hook_runtime_config(root.path()).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read hook runtime config"),
+        "{error:#}"
+    );
+    assert!(path.is_dir());
 }

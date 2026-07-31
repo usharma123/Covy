@@ -1,5 +1,11 @@
 #[path = "support/context_daemon.rs"]
 mod context_daemon;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use context_daemon::{
     ensure_packet28d_built, init_repo, suite_cmd, write_context_packet, write_packet_value,

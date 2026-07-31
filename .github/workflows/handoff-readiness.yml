@@ -37,15 +37,17 @@ jobs:
   verify-handoffs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.93.1
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Build Packet28 CLI
-        run: cargo build -p suite-cli
+        run: cargo build --locked -p suite-cli
 
       - name: Verify handoff readiness
         run: target/debug/Packet28 verify handoffs --root . --max-regressions 0

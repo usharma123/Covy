@@ -1,0 +1,1827 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result};
+use packet28_daemon_protocol::broker::{
+    BrokerAction, BrokerDeltaResponse, BrokerEvictionCandidate, BrokerGetContextRequest,
+    BrokerGetContextResponse, BrokerResponseMode, BrokerSection, BrokerSectionEstimate,
+    BrokerSourceKind, BrokerToolResultKind,
+};
+use packet28_daemon_protocol::paths::task_version_json_path;
+use packet28_daemon_protocol::task::TaskRecord;
+use serde_json::Value;
+
+use super::limits::{
+    action_critical_section_ids, estimate_brief_banner_cost, estimate_rendered_section_cost,
+    estimate_text_cost, filter_requested_section_ids, resolve_effective_limits, section_item_limit,
+    should_run_reducer_search,
+};
+use super::search_plan::{
+    build_reducer_search_execution, derive_query_focus, merge_query_focus_with_symbols,
+    SearchExecutionArgs,
+};
+use super::snapshot::{
+    build_resolved_questions, latest_intention_lines, render_checkpoint_context_lines,
+    render_missed_savings_lines, render_recent_tool_activity_lines, render_task_memory_lines,
+    truncate_lines,
+};
+use super::support::{
+    broker_default_budget_tokens, broker_objective, broker_request_response_mode,
+    BrokerEffectiveLimits,
+};
+use crate::planning::{merged_unique, merged_unique_many};
+use crate::state::DaemonState;
+use crate::{context_version_storage_id, task_storage_id};
+
+fn packet_source_kind(packet: &suite_packet_core::ContextManagePacketRef) -> BrokerSourceKind {
+    if packet.source_tier == Some(suite_packet_core::MemorySourceTier::Telemetry)
+        || packet.target.starts_with("agenty.state.")
+    {
+        BrokerSourceKind::SelfAuthored
+    } else if packet.source_tier == Some(suite_packet_core::MemorySourceTier::CuratedMemory)
+        || packet.target.starts_with("contextq.")
+        || packet.target.starts_with("packet28.broker_memory.")
+        || packet.target.starts_with("mapy.")
+        || packet.target.starts_with("context.")
+    {
+        BrokerSourceKind::Derived
+    } else {
+        BrokerSourceKind::External
+    }
+}
+
+fn render_relevant_context_line(
+    packet: &suite_packet_core::ContextManagePacketRef,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> (bool, String) {
+    let summary = packet
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let rendered = match (packet.source_tier, packet.memory_kind, summary) {
+        (_, _, Some(summary)) => summary.to_string(),
+        (_, Some(suite_packet_core::MemoryKind::Handoff), None) => "checkpoint handoff".to_string(),
+        (_, Some(suite_packet_core::MemoryKind::Brief), None) => "task brief".to_string(),
+        (_, Some(suite_packet_core::MemoryKind::Evidence), None) => "task evidence".to_string(),
+        (Some(suite_packet_core::MemorySourceTier::CuratedMemory), _, None) => {
+            "curated task memory".to_string()
+        }
+        (Some(suite_packet_core::MemorySourceTier::Telemetry), _, None) => {
+            "task telemetry".to_string()
+        }
+        _ => "relevant context".to_string(),
+    };
+    let (is_stale, freshness_note) = relevant_context_freshness_note(packet, &rendered, snapshot);
+    (is_stale, format!("- {rendered}{freshness_note}"))
+}
+
+fn relevant_context_freshness_note(
+    packet: &suite_packet_core::ContextManagePacketRef,
+    rendered: &str,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> (bool, String) {
+    for path in &snapshot.changed_paths_since_checkpoint {
+        if !packet_mentions_path(packet, rendered, path) {
+            continue;
+        }
+        if snapshot.files_read.iter().any(|read| read == path) {
+            return (false, format!(" [fresh_after_change: {path}]"));
+        }
+        return (true, format!(" [stale_after_change: refresh {path}]"));
+    }
+    (false, String::new())
+}
+
+fn packet_mentions_path(
+    packet: &suite_packet_core::ContextManagePacketRef,
+    rendered: &str,
+    path: &str,
+) -> bool {
+    rendered.contains(path)
+        || packet.target.contains(path)
+        || packet
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(path))
+}
+
+fn render_decision_evidence(decision: &suite_packet_core::AgentDecision) -> String {
+    let mut refs = Vec::new();
+    if !decision.related_paths.is_empty() {
+        refs.push(format!("paths={}", decision.related_paths.join(",")));
+    }
+    if !decision.related_symbols.is_empty() {
+        refs.push(format!("symbols={}", decision.related_symbols.join(",")));
+    }
+    if !decision.related_artifact_ids.is_empty() {
+        refs.push(format!(
+            "artifacts={}",
+            decision.related_artifact_ids.join(",")
+        ));
+    }
+    if refs.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", refs.join("; "))
+    }
+}
+
+pub(crate) fn load_task_record(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+) -> Option<TaskRecord> {
+    state.lock().ok()?.tasks.tasks.get(task_id).cloned()
+}
+
+fn shrink_section_to_budget(
+    section: &BrokerSection,
+    remaining_tokens: u64,
+    remaining_bytes: u64,
+) -> Option<BrokerSection> {
+    if remaining_tokens == 0 || remaining_bytes == 0 {
+        return None;
+    }
+    let lines = section.body.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+    for line_count in (1..=lines.len()).rev() {
+        let candidate_body = lines[..line_count].join("\n");
+        let (est_tokens, est_bytes) = estimate_text_cost(&candidate_body);
+        if est_tokens <= remaining_tokens && est_bytes <= remaining_bytes {
+            let mut candidate = section.clone();
+            candidate.body = candidate_body;
+            return Some(candidate);
+        }
+    }
+    let mut candidate = section.clone();
+    let max_chars = remaining_bytes.min((remaining_tokens.saturating_mul(4)).max(1)) as usize;
+    let truncated = section
+        .body
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    if truncated.is_empty() {
+        return None;
+    }
+    candidate.body = format!("{truncated}...");
+    Some(candidate)
+}
+
+struct SectionBudgetSelection {
+    selected: Vec<BrokerSection>,
+    pruned: Vec<BrokerEvictionCandidate>,
+    used_tokens: u64,
+    used_bytes: u64,
+    budget_tokens: u64,
+    budget_bytes: u64,
+}
+
+impl SectionBudgetSelection {
+    fn new(budget_tokens: u64, budget_bytes: u64) -> Self {
+        let (used_tokens, used_bytes) = estimate_brief_banner_cost();
+        Self {
+            selected: Vec::new(),
+            pruned: Vec::new(),
+            used_tokens,
+            used_bytes,
+            budget_tokens,
+            budget_bytes,
+        }
+    }
+
+    fn remaining_tokens(&self) -> u64 {
+        self.budget_tokens.saturating_sub(self.used_tokens)
+    }
+
+    fn remaining_bytes(&self) -> u64 {
+        self.budget_bytes.saturating_sub(self.used_bytes)
+    }
+
+    fn consider(&mut self, section: BrokerSection, must_keep: bool) {
+        let (est_tokens, est_bytes) = estimate_rendered_section_cost(&section);
+        if est_tokens + self.used_tokens <= self.budget_tokens
+            && est_bytes + self.used_bytes <= self.budget_bytes
+        {
+            self.push_selected(section, est_tokens, est_bytes);
+            return;
+        }
+
+        if must_keep {
+            if let Some(shrunk) =
+                shrink_section_to_budget(&section, self.remaining_tokens(), self.remaining_bytes())
+            {
+                let (shrunk_tokens, shrunk_bytes) = estimate_rendered_section_cost(&shrunk);
+                self.push_selected(shrunk, shrunk_tokens, shrunk_bytes);
+                return;
+            }
+        }
+
+        self.prune(section, est_tokens);
+    }
+
+    fn prune(&mut self, section: BrokerSection, est_tokens: u64) {
+        self.pruned.push(BrokerEvictionCandidate {
+            section_id: section.id,
+            reason: "budget_pruned".to_string(),
+            est_tokens,
+        });
+    }
+
+    fn push_selected(&mut self, section: BrokerSection, est_tokens: u64, est_bytes: u64) {
+        self.used_tokens = self.used_tokens.saturating_add(est_tokens);
+        self.used_bytes = self.used_bytes.saturating_add(est_bytes);
+        self.selected.push(section);
+    }
+
+    fn enforce_max_sections(&mut self, max_sections: usize) {
+        if self.selected.len() <= max_sections {
+            return;
+        }
+        for section in self.selected.drain(max_sections..) {
+            let (est_tokens, _) = estimate_rendered_section_cost(&section);
+            self.pruned.push(BrokerEvictionCandidate {
+                section_id: section.id,
+                reason: "budget_pruned".to_string(),
+                est_tokens,
+            });
+        }
+    }
+
+    fn into_parts(self) -> (Vec<BrokerSection>, Vec<BrokerEvictionCandidate>) {
+        (self.selected, self.pruned)
+    }
+}
+
+pub(crate) fn prune_sections_for_budget(
+    action: BrokerAction,
+    sections: Vec<BrokerSection>,
+    budget_tokens: u64,
+    budget_bytes: u64,
+    max_sections: usize,
+) -> (Vec<BrokerSection>, Vec<BrokerEvictionCandidate>) {
+    if sections.is_empty() {
+        return (sections, Vec::new());
+    }
+
+    let critical_ids = action_critical_section_ids(action)
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let mut selection = SectionBudgetSelection::new(budget_tokens, budget_bytes);
+    let min_remaining_tokens_for_optional = ((budget_tokens as f64) * 0.2).ceil() as u64;
+    let min_remaining_bytes_for_optional = ((budget_bytes as f64) * 0.2).ceil() as u64;
+
+    let mut objective = sections
+        .iter()
+        .find(|section| section.id == "task_objective")
+        .cloned();
+    if let Some(objective) = objective.take() {
+        selection.consider(objective, true);
+    }
+
+    for section_id in action_critical_section_ids(action) {
+        if let Some(section) = sections
+            .iter()
+            .find(|section| section.id == *section_id)
+            .cloned()
+        {
+            selection.consider(section, true);
+        }
+    }
+
+    for section in sections {
+        if section.id == "task_objective" || critical_ids.contains(section.id.as_str()) {
+            continue;
+        }
+        if selection.remaining_tokens() < min_remaining_tokens_for_optional
+            || selection.remaining_bytes() < min_remaining_bytes_for_optional
+        {
+            let (est_tokens, _) = estimate_rendered_section_cost(&section);
+            selection.prune(section, est_tokens);
+            continue;
+        }
+        selection.consider(section, false);
+    }
+
+    selection.enforce_max_sections(max_sections);
+    selection.into_parts()
+}
+
+pub(crate) fn build_budget_preflight_section(
+    request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    focus_symbols: &[String],
+    allowed_sections: &HashSet<String>,
+    effective_limits: &BrokerEffectiveLimits,
+) -> Option<BrokerSection> {
+    if !allowed_sections.contains("budget_notes") {
+        return None;
+    }
+    let budget_tokens = request.budget_tokens?;
+    let low_budget_threshold = 256_u64.max(broker_default_budget_tokens() / 4);
+    if budget_tokens > low_budget_threshold {
+        return None;
+    }
+    let wants_broad_context = allowed_sections.contains("search_evidence")
+        || allowed_sections.contains("code_evidence")
+        || allowed_sections.contains("relevant_context");
+    if !wants_broad_context {
+        return None;
+    }
+
+    let focus_paths = merged_unique_many([
+        &snapshot.focus_paths,
+        &snapshot.checkpoint_focus_paths,
+        &request.focus_paths,
+    ]);
+    let focus_symbols = merged_unique_many([
+        &snapshot.focus_symbols,
+        &snapshot.checkpoint_focus_symbols,
+        focus_symbols,
+    ]);
+    if !focus_paths.is_empty() || !focus_symbols.is_empty() {
+        return None;
+    }
+
+    Some(BrokerSection {
+        id: "budget_notes".to_string(),
+        title: "Budget Notes".to_string(),
+        body: truncate_lines(
+            vec![format!(
+                "- budget_preflight: low budget ({budget_tokens} tokens) with broad evidence/context request; add focus_paths or focus_symbols"
+            )],
+            section_item_limit(effective_limits, "budget_notes"),
+        ),
+        priority: 1,
+        source_kind: BrokerSourceKind::Derived,
+    })
+}
+
+pub(crate) fn build_broker_sections(
+    root: &Path,
+    state: &Arc<Mutex<DaemonState>>,
+    request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    manage: Option<&suite_packet_core::ContextManagePayload>,
+    _repo_map: Option<&suite_packet_core::EnvelopeV1<mapy_core::RepoMapPayload>>,
+) -> Vec<BrokerSection> {
+    let action = request.action.unwrap_or(BrokerAction::Plan);
+    let effective_limits = resolve_effective_limits(
+        action,
+        request.verbosity,
+        request.max_sections,
+        request.default_max_items_per_section,
+        &request.section_item_limits,
+    );
+    let allowed_sections =
+        filter_requested_section_ids(action, &request.include_sections, &request.exclude_sections);
+    let task = load_task_record(state, &request.task_id);
+    let resolved_questions = build_resolved_questions(task.as_ref(), snapshot);
+    let focus_symbols = if request.focus_symbols.is_empty() {
+        merged_unique(&snapshot.focus_symbols, &snapshot.checkpoint_focus_symbols)
+    } else {
+        request.focus_symbols.clone()
+    };
+    let mut query_focus = derive_query_focus(broker_objective(state, request).as_deref());
+    if !focus_symbols.is_empty() {
+        query_focus.full_symbol_terms.clear();
+        query_focus.symbol_terms.clear();
+    }
+    let query_focus = merge_query_focus_with_symbols(query_focus, &focus_symbols);
+    let mut sections = Vec::new();
+
+    if let Some(objective) = query_focus.raw_query.clone() {
+        sections.push(BrokerSection {
+            id: "task_objective".to_string(),
+            title: "Task Objective".to_string(),
+            body: objective,
+            priority: 1,
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if let Some(section) = build_budget_preflight_section(
+        request,
+        snapshot,
+        &focus_symbols,
+        &allowed_sections,
+        &effective_limits,
+    ) {
+        sections.push(section);
+    }
+
+    if allowed_sections.contains("action_critic") {
+        let critic_lines = build_action_critic_lines(request, snapshot, &focus_symbols);
+        if !critic_lines.is_empty() {
+            sections.push(BrokerSection {
+                id: "action_critic".to_string(),
+                title: "Action Critic".to_string(),
+                body: truncate_lines(
+                    critic_lines,
+                    section_item_limit(&effective_limits, "action_critic"),
+                ),
+                priority: 1,
+                source_kind: BrokerSourceKind::Derived,
+            });
+        }
+    }
+
+    let task_memory_lines = render_task_memory_lines(snapshot);
+    if !task_memory_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "task_memory".to_string(),
+            title: "Task Memory".to_string(),
+            body: truncate_lines(
+                task_memory_lines,
+                section_item_limit(&effective_limits, "task_memory"),
+            ),
+            priority: if matches!(
+                action,
+                BrokerAction::Plan
+                    | BrokerAction::Inspect
+                    | BrokerAction::ChooseTool
+                    | BrokerAction::Interpret
+                    | BrokerAction::Edit
+            ) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::SelfAuthored,
+        });
+    }
+
+    let intention_lines = latest_intention_lines(snapshot);
+    if !intention_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "agent_intention".to_string(),
+            title: "Latest Intention".to_string(),
+            body: truncate_lines(
+                intention_lines,
+                section_item_limit(&effective_limits, "agent_intention"),
+            ),
+            priority: 1,
+            source_kind: BrokerSourceKind::SelfAuthored,
+        });
+    }
+
+    let checkpoint_context_lines = render_checkpoint_context_lines(snapshot);
+    if !checkpoint_context_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "checkpoint_context".to_string(),
+            title: "Checkpoint Context".to_string(),
+            body: truncate_lines(
+                checkpoint_context_lines,
+                section_item_limit(&effective_limits, "checkpoint_context"),
+            ),
+            priority: 1,
+            source_kind: BrokerSourceKind::SelfAuthored,
+        });
+    }
+
+    if !snapshot.active_decisions.is_empty() {
+        sections.push(BrokerSection {
+            id: "active_decisions".to_string(),
+            title: "Active Decisions".to_string(),
+            body: truncate_lines(
+                snapshot
+                    .active_decisions
+                    .iter()
+                    .map(|decision| {
+                        let suffix = task
+                            .as_ref()
+                            .and_then(|task| task.linked_decisions.get(&decision.id))
+                            .map(|question_id| format!(" (answers {question_id})"))
+                            .unwrap_or_default();
+                        let evidence = render_decision_evidence(decision);
+                        format!("- {}: {}{}{}", decision.id, decision.text, evidence, suffix)
+                    })
+                    .collect(),
+                section_item_limit(&effective_limits, "active_decisions"),
+            ),
+            priority: 1,
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if !snapshot.open_questions.is_empty() {
+        sections.push(BrokerSection {
+            id: "open_questions".to_string(),
+            title: "Open Questions".to_string(),
+            body: truncate_lines(
+                snapshot
+                    .open_questions
+                    .iter()
+                    .map(|question| format!("- {}: {}", question.id, question.text))
+                    .collect(),
+                section_item_limit(&effective_limits, "open_questions"),
+            ),
+            priority: 1,
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if !resolved_questions.is_empty() {
+        sections.push(BrokerSection {
+            id: "resolved_questions".to_string(),
+            title: "Resolved Questions".to_string(),
+            body: truncate_lines(
+                resolved_questions
+                    .iter()
+                    .map(|question| {
+                        match (&question.resolved_by_decision_id, &question.resolution_text) {
+                            (Some(decision_id), Some(text)) => {
+                                format!(
+                                    "- {}: {} -> {} ({})",
+                                    question.id, question.text, decision_id, text
+                                )
+                            }
+                            (Some(decision_id), None) => {
+                                format!("- {}: {} -> {}", question.id, question.text, decision_id)
+                            }
+                            _ => format!("- {}: {}", question.id, question.text),
+                        }
+                    })
+                    .collect(),
+                section_item_limit(&effective_limits, "resolved_questions"),
+            ),
+            priority: if matches!(action, BrokerAction::Interpret | BrokerAction::Summarize) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    let focus_lines = merged_unique_many([
+        &snapshot.focus_paths,
+        &snapshot.checkpoint_focus_paths,
+        &request.focus_paths,
+    ])
+    .into_iter()
+    .map(|path| format!("- path: {path}"))
+    .chain(
+        merged_unique_many([
+            &snapshot.focus_symbols,
+            &snapshot.checkpoint_focus_symbols,
+            &request.focus_symbols,
+        ])
+        .into_iter()
+        .map(|symbol| format!("- symbol: {symbol}")),
+    )
+    .collect::<Vec<_>>();
+    if !focus_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "current_focus".to_string(),
+            title: "Current Focus".to_string(),
+            body: truncate_lines(
+                focus_lines,
+                section_item_limit(&effective_limits, "current_focus"),
+            ),
+            priority: if matches!(action, BrokerAction::Inspect | BrokerAction::Edit) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::SelfAuthored,
+        });
+    }
+
+    let discovered_scope_lines = snapshot
+        .read_paths_by_tool
+        .iter()
+        .flat_map(|summary| {
+            summary
+                .paths
+                .iter()
+                .map(|path| format!("- read via {}: {}", summary.tool_name, path))
+                .collect::<Vec<_>>()
+        })
+        .chain(snapshot.edited_paths_by_tool.iter().flat_map(|summary| {
+            summary
+                .paths
+                .iter()
+                .map(|path| format!("- edited via {}: {}", summary.tool_name, path))
+                .collect::<Vec<_>>()
+        }))
+        .chain(
+            merged_unique(&snapshot.focus_symbols, &snapshot.checkpoint_focus_symbols)
+                .into_iter()
+                .map(|symbol| format!("- symbol: {symbol}")),
+        )
+        .collect::<Vec<_>>();
+    if !discovered_scope_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "discovered_scope".to_string(),
+            title: "Discovered Scope".to_string(),
+            body: truncate_lines(
+                discovered_scope_lines,
+                section_item_limit(&effective_limits, "discovered_scope"),
+            ),
+            priority: if matches!(
+                action,
+                BrokerAction::Plan
+                    | BrokerAction::Inspect
+                    | BrokerAction::ChooseTool
+                    | BrokerAction::Edit
+            ) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if !snapshot.recent_tool_invocations.is_empty() {
+        let lines = render_recent_tool_activity_lines(snapshot, false);
+        sections.push(BrokerSection {
+            id: "recent_tool_activity".to_string(),
+            title: "Recent Tool Activity".to_string(),
+            body: truncate_lines(
+                lines,
+                section_item_limit(&effective_limits, "recent_tool_activity"),
+            ),
+            priority: if matches!(
+                action,
+                BrokerAction::Inspect
+                    | BrokerAction::ChooseTool
+                    | BrokerAction::Interpret
+                    | BrokerAction::Edit
+                    | BrokerAction::Summarize
+            ) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    let missed_savings = render_missed_savings_lines(snapshot);
+    if !missed_savings.is_empty() {
+        sections.push(BrokerSection {
+            id: "savings_opportunities".to_string(),
+            title: "Savings Opportunities".to_string(),
+            body: truncate_lines(
+                missed_savings,
+                section_item_limit(&effective_limits, "savings_opportunities"),
+            ),
+            priority: if matches!(
+                action,
+                BrokerAction::Inspect
+                    | BrokerAction::ChooseTool
+                    | BrokerAction::Edit
+                    | BrokerAction::Summarize
+            ) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if !snapshot.tool_failures.is_empty() {
+        let lines = snapshot
+            .tool_failures
+            .iter()
+            .rev()
+            .map(|failure| {
+                format!(
+                    "- #{} {} [{}] {}",
+                    failure.sequence,
+                    failure.tool_name,
+                    serde_json::to_string(&failure.operation_kind)
+                        .unwrap_or_else(|_| "\"generic\"".to_string())
+                        .trim_matches('"'),
+                    failure
+                        .error_message
+                        .as_deref()
+                        .or(failure.error_class.as_deref())
+                        .unwrap_or("tool failed")
+                )
+            })
+            .collect::<Vec<_>>();
+        sections.push(BrokerSection {
+            id: "tool_failures".to_string(),
+            title: "Tool Failures".to_string(),
+            body: truncate_lines(
+                lines,
+                section_item_limit(&effective_limits, "tool_failures"),
+            ),
+            priority: 1,
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    let failure_advice_lines = render_failure_advice_lines(root);
+    if !failure_advice_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "failure_advice".to_string(),
+            title: "Failure Advice".to_string(),
+            body: truncate_lines(
+                failure_advice_lines,
+                section_item_limit(&effective_limits, "failure_advice"),
+            ),
+            priority: if matches!(
+                action,
+                BrokerAction::Plan
+                    | BrokerAction::ChooseTool
+                    | BrokerAction::Interpret
+                    | BrokerAction::Summarize
+            ) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if !snapshot.evidence_artifact_ids.is_empty() {
+        sections.push(BrokerSection {
+            id: "evidence_cache".to_string(),
+            title: "Evidence Cache".to_string(),
+            body: truncate_lines(
+                snapshot
+                    .evidence_artifact_ids
+                    .iter()
+                    .map(|artifact_id| format!("- artifact: {artifact_id}"))
+                    .collect(),
+                section_item_limit(&effective_limits, "evidence_cache"),
+            ),
+            priority: if matches!(action, BrokerAction::Edit | BrokerAction::Summarize) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if !snapshot.changed_paths_since_checkpoint.is_empty()
+        || !snapshot.changed_symbols_since_checkpoint.is_empty()
+    {
+        let body = snapshot
+            .changed_paths_since_checkpoint
+            .iter()
+            .map(|path| format!("- changed path: {path}"))
+            .chain(
+                snapshot
+                    .changed_symbols_since_checkpoint
+                    .iter()
+                    .map(|symbol| format!("- changed symbol: {symbol}")),
+            )
+            .collect::<Vec<_>>();
+        sections.push(BrokerSection {
+            id: "checkpoint_deltas".to_string(),
+            title: "Checkpoint Deltas".to_string(),
+            body: truncate_lines(
+                body,
+                section_item_limit(&effective_limits, "checkpoint_deltas"),
+            ),
+            priority: if matches!(action, BrokerAction::Edit | BrokerAction::Summarize) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    let freshness_lines = render_evidence_freshness_lines(snapshot);
+    if !freshness_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "evidence_freshness".to_string(),
+            title: "Evidence Freshness".to_string(),
+            body: truncate_lines(
+                freshness_lines,
+                section_item_limit(&effective_limits, "evidence_freshness"),
+            ),
+            priority: if matches!(action, BrokerAction::Inspect | BrokerAction::Edit) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    let confidence_lines = render_evidence_confidence_lines(root, snapshot);
+    if !confidence_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "evidence_confidence".to_string(),
+            title: "Evidence Confidence".to_string(),
+            body: truncate_lines(
+                confidence_lines,
+                section_item_limit(&effective_limits, "evidence_confidence"),
+            ),
+            priority: if matches!(action, BrokerAction::Inspect | BrokerAction::Edit) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    let context_debt_lines = render_context_debt_lines(snapshot);
+    if !context_debt_lines.is_empty() {
+        sections.push(BrokerSection {
+            id: "context_debt".to_string(),
+            title: "Context Debt".to_string(),
+            body: truncate_lines(
+                context_debt_lines,
+                section_item_limit(&effective_limits, "context_debt"),
+            ),
+            priority: if matches!(
+                action,
+                BrokerAction::Plan
+                    | BrokerAction::Inspect
+                    | BrokerAction::ChooseTool
+                    | BrokerAction::Edit
+            ) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if should_run_reducer_search(&allowed_sections) {
+        let search_execution = build_reducer_search_execution(SearchExecutionArgs {
+            state: Some(state),
+            root,
+            snapshot,
+            request,
+            query_focus: &query_focus,
+            action,
+            max_files: section_item_limit(&effective_limits, "search_evidence").max(8),
+            max_evidence_lines: section_item_limit(&effective_limits, "code_evidence").min(15),
+        });
+        let reducer_files = search_execution.files;
+        if !reducer_files.is_empty() {
+            let evidence_by_file = search_execution.evidence_by_file;
+            let lines = reducer_files
+                .iter()
+                .map(|file| {
+                    let line_hint = file
+                        .preview_matches
+                        .first()
+                        .map(|(line, _)| format!(":{line}"))
+                        .unwrap_or_default();
+                    let terms = file
+                        .matched_terms
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "- {}{} [matches={}] — direct reducer hit for {}",
+                        file.path, line_hint, file.match_count, terms
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !lines.is_empty() {
+                sections.push(BrokerSection {
+                    id: "search_evidence".to_string(),
+                    title: "Relevant Files".to_string(),
+                    body: truncate_lines(
+                        lines,
+                        section_item_limit(&effective_limits, "search_evidence"),
+                    ),
+                    priority: if matches!(
+                        action,
+                        BrokerAction::Plan | BrokerAction::Inspect | BrokerAction::ChooseTool
+                    ) {
+                        1
+                    } else {
+                        2
+                    },
+                    source_kind: BrokerSourceKind::Derived,
+                });
+            }
+
+            let max_items = section_item_limit(&effective_limits, "code_evidence");
+            let evidence_lines = reducer_files
+                .iter()
+                .flat_map(|file| {
+                    evidence_by_file
+                        .get(&file.path)
+                        .map(|summary| summary.rendered_lines.clone())
+                        .unwrap_or_default()
+                })
+                .take(max_items)
+                .collect::<Vec<_>>();
+            if !evidence_lines.is_empty() {
+                sections.push(BrokerSection {
+                    id: "code_evidence".to_string(),
+                    title: "Code Evidence".to_string(),
+                    body: truncate_lines(evidence_lines, max_items),
+                    priority: if matches!(
+                        action,
+                        BrokerAction::Inspect
+                            | BrokerAction::Interpret
+                            | BrokerAction::Edit
+                            | BrokerAction::ChooseTool
+                    ) {
+                        1
+                    } else {
+                        2
+                    },
+                    source_kind: BrokerSourceKind::Derived,
+                });
+            }
+        }
+    }
+
+    if let Some(manage) = manage
+        .filter(|manage| !manage.working_set.is_empty() || !manage.recommended_packets.is_empty())
+    {
+        let packets = if !manage.working_set.is_empty() {
+            &manage.working_set
+        } else {
+            &manage.recommended_packets
+        };
+        let mut visible_packets = packets
+            .iter()
+            .filter(|packet| {
+                request.include_self_context
+                    || packet_source_kind(packet) != BrokerSourceKind::SelfAuthored
+            })
+            .map(|packet| render_relevant_context_line(packet, snapshot))
+            .collect::<Vec<_>>();
+        visible_packets.sort_by_key(|(is_stale, _)| *is_stale);
+        let visible_packets = visible_packets
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>();
+        if !visible_packets.is_empty() {
+            sections.push(BrokerSection {
+                id: "relevant_context".to_string(),
+                title: "Relevant Context".to_string(),
+                body: truncate_lines(
+                    visible_packets,
+                    section_item_limit(&effective_limits, "relevant_context"),
+                ),
+                priority: if matches!(
+                    action,
+                    BrokerAction::Plan | BrokerAction::Interpret | BrokerAction::ChooseTool
+                ) {
+                    1
+                } else {
+                    2
+                },
+                source_kind: BrokerSourceKind::External,
+            });
+        }
+    }
+
+    if let Some(manage) = manage.filter(|manage| !manage.recommended_actions.is_empty()) {
+        let title = match request
+            .tool_result_kind
+            .unwrap_or(BrokerToolResultKind::Generic)
+        {
+            BrokerToolResultKind::Build => "Build Guidance",
+            BrokerToolResultKind::Stack => "Stack Guidance",
+            BrokerToolResultKind::Test => "Test Guidance",
+            BrokerToolResultKind::Diff => "Diff Guidance",
+            BrokerToolResultKind::Generic => "Recommended Actions",
+        };
+        sections.push(BrokerSection {
+            id: "recommended_actions".to_string(),
+            title: title.to_string(),
+            body: truncate_lines(
+                manage
+                    .recommended_actions
+                    .iter()
+                    .map(|action| format!("- {}: {}", action.kind, action.summary))
+                    .collect(),
+                section_item_limit(&effective_limits, "recommended_actions"),
+            ),
+            priority: if matches!(action, BrokerAction::ChooseTool | BrokerAction::Interpret) {
+                1
+            } else {
+                2
+            },
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    if matches!(action, BrokerAction::Summarize) {
+        let progress = [
+            format!("- completed steps: {}", snapshot.completed_steps.len()),
+            format!("- files read: {}", snapshot.files_read.len()),
+            format!("- files edited: {}", snapshot.files_edited.len()),
+        ];
+        sections.push(BrokerSection {
+            id: "progress".to_string(),
+            title: "Progress".to_string(),
+            body: progress.join("\n"),
+            priority: 1,
+            source_kind: BrokerSourceKind::Derived,
+        });
+    }
+
+    sections.retain(|section| allowed_sections.contains(&section.id));
+    sections
+}
+
+pub(crate) fn build_action_critic_lines(
+    request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    focus_symbols: &[String],
+) -> Vec<String> {
+    match request.action.unwrap_or(BrokerAction::Plan) {
+        BrokerAction::ChooseTool => {
+            build_choose_tool_action_critic_lines(request, snapshot, focus_symbols)
+        }
+        BrokerAction::Edit => build_edit_action_critic_lines(request, snapshot, focus_symbols),
+        _ => Vec::new(),
+    }
+}
+
+fn build_choose_tool_action_critic_lines(
+    request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    focus_symbols: &[String],
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let query = request
+        .query
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    if query.is_none() && request.tool_name.as_deref().unwrap_or("").trim().is_empty() {
+        lines.push(
+            "- missing_tool_intent: supply a query or tool_name before choosing the next tool"
+                .to_string(),
+        );
+    }
+    let lower_query = query.unwrap_or_default().to_ascii_lowercase();
+    if destructive_command_risk(&lower_query) {
+        lines.push(
+            "- destructive_command: inspect scope and confirm intent before running this command"
+                .to_string(),
+        );
+    }
+    let has_scope = !request.focus_paths.is_empty() || !focus_symbols.is_empty();
+    if !has_scope && broad_search_risk(&lower_query) {
+        lines.push(
+            "- broad_search: add focus_paths or focus_symbols before launching a repository-wide search"
+                .to_string(),
+        );
+    }
+    if finalization_intent(&lower_query) && !has_recent_verification_evidence(snapshot) {
+        lines.push(
+            "- verification_gap: cite or run focused test/build/diff evidence before finalizing, committing, or pushing"
+                .to_string(),
+        );
+    }
+    lines
+}
+
+fn render_evidence_freshness_lines(
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> Vec<String> {
+    let fresh_paths = snapshot
+        .changed_paths_since_checkpoint
+        .iter()
+        .filter(|path| snapshot.files_read.iter().any(|read| read == *path))
+        .count();
+    let changed_paths = snapshot.changed_paths_since_checkpoint.len();
+    let stale_paths = changed_paths.saturating_sub(fresh_paths);
+    let changed_symbols = snapshot.changed_symbols_since_checkpoint.len();
+    let mut lines = vec![format!(
+        "- freshness_score: {fresh_paths}/{changed_paths} changed path(s) have fresh reads; {stale_paths} path(s) and {changed_symbols} symbol(s) need refresh"
+    )];
+
+    lines.extend(
+        snapshot
+            .changed_paths_since_checkpoint
+            .iter()
+            .map(|path| {
+                let read_status = if snapshot.files_read.iter().any(|read| read == path) {
+                    "fresh read recorded"
+                } else {
+                    "refresh read/search before relying on cached evidence"
+                };
+                format!("- changed path: {path} ({read_status})")
+            })
+            .chain(
+                snapshot
+                    .changed_symbols_since_checkpoint
+                    .iter()
+                    .map(|symbol| format!("- changed symbol: {symbol} (refresh symbol evidence)")),
+            ),
+    );
+    lines
+}
+
+fn render_context_debt_lines(snapshot: &suite_packet_core::AgentSnapshotPayload) -> Vec<String> {
+    let stale_paths = snapshot
+        .changed_paths_since_checkpoint
+        .iter()
+        .filter(|path| !snapshot.files_read.iter().any(|read| read == *path))
+        .collect::<Vec<_>>();
+    let unverified_edits = if (!snapshot.files_edited.is_empty()
+        || !snapshot.changed_paths_since_checkpoint.is_empty()
+        || !snapshot.changed_symbols_since_checkpoint.is_empty())
+        && !has_recent_verification_evidence(snapshot)
+    {
+        snapshot
+            .files_edited
+            .len()
+            .max(snapshot.changed_paths_since_checkpoint.len())
+            .max(snapshot.changed_symbols_since_checkpoint.len())
+    } else {
+        0
+    };
+    let contradiction_count = active_hypothesis_contradiction_count(snapshot);
+    let open_questions = snapshot.open_questions.len();
+    if stale_paths.is_empty()
+        && unverified_edits == 0
+        && contradiction_count == 0
+        && open_questions == 0
+    {
+        return Vec::new();
+    }
+
+    let mut lines = vec![format!(
+        "- debt_summary: stale_paths={} open_questions={} unverified_edits={} contradictions={}",
+        stale_paths.len(),
+        open_questions,
+        unverified_edits,
+        contradiction_count
+    )];
+    if let Some(path) = stale_paths.first() {
+        lines.push(format!(
+            "- payoff stale_path: read/search {path} before relying on cached evidence"
+        ));
+    }
+    if let Some(symbol) = snapshot.changed_symbols_since_checkpoint.first() {
+        lines.push(format!(
+            "- payoff stale_symbol: inspect/search {symbol} before relying on cached evidence"
+        ));
+    }
+    if open_questions > 0 {
+        lines.push(
+            "- payoff open_questions: resolve or explicitly defer before handoff/finalization"
+                .to_string(),
+        );
+    }
+    if unverified_edits > 0 {
+        lines.push("- payoff unverified_edits: run focused test/build/diff evidence".to_string());
+    }
+    if contradiction_count > 0 {
+        lines.push(
+            "- payoff contradictions: resolve or supersede contradicted hypothesis decisions"
+                .to_string(),
+        );
+    }
+    lines
+}
+
+fn render_evidence_confidence_lines(
+    root: &Path,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> Vec<String> {
+    let has_evidence_signal = !snapshot.recent_tool_invocations.is_empty()
+        || !snapshot.changed_paths_since_checkpoint.is_empty()
+        || !snapshot.changed_symbols_since_checkpoint.is_empty()
+        || !snapshot.evidence_artifact_ids.is_empty();
+    if !has_evidence_signal {
+        return Vec::new();
+    }
+
+    let stale_paths = snapshot
+        .changed_paths_since_checkpoint
+        .iter()
+        .filter(|path| !snapshot.files_read.iter().any(|read| read == *path))
+        .count() as u64;
+    let changed_symbols = snapshot.changed_symbols_since_checkpoint.len() as u64;
+    let successful_verification = snapshot.recent_tool_invocations.iter().any(|invocation| {
+        matches!(
+            invocation.operation_kind,
+            suite_packet_core::ToolOperationKind::Build
+                | suite_packet_core::ToolOperationKind::Test
+                | suite_packet_core::ToolOperationKind::Diff
+        ) && !invocation
+            .result_summary
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains("fail")
+    });
+    let fallback_count = load_broker_run_savings(root, 32)
+        .iter()
+        .filter(|record| {
+            record
+                .fallback_reason
+                .as_deref()
+                .is_some_and(|reason| !reason.trim().is_empty())
+        })
+        .count() as u64;
+    let failure_count = snapshot.tool_failures.len() as u64
+        + snapshot
+            .recent_tool_invocations
+            .iter()
+            .filter(|invocation| {
+                invocation
+                    .result_summary
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+                    .contains("fail")
+            })
+            .count() as u64;
+    let artifact_gap = snapshot
+        .recent_tool_invocations
+        .iter()
+        .filter(|invocation| {
+            invocation.artifact_id.is_none()
+                && !invocation.raw_artifact_available
+                && matches!(
+                    invocation.operation_kind,
+                    suite_packet_core::ToolOperationKind::Search
+                        | suite_packet_core::ToolOperationKind::Read
+                        | suite_packet_core::ToolOperationKind::Build
+                        | suite_packet_core::ToolOperationKind::Test
+                        | suite_packet_core::ToolOperationKind::Diff
+                )
+        })
+        .count() as u64;
+    let artifact_backed = !snapshot.evidence_artifact_ids.is_empty()
+        || snapshot.recent_tool_invocations.iter().any(|invocation| {
+            invocation.artifact_id.is_some() || invocation.raw_artifact_available
+        });
+    let evidence_backing = if artifact_gap > 0 || !artifact_backed {
+        "missing"
+    } else {
+        "artifact"
+    };
+    let unbacked_symbol_evidence = changed_symbols > 0 && artifact_gap > 0;
+    let score = 100_u64
+        .saturating_sub(stale_paths.saturating_mul(20).min(40))
+        .saturating_sub(changed_symbols.saturating_mul(20).min(40))
+        .saturating_sub(fallback_count.saturating_mul(20).min(40))
+        .saturating_sub(failure_count.saturating_mul(25).min(50))
+        .saturating_sub(artifact_gap.saturating_mul(10).min(40))
+        .saturating_sub(if unbacked_symbol_evidence { 10 } else { 0 })
+        .saturating_add(if successful_verification { 10 } else { 0 })
+        .min(100);
+    let score = if evidence_backing == "missing" {
+        score.min(84)
+    } else {
+        score
+    };
+    let label = if score >= 85 {
+        "high"
+    } else if score >= 60 {
+        "medium"
+    } else {
+        "low"
+    };
+    let payoff = confidence_payoff(
+        score,
+        stale_paths,
+        changed_symbols,
+        fallback_count,
+        failure_count,
+        artifact_gap,
+    );
+    let risk = confidence_risk(
+        score,
+        stale_paths,
+        changed_symbols,
+        fallback_count,
+        failure_count,
+        artifact_gap,
+    );
+    vec![
+        format!(
+            "- confidence: {label} score={score} stale_paths={stale_paths} changed_symbols={changed_symbols} fallback_records={fallback_count} failures={failure_count} artifact_gaps={artifact_gap} backing={evidence_backing}"
+        ),
+        format!(
+            "- confidence_reason: source=local_tool_state verification={} artifacts={} backing={} risk={} payoff={}",
+            if successful_verification { "fresh" } else { "missing" },
+            snapshot.evidence_artifact_ids.len(),
+            evidence_backing,
+            risk,
+            payoff
+        ),
+    ]
+}
+
+#[derive(Clone, Copy)]
+enum ConfidenceRiskClass {
+    Usable,
+    Failures,
+    MixedFreshness,
+    StalePaths,
+    ChangedSymbolMissingBacking,
+    ChangedSymbols,
+    FallbackRecords,
+    ArtifactMissingBacking,
+    WeakEvidence,
+}
+
+fn confidence_risk_class(
+    score: u64,
+    stale_paths: u64,
+    changed_symbols: u64,
+    fallback_count: u64,
+    failure_count: u64,
+    artifact_gap: u64,
+) -> ConfidenceRiskClass {
+    if score >= 85 {
+        return ConfidenceRiskClass::Usable;
+    }
+    if failure_count > 0 {
+        return ConfidenceRiskClass::Failures;
+    }
+    if stale_paths > 0 && changed_symbols > 0 {
+        return ConfidenceRiskClass::MixedFreshness;
+    }
+    if stale_paths > 0 {
+        return ConfidenceRiskClass::StalePaths;
+    }
+    if changed_symbols > 0 && artifact_gap > 0 {
+        return ConfidenceRiskClass::ChangedSymbolMissingBacking;
+    }
+    if changed_symbols > 0 {
+        return ConfidenceRiskClass::ChangedSymbols;
+    }
+    if fallback_count > 0 {
+        return ConfidenceRiskClass::FallbackRecords;
+    }
+    if artifact_gap > 0 {
+        return ConfidenceRiskClass::ArtifactMissingBacking;
+    }
+    ConfidenceRiskClass::WeakEvidence
+}
+
+pub(crate) fn confidence_payoff(
+    score: u64,
+    stale_paths: u64,
+    changed_symbols: u64,
+    fallback_count: u64,
+    failure_count: u64,
+    artifact_gap: u64,
+) -> &'static str {
+    match confidence_risk_class(
+        score,
+        stale_paths,
+        changed_symbols,
+        fallback_count,
+        failure_count,
+        artifact_gap,
+    ) {
+        ConfidenceRiskClass::Usable => "evidence usable",
+        ConfidenceRiskClass::Failures => "rerun failing evidence",
+        ConfidenceRiskClass::MixedFreshness => "refresh stale_paths+changed_symbols",
+        ConfidenceRiskClass::StalePaths => "refresh stale_paths",
+        ConfidenceRiskClass::ChangedSymbolMissingBacking => {
+            "capture artifact-backed symbol evidence"
+        }
+        ConfidenceRiskClass::ChangedSymbols => "refresh changed_symbols",
+        ConfidenceRiskClass::FallbackRecords => "replace fallback_records",
+        ConfidenceRiskClass::ArtifactMissingBacking => "capture artifact-backed evidence",
+        ConfidenceRiskClass::WeakEvidence => "refresh weak evidence",
+    }
+}
+
+pub(crate) fn confidence_risk(
+    score: u64,
+    stale_paths: u64,
+    changed_symbols: u64,
+    fallback_count: u64,
+    failure_count: u64,
+    artifact_gap: u64,
+) -> &'static str {
+    match confidence_risk_class(
+        score,
+        stale_paths,
+        changed_symbols,
+        fallback_count,
+        failure_count,
+        artifact_gap,
+    ) {
+        ConfidenceRiskClass::Usable => "none",
+        ConfidenceRiskClass::Failures => "failures",
+        ConfidenceRiskClass::MixedFreshness => "freshness_mixed",
+        ConfidenceRiskClass::StalePaths => "stale_paths",
+        ConfidenceRiskClass::ChangedSymbolMissingBacking => "missing_backing",
+        ConfidenceRiskClass::ChangedSymbols => "changed_symbols",
+        ConfidenceRiskClass::FallbackRecords => "fallback_records",
+        ConfidenceRiskClass::ArtifactMissingBacking => "missing_backing",
+        ConfidenceRiskClass::WeakEvidence => "weak_evidence",
+    }
+}
+
+fn active_hypothesis_contradiction_count(
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+) -> usize {
+    let contradiction_terms = [
+        "contradict",
+        "contradicted",
+        "contradiction",
+        "reject",
+        "rejected",
+        "refute",
+        "refuted",
+        "falsify",
+        "falsified",
+        "not true",
+    ];
+    snapshot
+        .active_decisions
+        .iter()
+        .filter(|decision| decision.id.starts_with("hypothesis:"))
+        .filter(|decision| {
+            let hypothesis_key = decision
+                .id
+                .strip_prefix("hypothesis:")
+                .unwrap_or(decision.id.as_str())
+                .to_ascii_lowercase();
+            snapshot.recent_tool_invocations.iter().any(|invocation| {
+                let evidence = [
+                    invocation.result_summary.as_deref().unwrap_or_default(),
+                    invocation.compact_preview.as_deref().unwrap_or_default(),
+                    invocation.request_summary.as_deref().unwrap_or_default(),
+                    invocation.command.as_deref().unwrap_or_default(),
+                ]
+                .join(" ")
+                .to_ascii_lowercase();
+                !evidence.trim().is_empty()
+                    && contradiction_terms
+                        .iter()
+                        .any(|term| evidence.contains(term))
+                    && (evidence.contains(&hypothesis_key)
+                        || decision.related_paths.iter().any(|path| {
+                            !path.trim().is_empty() && evidence.contains(&path.to_ascii_lowercase())
+                        })
+                        || decision.related_symbols.iter().any(|symbol| {
+                            !symbol.trim().is_empty()
+                                && evidence.contains(&symbol.to_ascii_lowercase())
+                        }))
+            })
+        })
+        .count()
+}
+
+#[derive(Debug, Clone)]
+struct BrokerRunSavingsRecord {
+    command: String,
+    cwd: String,
+    exit_code: i32,
+    fallback_reason: Option<String>,
+    failure_fingerprint: Option<String>,
+    changed_paths: Vec<String>,
+    timestamp_unix_ms: u128,
+}
+
+fn render_failure_advice_lines(root: &Path) -> Vec<String> {
+    let records = load_broker_run_savings(root, 64);
+    if records.is_empty() {
+        return Vec::new();
+    }
+    let mut repeat_counts = HashMap::<String, usize>::new();
+    for record in &records {
+        if let Some(fingerprint) = record.failure_fingerprint.as_deref() {
+            *repeat_counts.entry(fingerprint.to_string()).or_insert(0) += 1;
+        }
+    }
+    records
+        .iter()
+        .filter(|record| record.exit_code != 0 || record.fallback_reason.is_some())
+        .filter_map(|record| {
+            let fingerprint = record.failure_fingerprint.as_deref()?;
+            let repeat_count = repeat_counts.get(fingerprint).copied().unwrap_or(1);
+            let next_success = next_success_record(&records, record)?;
+            let changed_paths = if next_success.changed_paths.is_empty() {
+                "paths=none".to_string()
+            } else {
+                format!("paths={}", next_success.changed_paths.join(";"))
+            };
+            Some(format!(
+                "- repeated_failure: count={repeat_count} fingerprint={fingerprint} advice=retry `{}` after inspecting {changed_paths}",
+                next_success.command
+            ))
+        })
+        .take(4)
+        .collect()
+}
+
+fn load_broker_run_savings(root: &Path, limit: usize) -> Vec<BrokerRunSavingsRecord> {
+    let path = root.join(".packet28").join("run-savings.jsonl");
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut records = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(parse_broker_run_savings_record)
+        .collect::<Vec<_>>();
+    records.sort_by(|a, b| b.timestamp_unix_ms.cmp(&a.timestamp_unix_ms));
+    records.truncate(limit.max(1));
+    records
+}
+
+fn parse_broker_run_savings_record(line: &str) -> Option<BrokerRunSavingsRecord> {
+    let value = serde_json::from_str::<Value>(line).ok()?;
+    let command = value.get("command")?.as_str()?.to_string();
+    let cwd = value.get("cwd")?.as_str()?.to_string();
+    let exit_code = value.get("exit_code")?.as_i64()? as i32;
+    let fallback_reason = value
+        .get("fallback_reason")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let failure_fingerprint = value
+        .get("failure_fingerprint")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let changed_paths = value
+        .get("changed_paths")
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let timestamp_unix_ms = value.get("timestamp_unix_ms")?.as_u64()? as u128;
+    Some(BrokerRunSavingsRecord {
+        command,
+        cwd,
+        exit_code,
+        fallback_reason,
+        failure_fingerprint,
+        changed_paths,
+        timestamp_unix_ms,
+    })
+}
+
+fn next_success_record<'a>(
+    records: &'a [BrokerRunSavingsRecord],
+    failed: &BrokerRunSavingsRecord,
+) -> Option<&'a BrokerRunSavingsRecord> {
+    records
+        .iter()
+        .filter(|candidate| {
+            candidate.timestamp_unix_ms > failed.timestamp_unix_ms
+                && candidate.cwd == failed.cwd
+                && candidate.exit_code == 0
+        })
+        .min_by_key(|candidate| candidate.timestamp_unix_ms)
+}
+
+fn build_edit_action_critic_lines(
+    request: &BrokerGetContextRequest,
+    snapshot: &suite_packet_core::AgentSnapshotPayload,
+    focus_symbols: &[String],
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let focus_paths = merged_unique_many([
+        &snapshot.focus_paths,
+        &snapshot.checkpoint_focus_paths,
+        &request.focus_paths,
+    ]);
+    if focus_paths.is_empty() && focus_symbols.is_empty() {
+        lines.push(
+            "- missing_edit_scope: add focus_paths or focus_symbols before requesting edit context"
+                .to_string(),
+        );
+    }
+
+    let read_paths = merged_unique(
+        &snapshot.files_read,
+        &snapshot
+            .read_paths_by_tool
+            .iter()
+            .flat_map(|summary| summary.paths.iter().cloned())
+            .collect::<Vec<_>>(),
+    );
+    let unread_paths = focus_paths
+        .iter()
+        .filter(|path| !path_read_before_edit(path, &read_paths))
+        .take(4)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unread_paths.is_empty() {
+        lines.push(format!(
+            "- read_before_edit: inspect focused path(s) before editing: {}",
+            unread_paths.join(", ")
+        ));
+    }
+    lines
+}
+
+fn path_read_before_edit(path: &str, read_paths: &[String]) -> bool {
+    let path = path.trim().trim_start_matches("./");
+    read_paths
+        .iter()
+        .map(|read_path| read_path.trim().trim_start_matches("./"))
+        .any(|read_path| read_path == path)
+}
+
+fn destructive_command_risk(query: &str) -> bool {
+    [
+        "rm -rf",
+        "git reset --hard",
+        "git clean -fd",
+        "chmod -r",
+        "chown -r",
+        "sudo rm",
+    ]
+    .iter()
+    .any(|needle| query.contains(needle))
+}
+
+fn broad_search_risk(query: &str) -> bool {
+    let query = query.trim();
+    query.starts_with("rg ")
+        || query.starts_with("grep ")
+        || query.contains(" rg ")
+        || query.contains(" grep ")
+        || query.contains("search the repo")
+        || query.contains("search repository")
+}
+
+fn finalization_intent(query: &str) -> bool {
+    let query = query.trim();
+    query.contains("commit")
+        || query.contains("push")
+        || query.contains("finalize")
+        || query.contains("finish")
+        || query.contains("done")
+        || query.contains("ready to merge")
+}
+
+fn has_recent_verification_evidence(snapshot: &suite_packet_core::AgentSnapshotPayload) -> bool {
+    snapshot.recent_tool_invocations.iter().any(|invocation| {
+        matches!(
+            invocation.operation_kind,
+            suite_packet_core::ToolOperationKind::Test
+                | suite_packet_core::ToolOperationKind::Build
+                | suite_packet_core::ToolOperationKind::Diff
+        )
+    })
+}
+
+pub(crate) fn render_brief(
+    task_id: &str,
+    context_version: &str,
+    sections: &[BrokerSection],
+) -> String {
+    let mut blocks = vec![format!(
+        "[Packet28 Context v{context_version} — current Packet28 context for task {task_id}; supersedes all prior Packet28 context for this task]"
+    )];
+    blocks.extend(
+        sections
+            .iter()
+            .map(|section| format!("## {}\n{}", section.title, section.body)),
+    );
+    blocks.join("\n\n")
+}
+
+pub(crate) fn load_versioned_broker_response(
+    root: &Path,
+    task_id: &str,
+    context_version: &str,
+) -> Result<Option<BrokerGetContextResponse>> {
+    let task_id = task_storage_id(task_id)?;
+    let context_version = context_version_storage_id(context_version)?;
+    let path = task_version_json_path(root, &task_id, &context_version);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).with_context(|| {
+        format!(
+            "failed to read versioned broker response '{}'",
+            path.display()
+        )
+    })?;
+    Ok(Some(serde_json::from_slice(&bytes)?))
+}
+
+pub(crate) fn build_delta(
+    current: &[BrokerSection],
+    previous: Option<&BrokerGetContextResponse>,
+) -> BrokerDeltaResponse {
+    let Some(previous) = previous else {
+        return BrokerDeltaResponse {
+            changed_sections: current.to_vec(),
+            removed_section_ids: Vec::new(),
+            unchanged_section_ids: Vec::new(),
+            full_refresh_required: true,
+        };
+    };
+    let current_by_id = current
+        .iter()
+        .map(|section| (section.id.as_str(), section))
+        .collect::<BTreeMap<_, _>>();
+    let previous_by_id = previous
+        .sections
+        .iter()
+        .map(|section| (section.id.as_str(), section))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut changed_sections = Vec::new();
+    let mut unchanged_section_ids = Vec::new();
+    for section in current {
+        match previous_by_id.get(section.id.as_str()) {
+            Some(old) if *old == section => unchanged_section_ids.push(section.id.clone()),
+            _ => changed_sections.push(section.clone()),
+        }
+    }
+    let removed_section_ids = previous
+        .sections
+        .iter()
+        .filter(|section| !current_by_id.contains_key(section.id.as_str()))
+        .map(|section| section.id.clone())
+        .collect::<Vec<_>>();
+    BrokerDeltaResponse {
+        changed_sections,
+        removed_section_ids,
+        unchanged_section_ids,
+        full_refresh_required: false,
+    }
+}
+
+pub(crate) fn build_section_estimates(
+    sections: &[BrokerSection],
+    changed_ids: &HashSet<String>,
+) -> Vec<BrokerSectionEstimate> {
+    sections
+        .iter()
+        .map(|section| {
+            let (est_tokens, est_bytes) = estimate_rendered_section_cost(section);
+            BrokerSectionEstimate {
+                id: section.id.clone(),
+                est_tokens,
+                est_bytes,
+                source_kind: section.source_kind,
+                changed: changed_ids.contains(&section.id),
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn build_eviction_candidates(
+    sections: &[BrokerSection],
+) -> Vec<BrokerEvictionCandidate> {
+    sections
+        .iter()
+        .filter(|section| {
+            matches!(
+                section.id.as_str(),
+                "relevant_context"
+                    | "search_evidence"
+                    | "checkpoint_deltas"
+                    | "recommended_actions"
+            )
+        })
+        .map(|section| {
+            let (est_tokens, _) = estimate_rendered_section_cost(section);
+            let reason = match section.id.as_str() {
+                "relevant_context" => "refreshable evidence".to_string(),
+                "search_evidence" => "search evidence can be regenerated".to_string(),
+                "checkpoint_deltas" => "checkpoint state can be recomputed".to_string(),
+                "recommended_actions" => "guidance can be regenerated".to_string(),
+                _ => "refreshable section".to_string(),
+            };
+            BrokerEvictionCandidate {
+                section_id: section.id.clone(),
+                reason,
+                est_tokens,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn should_use_delta_view(
+    request: &BrokerGetContextRequest,
+    delta: &BrokerDeltaResponse,
+    full_sections_len: usize,
+) -> bool {
+    match broker_request_response_mode(request) {
+        BrokerResponseMode::Full => false,
+        BrokerResponseMode::Delta => request.since_version.is_some(),
+        BrokerResponseMode::Slim | BrokerResponseMode::Auto => {
+            request.since_version.is_some()
+                && !delta.full_refresh_required
+                && !delta.changed_sections.is_empty()
+                && delta.changed_sections.len() < full_sections_len
+        }
+    }
+}

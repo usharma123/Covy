@@ -4,21 +4,29 @@
 
 The context store persists reducer packets, recall indexes, and task state across process invocations. It supports long-horizon agent workflows where prior context must survive restarts, and enables recall — querying past packets by text, paths, symbols, and tests.
 
+Packet-cache persistence and daemon task-store persistence are separate
+authority domains. For daemon startup, request flushing, task cancellation,
+and runtime-file behavior, see
+[Packet28 daemon runtime](../docs/daemon-runtime.md). For the fail-closed task
+registry, event log, and quarantine contract, see
+[Task-store retention](../docs/task-store-retention.md).
+
 ## Storage Layout
 
 Root directory: `.packet28/` under the workspace root.
 
 ```
 .packet28/
-├── packet-cache-v2.bin          Packet cache with indexes (bincode)
+├── packet-cache-v3.bin          Packet-cache checkpoint with indexes (binary codec)
+├── packet-cache-v3.wal          Checksummed dirty-entry deltas
 ├── artifacts/                   Full packet artifacts for --json=handle
 │   └── <handle_id>.json
 ├── agent/
 │   ├── latest-bootstrap.json    Last worker bootstrap payload from packet28-agent
 │   └── latest-handoff.json      Last checkpointed handoff bootstrap
 └── daemon/
-    ├── packet28d.sock           Unix socket
-    ├── runtime.json             Daemon PID and metadata
+    ├── packet28d.sock           Workspace-local Unix fallback
+    ├── runtime.json             Daemon PID and selected Unix/TCP endpoint
     ├── packet28d.log            Daemon log
     ├── watch-registry-v1.json   Active file watches
     ├── task-registry-v1.json    Task state
@@ -27,13 +35,18 @@ Root directory: `.packet28/` under the workspace root.
             └── events.jsonl     Per-task event log
 ```
 
-## Cache Format (V2)
+## Cache Format (V3)
 
-The cache is stored as `packet-cache-v2.bin` using bincode with a versioned envelope:
+The cache is checkpointed as `packet-cache-v3.bin` using the versioned Packet28
+binary codec. Between debounced checkpoints, per-key upserts and
+tombstones are appended to `packet-cache-v3.wal` as checksummed frames. Startup
+replays only a valid prefix, so a torn final frame cannot discard earlier
+durable updates:
 
 ```rust
-struct PersistEnvelopeV2 {
-    version: u32,                              // 2
+struct PersistEnvelopeV3 {
+    version: u32,                              // 3
+    applied_wal_sequence: u64,
     entries: Vec<PacketCacheEntry>,
     recall_postings: HashMap<String, Vec<(String, usize)>>,  // BM25 term index
     recall_docs: HashMap<String, RecallDocument>,
@@ -45,14 +58,20 @@ struct PersistEnvelopeV2 {
 }
 ```
 
-The V2 format persists all indexes alongside cache entries, so recall is immediately available on load without reindexing.
+The V3 checkpoint persists all indexes alongside cache entries, so recall is
+immediately available on load without reindexing. Its WAL sequence watermark
+makes replay idempotent if a process stops after publishing the checkpoint but
+before truncating the WAL.
 
 ### Schema Migration
 
 - V1 files (`packet-cache-v1.bin`) are loaded and indexes rebuilt on first access
 - V2 files include pre-built indexes
-- Unknown versions are ignored (empty cache, warning logged)
-- Corrupt files are ignored (empty cache, no hard failure)
+- V3 adds the checkpoint watermark and checksummed delta WAL
+- Unknown versions are counted and ignored
+- Corrupt checkpoint files fall back to the prior compatible format
+- A corrupt or torn WAL tail is ignored after its last valid frame and repaired
+  only when a persistence owner starts
 
 ## PacketCacheEntry
 
@@ -160,10 +179,22 @@ Packet28 context recall --root . --query "coverage gap" --limit 5 --json
 
 ## Daemon Integration
 
-When the daemon is running, it owns the persistent cache. Commands routed via `--via-daemon` use the daemon's in-memory cache, which is periodically flushed to disk. Direct CLI commands (without `--via-daemon`) load from disk on each invocation.
+When the daemon is running, its persistent kernels own the cache-persistence
+workers for their roots. Commands routed via `--via-daemon` use those in-memory
+caches, whose workers persist bounded WAL/checkpoint updates. The daemon's
+request-boundary flush separately covers task/watch registry state. Direct CLI
+commands without `--via-daemon` construct their own kernel/cache lifecycle.
 
 ## Corruption and Recovery
 
-- If the cache file is unreadable or has an unknown version: start with an empty cache, log a warning
-- If the daemon crashes: cache state from the last flush is preserved on disk
-- No manual recovery steps required — the system self-heals on the next successful write
+- V3 checkpoint loading tries the authenticated primary and then its
+  authenticated backup. With no non-empty V3 WAL, older compatible checkpoints
+  may be loaded and migrated.
+- WAL replay accepts only the valid checksummed prefix. A persistence owner
+  truncates a corrupt tail only when a trusted V3 checkpoint establishes the
+  sequence baseline.
+- A baseline mismatch, or a corrupt WAL without a trusted V3 checkpoint,
+  refuses destructive repair and surfaces a persistence failure. Recovery is
+  therefore not an unconditional "start empty and self-heal" promise.
+- These cache rules do not weaken daemon task-store handling: corrupt durable
+  task frames and conflicted recovery authority fail daemon startup closed.

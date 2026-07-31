@@ -1,5 +1,11 @@
 #[path = "support/packet_wrapper.rs"]
 mod packet_wrapper;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 #[path = "support/via_daemon_root.rs"]
 mod via_daemon_root;
 

@@ -1,13 +1,16 @@
 use std::path::PathBuf;
 
 use crate::diagnostics::DiagnosticsData;
-use crate::error::CovyError;
+use crate::error::{CovyError, Result, TestyError};
 use crate::model::CoverageData;
 
-pub fn merge_coverage_inputs(
-    paths: &[PathBuf],
-    strict: bool,
-) -> Result<(CoverageData, usize), CovyError> {
+/// Merge persisted coverage states, optionally rejecting the first bad input.
+///
+/// # Errors
+///
+/// Returns [`TestyError::State`] with the original I/O or decoder source when
+/// `strict` is true and an input cannot be loaded.
+pub fn merge_coverage_inputs(paths: &[PathBuf], strict: bool) -> Result<(CoverageData, usize)> {
     let mut merged = CoverageData::new();
     let mut skipped = 0usize;
 
@@ -19,10 +22,7 @@ pub fn merge_coverage_inputs(
             Ok(data) => merged.merge(&data),
             Err(e) => {
                 if strict {
-                    return Err(CovyError::Cache(format!(
-                        "Failed to merge coverage input {}: {e}",
-                        path.display()
-                    )));
+                    return Err(TestyError::state("Failed to merge coverage input", path, e));
                 }
                 skipped += 1;
             }
@@ -32,10 +32,16 @@ pub fn merge_coverage_inputs(
     Ok((merged, skipped))
 }
 
+/// Merge persisted diagnostic states, optionally rejecting the first bad input.
+///
+/// # Errors
+///
+/// Returns [`TestyError::State`] with the original I/O or decoder source when
+/// `strict` is true and an input cannot be loaded.
 pub fn merge_diagnostics_inputs(
     paths: &[PathBuf],
     strict: bool,
-) -> Result<(DiagnosticsData, usize), CovyError> {
+) -> Result<(DiagnosticsData, usize)> {
     let mut merged = DiagnosticsData::new();
     let mut skipped = 0usize;
 
@@ -47,10 +53,11 @@ pub fn merge_diagnostics_inputs(
             Ok(data) => merged.merge(&data),
             Err(e) => {
                 if strict {
-                    return Err(CovyError::Cache(format!(
-                        "Failed to merge diagnostics input {}: {e}",
-                        path.display()
-                    )));
+                    return Err(TestyError::state(
+                        "Failed to merge diagnostics input",
+                        path,
+                        e,
+                    ));
                 }
                 skipped += 1;
             }

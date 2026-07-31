@@ -2,26 +2,20 @@ use std::cell::Cell;
 use std::ffi::{c_char, CString};
 use std::fs;
 use std::io::{BufReader, BufWriter};
-use std::os::unix::net::UnixStream;
+use std::mem::MaybeUninit;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::Duration;
 
-use packet28_daemon_core::{
-    read_socket_message, resolve_workspace_root, socket_path, write_socket_message,
-    ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextSourceKind,
-    DaemonRequest, DaemonResponse, InstructionFileResolveOutcome,
+use packet28_daemon_protocol::{
+    frame::{read_frame, write_frame},
+    message::{
+        ContextBackendKind, ContextResolveOutcome, ContextResolveRequest, ContextResolveResponse,
+        ContextSourceKind, DaemonRequest, DaemonResponse, InstructionFileResolveOutcome,
+    },
+    paths::resolve_workspace_root,
 };
 use sha2::{Digest, Sha256};
-
-type OpenFn = unsafe extern "C" fn(*const c_char, libc::c_int, libc::mode_t) -> libc::c_int;
-type OpenAtFn =
-    unsafe extern "C" fn(libc::c_int, *const c_char, libc::c_int, libc::mode_t) -> libc::c_int;
-
-static REAL_OPEN: OnceLock<OpenFn> = OnceLock::new();
-static REAL_OPEN64: OnceLock<Option<OpenFn>> = OnceLock::new();
-static REAL_OPENAT: OnceLock<OpenAtFn> = OnceLock::new();
-static REAL_OPENAT64: OnceLock<Option<OpenAtFn>> = OnceLock::new();
 
 thread_local! {
     static INTERCEPT_DEPTH: Cell<u32> = const { Cell::new(0) };
@@ -41,59 +35,117 @@ struct InterceptCandidate {
     absolute_path: PathBuf,
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn open(
-    path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    if let Some(fd) = maybe_virtualize(path, None) {
-        return fd;
-    }
-    call_real_open(real_open(), path, flags, mode)
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+compile_error!("the Linux preload shim supports only x86_64 and aarch64");
+
+#[cfg(not(test))]
+macro_rules! interpose_trampoline {
+    ($name:ident, $bridge:literal) => {
+        /// ELF-exported tail trampoline into a C variadic bridge.
+        ///
+        /// The naked body never reads, writes, or retypes argument registers;
+        /// C remains the sole owner of the variadic ABI.
+        ///
+        /// # Safety
+        ///
+        /// This symbol is for the dynamic loader, not Rust callers. It must be
+        /// invoked using the platform libc contract for the correspondingly
+        /// named variadic function.
+        #[doc(hidden)]
+        #[unsafe(naked)]
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $name() -> libc::c_int {
+            #[cfg(target_arch = "x86_64")]
+            core::arch::naked_asm!(concat!("jmp ", $bridge));
+            #[cfg(target_arch = "aarch64")]
+            core::arch::naked_asm!(concat!("b ", $bridge));
+        }
+    };
 }
 
+#[cfg(not(test))]
+interpose_trampoline!(open, "context_instruct_shim_linux_open");
+#[cfg(not(test))]
+interpose_trampoline!(open64, "context_instruct_shim_linux_open64");
+#[cfg(not(test))]
+interpose_trampoline!(openat, "context_instruct_shim_linux_openat");
+#[cfg(not(test))]
+interpose_trampoline!(openat64, "context_instruct_shim_linux_openat64");
+
+/// Attempt to virtualize a path intercepted by the Linux `open` or `open64`
+/// bridge.
+///
+/// Returns `1` and writes a replacement descriptor to `replacement_fd` when
+/// the path was virtualized. Returns `0` without modifying `replacement_fd`
+/// when the C bridge must call the real libc symbol.
+///
+/// # Safety
+///
+/// `path` must point to a valid NUL-terminated C string for the duration of
+/// this call. `flags` must be the flag word received by the corresponding
+/// libc `open` call. `replacement_fd` must be non-null, properly aligned, and
+/// valid for writing one `libc::c_int`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn open64(
+pub unsafe extern "C" fn context_instruct_shim_linux_try_open(
     path: *const c_char,
     flags: libc::c_int,
-    mode: libc::mode_t,
+    replacement_fd: *mut libc::c_int,
 ) -> libc::c_int {
-    if let Some(fd) = maybe_virtualize(path, None) {
-        return fd;
+    if replacement_fd.is_null() {
+        return 0;
     }
-    let real = real_open64().unwrap_or_else(real_open);
-    call_real_open(real, path, flags, mode)
+    let Some(fd) = maybe_virtualize(path, None, flags) else {
+        return 0;
+    };
+    // SAFETY: The caller guarantees that `replacement_fd` is writable, and
+    // the null case was rejected above.
+    unsafe {
+        replacement_fd.write(fd);
+    }
+    1
 }
 
+/// Attempt to virtualize a path intercepted by the Linux `openat` or
+/// `openat64` bridge.
+///
+/// Returns `1` and writes a replacement descriptor to `replacement_fd` when
+/// the path was virtualized. Returns `0` without modifying `replacement_fd`
+/// when the C bridge must call the real libc symbol.
+///
+/// # Safety
+///
+/// `path` must point to a valid NUL-terminated C string for the duration of
+/// this call. `dirfd` must be `AT_FDCWD` or a descriptor suitable for
+/// resolving `path`. `flags` must be the flag word received by the
+/// corresponding libc `openat` call. `replacement_fd` must be non-null,
+/// properly aligned, and valid for writing one `libc::c_int`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn openat(
+pub unsafe extern "C" fn context_instruct_shim_linux_try_openat(
     dirfd: libc::c_int,
     path: *const c_char,
     flags: libc::c_int,
-    mode: libc::mode_t,
+    replacement_fd: *mut libc::c_int,
 ) -> libc::c_int {
-    if let Some(fd) = maybe_virtualize(path, Some(dirfd)) {
-        return fd;
+    if replacement_fd.is_null() {
+        return 0;
     }
-    call_real_openat(real_openat(), dirfd, path, flags, mode)
+    let Some(fd) = maybe_virtualize(path, Some(dirfd), flags) else {
+        return 0;
+    };
+    // SAFETY: The caller guarantees that `replacement_fd` is writable, and
+    // the null case was rejected above.
+    unsafe {
+        replacement_fd.write(fd);
+    }
+    1
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn openat64(
-    dirfd: libc::c_int,
+fn maybe_virtualize(
     path: *const c_char,
+    dirfd: Option<libc::c_int>,
     flags: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    if let Some(fd) = maybe_virtualize(path, Some(dirfd)) {
-        return fd;
-    }
-    let real = real_openat64().unwrap_or_else(real_openat);
-    call_real_openat(real, dirfd, path, flags, mode)
-}
-
-fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<libc::c_int> {
+) -> Option<libc::c_int> {
+    let replacement_flags = virtualized_read_flags(flags)?;
     if path.is_null() || intercept_disabled() {
         return None;
     }
@@ -119,7 +171,11 @@ fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<l
             rewritten_bytes,
             ..
         } => {
-            let fd = create_memfd("context-instruct-shim", content.as_bytes())?;
+            let fd = create_readonly_memfd(
+                "context-instruct-shim",
+                content.as_bytes(),
+                replacement_flags,
+            )?;
             debug_log(&format!(
                 "p28 virtualized path={} task={} original_bytes={} rewritten_bytes={}",
                 candidate.absolute_path.display(),
@@ -145,7 +201,14 @@ fn maybe_virtualize(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<l
     }
 }
 
+fn virtualized_read_flags(flags: libc::c_int) -> Option<libc::c_int> {
+    let allowed = libc::O_CLOEXEC | libc::O_LARGEFILE;
+    crate::open_semantics::virtualized_read_flags(flags, allowed)
+}
+
 fn detect_candidate(path: *const c_char, dirfd: Option<libc::c_int>) -> Option<InterceptCandidate> {
+    // SAFETY: The fixed C callback contract requires a valid NUL-terminated
+    // path pointer for the duration of this call.
     let raw_path = unsafe { std::ffi::CStr::from_ptr(path) }.to_str().ok()?;
     let absolute_path = resolve_absolute_path(raw_path, dirfd)?;
     let file_name = absolute_path.file_name()?.to_str()?;
@@ -174,17 +237,23 @@ fn resolve_absolute_path(raw_path: &str, dirfd: Option<libc::c_int>) -> Option<P
             Some(fd) if fd != libc::AT_FDCWD => resolve_dirfd_path(fd)?,
             _ => std::env::current_dir().ok()?,
         };
-        let base_dir = if base.is_dir() {
-            base
-        } else {
-            base.parent()?.to_path_buf()
-        };
-        base_dir.join(path)
+        base.join(path)
     };
     Some(normalize_path(&absolute))
 }
 
 fn resolve_dirfd_path(dirfd: libc::c_int) -> Option<PathBuf> {
+    let mut metadata = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `metadata` points to writable storage for one `stat` value, and
+    // `fstat(2)` reports an invalid descriptor through its return value.
+    if unsafe { libc::fstat(dirfd, metadata.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: a successful `fstat(2)` initialized the complete `stat` value.
+    let metadata = unsafe { metadata.assume_init() };
+    if !crate::open_semantics::is_directory_mode(metadata.st_mode) {
+        return None;
+    }
     fs::read_link(format!("/proc/self/fd/{dirfd}")).ok()
 }
 
@@ -197,19 +266,18 @@ fn resolve_instruction_file(
     relative_path: &str,
     content: &str,
     content_sha256: &str,
-) -> Option<packet28_daemon_core::ContextResolveResponse> {
-    let socket = socket_path(root);
-    if !socket.exists() {
-        debug_log(&format!(
-            "p28 passthrough path={} reason=daemon_socket_missing",
-            root.join(relative_path).display()
-        ));
-        return None;
-    }
-    let stream = UnixStream::connect(&socket).ok()?;
+) -> Option<ContextResolveResponse> {
     let timeout = Duration::from_millis(50);
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
+    let stream = match packet28_daemon_client::transport::connect(root, timeout) {
+        Ok(stream) => stream,
+        Err(error) => {
+            debug_log(&format!(
+                "p28 passthrough path={} reason={error}",
+                root.join(relative_path).display()
+            ));
+            return None;
+        }
+    };
     let reader_stream = stream.try_clone().ok()?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(reader_stream);
@@ -220,6 +288,8 @@ fn resolve_instruction_file(
             source_path: Some(relative_path.to_string()),
             source_sha256: content_sha256.to_string(),
             source_content: content.to_string(),
+            render_mode: crate::configured_instruction_mode(),
+            stable_config: None,
             task_id: None,
             task_label: None,
             budget_tokens: Some(512),
@@ -228,48 +298,54 @@ fn resolve_instruction_file(
             backend_kind: ContextBackendKind::LinuxPreload,
         },
     };
-    write_socket_message(&mut writer, &request).ok()?;
-    match read_socket_message::<_, DaemonResponse>(&mut reader).ok()? {
+    write_frame(&mut writer, &request).ok()?;
+    match read_frame::<_, DaemonResponse>(&mut reader).ok()? {
         DaemonResponse::ContextResolve { response } => Some(response),
-        DaemonResponse::InstructionFileResolve { response } => {
-            Some(packet28_daemon_core::ContextResolveResponse {
-                source_kind: ContextSourceKind::InstructionFile,
-                source_path: Some(response.path.clone()),
-                outcome: match response.outcome {
-                    InstructionFileResolveOutcome::Rewrite {
-                        content,
-                        content_sha256,
-                        task_label,
-                        original_bytes,
-                        rewritten_bytes,
-                        cache_hit,
-                        matched_terms,
-                        section_titles,
-                    } => ContextResolveOutcome::Rewrite {
-                        content,
-                        content_sha256,
-                        task_label,
-                        original_bytes,
-                        rewritten_bytes,
-                        cache_hit,
-                        matched_terms,
-                        section_titles,
-                        schema_version: 1,
-                    },
-                    InstructionFileResolveOutcome::Passthrough {
-                        reason,
-                        content_sha256,
-                        task_label,
-                        original_bytes,
-                    } => ContextResolveOutcome::Passthrough {
-                        reason,
-                        content_sha256,
-                        task_label,
-                        original_bytes,
-                    },
+        DaemonResponse::InstructionFileResolve { response } => Some(ContextResolveResponse {
+            source_kind: ContextSourceKind::InstructionFile,
+            source_path: Some(response.path.clone()),
+            outcome: match response.outcome {
+                InstructionFileResolveOutcome::Rewrite {
+                    content,
+                    content_sha256,
+                    render_mode,
+                    stable_config_sha256,
+                    snapshot_sha256,
+                    rendered_sha256,
+                    task_label,
+                    original_bytes,
+                    rewritten_bytes,
+                    cache_hit,
+                    matched_terms,
+                    section_titles,
+                } => ContextResolveOutcome::Rewrite {
+                    content,
+                    content_sha256,
+                    render_mode,
+                    stable_config_sha256,
+                    snapshot_sha256,
+                    rendered_sha256,
+                    task_label,
+                    original_bytes,
+                    rewritten_bytes,
+                    cache_hit,
+                    matched_terms,
+                    section_titles,
+                    schema_version: 1,
                 },
-            })
-        }
+                InstructionFileResolveOutcome::Passthrough {
+                    reason,
+                    content_sha256,
+                    task_label,
+                    original_bytes,
+                } => ContextResolveOutcome::Passthrough {
+                    reason,
+                    content_sha256,
+                    task_label,
+                    original_bytes,
+                },
+            },
+        }),
         DaemonResponse::Error { message } => {
             debug_log(&format!(
                 "p28 passthrough path={} reason=daemon_error:{}",
@@ -282,93 +358,93 @@ fn resolve_instruction_file(
     }
 }
 
-fn create_memfd(name: &str, content: &[u8]) -> Option<libc::c_int> {
+fn create_readonly_memfd(
+    name: &str,
+    content: &[u8],
+    requested_flags: libc::c_int,
+) -> Option<libc::c_int> {
     let cname = CString::new(name).ok()?;
-    let fd = unsafe {
+    // SAFETY: `cname` is a live NUL-terminated string, and the flags are valid
+    // for Linux `memfd_create(2)`.
+    let raw_fd = unsafe {
         libc::syscall(
             libc::SYS_memfd_create,
             cname.as_ptr(),
             libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
         ) as libc::c_int
     };
-    if fd < 0 {
+    if raw_fd < 0 {
         return None;
     }
-    if !write_all_fd(fd, content) {
-        unsafe {
-            libc::close(fd);
-        }
+    // SAFETY: `raw_fd` is a new owned descriptor returned by
+    // `memfd_create(2)`.
+    let writable = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+    if !write_all_fd(writable.as_raw_fd(), content) {
         return None;
     }
-    unsafe {
-        libc::lseek(fd, 0, libc::SEEK_SET);
+    let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    // SAFETY: `writable` is a live memfd created with `MFD_ALLOW_SEALING`, and
+    // the third argument is the documented `F_ADD_SEALS` bitset.
+    if unsafe { libc::fcntl(writable.as_raw_fd(), libc::F_ADD_SEALS, seals) } != 0 {
+        return None;
     }
-    Some(fd)
+    let readonly = reopen_memfd_readonly(&writable, requested_flags)?;
+    if !replacement_descriptor_matches(&readonly, requested_flags) {
+        return None;
+    }
+    Some(readonly.into_raw_fd())
+}
+
+fn reopen_memfd_readonly(writable: &OwnedFd, requested_flags: libc::c_int) -> Option<OwnedFd> {
+    let proc_path = CString::new(format!("/proc/self/fd/{}", writable.as_raw_fd())).ok()?;
+    // SAFETY: `proc_path` is a live NUL-terminated string. The direct
+    // `openat(2)` syscall avoids re-entering the interposed libc symbol.
+    // `requested_flags` contains only O_CLOEXEC/O_LARGEFILE; O_RDONLY is zero.
+    let raw_fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat,
+            libc::AT_FDCWD,
+            proc_path.as_ptr(),
+            requested_flags,
+            0,
+        ) as libc::c_int
+    };
+    if raw_fd < 0 {
+        return None;
+    }
+    // SAFETY: a successful `openat(2)` returns one new owned descriptor.
+    Some(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+}
+
+fn replacement_descriptor_matches(fd: &OwnedFd, requested_flags: libc::c_int) -> bool {
+    // SAFETY: `fd` is live and both commands are descriptor-only queries.
+    let status_flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+    if status_flags < 0 || status_flags & libc::O_ACCMODE != libc::O_RDONLY {
+        return false;
+    }
+    // SAFETY: `fd` is live and `F_GETFD` takes no third argument.
+    let descriptor_flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
+    descriptor_flags >= 0
+        && (descriptor_flags & libc::FD_CLOEXEC != 0) == (requested_flags & libc::O_CLOEXEC != 0)
 }
 
 fn write_all_fd(fd: libc::c_int, mut bytes: &[u8]) -> bool {
     while !bytes.is_empty() {
+        // SAFETY: `bytes` is valid for `bytes.len()` reads and `fd` is an open
+        // descriptor supplied by `create_readonly_memfd`.
         let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
-        if written <= 0 {
+        if written < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if written == 0 {
             return false;
         }
         bytes = &bytes[written as usize..];
     }
     true
-}
-
-fn flags_require_mode(flags: libc::c_int) -> bool {
-    (flags & libc::O_CREAT) != 0 || (flags & libc::O_TMPFILE) != 0
-}
-
-unsafe fn call_real_open(
-    real: OpenFn,
-    path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    real(path, flags, mode)
-}
-
-unsafe fn call_real_openat(
-    real: OpenAtFn,
-    dirfd: libc::c_int,
-    path: *const c_char,
-    flags: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    real(dirfd, path, flags, mode)
-}
-
-fn real_open() -> OpenFn {
-    *REAL_OPEN.get_or_init(|| unsafe { load_symbol(b"open\0") })
-}
-
-fn real_open64() -> Option<OpenFn> {
-    *REAL_OPEN64.get_or_init(|| unsafe { load_optional_symbol(b"open64\0") })
-}
-
-fn real_openat() -> OpenAtFn {
-    *REAL_OPENAT.get_or_init(|| unsafe { load_symbol(b"openat\0") })
-}
-
-fn real_openat64() -> Option<OpenAtFn> {
-    *REAL_OPENAT64.get_or_init(|| unsafe { load_optional_symbol(b"openat64\0") })
-}
-
-unsafe fn load_symbol<T: Copy>(symbol: &[u8]) -> T {
-    let ptr = libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast());
-    assert!(!ptr.is_null(), "missing required libc symbol");
-    std::mem::transmute_copy(&ptr)
-}
-
-unsafe fn load_optional_symbol<T: Copy>(symbol: &[u8]) -> Option<T> {
-    let ptr = libc::dlsym(libc::RTLD_NEXT, symbol.as_ptr().cast());
-    if ptr.is_null() {
-        None
-    } else {
-        Some(std::mem::transmute_copy(&ptr))
-    }
 }
 
 fn with_intercept_disabled<T>(f: impl FnOnce() -> T) -> T {
@@ -392,6 +468,8 @@ fn debug_log(message: &str) {
     let _guard = disable_intercept();
     let mut line = String::from(message);
     line.push('\n');
+    // SAFETY: `line` is live for the duration of the write and stderr is a
+    // process-owned descriptor. Logging is intentionally best-effort.
     let _ = unsafe { libc::write(libc::STDERR_FILENO, line.as_ptr().cast(), line.len()) };
 }
 
@@ -427,5 +505,32 @@ mod tests {
         let nested = root.join("docs").join("AGENTS.md");
         let expected = root.join("AGENTS.md");
         assert_ne!(normalize_path(&nested), normalize_path(&expected));
+    }
+
+    #[test]
+    fn virtualized_read_flags_accept_only_read_and_descriptor_semantics() {
+        assert_eq!(virtualized_read_flags(libc::O_RDONLY), Some(0));
+        assert_eq!(
+            virtualized_read_flags(libc::O_RDONLY | libc::O_CLOEXEC),
+            Some(libc::O_CLOEXEC)
+        );
+        assert_eq!(
+            virtualized_read_flags(libc::O_RDONLY | libc::O_LARGEFILE),
+            Some(libc::O_LARGEFILE)
+        );
+    }
+
+    #[test]
+    fn virtualized_read_flags_reject_mutating_and_special_modes() {
+        for flags in [
+            libc::O_WRONLY,
+            libc::O_RDWR,
+            libc::O_RDONLY | libc::O_TRUNC,
+            libc::O_RDONLY | libc::O_APPEND,
+            libc::O_PATH,
+            libc::O_RDONLY | libc::O_DIRECTORY,
+        ] {
+            assert_eq!(virtualized_read_flags(flags), None, "flags={flags:#x}");
+        }
     }
 }

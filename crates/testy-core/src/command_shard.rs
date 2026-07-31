@@ -1,8 +1,9 @@
 use std::path::Path;
 
-use anyhow::Result;
 use suite_foundation_core::CovyConfig;
 use suite_packet_core::shard::ShardPlan;
+
+use crate::error::{Result, TestyError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlannerAlgorithmArg {
@@ -52,11 +53,17 @@ pub const SHARD_PLAN_SCHEMA_EXAMPLES: &str = r#"{
   }
 }"#;
 
+/// Resolve command/config inputs and build a shard plan.
+///
+/// # Errors
+///
+/// Returns [`TestyError`] for configuration, required-argument, task/timing
+/// input, planning, persistence, or response-invariant failures.
 pub fn run_shard_plan_command(args: ShardPlanArgs, config_path: &str) -> Result<ShardPlan> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let shard_count = args
         .shards
-        .ok_or_else(|| anyhow::anyhow!("--shards is required"))?;
+        .ok_or_else(|| TestyError::invalid("--shards is required"))?;
     let timings_path = args
         .timings
         .as_deref()
@@ -85,16 +92,23 @@ pub fn run_shard_plan_command(args: ShardPlanArgs, config_path: &str) -> Result<
         }),
     })?;
 
-    response
-        .shard_plan
-        .ok_or_else(|| anyhow::anyhow!("shard plan response missing shard plan"))
+    response.shard_plan.ok_or(TestyError::MissingResponseField {
+        operation: "shard plan",
+        field: "shard plan",
+    })
 }
 
+/// Ingest timing reports and update persisted timing history.
+///
+/// # Errors
+///
+/// Returns [`TestyError`] for configuration, report parsing, state
+/// persistence, or response-invariant failures.
 pub fn run_shard_update_command(
     args: ShardUpdateArgs,
     config_path: &str,
 ) -> Result<crate::pipeline_shard::ShardTimingSummary> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let timings_path = args
         .timings
         .as_deref()
@@ -113,9 +127,18 @@ pub fn run_shard_update_command(
 
     response
         .timing_summary
-        .ok_or_else(|| anyhow::anyhow!("shard update response missing timing summary"))
+        .ok_or(TestyError::MissingResponseField {
+            operation: "shard update",
+            field: "timing summary",
+        })
 }
 
+/// Resolve the shard planning algorithm from CLI and configuration values.
+///
+/// # Errors
+///
+/// Returns [`TestyError::InvalidInput`] when configuration names an
+/// unsupported algorithm.
 pub fn resolve_plan_algorithm(
     cli_algorithm: Option<PlannerAlgorithmArg>,
     config: &CovyConfig,
@@ -132,10 +155,9 @@ pub fn resolve_plan_algorithm(
     match configured.to_ascii_lowercase().as_str() {
         "lpt" => Ok(PlannerAlgorithmArg::Lpt),
         "whale-lpt" => Ok(PlannerAlgorithmArg::WhaleLpt),
-        _ => anyhow::bail!(
-            "Unsupported shard algorithm '{}'. Expected 'lpt' or 'whale-lpt'",
-            configured
-        ),
+        _ => Err(TestyError::invalid(format!(
+            "Unsupported shard algorithm '{configured}'. Expected 'lpt' or 'whale-lpt'"
+        ))),
     }
 }
 

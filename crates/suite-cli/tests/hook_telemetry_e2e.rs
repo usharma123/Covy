@@ -1,5 +1,11 @@
 #[path = "support/hook_telemetry.rs"]
 mod hook_telemetry;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use hook_telemetry::{run_hook_raw_with_env, suite_cmd};
 use predicates::prelude::*;

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 
 #[derive(Debug, Clone)]
 pub struct TestmapBuildArgs {
@@ -23,6 +23,12 @@ pub struct TestmapBuildOutput {
     pub summary: TestmapBuildSummary,
 }
 
+/// Build test-map and timing state from manifest globs.
+///
+/// # Errors
+///
+/// Returns [`crate::error::TestyError`] when manifest resolution, validation,
+/// coverage ingestion, state encoding, or output I/O fails.
 pub fn run_testmap_build(
     build: TestmapBuildArgs,
     adapters: &crate::pipeline_testmap::TestMapAdapters,

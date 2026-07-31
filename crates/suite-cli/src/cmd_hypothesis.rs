@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use packet28_daemon_core::{BrokerWriteOp, BrokerWriteStateRequest};
+use packet28_daemon_protocol::broker::{BrokerWriteOp, BrokerWriteStateRequest};
 use serde::Serialize;
 
 const HYPOTHESIS_PREFIX: &str = "hypothesis:";
@@ -203,17 +203,19 @@ pub(crate) fn active_hypotheses(
     root: &std::path::Path,
     task_id: &str,
 ) -> Result<Vec<HypothesisRecord>> {
-    let kernel = crate::cmd_context::build_persistent_kernel(root.to_path_buf());
-    let response = kernel.execute(context_kernel_core::KernelRequest {
-        target: "agenty.state.snapshot".to_string(),
-        reducer_input: serde_json::json!({
-            "task_id": task_id,
-        }),
-        policy_context: serde_json::json!({
-            "disable_cache": true,
-        }),
-        ..context_kernel_core::KernelRequest::default()
-    })?;
+    let response = crate::cmd_daemon_client::execute_kernel_request(
+        root,
+        context_kernel_core::KernelRequest {
+            target: "agenty.state.snapshot".to_string(),
+            reducer_input: serde_json::json!({
+                "task_id": task_id,
+            }),
+            policy_context: serde_json::json!({
+                "disable_cache": true,
+            }),
+            ..context_kernel_core::KernelRequest::default()
+        },
+    )?;
     let packet = response
         .output_packets
         .first()

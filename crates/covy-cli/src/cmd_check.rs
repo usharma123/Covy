@@ -87,7 +87,7 @@ pub struct CheckArgs {
 }
 
 pub fn run(args: CheckArgs, config_path: &str) -> Result<i32> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let report =
         if crate::cmd_common::resolve_json_output(args.json, args.report.as_deref(), "--report")? {
             "json".to_string()

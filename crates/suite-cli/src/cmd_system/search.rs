@@ -391,10 +391,10 @@ fn filter_search_result_by_file_type(result: &mut SearchResult, file_type: Optio
         return;
     };
     result.groups.retain_mut(|group| {
-        if !Path::new(&group.path)
+        if Path::new(&group.path)
             .extension()
             .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == file_type)
+            != Some(file_type)
         {
             return false;
         }

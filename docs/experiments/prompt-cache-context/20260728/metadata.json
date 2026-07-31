@@ -1,0 +1,46 @@
+{
+  "captured_at_utc": "2026-07-28T23:33:56+00:00",
+  "command": [
+    "cargo",
+    "run",
+    "--locked",
+    "--release",
+    "-p",
+    "context-kernel-core",
+    "--example",
+    "instruction_prefix_experiment",
+    "--",
+    "--manifest",
+    "docs/experiments/prompt-cache-context/instruction_prefix_manifest.json"
+  ],
+  "command_display": "cargo run --locked --release -p context-kernel-core --example instruction_prefix_experiment -- --manifest docs/experiments/prompt-cache-context/instruction_prefix_manifest.json",
+  "evidence_boundary": "Only local renderer bytes, render-relevant snapshot hashes, and Packet28 local cache hits are observed. Provider prompt ordering, cache boundaries, creation/read tokens, costs, compaction rewarm, adherence, and net savings are not established.",
+  "git": {
+    "branch": "remediate/architecture-audit-20260728",
+    "dirty": true,
+    "head": "832e40f4c4810d0f04abd354372be0ef1e6be862",
+    "snapshot_sha256": "57531413f56b19327e66a05cdf84aba5df58d8c232c1bfd8bb66ed93e92706bc"
+  },
+  "machine": {
+    "architecture": "arm64",
+    "logical_cpu_count": 14,
+    "memory_bytes": 25769803776,
+    "platform": "macOS-15.7.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "release": "24.6.0",
+    "system": "Darwin"
+  },
+  "provider_request_executed": false,
+  "schema": "packet28.instruction_prefix_experiment_artifacts.v1",
+  "source_stability": {
+    "attempt": 1,
+    "head_after": "832e40f4c4810d0f04abd354372be0ef1e6be862",
+    "snapshot_sha256_after": "57531413f56b19327e66a05cdf84aba5df58d8c232c1bfd8bb66ed93e92706bc",
+    "stable_during_run": true
+  },
+  "toolchain": {
+    "cargo": "cargo 1.93.1 (083ac5135 2025-12-15)",
+    "python": "3.14.5 (main, May 10 2026, 10:21:34) [Clang 17.0.0 (clang-1700.6.4.2)]",
+    "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: aarch64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8"
+  }
+}

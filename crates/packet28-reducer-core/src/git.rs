@@ -265,10 +265,10 @@ fn compact_diff(diff: &str, max_lines: usize) -> String {
     for line in diff.lines() {
         if line.starts_with("diff --git") {
             if !current_file.is_empty() && (added > 0 || removed > 0) {
-                result.push(format!("  +{} -{}", added, removed));
+                result.push(format!("  +{added} -{removed}"));
             }
             current_file = line.split(" b/").nth(1).unwrap_or("unknown").to_string();
-            result.push(format!("\n📄 {}", current_file));
+            result.push(format!("\n📄 {current_file}"));
             added = 0;
             removed = 0;
             in_hunk = false;
@@ -276,22 +276,22 @@ fn compact_diff(diff: &str, max_lines: usize) -> String {
             in_hunk = true;
             hunk_lines = 0;
             let hunk_info = line.split("@@").nth(1).unwrap_or("").trim();
-            result.push(format!("  @@ {} @@", hunk_info));
+            result.push(format!("  @@ {hunk_info} @@"));
         } else if in_hunk {
             if line.starts_with('+') && !line.starts_with("+++") {
                 added += 1;
                 if hunk_lines < max_hunk_lines {
-                    result.push(format!("  {}", line));
+                    result.push(format!("  {line}"));
                     hunk_lines += 1;
                 }
             } else if line.starts_with('-') && !line.starts_with("---") {
                 removed += 1;
                 if hunk_lines < max_hunk_lines {
-                    result.push(format!("  {}", line));
+                    result.push(format!("  {line}"));
                     hunk_lines += 1;
                 }
             } else if hunk_lines < max_hunk_lines && !line.starts_with('\\') && hunk_lines > 0 {
-                result.push(format!("  {}", line));
+                result.push(format!("  {line}"));
                 hunk_lines += 1;
             }
 
@@ -308,7 +308,7 @@ fn compact_diff(diff: &str, max_lines: usize) -> String {
     }
 
     if !current_file.is_empty() && (added > 0 || removed > 0) {
-        result.push(format!("  +{} -{}", added, removed));
+        result.push(format!("  +{added} -{removed}"));
     }
 
     result.join("\n").trim_start().to_string()

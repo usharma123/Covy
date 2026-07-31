@@ -1,0 +1,5242 @@
+//! Incremental repository-index generations with manifest-last publication.
+//!
+//! Public writers serialize on a repository-local lock and reject stale
+//! generation handles. Generation records bind every immutable artifact to a
+//! BLAKE3 digest, and the atomically published manifest binds the canonical
+//! generation record to its own digest. Best-effort pruning retains the current
+//! and explicitly recoverable previous generation under normal filesystem
+//! operation.
+//!
+//! Publication is process-crash atomic on filesystems that provide atomic
+//! same-directory rename: generation identities are persistently reserved
+//! before create-once artifacts are written, and the manifest is renamed last.
+//! The descriptor-anchored state layer synchronizes files and parent
+//! directories. This module's tests establish crash atomicity, not end-to-end
+//! power-loss behavior, so it makes no independent power-loss durability claim.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+
+use fs2::FileExt;
+#[cfg(unix)]
+use packet28_state_fs::StateDirLock;
+use packet28_state_fs::{FileAccess, StateDir, StateFile};
+use serde::{Deserialize, Serialize};
+use suite_packet_core::CovyError;
+
+use crate::runtime::{index_repo_path, normalize_path, MAP_CACHE_VERSION};
+use crate::{
+    build_repo_index_with_progress, RepoIndexFileEntry, RepoIndexSnapshot, RepoIndexUpdateSummary,
+    RepoIndexUpdateWork,
+};
+
+const REPO_INDEX_RUNTIME_SCHEMA_VERSION: u32 = 1;
+const REPO_INDEX_GENERATION_HIGH_WATER_SCHEMA_VERSION: u32 = 1;
+const REPO_INDEX_DIR_NAME: &str = "mapy-v1";
+const REPO_INDEX_MANIFEST_FILE: &str = "manifest.json";
+const REPO_INDEX_PREVIOUS_MANIFEST_FILE: &str = "manifest.previous.json";
+const REPO_INDEX_WRITER_LOCK_FILE: &str = ".mapy-v1.writer.lock";
+const REPO_INDEX_GENERATION_HIGH_WATER_FILE: &str = ".mapy-v1.generation-high-water.json";
+const REPO_INDEX_COMPACTION_SEGMENTS: usize = 8;
+const REPO_INDEX_SEGMENT_VERSION: u32 = 1;
+const MAX_REPO_INDEX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_REPO_INDEX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_GENERATION_RECORD_BYTES: u64 = 64 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+
+/// Metadata for an atomically published repository-index generation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RepoIndexRuntimeManifest {
+    /// On-disk generation-record schema.
+    pub schema_version: u32,
+    /// Monotonically increasing publication generation.
+    pub generation: u64,
+    /// Whether test files are represented by this generation.
+    pub include_tests: bool,
+    /// Number of visible repository files.
+    pub total_files: usize,
+    /// Number of currently visible files owned by overlay segments.
+    pub overlay_files: usize,
+    /// Number of immutable overlay segments referenced by this generation.
+    pub segment_count: usize,
+    /// Digest authenticating the canonical generation record selected by this manifest.
+    ///
+    /// Recorded generations without this field are rejected and rebuilt
+    /// because their artifact identities cannot be distinguished from a
+    /// structurally valid stale generation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation_record_digest: Option<String>,
+    /// Lifecycle status (`missing`, `ready`, or `corrupt`).
+    pub status: String,
+    /// Newer corrupt generation skipped during recovery, when applicable.
+    pub recovered_from_generation: Option<u64>,
+    /// Validation failure that prevented the current generation from loading.
+    pub last_error: Option<String>,
+}
+
+/// A cheap-to-clone read handle for one immutable repository-index generation.
+///
+/// Updates return a new runtime while existing readers retain their base and
+/// segment `Arc`s. Repository-sized materialization occurs only during an
+/// explicit snapshot request, a full rebuild, or threshold compaction.
+#[derive(Debug, Clone, Default)]
+pub struct RepoIndexRuntime {
+    /// Metadata for the loaded or unavailable generation.
+    pub manifest: RepoIndexRuntimeManifest,
+    generation: Option<Arc<RepoIndexGeneration>>,
+}
+
+impl RepoIndexRuntime {
+    /// Returns whether this handle owns a validated generation.
+    pub fn is_loaded(&self) -> bool {
+        self.generation.is_some()
+    }
+
+    /// Returns the visible entry for `path`, honoring the newest segment or tombstone.
+    pub fn file(&self, path: &str) -> Option<&RepoIndexFileEntry> {
+        let normalized = normalize_path(path);
+        let generation = self.generation.as_ref()?;
+        match generation.latest_by_path.get(&normalized) {
+            Some(Some(owner)) => generation
+                .segments
+                .iter()
+                .rev()
+                .find(|segment| segment.generation == *owner)
+                .and_then(|segment| segment.files.get(&normalized)),
+            Some(None) => None,
+            None => generation.base.files.get(&normalized),
+        }
+    }
+
+    /// Visits every visible file without cloning the repository-sized base map.
+    pub fn for_each_file(&self, mut visit: impl FnMut(&RepoIndexFileEntry)) {
+        let Some(generation) = self.generation.as_ref() else {
+            return;
+        };
+        for entry in generation.base.files.values() {
+            if !generation.latest_by_path.contains_key(&entry.path) {
+                visit(entry);
+            }
+        }
+        for segment in &generation.segments {
+            for entry in segment.files.values() {
+                if generation.latest_by_path.get(&entry.path) == Some(&Some(segment.generation)) {
+                    visit(entry);
+                }
+            }
+        }
+    }
+
+    /// Materializes a compatibility [`RepoIndexSnapshot`].
+    ///
+    /// This operation intentionally clones visible entries and should be kept
+    /// off incremental publication paths.
+    pub fn materialize_snapshot(&self) -> Option<RepoIndexSnapshot> {
+        let generation = self.generation.as_ref()?;
+        let mut files = BTreeMap::new();
+        self.for_each_file(|entry| {
+            files.insert(entry.path.clone(), entry.clone());
+        });
+        Some(RepoIndexSnapshot {
+            version: MAP_CACHE_VERSION,
+            include_tests: generation.base.include_tests,
+            files,
+        })
+    }
+
+    /// Returns true when two reader generations retain the same immutable base.
+    pub fn shares_base_with(&self, other: &Self) -> bool {
+        match (self.generation.as_ref(), other.generation.as_ref()) {
+            (Some(left), Some(right)) => Arc::ptr_eq(&left.base, &right.base),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn validated_map_file_count(&self, include_tests: bool) -> Result<usize, CovyError> {
+        validate_runtime(self)?;
+        let loaded = self
+            .generation
+            .as_ref()
+            .ok_or_else(|| cache_error("repository generation is absent"))?;
+        if include_tests && !loaded.base.include_tests {
+            return Err(cache_error(
+                "repository index runtime does not include test files",
+            ));
+        }
+        let mut visible = 0usize;
+        self.for_each_file(|entry| {
+            if include_tests || !entry.is_test {
+                visible = visible.saturating_add(1);
+            }
+        });
+        Ok(visible)
+    }
+}
+
+/// A feature-gated, validated repository generation awaiting manifest publication.
+///
+/// The handle owns the repository writer lock. Dropping it before
+/// [`Self::commit`] leaves the published manifest unchanged; dropping it after
+/// [`Self::publish`] performs a best-effort rollback to the exact manifest
+/// bytes observed before preparation.
+#[cfg(feature = "shared-repository-scan")]
+pub struct PreparedRepoIndexRuntime {
+    root: PathBuf,
+    writer: GenerationWriterLock,
+    previous: Option<RepoIndexRuntimeManifest>,
+    previous_record: Option<RepoIndexGenerationRecord>,
+    previous_current_bytes: Option<Vec<u8>>,
+    previous_previous_bytes: Option<Vec<u8>>,
+    record: RepoIndexGenerationRecord,
+    runtime: RepoIndexRuntime,
+    record_pins: Vec<PinnedGenerationRecord>,
+    artifact_pins: Vec<PinnedArtifact>,
+    published: bool,
+    committed: bool,
+}
+
+#[cfg(feature = "shared-repository-scan")]
+impl PreparedRepoIndexRuntime {
+    /// Publishes this validated generation while retaining rollback ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CovyError::Cache`] if this handle was already published or
+    /// the manifest cannot be atomically replaced.
+    pub fn publish(&mut self) -> Result<(), CovyError> {
+        if self.published {
+            return Err(cache_error(
+                "prepared repository generation was already published",
+            ));
+        }
+        self.published = true;
+        let result = publish_fenced_manifest_outputs(
+            PublicationTransaction {
+                root: &self.root,
+                writer: &self.writer,
+                previous: self.previous.as_ref(),
+                current: &self.runtime.manifest,
+                previous_current_bytes: self.previous_current_bytes.as_deref(),
+                previous_previous_bytes: self.previous_previous_bytes.as_deref(),
+                record_pins: &self.record_pins,
+                artifact_pins: &self.artifact_pins,
+            },
+            &mut |_| Ok(()),
+        );
+        self.finish_publication(result)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn publish_with<F>(&mut self, publish: F) -> Result<(), CovyError>
+    where
+        F: FnOnce(
+            &Path,
+            Option<&RepoIndexRuntimeManifest>,
+            &RepoIndexRuntimeManifest,
+        ) -> Result<(), CovyError>,
+    {
+        if self.published {
+            return Err(cache_error(
+                "prepared repository generation was already published",
+            ));
+        }
+        self.published = true;
+        let result = authenticate_publication_prestate(PublicationTransaction {
+            root: &self.root,
+            writer: &self.writer,
+            previous: self.previous.as_ref(),
+            current: &self.runtime.manifest,
+            previous_current_bytes: self.previous_current_bytes.as_deref(),
+            previous_previous_bytes: self.previous_previous_bytes.as_deref(),
+            record_pins: &self.record_pins,
+            artifact_pins: &self.artifact_pins,
+        })
+        .and_then(|_| publish(&self.root, self.previous.as_ref(), &self.runtime.manifest))
+        .and_then(|()| {
+            self.writer
+                .validate_attachment("prepared publication authentication")
+        })
+        .and_then(|()| self.authenticate_published_state());
+        self.finish_publication(result)
+    }
+
+    /// Restores both repository manifest files to their pre-publication bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CovyError::Cache`] if either manifest cannot be restored.
+    pub fn rollback(&mut self) -> Result<(), CovyError> {
+        if !self.published {
+            return Ok(());
+        }
+        restore_publication_prestate(PublicationTransaction {
+            root: &self.root,
+            writer: &self.writer,
+            previous: self.previous.as_ref(),
+            current: &self.runtime.manifest,
+            previous_current_bytes: self.previous_current_bytes.as_deref(),
+            previous_previous_bytes: self.previous_previous_bytes.as_deref(),
+            record_pins: &self.record_pins,
+            artifact_pins: &self.artifact_pins,
+        })?;
+        self.published = false;
+        Ok(())
+    }
+
+    /// Finalizes a successfully paired publication and releases its writer lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CovyError::Cache`] if [`Self::publish`] has not succeeded.
+    pub fn commit(mut self) -> Result<RepoIndexRuntime, CovyError> {
+        if !self.published {
+            return Err(cache_error(
+                "prepared repository generation must be published before commit",
+            ));
+        }
+        if let Err(publication) = self.authenticate_published_state() {
+            return match self.rollback() {
+                Ok(()) => Err(publication),
+                Err(rollback) => Err(cache_error(format!(
+                    "prepared repository generation failed final authentication ({publication}); restoring the pre-publication manifests also failed ({rollback})"
+                ))),
+            };
+        }
+        let prune_result = prune_generation_artifacts(
+            PublicationTransaction {
+                root: &self.root,
+                writer: &self.writer,
+                previous: self.previous.as_ref(),
+                current: &self.runtime.manifest,
+                previous_current_bytes: self.previous_current_bytes.as_deref(),
+                previous_previous_bytes: self.previous_previous_bytes.as_deref(),
+                record_pins: &self.record_pins,
+                artifact_pins: &self.artifact_pins,
+            },
+            &self.record,
+            self.previous_record.as_ref(),
+        );
+        if let Err(error) = finish_best_effort_prune(
+            PublicationTransaction {
+                root: &self.root,
+                writer: &self.writer,
+                previous: self.previous.as_ref(),
+                current: &self.runtime.manifest,
+                previous_current_bytes: self.previous_current_bytes.as_deref(),
+                previous_previous_bytes: self.previous_previous_bytes.as_deref(),
+                record_pins: &self.record_pins,
+                artifact_pins: &self.artifact_pins,
+            },
+            prune_result,
+        ) {
+            self.committed = true;
+            return Err(error);
+        }
+        self.committed = true;
+        Ok(self.runtime.clone())
+    }
+
+    /// Returns metadata for the validated generation without publishing it.
+    pub fn manifest(&self) -> &RepoIndexRuntimeManifest {
+        &self.runtime.manifest
+    }
+
+    fn authenticate_published_state(&self) -> Result<PublicationFenceWork, CovyError> {
+        self.writer
+            .validate_attachment("prepared publication final authentication")?;
+        authenticate_published_manifest_pair(PublicationTransaction {
+            root: &self.root,
+            writer: &self.writer,
+            previous: self.previous.as_ref(),
+            current: &self.runtime.manifest,
+            previous_current_bytes: self.previous_current_bytes.as_deref(),
+            previous_previous_bytes: self.previous_previous_bytes.as_deref(),
+            record_pins: &self.record_pins,
+            artifact_pins: &self.artifact_pins,
+        })?;
+        let work = revalidate_publication_fence(&self.record_pins, &self.artifact_pins)?;
+        self.writer
+            .validate_attachment("prepared publication final authentication")?;
+        Ok(work)
+    }
+
+    fn finish_publication(
+        &mut self,
+        result: Result<PublicationFenceWork, CovyError>,
+    ) -> Result<(), CovyError> {
+        match result {
+            Ok(_) => Ok(()),
+            Err(publication) => match self.rollback() {
+                Ok(()) => Err(publication),
+                Err(rollback) => Err(cache_error(format!(
+                    "repository generation publication failed ({publication}); restoring the pre-publication manifests also failed ({rollback})"
+                ))),
+            },
+        }
+    }
+}
+
+#[cfg(feature = "shared-repository-scan")]
+impl Drop for PreparedRepoIndexRuntime {
+    fn drop(&mut self) {
+        if self.published && !self.committed {
+            let _ = self.rollback();
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RepoIndexGeneration {
+    publication_identity: PublicationIdentity,
+    base: Arc<RepoIndexSnapshot>,
+    base_file: String,
+    base_digest: String,
+    base_stamp: ArtifactStamp,
+    segments: Vec<Arc<RepoIndexSegment>>,
+    segment_files: Vec<String>,
+    segment_digests: Vec<String>,
+    segment_stamps: Vec<ArtifactStamp>,
+    latest_by_path: BTreeMap<String, Option<u64>>,
+}
+
+#[derive(
+    Debug, Clone, Serialize, Deserialize, Default, wincode::SchemaRead, wincode::SchemaWrite,
+)]
+#[serde(default)]
+struct RepoIndexSegment {
+    version: u32,
+    generation: u64,
+    files: BTreeMap<String, RepoIndexFileEntry>,
+    tombstones: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+struct RepoIndexGenerationRecord {
+    schema_version: u32,
+    generation: u64,
+    base_file: String,
+    base_digest: String,
+    segment_files: Vec<String>,
+    segment_digests: Vec<String>,
+    manifest: RepoIndexRuntimeManifest,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepoIndexGenerationHighWater {
+    schema_version: u32,
+    generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PublicationIdentity {
+    generation: u64,
+    generation_record_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArtifactStamp {
+    len: u64,
+    modified_unix_nanos: Option<i128>,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed_unix_nanos: i128,
+}
+
+struct ValidatedArtifactStamps {
+    base: ArtifactStamp,
+    segments: Vec<ArtifactStamp>,
+    pins: Vec<PinnedArtifact>,
+    metadata_checks: usize,
+    bytes_hashed: usize,
+}
+
+struct PinnedArtifact {
+    path: PathBuf,
+    file: StateFile,
+    stamp: ArtifactStamp,
+    expected_digest: String,
+}
+
+struct PinnedGenerationRecord {
+    root: PathBuf,
+    path: PathBuf,
+    file: StateFile,
+    stamp: ArtifactStamp,
+    expected_manifest: RepoIndexRuntimeManifest,
+}
+
+struct PinnedRuntimeGeneration {
+    record: RepoIndexGenerationRecord,
+    record_pin: PinnedGenerationRecord,
+    artifact_pins: Vec<PinnedArtifact>,
+    work: PublicationFenceWork,
+}
+
+struct AuthenticatedRecovery {
+    manifest: RepoIndexRuntimeManifest,
+    runtime: RepoIndexRuntime,
+}
+
+struct RebuildPublicationPrestate {
+    previous: Option<RepoIndexRuntimeManifest>,
+    previous_record: Option<RepoIndexGenerationRecord>,
+    record_pins: Vec<PinnedGenerationRecord>,
+    artifact_pins: Vec<PinnedArtifact>,
+    previous_current_bytes: Option<Vec<u8>>,
+    previous_previous_bytes: Option<Vec<u8>>,
+    work: PublicationFenceWork,
+}
+
+#[derive(Debug, Default)]
+struct PublicationFenceWork {
+    publication_metadata_bytes_decoded: usize,
+    repository_artifact_bytes_decoded: usize,
+    repository_artifacts_decoded: usize,
+    repository_artifact_bytes_hashed: usize,
+    repository_artifact_metadata_checks: usize,
+}
+
+impl PublicationFenceWork {
+    fn add_assign(&mut self, other: Self) {
+        self.publication_metadata_bytes_decoded = self
+            .publication_metadata_bytes_decoded
+            .saturating_add(other.publication_metadata_bytes_decoded);
+        self.repository_artifact_bytes_decoded = self
+            .repository_artifact_bytes_decoded
+            .saturating_add(other.repository_artifact_bytes_decoded);
+        self.repository_artifacts_decoded = self
+            .repository_artifacts_decoded
+            .saturating_add(other.repository_artifacts_decoded);
+        self.repository_artifact_bytes_hashed = self
+            .repository_artifact_bytes_hashed
+            .saturating_add(other.repository_artifact_bytes_hashed);
+        self.repository_artifact_metadata_checks = self
+            .repository_artifact_metadata_checks
+            .saturating_add(other.repository_artifact_metadata_checks);
+    }
+
+    fn into_update_work(self, changed_paths_considered: usize) -> RepoIndexUpdateWork {
+        RepoIndexUpdateWork {
+            publication_metadata_bytes_decoded: self.publication_metadata_bytes_decoded,
+            repository_artifact_bytes_decoded: self.repository_artifact_bytes_decoded,
+            repository_artifacts_decoded: self.repository_artifacts_decoded,
+            repository_artifact_bytes_hashed: self.repository_artifact_bytes_hashed,
+            repository_artifact_metadata_checks: self.repository_artifact_metadata_checks,
+            changed_paths_considered,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PublicationTransaction<'a> {
+    root: &'a Path,
+    writer: &'a GenerationWriterLock,
+    previous: Option<&'a RepoIndexRuntimeManifest>,
+    current: &'a RepoIndexRuntimeManifest,
+    previous_current_bytes: Option<&'a [u8]>,
+    previous_previous_bytes: Option<&'a [u8]>,
+    record_pins: &'a [PinnedGenerationRecord],
+    artifact_pins: &'a [PinnedArtifact],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IncrementalPublicationStage {
+    AfterRebuildScan,
+    BeforeCurrent,
+    BeforeCurrentReplace,
+    AfterCurrent,
+    AfterPrevious,
+}
+
+/// Builds and manifest-last publishes a new immutable base generation.
+///
+/// The old manifest stays authoritative until every new artifact has been
+/// written, flushed, reloaded, and validated. A repository-local exclusive
+/// writer lock covers the build and publication.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Other`] for repository scan failures and
+/// [`CovyError::Cache`] for encoding, persistence, or validation failures.
+pub fn rebuild_repo_index_runtime(
+    root: &Path,
+    include_tests: bool,
+) -> Result<RepoIndexRuntime, CovyError> {
+    rebuild_repo_index_runtime_with_progress(root, include_tests, |_, _| {})
+}
+
+/// Builds and atomically publishes a new immutable base generation while
+/// reporting repository scan progress.
+///
+/// The callback receives `(indexed_files, total_files)` checkpoints from the
+/// repository scanner. Publication remains manifest-last, so progress does not
+/// expose a partially written generation to readers.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Other`] for repository scan failures and
+/// [`CovyError::Cache`] for encoding, persistence, or validation failures.
+pub fn rebuild_repo_index_runtime_with_progress<F>(
+    root: &Path,
+    include_tests: bool,
+    on_progress: F,
+) -> Result<RepoIndexRuntime, CovyError>
+where
+    F: FnMut(usize, usize),
+{
+    let writer = acquire_writer_lock(root)?;
+    writer.validate_attachment("repository rebuild scan")?;
+    let snapshot = build_repo_index_with_progress(root, include_tests, on_progress)?;
+    writer.validate_attachment("repository rebuild publication")?;
+    publish_rebuilt_runtime(root, &writer, include_tests, snapshot)
+}
+
+fn publish_rebuilt_runtime(
+    root: &Path,
+    writer: &GenerationWriterLock,
+    include_tests: bool,
+    snapshot: RepoIndexSnapshot,
+) -> Result<RepoIndexRuntime, CovyError> {
+    publish_rebuilt_runtime_with_hook(root, writer, include_tests, snapshot, |_| Ok(()))
+}
+
+fn publish_rebuilt_runtime_with_hook<F>(
+    root: &Path,
+    writer: &GenerationWriterLock,
+    include_tests: bool,
+    snapshot: RepoIndexSnapshot,
+    publication_hook: F,
+) -> Result<RepoIndexRuntime, CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
+    let prestate = capture_rebuild_publication_prestate(root, writer)?;
+    publish_rebuilt_runtime_from_prestate(
+        root,
+        writer,
+        include_tests,
+        snapshot,
+        prestate,
+        publication_hook,
+    )
+}
+
+fn capture_rebuild_publication_prestate(
+    root: &Path,
+    writer: &GenerationWriterLock,
+) -> Result<RebuildPublicationPrestate, CovyError> {
+    writer.validate_attachment("repository rebuild prestate capture")?;
+    let previous_current_bytes = read_optional_file(&manifest_path(root))?;
+    let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
+    let previous = load_authenticated_recovery(root)?;
+    let previous_pins = previous
+        .as_ref()
+        .map(|recovery| pin_runtime_generation(root, &recovery.runtime, &recovery.manifest))
+        .transpose()?;
+    let mut prestate = RebuildPublicationPrestate {
+        previous: previous.map(|recovery| recovery.manifest),
+        previous_record: None,
+        record_pins: Vec::with_capacity(2),
+        artifact_pins: Vec::new(),
+        previous_current_bytes,
+        previous_previous_bytes,
+        work: PublicationFenceWork::default(),
+    };
+    if let Some(pins) = previous_pins {
+        prestate.work.add_assign(pins.work);
+        prestate.previous_record = Some(pins.record);
+        prestate.record_pins.push(pins.record_pin);
+        prestate.artifact_pins.extend(pins.artifact_pins);
+    }
+    writer.validate_attachment("repository rebuild prestate capture")?;
+    Ok(prestate)
+}
+
+fn publish_rebuilt_runtime_from_prestate<F>(
+    root: &Path,
+    writer: &GenerationWriterLock,
+    include_tests: bool,
+    snapshot: RepoIndexSnapshot,
+    prestate: RebuildPublicationPrestate,
+    publication_hook: F,
+) -> Result<RepoIndexRuntime, CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
+    publish_rebuilt_runtime_from_prestate_with_work(
+        root,
+        writer,
+        include_tests,
+        snapshot,
+        prestate,
+        publication_hook,
+    )
+    .map(|(runtime, _)| runtime)
+}
+
+fn publish_rebuilt_runtime_from_prestate_with_work<F>(
+    root: &Path,
+    writer: &GenerationWriterLock,
+    include_tests: bool,
+    snapshot: RepoIndexSnapshot,
+    mut prestate: RebuildPublicationPrestate,
+    mut publication_hook: F,
+) -> Result<(RepoIndexRuntime, PublicationFenceWork), CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
+    writer.validate_attachment("repository rebuild prepublication validation")?;
+    authenticate_prepublication_manifest_snapshot(
+        root,
+        prestate.previous_current_bytes.as_deref(),
+        prestate.previous_previous_bytes.as_deref(),
+    )?;
+    prestate.work.add_assign(revalidate_publication_fence(
+        &prestate.record_pins,
+        &prestate.artifact_pins,
+    )?);
+    let generation = reserve_generation_with_writer(root, writer)?;
+    let base_file = base_file_name(generation);
+    let base_bytes = wincode::serialize(&snapshot)
+        .map_err(|error| cache_error(format!("failed to encode repository base: {error}")))?;
+    writer.validate_attachment("repository base persistence")?;
+    write_immutable(repo_index_dir(root).join(&base_file), &base_bytes)?;
+    writer.validate_attachment("repository base persistence")?;
+    let base_digest = artifact_digest(&base_bytes);
+    prestate.work.repository_artifact_bytes_hashed = prestate
+        .work
+        .repository_artifact_bytes_hashed
+        .saturating_add(base_bytes.len());
+
+    let mut manifest = RepoIndexRuntimeManifest {
+        schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+        generation,
+        include_tests,
+        total_files: snapshot.files.len(),
+        overlay_files: 0,
+        segment_count: 0,
+        generation_record_digest: None,
+        status: "ready".to_string(),
+        recovered_from_generation: None,
+        last_error: None,
+    };
+    let mut record = RepoIndexGenerationRecord {
+        schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+        generation,
+        base_file,
+        base_digest,
+        segment_files: Vec::new(),
+        segment_digests: Vec::new(),
+        manifest: manifest.clone(),
+    };
+    bind_generation_record(&mut manifest, &mut record)?;
+    writer.validate_attachment("repository generation-record persistence")?;
+    persist_generation_record(root, &record)?;
+    writer.validate_attachment("repository generation-record persistence")?;
+    writer.validate_attachment("repository rebuild artifact authentication")?;
+    let (runtime, load_work) = load_generation_with_work(root, &manifest)?;
+    prestate.work.add_assign(load_work);
+    let current_pins = pin_runtime_generation(root, &runtime, &manifest)?;
+    prestate.work.add_assign(current_pins.work);
+    record = current_pins.record;
+    prestate.record_pins.push(current_pins.record_pin);
+    prestate.artifact_pins.extend(current_pins.artifact_pins);
+    let publication = publish_fenced_manifest_outputs(
+        PublicationTransaction {
+            root,
+            writer,
+            previous: prestate.previous.as_ref(),
+            current: &manifest,
+            previous_current_bytes: prestate.previous_current_bytes.as_deref(),
+            previous_previous_bytes: prestate.previous_previous_bytes.as_deref(),
+            record_pins: &prestate.record_pins,
+            artifact_pins: &prestate.artifact_pins,
+        },
+        &mut publication_hook,
+    );
+    let publication_transaction = PublicationTransaction {
+        root,
+        writer,
+        previous: prestate.previous.as_ref(),
+        current: &manifest,
+        previous_current_bytes: prestate.previous_current_bytes.as_deref(),
+        previous_previous_bytes: prestate.previous_previous_bytes.as_deref(),
+        record_pins: &prestate.record_pins,
+        artifact_pins: &prestate.artifact_pins,
+    };
+    let publication_work = publication
+        .map_err(|error| rollback_publication_manifests(publication_transaction, error))?;
+    prestate.work.add_assign(publication_work);
+    let prune_result = prune_generation_artifacts(
+        publication_transaction,
+        &record,
+        prestate.previous_record.as_ref(),
+    );
+    let completion_work = finish_best_effort_prune(publication_transaction, prune_result)?;
+    prestate.work.add_assign(completion_work);
+    Ok((runtime, prestate.work))
+}
+
+#[cfg(feature = "shared-repository-scan")]
+pub(crate) fn prepare_repo_index_runtime_with_writer(
+    root: &Path,
+    include_tests: bool,
+    snapshot: RepoIndexSnapshot,
+    writer: GenerationWriterLock,
+) -> Result<PreparedRepoIndexRuntime, CovyError> {
+    writer.validate_attachment("prepared repository prestate capture")?;
+    let previous_current_bytes = read_optional_file(&manifest_path(root))?;
+    let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
+    let previous = load_authenticated_recovery(root)?;
+    let previous_pins = previous
+        .as_ref()
+        .map(|recovery| pin_runtime_generation(root, &recovery.runtime, &recovery.manifest))
+        .transpose()?;
+    let generation = reserve_generation_with_writer(root, &writer)?;
+    let base_file = base_file_name(generation);
+    let base_bytes = wincode::serialize(&snapshot)
+        .map_err(|error| cache_error(format!("failed to encode repository base: {error}")))?;
+    writer.validate_attachment("prepared repository base persistence")?;
+    write_immutable(repo_index_dir(root).join(&base_file), &base_bytes)?;
+    writer.validate_attachment("prepared repository base persistence")?;
+    let base_digest = artifact_digest(&base_bytes);
+    let mut manifest = RepoIndexRuntimeManifest {
+        schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+        generation,
+        include_tests,
+        total_files: snapshot.files.len(),
+        overlay_files: 0,
+        segment_count: 0,
+        generation_record_digest: None,
+        status: "ready".to_string(),
+        recovered_from_generation: None,
+        last_error: None,
+    };
+    let mut record = RepoIndexGenerationRecord {
+        schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+        generation,
+        base_file,
+        base_digest,
+        segment_files: Vec::new(),
+        segment_digests: Vec::new(),
+        manifest: manifest.clone(),
+    };
+    bind_generation_record(&mut manifest, &mut record)?;
+    writer.validate_attachment("prepared repository generation-record persistence")?;
+    persist_generation_record(root, &record)?;
+    writer.validate_attachment("prepared repository generation-record persistence")?;
+    writer.validate_attachment("prepared repository artifact authentication")?;
+    let runtime = load_generation(root, &manifest)?;
+    let current_pins = pin_runtime_generation(root, &runtime, &manifest)?;
+    let mut record_pins = Vec::with_capacity(2);
+    let mut artifact_pins = Vec::new();
+    let mut previous_record = None;
+    if let Some(pins) = previous_pins {
+        previous_record = Some(pins.record);
+        record_pins.push(pins.record_pin);
+        artifact_pins.extend(pins.artifact_pins);
+    }
+    record = current_pins.record;
+    record_pins.push(current_pins.record_pin);
+    artifact_pins.extend(current_pins.artifact_pins);
+    writer.validate_attachment("prepared repository completion")?;
+    Ok(PreparedRepoIndexRuntime {
+        root: root.to_path_buf(),
+        writer,
+        previous: previous.as_ref().map(|recovery| recovery.manifest.clone()),
+        previous_record,
+        previous_current_bytes,
+        previous_previous_bytes,
+        record,
+        runtime,
+        record_pins,
+        artifact_pins,
+        published: false,
+        committed: false,
+    })
+}
+
+/// Removes every persisted repository-index generation.
+///
+/// Existing [`RepoIndexRuntime`] handles remain readable because they own their
+/// immutable generation data independently of the on-disk artifacts. Durable
+/// generation fencing remains beside the writer lock so a later rebuild cannot
+/// reuse an identity owned by one of those handles.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Cache`] when the generation directory cannot be
+/// removed.
+pub fn clear_repo_index_runtime(root: &Path) -> Result<(), CovyError> {
+    clear_repo_index_runtime_with_hook(root, || Ok(()))
+}
+
+fn clear_repo_index_runtime_with_hook<F>(root: &Path, before_clear: F) -> Result<(), CovyError>
+where
+    F: FnOnce() -> Result<(), CovyError>,
+{
+    let writer = acquire_writer_lock(root)?;
+    writer.validate_attachment("generation high-water validation")?;
+    ensure_generation_high_water(root)?;
+    writer.validate_attachment("generation high-water validation")?;
+    writer.validate_attachment("repository index clear")?;
+    let path = repo_index_dir(root);
+    writer
+        .directory
+        .remove_tree_if_exists_with(REPO_INDEX_DIR_NAME, || {
+            before_clear().map_err(|error| std::io::Error::other(error.to_string()))
+        })
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to remove repository index directory '{}': {error}",
+                path.display()
+            ))
+        })?;
+    writer.validate_attachment("repository index clear completion")?;
+    Ok(())
+}
+
+/// Publishes changed paths as one immutable delta segment.
+///
+/// At eight referenced segments, live overlay entries are compacted into one
+/// segment. The immutable base remains shared across old and new readers. A
+/// repository-local lock serializes publishers, and an update from a stale
+/// runtime returns an explicit generation-conflict cache error.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Cache`] if `current` is unloaded or if an artifact
+/// cannot be encoded, flushed, validated, or published. File metadata/content
+/// failures use the existing repository-index error behavior.
+pub fn update_repo_index_runtime(
+    root: &Path,
+    current: &RepoIndexRuntime,
+    changed_paths: &[String],
+    include_tests: bool,
+) -> Result<(RepoIndexRuntime, RepoIndexUpdateSummary), CovyError> {
+    update_repo_index_runtime_with_hook(root, current, changed_paths, include_tests, |_| Ok(()))
+}
+
+fn update_repo_index_runtime_with_hook<F>(
+    root: &Path,
+    current: &RepoIndexRuntime,
+    changed_paths: &[String],
+    include_tests: bool,
+    mut publication_hook: F,
+) -> Result<(RepoIndexRuntime, RepoIndexUpdateSummary), CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
+    let loaded = current
+        .generation
+        .as_ref()
+        .ok_or_else(|| cache_error("repository index runtime is not loaded"))?;
+    let policy_changed = loaded.base.include_tests != include_tests;
+    if changed_paths.is_empty() && !policy_changed {
+        return Ok((
+            current.clone(),
+            RepoIndexUpdateSummary {
+                indexed_files: 0,
+                removed_files: 0,
+                changed_paths: Vec::new(),
+                work: RepoIndexUpdateWork::default(),
+            },
+        ));
+    }
+    let normalized = normalize_changed_paths(root, changed_paths)?;
+    let changed_paths_considered = normalized.len();
+    let writer = acquire_writer_lock(root)?;
+    writer.validate_attachment("incremental publication prestate capture")?;
+    let (published, previous_current_bytes) = load_published_manifest_with_bytes(root)?;
+    let manifest_bytes_decoded = previous_current_bytes.as_ref().map_or(0, Vec::len);
+    let previous_previous_bytes = read_optional_file(&previous_manifest_path(root))?;
+    let published_identity = publication_identity(&published)?;
+    let current_identity = &loaded.publication_identity;
+    if &published_identity != current_identity {
+        return Err(cache_error(format!(
+            "repository index generation conflict: caller has {}@{}, published generation is {}@{}",
+            current_identity.generation,
+            current_identity.generation_record_digest,
+            published_identity.generation,
+            published_identity.generation_record_digest
+        )));
+    }
+    let (published_record, published_record_pin, generation_record_bytes_decoded) =
+        pin_authenticated_generation_record(root, &published)?;
+    let mut publication_metadata_bytes_decoded =
+        manifest_bytes_decoded.saturating_add(generation_record_bytes_decoded);
+    let validated_artifacts = validate_loaded_artifact_stamps(root, loaded)?;
+    let mut repository_artifact_metadata_checks = validated_artifacts.metadata_checks;
+    let mut repository_artifact_bytes_hashed = validated_artifacts.bytes_hashed;
+    if policy_changed {
+        let prestate = RebuildPublicationPrestate {
+            previous: Some(published),
+            previous_record: Some(published_record),
+            record_pins: vec![published_record_pin],
+            artifact_pins: validated_artifacts.pins,
+            previous_current_bytes,
+            previous_previous_bytes,
+            work: PublicationFenceWork {
+                publication_metadata_bytes_decoded,
+                repository_artifact_bytes_hashed,
+                repository_artifact_metadata_checks,
+                ..PublicationFenceWork::default()
+            },
+        };
+        let snapshot = build_repo_index_with_progress(root, include_tests, |_, _| {})?;
+        publication_hook(IncrementalPublicationStage::AfterRebuildScan)?;
+        writer.validate_attachment("policy rebuild publication")?;
+        let (rebuilt, work) = publish_rebuilt_runtime_from_prestate_with_work(
+            root,
+            &writer,
+            include_tests,
+            snapshot,
+            prestate,
+            publication_hook,
+        )?;
+        return Ok((
+            rebuilt,
+            RepoIndexUpdateSummary {
+                indexed_files: 0,
+                removed_files: 0,
+                changed_paths: normalized,
+                work: work.into_update_work(changed_paths_considered),
+            },
+        ));
+    }
+    let ValidatedArtifactStamps {
+        base: validated_base_stamp,
+        segments: mut segment_stamps,
+        pins: mut artifact_pins,
+        ..
+    } = validated_artifacts;
+    let generation = reserve_generation_with_writer(root, &writer)?;
+    let mut segment = RepoIndexSegment {
+        version: REPO_INDEX_SEGMENT_VERSION,
+        generation,
+        ..RepoIndexSegment::default()
+    };
+    let mut indexed_files = 0;
+    let mut removed_files = 0;
+    for path in &normalized {
+        match index_repo_path(root, path, include_tests)? {
+            Some(entry) => {
+                segment.files.insert(path.clone(), entry);
+                indexed_files += 1;
+            }
+            None => {
+                segment.tombstones.insert(path.clone());
+                if current.file(path).is_some() {
+                    removed_files += 1;
+                }
+            }
+        }
+    }
+    validate_segment(&segment)?;
+
+    let mut segments = loaded.segments.clone();
+    let mut segment_files = loaded.segment_files.clone();
+    let mut segment_digests = loaded.segment_digests.clone();
+    let segment_file = segment_file_name(generation);
+    writer.validate_attachment("incremental segment persistence")?;
+    let (segment, segment_digest, segment_stamp, segment_work) =
+        persist_segment(root, &segment_file, &segment)?;
+    writer.validate_attachment("incremental segment persistence")?;
+    let mut repository_artifact_bytes_decoded = segment_work.repository_artifact_bytes_decoded;
+    let mut repository_artifacts_decoded = segment_work.repository_artifacts_decoded;
+    repository_artifact_bytes_hashed = repository_artifact_bytes_hashed
+        .saturating_add(segment_work.repository_artifact_bytes_hashed);
+    let segment = Arc::new(segment);
+    segment_files.push(segment_file);
+    segment_digests.push(segment_digest);
+    segment_stamps.push(segment_stamp);
+
+    let mut latest_by_path = loaded.latest_by_path.clone();
+    apply_segment_resolution(&segment, &mut latest_by_path);
+    segments.push(segment);
+
+    if segments.len() >= REPO_INDEX_COMPACTION_SEGMENTS {
+        let compacted = compact_segments(generation, &segments, &latest_by_path);
+        let compacted_file = compacted_segment_file_name(generation);
+        writer.validate_attachment("compacted segment persistence")?;
+        let (compacted, compacted_digest, compacted_stamp, compacted_work) =
+            persist_segment(root, &compacted_file, &compacted)?;
+        writer.validate_attachment("compacted segment persistence")?;
+        repository_artifact_bytes_decoded = repository_artifact_bytes_decoded
+            .saturating_add(compacted_work.repository_artifact_bytes_decoded);
+        repository_artifacts_decoded = repository_artifacts_decoded
+            .saturating_add(compacted_work.repository_artifacts_decoded);
+        repository_artifact_bytes_hashed = repository_artifact_bytes_hashed
+            .saturating_add(compacted_work.repository_artifact_bytes_hashed);
+        let compacted = Arc::new(compacted);
+        latest_by_path.clear();
+        apply_segment_resolution(&compacted, &mut latest_by_path);
+        segments = vec![compacted];
+        segment_files = vec![compacted_file];
+        segment_digests = vec![compacted_digest];
+        segment_stamps = vec![compacted_stamp];
+    }
+
+    let total_files = visible_file_count(&loaded.base, &latest_by_path);
+    let overlay_files = latest_by_path
+        .values()
+        .filter(|owner| owner.is_some())
+        .count();
+    let mut manifest = RepoIndexRuntimeManifest {
+        schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+        generation,
+        include_tests,
+        total_files,
+        overlay_files,
+        segment_count: segments.len(),
+        generation_record_digest: None,
+        status: "ready".to_string(),
+        recovered_from_generation: None,
+        last_error: None,
+    };
+    let mut record = RepoIndexGenerationRecord {
+        schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+        generation,
+        base_file: loaded.base_file.clone(),
+        base_digest: loaded.base_digest.clone(),
+        segment_files: segment_files.clone(),
+        segment_digests: segment_digests.clone(),
+        manifest: manifest.clone(),
+    };
+    bind_generation_record(&mut manifest, &mut record)?;
+    writer.validate_attachment("incremental generation-record persistence")?;
+    persist_generation_record(root, &record)?;
+    writer.validate_attachment("incremental generation-record authentication")?;
+    let (persisted_record, next_record_pin, next_record_bytes_decoded) =
+        pin_authenticated_generation_record(root, &manifest)?;
+    publication_metadata_bytes_decoded =
+        publication_metadata_bytes_decoded.saturating_add(next_record_bytes_decoded);
+    record = persisted_record;
+
+    let previously_pinned = loaded
+        .segment_files
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for ((file_name, expected_digest), stamp) in segment_files
+        .iter()
+        .zip(&segment_digests)
+        .zip(&mut segment_stamps)
+    {
+        if previously_pinned.contains(file_name.as_str()) {
+            continue;
+        }
+        let (authenticated_stamp, pin) = pin_loaded_artifact(
+            &repo_index_dir(root).join(file_name),
+            stamp,
+            expected_digest,
+            &mut repository_artifact_metadata_checks,
+            &mut repository_artifact_bytes_hashed,
+        )?;
+        *stamp = authenticated_stamp;
+        artifact_pins.push(pin);
+    }
+
+    let runtime = RepoIndexRuntime {
+        manifest: manifest.clone(),
+        generation: Some(Arc::new(RepoIndexGeneration {
+            publication_identity: publication_identity(&manifest)?,
+            base: Arc::clone(&loaded.base),
+            base_file: loaded.base_file.clone(),
+            base_digest: loaded.base_digest.clone(),
+            base_stamp: validated_base_stamp,
+            segments,
+            segment_files,
+            segment_digests,
+            segment_stamps,
+            latest_by_path,
+        })),
+    };
+    validate_runtime(&runtime)?;
+    let record_pins = [published_record_pin, next_record_pin];
+    let fence_work = publish_fenced_manifests_with_rollback(
+        PublicationTransaction {
+            root,
+            writer: &writer,
+            previous: Some(&published),
+            current: &manifest,
+            previous_current_bytes: previous_current_bytes.as_deref(),
+            previous_previous_bytes: previous_previous_bytes.as_deref(),
+            record_pins: &record_pins,
+            artifact_pins: &artifact_pins,
+        },
+        &mut publication_hook,
+    )?;
+    publication_metadata_bytes_decoded = publication_metadata_bytes_decoded
+        .saturating_add(fence_work.publication_metadata_bytes_decoded);
+    repository_artifact_bytes_hashed = repository_artifact_bytes_hashed
+        .saturating_add(fence_work.repository_artifact_bytes_hashed);
+    repository_artifact_bytes_decoded = repository_artifact_bytes_decoded
+        .saturating_add(fence_work.repository_artifact_bytes_decoded);
+    repository_artifacts_decoded =
+        repository_artifacts_decoded.saturating_add(fence_work.repository_artifacts_decoded);
+    repository_artifact_metadata_checks = repository_artifact_metadata_checks
+        .saturating_add(fence_work.repository_artifact_metadata_checks);
+    let publication_transaction = PublicationTransaction {
+        root,
+        writer: &writer,
+        previous: Some(&published),
+        current: &manifest,
+        previous_current_bytes: previous_current_bytes.as_deref(),
+        previous_previous_bytes: previous_previous_bytes.as_deref(),
+        record_pins: &record_pins,
+        artifact_pins: &artifact_pins,
+    };
+    let prune_result =
+        prune_generation_artifacts(publication_transaction, &record, Some(&published_record));
+    let completion_work = finish_best_effort_prune(publication_transaction, prune_result)?;
+    publication_metadata_bytes_decoded = publication_metadata_bytes_decoded
+        .saturating_add(completion_work.publication_metadata_bytes_decoded);
+    repository_artifact_bytes_decoded = repository_artifact_bytes_decoded
+        .saturating_add(completion_work.repository_artifact_bytes_decoded);
+    repository_artifacts_decoded =
+        repository_artifacts_decoded.saturating_add(completion_work.repository_artifacts_decoded);
+    repository_artifact_bytes_hashed = repository_artifact_bytes_hashed
+        .saturating_add(completion_work.repository_artifact_bytes_hashed);
+    repository_artifact_metadata_checks = repository_artifact_metadata_checks
+        .saturating_add(completion_work.repository_artifact_metadata_checks);
+    Ok((
+        runtime,
+        RepoIndexUpdateSummary {
+            indexed_files,
+            removed_files,
+            changed_paths: normalized,
+            work: RepoIndexUpdateWork {
+                publication_metadata_bytes_decoded,
+                repository_artifact_bytes_decoded,
+                repository_artifacts_decoded,
+                repository_artifact_bytes_hashed,
+                repository_artifact_metadata_checks,
+                changed_paths_considered,
+            },
+        },
+    ))
+}
+
+/// Loads the current generation, falling back only to the explicitly retained
+/// previous manifest when the current generation is corrupt.
+///
+/// Unpublished generation artifacts are deliberately ignored.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Cache`] only when both current and retained previous
+/// generation metadata cannot be read. Referenced-artifact corruption is
+/// represented by an unloaded runtime carrying the validation reason.
+pub fn load_repo_index_runtime(root: &Path) -> Result<RepoIndexRuntime, CovyError> {
+    let current = match load_published_manifest(root) {
+        Ok(manifest) => manifest,
+        Err(current_error) => {
+            return recover_previous(root, None, current_error);
+        }
+    };
+    if current.schema_version == 0 {
+        let current_exists =
+            read_optional_state_file(&manifest_path(root), MAX_REPO_INDEX_METADATA_BYTES)?
+                .is_some();
+        let previous_exists =
+            read_optional_state_file(&previous_manifest_path(root), MAX_REPO_INDEX_METADATA_BYTES)?
+                .is_some();
+        let recovered = recover_previous(
+            root,
+            None,
+            cache_error("repository index current manifest is missing or schema-zero"),
+        )?;
+        if recovered.is_loaded() || current_exists || previous_exists {
+            return Ok(recovered);
+        }
+        return Ok(RepoIndexRuntime {
+            manifest: RepoIndexRuntimeManifest {
+                status: "missing".to_string(),
+                ..RepoIndexRuntimeManifest::default()
+            },
+            generation: None,
+        });
+    }
+    match load_generation(root, &current) {
+        Ok(runtime) => Ok(runtime),
+        Err(current_error) => recover_previous(root, Some(current.generation), current_error),
+    }
+}
+
+fn recover_previous(
+    root: &Path,
+    failed_generation: Option<u64>,
+    current_error: CovyError,
+) -> Result<RepoIndexRuntime, CovyError> {
+    let previous = load_previous_manifest(root);
+    if let Ok(previous) = previous {
+        if let Ok(mut runtime) = load_generation(root, &previous) {
+            runtime.manifest.recovered_from_generation = failed_generation;
+            runtime.manifest.last_error = Some(current_error.to_string());
+            return Ok(runtime);
+        }
+    }
+    Ok(RepoIndexRuntime {
+        manifest: RepoIndexRuntimeManifest {
+            schema_version: REPO_INDEX_RUNTIME_SCHEMA_VERSION,
+            generation: failed_generation.unwrap_or_default(),
+            status: "corrupt".to_string(),
+            recovered_from_generation: None,
+            last_error: Some(current_error.to_string()),
+            ..RepoIndexRuntimeManifest::default()
+        },
+        generation: None,
+    })
+}
+
+fn load_generation(
+    root: &Path,
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<RepoIndexRuntime, CovyError> {
+    load_generation_with_work(root, expected_manifest).map(|(runtime, _)| runtime)
+}
+
+fn load_generation_with_work(
+    root: &Path,
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<(RepoIndexRuntime, PublicationFenceWork), CovyError> {
+    let (record, record_bytes_decoded) =
+        load_authenticated_generation_record_with_decoded_bytes(root, expected_manifest)?;
+    let mut work = PublicationFenceWork {
+        publication_metadata_bytes_decoded: record_bytes_decoded,
+        ..PublicationFenceWork::default()
+    };
+    validate_artifact_name(&record.base_file)?;
+    let base_path = repo_index_dir(root).join(&record.base_file);
+    let (base_raw, base_stamp) = read_authenticated_artifact(&base_path, &record.base_digest)?;
+    work.repository_artifact_bytes_hashed = work
+        .repository_artifact_bytes_hashed
+        .saturating_add(base_raw.len());
+    work.repository_artifact_bytes_decoded = work
+        .repository_artifact_bytes_decoded
+        .saturating_add(base_raw.len());
+    work.repository_artifacts_decoded = work.repository_artifacts_decoded.saturating_add(1);
+    let base = wincode::deserialize::<RepoIndexSnapshot>(&base_raw).map_err(|error| {
+        cache_error(format!(
+            "failed to decode repository base '{}': {error}",
+            base_path.display()
+        ))
+    })?;
+    validate_base(&base, expected_manifest.include_tests)?;
+
+    let record_path =
+        repo_index_dir(root).join(generation_record_file_name(expected_manifest.generation));
+    let mut segments = Vec::with_capacity(record.segment_files.len());
+    let mut segment_stamps = Vec::with_capacity(record.segment_files.len());
+    let mut latest_by_path = BTreeMap::new();
+    let mut previous_generation = None;
+    let mut unique_files = BTreeSet::new();
+    for (file_name, expected_digest) in record.segment_files.iter().zip(&record.segment_digests) {
+        validate_artifact_name(file_name)?;
+        if !unique_files.insert(file_name) {
+            return Err(cache_error(format!(
+                "generation record '{}' references duplicate segment '{file_name}'",
+                record_path.display()
+            )));
+        }
+        let path = repo_index_dir(root).join(file_name);
+        let (raw, stamp) = read_authenticated_artifact(&path, expected_digest)?;
+        work.repository_artifact_bytes_hashed = work
+            .repository_artifact_bytes_hashed
+            .saturating_add(raw.len());
+        work.repository_artifact_bytes_decoded = work
+            .repository_artifact_bytes_decoded
+            .saturating_add(raw.len());
+        work.repository_artifacts_decoded = work.repository_artifacts_decoded.saturating_add(1);
+        let segment = wincode::deserialize::<RepoIndexSegment>(&raw).map_err(|error| {
+            cache_error(format!(
+                "failed to decode repository segment '{}': {error}",
+                path.display()
+            ))
+        })?;
+        validate_segment(&segment)?;
+        segment_stamps.push(stamp);
+        if previous_generation.is_some_and(|previous| segment.generation <= previous)
+            || segment.generation > expected_manifest.generation
+        {
+            return Err(cache_error(format!(
+                "generation record '{}' has non-increasing or future segment generation {}",
+                record_path.display(),
+                segment.generation
+            )));
+        }
+        previous_generation = Some(segment.generation);
+        apply_segment_resolution(&segment, &mut latest_by_path);
+        segments.push(Arc::new(segment));
+    }
+    let generation = RepoIndexGeneration {
+        publication_identity: publication_identity(expected_manifest)?,
+        base: Arc::new(base),
+        base_file: record.base_file,
+        base_digest: record.base_digest,
+        base_stamp,
+        segments,
+        segment_files: record.segment_files,
+        segment_digests: record.segment_digests,
+        segment_stamps,
+        latest_by_path,
+    };
+    let runtime = RepoIndexRuntime {
+        manifest: expected_manifest.clone(),
+        generation: Some(Arc::new(generation)),
+    };
+    validate_runtime(&runtime)?;
+    Ok((runtime, work))
+}
+
+#[cfg(test)]
+fn load_authenticated_generation_record(
+    root: &Path,
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<RepoIndexGenerationRecord, CovyError> {
+    load_authenticated_generation_record_with_decoded_bytes(root, expected_manifest)
+        .map(|(record, _)| record)
+}
+
+fn load_authenticated_generation_record_with_decoded_bytes(
+    root: &Path,
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<(RepoIndexGenerationRecord, usize), CovyError> {
+    pin_authenticated_generation_record(root, expected_manifest)
+        .map(|(record, _, decoded_bytes)| (record, decoded_bytes))
+}
+
+fn pin_authenticated_generation_record(
+    root: &Path,
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<(RepoIndexGenerationRecord, PinnedGenerationRecord, usize), CovyError> {
+    validate_manifest(expected_manifest)?;
+    let record_path =
+        repo_index_dir(root).join(generation_record_file_name(expected_manifest.generation));
+    let (directory, name) = repo_state_location(&record_path, false)?;
+    let Some(mut file) = directory
+        .open_existing(&name, FileAccess::ReadOnly)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to open generation record '{}': {error}",
+                record_path.display()
+            ))
+        })?
+    else {
+        return Err(cache_error(format!(
+            "generation record '{}' does not exist",
+            record_path.display()
+        )));
+    };
+    let before_metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    ensure_regular_artifact(&record_path, &before_metadata)?;
+    if before_metadata.len() > MAX_GENERATION_RECORD_BYTES {
+        return Err(cache_error(format!(
+            "generation record '{}' is {} bytes; maximum is {MAX_GENERATION_RECORD_BYTES}",
+            record_path.display(),
+            before_metadata.len()
+        )));
+    }
+    let before = artifact_stamp_from_metadata(&before_metadata);
+    let capacity = usize::try_from(before_metadata.len()).map_err(|_| {
+        cache_error(format!(
+            "generation record '{}' exceeds the platform allocation limit",
+            record_path.display()
+        ))
+    })?;
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(capacity).map_err(|error| {
+        cache_error(format!(
+            "failed to reserve generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    file.file_mut().seek(SeekFrom::Start(0)).map_err(|error| {
+        cache_error(format!(
+            "failed to seek generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    Read::by_ref(file.file_mut())
+        .take(MAX_GENERATION_RECORD_BYTES.saturating_add(1))
+        .read_to_end(&mut raw)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to read generation record '{}': {error}",
+                record_path.display()
+            ))
+        })?;
+    if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_GENERATION_RECORD_BYTES {
+        return Err(cache_error(format!(
+            "generation record '{}' exceeds the {MAX_GENERATION_RECORD_BYTES}-byte limit",
+            record_path.display()
+        )));
+    }
+    let after_metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to re-inspect generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    ensure_regular_artifact(&record_path, &after_metadata)?;
+    let after = artifact_stamp_from_metadata(&after_metadata);
+    if before != after {
+        return Err(cache_error(format!(
+            "generation record '{}' changed while it was being authenticated",
+            record_path.display()
+        )));
+    }
+    file.validate_attachment().map_err(|error| {
+        cache_error(format!(
+            "generation record '{}' was replaced while it was being authenticated: {error}",
+            record_path.display()
+        ))
+    })?;
+    let record = authenticate_generation_record_bytes(&record_path, &raw, expected_manifest)?;
+    let decoded_bytes = raw.len();
+    Ok((
+        record,
+        PinnedGenerationRecord {
+            root: root.to_path_buf(),
+            path: record_path,
+            file,
+            stamp: after,
+            expected_manifest: expected_manifest.clone(),
+        },
+        decoded_bytes,
+    ))
+}
+
+fn authenticate_generation_record_bytes(
+    record_path: &Path,
+    raw: &[u8],
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<RepoIndexGenerationRecord, CovyError> {
+    let record = serde_json::from_slice::<RepoIndexGenerationRecord>(raw).map_err(|error| {
+        cache_error(format!(
+            "failed to decode generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    if record.schema_version != REPO_INDEX_RUNTIME_SCHEMA_VERSION
+        || record.generation != expected_manifest.generation
+        || record.manifest != durable_manifest(expected_manifest)
+        || record.base_digest.is_empty()
+        || record.segment_files.len() != record.segment_digests.len()
+        || record.segment_digests.iter().any(String::is_empty)
+    {
+        return Err(cache_error(format!(
+            "generation record '{}' does not match its published manifest or digest metadata",
+            record_path.display()
+        )));
+    }
+    let persisted_encoding = serde_json::to_vec_pretty(&record).map_err(|error| {
+        cache_error(format!(
+            "failed to encode generation record '{}': {error}",
+            record_path.display()
+        ))
+    })?;
+    if raw != persisted_encoding {
+        return Err(cache_error(format!(
+            "generation record '{}' is not in its authenticated canonical persisted encoding",
+            record_path.display()
+        )));
+    }
+    let expected_record_digest = expected_manifest
+        .generation_record_digest
+        .as_deref()
+        .ok_or_else(|| {
+            cache_error(format!(
+                "published repository generation {} does not authenticate its generation record",
+                expected_manifest.generation
+            ))
+        })?;
+    let actual_record_digest = generation_record_digest(&record)?;
+    if actual_record_digest != expected_record_digest {
+        return Err(cache_error(format!(
+            "generation record '{}' failed digest validation (expected {expected_record_digest}, found {actual_record_digest})",
+            record_path.display()
+        )));
+    }
+    Ok(record)
+}
+
+fn validate_manifest(manifest: &RepoIndexRuntimeManifest) -> Result<(), CovyError> {
+    if manifest.schema_version != REPO_INDEX_RUNTIME_SCHEMA_VERSION {
+        return Err(cache_error(format!(
+            "repository index schema mismatch: found {}, expected {}",
+            manifest.schema_version, REPO_INDEX_RUNTIME_SCHEMA_VERSION
+        )));
+    }
+    if manifest.status != "ready" || manifest.generation == 0 {
+        return Err(cache_error(format!(
+            "repository index generation {} is not ready",
+            manifest.generation
+        )));
+    }
+    Ok(())
+}
+
+fn validate_base(base: &RepoIndexSnapshot, include_tests: bool) -> Result<(), CovyError> {
+    if base.version == 0 || base.include_tests != include_tests {
+        return Err(cache_error(
+            "repository base has an invalid version or include-tests policy",
+        ));
+    }
+    for (path, entry) in &base.files {
+        if path.is_empty() || entry.path != *path {
+            return Err(cache_error(format!(
+                "repository base entry key '{path}' does not match path '{}'",
+                entry.path
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_segment(segment: &RepoIndexSegment) -> Result<(), CovyError> {
+    if segment.version != REPO_INDEX_SEGMENT_VERSION || segment.generation == 0 {
+        return Err(cache_error(format!(
+            "repository segment generation {} has invalid version {}",
+            segment.generation, segment.version
+        )));
+    }
+    for (path, entry) in &segment.files {
+        if path.is_empty() || entry.path != *path {
+            return Err(cache_error(format!(
+                "repository segment entry key '{path}' does not match path '{}'",
+                entry.path
+            )));
+        }
+        if segment.tombstones.contains(path) {
+            return Err(cache_error(format!(
+                "repository segment contains both an entry and tombstone for '{path}'"
+            )));
+        }
+    }
+    if segment.tombstones.iter().any(String::is_empty) {
+        return Err(cache_error(
+            "repository segment contains an empty tombstone path",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_runtime(runtime: &RepoIndexRuntime) -> Result<(), CovyError> {
+    validate_manifest(&runtime.manifest)?;
+    let loaded = runtime
+        .generation
+        .as_ref()
+        .ok_or_else(|| cache_error("repository generation is absent"))?;
+    if loaded.publication_identity != publication_identity(&runtime.manifest)? {
+        return Err(cache_error(
+            "repository runtime identity does not match its public manifest",
+        ));
+    }
+    if loaded.segments.len() != runtime.manifest.segment_count {
+        return Err(cache_error(format!(
+            "repository manifest declares {} segments but {} loaded",
+            runtime.manifest.segment_count,
+            loaded.segments.len()
+        )));
+    }
+    if loaded.base.include_tests != runtime.manifest.include_tests {
+        return Err(cache_error(
+            "repository manifest include-tests policy does not match its loaded base",
+        ));
+    }
+    if loaded.segments.len() != loaded.segment_files.len()
+        || loaded.segments.len() != loaded.segment_digests.len()
+        || loaded.segments.len() != loaded.segment_stamps.len()
+        || loaded.base_digest.is_empty()
+        || loaded.segment_digests.iter().any(String::is_empty)
+    {
+        return Err(cache_error(
+            "repository generation has inconsistent artifact digest metadata",
+        ));
+    }
+    let total_files = visible_file_count(&loaded.base, &loaded.latest_by_path);
+    let overlay_files = loaded
+        .latest_by_path
+        .values()
+        .filter(|owner| owner.is_some())
+        .count();
+    if total_files != runtime.manifest.total_files
+        || overlay_files != runtime.manifest.overlay_files
+    {
+        return Err(cache_error(format!(
+            "repository manifest counts do not match loaded generation (files {}/{}, overlay {}/{})",
+            runtime.manifest.total_files,
+            total_files,
+            runtime.manifest.overlay_files,
+            overlay_files
+        )));
+    }
+    Ok(())
+}
+
+fn visible_file_count(
+    base: &RepoIndexSnapshot,
+    latest_by_path: &BTreeMap<String, Option<u64>>,
+) -> usize {
+    let shadowed_base = latest_by_path
+        .keys()
+        .filter(|path| base.files.contains_key(*path))
+        .count();
+    let visible_overlay = latest_by_path
+        .values()
+        .filter(|owner| owner.is_some())
+        .count();
+    base.files
+        .len()
+        .saturating_sub(shadowed_base)
+        .saturating_add(visible_overlay)
+}
+
+fn compact_segments(
+    generation: u64,
+    segments: &[Arc<RepoIndexSegment>],
+    latest_by_path: &BTreeMap<String, Option<u64>>,
+) -> RepoIndexSegment {
+    let mut compacted = RepoIndexSegment {
+        version: REPO_INDEX_SEGMENT_VERSION,
+        generation,
+        ..RepoIndexSegment::default()
+    };
+    for (path, owner) in latest_by_path {
+        match owner {
+            Some(owner) => {
+                if let Some(entry) = segments
+                    .iter()
+                    .rev()
+                    .find(|segment| segment.generation == *owner)
+                    .and_then(|segment| segment.files.get(path))
+                {
+                    compacted.files.insert(path.clone(), entry.clone());
+                }
+            }
+            None => {
+                compacted.tombstones.insert(path.clone());
+            }
+        }
+    }
+    compacted
+}
+
+fn apply_segment_resolution(
+    segment: &RepoIndexSegment,
+    latest_by_path: &mut BTreeMap<String, Option<u64>>,
+) {
+    for path in segment.files.keys() {
+        latest_by_path.insert(path.clone(), Some(segment.generation));
+    }
+    for path in &segment.tombstones {
+        latest_by_path.insert(path.clone(), None);
+    }
+}
+
+fn normalize_changed_paths(root: &Path, paths: &[String]) -> Result<Vec<String>, CovyError> {
+    let canonical_root = fs::canonicalize(root).map_err(|error| {
+        CovyError::PathMapping(format!(
+            "cannot resolve repository root '{}': {error}",
+            root.display()
+        ))
+    })?;
+    let mut normalized = BTreeSet::new();
+    for raw in paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains('\n') {
+            return Err(invalid_changed_path(raw));
+        }
+        let input = Path::new(trimmed);
+        let relative = if input.is_absolute() {
+            if let Ok(stripped) = input.strip_prefix(root) {
+                stripped.to_path_buf()
+            } else if input.exists() {
+                fs::canonicalize(input)
+                    .ok()
+                    .and_then(|path| {
+                        path.strip_prefix(&canonical_root)
+                            .ok()
+                            .map(Path::to_path_buf)
+                    })
+                    .ok_or_else(|| invalid_changed_path(raw))?
+            } else {
+                return Err(invalid_changed_path(raw));
+            }
+        } else {
+            input.to_path_buf()
+        };
+        let mut safe = PathBuf::new();
+        for component in relative.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(part) => safe.push(part),
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(invalid_changed_path(raw));
+                }
+            }
+        }
+        if safe.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate = root.join(&safe);
+        if candidate.exists() {
+            let canonical_candidate =
+                fs::canonicalize(&candidate).map_err(|_| invalid_changed_path(raw))?;
+            if !canonical_candidate.starts_with(&canonical_root) {
+                return Err(invalid_changed_path(raw));
+            }
+        }
+        normalized.insert(normalize_path(&safe.to_string_lossy()));
+    }
+    Ok(normalized.into_iter().collect())
+}
+
+fn invalid_changed_path(path: &str) -> CovyError {
+    CovyError::PathMapping(format!(
+        "changed path '{path}' must resolve beneath the repository root"
+    ))
+}
+
+fn persist_segment(
+    root: &Path,
+    file_name: &str,
+    segment: &RepoIndexSegment,
+) -> Result<
+    (
+        RepoIndexSegment,
+        String,
+        ArtifactStamp,
+        PublicationFenceWork,
+    ),
+    CovyError,
+> {
+    let encoded = wincode::serialize(segment)
+        .map_err(|error| cache_error(format!("failed to encode repository segment: {error}")))?;
+    let path = repo_index_dir(root).join(file_name);
+    write_immutable(path.clone(), &encoded)?;
+    let digest = artifact_digest(&encoded);
+    let (persisted, stamp) = read_authenticated_artifact(&path, &digest)?;
+    let decoded = wincode::deserialize::<RepoIndexSegment>(&persisted)
+        .map_err(|error| cache_error(format!("failed to validate repository segment: {error}")))?;
+    validate_segment(&decoded)?;
+    Ok((
+        decoded,
+        digest,
+        stamp,
+        PublicationFenceWork {
+            repository_artifact_bytes_decoded: persisted.len(),
+            repository_artifacts_decoded: 1,
+            repository_artifact_bytes_hashed: encoded.len().saturating_add(persisted.len()),
+            ..PublicationFenceWork::default()
+        },
+    ))
+}
+
+fn persist_generation_record(
+    root: &Path,
+    record: &RepoIndexGenerationRecord,
+) -> Result<(), CovyError> {
+    let encoded = serde_json::to_vec_pretty(record).map_err(|error| {
+        cache_error(format!(
+            "failed to encode repository generation record: {error}"
+        ))
+    })?;
+    write_immutable(
+        repo_index_dir(root).join(generation_record_file_name(record.generation)),
+        &encoded,
+    )
+}
+
+fn bind_generation_record(
+    manifest: &mut RepoIndexRuntimeManifest,
+    record: &mut RepoIndexGenerationRecord,
+) -> Result<(), CovyError> {
+    manifest.generation_record_digest = None;
+    record.manifest = manifest.clone();
+    manifest.generation_record_digest = Some(generation_record_digest(record)?);
+    record.manifest = manifest.clone();
+    Ok(())
+}
+
+fn generation_record_digest(record: &RepoIndexGenerationRecord) -> Result<String, CovyError> {
+    let mut canonical = record.clone();
+    canonical.manifest.generation_record_digest = None;
+    let encoded = serde_json::to_vec(&canonical).map_err(|error| {
+        cache_error(format!(
+            "failed to encode canonical repository generation record: {error}"
+        ))
+    })?;
+    Ok(artifact_digest(&encoded))
+}
+
+fn publication_identity(
+    manifest: &RepoIndexRuntimeManifest,
+) -> Result<PublicationIdentity, CovyError> {
+    validate_manifest(manifest)?;
+    let generation_record_digest = manifest.generation_record_digest.clone().ok_or_else(|| {
+        cache_error(format!(
+            "published repository generation {} does not authenticate its generation record",
+            manifest.generation
+        ))
+    })?;
+    Ok(PublicationIdentity {
+        generation: manifest.generation,
+        generation_record_digest,
+    })
+}
+
+#[cfg(all(test, feature = "shared-repository-scan"))]
+fn publish_manifest(
+    root: &Path,
+    previous: Option<&RepoIndexRuntimeManifest>,
+    current: &RepoIndexRuntimeManifest,
+) -> Result<(), CovyError> {
+    publish_current_manifest(root, current)?;
+    if let Some(previous) = previous.filter(|manifest| manifest.generation > 0) {
+        publish_previous_manifest(root, previous)?;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "shared-repository-scan"))]
+fn publish_current_manifest(
+    root: &Path,
+    current: &RepoIndexRuntimeManifest,
+) -> Result<(), CovyError> {
+    publish_current_manifest_with_hook(root, current, || Ok(()))
+}
+
+fn publish_current_manifest_with_hook(
+    root: &Path,
+    current: &RepoIndexRuntimeManifest,
+    before_replace: impl FnOnce() -> Result<(), CovyError>,
+) -> Result<(), CovyError> {
+    let encoded = current_manifest_bytes(current)?;
+    write_atomic_with_hook(manifest_path(root), &encoded, before_replace)
+}
+
+fn publish_previous_manifest(
+    root: &Path,
+    previous: &RepoIndexRuntimeManifest,
+) -> Result<(), CovyError> {
+    let encoded = previous_manifest_bytes(previous)?;
+    write_atomic(previous_manifest_path(root), &encoded)
+}
+
+fn publish_fenced_manifests_with_rollback<F>(
+    publication: PublicationTransaction<'_>,
+    publication_hook: &mut F,
+) -> Result<PublicationFenceWork, CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
+    match publish_fenced_manifest_outputs(publication, publication_hook) {
+        Ok(work) => Ok(work),
+        Err(error) => Err(rollback_publication_manifests(publication, error)),
+    }
+}
+
+fn publish_fenced_manifest_outputs<F>(
+    publication: PublicationTransaction<'_>,
+    publication_hook: &mut F,
+) -> Result<PublicationFenceWork, CovyError>
+where
+    F: FnMut(IncrementalPublicationStage) -> Result<(), CovyError>,
+{
+    let mut work = authenticate_publication_prestate(publication)?;
+    publication_hook(IncrementalPublicationStage::BeforeCurrent)?;
+    work.add_assign(authenticate_publication_prestate(publication)?);
+    publish_current_manifest_with_hook(publication.root, publication.current, || {
+        publication_hook(IncrementalPublicationStage::BeforeCurrentReplace)
+    })?;
+    publication
+        .writer
+        .validate_attachment("current manifest publication")?;
+    publication_hook(IncrementalPublicationStage::AfterCurrent)?;
+    publication
+        .writer
+        .validate_attachment("current manifest authentication")?;
+    authenticate_current_manifest_output(publication.root, publication.current)?;
+    work.add_assign(revalidate_publication_fence(
+        publication.record_pins,
+        publication.artifact_pins,
+    )?);
+    if let Some(previous) = publication
+        .previous
+        .filter(|manifest| manifest.generation > 0)
+    {
+        authenticate_current_publication_stage(publication)?;
+        publish_previous_manifest(publication.root, previous)?;
+        publication
+            .writer
+            .validate_attachment("previous manifest publication")?;
+    }
+    publication_hook(IncrementalPublicationStage::AfterPrevious)?;
+    publication
+        .writer
+        .validate_attachment("published manifest-pair authentication")?;
+    authenticate_published_manifest_pair(publication)?;
+    let final_work =
+        revalidate_publication_fence(publication.record_pins, publication.artifact_pins)?;
+    work.add_assign(final_work);
+    publication
+        .writer
+        .validate_attachment("publication completion")?;
+    Ok(work)
+}
+
+fn authenticate_current_publication_stage(
+    publication: PublicationTransaction<'_>,
+) -> Result<(), CovyError> {
+    publication
+        .writer
+        .validate_attachment("previous manifest prepublication authentication")?;
+    authenticate_current_manifest_output(publication.root, publication.current)?;
+    authenticate_optional_manifest_snapshot(
+        &previous_manifest_path(publication.root),
+        publication.previous_previous_bytes,
+        "pre-publication previous manifest",
+    )?;
+    publication
+        .writer
+        .validate_attachment("previous manifest prepublication authentication")
+}
+
+fn authenticate_publication_prestate(
+    publication: PublicationTransaction<'_>,
+) -> Result<PublicationFenceWork, CovyError> {
+    publication
+        .writer
+        .validate_attachment("pre-publication manifest authentication")?;
+    authenticate_prepublication_manifest_snapshot(
+        publication.root,
+        publication.previous_current_bytes,
+        publication.previous_previous_bytes,
+    )?;
+    let work = revalidate_publication_fence(publication.record_pins, publication.artifact_pins)?;
+    publication
+        .writer
+        .validate_attachment("pre-publication manifest authentication")?;
+    Ok(work)
+}
+
+fn authenticate_published_manifest_pair(
+    publication: PublicationTransaction<'_>,
+) -> Result<(), CovyError> {
+    authenticate_current_manifest_output(publication.root, publication.current)?;
+    if let Some(previous) = publication
+        .previous
+        .filter(|manifest| manifest.generation > 0)
+    {
+        authenticate_manifest_output(
+            &previous_manifest_path(publication.root),
+            &previous_manifest_bytes(previous)?,
+            "previous manifest",
+        )?;
+    } else {
+        authenticate_optional_manifest_snapshot(
+            &previous_manifest_path(publication.root),
+            publication.previous_previous_bytes,
+            "untouched previous manifest",
+        )?;
+    }
+    Ok(())
+}
+
+fn authenticate_publication_completion(
+    publication: PublicationTransaction<'_>,
+) -> Result<PublicationFenceWork, CovyError> {
+    publication
+        .writer
+        .validate_attachment("publication completion authentication")?;
+    authenticate_published_manifest_pair(publication)?;
+    let work = revalidate_publication_fence(publication.record_pins, publication.artifact_pins)?;
+    publication
+        .writer
+        .validate_attachment("publication completion authentication")?;
+    Ok(work)
+}
+
+fn finish_best_effort_prune(
+    publication: PublicationTransaction<'_>,
+    prune_result: Result<(), CovyError>,
+) -> Result<PublicationFenceWork, CovyError> {
+    match (prune_result, authenticate_publication_completion(publication)) {
+        (_, Ok(work)) => Ok(work),
+        (Ok(()), Err(authentication)) => Err(authentication),
+        (Err(prune), Err(authentication)) => Err(cache_error(format!(
+            "repository generation pruning failed ({prune}); post-prune publication authentication also failed ({authentication})"
+        ))),
+    }
+}
+
+fn current_manifest_bytes(manifest: &RepoIndexRuntimeManifest) -> Result<Vec<u8>, CovyError> {
+    serde_json::to_vec_pretty(manifest)
+        .map_err(|error| cache_error(format!("failed to encode repository manifest: {error}")))
+}
+
+fn previous_manifest_bytes(manifest: &RepoIndexRuntimeManifest) -> Result<Vec<u8>, CovyError> {
+    serde_json::to_vec_pretty(&durable_manifest(manifest)).map_err(|error| {
+        cache_error(format!(
+            "failed to encode previous repository manifest: {error}"
+        ))
+    })
+}
+
+fn authenticate_prepublication_manifest_snapshot(
+    root: &Path,
+    current: Option<&[u8]>,
+    previous: Option<&[u8]>,
+) -> Result<(), CovyError> {
+    authenticate_optional_manifest_snapshot(
+        &manifest_path(root),
+        current,
+        "pre-publication current manifest",
+    )?;
+    authenticate_optional_manifest_snapshot(
+        &previous_manifest_path(root),
+        previous,
+        "pre-publication previous manifest",
+    )
+}
+
+fn authenticate_optional_manifest_snapshot(
+    path: &Path,
+    expected: Option<&[u8]>,
+    kind: &str,
+) -> Result<(), CovyError> {
+    if let Some(expected) = expected {
+        return authenticate_manifest_output(path, expected, kind);
+    }
+    let (root, components, name) = repo_state_spec(path)?;
+    let directory = match StateDir::open(root, components, false) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to inspect absent repository index {kind} '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    let appeared = directory
+        .open_existing(&name, FileAccess::ReadOnly)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to inspect absent repository index {kind} '{}': {error}",
+                path.display()
+            ))
+        })?
+        .is_some();
+    if appeared {
+        Err(cache_error(format!(
+            "repository index {kind} '{}' appeared during publication",
+            path.display()
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn authenticate_current_manifest_output(
+    root: &Path,
+    current: &RepoIndexRuntimeManifest,
+) -> Result<(), CovyError> {
+    authenticate_manifest_output(
+        &manifest_path(root),
+        &current_manifest_bytes(current)?,
+        "current manifest",
+    )
+}
+
+fn authenticate_manifest_output(path: &Path, expected: &[u8], kind: &str) -> Result<(), CovyError> {
+    let (directory, name) = repo_state_location(path, false)?;
+    let Some(mut file) = directory
+        .open_existing(&name, FileAccess::ReadOnly)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to open published repository index {kind} '{}': {error}",
+                path.display()
+            ))
+        })?
+    else {
+        return Err(cache_error(format!(
+            "published repository index {kind} '{}' does not exist",
+            path.display()
+        )));
+    };
+    let before_metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect published repository index {kind} '{}': {error}",
+            path.display()
+        ))
+    })?;
+    ensure_regular_artifact(path, &before_metadata)?;
+    if before_metadata.len() > MAX_MANIFEST_BYTES {
+        return Err(cache_error(format!(
+            "published repository index {kind} '{}' is {} bytes; maximum is {MAX_MANIFEST_BYTES}",
+            path.display(),
+            before_metadata.len()
+        )));
+    }
+    let before = artifact_stamp_from_metadata(&before_metadata);
+    let capacity = usize::try_from(before_metadata.len()).map_err(|_| {
+        cache_error(format!(
+            "published repository index {kind} '{}' exceeds the platform allocation limit",
+            path.display()
+        ))
+    })?;
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(capacity).map_err(|error| {
+        cache_error(format!(
+            "failed to reserve published repository index {kind} '{}': {error}",
+            path.display()
+        ))
+    })?;
+    file.file_mut().seek(SeekFrom::Start(0)).map_err(|error| {
+        cache_error(format!(
+            "failed to seek published repository index {kind} '{}': {error}",
+            path.display()
+        ))
+    })?;
+    Read::by_ref(file.file_mut())
+        .take(MAX_MANIFEST_BYTES.saturating_add(1))
+        .read_to_end(&mut raw)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to read published repository index {kind} '{}': {error}",
+                path.display()
+            ))
+        })?;
+    if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_MANIFEST_BYTES {
+        return Err(cache_error(format!(
+            "published repository index {kind} '{}' exceeds the {MAX_MANIFEST_BYTES}-byte limit",
+            path.display()
+        )));
+    }
+    let after_metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to re-inspect published repository index {kind} '{}': {error}",
+            path.display()
+        ))
+    })?;
+    ensure_regular_artifact(path, &after_metadata)?;
+    let after = artifact_stamp_from_metadata(&after_metadata);
+    if before != after {
+        return Err(cache_error(format!(
+            "published repository index {kind} '{}' changed while it was being authenticated",
+            path.display()
+        )));
+    }
+    file.validate_attachment().map_err(|error| {
+        cache_error(format!(
+            "published repository index {kind} '{}' was replaced while it was being authenticated: {error}",
+            path.display()
+        ))
+    })?;
+    if raw != expected {
+        return Err(cache_error(format!(
+            "published repository index {kind} '{}' does not match the authenticated publication bytes",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn revalidate_publication_fence(
+    record_pins: &[PinnedGenerationRecord],
+    artifact_pins: &[PinnedArtifact],
+) -> Result<PublicationFenceWork, CovyError> {
+    let mut work = PublicationFenceWork::default();
+    for pin in record_pins {
+        revalidate_pinned_leaf(&pin.path, &pin.file, &pin.stamp, "generation record")?;
+        if !cfg!(unix) {
+            let (_, decoded_bytes) = load_authenticated_generation_record_with_decoded_bytes(
+                &pin.root,
+                &pin.expected_manifest,
+            )?;
+            work.publication_metadata_bytes_decoded = work
+                .publication_metadata_bytes_decoded
+                .saturating_add(decoded_bytes);
+        }
+    }
+    for pin in artifact_pins {
+        revalidate_pinned_leaf(&pin.path, &pin.file, &pin.stamp, "artifact")?;
+        work.repository_artifact_metadata_checks =
+            work.repository_artifact_metadata_checks.saturating_add(1);
+        if !cfg!(unix) {
+            let (raw, _) = read_authenticated_artifact(&pin.path, &pin.expected_digest)?;
+            work.repository_artifact_bytes_hashed = work
+                .repository_artifact_bytes_hashed
+                .saturating_add(raw.len());
+        }
+    }
+    Ok(work)
+}
+
+fn revalidate_pinned_leaf(
+    path: &Path,
+    file: &StateFile,
+    expected_stamp: &ArtifactStamp,
+    kind: &str,
+) -> Result<(), CovyError> {
+    let metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect pinned repository index {kind} '{}': {error}",
+            path.display()
+        ))
+    })?;
+    ensure_regular_artifact(path, &metadata)?;
+    let descriptor_stamp = artifact_stamp_from_metadata(&metadata);
+    file.validate_attachment().map_err(|error| {
+        cache_error(format!(
+            "pinned repository index {kind} '{}' was replaced during publication: {error}",
+            path.display()
+        ))
+    })?;
+    if descriptor_stamp != *expected_stamp {
+        return Err(cache_error(format!(
+            "repository index {kind} '{}' changed during publication",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn rollback_publication_manifests(
+    publication: PublicationTransaction<'_>,
+    publication_error: CovyError,
+) -> CovyError {
+    match restore_publication_prestate(publication) {
+        Ok(()) => publication_error,
+        Err(rollback) => cache_error(format!(
+            "repository publication failed ({publication_error}); restoring the pre-publication manifests also failed ({rollback})"
+        )),
+    }
+}
+
+fn restore_publication_prestate(publication: PublicationTransaction<'_>) -> Result<(), CovyError> {
+    authenticate_rollback_ownership(publication)?;
+    publication
+        .writer
+        .validate_attachment("previous manifest rollback")?;
+    let previous_restore = restore_optional_file(
+        previous_manifest_path(publication.root),
+        publication.previous_previous_bytes,
+    );
+
+    let ownership_after_previous = publication
+        .writer
+        .validate_attachment("current manifest rollback")
+        .and_then(|()| authenticate_rollback_ownership(publication));
+    let current_restore = match ownership_after_previous {
+        Ok(()) => restore_optional_file(
+            manifest_path(publication.root),
+            publication.previous_current_bytes,
+        ),
+        Err(error) => Err(error),
+    };
+
+    let final_authentication = publication
+        .writer
+        .validate_attachment("manifest rollback completion")
+        .and_then(|()| {
+            authenticate_prepublication_manifest_snapshot(
+                publication.root,
+                publication.previous_current_bytes,
+                publication.previous_previous_bytes,
+            )
+        });
+    match (previous_restore, current_restore, final_authentication) {
+        (Ok(()), Ok(()), Ok(())) => Ok(()),
+        (previous, current, final_authentication) => Err(cache_error(format!(
+            "restoring previous manifest: {}; restoring current manifest: {}; authenticating restored pair: {}",
+            display_result(previous),
+            display_result(current),
+            display_result(final_authentication)
+        ))),
+    }
+}
+
+fn authenticate_rollback_ownership(
+    publication: PublicationTransaction<'_>,
+) -> Result<(), CovyError> {
+    publication
+        .writer
+        .validate_attachment("manifest rollback ownership check")?;
+    let current = read_optional_file(&manifest_path(publication.root))?;
+    let published_current = current_manifest_bytes(publication.current)?;
+    if current.as_deref() != publication.previous_current_bytes
+        && current.as_deref() != Some(published_current.as_slice())
+    {
+        return Err(cache_error(
+            "refusing to roll back a repository current manifest not owned by this publication",
+        ));
+    }
+
+    let previous = read_optional_file(&previous_manifest_path(publication.root))?;
+    let published_previous = publication
+        .previous
+        .filter(|manifest| manifest.generation > 0)
+        .map(previous_manifest_bytes)
+        .transpose()?
+        .or_else(|| publication.previous_previous_bytes.map(<[u8]>::to_vec));
+    if previous.as_deref() != publication.previous_previous_bytes
+        && previous.as_deref() != published_previous.as_deref()
+    {
+        return Err(cache_error(
+            "refusing to roll back a repository previous manifest not owned by this publication",
+        ));
+    }
+    publication
+        .writer
+        .validate_attachment("manifest rollback ownership check")
+}
+
+fn display_result(result: Result<(), CovyError>) -> String {
+    result
+        .err()
+        .map_or_else(|| "ok".to_string(), |error| error.to_string())
+}
+
+fn durable_manifest(manifest: &RepoIndexRuntimeManifest) -> RepoIndexRuntimeManifest {
+    let mut durable = manifest.clone();
+    durable.recovered_from_generation = None;
+    durable.last_error = None;
+    durable
+}
+
+fn load_authenticated_recovery(root: &Path) -> Result<Option<AuthenticatedRecovery>, CovyError> {
+    let runtime = load_repo_index_runtime(root)?;
+    if !runtime.is_loaded() {
+        return Ok(None);
+    }
+    let manifest = durable_manifest(&runtime.manifest);
+    Ok(Some(AuthenticatedRecovery { manifest, runtime }))
+}
+
+fn load_published_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
+    load_published_manifest_with_decoded_bytes(root).map(|(manifest, _)| manifest)
+}
+
+fn load_published_manifest_with_decoded_bytes(
+    root: &Path,
+) -> Result<(RepoIndexRuntimeManifest, usize), CovyError> {
+    load_published_manifest_with_bytes(root)
+        .map(|(manifest, bytes)| (manifest, bytes.as_ref().map_or(0, Vec::len)))
+}
+
+fn load_published_manifest_with_bytes(
+    root: &Path,
+) -> Result<(RepoIndexRuntimeManifest, Option<Vec<u8>>), CovyError> {
+    let path = manifest_path(root);
+    let Some(raw) = read_optional_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)? else {
+        return Ok((RepoIndexRuntimeManifest::default(), None));
+    };
+    let manifest = decode_manifest_path(&path, &raw)?;
+    Ok((manifest, Some(raw)))
+}
+
+fn load_previous_manifest(root: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
+    load_manifest_path(&previous_manifest_path(root))
+}
+
+fn load_manifest_path(path: &Path) -> Result<RepoIndexRuntimeManifest, CovyError> {
+    load_manifest_path_with_decoded_bytes(path).map(|(manifest, _)| manifest)
+}
+
+fn load_manifest_path_with_decoded_bytes(
+    path: &Path,
+) -> Result<(RepoIndexRuntimeManifest, usize), CovyError> {
+    let raw = read_state_file(path, MAX_REPO_INDEX_METADATA_BYTES)?;
+    let decoded_bytes = raw.len();
+    let manifest = decode_manifest_path(path, &raw)?;
+    Ok((manifest, decoded_bytes))
+}
+
+fn decode_manifest_path(path: &Path, raw: &[u8]) -> Result<RepoIndexRuntimeManifest, CovyError> {
+    serde_json::from_slice(raw).map_err(|error| {
+        cache_error(format!(
+            "failed to decode repository manifest '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn reserve_generation(root: &Path) -> Result<u64, CovyError> {
+    let observed = discover_generation_high_water(root)?;
+    let current = match load_generation_high_water(root)? {
+        Some(stored) if stored < observed => {
+            return Err(cache_error(format!(
+                "repository generation high-water {stored} trails observed generation {observed}"
+            )));
+        }
+        Some(stored) => stored,
+        None => observed,
+    };
+    let next = current
+        .checked_add(1)
+        .ok_or_else(|| cache_error("repository generation high-water is exhausted at u64::MAX"))?;
+    persist_generation_high_water(root, next)?;
+    Ok(next)
+}
+
+fn reserve_generation_with_writer(
+    root: &Path,
+    writer: &GenerationWriterLock,
+) -> Result<u64, CovyError> {
+    writer.validate_attachment("generation reservation")?;
+    let generation = reserve_generation(root)?;
+    writer.validate_attachment("generation reservation")?;
+    Ok(generation)
+}
+
+fn ensure_generation_high_water(root: &Path) -> Result<u64, CovyError> {
+    let observed = discover_generation_high_water(root)?;
+    match load_generation_high_water(root)? {
+        Some(stored) if stored < observed => Err(cache_error(format!(
+            "repository generation high-water {stored} trails observed generation {observed}"
+        ))),
+        Some(stored) => Ok(stored),
+        None => {
+            persist_generation_high_water(root, observed)?;
+            Ok(observed)
+        }
+    }
+}
+
+fn load_generation_high_water(root: &Path) -> Result<Option<u64>, CovyError> {
+    let path = generation_high_water_path(root);
+    let Some(raw) = read_optional_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)? else {
+        return Ok(None);
+    };
+    let high_water =
+        serde_json::from_slice::<RepoIndexGenerationHighWater>(&raw).map_err(|error| {
+            cache_error(format!(
+                "failed to decode repository generation high-water '{}': {error}",
+                path.display()
+            ))
+        })?;
+    if high_water.schema_version != REPO_INDEX_GENERATION_HIGH_WATER_SCHEMA_VERSION {
+        return Err(cache_error(format!(
+            "repository generation high-water '{}' has schema {}, expected {}",
+            path.display(),
+            high_water.schema_version,
+            REPO_INDEX_GENERATION_HIGH_WATER_SCHEMA_VERSION
+        )));
+    }
+    Ok(Some(high_water.generation))
+}
+
+fn persist_generation_high_water(root: &Path, generation: u64) -> Result<(), CovyError> {
+    let encoded = serde_json::to_vec_pretty(&RepoIndexGenerationHighWater {
+        schema_version: REPO_INDEX_GENERATION_HIGH_WATER_SCHEMA_VERSION,
+        generation,
+    })
+    .map_err(|error| {
+        cache_error(format!(
+            "failed to encode repository generation high-water: {error}"
+        ))
+    })?;
+    write_atomic(generation_high_water_path(root), &encoded)
+}
+
+fn discover_generation_high_water(root: &Path) -> Result<u64, CovyError> {
+    let mut generation = 0;
+    for path in [manifest_path(root), previous_manifest_path(root)] {
+        if let Some(raw) = read_optional_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)? {
+            if let Ok(manifest) = serde_json::from_slice::<RepoIndexRuntimeManifest>(&raw) {
+                generation = generation.max(manifest.generation);
+            }
+        }
+    }
+    let directory = repo_index_dir(root);
+    let state = match StateDir::open(root, &[".packet28", "index", REPO_INDEX_DIR_NAME], false) {
+        Ok(state) => state,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(generation),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to inspect repository index directory '{}': {error}",
+                directory.display()
+            )));
+        }
+    };
+    for entry in state.names().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect repository index directory '{}': {error}",
+            directory.display()
+        ))
+    })? {
+        let Some(name) = entry.to_str() else {
+            continue;
+        };
+        if let Some(observed) = managed_artifact_generation(name)? {
+            generation = generation.max(observed);
+        }
+    }
+    Ok(generation)
+}
+
+fn managed_artifact_generation(name: &str) -> Result<Option<u64>, CovyError> {
+    let digits = if let Some(digits) = name
+        .strip_prefix("generation-")
+        .and_then(|name| name.strip_suffix(".json"))
+    {
+        Some(digits)
+    } else if let Some(digits) = name
+        .strip_prefix("base-")
+        .and_then(|name| name.strip_suffix(".bin"))
+    {
+        Some(digits)
+    } else if let Some(segment) = name
+        .strip_prefix("segment-")
+        .and_then(|name| name.strip_suffix(".bin"))
+    {
+        Some(segment.strip_suffix("-compacted").unwrap_or(segment))
+    } else {
+        None
+    };
+    let Some(digits) = digits else {
+        return Ok(None);
+    };
+    if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(cache_error(format!(
+            "repository generation artifact '{name}' has an invalid generation"
+        )));
+    }
+    let generation = digits.parse::<u64>().map_err(|error| {
+        cache_error(format!(
+            "repository generation artifact '{name}' has an invalid generation: {error}"
+        ))
+    })?;
+    if generation == 0 {
+        return Err(cache_error(format!(
+            "repository generation artifact '{name}' uses reserved generation zero"
+        )));
+    }
+    Ok(Some(generation))
+}
+
+pub(crate) struct GenerationWriterLock {
+    directory: StateDir,
+    file: StateFile,
+    path: PathBuf,
+    #[cfg(unix)]
+    _directory_lock: StateDirLock,
+}
+
+impl GenerationWriterLock {
+    fn validate_attachment(&self, operation: &str) -> Result<(), CovyError> {
+        self.file.validate_attachment().map_err(|error| {
+            cache_error(format!(
+                "repository index writer lock '{}' detached before {operation}: {error}",
+                self.path.display()
+            ))
+        })
+    }
+}
+
+impl Drop for GenerationWriterLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(self.file.file());
+    }
+}
+
+pub(crate) fn acquire_writer_lock(root: &Path) -> Result<GenerationWriterLock, CovyError> {
+    let parent = repo_index_parent(root);
+    let directory = StateDir::open(root, &[".packet28", "index"], true).map_err(|error| {
+        cache_error(format!(
+            "failed to open repository index parent '{}': {error}",
+            parent.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    let directory_lock = directory.lock_exclusive().map_err(|error| {
+        cache_error(format!(
+            "failed to acquire retained repository index parent lock '{}': {error}",
+            parent.display()
+        ))
+    })?;
+    let path = parent.join(REPO_INDEX_WRITER_LOCK_FILE);
+    let file = directory
+        .open_or_create(REPO_INDEX_WRITER_LOCK_FILE, FileAccess::ReadWrite)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to open repository index writer lock '{}': {error}",
+                path.display()
+            ))
+        })?
+        .file;
+    FileExt::lock_exclusive(file.file()).map_err(|error| {
+        cache_error(format!(
+            "failed to acquire repository index writer lock '{}': {error}",
+            path.display()
+        ))
+    })?;
+    if let Err(error) = file.validate_attachment() {
+        let _ = FileExt::unlock(file.file());
+        return Err(cache_error(format!(
+            "repository index writer lock '{}' was replaced while acquiring it: {error}",
+            path.display()
+        )));
+    }
+    Ok(GenerationWriterLock {
+        directory,
+        file,
+        path,
+        #[cfg(unix)]
+        _directory_lock: directory_lock,
+    })
+}
+
+fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>, CovyError> {
+    read_optional_state_file(path, MAX_REPO_INDEX_METADATA_BYTES)
+}
+
+fn restore_optional_file(path: PathBuf, bytes: Option<&[u8]>) -> Result<(), CovyError> {
+    match bytes {
+        Some(bytes) => write_atomic(path, bytes),
+        None => remove_state_file_if_exists(&path),
+    }
+}
+
+fn artifact_digest(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
+#[cfg(test)]
+fn artifact_stamp(path: &Path) -> Result<ArtifactStamp, CovyError> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        cache_error(format!(
+            "failed to inspect repository index artifact '{}': {error}",
+            path.display()
+        ))
+    })?;
+    ensure_regular_artifact(path, &metadata)?;
+    Ok(artifact_stamp_from_metadata(&metadata))
+}
+
+fn ensure_regular_artifact(path: &Path, metadata: &fs::Metadata) -> Result<(), CovyError> {
+    if !metadata.is_file() {
+        return Err(cache_error(format!(
+            "repository index artifact '{}' is not a regular file",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn artifact_stamp_from_metadata(metadata: &fs::Metadata) -> ArtifactStamp {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt as _;
+
+    ArtifactStamp {
+        len: metadata.len(),
+        modified_unix_nanos: crate::scan::metadata_mtime_unix_nanos(metadata),
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(unix)]
+        changed_unix_nanos: i128::from(metadata.ctime())
+            .saturating_mul(1_000_000_000)
+            .saturating_add(i128::from(metadata.ctime_nsec())),
+    }
+}
+
+fn read_authenticated_artifact(
+    path: &Path,
+    expected_digest: &str,
+) -> Result<(Vec<u8>, ArtifactStamp), CovyError> {
+    let (directory, name) = repo_state_location(path, false)?;
+    let Some(mut file) = directory
+        .open_bounded(&name, FileAccess::ReadOnly, MAX_REPO_INDEX_ARTIFACT_BYTES)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to open repository index artifact '{}': {error}",
+                path.display()
+            ))
+        })?
+    else {
+        return Err(cache_error(format!(
+            "repository index artifact '{}' does not exist",
+            path.display()
+        )));
+    };
+    read_authenticated_pinned_artifact(&mut file, path, expected_digest)
+}
+
+fn read_authenticated_pinned_artifact(
+    file: &mut StateFile,
+    path: &Path,
+    expected_digest: &str,
+) -> Result<(Vec<u8>, ArtifactStamp), CovyError> {
+    let before = file
+        .file()
+        .metadata()
+        .map(|metadata| artifact_stamp_from_metadata(&metadata))
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to inspect repository index artifact '{}': {error}",
+                path.display()
+            ))
+        })?;
+    let capacity = usize::try_from(before.len).map_err(|_| {
+        cache_error(format!(
+            "repository index artifact '{}' exceeds the platform allocation limit",
+            path.display()
+        ))
+    })?;
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(capacity).map_err(|error| {
+        cache_error(format!(
+            "failed to reserve repository index artifact '{}': {error}",
+            path.display()
+        ))
+    })?;
+    file.file_mut().seek(SeekFrom::Start(0)).map_err(|error| {
+        cache_error(format!(
+            "failed to seek repository index artifact '{}': {error}",
+            path.display()
+        ))
+    })?;
+    file.file_mut()
+        .take(MAX_REPO_INDEX_ARTIFACT_BYTES.saturating_add(1))
+        .read_to_end(&mut raw)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to read repository index artifact '{}': {error}",
+                path.display()
+            ))
+        })?;
+    if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_REPO_INDEX_ARTIFACT_BYTES {
+        return Err(cache_error(format!(
+            "repository index artifact '{}' exceeds the {}-byte limit",
+            path.display(),
+            MAX_REPO_INDEX_ARTIFACT_BYTES
+        )));
+    }
+    let after = file
+        .file()
+        .metadata()
+        .map(|metadata| artifact_stamp_from_metadata(&metadata))
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to re-inspect repository index artifact '{}': {error}",
+                path.display()
+            ))
+        })?;
+    if before != after {
+        return Err(cache_error(format!(
+            "repository index artifact '{}' changed while it was being authenticated",
+            path.display()
+        )));
+    }
+    file.validate_attachment().map_err(|error| {
+        cache_error(format!(
+            "repository index artifact '{}' was replaced while it was being authenticated: {error}",
+            path.display()
+        ))
+    })?;
+    verify_artifact_digest(path, &raw, expected_digest)?;
+    Ok((raw, after))
+}
+
+fn validate_loaded_artifact_stamps(
+    root: &Path,
+    loaded: &RepoIndexGeneration,
+) -> Result<ValidatedArtifactStamps, CovyError> {
+    let mut metadata_checks = 0usize;
+    let mut bytes_hashed = 0usize;
+    let (base, base_pin) = pin_loaded_artifact(
+        &repo_index_dir(root).join(&loaded.base_file),
+        &loaded.base_stamp,
+        &loaded.base_digest,
+        &mut metadata_checks,
+        &mut bytes_hashed,
+    )?;
+    let mut segments = Vec::with_capacity(loaded.segment_stamps.len());
+    let mut pins = Vec::with_capacity(loaded.segment_stamps.len().saturating_add(1));
+    pins.push(base_pin);
+    for ((file_name, expected_digest), expected_stamp) in loaded
+        .segment_files
+        .iter()
+        .zip(&loaded.segment_digests)
+        .zip(&loaded.segment_stamps)
+    {
+        let (stamp, pin) = pin_loaded_artifact(
+            &repo_index_dir(root).join(file_name),
+            expected_stamp,
+            expected_digest,
+            &mut metadata_checks,
+            &mut bytes_hashed,
+        )?;
+        segments.push(stamp);
+        pins.push(pin);
+    }
+    Ok(ValidatedArtifactStamps {
+        base,
+        segments,
+        pins,
+        metadata_checks,
+        bytes_hashed,
+    })
+}
+
+fn pin_runtime_generation(
+    root: &Path,
+    runtime: &RepoIndexRuntime,
+    expected_manifest: &RepoIndexRuntimeManifest,
+) -> Result<PinnedRuntimeGeneration, CovyError> {
+    let loaded = runtime
+        .generation
+        .as_ref()
+        .ok_or_else(|| cache_error("repository generation is absent"))?;
+    if loaded.publication_identity != publication_identity(expected_manifest)? {
+        return Err(cache_error(
+            "repository runtime identity does not match the publication being pinned",
+        ));
+    }
+    let (record, record_pin, record_bytes_decoded) =
+        pin_authenticated_generation_record(root, expected_manifest)?;
+    let artifacts = validate_loaded_artifact_stamps(root, loaded)?;
+    Ok(PinnedRuntimeGeneration {
+        record,
+        record_pin,
+        artifact_pins: artifacts.pins,
+        work: PublicationFenceWork {
+            publication_metadata_bytes_decoded: record_bytes_decoded,
+            repository_artifact_bytes_hashed: artifacts.bytes_hashed,
+            repository_artifact_metadata_checks: artifacts.metadata_checks,
+            ..PublicationFenceWork::default()
+        },
+    })
+}
+
+fn pin_loaded_artifact(
+    path: &Path,
+    expected_stamp: &ArtifactStamp,
+    expected_digest: &str,
+    metadata_checks: &mut usize,
+    bytes_hashed: &mut usize,
+) -> Result<(ArtifactStamp, PinnedArtifact), CovyError> {
+    *metadata_checks = metadata_checks.saturating_add(1);
+    let (directory, name) = repo_state_location(path, false)?;
+    let Some(mut file) = directory
+        .open_bounded(&name, FileAccess::ReadOnly, MAX_REPO_INDEX_ARTIFACT_BYTES)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to pin repository index artifact '{}': {error}",
+                path.display()
+            ))
+        })?
+    else {
+        return Err(cache_error(format!(
+            "repository index artifact '{}' does not exist",
+            path.display()
+        )));
+    };
+    let before_metadata = file.file().metadata().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect pinned repository index artifact '{}': {error}",
+            path.display()
+        ))
+    })?;
+    ensure_regular_artifact(path, &before_metadata)?;
+    let before = artifact_stamp_from_metadata(&before_metadata);
+    file.validate_attachment().map_err(|error| {
+        cache_error(format!(
+            "repository index artifact '{}' was replaced while it was being pinned: {error}",
+            path.display()
+        ))
+    })?;
+    let stamp = if !cfg!(unix) || before != *expected_stamp {
+        let (raw, authenticated_stamp) =
+            read_authenticated_pinned_artifact(&mut file, path, expected_digest)?;
+        *bytes_hashed = bytes_hashed.saturating_add(raw.len());
+        authenticated_stamp
+    } else {
+        before
+    };
+    Ok((
+        stamp.clone(),
+        PinnedArtifact {
+            path: path.to_path_buf(),
+            file,
+            stamp,
+            expected_digest: expected_digest.to_string(),
+        },
+    ))
+}
+
+fn verify_artifact_digest(path: &Path, bytes: &[u8], expected: &str) -> Result<(), CovyError> {
+    let actual = artifact_digest(bytes);
+    if actual != expected {
+        return Err(cache_error(format!(
+            "repository index artifact '{}' failed digest validation (expected {expected}, found {actual})",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn prune_generation_artifacts(
+    publication: PublicationTransaction<'_>,
+    current: &RepoIndexGenerationRecord,
+    previous: Option<&RepoIndexGenerationRecord>,
+) -> Result<(), CovyError> {
+    prune_generation_artifacts_with_hook(publication, current, previous, || Ok(()))
+}
+
+fn prune_generation_artifacts_with_hook<F>(
+    publication: PublicationTransaction<'_>,
+    current: &RepoIndexGenerationRecord,
+    previous: Option<&RepoIndexGenerationRecord>,
+    before_remove: F,
+) -> Result<(), CovyError>
+where
+    F: FnOnce() -> Result<(), CovyError>,
+{
+    publication
+        .writer
+        .validate_attachment("generation artifact pruning")?;
+    authenticate_published_manifest_pair(publication)?;
+    revalidate_publication_fence(publication.record_pins, publication.artifact_pins)?;
+    let mut retained = BTreeSet::from([
+        REPO_INDEX_MANIFEST_FILE.to_string(),
+        REPO_INDEX_PREVIOUS_MANIFEST_FILE.to_string(),
+        generation_record_file_name(current.generation),
+        current.base_file.clone(),
+    ]);
+    retained.extend(current.segment_files.iter().cloned());
+    if let Some(previous) = previous.filter(|record| record.generation > 0) {
+        retained.insert(generation_record_file_name(previous.generation));
+        retained.insert(previous.base_file.clone());
+        retained.extend(previous.segment_files.iter().cloned());
+    }
+    let directory = repo_index_dir(publication.root);
+    let state = StateDir::open(
+        publication.root,
+        &[".packet28", "index", REPO_INDEX_DIR_NAME],
+        false,
+    )
+    .map_err(|error| {
+        cache_error(format!(
+            "failed to inspect repository index directory '{}': {error}",
+            directory.display()
+        ))
+    })?;
+    let names = state.names().map_err(|error| {
+        cache_error(format!(
+            "failed to inspect repository index directory '{}': {error}",
+            directory.display()
+        ))
+    })?;
+    before_remove()?;
+    for entry in names {
+        let Some(name) = entry.to_str() else {
+            continue;
+        };
+        if is_managed_generation_artifact(name) && !retained.contains(name) {
+            if managed_artifact_generation(name)?
+                .is_some_and(|generation| generation > publication.current.generation)
+            {
+                continue;
+            }
+            publication
+                .writer
+                .validate_attachment("generation artifact pruning")?;
+            authenticate_published_manifest_pair(publication)?;
+            state.remove_file_if_exists(name).map_err(|error| {
+                cache_error(format!(
+                    "failed to prune repository index artifact '{}': {error}",
+                    directory.join(name).display()
+                ))
+            })?;
+            publication
+                .writer
+                .validate_attachment("generation artifact pruning")?;
+        }
+    }
+    authenticate_published_manifest_pair(publication)?;
+    revalidate_publication_fence(publication.record_pins, publication.artifact_pins)?;
+    publication
+        .writer
+        .validate_attachment("generation artifact pruning completion")?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn load_generation_record(
+    root: &Path,
+    generation: u64,
+) -> Result<RepoIndexGenerationRecord, CovyError> {
+    let path = repo_index_dir(root).join(generation_record_file_name(generation));
+    let raw = read_state_file(&path, MAX_REPO_INDEX_METADATA_BYTES)?;
+    serde_json::from_slice(&raw).map_err(|error| {
+        cache_error(format!(
+            "failed to decode repository generation record '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn is_managed_generation_artifact(name: &str) -> bool {
+    (name.starts_with("generation-") && name.ends_with(".json"))
+        || (name.starts_with("base-") && name.ends_with(".bin"))
+        || (name.starts_with("segment-") && name.ends_with(".bin"))
+        || (name.starts_with('.') && name.ends_with(".tmp"))
+}
+
+fn repo_state_spec(path: &Path) -> Result<(&Path, &'static [&'static str], String), CovyError> {
+    let parent = path.parent().ok_or_else(|| {
+        cache_error(format!(
+            "repository state path '{}' has no parent",
+            path.display()
+        ))
+    })?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            cache_error(format!(
+                "repository state path '{}' has an invalid leaf",
+                path.display()
+            ))
+        })?
+        .to_string();
+    let (root, components): (&Path, &'static [&'static str]) = if parent
+        .file_name()
+        .is_some_and(|name| name == REPO_INDEX_DIR_NAME)
+    {
+        let index = parent
+            .parent()
+            .filter(|path| path.file_name().is_some_and(|name| name == "index"));
+        let packet28 = index
+            .and_then(Path::parent)
+            .filter(|path| path.file_name().is_some_and(|name| name == ".packet28"));
+        let root = packet28.and_then(Path::parent).ok_or_else(|| {
+            cache_error(format!(
+                "repository state path '{}' is outside the managed index",
+                path.display()
+            ))
+        })?;
+        (root, &[".packet28", "index", REPO_INDEX_DIR_NAME])
+    } else if parent.file_name().is_some_and(|name| name == "index") {
+        let packet28 = parent
+            .parent()
+            .filter(|path| path.file_name().is_some_and(|name| name == ".packet28"));
+        let root = packet28.and_then(Path::parent).ok_or_else(|| {
+            cache_error(format!(
+                "repository state path '{}' is outside the managed index",
+                path.display()
+            ))
+        })?;
+        (root, &[".packet28", "index"])
+    } else {
+        return Err(cache_error(format!(
+            "repository state path '{}' is outside the managed index",
+            path.display()
+        )));
+    };
+    Ok((root, components, name))
+}
+
+fn repo_state_location(path: &Path, create: bool) -> Result<(StateDir, String), CovyError> {
+    let (root, components, name) = repo_state_spec(path)?;
+    let directory = StateDir::open(root, components, create).map_err(|error| {
+        cache_error(format!(
+            "failed to open repository state directory for '{}': {error}",
+            path.display()
+        ))
+    })?;
+    Ok((directory, name))
+}
+
+fn read_state_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>, CovyError> {
+    let (directory, name) = repo_state_location(path, false)?;
+    directory
+        .read_bounded(&name, max_bytes)
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to read repository state '{}': {error}",
+                path.display()
+            ))
+        })?
+        .ok_or_else(|| {
+            cache_error(format!(
+                "repository state '{}' does not exist",
+                path.display()
+            ))
+        })
+}
+
+fn read_optional_state_file(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>, CovyError> {
+    let (root, components, name) = repo_state_spec(path)?;
+    let directory = match StateDir::open(root, components, false) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to open repository state directory for '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    directory.read_bounded(&name, max_bytes).map_err(|error| {
+        cache_error(format!(
+            "failed to read repository state '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn remove_state_file_if_exists(path: &Path) -> Result<(), CovyError> {
+    let (root, components, name) = repo_state_spec(path)?;
+    let directory = match StateDir::open(root, components, false) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(cache_error(format!(
+                "failed to open repository state directory for '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    directory.remove_file_if_exists(&name).map_err(|error| {
+        cache_error(format!(
+            "failed to remove repository state '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn write_immutable(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
+    let (directory, name) = repo_state_location(&path, true)?;
+    directory.write_immutable(&name, bytes).map_err(|error| {
+        cache_error(format!(
+            "failed to create immutable repository artifact '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn write_atomic(path: PathBuf, bytes: &[u8]) -> Result<(), CovyError> {
+    write_atomic_with_hook(path, bytes, || Ok(()))
+}
+
+fn write_atomic_with_hook(
+    path: PathBuf,
+    bytes: &[u8],
+    before_replace: impl FnOnce() -> Result<(), CovyError>,
+) -> Result<(), CovyError> {
+    let (directory, name) = repo_state_location(&path, true)?;
+    directory
+        .write_atomic_with(&name, bytes, || {
+            before_replace().map_err(|error| std::io::Error::other(error.to_string()))
+        })
+        .map_err(|error| {
+            cache_error(format!(
+                "failed to publish repository artifact '{}': {error}",
+                path.display()
+            ))
+        })
+}
+
+fn validate_artifact_name(name: &str) -> Result<(), CovyError> {
+    let path = Path::new(name);
+    if name.is_empty() || path.is_absolute() || path.components().count() != 1 {
+        return Err(cache_error(format!(
+            "repository generation references invalid artifact name '{name}'"
+        )));
+    }
+    Ok(())
+}
+
+fn repo_index_parent(root: &Path) -> PathBuf {
+    root.join(".packet28").join("index")
+}
+
+fn repo_index_dir(root: &Path) -> PathBuf {
+    repo_index_parent(root).join(REPO_INDEX_DIR_NAME)
+}
+
+fn generation_high_water_path(root: &Path) -> PathBuf {
+    repo_index_parent(root).join(REPO_INDEX_GENERATION_HIGH_WATER_FILE)
+}
+
+fn manifest_path(root: &Path) -> PathBuf {
+    repo_index_dir(root).join(REPO_INDEX_MANIFEST_FILE)
+}
+
+fn previous_manifest_path(root: &Path) -> PathBuf {
+    repo_index_dir(root).join(REPO_INDEX_PREVIOUS_MANIFEST_FILE)
+}
+
+fn generation_record_file_name(generation: u64) -> String {
+    format!("generation-{generation:020}.json")
+}
+
+fn base_file_name(generation: u64) -> String {
+    format!("base-{generation:020}.bin")
+}
+
+fn segment_file_name(generation: u64) -> String {
+    format!("segment-{generation:020}.bin")
+}
+
+fn compacted_segment_file_name(generation: u64) -> String {
+    format!("segment-{generation:020}-compacted.bin")
+}
+
+fn cache_error(message: impl Into<String>) -> CovyError {
+    CovyError::Cache(message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::sync::mpsc;
+    use std::sync::Barrier;
+    #[cfg(unix)]
+    use std::thread;
+
+    use super::*;
+    use crate::{build_repo_index, update_repo_index};
+
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(dir.path().join("src")).expect("src");
+        fs::write(
+            dir.path().join("src/a.rs"),
+            "pub fn alpha() -> usize { 1 }\n",
+        )
+        .expect("a");
+        fs::write(
+            dir.path().join("src/b.rs"),
+            "pub fn beta() -> usize { 2 }\n",
+        )
+        .expect("b");
+        dir
+    }
+
+    fn current_record(root: &Path) -> RepoIndexGenerationRecord {
+        let manifest = load_published_manifest(root).expect("manifest");
+        let raw =
+            fs::read(repo_index_dir(root).join(generation_record_file_name(manifest.generation)))
+                .expect("record");
+        serde_json::from_slice(&raw).expect("decode record")
+    }
+
+    fn generation_artifact_snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
+        let directory = repo_index_dir(root);
+        if !directory.exists() {
+            return BTreeMap::new();
+        }
+        fs::read_dir(directory)
+            .expect("generation directory")
+            .map(|entry| {
+                let entry = entry.expect("generation entry");
+                (
+                    entry.file_name().to_string_lossy().to_string(),
+                    fs::read(entry.path()).expect("generation artifact"),
+                )
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
+    fn detach_writer_lock(root: &Path) {
+        let lock_path = repo_index_parent(root).join(REPO_INDEX_WRITER_LOCK_FILE);
+        let detached_path = repo_index_parent(root).join(".mapy-v1.writer.lock.detached");
+        fs::rename(&lock_path, &detached_path).expect("detach held writer lock");
+        fs::write(&lock_path, b"replacement writer lock").expect("replace writer lock");
+    }
+
+    #[cfg(unix)]
+    fn spawn_blocked_successor_rebuild(root: &Path) -> thread::JoinHandle<RepoIndexRuntime> {
+        let root = root.to_path_buf();
+        let (attempted_tx, attempted_rx) = mpsc::sync_channel(0);
+        let successor = thread::spawn(move || {
+            let contender =
+                StateDir::open(&root, &[".packet28", "index"], false).expect("contending parent");
+            let replacement_leaf = contender
+                .open_existing(REPO_INDEX_WRITER_LOCK_FILE, FileAccess::ReadWrite)
+                .expect("replacement writer lock")
+                .expect("replacement writer lock must exist");
+            FileExt::try_lock_exclusive(replacement_leaf.file())
+                .expect("the replacement leaf alone must admit a split writer");
+            FileExt::unlock(replacement_leaf.file()).expect("unlock replacement writer leaf");
+            let error = contender
+                .try_lock_exclusive()
+                .expect_err("retained writer parent must remain exclusively leased");
+            attempted_tx
+                .send(error.kind())
+                .expect("signal successor acquisition attempt");
+            rebuild_repo_index_runtime(&root, true).expect("successor publication")
+        });
+        assert_eq!(
+            attempted_rx.recv().expect("successor acquisition attempt"),
+            std::io::ErrorKind::WouldBlock
+        );
+        successor
+    }
+
+    #[test]
+    fn incremental_update_and_delete_match_legacy_snapshot() {
+        let dir = fixture();
+        let root = dir.path();
+        let mut legacy = build_repo_index(root, true).expect("legacy");
+        let runtime = rebuild_repo_index_runtime(root, true).expect("runtime");
+
+        fs::write(
+            root.join("src/a.rs"),
+            "pub fn alpha() -> usize { 3 }\npub fn gamma() {}\n",
+        )
+        .expect("update");
+        fs::remove_file(root.join("src/b.rs")).expect("delete");
+        fs::write(root.join("src/c.rs"), "pub struct Charlie;\n").expect("add");
+        let paths = vec![
+            "src/a.rs".to_string(),
+            "src/b.rs".to_string(),
+            "src/c.rs".to_string(),
+        ];
+
+        update_repo_index(root, &mut legacy, &paths, true).expect("legacy update");
+        let (updated, summary) =
+            update_repo_index_runtime(root, &runtime, &paths, true).expect("runtime update");
+
+        assert_eq!(summary.indexed_files, 2);
+        assert_eq!(summary.removed_files, 1);
+        assert_eq!(updated.materialize_snapshot().as_ref(), Some(&legacy));
+    }
+
+    #[test]
+    fn runtime_map_reflects_incremental_update_without_repository_rescan() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        fs::write(
+            root.join("src/a.rs"),
+            "pub fn alpha() {}\npub fn incremental_symbol() {}\n",
+        )
+        .expect("incremental edit");
+        let updated = update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+            .expect("incremental update")
+            .0;
+        fs::rename(root.join("src"), root.join("source-unavailable"))
+            .expect("make repository scan unavailable");
+
+        let envelope = crate::build_repo_map_from_runtime(
+            crate::RepoMapRequest {
+                repo_root: root.to_string_lossy().to_string(),
+                focus_symbols: vec![String::from("incremental_symbol")],
+                max_files: 8,
+                max_symbols: 16,
+                include_tests: true,
+                ..crate::RepoMapRequest::default()
+            },
+            &updated,
+        )
+        .expect("runtime map");
+        let rich = crate::expand_repo_map_payload(&envelope);
+
+        assert!(rich
+            .symbols_ranked
+            .iter()
+            .any(|symbol| symbol.name == "incremental_symbol" && symbol.file == "src/a.rs"));
+    }
+
+    #[test]
+    fn runtime_map_rejects_public_policy_tampering() {
+        let dir = fixture();
+        let mut runtime =
+            rebuild_repo_index_runtime(dir.path(), false).expect("runtime without tests");
+        runtime.manifest.include_tests = true;
+
+        let error = crate::build_repo_map_from_runtime(
+            crate::RepoMapRequest {
+                repo_root: dir.path().to_string_lossy().to_string(),
+                include_tests: true,
+                ..crate::RepoMapRequest::default()
+            },
+            &runtime,
+        )
+        .expect_err("public policy tampering must be rejected");
+
+        assert!(matches!(error, CovyError::Cache(_)));
+        assert!(error.to_string().contains("include-tests"));
+    }
+
+    #[test]
+    fn runtime_map_authenticates_public_manifest_before_reserving() {
+        let dir = fixture();
+        let runtime = rebuild_repo_index_runtime(dir.path(), true).expect("runtime");
+        let request = crate::RepoMapRequest {
+            repo_root: dir.path().to_string_lossy().to_string(),
+            include_tests: true,
+            ..crate::RepoMapRequest::default()
+        };
+        let mut tampered_manifests = Vec::new();
+
+        let mut count = runtime.manifest.clone();
+        count.total_files = usize::MAX;
+        tampered_manifests.push(count);
+
+        let mut generation = runtime.manifest.clone();
+        generation.generation = generation.generation.saturating_add(1);
+        tampered_manifests.push(generation);
+
+        let mut digest = runtime.manifest.clone();
+        digest.generation_record_digest = Some("untrusted".to_string());
+        tampered_manifests.push(digest);
+
+        let mut status = runtime.manifest.clone();
+        status.status = "corrupt".to_string();
+        tampered_manifests.push(status);
+
+        for manifest in tampered_manifests {
+            let mut tampered = runtime.clone();
+            tampered.manifest = manifest;
+            let error = crate::build_repo_map_from_runtime(request.clone(), &tampered)
+                .expect_err("mutable manifest input must be authenticated before allocation");
+            assert!(matches!(error, CovyError::Cache(_)));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_parent_lease_serializes_detachment_at_manifest_replace_and_fence_windows() {
+        for detachment_stage in [
+            IncrementalPublicationStage::BeforeCurrent,
+            IncrementalPublicationStage::BeforeCurrentReplace,
+            IncrementalPublicationStage::AfterCurrent,
+            IncrementalPublicationStage::AfterPrevious,
+        ] {
+            let dir = fixture();
+            let root = dir.path();
+            let current = rebuild_repo_index_runtime(root, true).expect("current");
+            fs::write(root.join("src/a.rs"), "pub fn outer_update() {}\n").expect("outer update");
+            let mut successor = None;
+
+            let error = update_repo_index_runtime_with_hook(
+                root,
+                &current,
+                &[String::from("src/a.rs")],
+                true,
+                |stage| {
+                    if stage == detachment_stage {
+                        detach_writer_lock(root);
+                        fs::write(root.join("src/b.rs"), "pub fn successor_update() {}\n")
+                            .expect("successor update");
+                        successor = Some(spawn_blocked_successor_rebuild(root));
+                    }
+                    Ok(())
+                },
+            )
+            .expect_err("detached outer writer must fail");
+
+            assert!(error.to_string().contains("detached"), "{error}");
+            let successor = successor
+                .expect("successor handle")
+                .join()
+                .expect("successor thread");
+            let successor_artifacts = generation_artifact_snapshot(root);
+            let successor_high_water =
+                fs::read(generation_high_water_path(root)).expect("successor high-water");
+            assert_eq!(
+                load_repo_index_runtime(root)
+                    .expect("surviving successor")
+                    .manifest
+                    .generation,
+                successor.manifest.generation
+            );
+            assert_eq!(generation_artifact_snapshot(root), successor_artifacts);
+            assert_eq!(
+                fs::read(generation_high_water_path(root)).expect("surviving high-water"),
+                successor_high_water
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_parent_lease_serializes_detachment_at_the_remove_window() {
+        let dir = fixture();
+        let root = dir.path();
+        rebuild_repo_index_runtime(root, true).expect("current");
+        let mut successor = None;
+
+        let error = clear_repo_index_runtime_with_hook(root, || {
+            detach_writer_lock(root);
+            fs::write(root.join("src/c.rs"), "pub struct Successor;\n").expect("successor source");
+            successor = Some(spawn_blocked_successor_rebuild(root));
+            Ok(())
+        })
+        .expect_err("detached clear must fail");
+
+        assert!(error.to_string().contains("detached"), "{error}");
+        let successor = successor
+            .expect("successor handle")
+            .join()
+            .expect("successor thread");
+        let successor_artifacts = generation_artifact_snapshot(root);
+        let successor_high_water =
+            fs::read(generation_high_water_path(root)).expect("successor high-water");
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("surviving successor")
+                .manifest
+                .generation,
+            successor.manifest.generation
+        );
+        assert_eq!(generation_artifact_snapshot(root), successor_artifacts);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("surviving high-water"),
+            successor_high_water
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_prune_fails_and_preserves_a_successor_publication() {
+        let dir = fixture();
+        let root = dir.path();
+        let runtime = rebuild_repo_index_runtime(root, true).expect("current");
+        let writer = acquire_writer_lock(root).expect("outer writer");
+        let current = load_published_manifest(root).expect("current manifest");
+        let previous_current_bytes = read_optional_file(&manifest_path(root)).expect("current raw");
+        let previous_previous_bytes =
+            read_optional_file(&previous_manifest_path(root)).expect("previous raw");
+        let pins = pin_runtime_generation(root, &runtime, &current).expect("current pins");
+        let record = pins.record;
+        let record_pins = [pins.record_pin];
+        let artifact_pins = pins.artifact_pins;
+        let orphan = repo_index_dir(root).join(compacted_segment_file_name(current.generation));
+        fs::write(&orphan, b"unreferenced outer artifact").expect("orphan artifact");
+        let publication = PublicationTransaction {
+            root,
+            writer: &writer,
+            previous: None,
+            current: &current,
+            previous_current_bytes: previous_current_bytes.as_deref(),
+            previous_previous_bytes: previous_previous_bytes.as_deref(),
+            record_pins: &record_pins,
+            artifact_pins: &artifact_pins,
+        };
+        let mut successor = None;
+
+        let prune_result = prune_generation_artifacts_with_hook(publication, &record, None, || {
+            detach_writer_lock(root);
+            fs::write(root.join("src/c.rs"), "pub struct Successor;\n").expect("successor source");
+            successor = Some(spawn_blocked_successor_rebuild(root));
+            Ok(())
+        });
+        let error = finish_best_effort_prune(publication, prune_result)
+            .expect_err("detached prune must propagate its ownership failure");
+
+        assert!(error.to_string().contains("detached"), "{error}");
+        drop(writer);
+        let successor = successor
+            .expect("successor handle")
+            .join()
+            .expect("successor thread");
+        let successor_artifacts = generation_artifact_snapshot(root);
+        let successor_high_water =
+            fs::read(generation_high_water_path(root)).expect("successor high-water");
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("surviving successor")
+                .manifest
+                .generation,
+            successor.manifest.generation
+        );
+        assert_eq!(generation_artifact_snapshot(root), successor_artifacts);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("surviving high-water"),
+            successor_high_water
+        );
+    }
+
+    #[cfg(all(unix, feature = "shared-repository-scan"))]
+    #[test]
+    fn detached_prepared_rollback_never_restores_over_a_successor() {
+        let dir = fixture();
+        let root = dir.path();
+        rebuild_repo_index_runtime(root, true).expect("current");
+        let snapshot = build_repo_index(root, true).expect("prepared snapshot");
+        let writer = acquire_writer_lock(root).expect("prepared writer");
+        let mut prepared =
+            prepare_repo_index_runtime_with_writer(root, true, snapshot, writer).expect("prepare");
+        prepared.publish().expect("prepared publication");
+        detach_writer_lock(root);
+        fs::write(root.join("src/c.rs"), "pub struct Successor;\n").expect("successor source");
+        let successor = spawn_blocked_successor_rebuild(root);
+
+        let error = prepared
+            .rollback()
+            .expect_err("detached prepared rollback must fail");
+
+        assert!(error.to_string().contains("detached"), "{error}");
+        drop(prepared);
+        let successor = successor.join().expect("successor thread");
+        let successor_artifacts = generation_artifact_snapshot(root);
+        let successor_high_water =
+            fs::read(generation_high_water_path(root)).expect("successor high-water");
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("surviving successor")
+                .manifest
+                .generation,
+            successor.manifest.generation
+        );
+        assert_eq!(generation_artifact_snapshot(root), successor_artifacts);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("surviving high-water"),
+            successor_high_water
+        );
+    }
+
+    #[test]
+    fn rebuild_with_progress_reports_scan_checkpoints() {
+        let dir = fixture();
+        let mut checkpoints = Vec::new();
+
+        let runtime =
+            rebuild_repo_index_runtime_with_progress(dir.path(), true, |indexed, total| {
+                checkpoints.push((indexed, total));
+            })
+            .expect("runtime");
+
+        assert!(runtime.is_loaded());
+        assert_eq!(runtime.manifest.total_files, 2);
+        assert!(checkpoints
+            .iter()
+            .any(|&(indexed, total)| indexed == total && total == 2));
+    }
+
+    #[test]
+    fn clearing_artifacts_preserves_owned_readers() {
+        let dir = fixture();
+        let runtime = rebuild_repo_index_runtime(dir.path(), true).expect("runtime");
+
+        clear_repo_index_runtime(dir.path()).expect("clear");
+
+        assert!(!repo_index_dir(dir.path()).exists());
+        assert!(runtime.file("src/a.rs").is_some());
+        let reloaded = load_repo_index_runtime(dir.path()).expect("reload");
+        assert!(!reloaded.is_loaded());
+        assert_eq!(reloaded.manifest.status, "missing");
+    }
+
+    #[test]
+    fn corrupt_manifest_repair_never_reuses_an_identity_or_accepts_its_stale_handle() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = rebuild_repo_index_runtime(root, true).expect("first");
+        let first_record =
+            load_generation_record(root, stale.manifest.generation).expect("first record");
+        let first_record_path =
+            repo_index_dir(root).join(generation_record_file_name(stale.manifest.generation));
+        let first_base_path = repo_index_dir(root).join(&first_record.base_file);
+        let first_record_bytes = fs::read(&first_record_path).expect("first record bytes");
+        let first_base_bytes = fs::read(&first_base_path).expect("first base bytes");
+        fs::write(root.join("src/a.rs"), "pub fn second() {}\n").expect("second contents");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        fs::remove_file(generation_high_water_path(root)).expect("simulate legacy allocator");
+        fs::write(manifest_path(root), b"{").expect("corrupt current manifest");
+
+        let recovered = load_repo_index_runtime(root).expect("recover first");
+        fs::write(root.join("src/c.rs"), "pub struct Repaired;\n").expect("repair contents");
+        let repaired = rebuild_repo_index_runtime(root, true).expect("repair");
+
+        assert_eq!(recovered.manifest.generation, stale.manifest.generation);
+        assert!(repaired.manifest.generation > second.manifest.generation);
+        assert_eq!(
+            fs::read(first_record_path).expect("retained first record"),
+            first_record_bytes
+        );
+        assert_eq!(
+            fs::read(first_base_path).expect("retained first base"),
+            first_base_bytes
+        );
+
+        fs::write(root.join("src/d.rs"), "pub struct StaleWriter;\n").expect("stale path");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before conflict");
+        let error = update_repo_index_runtime(root, &stale, &[String::from("src/d.rs")], true)
+            .expect_err("stale writer must conflict");
+
+        assert!(error.to_string().contains("generation conflict"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after conflict"),
+            counter_before
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load repaired")
+                .manifest
+                .generation,
+            repaired.manifest.generation
+        );
+    }
+
+    #[test]
+    fn missing_or_schema_zero_current_retains_the_authenticated_previous_generation() {
+        for current_bytes in [None, Some(b"{}".as_slice())] {
+            let dir = fixture();
+            let root = dir.path();
+            let first = rebuild_repo_index_runtime(root, true).expect("first");
+            fs::write(root.join("src/c.rs"), "pub struct Second;\n").expect("second file");
+            let second = rebuild_repo_index_runtime(root, true).expect("second");
+            match current_bytes {
+                Some(bytes) => fs::write(manifest_path(root), bytes).expect("schema-zero current"),
+                None => fs::remove_file(manifest_path(root)).expect("missing current"),
+            }
+
+            let recovered = load_repo_index_runtime(root).expect("recover previous");
+            assert_eq!(recovered.manifest.generation, first.manifest.generation);
+            let repaired = rebuild_repo_index_runtime(root, true).expect("repair");
+            assert!(repaired.manifest.generation > second.manifest.generation);
+            let repaired_record = current_record(root);
+            fs::write(
+                repo_index_dir(root).join(repaired_record.base_file),
+                b"corrupt repair",
+            )
+            .expect("corrupt repair artifact");
+
+            assert_eq!(
+                load_repo_index_runtime(root)
+                    .expect("recover retained previous")
+                    .manifest
+                    .generation,
+                first.manifest.generation
+            );
+        }
+    }
+
+    #[test]
+    fn clear_migrates_legacy_fencing_and_rejects_a_pre_clear_handle() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::remove_file(generation_high_water_path(root)).expect("simulate legacy allocator");
+
+        clear_repo_index_runtime(root).expect("clear");
+
+        assert_eq!(
+            load_generation_high_water(root).expect("migrated high-water"),
+            Some(stale.manifest.generation)
+        );
+        assert!(stale.file("src/a.rs").is_some());
+        let rebuilt = rebuild_repo_index_runtime(root, true).expect("rebuild");
+        assert!(rebuilt.manifest.generation > stale.manifest.generation);
+
+        fs::write(root.join("src/a.rs"), "pub fn stale_after_clear() {}\n").expect("change");
+        let error = update_repo_index_runtime(root, &stale, &[String::from("src/a.rs")], true)
+            .expect_err("pre-clear writer must conflict");
+        assert!(error.to_string().contains("generation conflict"));
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load rebuilt")
+                .manifest
+                .generation,
+            rebuilt.manifest.generation
+        );
+    }
+
+    #[test]
+    fn clear_fails_closed_when_generation_fencing_is_corrupt() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        fs::write(generation_high_water_path(root), b"{").expect("corrupt high-water");
+        let before = generation_artifact_snapshot(root);
+
+        let error = clear_repo_index_runtime(root).expect_err("strict high-water");
+
+        assert!(error.to_string().contains("generation high-water"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn writer_compare_and_swap_uses_the_private_authenticated_identity() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let mut stale = current.clone();
+        Arc::make_mut(stale.generation.as_mut().expect("loaded generation"))
+            .publication_identity
+            .generation_record_digest = "stale-publication".to_string();
+        stale.manifest = current.manifest;
+        fs::write(root.join("src/a.rs"), "pub fn attempted() {}\n").expect("change");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before conflict");
+
+        let error = update_repo_index_runtime(root, &stale, &[String::from("src/a.rs")], true)
+            .expect_err("identity mismatch");
+
+        assert!(error.to_string().contains("generation conflict"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after conflict"),
+            counter_before
+        );
+    }
+
+    #[test]
+    fn incremental_identity_check_decodes_only_bounded_publication_metadata() {
+        let dir = fixture();
+        let root = dir.path();
+        let mut current = rebuild_repo_index_runtime(root, true).expect("current");
+        for revision in 0..4 {
+            fs::write(
+                root.join("src/a.rs"),
+                format!("pub fn alpha_revision_{revision}() {{}}\n"),
+            )
+            .expect("seed overlay");
+            current = update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+                .expect("seed update")
+                .0;
+        }
+        fs::write(root.join("src/a.rs"), "pub fn measured_update() {}\n").expect("measured edit");
+
+        let (updated, summary) =
+            update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+                .expect("measured update");
+        let loaded = updated.generation.as_ref().expect("loaded update");
+        let measured_segment = loaded.segment_files.last().expect("measured segment file");
+        let measured_segment_bytes = usize::try_from(
+            fs::metadata(repo_index_dir(root).join(measured_segment))
+                .expect("measured segment metadata")
+                .len(),
+        )
+        .expect("segment size");
+        let base_bytes = usize::try_from(loaded.base_stamp.len).expect("base size");
+
+        assert!(updated.shares_base_with(&current));
+        assert!(
+            measured_segment_bytes < base_bytes,
+            "fixture must distinguish one-segment work from a full-base reload"
+        );
+        assert_eq!(
+            summary.work.repository_artifact_bytes_decoded,
+            measured_segment_bytes
+        );
+        assert_eq!(summary.work.repository_artifacts_decoded, 1);
+        #[cfg(unix)]
+        assert_eq!(
+            summary.work.repository_artifact_bytes_hashed,
+            measured_segment_bytes.saturating_mul(2)
+        );
+        #[cfg(not(unix))]
+        assert!(
+            summary.work.repository_artifact_bytes_hashed
+                >= measured_segment_bytes.saturating_mul(2),
+            "platforms without a stable file identity must rehash retained artifacts"
+        );
+        assert!(summary.work.repository_artifact_metadata_checks > 0);
+        assert_eq!(summary.work.changed_paths_considered, 1);
+        assert!(
+            (1..=4_096).contains(&summary.work.publication_metadata_bytes_decoded),
+            "publication identity should decode only the small manifest and generation record, decoded {} bytes",
+            summary.work.publication_metadata_bytes_decoded
+        );
+    }
+
+    #[test]
+    fn incremental_identity_check_rejects_manifest_metadata_tampering() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let mut tampered = load_published_manifest(root).expect("manifest");
+        tampered.total_files += 1;
+        fs::write(
+            manifest_path(root),
+            serde_json::to_vec_pretty(&tampered).expect("encode tampered manifest"),
+        )
+        .expect("tamper manifest");
+        fs::write(root.join("src/a.rs"), "pub fn attempted() {}\n").expect("change");
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before rejection");
+
+        let error = update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+            .expect_err("tampered manifest must fail authentication");
+
+        assert!(error.to_string().contains("generation record"));
+        assert!(error.to_string().contains("does not match"));
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after rejection"),
+            counter_before
+        );
+    }
+
+    #[test]
+    fn mutable_manifest_policy_cannot_bypass_the_private_loaded_base_policy() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let mut mutated = current.clone();
+        mutated.manifest.include_tests = false;
+        assert!(
+            mutated
+                .materialize_snapshot()
+                .expect("private snapshot")
+                .include_tests
+        );
+
+        let (rebuilt, summary) =
+            update_repo_index_runtime(root, &mutated, &[], false).expect("policy rebuild");
+        let rebuilt_generation = rebuilt.generation.as_ref().expect("rebuilt generation");
+        let rebuilt_base_bytes =
+            usize::try_from(rebuilt_generation.base_stamp.len).expect("rebuilt base size");
+
+        assert!(rebuilt.manifest.generation > current.manifest.generation);
+        assert!(!rebuilt.manifest.include_tests);
+        assert!(!current.shares_base_with(&rebuilt));
+        assert_eq!(
+            summary.work.repository_artifact_bytes_decoded,
+            rebuilt_base_bytes
+        );
+        assert_eq!(summary.work.repository_artifacts_decoded, 1);
+        #[cfg(unix)]
+        assert_eq!(
+            summary.work.repository_artifact_bytes_hashed,
+            rebuilt_base_bytes.saturating_mul(2)
+        );
+        #[cfg(not(unix))]
+        assert!(
+            summary.work.repository_artifact_bytes_hashed >= rebuilt_base_bytes.saturating_mul(2)
+        );
+        let reloaded = load_repo_index_runtime(root).expect("reload rebuilt policy");
+        assert!(reloaded.is_loaded());
+        assert!(!reloaded.manifest.include_tests);
+
+        let mut stale = current;
+        stale.manifest.include_tests = false;
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before stale policy change");
+        let error = update_repo_index_runtime(root, &stale, &[], false)
+            .expect_err("stale policy change must conflict");
+        assert!(error.to_string().contains("generation conflict"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after stale policy change"),
+            counter_before
+        );
+    }
+
+    #[test]
+    fn generation_high_water_reserves_max_once_then_exhausts_without_artifact_writes() {
+        let dir = fixture();
+        let root = dir.path();
+        persist_generation_high_water(root, u64::MAX - 1).expect("seed high-water");
+        let _writer = acquire_writer_lock(root).expect("writer");
+
+        assert_eq!(reserve_generation(root).expect("reserve max"), u64::MAX);
+        let counter_at_max = fs::read(generation_high_water_path(root)).expect("counter at max");
+        let error = reserve_generation(root).expect_err("generation exhaustion");
+
+        assert!(error.to_string().contains("exhausted"));
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after exhaustion"),
+            counter_at_max
+        );
+        assert!(!repo_index_dir(root).exists());
+    }
+
+    #[test]
+    fn rebuild_at_generation_max_fails_before_creating_generation_artifacts() {
+        let dir = fixture();
+        let root = dir.path();
+        persist_generation_high_water(root, u64::MAX).expect("seed max");
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before rebuild");
+
+        let error = rebuild_repo_index_runtime(root, true).expect_err("generation exhaustion");
+
+        assert!(error.to_string().contains("exhausted"));
+        assert!(!repo_index_dir(root).exists());
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after rebuild"),
+            counter_before
+        );
+    }
+
+    #[test]
+    fn update_at_generation_max_preserves_the_published_generation() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        persist_generation_high_water(root, u64::MAX).expect("seed max");
+        fs::write(root.join("src/a.rs"), "pub fn overflow_attempt() {}\n").expect("change");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before update");
+
+        let error = update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+            .expect_err("generation exhaustion");
+
+        assert!(error.to_string().contains("exhausted"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after update"),
+            counter_before
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn update_does_not_discard_recovery_when_the_published_artifact_is_corrupt() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(root.join("src/c.rs"), "pub struct Second;\n").expect("second file");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        let second_record = current_record(root);
+        fs::write(
+            repo_index_dir(root).join(second_record.base_file),
+            b"corrupt second base",
+        )
+        .expect("corrupt current base");
+        fs::write(root.join("src/d.rs"), "pub struct Attempt;\n").expect("update path");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before update");
+
+        let error = update_repo_index_runtime(root, &second, &[String::from("src/d.rs")], true)
+            .expect_err("corrupt published generation");
+
+        assert!(error.to_string().contains("digest validation"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after update"),
+            counter_before
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("recover first")
+                .manifest
+                .generation,
+            first.manifest.generation
+        );
+    }
+
+    #[test]
+    fn update_rejects_a_corrupt_published_record_without_displacing_recovery() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(root.join("src/c.rs"), "pub struct Second;\n").expect("second file");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        let record_path =
+            repo_index_dir(root).join(generation_record_file_name(second.manifest.generation));
+        fs::write(&record_path, b"{").expect("corrupt current record");
+        fs::write(root.join("src/d.rs"), "pub struct Attempt;\n").expect("update path");
+        let before = generation_artifact_snapshot(root);
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before update");
+
+        let error = update_repo_index_runtime(root, &second, &[String::from("src/d.rs")], true)
+            .expect_err("corrupt published record");
+
+        assert!(error.to_string().contains("generation record"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after update"),
+            counter_before
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("recover first")
+                .manifest
+                .generation,
+            first.manifest.generation
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_rehashes_same_size_artifact_corruption_with_restored_mtime() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(root.join("src/c.rs"), "pub struct Second;\n").expect("second file");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        let loaded = second.generation.as_ref().expect("loaded second");
+        let base_path = repo_index_dir(root).join(&loaded.base_file);
+        let expected_stamp = loaded.base_stamp.clone();
+        let timestamp_reference = root.join(".artifact-mtime-reference");
+        fs::write(&timestamp_reference, b"reference").expect("timestamp reference");
+        let status = std::process::Command::new("touch")
+            .args(["-r"])
+            .arg(&base_path)
+            .arg(&timestamp_reference)
+            .status()
+            .expect("copy original mtime");
+        assert!(status.success());
+        let mut corrupted = fs::read(&base_path).expect("base bytes");
+        corrupted[0] ^= 0xff;
+        fs::write(&base_path, corrupted).expect("same-size corruption");
+        let status = std::process::Command::new("touch")
+            .args(["-r"])
+            .arg(&timestamp_reference)
+            .arg(&base_path)
+            .status()
+            .expect("restore original mtime");
+        assert!(status.success());
+        let corrupted_stamp = artifact_stamp(&base_path).expect("corrupted stamp");
+        assert_eq!(corrupted_stamp.len, expected_stamp.len);
+        assert_eq!(
+            corrupted_stamp.modified_unix_nanos,
+            expected_stamp.modified_unix_nanos
+        );
+        assert_ne!(
+            corrupted_stamp, expected_stamp,
+            "the Unix change token must detect same-size, same-mtime replacement"
+        );
+        fs::write(root.join("src/d.rs"), "pub struct Attempt;\n").expect("update path");
+        let before = generation_artifact_snapshot(root);
+
+        let error = update_repo_index_runtime(root, &second, &[String::from("src/d.rs")], true)
+            .expect_err("same-size corrupt published artifact");
+
+        assert!(error.to_string().contains("digest validation"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("recover first")
+                .manifest
+                .generation,
+            first.manifest.generation
+        );
+    }
+
+    #[test]
+    fn incremental_publication_fence_restores_both_manifests_before_pruning() {
+        let dir = fixture();
+        let root = dir.path();
+        let mut current = rebuild_repo_index_runtime(root, true).expect("base");
+        for revision in 0..7 {
+            fs::write(
+                root.join("src/a.rs"),
+                format!("pub fn alpha_revision_{revision}() {{}}\n"),
+            )
+            .expect("seed segment");
+            current = update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+                .expect("seed update")
+                .0;
+        }
+        assert_eq!(current.manifest.segment_count, 7);
+        let recovery_manifest = load_previous_manifest(root).expect("recovery manifest");
+        let recovery_record =
+            load_authenticated_generation_record(root, &recovery_manifest).expect("recovery");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            fs::read(previous_manifest_path(root)).expect("previous bytes");
+        let current_record_path =
+            repo_index_dir(root).join(generation_record_file_name(current.manifest.generation));
+        fs::write(root.join("src/a.rs"), "pub fn compacted_update() {}\n").expect("changed path");
+
+        let error = update_repo_index_runtime_with_hook(
+            root,
+            &current,
+            &[String::from("src/a.rs")],
+            true,
+            |stage| {
+                if stage == IncrementalPublicationStage::AfterPrevious {
+                    let mut swapped =
+                        load_generation_record(root, current.manifest.generation).expect("record");
+                    swapped.segment_files.clear();
+                    swapped.segment_digests.clear();
+                    fs::write(
+                        &current_record_path,
+                        serde_json::to_vec_pretty(&swapped).expect("swapped record"),
+                    )
+                    .expect("swap retained record");
+                }
+                Ok(())
+            },
+        )
+        .expect_err("post-rotation record swap must fail");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            fs::read(previous_manifest_path(root)).expect("restored previous"),
+            previous_manifest_bytes
+        );
+        let recovered = load_repo_index_runtime(root).expect("recover retained generation");
+        assert_eq!(recovered.manifest.generation, recovery_manifest.generation);
+        for file_name in
+            std::iter::once(&recovery_record.base_file).chain(recovery_record.segment_files.iter())
+        {
+            assert!(
+                repo_index_dir(root).join(file_name).exists(),
+                "recovery artifact {file_name} must not be pruned"
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_publication_authenticates_both_manifest_outputs() {
+        for replace_previous in [false, true] {
+            let dir = fixture();
+            let root = dir.path();
+            rebuild_repo_index_runtime(root, true).expect("first");
+            let current = rebuild_repo_index_runtime(root, true).expect("current");
+            let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+            let previous_manifest_bytes =
+                fs::read(previous_manifest_path(root)).expect("previous bytes");
+            fs::write(root.join("src/a.rs"), "pub fn attempted_update() {}\n")
+                .expect("changed path");
+
+            let error = update_repo_index_runtime_with_hook(
+                root,
+                &current,
+                &[String::from("src/a.rs")],
+                true,
+                |stage| {
+                    if stage == IncrementalPublicationStage::AfterPrevious {
+                        if replace_previous {
+                            fs::write(previous_manifest_path(root), &previous_manifest_bytes)
+                                .expect("replace previous output");
+                        } else {
+                            fs::write(manifest_path(root), &current_manifest_bytes)
+                                .expect("replace current output");
+                        }
+                    }
+                    Ok(())
+                },
+            )
+            .expect_err("replaced manifest output must fail");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not match the authenticated publication bytes"),
+                "{error}"
+            );
+            assert_eq!(
+                fs::read(manifest_path(root)).expect("restored current"),
+                current_manifest_bytes
+            );
+            assert_eq!(
+                fs::read(previous_manifest_path(root)).expect("restored previous"),
+                previous_manifest_bytes
+            );
+        }
+    }
+
+    #[test]
+    fn policy_rebuild_retains_the_complete_publication_fence() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            read_optional_file(&previous_manifest_path(root)).expect("previous bytes");
+        let next_record_path = repo_index_dir(root).join(generation_record_file_name(
+            current.manifest.generation.checked_add(1).expect("next"),
+        ));
+
+        let error = update_repo_index_runtime_with_hook(root, &current, &[], false, |stage| {
+            if stage == IncrementalPublicationStage::AfterCurrent {
+                OpenOptions::new()
+                    .append(true)
+                    .open(&next_record_path)
+                    .expect("open rebuilt record")
+                    .write_all(b"\n")
+                    .expect("mutate rebuilt record");
+            }
+            Ok(())
+        })
+        .expect_err("policy rebuild record mutation must fail");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            read_optional_file(&previous_manifest_path(root)).expect("restored previous"),
+            previous_manifest_bytes
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load restored current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn policy_rebuild_revalidates_the_outer_prestate_after_scanning() {
+        let dir = fixture();
+        let root = dir.path();
+        rebuild_repo_index_runtime(root, true).expect("recovery");
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            fs::read(previous_manifest_path(root)).expect("previous bytes");
+        let current_record_path =
+            repo_index_dir(root).join(generation_record_file_name(current.manifest.generation));
+        let current_record_bytes = fs::read(&current_record_path).expect("current record");
+        let counter_before =
+            fs::read(generation_high_water_path(root)).expect("counter before scan");
+
+        let error = update_repo_index_runtime_with_hook(root, &current, &[], false, |stage| {
+            if stage == IncrementalPublicationStage::AfterRebuildScan {
+                OpenOptions::new()
+                    .append(true)
+                    .open(&current_record_path)
+                    .expect("open outer record")
+                    .write_all(b"\n")
+                    .expect("mutate outer record");
+            }
+            Ok(())
+        })
+        .expect_err("policy rebuild must retain the outer authenticated prestate");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(generation_high_water_path(root)).expect("counter after rejection"),
+            counter_before,
+            "prestate authentication must fail before reserving N+1"
+        );
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("unchanged current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            fs::read(previous_manifest_path(root)).expect("unchanged previous"),
+            previous_manifest_bytes
+        );
+        fs::write(current_record_path, current_record_bytes).expect("restore attacked record");
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load restored current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[cfg(feature = "shared-repository-scan")]
+    #[test]
+    fn prepared_publication_revalidates_pins_during_publish_and_commit() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let original_current = fs::read(manifest_path(root)).expect("current bytes");
+        let original_previous =
+            read_optional_file(&previous_manifest_path(root)).expect("previous bytes");
+        let snapshot = build_repo_index(root, true).expect("snapshot");
+        let writer = acquire_writer_lock(root).expect("writer");
+        let mut prepared =
+            prepare_repo_index_runtime_with_writer(root, true, snapshot, writer).expect("prepare");
+        let record_path =
+            repo_index_dir(root).join(generation_record_file_name(prepared.manifest().generation));
+
+        let error = prepared
+            .publish_with(|root, previous, next| {
+                publish_manifest(root, previous, next)?;
+                OpenOptions::new()
+                    .append(true)
+                    .open(&record_path)
+                    .expect("open prepared record")
+                    .write_all(b"\n")
+                    .expect("mutate prepared record");
+                Ok(())
+            })
+            .expect_err("prepared publish must revalidate retained pins");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            original_current
+        );
+        assert_eq!(
+            read_optional_file(&previous_manifest_path(root)).expect("restored previous"),
+            original_previous
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load restored generation")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+        drop(prepared);
+
+        let snapshot = build_repo_index(root, true).expect("second snapshot");
+        let writer = acquire_writer_lock(root).expect("second writer");
+        let mut prepared =
+            prepare_repo_index_runtime_with_writer(root, true, snapshot, writer).expect("prepare");
+        let record_path =
+            repo_index_dir(root).join(generation_record_file_name(prepared.manifest().generation));
+        prepared.publish().expect("publish");
+        OpenOptions::new()
+            .append(true)
+            .open(record_path)
+            .expect("open published prepared record")
+            .write_all(b"\n")
+            .expect("mutate before commit");
+
+        let error = prepared
+            .commit()
+            .expect_err("prepared commit must revalidate retained pins");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            original_current
+        );
+        assert_eq!(
+            read_optional_file(&previous_manifest_path(root)).expect("restored previous"),
+            original_previous
+        );
+    }
+
+    #[test]
+    fn incremental_publication_authenticates_the_new_record_before_returning() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            read_optional_file(&previous_manifest_path(root)).expect("previous bytes");
+        let next_record_path = repo_index_dir(root).join(generation_record_file_name(
+            current.manifest.generation.checked_add(1).expect("next"),
+        ));
+        fs::write(root.join("src/a.rs"), "pub fn attempted_update() {}\n").expect("changed path");
+
+        let error = update_repo_index_runtime_with_hook(
+            root,
+            &current,
+            &[String::from("src/a.rs")],
+            true,
+            |stage| {
+                if stage == IncrementalPublicationStage::BeforeCurrent {
+                    OpenOptions::new()
+                        .append(true)
+                        .open(&next_record_path)
+                        .expect("open next record")
+                        .write_all(b"\n")
+                        .expect("pad next record");
+                }
+                Ok(())
+            },
+        )
+        .expect_err("mutated new record must fail");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            read_optional_file(&previous_manifest_path(root)).expect("restored previous"),
+            previous_manifest_bytes
+        );
+    }
+
+    #[test]
+    fn incremental_publication_fence_pins_the_new_segment_through_publication() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        let current_manifest_bytes = fs::read(manifest_path(root)).expect("current bytes");
+        let previous_manifest_bytes =
+            read_optional_file(&previous_manifest_path(root)).expect("previous bytes");
+        let next_segment_path = repo_index_dir(root).join(segment_file_name(
+            current.manifest.generation.checked_add(1).expect("next"),
+        ));
+        fs::write(root.join("src/a.rs"), "pub fn attempted_update() {}\n").expect("changed path");
+
+        let error = update_repo_index_runtime_with_hook(
+            root,
+            &current,
+            &[String::from("src/a.rs")],
+            true,
+            |stage| {
+                if stage == IncrementalPublicationStage::AfterCurrent {
+                    let mut bytes = fs::read(&next_segment_path).expect("next segment");
+                    bytes[0] ^= 0xff;
+                    fs::write(&next_segment_path, bytes).expect("mutate next segment");
+                }
+                Ok(())
+            },
+        )
+        .expect_err("mutated new segment must fail");
+
+        assert!(error.to_string().contains("changed during publication"));
+        assert_eq!(
+            fs::read(manifest_path(root)).expect("restored current"),
+            current_manifest_bytes
+        );
+        assert_eq!(
+            read_optional_file(&previous_manifest_path(root)).expect("restored previous"),
+            previous_manifest_bytes
+        );
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load restored current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn generation_record_padding_is_bounded_and_noncanonical() {
+        for padding in [1usize, MAX_GENERATION_RECORD_BYTES as usize + 1] {
+            let dir = fixture();
+            let root = dir.path();
+            let current = rebuild_repo_index_runtime(root, true).expect("current");
+            let record_path =
+                repo_index_dir(root).join(generation_record_file_name(current.manifest.generation));
+            OpenOptions::new()
+                .append(true)
+                .open(&record_path)
+                .expect("open record")
+                .write_all(&vec![b' '; padding])
+                .expect("pad record");
+            let loaded = load_repo_index_runtime(root).expect("bounded corrupt load");
+            assert!(!loaded.is_loaded());
+            let load_error = loaded.manifest.last_error.as_deref().unwrap_or_default();
+            if padding == 1 {
+                assert!(load_error.contains("canonical persisted encoding"));
+            } else {
+                assert!(load_error.contains("maximum"));
+            }
+            fs::write(root.join("src/a.rs"), "pub fn attempted() {}\n").expect("changed path");
+            let counter_before =
+                fs::read(generation_high_water_path(root)).expect("counter before");
+
+            let error =
+                update_repo_index_runtime(root, &current, &[String::from("src/a.rs")], true)
+                    .expect_err("padded record must fail");
+
+            if padding == 1 {
+                assert!(error.to_string().contains("canonical persisted encoding"));
+            } else {
+                assert!(error.to_string().contains("maximum"));
+            }
+            assert_eq!(
+                fs::read(generation_high_water_path(root)).expect("counter after"),
+                counter_before
+            );
+        }
+    }
+
+    #[test]
+    fn corrupt_generation_high_water_fails_closed_without_touching_the_index() {
+        let dir = fixture();
+        let root = dir.path();
+        let current = rebuild_repo_index_runtime(root, true).expect("current");
+        fs::write(generation_high_water_path(root), b"{").expect("corrupt high-water");
+        let before = generation_artifact_snapshot(root);
+
+        let error = rebuild_repo_index_runtime(root, true).expect_err("strict high-water");
+
+        assert!(error.to_string().contains("generation high-water"));
+        assert_eq!(generation_artifact_snapshot(root), before);
+        assert_eq!(
+            load_repo_index_runtime(root)
+                .expect("load current")
+                .manifest
+                .generation,
+            current.manifest.generation
+        );
+    }
+
+    #[test]
+    fn immutable_artifact_write_refuses_to_replace_existing_bytes() {
+        let dir = fixture();
+        let path = repo_index_dir(dir.path()).join(base_file_name(1));
+        fs::create_dir_all(path.parent().expect("artifact parent")).expect("create parent");
+        fs::write(&path, b"retained generation").expect("sentinel");
+
+        let error = write_immutable(path.clone(), b"replacement").expect_err("collision");
+
+        assert!(error.to_string().contains("immutable repository artifact"));
+        assert_eq!(
+            fs::read(path).expect("retained bytes"),
+            b"retained generation"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_skips_a_precreated_temporary_symlink_without_following_it() {
+        let dir = fixture();
+        let target = manifest_path(dir.path());
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"sentinel").expect("outside sentinel");
+        let (state, name) = repo_state_location(&target, true).expect("state");
+        let mut collision = None;
+        state
+            .write_atomic_with_observers(
+                &name,
+                b"published",
+                |candidate| {
+                    if collision.is_none() {
+                        std::os::unix::fs::symlink(&outside, candidate)?;
+                        collision = Some(candidate.to_path_buf());
+                    }
+                    Ok(())
+                },
+                |_| Ok(()),
+                |_, _| Ok(()),
+            )
+            .expect("atomic write");
+
+        assert_eq!(fs::read(outside).expect("outside bytes"), b"sentinel");
+        assert!(collision.expect("collision").is_symlink());
+        assert_eq!(fs::read(target).expect("published bytes"), b"published");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rebuild_rejects_a_symlinked_state_parent_without_touching_the_victim() {
+        let dir = fixture();
+        let victim = tempfile::tempdir().expect("victim");
+        let sentinel = victim.path().join("sentinel");
+        fs::write(&sentinel, b"outside-must-survive").expect("sentinel");
+        std::os::unix::fs::symlink(victim.path(), dir.path().join(".packet28"))
+            .expect("symlink parent");
+
+        let error = rebuild_repo_index_runtime(dir.path(), true).expect_err("unsafe parent");
+
+        assert!(error.to_string().contains("repository index parent"));
+        assert_eq!(
+            fs::read(&sentinel).expect("sentinel bytes"),
+            b"outside-must-survive"
+        );
+        assert!(!victim.path().join("index").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_map_state_rejects_an_ancestor_swap_without_touching_the_victim() {
+        let dir = fixture();
+        let victim = tempfile::tempdir().expect("victim");
+        let target = manifest_path(dir.path());
+        let (state, name) = repo_state_location(&target, true).expect("state capability");
+        let held = dir.path().join("held-packet28");
+        let sentinel = victim.path().join("sentinel");
+        fs::write(&sentinel, b"outside-must-survive").expect("sentinel");
+        fs::rename(dir.path().join(".packet28"), &held).expect("hold state");
+        std::os::unix::fs::symlink(victim.path(), dir.path().join(".packet28"))
+            .expect("swap ancestor");
+
+        let error = state
+            .write_atomic(&name, b"replacement")
+            .expect_err("substituted ancestor");
+
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::NotADirectory | std::io::ErrorKind::PermissionDenied
+        ));
+        assert_eq!(
+            fs::read(&sentinel).expect("sentinel bytes"),
+            b"outside-must-survive"
+        );
+        assert!(!victim.path().join(REPO_INDEX_MANIFEST_FILE).exists());
+        assert!(!held.join("index/mapy-v1/manifest.json").exists());
+    }
+
+    #[test]
+    fn repeated_updates_retain_the_base_and_old_reader_view() {
+        let dir = fixture();
+        let root = dir.path();
+        let original = rebuild_repo_index_runtime(root, true).expect("runtime");
+        fs::write(root.join("src/a.rs"), "pub fn replacement() {}\n").expect("update");
+
+        let (updated, _) =
+            update_repo_index_runtime(root, &original, &[String::from("src/a.rs")], true)
+                .expect("incremental update");
+
+        assert!(original.shares_base_with(&updated));
+        assert!(original
+            .file("src/a.rs")
+            .is_some_and(|entry| entry.symbols.iter().any(|symbol| symbol.name == "alpha")));
+        assert!(updated.file("src/a.rs").is_some_and(|entry| entry
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "replacement")));
+    }
+
+    #[test]
+    fn threshold_compaction_preserves_parity_and_base_ownership() {
+        let dir = fixture();
+        let root = dir.path();
+        let original = rebuild_repo_index_runtime(root, true).expect("runtime");
+        let mut runtime = original.clone();
+        let mut legacy = build_repo_index(root, true).expect("legacy");
+        let path = String::from("src/a.rs");
+
+        for revision in 0..REPO_INDEX_COMPACTION_SEGMENTS {
+            fs::write(
+                root.join(&path),
+                format!("pub fn revision_{revision}() -> usize {{ {revision} }}\n"),
+            )
+            .expect("revision");
+            update_repo_index(root, &mut legacy, std::slice::from_ref(&path), true)
+                .expect("legacy update");
+            runtime = update_repo_index_runtime(root, &runtime, std::slice::from_ref(&path), true)
+                .expect("runtime update")
+                .0;
+        }
+
+        assert_eq!(runtime.manifest.segment_count, 1);
+        assert!(original.shares_base_with(&runtime));
+        assert_eq!(runtime.materialize_snapshot().as_ref(), Some(&legacy));
+    }
+
+    #[test]
+    fn concurrent_readers_keep_generation_owned_entries() {
+        let dir = fixture();
+        let root = dir.path();
+        let original = rebuild_repo_index_runtime(root, true).expect("runtime");
+        fs::write(root.join("src/a.rs"), "pub fn replacement() {}\n").expect("update");
+        let updated = update_repo_index_runtime(root, &original, &[String::from("src/a.rs")], true)
+            .expect("update")
+            .0;
+        let barrier = Arc::new(Barrier::new(9));
+
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for idx in 0..8 {
+                let barrier = Arc::clone(&barrier);
+                let runtime = if idx % 2 == 0 {
+                    original.clone()
+                } else {
+                    updated.clone()
+                };
+                handles.push(scope.spawn(move || {
+                    barrier.wait();
+                    runtime
+                        .file("src/a.rs")
+                        .expect("entry")
+                        .symbols
+                        .first()
+                        .expect("symbol")
+                        .name
+                        .clone()
+                }));
+            }
+            barrier.wait();
+            for (idx, handle) in handles.into_iter().enumerate() {
+                let expected = if idx % 2 == 0 { "alpha" } else { "replacement" };
+                assert_eq!(handle.join().expect("reader"), expected);
+            }
+        });
+    }
+
+    #[test]
+    fn corrupt_current_segment_recovers_only_the_retained_previous_generation() {
+        let dir = fixture();
+        let root = dir.path();
+        let base = rebuild_repo_index_runtime(root, true).expect("base");
+        fs::write(root.join("src/a.rs"), "pub fn replacement() {}\n").expect("update");
+        let updated = update_repo_index_runtime(root, &base, &[String::from("src/a.rs")], true)
+            .expect("update")
+            .0;
+        let record = current_record(root);
+        fs::write(
+            repo_index_dir(root).join(&record.segment_files[0]),
+            b"corrupt segment",
+        )
+        .expect("corrupt");
+
+        let recovered = load_repo_index_runtime(root).expect("recover");
+
+        assert_eq!(
+            recovered.manifest.recovered_from_generation,
+            Some(updated.manifest.generation)
+        );
+        assert_eq!(recovered.manifest.generation, base.manifest.generation);
+        assert!(recovered
+            .file("src/a.rs")
+            .is_some_and(|entry| entry.symbols.iter().any(|symbol| symbol.name == "alpha")));
+    }
+
+    #[test]
+    fn corrupt_current_base_recovers_a_previous_full_generation() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(root.join("src/c.rs"), "pub struct Charlie;\n").expect("add");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        let record = current_record(root);
+        fs::write(repo_index_dir(root).join(record.base_file), b"corrupt base").expect("corrupt");
+
+        let recovered = load_repo_index_runtime(root).expect("recover");
+
+        assert_eq!(
+            recovered.manifest.recovered_from_generation,
+            Some(second.manifest.generation)
+        );
+        assert_eq!(recovered.manifest.generation, first.manifest.generation);
+        assert!(recovered.file("src/c.rs").is_none());
+    }
+
+    #[test]
+    fn repair_retains_the_authenticated_recovery_generation_instead_of_corrupt_current() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(root.join("src/c.rs"), "pub struct CorruptCurrent;\n").expect("second file");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        let second_record = current_record(root);
+        fs::write(
+            repo_index_dir(root).join(second_record.base_file),
+            b"corrupt second base",
+        )
+        .expect("corrupt second");
+        let recovered = load_repo_index_runtime(root).expect("recover first");
+        assert_eq!(recovered.manifest.generation, first.manifest.generation);
+
+        fs::write(root.join("src/d.rs"), "pub struct Repair;\n").expect("repair file");
+        let repaired = rebuild_repo_index_runtime(root, true).expect("repair");
+        assert!(repaired.manifest.generation > second.manifest.generation);
+        let repaired_record = current_record(root);
+        fs::write(
+            repo_index_dir(root).join(repaired_record.base_file),
+            b"corrupt repaired base",
+        )
+        .expect("corrupt repaired");
+
+        let recovered_again = load_repo_index_runtime(root).expect("recover retained first");
+
+        assert_eq!(
+            recovered_again.manifest.generation,
+            first.manifest.generation
+        );
+        assert!(recovered_again.file("src/c.rs").is_none());
+        assert!(recovered_again.file("src/d.rs").is_none());
+    }
+
+    #[test]
+    fn retained_previous_base_cannot_be_substituted_for_the_current_generation() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(
+            root.join("src/a.rs"),
+            "pub fn replacement() -> usize { 1 }\n",
+        )
+        .expect("replace");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        assert_eq!(first.manifest.total_files, second.manifest.total_files);
+        let previous_record =
+            load_generation_record(root, first.manifest.generation).expect("previous record");
+        let mut current_record = current_record(root);
+        current_record.base_file = previous_record.base_file;
+        current_record.base_digest = previous_record.base_digest;
+        fs::write(
+            repo_index_dir(root).join(generation_record_file_name(current_record.generation)),
+            serde_json::to_vec_pretty(&current_record).expect("encode substituted record"),
+        )
+        .expect("substitute previous base");
+
+        let recovered = load_repo_index_runtime(root).expect("recover");
+
+        assert_eq!(
+            recovered.manifest.recovered_from_generation,
+            Some(second.manifest.generation)
+        );
+        assert_eq!(recovered.manifest.generation, first.manifest.generation);
+        assert!(recovered.file("src/a.rs").is_some_and(|entry| {
+            entry.symbols.iter().any(|symbol| symbol.name == "alpha")
+                && entry
+                    .symbols
+                    .iter()
+                    .all(|symbol| symbol.name != "replacement")
+        }));
+        assert!(recovered
+            .manifest
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("generation record")
+                && error.contains("failed digest validation")));
+    }
+
+    #[test]
+    fn corrupt_current_manifest_recovers_the_explicit_backup() {
+        let dir = fixture();
+        let root = dir.path();
+        let base = rebuild_repo_index_runtime(root, true).expect("base");
+        fs::write(root.join("src/a.rs"), "pub fn replacement() {}\n").expect("update");
+        let _updated = update_repo_index_runtime(root, &base, &[String::from("src/a.rs")], true)
+            .expect("update");
+        fs::write(manifest_path(root), b"{").expect("corrupt");
+
+        let recovered = load_repo_index_runtime(root).expect("recover");
+
+        assert_eq!(recovered.manifest.generation, base.manifest.generation);
+        assert!(recovered.manifest.last_error.is_some());
+    }
+
+    #[test]
+    fn unpublished_orphan_generation_is_never_promoted() {
+        let dir = fixture();
+        let root = dir.path();
+        let runtime = rebuild_repo_index_runtime(root, true).expect("runtime");
+        let orphan_generation = runtime.manifest.generation + 1;
+        fs::write(
+            repo_index_dir(root).join(generation_record_file_name(orphan_generation)),
+            b"{\"schema_version\":1}",
+        )
+        .expect("orphan");
+        fs::write(
+            repo_index_dir(root).join(segment_file_name(orphan_generation)),
+            b"partial",
+        )
+        .expect("partial segment");
+
+        let loaded = load_repo_index_runtime(root).expect("load");
+
+        assert_eq!(loaded.manifest.generation, runtime.manifest.generation);
+        assert!(loaded.is_loaded());
+    }
+
+    #[test]
+    fn generation_record_count_mismatch_recovers_previous_generation() {
+        let dir = fixture();
+        let root = dir.path();
+        let base = rebuild_repo_index_runtime(root, true).expect("base");
+        fs::write(root.join("src/a.rs"), "pub fn replacement() {}\n").expect("update");
+        let updated = update_repo_index_runtime(root, &base, &[String::from("src/a.rs")], true)
+            .expect("update")
+            .0;
+        let mut record = current_record(root);
+        record.manifest.total_files += 1;
+        fs::write(
+            repo_index_dir(root).join(generation_record_file_name(record.generation)),
+            serde_json::to_vec_pretty(&record).expect("encode"),
+        )
+        .expect("rewrite");
+
+        let recovered = load_repo_index_runtime(root).expect("recover");
+
+        assert_eq!(
+            recovered.manifest.recovered_from_generation,
+            Some(updated.manifest.generation)
+        );
+        assert_eq!(recovered.manifest.generation, base.manifest.generation);
+    }
+
+    #[test]
+    fn segment_validation_rejects_path_mismatch_and_entry_tombstone_overlap() {
+        let mut segment = RepoIndexSegment {
+            version: REPO_INDEX_SEGMENT_VERSION,
+            generation: 1,
+            ..RepoIndexSegment::default()
+        };
+        segment.files.insert(
+            "src/key.rs".to_string(),
+            RepoIndexFileEntry {
+                path: "src/value.rs".to_string(),
+                ..RepoIndexFileEntry::default()
+            },
+        );
+        assert!(validate_segment(&segment)
+            .expect_err("path mismatch")
+            .to_string()
+            .contains("does not match"));
+
+        let entry = segment.files.remove("src/key.rs").expect("entry");
+        segment.files.insert(entry.path.clone(), entry);
+        segment.tombstones.insert("src/value.rs".to_string());
+        assert!(validate_segment(&segment)
+            .expect_err("overlap")
+            .to_string()
+            .contains("both an entry and tombstone"));
+    }
+
+    #[test]
+    fn changed_paths_cannot_escape_the_repository_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("workspace");
+        fs::create_dir_all(root.join("src")).expect("workspace");
+        fs::write(root.join("src/lib.rs"), "pub fn inside() {}\n").expect("inside");
+        fs::write(dir.path().join("outside.rs"), "pub fn outside() {}\n").expect("outside");
+        let runtime = rebuild_repo_index_runtime(&root, true).expect("runtime");
+        let mut legacy = build_repo_index(&root, true).expect("legacy");
+
+        let runtime_error =
+            update_repo_index_runtime(&root, &runtime, &[String::from("../outside.rs")], true)
+                .expect_err("runtime traversal");
+        let legacy_error =
+            update_repo_index(&root, &mut legacy, &[String::from("../outside.rs")], true)
+                .expect_err("legacy traversal");
+
+        assert!(runtime_error.to_string().contains("beneath"));
+        assert!(legacy_error.to_string().contains("beneath"));
+        assert_eq!(
+            load_repo_index_runtime(&root)
+                .expect("reload")
+                .manifest
+                .generation,
+            runtime.manifest.generation
+        );
+    }
+
+    #[test]
+    fn concurrent_writers_return_an_explicit_generation_conflict() {
+        let dir = fixture();
+        let root = dir.path();
+        let base = rebuild_repo_index_runtime(root, true).expect("base");
+        fs::write(root.join("src/c.rs"), "pub struct Charlie;\n").expect("c");
+        fs::write(root.join("src/d.rs"), "pub struct Delta;\n").expect("d");
+        let barrier = Arc::new(Barrier::new(3));
+
+        let results = std::thread::scope(|scope| {
+            let handles = ["src/c.rs", "src/d.rs"].map(|path| {
+                let runtime = base.clone();
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    update_repo_index_runtime(root, &runtime, &[path.to_string()], true)
+                })
+            });
+            barrier.wait();
+            handles.map(|handle| handle.join().expect("writer"))
+        });
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        let conflict = results
+            .iter()
+            .find_map(|result| result.as_ref().err())
+            .expect("conflict");
+        assert!(conflict.to_string().contains("generation conflict"));
+        let loaded = load_repo_index_runtime(root).expect("load winner");
+        assert!(loaded.is_loaded());
+        assert_eq!(loaded.manifest.generation, base.manifest.generation + 1);
+        assert_eq!(
+            usize::from(loaded.file("src/c.rs").is_some())
+                + usize::from(loaded.file("src/d.rs").is_some()),
+            1
+        );
+    }
+
+    #[test]
+    fn structurally_valid_segment_mutation_recovers_previous_generation() {
+        let dir = fixture();
+        let root = dir.path();
+        let base = rebuild_repo_index_runtime(root, true).expect("base");
+        fs::write(root.join("src/a.rs"), "pub fn replacement() {}\n").expect("update");
+        let updated = update_repo_index_runtime(root, &base, &[String::from("src/a.rs")], true)
+            .expect("update")
+            .0;
+        let record = current_record(root);
+        let segment_path = repo_index_dir(root).join(&record.segment_files[0]);
+        let raw = fs::read(&segment_path).expect("segment");
+        let mut segment = wincode::deserialize::<RepoIndexSegment>(&raw).expect("decode");
+        segment.files.get_mut("src/a.rs").expect("entry").size += 1;
+        fs::write(
+            &segment_path,
+            wincode::serialize(&segment).expect("valid segment"),
+        )
+        .expect("mutate");
+
+        let recovered = load_repo_index_runtime(root).expect("recover");
+
+        assert_eq!(
+            recovered.manifest.recovered_from_generation,
+            Some(updated.manifest.generation)
+        );
+        assert_eq!(recovered.manifest.generation, base.manifest.generation);
+        assert!(recovered
+            .manifest
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("digest validation")));
+    }
+
+    #[test]
+    fn retention_keeps_only_current_and_previous_full_generations() {
+        let dir = fixture();
+        let root = dir.path();
+        let first = rebuild_repo_index_runtime(root, true).expect("first");
+        fs::write(root.join("src/c.rs"), "pub struct Charlie;\n").expect("c");
+        let second = rebuild_repo_index_runtime(root, true).expect("second");
+        fs::write(root.join("src/d.rs"), "pub struct Delta;\n").expect("d");
+        let third = rebuild_repo_index_runtime(root, true).expect("third");
+        let names = fs::read_dir(repo_index_dir(root))
+            .expect("index directory")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.starts_with("generation-"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| name.starts_with("base-"))
+                .count(),
+            2
+        );
+        assert!(!names.contains(&generation_record_file_name(first.manifest.generation)));
+        assert!(names.contains(&generation_record_file_name(second.manifest.generation)));
+        assert!(names.contains(&generation_record_file_name(third.manifest.generation)));
+    }
+}

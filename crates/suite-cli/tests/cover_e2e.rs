@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use serde_json::Value;
 use std::path::PathBuf;
+use tempfile::TempDir;
 
 fn suite_cmd() -> Command {
     assert_cmd::cargo::cargo_bin_cmd!("Packet28")
@@ -138,4 +139,33 @@ fn test_cover_cli_check_report_json_compat_maps_to_packet_wrapper() {
         .clone();
     let value = parse_packet_wrapper(&output, "suite.cover.check.v1");
     assert!(packet_payload(&value).get("passed").is_some());
+}
+
+#[test]
+fn test_cover_cli_check_rejects_malformed_config() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("covy.toml");
+    std::fs::write(&config, "[gate\nfail_under_total = 101").unwrap();
+
+    suite_cmd()
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "cover",
+            "check",
+            "--coverage",
+            &fixture("lcov/basic.info"),
+            "--no-issues-state",
+            "--base",
+            "HEAD",
+            "--head",
+            "HEAD",
+            "--json",
+        ])
+        .assert()
+        .code(2)
+        .stdout(
+            predicate::str::contains("failed to parse config at")
+                .and(predicate::str::contains(config.to_str().unwrap())),
+        );
 }

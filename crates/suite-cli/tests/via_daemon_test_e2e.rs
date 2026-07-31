@@ -1,8 +1,14 @@
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
+
 use assert_cmd::Command;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use tempfile::TempDir;
 
 fn suite_cmd() -> Command {
@@ -10,14 +16,7 @@ fn suite_cmd() -> Command {
 }
 
 fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
-    });
+    process_harness::ensure_packet28d_built();
 }
 
 fn fixture(rel: &str) -> String {
@@ -44,12 +43,7 @@ fn write_manifest(path: &Path) {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {:?} failed with {status}", args);
+    process_harness::run_git(root, args);
 }
 
 fn init_repo(root: &Path) {

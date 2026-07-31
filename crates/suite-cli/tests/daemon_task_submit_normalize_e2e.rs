@@ -4,6 +4,12 @@
 mod daemon_task_submit;
 #[path = "support/daemon_task_submit_map.rs"]
 mod daemon_task_submit_map;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use daemon_task_submit::{
     ensure_packet28d_built, setup_changed_repo, suite_cmd, task_spec_with_file_watch,

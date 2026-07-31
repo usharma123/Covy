@@ -1,8 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
-use packet28_daemon_core::{resolve_workspace_root, BrokerWriteOp, BrokerWriteStateRequest};
+use packet28_daemon_protocol::broker::{BrokerWriteOp, BrokerWriteStateRequest};
+use packet28_daemon_protocol::paths::resolve_workspace_root;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const PROXY_PERSISTENCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default, PartialEq, Eq)]
 pub enum PacketDetailArg {
@@ -59,7 +63,7 @@ pub struct RunArgs {
     #[arg(long)]
     pub debug: bool,
 
-    /// Persist kernel cache on disk under <cwd>/.packet28
+    /// Persist kernel cache on disk under `<cwd>/.packet28`.
     #[arg(long)]
     pub cache: bool,
 
@@ -121,7 +125,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
     };
     let input = suite_proxy_core::ProxyRunRequest {
         argv: args.command_argv.clone(),
-        cwd: resolved_cwd.clone(),
+        cwd: resolved_cwd,
         env_allowlist: args.env_allowlist.clone(),
         max_output_bytes: args.max_output_bytes,
         max_lines: args.max_lines,
@@ -183,7 +187,7 @@ pub fn run(args: RunArgs) -> Result<i32> {
         .first()
         .ok_or_else(|| anyhow!("kernel returned no output packets"))?;
 
-    let governed_response = if let Some(context_config) = resolved_context_config.clone() {
+    let governed_response = if let Some(context_config) = resolved_context_config {
         Some(kernel.execute(context_kernel_core::KernelRequest {
             target: "governed.assemble".to_string(),
             input_packets: vec![output_packet.clone()],
@@ -205,6 +209,16 @@ pub fn run(args: RunArgs) -> Result<i32> {
     } else {
         None
     };
+    if args.cache {
+        kernel
+            .shutdown_cache_persistence(PROXY_PERSISTENCE_TIMEOUT)
+            .with_context(|| {
+                format!(
+                    "failed to durably finish proxy run under '{}'",
+                    persist_root.display()
+                )
+            })?;
+    }
 
     handle_kernel_response(
         &args,

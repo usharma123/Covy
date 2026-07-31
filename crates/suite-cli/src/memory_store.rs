@@ -4,8 +4,9 @@ use std::path::Path;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 
-pub(crate) use crate::memory_db::{
-    expanded_filter_limit, fts_match_query, normalize_non_empty, open_memory_db, timestamp_unix_ms,
+use crate::memory_db::{
+    expanded_filter_limit, fts_match_query, normalize_non_empty, timestamp_unix_ms,
+    LocalMemoryStore,
 };
 pub(crate) use crate::memory_feedback_transcript::{
     append_transcript_message, apply_feedback, delete_feedback, feedback_stats, list_feedback,
@@ -18,7 +19,9 @@ pub(crate) use crate::memory_graph_store::{
     export_graph, graph_stats, inspect_graph, inspect_graph_concept, learn_project_graph,
     link_concepts, list_graph_memoirs, refine_concept, search_concepts_filtered, show_graph_memoir,
 };
+use crate::memory_graph_store::{add_concept_with_metadata_on, create_graph_memoir_on};
 pub(crate) use crate::memory_lint::lint_memory_records;
+use crate::memory_local_store::list_hook_events_on;
 pub(crate) use crate::memory_local_store::{
     delete_pending_extractions, enqueue_pending_extraction, hook_event_stats, list_hook_events,
     list_pending_extractions, local_store_stats, process_pending_extractions, record_hook_event,
@@ -53,7 +56,14 @@ impl MemoryRecallQuery<'_> {
 }
 
 pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<MemoryRecord> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| store_memory_on(conn, input))
+}
+
+pub(super) fn store_memory_on(
+    conn: &Connection,
+    input: MemoryStoreInput<'_>,
+) -> Result<MemoryRecord> {
     let now = timestamp_unix_ms();
     let topic = normalize_non_empty(input.topic, "general");
     let importance = normalize_importance(input.importance)?;
@@ -80,16 +90,16 @@ pub(crate) fn store_memory_with_metadata(input: MemoryStoreInput<'_>) -> Result<
         "INSERT INTO memory_chunks (memory_id, chunk_index, content) VALUES (?1, 0, ?2)",
         params![id, input.content],
     )?;
-    get_memory(&conn, id)
+    get_memory(conn, id)
 }
 
 pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<Vec<MemoryRecord>> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
     let now = timestamp_unix_ms();
     let expanded_limit = expanded_filter_limit(input.limit, input.has_filters());
     let mut fts_records = Vec::new();
     if let Some(match_query) = fts_match_query(input.query) {
-        let mut stmt = conn.prepare(
+        let mut stmt = store.prepare(
             "SELECT
                 m.id, m.content, m.tags, m.topic, m.importance, m.keywords, m.project, m.source, m.raw_excerpt, m.weight,
                 m.created_at_unix_ms, m.updated_at_unix_ms, bm25(memories_fts) AS recall_score
@@ -102,16 +112,16 @@ pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<V
         fts_records = read_memory_rows(&mut stmt, params![match_query, expanded_limit as i64])?;
         fts_records = filter_memory_records(fts_records, input);
     }
-    let vector_records = recall_memories_vector(&conn, input, expanded_limit)?;
+    let vector_records = recall_memories_vector(&store, input, expanded_limit)?;
     let vector_records = filter_memory_records(vector_records, input);
     let hybrid_records =
         merge_hybrid_memory_records(input.query, fts_records, vector_records, input.limit);
     if !hybrid_records.is_empty() {
-        mark_memories_accessed(&conn, &hybrid_records, now)?;
+        mark_memories_accessed(&mut store, &hybrid_records, now)?;
         return Ok(hybrid_records);
     }
     let mut records = filter_memory_records(
-        recall_memories_like(&conn, input.query, expanded_limit)?,
+        recall_memories_like(&store, input.query, expanded_limit)?,
         input,
     )
     .into_iter()
@@ -128,21 +138,27 @@ pub(crate) fn recall_memories_filtered(input: MemoryRecallQuery<'_>) -> Result<V
             .then_with(|| a.id.cmp(&b.id))
     });
     let records = limit_memory_records(records, input.limit);
-    mark_memories_accessed(&conn, &records, now)?;
+    mark_memories_accessed(&mut store, &records, now)?;
     Ok(records)
 }
 
-fn mark_memories_accessed(conn: &Connection, records: &[MemoryRecord], now: i64) -> Result<()> {
-    for record in records {
-        conn.execute(
+fn mark_memories_accessed(
+    store: &mut LocalMemoryStore,
+    records: &[MemoryRecord],
+    now: i64,
+) -> Result<()> {
+    store.transaction(|tx| {
+        let mut stmt = tx.prepare_cached(
             "UPDATE memories
              SET access_count = access_count + 1,
                  last_accessed_unix_ms = ?1
              WHERE id = ?2",
-            params![now, record.id],
         )?;
-    }
-    Ok(())
+        for record in records {
+            stmt.execute(params![now, record.id])?;
+        }
+        Ok(())
+    })
 }
 
 fn merge_hybrid_memory_records(
@@ -245,6 +261,7 @@ fn recall_memories_vector(
         },
     )?;
     let mut by_id = HashMap::<i64, MemoryRecord>::new();
+    let mut query_embeddings = HashMap::<usize, Vec<f64>>::new();
     for row in rows {
         let (mut record, dimensions, embedding_json) = row?;
         let Ok(embedding) = serde_json::from_str::<Vec<f64>>(&embedding_json) else {
@@ -253,8 +270,9 @@ fn recall_memories_vector(
         if dimensions == 0 || embedding.is_empty() {
             continue;
         }
-        let query_embedding = deterministic_embedding(input.query, dimensions);
-        let score = cosine_similarity(&query_embedding, &embedding);
+        let query_embedding =
+            query_embedding_for_dimension(&mut query_embeddings, input.query, dimensions);
+        let score = cosine_similarity(query_embedding, &embedding);
         if score > 0.0 {
             record.recall_score = Some(score);
             by_id
@@ -278,6 +296,16 @@ fn recall_memories_vector(
     Ok(records)
 }
 
+fn query_embedding_for_dimension<'a>(
+    query_embeddings: &'a mut HashMap<usize, Vec<f64>>,
+    query: &str,
+    dimensions: usize,
+) -> &'a [f64] {
+    query_embeddings
+        .entry(dimensions)
+        .or_insert_with(|| deterministic_embedding(query, dimensions))
+}
+
 pub(crate) fn list_memories(limit: usize) -> Result<Vec<MemoryRecord>> {
     list_memories_filtered(MemoryListQuery {
         limit,
@@ -289,7 +317,14 @@ pub(crate) fn list_memories(limit: usize) -> Result<Vec<MemoryRecord>> {
 }
 
 pub(crate) fn list_memories_filtered(input: MemoryListQuery<'_>) -> Result<Vec<MemoryRecord>> {
-    let conn = open_memory_db()?;
+    let store = LocalMemoryStore::open_default()?;
+    list_memories_filtered_on(&store, input)
+}
+
+pub(super) fn list_memories_filtered_on(
+    conn: &Connection,
+    input: MemoryListQuery<'_>,
+) -> Result<Vec<MemoryRecord>> {
     let limit = if input.all {
         10_000
     } else {
@@ -348,8 +383,8 @@ pub(crate) fn list_memories_filtered(input: MemoryListQuery<'_>) -> Result<Vec<M
 }
 
 pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord> {
-    let conn = open_memory_db()?;
-    let current = get_memory(&conn, input.id)?;
+    let mut store = LocalMemoryStore::open_default()?;
+    let current = get_memory(&store, input.id)?;
     let now = timestamp_unix_ms();
     let content = input.content.unwrap_or(&current.content);
     let tags = input.tags.or(current.tags.as_deref());
@@ -361,63 +396,61 @@ pub(crate) fn update_memory(input: MemoryUpdateInput<'_>) -> Result<MemoryRecord
     let project = input.project.or(current.project.as_deref());
     let source = input.source.or(current.source.as_deref());
     let raw_excerpt = input.raw_excerpt.or(current.raw_excerpt.as_deref());
-    conn.execute(
-        "UPDATE memories
-         SET content = ?1,
-             tags = ?2,
-             topic = ?3,
-             importance = ?4,
-             keywords = ?5,
-             project = ?6,
-             source = ?7,
-             raw_excerpt = ?8,
-             weight = MAX(weight, ?9),
-             updated_at_unix_ms = ?10
-         WHERE id = ?11",
-        params![
-            content,
-            tags,
-            normalize_non_empty(Some(topic), "general"),
-            normalized_importance,
-            keywords,
-            project,
-            source,
-            raw_excerpt,
-            min_weight,
-            now,
-            input.id
-        ],
-    )?;
-    conn.execute(
-        "UPDATE memory_chunks SET content = ?1 WHERE memory_id = ?2 AND chunk_index = 0",
-        params![content, input.id],
-    )?;
-    get_memory(&conn, input.id)
+    store.transaction(|conn| {
+        conn.execute(
+            "UPDATE memories
+             SET content = ?1,
+                 tags = ?2,
+                 topic = ?3,
+                 importance = ?4,
+                 keywords = ?5,
+                 project = ?6,
+                 source = ?7,
+                 raw_excerpt = ?8,
+                 weight = MAX(weight, ?9),
+                 updated_at_unix_ms = ?10
+             WHERE id = ?11",
+            params![
+                content,
+                tags,
+                normalize_non_empty(Some(topic), "general"),
+                normalized_importance,
+                keywords,
+                project,
+                source,
+                raw_excerpt,
+                min_weight,
+                now,
+                input.id
+            ],
+        )?;
+        conn.execute(
+            "UPDATE memory_chunks SET content = ?1 WHERE memory_id = ?2 AND chunk_index = 0",
+            params![content, input.id],
+        )?;
+        get_memory(conn, input.id)
+    })
 }
 
 pub(crate) fn forget_memory(id: i64) -> Result<usize> {
-    let conn = open_memory_db()?;
-    conn.execute(
-        "DELETE FROM memory_chunks WHERE memory_id = ?1",
-        params![id],
-    )?;
-    conn.execute("DELETE FROM memories WHERE id = ?1", params![id])
-        .map_err(Into::into)
+    let mut store = LocalMemoryStore::open_default()?;
+    store.transaction(|conn| {
+        conn.execute("DELETE FROM memories WHERE id = ?1", params![id])
+            .map_err(Into::into)
+    })
 }
 
 pub(crate) fn forget_memories_by_topic(topic: &str) -> Result<usize> {
-    let conn = open_memory_db()?;
+    let mut store = LocalMemoryStore::open_default()?;
     let topic = normalize_non_empty(Some(topic), "general");
-    conn.execute(
-        "DELETE FROM memory_chunks WHERE memory_id IN (SELECT id FROM memories WHERE topic = ?1)",
-        params![topic],
-    )?;
-    conn.execute("DELETE FROM memories WHERE topic = ?1", params![topic])
-        .map_err(Into::into)
+    store.transaction(|conn| {
+        conn.execute("DELETE FROM memories WHERE topic = ?1", params![topic])
+            .map_err(Into::into)
+    })
 }
 
 pub(crate) fn memory_topics() -> Result<Vec<MemoryTopicStats>> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let mut stmt = conn.prepare(
         "SELECT topic, COUNT(*)
          FROM memories
@@ -439,7 +472,7 @@ pub(crate) fn memory_health(
     stale_after_days: i64,
     consolidation_threshold: i64,
 ) -> Result<MemoryHealthReport> {
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let now = timestamp_unix_ms();
     let day_ms = 86_400_000_i64;
     let stale_after_days = stale_after_days.max(0);
@@ -516,7 +549,7 @@ pub(crate) fn memory_health(
 
 pub(crate) fn decay_memories(factor: f64) -> Result<MemoryDecayReport> {
     let factor = factor.clamp(0.0, 1.0);
-    let conn = open_memory_db()?;
+    let conn = LocalMemoryStore::open_default()?;
     let decayed_count = conn.execute(
         "UPDATE memories
          SET weight = weight * MAX(
@@ -551,8 +584,8 @@ pub(crate) fn decay_memories(factor: f64) -> Result<MemoryDecayReport> {
 
 pub(crate) fn prune_memories(threshold: f64, dry_run: bool) -> Result<MemoryPruneReport> {
     let threshold = threshold.clamp(0.0, 1.0);
-    let conn = open_memory_db()?;
-    let mut stmt = conn.prepare(
+    let mut store = LocalMemoryStore::open_default()?;
+    let mut stmt = store.prepare(
         "SELECT id FROM memories
          WHERE weight < ?1 AND LOWER(importance) NOT IN ('critical', 'high')
          ORDER BY weight ASC, updated_at_unix_ms ASC",
@@ -562,17 +595,19 @@ pub(crate) fn prune_memories(threshold: f64, dry_run: bool) -> Result<MemoryPrun
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let candidate_count = candidate_ids.len();
     drop(stmt);
-    let mut deleted_count = 0;
-    if !dry_run {
-        for id in &candidate_ids {
-            conn.execute(
-                "DELETE FROM memory_chunks WHERE memory_id = ?1",
-                params![id],
-            )?;
-            deleted_count += conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
-        }
-    }
-    let skipped_protected_count = conn
+    let deleted_count = if dry_run {
+        0
+    } else {
+        store.transaction(|tx| {
+            let mut delete_memory = tx.prepare_cached("DELETE FROM memories WHERE id = ?1")?;
+            let mut deleted = 0;
+            for id in &candidate_ids {
+                deleted += delete_memory.execute(params![id])?;
+            }
+            Ok(deleted)
+        })?
+    };
+    let skipped_protected_count = store
         .query_row(
             "SELECT COUNT(*) FROM memories
              WHERE weight < ?1 AND LOWER(importance) IN ('critical', 'high')",
@@ -593,9 +628,17 @@ pub(crate) fn consolidate_memories(
     topic: Option<&str>,
     keep_originals: bool,
 ) -> Result<MemoryConsolidationReport> {
+    let mut store = LocalMemoryStore::open_default()?;
+    consolidate_memories_with_store(&mut store, topic, keep_originals)
+}
+
+fn consolidate_memories_with_store(
+    store: &mut LocalMemoryStore,
+    topic: Option<&str>,
+    keep_originals: bool,
+) -> Result<MemoryConsolidationReport> {
     let topic = normalize_non_empty(topic, "general");
-    let conn = open_memory_db()?;
-    let mut stmt = conn.prepare(
+    let mut stmt = store.prepare(
         "SELECT
             id, content, tags, topic, importance, keywords, project, source, raw_excerpt, weight,
             created_at_unix_ms, updated_at_unix_ms
@@ -624,7 +667,6 @@ pub(crate) fn consolidate_memories(
         });
     }
     drop(stmt);
-    drop(conn);
 
     let content = render_consolidated_memory(&topic, &memories);
     let tags = merge_csv_field(memories.iter().filter_map(|memory| memory.tags.as_deref()));
@@ -647,29 +689,27 @@ pub(crate) fn consolidate_memories(
     let importance = consolidated_importance(&memories);
     let source_ids: Vec<i64> = memories.iter().map(|memory| memory.id).collect();
 
-    let conn = open_memory_db()?;
-    if !keep_originals {
-        let tx = conn.unchecked_transaction()?;
-        for id in &source_ids {
-            tx.execute(
-                "DELETE FROM memory_chunks WHERE memory_id = ?1",
-                params![id],
-            )?;
-            tx.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
+    let consolidated = store.transaction(|tx| {
+        let consolidated = store_memory_on(
+            tx,
+            MemoryStoreInput {
+                content: &content,
+                tags: tags.as_deref(),
+                topic: Some(&topic),
+                importance: Some(&importance),
+                keywords: keywords.as_deref(),
+                project: project.as_deref(),
+                source: source.as_deref(),
+                raw_excerpt: raw_excerpt.as_deref(),
+            },
+        )?;
+        if !keep_originals {
+            let mut delete_memory = tx.prepare_cached("DELETE FROM memories WHERE id = ?1")?;
+            for id in &source_ids {
+                delete_memory.execute(params![id])?;
+            }
         }
-        tx.commit()?;
-    }
-    drop(conn);
-
-    let consolidated = store_memory_with_metadata(MemoryStoreInput {
-        content: &content,
-        tags: tags.as_deref(),
-        topic: Some(&topic),
-        importance: Some(&importance),
-        keywords: keywords.as_deref(),
-        project: project.as_deref(),
-        source: source.as_deref(),
-        raw_excerpt: raw_excerpt.as_deref(),
+        Ok(consolidated)
     })?;
     Ok(MemoryConsolidationReport {
         topic,
@@ -680,9 +720,8 @@ pub(crate) fn consolidate_memories(
     })
 }
 
-pub(crate) fn embed_memory(id: i64, dimensions: usize) -> Result<MemoryEmbeddingRecord> {
-    let conn = open_memory_db()?;
-    let memory = get_memory(&conn, id)?;
+fn embed_memory_on(conn: &Connection, id: i64, dimensions: usize) -> Result<MemoryEmbeddingRecord> {
+    let memory = get_memory(conn, id)?;
     let embedding = deterministic_embedding(&memory_embedding_document(&memory), dimensions);
     let embedding_json = serde_json::to_string(&embedding)?;
     let now = timestamp_unix_ms();
@@ -697,7 +736,7 @@ pub(crate) fn embed_memory(id: i64, dimensions: usize) -> Result<MemoryEmbedding
              created_at_unix_ms = excluded.created_at_unix_ms",
         params![id, model, dimensions.max(1) as i64, embedding_json, now],
     )?;
-    get_memory_embedding(&conn, id, model)
+    get_memory_embedding(conn, id, model)
 }
 
 pub(crate) fn embed_memories(
@@ -706,18 +745,34 @@ pub(crate) fn embed_memories(
     dimensions: usize,
 ) -> Result<MemoryEmbedReport> {
     let dimensions = dimensions.clamp(8, 4096);
-    let embeddings = if let Some(id) = id {
-        vec![embed_memory(id, dimensions)?]
-    } else if all {
-        let memories = list_memories(10_000)?;
-        let mut records = Vec::with_capacity(memories.len());
-        for memory in memories {
-            records.push(embed_memory(memory.id, dimensions)?);
-        }
-        records
-    } else {
+    if id.is_none() && !all {
         anyhow::bail!("pass a memory id or --all");
-    };
+    }
+    let mut store = LocalMemoryStore::open_default()?;
+    let embeddings = store.transaction(|tx| {
+        let ids = if let Some(id) = id {
+            vec![id]
+        } else {
+            list_memories_filtered_on(
+                tx,
+                MemoryListQuery {
+                    limit: 10_000,
+                    topic: None,
+                    project: None,
+                    all: true,
+                    sort: "recent",
+                },
+            )?
+            .into_iter()
+            .map(|memory| memory.id)
+            .collect()
+        };
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            records.push(embed_memory_on(tx, id, dimensions)?);
+        }
+        Ok(records)
+    })?;
     Ok(MemoryEmbedReport {
         model: LOCAL_EMBEDDING_MODEL.to_string(),
         dimensions,
@@ -733,13 +788,17 @@ pub(crate) fn extract_memory_patterns(
 ) -> Result<MemoryPatternReport> {
     let topic = normalize_non_empty(Some(topic), "general");
     let min_cluster_size = min_cluster_size.max(2);
-    let memories = list_memories_filtered(MemoryListQuery {
-        limit: 10_000,
-        topic: Some(&topic),
-        project: None,
-        all: true,
-        sort: "recent",
-    })?;
+    let mut store = LocalMemoryStore::open_default()?;
+    let memories = list_memories_filtered_on(
+        &store,
+        MemoryListQuery {
+            limit: 10_000,
+            topic: Some(&topic),
+            project: None,
+            all: true,
+            sort: "recent",
+        },
+    )?;
     let mut groups: BTreeMap<String, Vec<MemoryRecord>> = BTreeMap::new();
     for memory in &memories {
         for token in pattern_tokens(memory) {
@@ -792,46 +851,52 @@ pub(crate) fn extract_memory_patterns(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
     if let Some(memoir_name) = &memoir_name {
-        create_graph_memoir(
-            Some(memoir_name),
-            Some(&format!("Extracted memory patterns for {topic}")),
-        )?;
-        for pattern in &patterns {
-            let description = format!(
-                "Recurring memory pattern '{}' found in {} memories for topic '{}'.\n{}",
-                pattern.key,
-                pattern.memory_count,
-                topic,
-                pattern.sample_contents.join("\n")
-            );
-            let mut labels = vec![
-                format!("topic:{topic}"),
-                "memory-pattern".to_string(),
-                format!("pattern:{}", pattern.key),
-            ];
-            labels.extend(
-                pattern
-                    .keywords
-                    .iter()
-                    .take(4)
-                    .map(|keyword| format!("tag:{keyword}")),
-            );
-            labels.sort();
-            labels.dedup();
-            let source_ids = pattern
-                .memory_ids
-                .iter()
-                .map(|id| format!("memory:{id}"))
-                .collect::<Vec<_>>();
-            created_concepts.push(add_concept_with_metadata(
-                &pattern.key,
-                Some(&description),
+        created_concepts = store.transaction(|tx| {
+            create_graph_memoir_on(
+                tx,
                 Some(memoir_name),
-                &labels,
-                Some(0.7),
-                &source_ids,
-            )?);
-        }
+                Some(&format!("Extracted memory patterns for {topic}")),
+            )?;
+            let mut concepts = Vec::with_capacity(patterns.len());
+            for pattern in &patterns {
+                let description = format!(
+                    "Recurring memory pattern '{}' found in {} memories for topic '{}'.\n{}",
+                    pattern.key,
+                    pattern.memory_count,
+                    topic,
+                    pattern.sample_contents.join("\n")
+                );
+                let mut labels = vec![
+                    format!("topic:{topic}"),
+                    "memory-pattern".to_string(),
+                    format!("pattern:{}", pattern.key),
+                ];
+                labels.extend(
+                    pattern
+                        .keywords
+                        .iter()
+                        .take(4)
+                        .map(|keyword| format!("tag:{keyword}")),
+                );
+                labels.sort();
+                labels.dedup();
+                let source_ids = pattern
+                    .memory_ids
+                    .iter()
+                    .map(|id| format!("memory:{id}"))
+                    .collect::<Vec<_>>();
+                concepts.push(add_concept_with_metadata_on(
+                    tx,
+                    &pattern.key,
+                    Some(&description),
+                    Some(memoir_name),
+                    &labels,
+                    Some(0.7),
+                    &source_ids,
+                )?);
+            }
+            Ok(concepts)
+        })?;
     }
 
     Ok(MemoryPatternReport {
@@ -846,14 +911,18 @@ pub(crate) fn extract_memory_patterns(
 }
 
 pub(crate) fn lint_memories(root: &Path, limit: usize) -> Result<MemoryLintReport> {
-    let memories = list_memories_filtered(MemoryListQuery {
-        limit,
-        topic: None,
-        project: None,
-        all: false,
-        sort: "recent",
-    })?;
-    let hook_events = list_hook_events(500)?;
+    let store = LocalMemoryStore::open_default()?;
+    let memories = list_memories_filtered_on(
+        &store,
+        MemoryListQuery {
+            limit,
+            topic: None,
+            project: None,
+            all: false,
+            sort: "recent",
+        },
+    )?;
+    let hook_events = list_hook_events_on(&store, 500)?;
     Ok(lint_memory_records(root, &memories, &hook_events))
 }
 
@@ -904,7 +973,7 @@ fn filter_memory_records(
                 .unwrap_or(true)
         })
         .filter(|record| {
-            input.project.map_or(true, |project| {
+            input.project.is_none_or(|project| {
                 let wanted = normalize_non_empty(Some(project), "default");
                 record.project.as_deref() == Some(wanted.as_str())
             })
@@ -1140,6 +1209,19 @@ mod tests {
     }
 
     #[test]
+    fn query_embeddings_are_reused_per_dimension() {
+        let mut embeddings = HashMap::<usize, Vec<f64>>::new();
+        let first = query_embedding_for_dimension(&mut embeddings, "query", 16).as_ptr();
+        let second = query_embedding_for_dimension(&mut embeddings, "query", 16).as_ptr();
+        query_embedding_for_dimension(&mut embeddings, "query", 32);
+
+        assert_eq!(first, second);
+        assert_eq!(embeddings.len(), 2);
+        assert_eq!(embeddings[&16].len(), 16);
+        assert_eq!(embeddings[&32].len(), 32);
+    }
+
+    #[test]
     fn memory_lint_flags_stale_runtime_specific_memory_and_preserves_generic_memory() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("docs")).unwrap();
@@ -1171,5 +1253,63 @@ mod tests {
         }));
         assert!(!report.issues.iter().any(|issue| issue.memory_id == 2));
         assert!(serde_json::to_string(&report).unwrap().len() < 768);
+    }
+
+    #[test]
+    fn consolidation_rolls_back_new_memory_and_source_deletes_on_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = LocalMemoryStore::open_path(temp.path().join("memory.db")).unwrap();
+        for content in ["first durable fact", "second durable fact"] {
+            store
+                .transaction(|tx| {
+                    store_memory_on(
+                        tx,
+                        MemoryStoreInput {
+                            content,
+                            tags: Some("rollback"),
+                            topic: Some("rollback"),
+                            importance: Some("medium"),
+                            keywords: None,
+                            project: Some("packet28"),
+                            source: Some("test"),
+                            raw_excerpt: None,
+                        },
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        store
+            .execute_batch(
+                "
+                CREATE TRIGGER fail_memory_delete
+                BEFORE DELETE ON memories
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced memory delete failure');
+                END;
+                ",
+            )
+            .unwrap();
+
+        let result = consolidate_memories_with_store(&mut store, Some("rollback"), false);
+
+        assert!(result.is_err());
+        assert_eq!(
+            store
+                .query_row("SELECT COUNT(*) FROM memories", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store
+                .query_row("SELECT COUNT(*) FROM memory_chunks", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            2
+        );
+        assert_eq!(store.metrics().transactions_rolled_back, 1);
     }
 }

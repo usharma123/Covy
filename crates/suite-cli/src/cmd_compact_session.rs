@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use packet28_daemon_core::load_task_registry;
+use packet28_daemon_core::storage::load_task_registry;
 use serde::Serialize;
 
 use super::{load_task_state, resolve_root, SessionArgs};
@@ -56,7 +56,7 @@ pub fn run_session(args: SessionArgs) -> Result<i32> {
         let state = load_task_state(&root, &task_id).ok();
         sessions.push(SessionItem {
             task_id: task_id.clone(),
-            running: task.running,
+            running: task.lifecycle.is_running(),
             latest_context_version: task.latest_context_version,
             latest_hook_command_kind: task.latest_hook_command_kind,
             latest_hook_handoff_reason: task.latest_hook_handoff_reason,
@@ -92,11 +92,9 @@ pub fn run_session(args: SessionArgs) -> Result<i32> {
 }
 
 fn run_session_adoption(args: SessionArgs) -> Result<i32> {
-    let sessions_dir = args
-        .sessions_dir
-        .as_deref()
-        .map(PathBuf::from)
-        .expect("checked by caller");
+    let Some(sessions_dir) = args.sessions_dir.as_deref().map(PathBuf::from) else {
+        anyhow::bail!("session adoption requires --sessions-dir");
+    };
     let session_files = crate::cmd_discover::collect_session_files_for_scan(
         &sessions_dir,
         args.limit,

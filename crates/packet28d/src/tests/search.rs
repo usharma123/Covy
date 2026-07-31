@@ -2,6 +2,23 @@ use super::support::*;
 use super::*;
 
 #[test]
+fn authenticated_evidence_keeps_sparse_high_line_numbers_bounded() {
+    let file = ReducerSearchFile {
+        path: "src/high_line.rs".to_string(),
+        definition_hits: 1,
+        preview_matches: vec![(1_000_000, "pub fn authenticated_symbol() {}".to_string())],
+        ..ReducerSearchFile::default()
+    };
+
+    let evidence = build_authenticated_search_evidence(&[file], 3);
+
+    assert_eq!(
+        evidence["src/high_line.rs"].rendered_lines,
+        ["- src/high_line.rs:1000000 pub fn authenticated_symbol() {}"]
+    );
+}
+
+#[test]
 fn infer_scope_paths_prefers_explicit_paths() {
     let inferred = infer_scope_paths(
         "refactor auth module",
@@ -129,7 +146,7 @@ fn expand_scope_paths_pulls_adjacent_role_files() {
 }
 
 #[test]
-fn exact_symbol_query_returns_definition_first_without_fallback() {
+fn strong_primary_definition_skips_the_deferred_search_stage() {
     let temp_dir = tempfile::tempdir().unwrap();
     let root = temp_dir.path();
     write_search_fixture(

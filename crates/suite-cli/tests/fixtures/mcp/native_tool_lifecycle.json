@@ -1,0 +1,285 @@
+{
+  "native_tool_names": [
+    "packet28.search",
+    "packet28.search_fast",
+    "packet28.read_regions",
+    "packet28.glob",
+    "packet28.fetch_tool_result",
+    "packet28.fetch_raw_output",
+    "packet28.fetch_context",
+    "packet28.verify_handoff",
+    "packet28.prompt_pressure",
+    "packet28.handoff_diff",
+    "packet28.handoff_compress",
+    "packet28.handoff_lint_dependencies",
+    "packet28.handoff_lint_paths",
+    "packet28.handoff_lint_tests",
+    "packet28.handoff_lint_stale_commands",
+    "packet28.handoff_lint_environment",
+    "packet28.handoff_lint_all",
+    "packet28.handoff_fix_plan",
+    "packet28.handoff_repair_verify",
+    "packet28.handoff_lint_trends",
+    "packet28.handoff_lint_regressions",
+    "packet28.prepare_handoff",
+    "packet28.validate_plan",
+    "packet28.action_critic",
+    "packet28.recommend_next_tool",
+    "packet28.validate_tool_outcome",
+    "packet28.agent_status",
+    "packet28.patch_risk"
+  ],
+  "representative_descriptors": [
+    {
+      "name": "packet28.search",
+      "description": "Run compact code/text search and return a slim preview plus a fetchable full artifact.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "task_id": {"type": "string"},
+          "query": {"type": "string"},
+          "paths": {"type": "array", "items": {"type": "string"}},
+          "fixed_string": {"type": "boolean"},
+          "case_sensitive": {"type": "boolean"},
+          "whole_word": {"type": "boolean"},
+          "context_lines": {"type": "integer", "minimum": 0},
+          "max_matches_per_file": {"type": "integer", "minimum": 1},
+          "max_total_matches": {"type": "integer", "minimum": 1},
+          "search_strategy": {
+            "type": "string",
+            "enum": ["hybrid", "recall", "indexed", "native", "fff"]
+          },
+          "response_mode": {"type": "string", "enum": ["slim", "full"]}
+        }
+      }
+    },
+    {
+      "name": "packet28.read_regions",
+      "description": "Read targeted file regions and return a slim preview plus a fetchable full artifact.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "task_id": {"type": "string"},
+          "path": {"type": "string"},
+          "regions": {"type": "array", "items": {"type": "string"}},
+          "line_start": {"type": "integer", "minimum": 1},
+          "line_end": {"type": "integer", "minimum": 1},
+          "response_mode": {"type": "string", "enum": ["slim", "full"]}
+        }
+      }
+    },
+    {
+      "name": "packet28.fetch_context",
+      "description": "Fetch a stored Packet28 broker context by context_version or artifact_id. Use response_mode='slim' to omit heavy sections.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {"type": "string"},
+          "artifact_id": {"type": "string"},
+          "context_version": {"type": "string"},
+          "response_mode": {"type": "string", "enum": ["slim", "full"]}
+        }
+      }
+    },
+    {
+      "name": "packet28.prepare_handoff",
+      "description": "Prepare a compact Packet28 handoff packet for bootstrapping a fresh worker after a checkpoint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_id": {"type": "string"},
+          "query": {"type": "string"},
+          "response_mode": {"type": "string", "enum": ["slim", "full"]}
+        }
+      }
+    },
+    {
+      "name": "packet28.validate_plan",
+      "description": "Validate an agent implementation plan against Packet28 broker state, coverage, dependency order, read-before-edit, and mapped test-gate evidence.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["task_id", "steps"],
+        "properties": {
+          "task_id": {"type": "string"},
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "action": {"type": "string"},
+                "description": {"type": "string"},
+                "paths": {"type": "array", "items": {"type": "string"}},
+                "symbols": {"type": "array", "items": {"type": "string"}},
+                "depends_on": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          },
+          "require_read_before_edit": {"type": "boolean"},
+          "require_test_gate": {"type": "boolean"},
+          "budget_tokens": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  ],
+  "representative_response_shapes": [
+    {
+      "name": "packet28.search",
+      "response": {
+        "content": [{"type": "text", "text": "Search found 2 matches."}],
+        "structuredContent": {
+          "compact_preview": "Search found 2 matches.",
+          "paths": ["src/lib.rs"]
+        }
+      }
+    },
+    {
+      "name": "packet28.read_regions",
+      "response": {
+        "content": [{"type": "text", "text": "src/lib.rs:10-12"}],
+        "structuredContent": {
+          "compact_preview": "src/lib.rs:10-12",
+          "path": "src/lib.rs"
+        }
+      }
+    },
+    {
+      "name": "packet28.fetch_context",
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Packet28 fetched broker context artifact context-v7."
+          }
+        ],
+        "structuredContent": {
+          "artifact_id": "context-v7",
+          "response_mode": "slim"
+        }
+      }
+    },
+    {
+      "name": "packet28.prepare_handoff",
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Packet28 prepared a handoff: checkpoint requested"
+          }
+        ],
+        "structuredContent": {
+          "handoff_ready": true,
+          "handoff_reason": "checkpoint requested"
+        }
+      }
+    },
+    {
+      "name": "packet28.validate_plan",
+      "response": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Packet28 plan validation valid=false violations=1 warnings=0."
+          }
+        ],
+        "structuredContent": {
+          "valid": false,
+          "violations": [{"code": "missing_test"}],
+          "warnings": []
+        }
+      }
+    }
+  ],
+  "all_tools_list_names": [
+    "packet28_search",
+    "packet28_search_fast",
+    "packet28_read_regions",
+    "packet28_glob",
+    "packet28_fetch_tool_result",
+    "packet28_fetch_raw_output",
+    "packet28_fetch_context",
+    "packet28_verify_handoff",
+    "packet28_prompt_pressure",
+    "packet28_handoff_diff",
+    "packet28_handoff_compress",
+    "packet28_handoff_lint_dependencies",
+    "packet28_handoff_lint_paths",
+    "packet28_handoff_lint_tests",
+    "packet28_handoff_lint_stale_commands",
+    "packet28_handoff_lint_environment",
+    "packet28_handoff_lint_all",
+    "packet28_handoff_fix_plan",
+    "packet28_handoff_repair_verify",
+    "packet28_handoff_lint_trends",
+    "packet28_handoff_lint_regressions",
+    "packet28_prepare_handoff",
+    "packet28_validate_plan",
+    "packet28_action_critic",
+    "packet28_recommend_next_tool",
+    "packet28_validate_tool_outcome",
+    "packet28_agent_status",
+    "packet28_patch_risk",
+    "packet28_verify_experiments",
+    "packet28_reducer_drift",
+    "packet28_hypothesis_add",
+    "packet28_hypothesis_list",
+    "packet28_hypothesis_resolve",
+    "packet28_reduce",
+    "packet28_rewrite",
+    "packet28_doctor",
+    "packet28_memory_store",
+    "packet28_memory_recall",
+    "packet28_memory_list",
+    "packet28_memory_update",
+    "packet28_memory_forget",
+    "packet28_memory_topics",
+    "packet28_memory_stats",
+    "packet28_memory_health",
+    "packet28_memory_lint",
+    "packet28_context_anomalies",
+    "packet28_verify_context_anomalies",
+    "packet28_memory_consolidate",
+    "packet28_memory_decay",
+    "packet28_memory_prune",
+    "packet28_memory_embed",
+    "packet28_memory_extract_patterns",
+    "packet28_memory_pending_enqueue",
+    "packet28_memory_pending_list",
+    "packet28_memory_pending_process",
+    "packet28_memory_pending_delete",
+    "packet28_memory_pending_stats",
+    "packet28_feedback_record",
+    "packet28_feedback_search",
+    "packet28_feedback_list",
+    "packet28_feedback_apply",
+    "packet28_feedback_delete",
+    "packet28_feedback_stats",
+    "packet28_wakeup",
+    "packet28_learn_project",
+    "packet28_transcript_append",
+    "packet28_transcript_list",
+    "packet28_transcript_show",
+    "packet28_transcript_search",
+    "packet28_transcript_stats",
+    "packet28_transcript_export",
+    "packet28_transcript_import",
+    "packet28_graph_create",
+    "packet28_graph_list",
+    "packet28_graph_show",
+    "packet28_graph_add_concept",
+    "packet28_graph_refine",
+    "packet28_graph_link",
+    "packet28_graph_search",
+    "packet28_graph_export",
+    "packet28_graph_stats",
+    "packet28_graph_delete",
+    "packet28_graph_inspect",
+    "packet28_graph_inspect_concept",
+    "packet28_graph_distill",
+    "packet28_write_intention",
+    "packet28_task_status",
+    "packet28_capabilities"
+  ]
+}

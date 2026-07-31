@@ -1,0 +1,65 @@
+{
+  "schema_version": 3,
+  "captured_at": "2026-07-30",
+  "source": {
+    "integration_base": "48024d28a2a6aa3a11a406230a61fcfb0af66356",
+    "implementation_head": "c3eefcd51465b0ea8b30e9886bae07eb09d977ad",
+    "implementation_tree": "2665a1bbb073962c7afa654514d666001e450fdf",
+    "files": {
+      "Cargo.lock": "46550474b47ca5dd28b969d1b8f783bc76eaff97c3b72a40d5ae360d7001ce15",
+      "crates/packet28-daemon-core/Cargo.toml": "353dfec646f7442c4e462d498f6b67cc0df3e1d3e8a017d2f49067780ccf9e6f",
+      "crates/packet28-daemon-core/src/error.rs": "79aae6a746b1c1292fc26feec20e2039916452138078feacf262912fc694ace4",
+      "crates/packet28-daemon-core/src/retention/capability.rs": "03aa18e027aee42c4420186b1285bacefda7067a6e5fdbcc9f8899265835099b",
+      "crates/packet28-daemon-core/src/storage.rs": "60346d70f4e2aa239dd2ea428a98cd68ee106c6f8b4e09bb09023a9c770d7005",
+      "crates/packet28-daemon-core/src/storage/checkpoint.rs": "0a609055250fa076442c3a50122553418e467b87c0d1e2719bdf5eb0f451e876",
+      "crates/packet28-daemon-core/src/storage/event_tail.rs": "cea699a14e4de64be359fe2a91bd234c501ef15e0ad51cdc488195efa43920ae",
+      "crates/packet28-daemon-core/src/storage/registry_delta.rs": "b1700545324aab56c94e9d6408dbdc4183e851b031dc63af5a3ef969fdfbdb3f",
+      "crates/packet28d/src/application.rs": "a64b3ef56763b20e98ed0375ed28b61fb8bd7d2728d23147a0e3fc101d68ba6e",
+      "crates/packet28d/src/broker/support.rs": "82d910165f987961ab15fd4a44560c34bd0d3bafbc4d44864167c8cc2520dc03",
+      "crates/packet28d/src/launch.rs": "28c6614788884e485a684405c9adab3740896df789b58adb1983e6c85ca93a3c",
+      "crates/packet28d/src/lib.rs": "31aea6b007b4e88e6f8ce461e783b81400dad42ab2168a9b69e9f3e300f135b6",
+      "crates/packet28d/src/persistence.rs": "6368b3984d79e8c13dd6b54d1ad5c7735bf203e1a4f9e2c3d7abfd434bf4b20f",
+      "crates/packet28d/src/server.rs": "133928b07e27160d80e91bd584fc223e38cba49e42a0fac4ff7beeffcddfabf5",
+      "crates/packet28d/src/tests/cancellation.rs": "c751681eab2a2f03b44bbee8b223c9533ea40d9a6c2cd8bcbdb529bc28f4a5e7",
+      "crates/packet28d/src/tests/persistence.rs": "d44e75fabe64556cea6473388a20408f6026fff6f45f58dcec3f6fe04a1e3dfc",
+      "crates/packet28d/src/tests/support.rs": "1a85564948e67f6bc3a604d093a9a2ea8ce54560c361ac6123f60c09ff500855",
+      "crates/packet28d/src/watch.rs": "33761d701c86599d87b8bcc8f5931e1e68e3d1f94a82cacb39df52aa06e189db",
+      "crates/packet28d/tests/daemon_lifecycle.rs": "f09c376ed2c299713e79fae984235d71bf67066b0e74bed835dc11592432c794"
+    }
+  },
+  "environment": {
+    "os": "Darwin 24.6.0",
+    "arch": "arm64",
+    "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+    "cargo": "cargo 1.93.1 (083ac5135 2025-12-15)"
+  },
+  "fixture_tasks": 300,
+  "fixture_registry_bytes": 1848325,
+  "measured_events": 32,
+  "repeats": 3,
+  "legacy_full_checkpoint_under_lock": {
+    "median_event_lock_ns": 86058542,
+    "median_elapsed_us": 2755669,
+    "median_published_bytes": 59150656,
+    "median_checkpoints": 32
+  },
+  "owned_wal_with_coalesced_checkpoint_after_lock": {
+    "median_event_lock_ns": 7249,
+    "median_elapsed_us": 461943,
+    "median_published_bytes": 193096,
+    "median_checkpoints": 0
+  },
+  "registry_scaling": {
+    "small_fixture_tasks": 1,
+    "small_fixture_registry_bytes": 6186,
+    "large_fixture_tasks": 300,
+    "large_fixture_registry_bytes": 1848325,
+    "small_owned_median_published_bytes": 193096,
+    "large_owned_median_published_bytes": 193096,
+    "published_byte_ratio_large_over_small": 1.0
+  },
+  "lock_time_reduction_percent": 99.99157666417355,
+  "write_byte_reduction_percent": 99.673552225693,
+  "elapsed_speedup": 5.965387504518956,
+  "parity_event_count": 33
+}

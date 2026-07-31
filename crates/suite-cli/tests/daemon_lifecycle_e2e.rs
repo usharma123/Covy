@@ -4,6 +4,9 @@ mod daemon_lifecycle;
 use daemon_lifecycle::{ensure_packet28d_built, init_repo, suite_cmd, write_repo_fixture};
 use serde_json::Value;
 use std::fs;
+use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -70,6 +73,77 @@ fn test_daemon_lifecycle_cli_start_status_stop_cycle() {
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
         .assert()
         .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_daemon_lifecycle_forced_tcp_stop_exits_and_releases_endpoint() {
+    ensure_packet28d_built();
+    let dir = TempDir::new().unwrap();
+    write_repo_fixture(dir.path());
+    init_repo(dir.path());
+
+    suite_cmd()
+        .env("PACKET28D_FORCE_TCP", "1")
+        .args(["daemon", "start", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success();
+
+    let status_output = suite_cmd()
+        .args([
+            "daemon",
+            "status",
+            "--root",
+            dir.path().to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status: Value = serde_json::from_slice(&status_output).unwrap();
+    let pid = i32::try_from(status.get("pid").and_then(Value::as_u64).unwrap()).unwrap();
+    let endpoint = status.get("socket_path").and_then(Value::as_str).unwrap();
+    let address = endpoint
+        .strip_prefix("tcp://")
+        .expect("forced TCP daemon did not publish a TCP endpoint")
+        .to_string();
+    let runtime_path = dir.path().join(".packet28/daemon/runtime.json");
+    let runtime_mode = fs::metadata(&runtime_path).unwrap().permissions().mode() & 0o777;
+    let runtime: Value = serde_json::from_slice(&fs::read(&runtime_path).unwrap()).unwrap();
+    assert_eq!(runtime_mode, 0o600);
+    assert!(runtime
+        .get("transport_auth")
+        .and_then(|auth| auth.get("secret"))
+        .and_then(Value::as_str)
+        .is_some_and(|secret| secret.len() == 64));
+    assert!(status.get("transport_auth").is_none());
+
+    suite_cmd()
+        .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout("stopping\n");
+
+    let started = std::time::Instant::now();
+    while process_exists(pid) && started.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !process_exists(pid),
+        "forced TCP daemon process {pid} did not exit after Stop"
+    );
+    TcpListener::bind(&address)
+        .unwrap_or_else(|error| panic!("TCP endpoint {address} was not released: {error}"));
+}
+
+#[cfg(unix)]
+fn process_exists(pid: i32) -> bool {
+    // SAFETY: signal 0 performs a non-mutating process existence check for the
+    // positive PID returned by the daemon status response.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[test]

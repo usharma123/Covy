@@ -1338,7 +1338,7 @@ fn append_log_group(
             .unwrap_or(normalized);
         let truncated = compact_for_log(original, 100);
         if **count > 1 {
-            lines.push(format!("   [x{}] {truncated}", count));
+            lines.push(format!("   [x{count}] {truncated}"));
         } else {
             lines.push(format!("   {truncated}"));
         }

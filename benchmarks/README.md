@@ -27,6 +27,22 @@ What it does:
   - large cached state (`200k` issues in `issues.bin`)
   - explicit SARIF parse path (`--issues ...`)
 
+## Focused experiments
+
+- [`asy-04-runtime-starvation/`](asy-04-runtime-starvation/) records the
+  release-mode timer-lateness boundary for synchronous work on a Tokio worker
+  versus the daemon's bounded blocking pool.
+- [`per-01-task-persistence/`](per-01-task-persistence/) contains the
+  full-registry-checkpoint-under-lock versus owned, coalesced daemon task
+  persistence comparison.
+- [`per-02-cache-persistence/`](per-02-cache-persistence/) contains the
+  full-checkpoint-under-lock versus owned dirty-delta WAL comparison.
+- [`per-05-testmap/`](per-05-testmap/) contains the deterministic dense-to-sparse
+  test-map planning and persistence comparison.
+- [`per-10-workspace-index/`](per-10-workspace-index/) contains the isolated,
+  locked current-source workspace-index build benchmark while preserving the
+  older Packet28 measurement as historical, non-comparable evidence.
+
 ## Generated Fixtures
 
 - `benchmarks/generated/lcov-100k.info`

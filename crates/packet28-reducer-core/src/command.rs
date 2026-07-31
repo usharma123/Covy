@@ -24,7 +24,7 @@ pub fn classify_command(command: &str) -> Option<CommandReducerSpec> {
         return None;
     }
     let argv = shell_words::split(trimmed).ok()?;
-    let (_env_assignments, argv) = split_leading_env_assignments(argv);
+    let (_env_assignments, argv) = consume_leading_env_assignments(argv);
     if argv.is_empty() {
         return None;
     }
@@ -111,26 +111,39 @@ fn parse_family(value: &str) -> Result<CommandReducerFamily> {
     })
 }
 
-fn looks_like_env_assignment(arg: &str) -> bool {
-    arg.contains('=')
-        && !arg.starts_with('=')
+fn env_assignment_separator(arg: &str) -> Option<usize> {
+    let equals = arg.find('=')?;
+    (equals > 0
         && arg
             .chars()
             .next()
-            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_'))
+    .then_some(equals)
 }
 
-fn split_leading_env_assignments(argv: Vec<String>) -> (Vec<(String, String)>, Vec<String>) {
-    let mut assignments = Vec::new();
-    let mut idx = 0usize;
-    while idx < argv.len() && looks_like_env_assignment(&argv[idx]) {
-        let mut parts = argv[idx].splitn(2, '=');
-        let key = parts.next().unwrap_or_default().trim().to_string();
-        let value = parts.next().unwrap_or_default().to_string();
-        assignments.push((key, value));
-        idx += 1;
-    }
-    (assignments, argv[idx..].to_vec())
+/// Consumes leading `KEY=VALUE` arguments and returns the remaining command.
+///
+/// The returned command reuses the input vector and its owned argument strings,
+/// so routing a command does not clone the command tail.
+pub fn consume_leading_env_assignments(
+    mut argv: Vec<String>,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let prefix_len = argv
+        .iter()
+        .take_while(|arg| env_assignment_separator(arg).is_some())
+        .count();
+    let assignments = argv
+        .drain(..prefix_len)
+        .filter_map(|mut assignment| {
+            let equals = env_assignment_separator(&assignment)?;
+            let value = assignment.split_off(equals + 1);
+            assignment.truncate(equals);
+            assignment.truncate(assignment.trim_end().len());
+            Some((assignment, value))
+        })
+        .collect::<Vec<_>>();
+    debug_assert_eq!(assignments.len(), prefix_len);
+    (assignments, argv)
 }
 
 fn strip_supported_trailing_redirects(command: &str) -> String {
@@ -331,6 +344,49 @@ mod tests {
     fn accepts_env_assignments_and_trailing_redirects() {
         assert!(classify_command("FOO=1 cargo test").is_some());
         assert!(classify_command("cargo test -q 2>&1").is_some());
+    }
+
+    #[test]
+    fn consuming_env_assignments_reuses_the_command_storage() {
+        let argv = vec![
+            "EMPTY=".to_string(),
+            "EQUALS=left=right".to_string(),
+            "command".to_string(),
+            "cargo".to_string(),
+            "test".to_string(),
+        ];
+        let vector_pointer = argv.as_ptr();
+        let vector_capacity = argv.capacity();
+        let command_pointer = argv[2].as_ptr();
+
+        let (assignments, command) = consume_leading_env_assignments(argv);
+
+        assert_eq!(
+            assignments,
+            vec![
+                ("EMPTY".to_string(), String::new()),
+                ("EQUALS".to_string(), "left=right".to_string()),
+            ]
+        );
+        assert_eq!(command, ["command", "cargo", "test"]);
+        assert_eq!(command.as_ptr(), vector_pointer);
+        assert_eq!(command.capacity(), vector_capacity);
+        assert_eq!(command[0].as_ptr(), command_pointer);
+    }
+
+    #[test]
+    fn consuming_env_assignments_stops_at_the_first_malformed_assignment() {
+        let argv = vec![
+            "_VALID=1".to_string(),
+            "=missing-key".to_string(),
+            "LATER=2".to_string(),
+            "cargo".to_string(),
+        ];
+
+        let (assignments, command) = consume_leading_env_assignments(argv);
+
+        assert_eq!(assignments, [("_VALID".to_string(), "1".to_string())]);
+        assert_eq!(command, ["=missing-key", "LATER=2", "cargo"]);
     }
 
     #[test]

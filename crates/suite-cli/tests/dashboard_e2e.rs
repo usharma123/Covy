@@ -1,5 +1,11 @@
 #[path = "support/dashboard.rs"]
 mod dashboard;
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use dashboard::{context_anomaly_history_fixture, seed_dashboard_product_state, suite_cmd};
 use predicates::prelude::*;

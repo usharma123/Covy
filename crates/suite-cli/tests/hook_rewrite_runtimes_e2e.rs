@@ -1,5 +1,11 @@
 #[path = "support/hook_rewrite.rs"]
 mod hook_rewrite;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use serde_json::{json, Value};
 use tempfile::TempDir;

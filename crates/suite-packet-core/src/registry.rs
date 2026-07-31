@@ -1,27 +1,49 @@
+//! Stable packet identifiers and machine-readable schema snapshots.
+
 use serde::Serialize;
 use serde_json::{json, Value};
 
+/// Coverage quality-gate result packet.
 pub const PACKET_TYPE_COVER_CHECK: &str = "suite.cover.check.v1";
+/// Diff analysis result packet.
 pub const PACKET_TYPE_DIFF_ANALYZE: &str = "suite.diff.analyze.v1";
+/// Test-impact plan packet.
 pub const PACKET_TYPE_TEST_IMPACT: &str = "suite.test.impact.v1";
+/// Agent state event packet.
 pub const PACKET_TYPE_AGENT_STATE: &str = "suite.agent.state.v1";
+/// Derived agent state snapshot packet.
 pub const PACKET_TYPE_AGENT_SNAPSHOT: &str = "suite.agent.snapshot.v1";
+/// Cross-packet context correlation packet.
 pub const PACKET_TYPE_CONTEXT_CORRELATE: &str = "suite.context.correlate.v1";
+/// Task-scoped context management packet.
 pub const PACKET_TYPE_CONTEXT_MANAGE: &str = "suite.context.manage.v1";
+/// Stack-trace reduction packet.
 pub const PACKET_TYPE_STACK_SLICE: &str = "suite.stack.slice.v1";
+/// Build-diagnostic reduction packet.
 pub const PACKET_TYPE_BUILD_REDUCE: &str = "suite.build.reduce.v1";
+/// Repository map packet.
 pub const PACKET_TYPE_MAP_REPO: &str = "suite.map.repo.v1";
+/// Repository map query packet.
 pub const PACKET_TYPE_MAP_QUERY: &str = "suite.map.query.v1";
+/// Bounded command-proxy result packet.
 pub const PACKET_TYPE_PROXY_RUN: &str = "suite.proxy.run.v1";
+/// Assembled context packet.
 pub const PACKET_TYPE_CONTEXT_ASSEMBLE: &str = "suite.context.assemble.v1";
+/// Governance guard result packet.
 pub const PACKET_TYPE_GUARD_CHECK: &str = "suite.guard.check.v1";
 
+/// Reviewed payload and compatibility rules for one packet identifier.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct PacketTypeContract {
+    /// Stable versioned packet identifier.
     pub packet_type: &'static str,
+    /// Payload fields required by the current contract.
     pub required_payload_fields: &'static [&'static str],
+    /// Payload fields that callers may omit.
     pub optional_payload_fields: &'static [&'static str],
+    /// Rules that keep machine output bounded.
     pub boundedness_rules: &'static [&'static str],
+    /// Source- or wire-compatibility notes for current consumers.
     pub compatibility_notes: &'static [&'static str],
 }
 
@@ -201,16 +223,19 @@ static CONTRACTS: &[PacketTypeContract] = &[
     },
 ];
 
+/// Returns all registered packet contracts in stable catalog order.
 pub fn packet_contracts() -> &'static [PacketTypeContract] {
     CONTRACTS
 }
 
+/// Returns the contract registered for `packet_type`.
 pub fn packet_contract(packet_type: &str) -> Option<&'static PacketTypeContract> {
     CONTRACTS
         .iter()
         .find(|contract| contract.packet_type == packet_type)
 }
 
+/// Returns the reviewed JSON Schema snapshot for the common packet wrapper.
 pub fn wrapper_schema_snapshot() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -239,6 +264,7 @@ pub fn wrapper_schema_snapshot() -> Value {
     })
 }
 
+/// Returns a payload-aware JSON Schema snapshot for a registered packet type.
 pub fn packet_type_schema_snapshot(packet_type: &str) -> Option<Value> {
     let contract = packet_contract(packet_type)?;
     Some(json!({
@@ -283,7 +309,10 @@ fn payload_property_hints(contract: &PacketTypeContract) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
+
+    const FULL_VALUE_FIXTURE_EXCLUSIONS: &[(&str, &str)] = &[];
 
     #[test]
     fn registry_contains_all_phase_one_packet_types() {
@@ -355,11 +384,100 @@ mod tests {
     }
 
     #[test]
-    fn schema_artifacts_exist_for_all_packet_types_and_profiles() {
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
+    fn every_registered_family_has_a_full_value_fixture_or_reviewed_exclusion() {
+        let workspace_root = workspace_root();
+        let registered = packet_contracts()
+            .iter()
+            .map(|contract| contract.packet_type)
+            .collect::<BTreeSet<_>>();
+        let mut exclusions = BTreeSet::new();
+        for (packet_type, reason) in FULL_VALUE_FIXTURE_EXCLUSIONS {
+            assert!(
+                registered.contains(packet_type),
+                "full-value fixture exclusion is not registered: {packet_type}"
+            );
+            assert!(
+                !reason.trim().is_empty(),
+                "full-value fixture exclusion has no reason: {packet_type}"
+            );
+            assert!(
+                exclusions.insert(*packet_type),
+                "duplicate full-value fixture exclusion: {packet_type}"
+            );
+        }
+
+        for contract in packet_contracts() {
+            if exclusions.contains(contract.packet_type) {
+                continue;
+            }
+            let relative_path = format!("schemas/snapshots/{}/full.json", contract.packet_type);
+            let fixture: Value = serde_json::from_str(
+                &std::fs::read_to_string(workspace_root.join(&relative_path)).unwrap(),
+            )
             .unwrap();
+            assert_eq!(
+                fixture.get("schema_version").and_then(Value::as_str),
+                Some("suite.packet.v1")
+            );
+            assert_eq!(
+                fixture.get("packet_type").and_then(Value::as_str),
+                Some(contract.packet_type)
+            );
+
+            let packet = fixture
+                .get("packet")
+                .and_then(Value::as_object)
+                .expect("full-value fixture packet object");
+            for field in [
+                "version",
+                "tool",
+                "kind",
+                "hash",
+                "summary",
+                "budget_cost",
+                "provenance",
+                "payload",
+            ] {
+                assert!(
+                    packet.contains_key(field),
+                    "{} full-value fixture is missing packet.{field}",
+                    contract.packet_type
+                );
+            }
+
+            let payload = packet
+                .get("payload")
+                .and_then(Value::as_object)
+                .expect("full-value fixture payload object");
+            for field in contract.required_payload_fields {
+                assert!(
+                    payload.contains_key(*field),
+                    "{} full-value fixture is missing required payload field '{field}'",
+                    contract.packet_type
+                );
+            }
+        }
+
+        let observed_snapshot_families =
+            std::fs::read_dir(workspace_root.join("schemas/snapshots"))
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .collect::<BTreeSet<_>>();
+        let expected_snapshot_families = registered
+            .iter()
+            .map(|packet_type| (*packet_type).to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            observed_snapshot_families, expected_snapshot_families,
+            "snapshot directories must map one-to-one to registered packet families"
+        );
+    }
+
+    #[test]
+    fn schema_artifacts_exist_for_all_packet_types_and_profiles() {
+        let workspace_root = workspace_root();
 
         let wrapper_path =
             workspace_root.join("schemas/packet-wrapper/suite.packet.v1.schema.json");
@@ -374,23 +492,10 @@ mod tests {
             Some("suite.packet.v1")
         );
 
-        let expected_packet_types = [
-            PACKET_TYPE_COVER_CHECK,
-            PACKET_TYPE_DIFF_ANALYZE,
-            PACKET_TYPE_TEST_IMPACT,
-            PACKET_TYPE_AGENT_STATE,
-            PACKET_TYPE_AGENT_SNAPSHOT,
-            PACKET_TYPE_CONTEXT_CORRELATE,
-            PACKET_TYPE_CONTEXT_MANAGE,
-            PACKET_TYPE_STACK_SLICE,
-            PACKET_TYPE_BUILD_REDUCE,
-            PACKET_TYPE_MAP_REPO,
-            PACKET_TYPE_PROXY_RUN,
-            PACKET_TYPE_CONTEXT_ASSEMBLE,
-            PACKET_TYPE_GUARD_CHECK,
-        ];
-
-        for packet_type in expected_packet_types {
+        for packet_type in packet_contracts()
+            .iter()
+            .map(|contract| contract.packet_type)
+        {
             let schema_path =
                 workspace_root.join(format!("schemas/packet-types/{packet_type}.schema.json"));
             let schema: Value =
@@ -419,5 +524,12 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
     }
 }

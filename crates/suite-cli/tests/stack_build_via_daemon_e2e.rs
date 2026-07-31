@@ -1,5 +1,11 @@
 #![cfg(unix)]
 
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 #[path = "support/stack_build.rs"]
 mod stack_build;
 #[path = "support/stack_build_daemon.rs"]

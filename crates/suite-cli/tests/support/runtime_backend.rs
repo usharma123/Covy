@@ -1,6 +1,5 @@
 use assert_cmd::Command;
 use std::path::Path;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub fn suite_cmd() -> Command {
@@ -8,14 +7,7 @@ pub fn suite_cmd() -> Command {
 }
 
 pub fn ensure_packet28d_built() {
-    static BUILT: OnceLock<()> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        let status = std::process::Command::new("cargo")
-            .args(["build", "-p", "packet28d"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "failed to build packet28d");
-    });
+    crate::process_harness::ensure_packet28d_built();
 }
 
 #[cfg(unix)]
@@ -47,7 +39,9 @@ pub fn write_executable_script(path: &Path, body: &str) {
 pub fn swap_reports(report_dir: &Path) -> Vec<std::path::PathBuf> {
     std::fs::read_dir(report_dir)
         .unwrap()
-        .map(|entry| entry.unwrap().path())
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(std::ffi::OsStr::to_str) == Some("json"))
         .collect()
 }
 
@@ -58,22 +52,27 @@ pub fn wait_for_active_swap_report(report_dir: &Path, timeout: Duration) {
             && std::fs::read_dir(report_dir)
                 .unwrap()
                 .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(std::ffi::OsStr::to_str) == Some("json"))
                 .any(|entry| {
-                    serde_json::from_slice::<serde_json::Value>(
-                        &std::fs::read(entry.path()).unwrap(),
-                    )
-                    .ok()
-                    .and_then(|report| {
-                        report
-                            .get("state")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                    })
-                    .is_some_and(|state| state == "active")
+                    std::fs::read(entry)
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                        .and_then(|report| {
+                            report
+                                .get("state")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                        })
+                        .is_some_and(|state| state == "active")
                 })
         {
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    panic!(
+        "timed out after {timeout:?} waiting for an active macOS swap report in '{}'",
+        report_dir.display()
+    );
 }

@@ -2,11 +2,9 @@ mod support;
 
 use serde_json::json;
 use std::fs;
-use std::io::BufReader;
-use std::process::Stdio;
 use support::mcp::{
-    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id,
-    write_mcp_message,
+    initialize_mcp_session, packet28_cmd, packet28_process, read_mcp_message_for_id, spawn_mcp,
+    stop_mcp_server, write_mcp_message,
 };
 use tempfile::TempDir;
 
@@ -22,20 +20,16 @@ fn test_mcp_context_learn_project() {
     fs::create_dir_all(root.path().join("src")).unwrap();
     fs::write(root.path().join("src/lib.rs"), "pub fn fixture() {}\n").unwrap();
 
-    let mut child = packet28_process()
+    let mut command = packet28_process();
+    command
         .current_dir(root.path())
         .env("HOME", home.path())
-        .args(["mcp", "serve", "--root", root.path().to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    initialize_mcp_session(&mut stdin, &mut stdout);
+        .args(["mcp", "serve", "--root", root.path().to_str().unwrap()]);
+    let mut server = spawn_mcp(&mut command);
+    initialize_mcp_session(&mut server);
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":2,
@@ -46,7 +40,7 @@ fn test_mcp_context_learn_project() {
             }
         }),
     );
-    let learned = read_mcp_message_for_id(&mut stdout, 2);
+    let learned = read_mcp_message_for_id(&mut server, 2);
     assert_eq!(
         learned["result"]["structuredContent"]["project_name"].as_str(),
         Some("McpLearnFixture")
@@ -62,8 +56,7 @@ fn test_mcp_context_learn_project() {
             >= 3
     );
 
-    let _ = child.kill();
-    let _ = child.wait();
+    stop_mcp_server(server);
     packet28_cmd()
         .current_dir(root.path())
         .env("HOME", home.path())

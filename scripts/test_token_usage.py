@@ -30,8 +30,8 @@ HOOK_CASES = [
     ("git_status", "git status"),
     ("git_log", "git log --oneline -20"),
     ("git_diff", "git diff HEAD~3 --stat"),
-    ("cargo_check", "cargo check --workspace --message-format=short 2>&1 | head -60"),
-    ("cargo_test", "cargo test --package packet28-daemon-core --lib 2>&1 | tail -30"),
+    ("cargo_check", "cargo check --locked --workspace --message-format=short 2>&1 | head -60"),
+    ("cargo_test", "cargo test --locked --package packet28-daemon-core --lib 2>&1 | tail -30"),
     ("find_rs", "find crates -name '*.rs' -type f | head -40"),
     ("cat_file", "cat crates/packet28-daemon-core/src/hook_types.rs"),
 ]

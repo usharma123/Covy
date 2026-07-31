@@ -7,7 +7,7 @@ use roaring::RoaringBitmap;
 use suite_foundation_core::config::GateConfig;
 use suite_foundation_core::CovyConfig;
 use suite_packet_core::diagnostics::DiagnosticsData;
-use suite_packet_core::{CoverageData, CoverageFormat, FileDiff};
+use suite_packet_core::{CoverageData, CoverageFormat, CovyError, FileDiff};
 
 /// Resolve the report output format: use the explicit value if provided,
 /// otherwise default to "json" when stdout is piped (non-TTY) and "terminal"
@@ -30,11 +30,7 @@ pub fn resolve_json_output(
     if json_flag {
         if let Some(fmt) = legacy_format {
             if !fmt.eq_ignore_ascii_case("json") {
-                anyhow::bail!(
-                    "Conflicting output flags: --json and {} {}",
-                    legacy_flag_name,
-                    fmt
-                );
+                anyhow::bail!("Conflicting output flags: --json and {legacy_flag_name} {fmt}");
             }
         }
         return Ok(true);
@@ -94,20 +90,23 @@ pub fn default_pipeline_ingest_adapters() -> diffy_core::pipeline::PipelineInges
     }
 }
 
-fn ingest_coverage_auto(path: &Path) -> Result<CoverageData> {
-    covy_ingest::ingest_path(path).map_err(Into::into)
+fn ingest_coverage_auto(path: &Path) -> std::result::Result<CoverageData, CovyError> {
+    covy_ingest::ingest_path(path)
 }
 
-fn ingest_coverage_with_format(path: &Path, format: CoverageFormat) -> Result<CoverageData> {
-    covy_ingest::ingest_path_with_format(path, format).map_err(Into::into)
+fn ingest_coverage_with_format(
+    path: &Path,
+    format: CoverageFormat,
+) -> std::result::Result<CoverageData, CovyError> {
+    covy_ingest::ingest_path_with_format(path, format)
 }
 
-fn ingest_coverage_stdin(format: CoverageFormat) -> Result<CoverageData> {
-    covy_ingest::ingest_reader(std::io::stdin().lock(), format).map_err(Into::into)
+fn ingest_coverage_stdin(format: CoverageFormat) -> std::result::Result<CoverageData, CovyError> {
+    covy_ingest::ingest_reader(std::io::stdin().lock(), format)
 }
 
-fn ingest_diagnostics(path: &Path) -> Result<DiagnosticsData> {
-    covy_ingest::ingest_diagnostics_path(path).map_err(Into::into)
+fn ingest_diagnostics(path: &Path) -> std::result::Result<DiagnosticsData, CovyError> {
+    covy_ingest::ingest_diagnostics_path(path)
 }
 
 pub fn load_coverage_state(path: &str) -> Result<CoverageData> {

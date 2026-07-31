@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand};
-use packet28_daemon_core::{
-    load_task_registry, task_state_json_path, BrokerGetContextResponse, BrokerWriteOp,
-    BrokerWriteStateRequest,
+use packet28_daemon_core::storage::load_task_registry;
+use packet28_daemon_protocol::broker::{
+    BrokerGetContextResponse, BrokerWriteOp, BrokerWriteStateRequest,
 };
+use packet28_daemon_protocol::paths::{task_state_json_path, TaskStorageId};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -455,7 +456,7 @@ fn run_read(args: ReadArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.read",
             compact_path: "native_tool",
-            request_summary: format!("read {}", relative),
+            request_summary: format!("read {relative}"),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_str(&text)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -510,7 +511,7 @@ fn run_grep(args: GrepArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.grep",
             compact_path: "native_tool",
-            request_summary: format!("grep {}", query),
+            request_summary: format!("grep {query}"),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_for_value(&payload)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -580,7 +581,7 @@ fn run_json(args: JsonArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.json",
             compact_path: "native_tool",
-            request_summary: format!("json {}", relative),
+            request_summary: format!("json {relative}"),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_str(&raw)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -724,7 +725,7 @@ fn run_log(args: LogArgs) -> Result<i32> {
             task_id: args.task_id.as_deref(),
             tool_name: "packet28.compact.log",
             compact_path: "native_tool",
-            request_summary: format!("log {}", relative),
+            request_summary: format!("log {relative}"),
             result_summary: preview.clone(),
             raw_est_tokens: Some(estimate_tokens_str(&raw)),
             reduced_est_tokens: Some(estimate_tokens_str(&preview)),
@@ -929,7 +930,8 @@ fn run_fetch_raw(args: FetchRawArgs) -> Result<i32> {
         if candidate.exists() {
             candidate
         } else {
-            task_state_json_path(&root, &args.task_id)
+            let task_id = TaskStorageId::try_from(args.task_id.as_str())?;
+            task_state_json_path(&root, &task_id)
                 .parent()
                 .unwrap_or(&root)
                 .join(&args.handle)
@@ -1033,7 +1035,7 @@ fn walk_tree(root: &Path, path: &Path, depth: usize, state: &mut TreeWalkState<'
             format!("{}{}", "  ".repeat(depth), relative)
         };
         state.rendered.push(name);
-        state.paths.push(relative.clone());
+        state.paths.push(relative);
     }
     if depth >= state.max_depth || !path.is_dir() {
         return Ok(());
@@ -1203,8 +1205,9 @@ fn render_toml_value(value: &toml::Value) -> String {
 }
 
 fn load_task_state(root: &Path, task_id: &str) -> Result<BrokerGetContextResponse> {
-    let bytes = fs::read(task_state_json_path(root, task_id))
-        .with_context(|| format!("failed to read task state for '{}'", task_id))?;
+    let task_storage_id = TaskStorageId::try_from(task_id)?;
+    let bytes = fs::read(task_state_json_path(root, &task_storage_id))
+        .with_context(|| format!("failed to read task state for '{task_id}'"))?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 

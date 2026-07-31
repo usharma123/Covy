@@ -4,6 +4,12 @@ mod daemon_task_core;
 mod daemon_task_mcp;
 #[path = "support/daemon_task_seed.rs"]
 mod daemon_task_seed;
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use serde_json::Value;
 use std::fs;

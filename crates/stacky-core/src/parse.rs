@@ -222,24 +222,32 @@ pub(crate) fn now_unix() -> u64 {
 fn java_frame_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^at\s+(?P<func>[\w.$<>]+)\((?P<file>[^:()]+):(?P<line>\d+)\)").unwrap()
+        compile_literal_regex(r"^at\s+(?P<func>[\w.$<>]+)\((?P<file>[^:()]+):(?P<line>\d+)\)")
     })
 }
 
 fn python_frame_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"^File\s+\"(?P<file>[^\"]+)\",\s+line\s+(?P<line>\d+),\s+in\s+(?P<func>.+)$"#)
-            .unwrap()
+        compile_literal_regex(
+            r#"^File\s+\"(?P<file>[^\"]+)\",\s+line\s+(?P<line>\d+),\s+in\s+(?P<func>.+)$"#,
+        )
     })
 }
 
 fn generic_path_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
+        compile_literal_regex(
             r"(?P<file>[A-Za-z0-9_./-]+\.[A-Za-z0-9_+-]+):(?P<line>\d+)(?::\d+)?(?:\s+in\s+(?P<func>[\w.$<>:]+))?",
         )
-        .unwrap()
     })
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "all callers pass compile-time regex literals covered by parser tests"
+)]
+fn compile_literal_regex(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("hard-coded stack-frame regex must compile")
 }

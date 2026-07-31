@@ -1,3 +1,10 @@
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -10,11 +17,7 @@ fn suite_cmd() -> Command {
 fn test_gain_reports_failed_and_fallback_runs() {
     let root = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    std::process::Command::new("git")
-        .arg("init")
-        .current_dir(root.path())
-        .output()
-        .unwrap();
+    process_harness::run_git(root.path(), &["init"]);
     std::fs::create_dir_all(root.path().join("src")).unwrap();
     suite_cmd()
         .current_dir(root.path())

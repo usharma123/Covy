@@ -24,7 +24,8 @@ pub struct MapPathsArgs {
     #[arg(long)]
     pub explain: Option<String>,
 
-    /// Coverage report file paths/globs to use for --learn (overrides [ingest].report_paths)
+    /// Coverage report file paths/globs to use for `--learn`
+    /// (overrides `ingest.report_paths`).
     #[arg(long = "paths")]
     pub paths: Vec<String>,
 
@@ -38,7 +39,7 @@ pub fn run(args: MapPathsArgs, config_path: &str) -> Result<i32> {
         anyhow::bail!("Specify at least one of --learn or --explain");
     }
 
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let repo_root = std::env::current_dir()?;
     let repo_files = load_repo_paths(&repo_root)?;
 
@@ -108,7 +109,7 @@ pub fn run(args: MapPathsArgs, config_path: &str) -> Result<i32> {
                 write_strip_prefixes(config_path, &learned.suggested_strip_prefixes)?;
                 wrote_config = true;
                 if !args.json {
-                    println!("Updated {} with [paths].strip_prefix", config_path);
+                    println!("Updated {config_path} with [paths].strip_prefix");
                 }
             }
         }

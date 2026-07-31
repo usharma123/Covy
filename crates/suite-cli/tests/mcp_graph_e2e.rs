@@ -1,7 +1,11 @@
 #[path = "support/mcp_graph.rs"]
 mod mcp_graph;
-
-mod support;
+#[expect(
+    dead_code,
+    reason = "shared integration harness APIs are exercised by sibling test binaries"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use mcp_graph::McpGraphServer;
 use serde_json::json;

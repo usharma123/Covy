@@ -167,6 +167,10 @@ pub(crate) struct ProjectLearnReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct LocalStoreStats {
+    pub(crate) schema_version: u32,
+    pub(crate) process_connection_open_count: u64,
+    pub(crate) connection_open_count: u64,
+    pub(crate) migrations_applied_on_open: u32,
     pub(crate) memory_count: i64,
     pub(crate) memory_embedding_count: i64,
     pub(crate) feedback_count: i64,

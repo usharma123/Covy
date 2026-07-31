@@ -1,0 +1,64 @@
+{
+  "schema_version": "suite.packet.v1",
+  "packet_type": "suite.map.query.v1",
+  "packet": {
+    "version": "1",
+    "tool": "mapy",
+    "kind": "repo_query",
+    "hash": "hash-handle-example",
+    "summary": "1 repository symbol match with full artifact",
+    "files": [
+      {
+        "path": "src/lib.rs",
+        "relevance": 1.0,
+        "source": "mapy.query"
+      }
+    ],
+    "symbols": [
+      {
+        "name": "PacketQuery",
+        "file": "src/lib.rs",
+        "kind": "struct",
+        "relevance": 1.0,
+        "source": "mapy.query"
+      }
+    ],
+    "confidence": 1.0,
+    "budget_cost": {
+      "est_tokens": 128,
+      "est_bytes": 512,
+      "runtime_ms": 5,
+      "tool_calls": 1,
+      "payload_est_tokens": 44,
+      "payload_est_bytes": 176
+    },
+    "provenance": {
+      "inputs": ["query:PacketQuery", "repo:."],
+      "generated_at_unix": 1700000000
+    },
+    "payload": {
+      "query": "PacketQuery",
+      "matches": [
+        {
+          "file_idx": 0,
+          "symbol_idx": 0,
+          "line": 12,
+          "score": 1.0
+        }
+      ],
+      "truncation": {
+        "files_dropped": 0,
+        "symbols_dropped": 0,
+        "edges_dropped": 0
+      },
+      "artifact_handle": {
+        "handle_id": "handle-suite.map.query.v1",
+        "packet_type": "suite.map.query.v1",
+        "packet_hash": "hash-handle-example",
+        "artifact_sha256": "sha256-example",
+        "path": ".packet28/artifacts/handle-suite.map.query.v1.json",
+        "created_at_unix": 1700000000
+      }
+    }
+  }
+}

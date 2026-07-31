@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
+ROOT="${CODEX_AUTOFIX_ROOT:-${GITHUB_WORKSPACE:-$(pwd)}}"
 FAILURE_LOG="${CI_FAILURE_LOG:-$ROOT/.packet28/ci-autofix/failure.log}"
 OUT_DIR="${CODEX_AUTOFIX_DIR:-$ROOT/.packet28/ci-autofix}"
 CODEX_BIN="${CODEX_BIN:-codex}"
-CODEX_CMD="${CODEX_CMD:-}"
-VERIFY_CMD="${CODEX_AUTOFIX_VERIFY:-cargo test --workspace --all-targets}"
+VERIFY_CMD="${CODEX_AUTOFIX_VERIFY:-cargo test --locked --workspace --all-targets}"
 RUN_URL="${CI_RUN_URL:-unknown}"
 DRY_RUN="${CODEX_AUTOFIX_DRY_RUN:-0}"
 
@@ -47,24 +46,23 @@ if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
   exit 78
 fi
 
-if [[ -n "$CODEX_CMD" ]]; then
-  echo "Running Codex autofix with override: $CODEX_CMD" >&2
-  # CODEX_CMD is an intentional escape hatch for CI experiments.
-  bash -lc "$CODEX_CMD" <"$OUT_DIR/prompt.txt" 2>&1 | tee "$OUT_DIR/codex.log"
-else
-  echo "Running Codex autofix with: $CODEX_BIN exec --cd '$ROOT' --sandbox workspace-write" >&2
-  "$CODEX_BIN" exec \
-    --cd "$ROOT" \
-    --sandbox workspace-write \
-    --output-last-message "$OUT_DIR/final.md" \
-    - <"$OUT_DIR/prompt.txt" 2>&1 | tee "$OUT_DIR/codex.log"
-fi
+echo "Running Codex autofix with a secret-filtered subprocess environment" >&2
+"$CODEX_BIN" exec \
+  --ignore-user-config \
+  --strict-config \
+  --config 'shell_environment_policy.inherit="core"' \
+  --config 'shell_environment_policy.ignore_default_excludes=false' \
+  --config 'shell_environment_policy.exclude=["OPENAI_API_KEY","GITHUB_TOKEN","GH_TOKEN","ACTIONS_ID_TOKEN_REQUEST_TOKEN"]' \
+  --cd "$ROOT" \
+  --sandbox workspace-write \
+  --output-last-message "$OUT_DIR/final.md" \
+  - <"$OUT_DIR/prompt.txt" 2>&1 | tee "$OUT_DIR/codex.log"
 
-if git diff --quiet -- . ':!.packet28'; then
+if git -C "$ROOT" diff --quiet -- . ':!.packet28'; then
   echo "Codex completed but produced no tracked diff" >&2
   exit 0
 fi
 
 echo "Codex produced a diff:" >&2
-git diff --stat -- . ':!.packet28'
-git diff -- . ':!.packet28' >"$OUT_DIR/diff.patch"
+git -C "$ROOT" diff --stat -- . ':!.packet28'
+git -C "$ROOT" diff --binary --full-index -- . ':!.packet28' >"$OUT_DIR/diff.patch"

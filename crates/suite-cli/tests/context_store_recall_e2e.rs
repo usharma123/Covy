@@ -81,3 +81,52 @@ fn test_context_store_state_cli_recall_returns_recent_hits() {
         .map(|hits| !hits.is_empty())
         .unwrap_or(false));
 }
+
+#[test]
+fn test_context_assemble_cache_reports_persistence_shutdown_failure() {
+    let dir = TempDir::new().unwrap();
+    let packet = dir.path().join("packet.json");
+    write_context_packet(
+        &packet,
+        "diffy",
+        "Parser note",
+        "missing mappings in parser for src/lib.rs",
+        "src/lib.rs",
+    );
+    fs::write(dir.path().join(".packet28"), "not a directory").unwrap();
+
+    let output = suite_cmd()
+        .current_dir(dir.path())
+        .args([
+            "context",
+            "assemble",
+            "--packet",
+            packet.to_str().unwrap(),
+            "--cache",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(output.stderr.is_empty());
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        error.get("schema_version").and_then(Value::as_str),
+        Some("suite.error.v1")
+    );
+    assert_eq!(
+        error.get("target").and_then(Value::as_str),
+        Some("contextq.assemble")
+    );
+    assert!(error
+        .get("message")
+        .and_then(Value::as_str)
+        .is_some_and(|message| message.contains("failed to durably finish context assembly")));
+    assert!(error
+        .get("causes")
+        .and_then(Value::as_array)
+        .and_then(|causes| causes.first())
+        .and_then(Value::as_str)
+        .is_some_and(|cause| cause.contains("cache persistence")));
+}

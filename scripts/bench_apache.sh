@@ -1138,7 +1138,7 @@ main() {
 
   if [[ "$SKIP_BUILD" -eq 0 ]]; then
     log "Building covy release binary"
-    (cd "$ROOT_DIR" && cargo build --release -p covy-cli >/dev/null)
+    (cd "$ROOT_DIR" && cargo build --locked --release -p covy-cli >/dev/null)
   fi
   [[ -x "$COVY_BIN" ]] || fail "Covy binary not found or not executable: $COVY_BIN"
 

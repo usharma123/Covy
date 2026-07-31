@@ -12,6 +12,8 @@ mod artifacts;
 mod fff;
 #[path = "cmd_mcp_native_handoff.rs"]
 mod handoff;
+#[path = "cmd_mcp_native_lifecycle.rs"]
+mod lifecycle;
 #[path = "cmd_mcp_native_read.rs"]
 mod read;
 #[path = "cmd_mcp_native_search.rs"]
@@ -55,6 +57,10 @@ use search::{
     build_search_full_payload, build_search_request, build_search_response_payload,
     merge_search_results, search_backend_name, should_shadow_with_native, Packet28SearchExecution,
 };
+
+#[cfg(test)]
+pub(crate) use lifecycle::structural_snapshot;
+pub(crate) use lifecycle::{handle_tool_call, tool_descriptors};
 
 #[derive(Debug, Clone)]
 struct ToolRecommendation {
@@ -104,7 +110,7 @@ fn search_request_summary_parts(
     strategy: Packet28SearchStrategy,
 ) -> String {
     let scope = if paths.is_empty() {
-        format!("search '{}' across repo ({:?})", query, response_mode)
+        format!("search '{query}' across repo ({response_mode:?})")
     } else {
         format!(
             "search '{}' in {} path(s) ({:?})",
@@ -293,7 +299,7 @@ fn execute_search_with_strategy(
             } else {
                 execution
                     .notes
-                    .push(format!("primary backend already used {}", primary_backend));
+                    .push(format!("primary backend already used {primary_backend}"));
             }
             Ok((primary, execution))
         }
@@ -333,6 +339,36 @@ fn write_native_tool_result(
             ..BrokerWriteStateRequest::default()
         }],
     )
+}
+
+fn write_native_tool_started(
+    root: &Path,
+    session: &Arc<Mutex<McpSessionState>>,
+    record: NativeToolStartedRecord<'_>,
+) -> Result<()> {
+    write_auto_capture_state_batch_via_session(
+        root,
+        session,
+        vec![BrokerWriteStateRequest {
+            task_id: record.task_id.to_string(),
+            op: Some(BrokerWriteOp::ToolInvocationStarted),
+            invocation_id: Some(record.invocation_id.to_string()),
+            tool_name: Some(record.tool_name.to_string()),
+            operation_kind: Some(record.operation_kind),
+            request_summary: Some(record.request_summary),
+            sequence: Some(record.sequence),
+            ..BrokerWriteStateRequest::default()
+        }],
+    )
+}
+
+struct NativeToolStartedRecord<'a> {
+    task_id: &'a str,
+    invocation_id: &'a str,
+    sequence: u64,
+    tool_name: &'a str,
+    operation_kind: suite_packet_core::ToolOperationKind,
+    request_summary: String,
 }
 
 struct NativeToolResultRecord<'a> {
@@ -409,16 +445,29 @@ pub(crate) fn handle_packet28_search(
     session: &Arc<Mutex<McpSessionState>>,
     args: Packet28SearchArgs,
 ) -> Result<Value> {
-    let task_id = args.task_id.trim();
+    let task_id = args.task_id.as_str();
     if task_id.is_empty() {
         return Err(anyhow!("packet28.search requires task_id"));
     }
+    validated_task_storage_id(task_id)?;
     let query = args.query.trim();
     if query.is_empty() {
         return Err(anyhow!("packet28.search requires query"));
     }
     let (sequence, invocation_id) = next_task_invocation(session, task_id)?;
     let request_summary = search_request_summary(&args);
+    write_native_tool_started(
+        root,
+        session,
+        NativeToolStartedRecord {
+            task_id,
+            invocation_id: &invocation_id,
+            sequence,
+            tool_name: "packet28.search",
+            operation_kind: suite_packet_core::ToolOperationKind::Search,
+            request_summary: request_summary.clone(),
+        },
+    )?;
 
     let request = build_search_request(
         query,
@@ -467,7 +516,7 @@ pub(crate) fn handle_packet28_search(
                 args.paths.len()
             )
         } else if search_result.resolved_paths.is_empty() {
-            format!("No matches for '{}' across repo", query)
+            format!("No matches for '{query}' across repo")
         } else {
             format!(
                 "No matches for '{}' in {} path(s)",
@@ -519,7 +568,7 @@ pub(crate) fn handle_packet28_search(
             command: None,
             paths: search_result.paths.clone(),
             regions: search_result.regions.clone(),
-            symbols: search_result.symbols.clone(),
+            symbols: search_result.symbols,
             artifact_id,
             raw_artifact_handle: None,
             duration_ms,
@@ -561,9 +610,10 @@ pub(crate) fn handle_packet28_validate_plan(
     root: &Path,
     args: Packet28ValidatePlanArgs,
 ) -> Result<Value> {
-    if args.task_id.trim().is_empty() {
+    if args.task_id.is_empty() {
         return Err(anyhow!("packet28.validate_plan requires task_id"));
     }
+    validated_task_storage_id(&args.task_id)?;
     if args.steps.is_empty() {
         return Err(anyhow!("packet28.validate_plan requires at least one step"));
     }
@@ -584,9 +634,10 @@ pub(crate) fn handle_packet28_action_critic(
     root: &Path,
     args: Packet28ActionCriticArgs,
 ) -> Result<Value> {
-    if args.task_id.trim().is_empty() {
+    if args.task_id.is_empty() {
         return Err(anyhow!("packet28.action_critic requires task_id"));
     }
+    validated_task_storage_id(&args.task_id)?;
     if !matches!(args.action, BrokerAction::ChooseTool | BrokerAction::Edit) {
         return Err(anyhow!(
             "packet28.action_critic action must be choose_tool or edit"
@@ -594,7 +645,7 @@ pub(crate) fn handle_packet28_action_critic(
     }
     let response = crate::broker_client::get_context(
         root,
-        packet28_daemon_core::BrokerGetContextRequest {
+        packet28_daemon_protocol::broker::BrokerGetContextRequest {
             task_id: args.task_id.clone(),
             action: Some(args.action),
             focus_paths: args.focus_paths,
@@ -606,7 +657,7 @@ pub(crate) fn handle_packet28_action_critic(
             default_max_items_per_section: Some(8),
             budget_tokens: args.budget_tokens,
             persist_artifacts: Some(false),
-            ..packet28_daemon_core::BrokerGetContextRequest::default()
+            ..packet28_daemon_protocol::broker::BrokerGetContextRequest::default()
         },
     )?;
     let section = response
@@ -705,7 +756,7 @@ pub(crate) fn handle_packet28_validate_tool_outcome(
         .filter(|v| !v.is_empty());
     let record = records
         .iter()
-        .find(|record| command_filter.map_or(true, |needle| record.command.contains(needle)));
+        .find(|record| command_filter.is_none_or(|needle| record.command.contains(needle)));
     let Some(record) = record else {
         return Ok(json!({
             "task_id": args.task_id,
@@ -1004,9 +1055,10 @@ pub(crate) fn handle_packet28_write_intention(
     if text.is_empty() {
         return Err(anyhow!("packet28.write_intention requires text"));
     }
-    if args.task_id.trim().is_empty() {
+    if args.task_id.is_empty() {
         return Err(anyhow!("packet28.write_intention requires task_id"));
     }
+    validated_task_storage_id(&args.task_id)?;
     crate::cmd_mcp::support::track_task(session, root, &args.task_id)?;
     let response = crate::broker_client::write_intention(
         root,

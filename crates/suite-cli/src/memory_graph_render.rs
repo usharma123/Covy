@@ -20,7 +20,7 @@ pub(crate) fn render_graph_ascii(graph: &GraphInspect) -> String {
     for concept in &graph.concepts {
         out.push_str(&format!("* {}\n", concept.name));
         if let Some(description) = &concept.description {
-            out.push_str(&format!("  {}\n", description));
+            out.push_str(&format!("  {description}\n"));
         }
     }
     for relation in &graph.relations {

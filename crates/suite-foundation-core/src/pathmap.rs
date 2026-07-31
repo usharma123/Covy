@@ -229,25 +229,15 @@ impl PathMapper {
         }
         let known_paths_key = hasher.finish();
 
-        let needs_rebuild = self
-            .cached_known_index
-            .as_ref()
-            .map(|(cached_key, _)| *cached_key != known_paths_key)
-            .unwrap_or(true);
-        if needs_rebuild {
-            self.cached_known_index = Some((
-                known_paths_key,
-                Arc::new(self.build_known_index(known_paths)),
-            ));
+        if let Some((cached_key, index)) = &self.cached_known_index {
+            if *cached_key == known_paths_key {
+                return Arc::clone(index);
+            }
         }
 
-        Arc::clone(
-            &self
-                .cached_known_index
-                .as_ref()
-                .expect("known index cache must be initialized")
-                .1,
-        )
+        let index = Arc::new(self.build_known_index(known_paths));
+        self.cached_known_index = Some((known_paths_key, Arc::clone(&index)));
+        index
     }
 
     fn find_known<'a>(

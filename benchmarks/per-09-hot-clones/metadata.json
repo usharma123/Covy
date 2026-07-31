@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-30",
+  "source_head": "eef4db1b2cfa25788c282c126782b731979a7686",
+  "source_patch_sha256": "ecdd661677a0f87ac121e0970df44c4532820eada192f9b63084295f87cf4234",
+  "benchmark_source_head": "d1da15d9caf2b0662df06cbbe36de48c3f98f9fe",
+  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+  "rustc_host": "aarch64-apple-darwin",
+  "llvm": "21.1.8",
+  "os": "Darwin 24.6.0 arm64",
+  "memory_bytes": 25769803776,
+  "profile": "release",
+  "commands": [
+    "cargo clippy --workspace --all-targets --all-features --locked -- -W clippy::redundant_clone -W clippy::needless_collect -W clippy::trivially_copy_pass_by_ref -W clippy::large_types_passed_by_value",
+    "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+    "cargo test --workspace --all-features --locked",
+    "cargo test -p packet28d --release --locked benchmark_budget_pruning_clone_elision -- --ignored --nocapture"
+  ]
+}

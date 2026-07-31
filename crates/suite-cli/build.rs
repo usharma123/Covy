@@ -1,3 +1,9 @@
+#![expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a build script must abort when Cargo metadata or embedded filter generation is invalid"
+)]
+
 use std::collections::HashSet;
 use std::env;
 use std::fs;

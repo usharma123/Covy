@@ -36,12 +36,13 @@ pub fn run(args: MapArgs) -> Result<i32> {
         },
         &testy_cli_common::testmap::TestmapRunnerOptions::default(),
     )
+    .map_err(Into::into)
 }
 
 pub fn run_remote(args: MapArgs, daemon_root: &Path) -> Result<i32> {
     let response = crate::cmd_daemon::execute_test_map(
         daemon_root,
-        packet28_daemon_core::TestMapRequest {
+        packet28_daemon_protocol::commands::TestMapRequest {
             manifest: args.manifest,
             output: args.output,
             timings_output: args.timings_output,

@@ -28,6 +28,21 @@ fn routes_multiple_env_prefixed_reducer_commands() {
 }
 
 #[test]
+fn routes_owned_env_values_before_runtime_wrappers_without_reordering() {
+    let decision = decide_command_route("EMPTY= EQUALS=left=right command cargo test --workspace");
+    assert_eq!(decision.kind, RouteKind::ReducerRewrite);
+    assert_eq!(
+        decision.env_assignments,
+        vec![
+            ("EMPTY".to_string(), String::new()),
+            ("EQUALS".to_string(), "left=right".to_string()),
+        ]
+    );
+    assert_eq!(decision.wrapper_prefix, vec!["command".to_string()]);
+    assert_eq!(decision.argv, ["cargo", "test", "--workspace"]);
+}
+
+#[test]
 fn disabled_env_prefix_bypasses_rewrite() {
     let decision = decide_command_route("PACKET28_DISABLED=1 git status --short");
     assert_eq!(decision.kind, RouteKind::RawPassthrough);

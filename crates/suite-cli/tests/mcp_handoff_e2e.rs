@@ -1,10 +1,16 @@
 #[path = "support/mcp_handoff.rs"]
 mod mcp_handoff;
+#[expect(
+    dead_code,
+    reason = "this integration binary exercises a focused subset of the shared harness"
+)]
+#[path = "support/process_harness.rs"]
+mod process_harness;
 
 use mcp_handoff::{
     ensure_packet28d_built, init_repo, initialize_mcp_session, read_mcp_message_for_id,
-    run_claude_hook, start_mcp_server, suite_cmd, write_intention_via_mcp, write_mcp_message,
-    write_repo_fixture,
+    run_claude_hook, start_mcp_server, stop_mcp_server, suite_cmd, write_intention_via_mcp,
+    write_mcp_message, write_repo_fixture,
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -17,12 +23,11 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
     init_repo(dir.path());
     write_repo_fixture(dir.path());
 
-    let (mut child, mut stdin, mut stdout) = start_mcp_server(dir.path());
+    let mut server = start_mcp_server(dir.path());
 
-    initialize_mcp_session(&mut stdin, &mut stdout);
+    initialize_mcp_session(&mut server);
     let intention = write_intention_via_mcp(
-        &mut stdin,
-        &mut stdout,
+        &mut server,
         2,
         "task-handoff",
         "Inspect Alpha before editing it",
@@ -32,7 +37,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
     assert_eq!(intention["result"]["structuredContent"]["accepted"], true);
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":3,
@@ -45,7 +50,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
             }
         }),
     );
-    let not_ready = read_mcp_message_for_id(&mut stdout, 3);
+    let not_ready = read_mcp_message_for_id(&mut server, 3);
     let not_ready_payload = &not_ready["result"]["structuredContent"];
     assert_eq!(not_ready_payload["handoff_ready"], false);
     assert!(not_ready_payload["context"].is_null());
@@ -61,7 +66,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
     assert_eq!(status, 0);
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":4,
@@ -75,7 +80,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
             }
         }),
     );
-    let handoff = read_mcp_message_for_id(&mut stdout, 4);
+    let handoff = read_mcp_message_for_id(&mut server, 4);
     let handoff_payload = &handoff["result"]["structuredContent"];
     assert_eq!(handoff_payload["handoff_ready"], true);
     assert!(handoff_payload["latest_checkpoint_id"].is_null());
@@ -93,7 +98,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
     let handoff_artifact_id = handoff_context["artifact_id"].as_str().unwrap().to_string();
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":5,
@@ -107,7 +112,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
             }
         }),
     );
-    let fetched = read_mcp_message_for_id(&mut stdout, 5);
+    let fetched = read_mcp_message_for_id(&mut server, 5);
     let fetched_payload = &fetched["result"]["structuredContent"];
     assert_eq!(fetched_payload["response_mode"], "full");
     assert_eq!(
@@ -121,7 +126,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
         .any(|section| section["id"] == "agent_intention"));
 
     write_mcp_message(
-        &mut stdin,
+        &mut server,
         &json!({
             "jsonrpc":"2.0",
             "id":6,
@@ -134,7 +139,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
             }
         }),
     );
-    let status = read_mcp_message_for_id(&mut stdout, 6);
+    let status = read_mcp_message_for_id(&mut server, 6);
     let status_payload = &status["result"]["structuredContent"];
     assert_eq!(status_payload["handoff_ready"], true);
     assert!(status_payload["latest_handoff_checkpoint_id"].is_null());
@@ -160,8 +165,7 @@ fn test_mcp_handoff_prepare_requires_checkpoint_and_persists_artifact() {
     assert!(additional_context.contains("Packet28 Context v"));
     assert!(additional_context.contains("Latest Intention"));
 
-    child.kill().unwrap();
-    child.wait().unwrap();
+    stop_mcp_server(server);
 
     suite_cmd()
         .args(["daemon", "stop", "--root", dir.path().to_str().unwrap()])

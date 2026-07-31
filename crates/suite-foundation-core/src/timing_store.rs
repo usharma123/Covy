@@ -3,7 +3,9 @@ use crate::testmap::TestTimingHistory;
 
 pub const TESTTIMINGS_SCHEMA_VERSION: u16 = 1;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, wincode::SchemaRead, wincode::SchemaWrite,
+)]
 struct StoredTestTimingHistory {
     schema_version: u16,
     timings: TestTimingHistory,
@@ -15,13 +17,13 @@ pub fn serialize_test_timings(timings: &TestTimingHistory) -> Result<Vec<u8>, Co
         schema_version: TESTTIMINGS_SCHEMA_VERSION,
         timings: timings.clone(),
     };
-    bincode::serialize(&stored)
+    wincode::serialize(&stored)
         .map_err(|e| CovyError::Cache(format!("Failed to serialize test timings: {e}")))
 }
 
 /// Deserialize TestTimingHistory from bytes.
 pub fn deserialize_test_timings(data: &[u8]) -> Result<TestTimingHistory, CovyError> {
-    let stored: StoredTestTimingHistory = bincode::deserialize(data)
+    let stored: StoredTestTimingHistory = wincode::deserialize(data)
         .map_err(|e| CovyError::Cache(format!("Failed to deserialize test timings: {e}")))?;
     if stored.schema_version != TESTTIMINGS_SCHEMA_VERSION {
         return Err(CovyError::Cache(format!(

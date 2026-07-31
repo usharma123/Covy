@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 use regex::Regex;
@@ -7,18 +7,18 @@ use suite_packet_core::{BudgetCost, CovyError, EnvelopeV1, FileRef, Provenance, 
 
 use crate::scan::{
     extract_index_metadata, is_generated_or_vendor_path, is_source_file, is_test_path,
-    load_scan_cache, metadata_mtime_secs, scan_repo, scan_repo_with_progress,
+    metadata_mtime_secs, scan_repo, scan_repo_with_progress,
 };
 use crate::types::{
     FocusHit, FocusHitRich, IndexedSymbolDef, RankedFile, RankedFileRich, RankedSymbol,
     RankedSymbolRich, RepoEdge, RepoEdgeRich, RepoIndexFileEntry, RepoIndexSnapshot,
-    RepoIndexUpdateSummary, RepoMapPayload, RepoMapPayloadRich, RepoMapRequest, RepoQueryMatch,
-    RepoQueryMatchRich, RepoQueryPayload, RepoQueryPayloadRich, RepoQueryRequest,
-    TruncationSummary,
+    RepoIndexUpdateSummary, RepoIndexUpdateWork, RepoMapPayload, RepoMapPayloadRich,
+    RepoMapRequest, RepoQueryMatch, RepoQueryMatchRich, RepoQueryPayload, RepoQueryPayloadRich,
+    RepoQueryRequest, TruncationSummary,
 };
 use crate::{
     collect_syntax_candidates, detect_source_language, parse_source_language_name,
-    resolve_import_leaf, SourceLanguage,
+    resolve_import_leaf, RepoIndexRuntime, SourceLanguage,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -64,7 +64,7 @@ struct QueryMatchTmp {
     score: f64,
 }
 
-pub(crate) const MAP_CACHE_VERSION: u32 = 4;
+pub(crate) const MAP_CACHE_VERSION: u32 = 5;
 pub(crate) const MAP_CACHE_DIR: &str = ".packet28";
 pub(crate) const MAP_CACHE_FILE: &str = "mapy-cache-v1.bin";
 pub(crate) const MAP_CACHE_FILE_LEGACY: &str = "mapy-cache-v1.json";
@@ -363,21 +363,51 @@ pub fn build_repo_map_from_index(
         .files
         .values()
         .filter(|entry| snapshot.include_tests || !entry.is_test)
-        .map(|entry| FileScan {
-            path: entry.path.clone(),
-            size: entry.size,
-            symbols: entry
-                .symbols
-                .iter()
-                .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
-                .collect(),
-            symbol_defs: entry.symbols.clone(),
-            imports: entry.imports.clone(),
-            token_lines: entry.token_lines.clone(),
-            mtime_secs: entry.mtime_secs,
-        })
+        .map(file_scan_from_index_entry)
         .collect::<Vec<_>>();
     build_repo_map_from_scans(req, scans)
+}
+
+/// Builds a repository map from an authenticated incremental runtime without
+/// walking or rereading the repository.
+///
+/// # Errors
+///
+/// Returns [`CovyError::Cache`] when `runtime` is not loaded or was built
+/// without tests while `req` requires test files.
+pub fn build_repo_map_from_runtime(
+    req: RepoMapRequest,
+    runtime: &RepoIndexRuntime,
+) -> Result<EnvelopeV1<RepoMapPayload>, CovyError> {
+    let file_count = runtime.validated_map_file_count(req.include_tests)?;
+    let mut scans = Vec::new();
+    scans.try_reserve_exact(file_count).map_err(|error| {
+        CovyError::Cache(format!(
+            "failed to reserve authenticated repository map input: {error}"
+        ))
+    })?;
+    runtime.for_each_file(|entry| {
+        if req.include_tests || !entry.is_test {
+            scans.push(file_scan_from_index_entry(entry));
+        }
+    });
+    build_repo_map_from_scans(req, scans)
+}
+
+fn file_scan_from_index_entry(entry: &RepoIndexFileEntry) -> FileScan {
+    FileScan {
+        path: entry.path.clone(),
+        size: entry.size,
+        symbols: entry
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.kind.clone(), symbol.name.clone()))
+            .collect(),
+        symbol_defs: entry.symbols.clone(),
+        imports: entry.imports.clone(),
+        token_lines: entry.token_lines.clone(),
+        mtime_secs: entry.mtime_secs,
+    }
 }
 
 fn build_repo_map_from_scans(
@@ -746,54 +776,102 @@ pub fn update_repo_index(
             continue;
         }
         changed.insert(relative_path.clone());
-        let full_path = root.join(&relative_path);
-        let should_remove = !full_path.exists()
-            || !is_source_file(&full_path)
-            || is_generated_or_vendor_path(&relative_path)
-            || (!include_tests && is_test_path(&relative_path));
-        if should_remove {
-            if snapshot.files.remove(&relative_path).is_some() {
-                removed_files += 1;
+        match index_repo_path(root, &relative_path, include_tests)? {
+            Some(entry) => {
+                snapshot.files.insert(relative_path, entry);
+                indexed_files += 1;
             }
-            continue;
+            None => {
+                if snapshot.files.remove(&relative_path).is_some() {
+                    removed_files += 1;
+                }
+            }
         }
-        let metadata = std::fs::metadata(&full_path).map_err(|source| {
-            CovyError::Other(format!(
-                "failed to read metadata for '{}': {source}",
-                full_path.display()
-            ))
-        })?;
-        let size = metadata.len();
-        let mtime_secs = metadata_mtime_secs(&metadata);
-        let content = std::fs::read_to_string(&full_path).map_err(|source| {
-            CovyError::Other(format!(
-                "failed to read '{}': {source}",
-                full_path.display()
-            ))
-        })?;
-        let (symbols, imports, token_lines) = extract_index_metadata(&relative_path, &content);
-        snapshot.files.insert(
-            relative_path.clone(),
-            RepoIndexFileEntry {
-                path: relative_path,
-                size,
-                mtime_secs,
-                is_test: is_test_path(raw_path),
-                symbols,
-                imports,
-                token_lines,
-            },
-        );
-        indexed_files += 1;
     }
+    let changed_paths = changed.into_iter().collect::<Vec<_>>();
     Ok(RepoIndexUpdateSummary {
         indexed_files,
         removed_files,
-        changed_paths: changed.into_iter().collect(),
+        work: RepoIndexUpdateWork {
+            changed_paths_considered: changed_paths.len(),
+            ..RepoIndexUpdateWork::default()
+        },
+        changed_paths,
     })
 }
 
-fn repo_index_from_scans(files: Vec<FileScan>, include_tests: bool) -> RepoIndexSnapshot {
+pub(crate) fn index_repo_path(
+    root: &Path,
+    relative_path: &str,
+    include_tests: bool,
+) -> Result<Option<RepoIndexFileEntry>, CovyError> {
+    if Path::new(relative_path).components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(CovyError::PathMapping(format!(
+            "changed path '{relative_path}' must resolve beneath the repository root"
+        )));
+    }
+    let full_path = root.join(relative_path);
+    if full_path.exists() {
+        let canonical_root = std::fs::canonicalize(root).map_err(|source| {
+            CovyError::PathMapping(format!(
+                "cannot resolve repository root '{}': {source}",
+                root.display()
+            ))
+        })?;
+        let canonical_path = std::fs::canonicalize(&full_path).map_err(|source| {
+            CovyError::PathMapping(format!(
+                "cannot resolve changed path '{}': {source}",
+                full_path.display()
+            ))
+        })?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(CovyError::PathMapping(format!(
+                "changed path '{relative_path}' must resolve beneath the repository root"
+            )));
+        }
+    }
+    let should_remove = !full_path.exists()
+        || !is_source_file(&full_path)
+        || is_generated_or_vendor_path(relative_path)
+        || (!include_tests && is_test_path(relative_path));
+    if should_remove {
+        return Ok(None);
+    }
+    let metadata = std::fs::metadata(&full_path).map_err(|source| {
+        CovyError::Other(format!(
+            "failed to read metadata for '{}': {source}",
+            full_path.display()
+        ))
+    })?;
+    let size = metadata.len();
+    let mtime_secs = metadata_mtime_secs(&metadata);
+    let content = std::fs::read_to_string(&full_path).map_err(|source| {
+        CovyError::Other(format!(
+            "failed to read '{}': {source}",
+            full_path.display()
+        ))
+    })?;
+    let (symbols, imports, token_lines) = extract_index_metadata(relative_path, &content);
+    Ok(Some(RepoIndexFileEntry {
+        path: relative_path.to_string(),
+        size,
+        mtime_secs,
+        is_test: is_test_path(relative_path),
+        symbols,
+        imports,
+        token_lines,
+    }))
+}
+
+pub(crate) fn repo_index_from_scans(
+    files: Vec<FileScan>,
+    include_tests: bool,
+) -> RepoIndexSnapshot {
     let mut entries = BTreeMap::new();
     for file in files {
         let path = file.path.clone();
@@ -917,38 +995,7 @@ pub fn expand_repo_query_payload(envelope: &EnvelopeV1<RepoQueryPayload>) -> Rep
 }
 
 fn load_query_index(root: &Path, include_tests: bool) -> Result<RepoIndexSnapshot, CovyError> {
-    if include_tests {
-        return build_repo_index(root, true);
-    }
-
-    let cache = load_scan_cache(root);
-    if cache.files.is_empty() {
-        return build_repo_index(root, false);
-    }
-
-    Ok(RepoIndexSnapshot {
-        version: cache.version,
-        include_tests: false,
-        files: cache
-            .files
-            .into_iter()
-            .map(|(path, entry)| {
-                let is_test = is_test_path(&path);
-                (
-                    path.clone(),
-                    RepoIndexFileEntry {
-                        path,
-                        size: entry.size,
-                        mtime_secs: entry.mtime_secs,
-                        is_test,
-                        symbols: entry.symbol_defs,
-                        imports: entry.imports,
-                        token_lines: entry.token_lines,
-                    },
-                )
-            })
-            .collect(),
-    })
+    build_repo_index(root, include_tests)
 }
 
 fn query_match_score(
@@ -1262,9 +1309,7 @@ fn normalize_syntax_text(text: &str) -> String {
 }
 
 fn display_name_for_candidate(candidate: &crate::SyntaxCandidate) -> String {
-    static IDENTIFIER_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = IDENTIFIER_RE
-        .get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("identifier regex is valid"));
+    let re = crate::identifier_re();
 
     re.find_iter(&candidate.text)
         .map(|matched| matched.as_str())

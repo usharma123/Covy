@@ -261,3 +261,91 @@ fn budget_pruning_shrinks_critical_sections_before_dropping_them() {
     assert!(code_evidence.body.len() < code_evidence_body.len());
     assert!(code_evidence.body.contains("src/alpha.rs:1"));
 }
+
+fn clone_elision_benchmark_sections() -> Vec<BrokerSection> {
+    (0..32)
+        .map(|index| BrokerSection {
+            id: if index == 0 {
+                "task_objective".to_string()
+            } else {
+                format!("optional_{index}")
+            },
+            title: format!("Section {index}"),
+            body: format!("section-{index}:{}", "x".repeat(32 * 1024)),
+            priority: if index == 0 { 1 } else { 3 },
+            source_kind: BrokerSourceKind::Derived,
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "release-only PER-09 benchmark; run explicitly with --ignored --nocapture"]
+fn benchmark_budget_pruning_clone_elision() {
+    const ITERATIONS: u32 = 128;
+    const BUDGET_TOKENS: u64 = 8_192;
+    const BUDGET_BYTES: u64 = 32 * 1024;
+
+    let parity_input = clone_elision_benchmark_sections();
+    let reference = prune_sections_for_budget(
+        BrokerAction::Plan,
+        parity_input.clone(),
+        BUDGET_TOKENS,
+        BUDGET_BYTES,
+        8,
+    );
+    let direct = prune_sections_for_budget(
+        BrokerAction::Plan,
+        parity_input,
+        BUDGET_TOKENS,
+        BUDGET_BYTES,
+        8,
+    );
+    assert_eq!(reference.0, direct.0);
+    assert_eq!(
+        reference
+            .1
+            .iter()
+            .map(|candidate| (&candidate.section_id, &candidate.reason))
+            .collect::<Vec<_>>(),
+        direct
+            .1
+            .iter()
+            .map(|candidate| (&candidate.section_id, &candidate.reason))
+            .collect::<Vec<_>>()
+    );
+
+    let mut cloned_path_nanos = 0_u128;
+    for _ in 0..ITERATIONS {
+        let sections = clone_elision_benchmark_sections();
+        let started = std::time::Instant::now();
+        let result = prune_sections_for_budget(
+            BrokerAction::Plan,
+            std::hint::black_box(sections.clone()),
+            BUDGET_TOKENS,
+            BUDGET_BYTES,
+            8,
+        );
+        cloned_path_nanos = cloned_path_nanos.saturating_add(started.elapsed().as_nanos());
+        std::hint::black_box(result);
+        std::hint::black_box(sections);
+    }
+
+    let mut moved_path_nanos = 0_u128;
+    for _ in 0..ITERATIONS {
+        let sections = clone_elision_benchmark_sections();
+        let started = std::time::Instant::now();
+        let result = prune_sections_for_budget(
+            BrokerAction::Plan,
+            std::hint::black_box(sections),
+            BUDGET_TOKENS,
+            BUDGET_BYTES,
+            8,
+        );
+        moved_path_nanos = moved_path_nanos.saturating_add(started.elapsed().as_nanos());
+        std::hint::black_box(result);
+    }
+
+    println!(
+        "{{\"iterations\":{ITERATIONS},\"fixture_sections\":32,\"body_bytes_per_section\":32768,\"cloned_path_nanos\":{cloned_path_nanos},\"moved_path_nanos\":{moved_path_nanos}}}"
+    );
+}

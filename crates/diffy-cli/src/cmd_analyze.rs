@@ -5,6 +5,7 @@ use anyhow::Result;
 use clap::Args;
 use suite_foundation_core::config::GateConfig;
 use suite_foundation_core::CovyConfig;
+use suite_packet_core::CovyError;
 
 #[derive(Args)]
 pub struct AnalyzeArgs {
@@ -59,7 +60,7 @@ pub struct AnalyzeArgs {
 }
 
 pub fn run(args: AnalyzeArgs, config_path: &str) -> Result<i32> {
-    let config = CovyConfig::load(Path::new(config_path)).unwrap_or_default();
+    let config = CovyConfig::load(Path::new(config_path))?;
     let report = if resolve_json_output(args.json, args.report.as_deref(), "--report")? {
         "json".to_string()
     } else {
@@ -138,11 +139,7 @@ fn resolve_json_output(
     if json_flag {
         if let Some(fmt) = legacy_format {
             if !fmt.eq_ignore_ascii_case("json") {
-                anyhow::bail!(
-                    "Conflicting output flags: --json and {} {}",
-                    legacy_flag_name,
-                    fmt
-                );
+                anyhow::bail!("Conflicting output flags: --json and {legacy_flag_name} {fmt}");
             }
         }
         return Ok(true);
@@ -160,23 +157,27 @@ fn default_pipeline_ingest_adapters() -> diffy_core::pipeline::PipelineIngestAda
     }
 }
 
-fn ingest_coverage_auto(path: &Path) -> Result<diffy_core::model::CoverageData> {
-    covy_ingest::ingest_path(path).map_err(Into::into)
+fn ingest_coverage_auto(
+    path: &Path,
+) -> std::result::Result<diffy_core::model::CoverageData, CovyError> {
+    covy_ingest::ingest_path(path)
 }
 
 fn ingest_coverage_with_format(
     path: &Path,
     format: diffy_core::model::CoverageFormat,
-) -> Result<diffy_core::model::CoverageData> {
-    covy_ingest::ingest_path_with_format(path, format).map_err(Into::into)
+) -> std::result::Result<diffy_core::model::CoverageData, CovyError> {
+    covy_ingest::ingest_path_with_format(path, format)
 }
 
 fn ingest_coverage_stdin(
     format: diffy_core::model::CoverageFormat,
-) -> Result<diffy_core::model::CoverageData> {
-    covy_ingest::ingest_reader(std::io::stdin().lock(), format).map_err(Into::into)
+) -> std::result::Result<diffy_core::model::CoverageData, CovyError> {
+    covy_ingest::ingest_reader(std::io::stdin().lock(), format)
 }
 
-fn ingest_diagnostics(path: &Path) -> Result<diffy_core::diagnostics::DiagnosticsData> {
-    covy_ingest::ingest_diagnostics_path(path).map_err(Into::into)
+fn ingest_diagnostics(
+    path: &Path,
+) -> std::result::Result<diffy_core::diagnostics::DiagnosticsData, CovyError> {
+    covy_ingest::ingest_diagnostics_path(path)
 }

@@ -52,9 +52,9 @@ fn test_daemon_lifecycle_cli_suppresses_disconnect_log_noise() {
             ),
         }
     };
-    packet28_daemon_core::write_socket_message(
+    packet28_daemon_protocol::frame::write_frame(
         &mut stream,
-        &packet28_daemon_core::DaemonRequest::Status,
+        &packet28_daemon_protocol::message::DaemonRequest::Status,
     )
     .unwrap();
     drop(stream);

@@ -1,12 +1,65 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 use crate::*;
 
+/// A cache mutation whose owned payload is ready for optional persistence
+/// preparation without being visible in the live cache.
+pub struct PreparedCacheMutation {
+    pub(crate) entry: PacketCacheEntry,
+    #[cfg(test)]
+    drop_probe: PreparedMutationDropProbe,
+}
+
+impl PreparedCacheMutation {
+    /// Returns the canonical key that will become visible after acceptance.
+    pub fn cache_key(&self) -> &str {
+        &self.entry.cache_key
+    }
+
+    pub(crate) fn into_entry_at(mut self, created_at_unix: u64) -> PacketCacheEntry {
+        self.entry.created_at_unix = created_at_unix;
+        #[cfg(test)]
+        self.drop_probe.disarm();
+        self.entry
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_drop_probe(&mut self, probe: Arc<dyn Fn() + Send + Sync>) {
+        self.drop_probe.callback = Some(probe);
+    }
+}
+
+#[cfg(test)]
 #[derive(Default)]
+struct PreparedMutationDropProbe {
+    callback: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+#[cfg(test)]
+impl PreparedMutationDropProbe {
+    fn disarm(&mut self) {
+        self.callback = None;
+    }
+}
+
+#[cfg(test)]
+impl Drop for PreparedMutationDropProbe {
+    fn drop(&mut self) {
+        if let Some(callback) = self.callback.take() {
+            callback();
+        }
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct PacketCache {
     pub(crate) entries_by_hash: HashMap<String, PacketCacheEntry>,
     pub(crate) latest_request_index: HashMap<String, String>,
@@ -21,6 +74,9 @@ pub struct PacketCache {
     pub(crate) symbol_index: HashMap<String, BTreeSet<String>>,
     pub(crate) test_index: HashMap<String, BTreeSet<String>>,
     pub(crate) task_index: HashMap<String, BTreeSet<String>>,
+    pub(crate) persisted_sequence: u64,
+    pub(crate) has_v3_checkpoint_baseline: bool,
+    pub(crate) has_legacy_checkpoint_baseline: bool,
 }
 
 impl PacketCache {
@@ -29,10 +85,36 @@ impl PacketCache {
     }
 
     pub fn evict_expired(&mut self, ttl_secs: u64) {
+        self.evict_expired_entries(ttl_secs);
+    }
+
+    pub fn evict_expired_entries(&mut self, ttl_secs: u64) -> Vec<String> {
+        self.evict_expired_entries_at(ttl_secs, now_unix())
+    }
+
+    /// Evicts entries expired at one caller-supplied timestamp.
+    pub fn evict_expired_entries_at(&mut self, ttl_secs: u64, now_unix: u64) -> Vec<String> {
         self.remove_where(
-            |entry, now| is_expired(entry.created_at_unix, ttl_secs, now),
+            |entry, _| is_expired(entry.created_at_unix, ttl_secs, now_unix),
             EvictionReason::ExpiredTtl,
-        );
+            now_unix,
+        )
+    }
+
+    pub fn expired_entry_keys(&self, ttl_secs: u64) -> Vec<String> {
+        self.expired_entry_keys_at(ttl_secs, now_unix())
+    }
+
+    /// Returns entries expired at one caller-supplied timestamp.
+    pub fn expired_entry_keys_at(&self, ttl_secs: u64, now_unix: u64) -> Vec<String> {
+        let mut keys = self
+            .entries_by_hash
+            .iter()
+            .filter(|(_, entry)| is_expired(entry.created_at_unix, ttl_secs, now_unix))
+            .map(|(cache_key, _)| cache_key.clone())
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
     }
 
     pub fn len(&self) -> usize {
@@ -116,29 +198,96 @@ impl PacketCache {
         metadata: Value,
         hooks: &mut dyn DeltaReuseHooks,
     ) -> PacketCacheEntry {
-        let entry = PacketCacheEntry {
+        self.put_at_with_hooks(target, lookup, packets, metadata, now_unix(), hooks)
+    }
+
+    pub fn put_at_with_hooks(
+        &mut self,
+        target: &str,
+        lookup: &CacheLookup,
+        packets: Vec<CachePacket>,
+        metadata: Value,
+        created_at_unix: u64,
+        hooks: &mut dyn DeltaReuseHooks,
+    ) -> PacketCacheEntry {
+        let mutation = Self::prepare_mutation(target, lookup, packets, metadata);
+        self.commit_prepared_volatile_at(mutation, created_at_unix, hooks)
+    }
+
+    /// Builds an opaque cache mutation without exposing it through this cache.
+    ///
+    /// Persistence owners may encode this value before the caller acquires the
+    /// live cache mutex, then accept it cheaply while that mutex is held.
+    pub fn prepare_mutation(
+        target: &str,
+        lookup: &CacheLookup,
+        packets: Vec<CachePacket>,
+        metadata: Value,
+    ) -> PreparedCacheMutation {
+        PreparedCacheMutation {
+            entry: Self::prepare_entry_at(target, lookup, packets, metadata, 0),
+            #[cfg(test)]
+            drop_probe: PreparedMutationDropProbe::default(),
+        }
+    }
+
+    pub(crate) fn prepare_entry_at(
+        target: &str,
+        lookup: &CacheLookup,
+        packets: Vec<CachePacket>,
+        metadata: Value,
+        created_at_unix: u64,
+    ) -> PacketCacheEntry {
+        PacketCacheEntry {
             cache_key: lookup.cache_key.clone(),
             target: target.to_string(),
             input_hash: lookup.input_hash.clone(),
-            created_at_unix: now_unix(),
+            created_at_unix,
             packets,
             metadata,
             delta_reuse: DeltaReuse {
                 reused_from: lookup.suggested_reuse_base.clone(),
                 delta_ratio: None,
             },
-        };
+        }
+    }
 
+    pub(crate) fn commit_prepared_volatile_at(
+        &mut self,
+        mutation: PreparedCacheMutation,
+        created_at_unix: u64,
+        hooks: &mut dyn DeltaReuseHooks,
+    ) -> PacketCacheEntry {
+        let entry = self.insert_entry(mutation.into_entry_at(created_at_unix));
+        hooks.on_put(&entry);
+        entry
+    }
+
+    pub(crate) fn insert_entry(&mut self, entry: PacketCacheEntry) -> PacketCacheEntry {
+        let request_hash = Self::compute_request_hash(&entry.target, &entry.input_hash);
         if self.entries_by_hash.contains_key(&entry.cache_key) {
             self.remove_index_for(&entry.cache_key);
         }
         self.entries_by_hash
             .insert(entry.cache_key.clone(), entry.clone());
         self.latest_request_index
-            .insert(lookup.cache_key.clone(), entry.cache_key.clone());
+            .insert(request_hash, entry.cache_key.clone());
         self.index_entry(&entry);
-        hooks.on_put(&entry);
         entry
+    }
+
+    pub(crate) fn insert_owned(&mut self, entry: PacketCacheEntry) -> Option<PacketCacheEntry> {
+        let cache_key = entry.cache_key.clone();
+        let request_hash = Self::compute_request_hash(&entry.target, &entry.input_hash);
+        if self.entries_by_hash.contains_key(&cache_key) {
+            self.remove_index_for(&cache_key);
+        }
+        let document = build_recall_document(&entry, self.workspace_root.as_deref());
+        self.latest_request_index
+            .insert(request_hash, cache_key.clone());
+        let retired = self.entries_by_hash.insert(cache_key.clone(), entry);
+        self.index_document(document);
+        retired
     }
 
     pub fn list_entries(
@@ -230,6 +379,15 @@ impl PacketCache {
     }
 
     pub fn prune(&mut self, request: ContextStorePruneRequest) -> ContextStorePruneReport {
+        self.prune_at(request, now_unix())
+    }
+
+    /// Prunes entries selected at one caller-supplied timestamp.
+    pub fn prune_at(
+        &mut self,
+        request: ContextStorePruneRequest,
+        now_unix: u64,
+    ) -> ContextStorePruneReport {
         let removed = if request.all {
             let removed = self.entries_by_hash.len();
             self.entries_by_hash.clear();
@@ -242,9 +400,11 @@ impl PacketCache {
         } else {
             let ttl_secs = request.ttl_secs.unwrap_or(DEFAULT_PERSIST_TTL_SECS);
             self.remove_where(
-                |entry, now| is_expired(entry.created_at_unix, ttl_secs, now),
+                |entry, _| is_expired(entry.created_at_unix, ttl_secs, now_unix),
                 EvictionReason::ManualPrune,
+                now_unix,
             )
+            .len()
         };
 
         ContextStorePruneReport {
@@ -252,6 +412,27 @@ impl PacketCache {
             remaining: self.entries_by_hash.len(),
             reasons: self.eviction_counters.clone(),
         }
+    }
+
+    pub fn prune_candidate_keys(&self, request: &ContextStorePruneRequest) -> Vec<String> {
+        self.prune_candidate_keys_at(request, now_unix())
+    }
+
+    /// Returns prune candidates selected at one caller-supplied timestamp.
+    pub fn prune_candidate_keys_at(
+        &self,
+        request: &ContextStorePruneRequest,
+        now_unix: u64,
+    ) -> Vec<String> {
+        if request.all {
+            let mut keys = self.entries_by_hash.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            return keys;
+        }
+        self.expired_entry_keys_at(
+            request.ttl_secs.unwrap_or(DEFAULT_PERSIST_TTL_SECS),
+            now_unix,
+        )
     }
 
     pub fn stats(&self) -> ContextStoreStats {
@@ -273,32 +454,36 @@ impl PacketCache {
         }
     }
 
-    pub(crate) fn remove_where<F>(&mut self, mut predicate: F, reason: EvictionReason) -> usize
+    pub(crate) fn remove_where<F>(
+        &mut self,
+        mut predicate: F,
+        reason: EvictionReason,
+        now_unix: u64,
+    ) -> Vec<String>
     where
         F: FnMut(&PacketCacheEntry, u64) -> bool,
     {
-        let now = now_unix();
-        let before = self.entries_by_hash.len();
-        let to_remove = self
+        let mut to_remove = self
             .entries_by_hash
             .iter()
-            .filter(|(_, entry)| predicate(entry, now))
+            .filter(|(_, entry)| predicate(entry, now_unix))
             .map(|(cache_key, _)| cache_key.clone())
             .collect::<Vec<_>>();
+        to_remove.sort();
         for cache_key in &to_remove {
             self.entries_by_hash.remove(cache_key);
             self.remove_index_for(cache_key);
         }
         self.rebuild_latest_request_index();
-        let removed = before.saturating_sub(self.entries_by_hash.len());
+        let removed = to_remove.len();
         if removed > 0 {
             self.evict_reason(reason, removed);
         }
-        removed
+        to_remove
     }
 
     pub(crate) fn evict_reason(&mut self, reason: EvictionReason, count: usize) {
-        self.eviction_counters.add(reason, count);
+        add_evictions(&mut self.eviction_counters, reason, count);
     }
 
     pub(crate) fn rebuild_latest_request_index(&mut self) {
@@ -344,6 +529,10 @@ impl PacketCache {
 
     pub(crate) fn index_entry(&mut self, entry: &PacketCacheEntry) {
         let doc = build_recall_document(entry, self.workspace_root.as_deref());
+        self.index_document(doc);
+    }
+
+    fn index_document(&mut self, doc: RecallDocument) {
         self.recall_total_doc_length = self.recall_total_doc_length.saturating_add(doc.doc_length);
         self.recall_avg_doc_length = if self.entries_by_hash.is_empty() {
             0.0
@@ -456,7 +645,19 @@ pub(crate) fn is_expired(created_at_unix: u64, ttl_secs: u64, now_unix: u64) -> 
 }
 
 pub(crate) fn encode_json_value(value: &Value) -> String {
+    #[cfg(test)]
+    PERSIST_JSON_ENCODE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    static PERSIST_JSON_ENCODE_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn persist_json_encode_calls() -> usize {
+    PERSIST_JSON_ENCODE_CALLS.with(Cell::get)
 }
 
 pub(crate) fn decode_json_value(raw: &str) -> Value {
@@ -590,9 +791,9 @@ mod tests {
         );
 
         cache.save_to_disk(&config).unwrap();
-        let cache_path = persist_cache_path_v2(dir.path());
+        let cache_path = persist_cache_path_v3(dir.path());
         let raw = fs::read(cache_path).unwrap();
-        let envelope: PersistEnvelopeV2 = bincode::deserialize(&raw).unwrap();
+        let envelope = decode_checkpoint_envelope_v3(&raw).unwrap();
         assert_eq!(envelope.version, PERSIST_CACHE_VERSION);
         assert_eq!(envelope.entries.len(), 1);
         assert!(!envelope.recall_docs.is_empty());
@@ -602,6 +803,198 @@ mod tests {
         assert!(loaded
             .get_by_request("demo.reducer", &request_hash)
             .is_some());
+    }
+
+    #[test]
+    fn corrupt_primary_uses_matching_backup_then_replays_newer_wal() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let first_lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"checkpoint"}),
+            &mut hooks,
+        );
+        let first = cache.put_with_hooks(
+            "demo.reducer",
+            &first_lookup,
+            vec![CachePacket {
+                body: serde_json::json!({"summary":"checkpoint entry"}),
+                ..CachePacket::default()
+            }],
+            serde_json::json!({"valid":true}),
+            &mut hooks,
+        );
+        cache.save_to_disk(&config).unwrap();
+
+        let primary_path = persist_cache_path_v3(dir.path());
+        let raw = fs::read(&primary_path).unwrap();
+        let mut envelope = decode_checkpoint_envelope_v3(&raw).unwrap();
+        envelope.entries[0].metadata_json = "{".to_string();
+        let payload = wincode::serialize(&envelope).unwrap();
+        fs::write(&primary_path, encode_checkpoint_frame(&payload).unwrap()).unwrap();
+
+        let second_lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"wal"}),
+            &mut hooks,
+        );
+        let second = cache.put_with_hooks(
+            "demo.reducer",
+            &second_lookup,
+            vec![CachePacket {
+                body: serde_json::json!({"summary":"newer WAL entry"}),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+            &mut hooks,
+        );
+        append_wal_record(&config, 1, &[PersistDelta::upsert(&second)]).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+
+        assert!(loaded.get(&first.cache_key).is_some());
+        assert!(loaded.get(&second.cache_key).is_some());
+        assert_eq!(loaded.persisted_sequence, 1);
+        assert_eq!(loaded.stats().evictions.corrupt_load_recovery, 1);
+    }
+
+    #[test]
+    fn framed_checkpoint_rejects_live_entries_with_erased_indexes() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"indexes"}),
+            &mut hooks,
+        );
+        cache.put_with_hooks(
+            "demo.reducer",
+            &lookup,
+            vec![CachePacket {
+                body: serde_json::json!({"summary":"must remain recallable"}),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+            &mut hooks,
+        );
+        cache.save_to_disk(&config).unwrap();
+
+        let primary_path = persist_cache_path_v3(dir.path());
+        let raw = fs::read(&primary_path).unwrap();
+        let mut envelope = decode_checkpoint_envelope_v3(&raw).unwrap();
+        envelope.recall_docs.clear();
+        envelope.recall_postings.clear();
+        envelope.recall_avg_doc_length = 0.0;
+        envelope.file_ref_index.clear();
+        envelope.basename_alias_index.clear();
+        envelope.symbol_index.clear();
+        envelope.test_index.clear();
+        envelope.task_index.clear();
+        let payload = wincode::serialize(&envelope).unwrap();
+        fs::write(&primary_path, encode_checkpoint_frame(&payload).unwrap()).unwrap();
+        fs::remove_file(persist_cache_backup_path_v3(dir.path())).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+
+        assert!(loaded.is_empty());
+        assert_eq!(loaded.stats().evictions.corrupt_load_recovery, 1);
+    }
+
+    #[test]
+    fn unauthenticated_unframed_v3_is_rejected() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"legacy-v3"}),
+            &mut hooks,
+        );
+        cache.put_with_hooks(
+            "demo.reducer",
+            &lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+            &mut hooks,
+        );
+        cache.save_to_disk(&config).unwrap();
+        let primary_path = persist_cache_path_v3(dir.path());
+        let envelope = decode_checkpoint_envelope_v3(&fs::read(&primary_path).unwrap()).unwrap();
+        fs::write(&primary_path, wincode::serialize(&envelope).unwrap()).unwrap();
+        fs::remove_file(persist_cache_backup_path_v3(dir.path())).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+
+        assert!(loaded.is_empty());
+        assert_eq!(loaded.stats().evictions.corrupt_load_recovery, 1);
+    }
+
+    #[test]
+    fn corrupt_v3_with_gapped_wal_never_uses_legacy_baseline_or_truncates() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut legacy = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let old_lookup = legacy.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"old-v2"}),
+            &mut hooks,
+        );
+        legacy.put_with_hooks(
+            "demo.reducer",
+            &old_lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+            &mut hooks,
+        );
+        let v2 = PersistEnvelopeV2 {
+            version: 2,
+            entries: legacy.collect_live_entries(config.ttl_secs),
+            ..PersistEnvelopeV2::default()
+        };
+        let v2_path = persist_cache_path_v2(dir.path());
+        fs::create_dir_all(v2_path.parent().unwrap()).unwrap();
+        fs::write(v2_path, wincode::serialize(&v2).unwrap()).unwrap();
+        fs::write(persist_cache_path_v3(dir.path()), b"corrupt-primary").unwrap();
+        fs::write(persist_cache_backup_path_v3(dir.path()), b"corrupt-backup").unwrap();
+
+        let mut current = PacketCache::new();
+        let new_lookup = current.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task":"new-wal"}),
+            &mut hooks,
+        );
+        let new_entry = current.put_with_hooks(
+            "demo.reducer",
+            &new_lookup,
+            vec![CachePacket::default()],
+            Value::Null,
+            &mut hooks,
+        );
+        append_wal_record(&config, 7, &[PersistDelta::upsert(&new_entry)]).unwrap();
+        let wal_path = persist_cache_wal_path_v3(dir.path());
+        let wal_before = fs::read(&wal_path).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+        let open_error = match CachePersistence::open(config) {
+            Ok(_) => panic!("gapped WAL must not open a persistence owner"),
+            Err(error) => error,
+        };
+
+        assert!(loaded.is_empty());
+        assert!(matches!(
+            open_error,
+            CachePersistenceError::Io {
+                operation: "WAL recovery",
+                ..
+            }
+        ));
+        assert_eq!(fs::read(wal_path).unwrap(), wal_before);
     }
 
     #[test]
@@ -628,6 +1021,40 @@ mod tests {
         cache.evict_expired(60);
         assert!(cache.is_empty());
         assert_eq!(cache.stats().evictions.expired_ttl, 1);
+    }
+
+    #[test]
+    fn ttl_candidates_and_evictions_use_the_same_boundary_timestamp() {
+        const NOW: u64 = 10_000;
+        let cases = [
+            (0_u64, 10_000_u64, false),
+            (60, 59, false),
+            (60, 60, false),
+            (60, 61, true),
+        ];
+
+        for (case, (ttl_secs, age_secs, expected_expired)) in cases.into_iter().enumerate() {
+            let mut cache = PacketCache::new();
+            let mut hooks = NoopDeltaReuseHooks;
+            let target = format!("demo.reducer.{case}");
+            let lookup =
+                cache.lookup_with_hooks(&target, &serde_json::json!({"case": case}), &mut hooks);
+            let entry = PacketCache::prepare_entry_at(
+                &target,
+                &lookup,
+                vec![CachePacket::default()],
+                Value::Null,
+                NOW.saturating_sub(age_secs),
+            );
+            let cache_key = entry.cache_key.clone();
+            cache.insert_entry(entry);
+
+            let candidates = cache.expired_entry_keys_at(ttl_secs, NOW);
+            let removed = cache.evict_expired_entries_at(ttl_secs, NOW);
+
+            assert_eq!(candidates, removed, "case {case}");
+            assert_eq!(removed == vec![cache_key], expected_expired, "case {case}");
+        }
     }
 
     #[test]
@@ -676,7 +1103,7 @@ mod tests {
         };
         let path = persist_cache_path_v1(dir.path());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, bincode::serialize(&legacy_envelope).unwrap()).unwrap();
+        fs::write(path, wincode::serialize(&legacy_envelope).unwrap()).unwrap();
 
         let loaded = PacketCache::load_from_disk(&config);
         let hits = loaded.recall(
@@ -694,6 +1121,54 @@ mod tests {
             .match_reasons
             .iter()
             .any(|reason| reason == "basename_fallback" || reason == "canonical_path_match"));
+    }
+
+    #[test]
+    fn load_from_v2_rebuilds_missing_indexes_before_v3_checkpoint() {
+        let dir = tempdir().unwrap();
+        let config = PersistConfig::new(dir.path().to_path_buf());
+        let mut cache = PacketCache::new();
+        let mut hooks = NoopDeltaReuseHooks;
+        let lookup = cache.lookup_with_hooks(
+            "demo.reducer",
+            &serde_json::json!({"task_id":"task-v2"}),
+            &mut hooks,
+        );
+        cache.put_with_hooks(
+            "demo.reducer",
+            &lookup,
+            vec![CachePacket {
+                body: serde_json::json!({
+                    "summary": "v2 cache for src/migration.rs",
+                    "task_id": "task-v2",
+                    "files": [{"path": "src/migration.rs"}],
+                }),
+                ..CachePacket::default()
+            }],
+            Value::Null,
+            &mut hooks,
+        );
+        let envelope = PersistEnvelopeV2 {
+            version: 2,
+            entries: cache.collect_live_entries(config.ttl_secs),
+            ..PersistEnvelopeV2::default()
+        };
+        let path = persist_cache_path_v2(dir.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, wincode::serialize(&envelope).unwrap()).unwrap();
+
+        let loaded = PacketCache::load_from_disk(&config);
+        let hits = loaded.recall(
+            "src/migration.rs",
+            &RecallOptions {
+                limit: 4,
+                ..RecallOptions::default()
+            },
+        );
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].cache_key, lookup.cache_key);
     }
 
     #[test]
@@ -918,6 +1393,7 @@ mod tests {
         cache.remove_where(
             |entry, _| entry.cache_key == first.cache_key,
             EvictionReason::ManualPrune,
+            now_unix(),
         );
 
         assert_eq!(

@@ -146,7 +146,7 @@ pub struct FileDiff {
 }
 
 /// Counts of issues on changed lines, used for issue gate reporting.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, wincode::SchemaRead, wincode::SchemaWrite)]
 pub struct IssueGateCounts {
     pub changed_errors: u32,
     pub changed_warnings: u32,

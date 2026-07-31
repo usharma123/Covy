@@ -122,7 +122,7 @@ fn suggested_tests(diffs: &[FileDiff], config: &CovyConfig) -> Result<Vec<String
 
     let bytes = std::fs::read(path)?;
     let map = suite_foundation_core::cache::deserialize_testmap(&bytes)?;
-    if map.coverage.is_empty() || map.tests.is_empty() {
+    if !map.has_line_coverage() {
         return Ok(Vec::new());
     }
 
