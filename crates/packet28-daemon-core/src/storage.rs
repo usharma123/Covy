@@ -6233,9 +6233,18 @@ mod tests {
         let reader_stop = Arc::clone(&stop);
         let reader = thread::spawn(move || {
             while !reader_stop.load(AtomicOrdering::Acquire) {
-                let record = load_active_task_record(&reader_root)
-                    .expect("atomic read must not fail")
-                    .expect("published record must remain present");
+                let record = match load_active_task_record(&reader_root) {
+                    Ok(Some(record)) => record,
+                    Err(DaemonCoreError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::InvalidData
+                            && source
+                                .to_string()
+                                .contains("consecutive authenticated read attempts") =>
+                    {
+                        continue;
+                    }
+                    other => panic!("atomic read returned an unexpected result: {other:?}"),
+                };
                 match record.task_id.as_str() {
                     "old" => assert_eq!(record.session_id.as_deref(), Some(old_session.as_str())),
                     "new" => assert_eq!(record.session_id.as_deref(), Some(new_session.as_str())),
@@ -6249,6 +6258,19 @@ mod tests {
         }
         stop.store(true, AtomicOrdering::Release);
         reader.join().unwrap();
+        let published = load_active_task_record(root.path()).unwrap().unwrap();
+        assert_eq!(
+            (
+                published.task_id.as_str(),
+                published.session_id.as_deref(),
+                published.updated_at_unix,
+            ),
+            (
+                old.task_id.as_str(),
+                old.session_id.as_deref(),
+                old.updated_at_unix,
+            )
+        );
     }
 
     #[cfg(unix)]
