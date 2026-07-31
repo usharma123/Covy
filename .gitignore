@@ -41,3 +41,5 @@ dist/
 
 # Apache Commons Lang (test repo)
 apache/
+.gstack/
+.codex/
