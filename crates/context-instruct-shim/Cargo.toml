@@ -19,6 +19,7 @@ crate-type = ["cdylib"]
 packet28-daemon-client.workspace = true
 packet28-daemon-protocol.workspace = true
 sha2.workspace = true
+hex.workspace = true
 libc.workspace = true
 
 [dev-dependencies]

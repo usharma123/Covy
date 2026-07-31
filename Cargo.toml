@@ -46,6 +46,7 @@ testy-core = { version = "0.2.0", path = "crates/testy-core" }
 roaring = "0.10"
 blake3 = "1.4.0"
 constant_time_eq = "0.4"
+hex = "0.4"
 sha2 = "0.11"
 libc = "0.2.172"
 thiserror = "2.0.18"

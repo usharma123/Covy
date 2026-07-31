@@ -21,3 +21,4 @@ serde_json.workspace = true
 toml.workspace = true
 blake3.workspace = true
 sha2.workspace = true
+hex.workspace = true

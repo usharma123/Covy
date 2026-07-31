@@ -449,5 +449,5 @@ fn assert_all_stable_hashes_match(records: &[InstructionCacheTelemetryV1]) -> As
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }

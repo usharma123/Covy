@@ -1051,7 +1051,7 @@ fn stage_instruction_swaps(
                 continue;
             }
         };
-        let original_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let original_sha256 = hex::encode(Sha256::digest(&bytes));
         let content = match String::from_utf8(bytes.clone()) {
             Ok(content) => content,
             Err(_) => {
@@ -1179,7 +1179,7 @@ fn stage_rewritten_file(
     hooks: &dyn LifecycleHooks,
 ) -> Result<()> {
     session.interrupt_if_signalled()?;
-    let locally_computed_sha256 = format!("{:x}", Sha256::digest(rewritten));
+    let locally_computed_sha256 = hex::encode(Sha256::digest(rewritten));
     // Recovery trusts only the bytes received by this process. The daemon
     // digest may describe a pre-render representation, so it is not an
     // on-disk restoration invariant.
@@ -1261,7 +1261,7 @@ fn prepare_rewritten_file(
         backup_path,
         temp_path,
         original_sha256,
-        rewritten_sha256: format!("{:x}", Sha256::digest(rewritten)),
+        rewritten_sha256: hex::encode(Sha256::digest(rewritten)),
     })
 }
 
@@ -1818,7 +1818,7 @@ fn path_sha256(path: &Path) -> Result<Option<String>> {
                 .with_context(|| format!("failed to hash restored file '{}'", path.display()));
         }
     };
-    Ok(Some(format!("{:x}", Sha256::digest(bytes))))
+    Ok(Some(hex::encode(Sha256::digest(bytes))))
 }
 
 #[cfg(target_os = "macos")]
@@ -2661,7 +2661,7 @@ mod tests {
     }
 
     fn sha256(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     fn test_report(root: &Path, session_id: &str, state: SessionState) -> SessionReport {
