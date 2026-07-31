@@ -4,19 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Packet28 — Your AI Agent Reads Too Much</title>
-<meta name="description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see. 164x fewer tokens on large codebases.">
+<meta name="description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see: 3x more work per context window, up to 164x fewer tokens on large-file reads.">
+<link rel="canonical" href="https://packet28.dev/">
+<meta name="theme-color" content="#000000">
+<meta property="og:url" content="https://packet28.dev/">
 <meta property="og:title" content="Packet28 — Your AI Agent Reads Too Much">
-<meta property="og:description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see. 164x fewer tokens on large codebases.">
-<meta property="og:image" content="og-image.png">
+<meta property="og:description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see: 3x more work per context window, up to 164x fewer tokens on large-file reads.">
+<meta property="og:image" content="https://packet28.dev/og-image.png">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Packet28 — Your AI Agent Reads Too Much">
-<meta name="twitter:description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see. 164x fewer tokens on large codebases.">
-<meta name="twitter:image" content="og-image.png">
+<meta name="twitter:description" content="AI coding agents waste tokens reading entire files. Packet28 compresses what they see: 3x more work per context window, up to 164x fewer tokens on large-file reads.">
+<meta name="twitter:image" content="https://packet28.dev/og-image.png">
 <link rel="icon" type="image/svg+xml" href="logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&amp;family=Space+Mono:wght@400;700&amp;display=swap">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Space+Mono:wght@400;700&display=swap');
-
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
@@ -99,9 +103,16 @@ body::after {
   height: 100%;
   display: flex;
   align-items: center;
-  cursor: default;
+  cursor: pointer;
   letter-spacing: 0.3px;
   transition: background 0.08s;
+  color: inherit;
+  text-decoration: none;
+}
+
+.tui-bar-item:focus-visible {
+  outline: 2px solid var(--bg);
+  outline-offset: -2px;
 }
 
 .tui-bar-item:hover {
@@ -373,21 +384,6 @@ body::after {
 
 .hero-links a:hover .link-key { color: var(--bg); }
 
-.hero-producthunt {
-  margin-top: 20px;
-  display: flex;
-  justify-content: center;
-}
-
-.hero-producthunt a {
-  display: inline-block;
-  line-height: 0;
-}
-
-.hero-producthunt img {
-  display: block;
-}
-
 #matrix {
   position: absolute;
   inset: 0;
@@ -451,7 +447,7 @@ body::after {
 /* ═══ FEATURES ═══ */
 .features-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 0;
 }
 
@@ -461,6 +457,13 @@ body::after {
   margin-bottom: -1px;
   transition: all 0.15s;
 }
+
+/* Primary feature spans the full row — READ is the product, the rest support it */
+.feature-item--primary {
+  grid-column: 1 / -1;
+}
+
+.feature-item--primary .feature-title { font-size: 15px; }
 
 .feature-item:hover {
   background: rgba(255, 255, 255, 0.02);
@@ -509,6 +512,192 @@ body::after {
   background: rgba(255, 255, 255, 0.04);
   padding: 1px 5px;
   border: 1px solid var(--border);
+}
+
+/* ═══ READ COMPARISON (what the agent sees) ═══ */
+.readviz {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 24px;
+}
+
+.readviz-col {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.readviz-col + .readviz-col { border-left: none; }
+
+.readviz-head {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.readviz-head b { color: var(--dim); font-weight: 600; }
+.readviz-col--after .readviz-head b { color: var(--highlight); }
+
+.readviz-lines {
+  flex: 1;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 260px;
+}
+
+/* One row per source line: a dim bar for skipped, a solid bar for served */
+.readviz-line {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.09);
+  flex-shrink: 0;
+}
+
+.readviz-line--kept {
+  background: var(--highlight);
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.35);
+}
+
+.readviz-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 18px;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.readviz-foot {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.readviz-col--after .readviz-foot { color: var(--dim); }
+
+/* ═══ ARCHITECTURE ═══ */
+.arch-stack {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.arch-layer {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  transition: background 0.15s;
+}
+
+.arch-layer:last-child { border-bottom: none; }
+.arch-layer:hover { background: rgba(255, 255, 255, 0.02); }
+
+.arch-layer-name {
+  width: 168px;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--highlight);
+  letter-spacing: 0.3px;
+}
+
+.arch-layer-parts {
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.8;
+  min-width: 0;
+}
+
+.arch-layer-parts span { color: var(--muted); }
+
+.arch-note {
+  margin-top: 28px;
+  border: 1px solid var(--border);
+  padding: 18px 20px;
+}
+
+.arch-note-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--highlight);
+  margin-bottom: 12px;
+  letter-spacing: 0.3px;
+}
+
+.arch-note ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.arch-note li {
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.7;
+  padding-left: 18px;
+  position: relative;
+}
+
+.arch-note li::before {
+  content: '\2192';
+  position: absolute;
+  left: 0;
+  color: var(--muted);
+}
+
+/* ═══ SPEC LINKS ═══ */
+.spec-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  margin-top: 24px;
+}
+
+.spec-link {
+  border: 1px solid var(--border);
+  margin-right: -1px;
+  margin-bottom: -1px;
+  padding: 14px 18px;
+  text-decoration: none;
+  display: block;
+  transition: all 0.15s;
+}
+
+.spec-link:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--border-hi);
+  position: relative;
+  z-index: 1;
+}
+
+.spec-link-name {
+  font-size: 12px;
+  color: var(--highlight);
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.spec-link-desc {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 /* ═══ BENCHMARK ═══ */
@@ -764,11 +953,42 @@ body::after {
   transition-delay: calc(var(--i, 0) * 60ms);
 }
 
+/* ═══ REDUCED MOTION ═══ */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  /* Reveal/typing animations gate visibility — force the end state instead */
+  .reveal { opacity: 1; transform: none; }
+  .term-line { opacity: 1; transform: none; }
+  .cursor-blink { animation: none; opacity: 1; }
+  .hero-logo-char { visibility: visible; }
+  .hero-logo-char .block { display: none !important; }
+
+  body::after { display: none; }
+  #matrix { display: none; }
+}
+
 /* ═══ RESPONSIVE ═══ */
 @media (max-width: 768px) {
   .container { padding: 0 20px; }
 
   .features-grid { grid-template-columns: 1fr; }
+
+  .readviz { grid-template-columns: 1fr; }
+  .readviz-col + .readviz-col { border-left: 1px solid var(--border); border-top: none; }
+  .readviz-lines { min-height: 150px; }
+  .readviz-arrow { padding: 10px 0; transform: rotate(90deg); }
+
+  .arch-layer { flex-direction: column; gap: 6px; }
+  .arch-layer-name { width: 100%; }
+
+  .spec-grid { grid-template-columns: 1fr; }
 
   .bench-row { flex-direction: column; }
   .bench-label { width: 100%; }
@@ -804,10 +1024,11 @@ body::after {
 
 <!-- ═══ TUI MENU BAR ═══ -->
 <nav class="tui-bar">
-  <span class="tui-bar-item"><span class="hotkey">F</span>ile</span>
-  <span class="tui-bar-item"><span class="hotkey">V</span>iew</span>
-  <span class="tui-bar-item"><span class="hotkey">S</span>etup</span>
-  <span class="tui-bar-item"><span class="hotkey">H</span>elp</span>
+  <a class="tui-bar-item" href="#features"><span class="hotkey">W</span>hat</a>
+  <a class="tui-bar-item" href="#architecture"><span class="hotkey">A</span>rchitecture</a>
+  <a class="tui-bar-item" href="#benchmark"><span class="hotkey">B</span>enchmark</a>
+  <a class="tui-bar-item" href="#quickstart"><span class="hotkey">S</span>etup</a>
+  <a class="tui-bar-item" href="#specs"><span class="hotkey">D</span>ocs</a>
   <span class="tui-bar-right">packet28</span>
 </nav>
 
@@ -823,7 +1044,8 @@ body::after {
       AI coding agents waste tokens reading entire files.
       Packet28 compresses what your agent sees &mdash; a 9,243-line file becomes
       <strong>~40 relevant lines</strong>.
-      Result: <strong>164x fewer tokens</strong> on large codebases.<span class="cursor-blink"></span>
+      Result: <strong>3x more work per context window</strong>, and up to
+      <strong>164x fewer tokens</strong> on large-file reads.<span class="cursor-blink"></span>
     </p>
     <div class="tools-inline">
       <span>Works with:</span> Claude Code &middot; Cursor &middot; Codex &middot; Copilot &middot; Windsurf
@@ -837,12 +1059,9 @@ body::after {
     </div>
     <div class="hero-links">
       <a href="#quickstart"><span class="link-key">1</span> get started</a>
-      <a href="https://github.com/usharma123/Packet28" target="_blank"><span class="link-key">2</span> source</a>
-      <a href="https://www.npmjs.com/package/packet28" target="_blank"><span class="link-key">3</span> npm</a>
-      <a href="https://deepwiki.com/usharma123/Packet28" target="_blank"><span class="link-key">4</span> docs</a>
-    </div>
-    <div class="hero-producthunt">
-      <a href="https://www.producthunt.com/products/packet28?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-packet28" target="_blank" rel="noopener noreferrer"><img alt="Packet28 - Context OS for AI coding agents | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1101005&amp;theme=dark&amp;t=1773850877970"></a>
+      <a href="https://github.com/usharma123/Packet28" target="_blank" rel="noopener"><span class="link-key">2</span> source</a>
+      <a href="https://www.npmjs.com/package/packet28" target="_blank" rel="noopener"><span class="link-key">3</span> npm</a>
+      <a href="https://deepwiki.com/usharma123/Packet28" target="_blank" rel="noopener"><span class="link-key">4</span> docs</a>
     </div>
   </div>
 </section>
@@ -855,9 +1074,24 @@ body::after {
       <h2 class="section-title">What it does</h2>
     </div>
     <div class="features-grid reveal-stagger">
-      <div class="feature-item reveal" style="--i:0">
+      <div class="feature-item feature-item--primary reveal" style="--i:0">
         <div class="feature-head"><span class="feature-tag">READ</span><span class="feature-title">Compresses file reads</span></div>
-        <div class="feature-body"><p class="feature-desc">Your agent tries to read a 9,243-line file. Packet28 intercepts it and returns only the ~40 lines that matter for the current task. No wasted tokens on irrelevant code.</p></div>
+        <div class="feature-body">
+          <p class="feature-desc">Your agent tries to read a 9,243-line file. Packet28 intercepts it and returns only the ~40 lines that matter for the current task &mdash; plus anchors back to the full file. No wasted tokens on irrelevant code.</p>
+          <div class="readviz" id="readviz">
+            <div class="readviz-col readviz-col--before">
+              <div class="readviz-head"><span>without packet28</span><b>9,243 lines</b></div>
+              <div class="readviz-lines" id="readviz-before"></div>
+              <div class="readviz-foot">The whole file enters the context window. Most of it is never referenced again.</div>
+            </div>
+            <div class="readviz-arrow" aria-hidden="true">&rarr;</div>
+            <div class="readviz-col readviz-col--after">
+              <div class="readviz-head"><span>with packet28</span><b>~40 lines</b></div>
+              <div class="readviz-lines" id="readviz-after"></div>
+              <div class="readviz-foot">Only the regions the task touches, with file and symbol anchors to fetch more on demand.</div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="feature-item reveal" style="--i:1">
         <div class="feature-head"><span class="feature-tag">MAP</span><span class="feature-title">Maps your repo</span></div>
@@ -871,6 +1105,48 @@ body::after {
         <div class="feature-head"><span class="feature-tag">SET</span><span class="feature-title">One command setup</span></div>
         <div class="feature-body"><p class="feature-desc">Auto-detects Claude Code, Cursor, Codex, Copilot, or Windsurf and configures everything. One command: <code>packet28 setup --root .</code></p></div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ ARCHITECTURE ═══ -->
+<div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">architecture</span></div></div>
+<section class="section" id="architecture">
+  <div class="container">
+    <div class="section-header reveal">
+      <h2 class="section-title">How it works</h2>
+      <p class="section-desc">A Rust workspace of 28 crates in five layers. Reducers compress artifacts, the runtime decides what the agent sees, and every output carries the same envelope.</p>
+    </div>
+    <div class="arch-stack reveal">
+      <div class="arch-layer">
+        <div class="arch-layer-name">Agent surface</div>
+        <div class="arch-layer-parts">packet28-agent wrapper <span>&middot;</span> agent-prompt generator <span>&middot;</span> MCP surface</div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-layer-name">CLI + daemon</div>
+        <div class="arch-layer-parts">Packet28 CLI <span>&middot;</span> packet28d daemon <span>&middot;</span> task / watch / stream protocol</div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-layer-name">Context runtime</div>
+        <div class="arch-layer-parts">kernel <span>&middot;</span> scheduler <span>&middot;</span> memory &amp; recall <span>&middot;</span> assembly <span>&middot;</span> correlation <span>&middot;</span> policy &amp; guard <span>&middot;</span> agent state</div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-layer-name">Reducers</div>
+        <div class="arch-layer-parts">diffy <span>&middot;</span> covy <span>&middot;</span> testy <span>&middot;</span> stacky <span>&middot;</span> buildy <span>&middot;</span> mapy <span>&middot;</span> proxy</div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-layer-name">Shared contracts</div>
+        <div class="arch-layer-parts">EnvelopeV1 <span>&middot;</span> BudgetCost <span>&middot;</span> FileRef / SymbolRef <span>&middot;</span> Provenance</div>
+      </div>
+    </div>
+    <div class="arch-note reveal">
+      <div class="arch-note-title">When it can&rsquo;t compress safely, it gets out of the way</div>
+      <ul>
+        <li>A command that policy excludes, or that can&rsquo;t be rewritten safely, passes through raw.</li>
+        <li>Unsupported reducer families run raw, and the fallback reason is recorded in the tool result.</li>
+        <li>If pre-tool rewriting isn&rsquo;t available for your runtime, activity is captured post-tool instead.</li>
+        <li>If the daemon or preferred search backend is down, reducers and search run locally.</li>
+      </ul>
     </div>
   </div>
 </section>
@@ -902,7 +1178,8 @@ body::after {
       </div>
       <div class="bench-footnote">
         Task: "Understand StringUtils.wrap and fix null delimiter handling"<br>
-        Naive agent reads entire 9,243-line files. Packet28 serves ~40 relevant lines + anchors.
+        Naive agent reads entire 9,243-line files. Packet28 serves ~40 relevant lines + anchors.<br>
+        Bars are not to scale &mdash; at true ratio the Packet28 bar is 0.6% wide. Large-file reads are the best case; across a full session the typical result is ~90% less search overhead and about 3x more work per context window.
       </div>
     </div>
   </div>
@@ -942,6 +1219,47 @@ body::after {
   </div>
 </section>
 
+<!-- ═══ SPECS ═══ -->
+<div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">specs</span></div></div>
+<section class="section" id="specs">
+  <div class="container">
+    <div class="section-header reveal">
+      <h2 class="section-title">Protocol &amp; format specs</h2>
+      <p class="section-desc">The wire formats everything above is built on, written down.</p>
+    </div>
+    <div class="spec-grid reveal">
+      <a class="spec-link" href="packet-envelope-v1.md">
+        <div class="spec-link-name">Packet Envelope v1</div>
+        <div class="spec-link-desc">The envelope every reducer output is wrapped in</div>
+      </a>
+      <a class="spec-link" href="context-store-v1.md">
+        <div class="spec-link-name">Context Store v1</div>
+        <div class="spec-link-desc">On-disk cache, indexes, and recall layout</div>
+      </a>
+      <a class="spec-link" href="daemon-protocol.md">
+        <div class="spec-link-name">Daemon Protocol</div>
+        <div class="spec-link-desc">packet28d requests, tasks, watches, streams</div>
+      </a>
+      <a class="spec-link" href="schema-registry.md">
+        <div class="spec-link-name">Schema Registry</div>
+        <div class="spec-link-desc">Packet types and their versioned schemas</div>
+      </a>
+      <a class="spec-link" href="wire-profiles.md">
+        <div class="spec-link-name">Wire Profiles</div>
+        <div class="spec-link-desc">Transport profiles and negotiated encodings</div>
+      </a>
+      <a class="spec-link" href="machine-output-contract.md">
+        <div class="spec-link-name">Machine Output Contract</div>
+        <div class="spec-link-desc">Guarantees for tools parsing Packet28 output</div>
+      </a>
+      <a class="spec-link" href="ci-agent-examples.md">
+        <div class="spec-link-name">CI Agent Examples</div>
+        <div class="spec-link-desc">Wiring Packet28 into pipeline agents</div>
+      </a>
+    </div>
+  </div>
+</section>
+
 <!-- ═══ FOUNDER ═══ -->
 <div class="section-rule"><div class="section-rule-inner"><span class="section-rule-label">founder</span></div></div>
 <section class="section" id="founder">
@@ -953,7 +1271,7 @@ body::after {
       <div class="founder-card">
         <div class="founder-name">Utsav Sharma</div>
         <div class="founder-role">Founder</div>
-        <a href="https://www.linkedin.com/in/usharma124" target="_blank" class="founder-link">linkedin &rarr;</a>
+        <a href="https://www.linkedin.com/in/usharma124" target="_blank" rel="noopener" class="founder-link">linkedin &rarr;</a>
       </div>
     </div>
   </div>
@@ -970,18 +1288,19 @@ body::after {
       <span class="footer-sep">&middot;</span>
       <span>2026</span>
       <span class="footer-sep">&vert;</span>
-      <a href="https://github.com/usharma123/Packet28" target="_blank">github</a>
+      <a href="https://github.com/usharma123/Packet28" target="_blank" rel="noopener">github</a>
       <span class="footer-sep">&middot;</span>
-      <a href="https://www.npmjs.com/package/packet28" target="_blank">npm</a>
+      <a href="https://www.npmjs.com/package/packet28" target="_blank" rel="noopener">npm</a>
       <span class="footer-sep">&middot;</span>
-      <a href="https://deepwiki.com/usharma123/Packet28" target="_blank">docs</a>
+      <a href="https://deepwiki.com/usharma123/Packet28" target="_blank" rel="noopener">docs</a>
     </div>
   </div>
 </footer>
 
 <!-- ═══ TUI STATUS BAR ═══ -->
 <nav class="tui-status">
-  <span><span class="tui-status-key">1-4</span> navigate</span>
+  <span><span class="tui-status-key">1-4</span> links</span>
+  <span><span class="tui-status-key">W A B S D</span> sections</span>
   <span><span class="tui-status-key">C</span> copy install</span>
   <span class="tui-status-right">packet28 &mdash; MIT</span>
 </nav>
@@ -990,12 +1309,47 @@ body::after {
 (function() {
   'use strict';
 
-  window.copyCmd = function() {
-    navigator.clipboard.writeText('npm install -g packet28');
+  var reduceMotion = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var INSTALL_CMD = 'npm install -g packet28';
+
+  function flashCopied(ok) {
     var btn = document.getElementById('copy-btn');
-    btn.textContent = 'COPIED';
+    if (!btn) return;
+    btn.textContent = ok ? 'COPIED' : 'PRESS ⌘C';
     btn.classList.add('copied');
     setTimeout(function() { btn.textContent = 'COPY'; btn.classList.remove('copied'); }, 1500);
+  }
+
+  // clipboard API is unavailable on insecure origins and can reject on denial —
+  // fall back to a selection so the command is still reachable.
+  function legacyCopy() {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = INSTALL_CMD;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  window.copyCmd = function() {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(INSTALL_CMD).then(
+        function() { flashCopied(true); },
+        function() { flashCopied(legacyCopy()); }
+      );
+      return;
+    }
+    flashCopied(legacyCopy());
   };
 
   // Logo scan — solid block slides left-to-right, revealing each char
@@ -1007,6 +1361,12 @@ body::after {
     var step = 80;
 
     blocks.forEach(function(b) { b.style.display = 'none'; });
+
+    if (reduceMotion) {
+      chars.forEach(function(ch) { ch.classList.add('revealed'); });
+      logo.classList.add('settled');
+      return;
+    }
 
     chars.forEach(function(ch, i) {
       setTimeout(function() {
@@ -1023,14 +1383,20 @@ body::after {
     });
   })();
 
-  // Matrix rain
+  // Matrix rain — paused whenever the hero is off-screen or the tab is hidden
   (function() {
     var canvas = document.getElementById('matrix');
+    if (!canvas || reduceMotion) {
+      if (canvas) canvas.style.display = 'none';
+      return;
+    }
     var ctx = canvas.getContext('2d');
     var columns, drops;
     var fontSize = 16;
     var last = 0;
     var interval = 55;
+    var running = false;
+    var onScreen = true;
 
     function resize() {
       var hero = canvas.parentElement;
@@ -1042,7 +1408,18 @@ body::after {
       });
     }
 
+    function shouldRun() {
+      return onScreen && !document.hidden;
+    }
+
+    function start() {
+      if (running || !shouldRun()) return;
+      running = true;
+      requestAnimationFrame(draw);
+    }
+
     function draw(ts) {
+      if (!shouldRun()) { running = false; return; }
       requestAnimationFrame(draw);
       if (ts - last < interval) return;
       last = ts;
@@ -1058,8 +1435,55 @@ body::after {
     }
 
     resize();
-    requestAnimationFrame(draw);
     window.addEventListener('resize', resize);
+    document.addEventListener('visibilitychange', start);
+
+    new IntersectionObserver(function(entries) {
+      onScreen = entries[0].isIntersecting;
+      start();
+    }, { threshold: 0 }).observe(canvas.parentElement);
+
+    start();
+  })();
+
+  // Read comparison — one bar per source line, scaled to the column height
+  (function() {
+    var before = document.getElementById('readviz-before');
+    var after = document.getElementById('readviz-after');
+    if (!before || !after) return;
+
+    var ROWS = 56;             // bars drawn per column
+    var TOTAL_LINES = 9243;    // lines in the real benchmark file
+    var KEPT_LINES = 40;       // lines Packet28 actually serves
+
+    function fill(el) {
+      var frag = document.createDocumentFragment();
+      for (var i = 0; i < ROWS; i++) {
+        var row = document.createElement('div');
+        row.className = 'readviz-line';
+        frag.appendChild(row);
+      }
+      el.appendChild(frag);
+      return el.children;
+    }
+
+    fill(before);
+    var afterRows = fill(after);
+
+    // Represent the kept regions as a handful of contiguous clusters rather than
+    // scattered single lines — that is what a region read actually looks like.
+    var keptRowCount = Math.max(3, Math.round(ROWS * (KEPT_LINES / TOTAL_LINES) * 30));
+    var clusters = [
+      { start: 6, len: Math.ceil(keptRowCount * 0.45) },
+      { start: 24, len: Math.ceil(keptRowCount * 0.35) },
+      { start: 41, len: Math.ceil(keptRowCount * 0.25) }
+    ];
+
+    clusters.forEach(function(c) {
+      for (var i = c.start; i < c.start + c.len && i < afterRows.length; i++) {
+        afterRows[i].classList.add('readviz-line--kept');
+      }
+    });
   })();
 
   // Reveal observer
@@ -1101,16 +1525,42 @@ body::after {
   var termEl = document.getElementById('terminal');
   if (termEl) termObs.observe(termEl);
 
-  // Keyboard navigation — hero links
+  // Keyboard navigation — hero links (1-4) and menu-bar hotkeys
+  var HOTKEY_TARGETS = {
+    w: '#features',
+    a: '#architecture',
+    b: '#benchmark',
+    s: '#quickstart',
+    d: '#specs'
+  };
+
   document.addEventListener('keydown', function(e) {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    // Never shadow browser/OS shortcuts such as ⌘1 or Ctrl+D
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+
+    var key = e.key.toLowerCase();
+
     var links = document.querySelectorAll('.hero-links a');
-    var idx = parseInt(e.key) - 1;
+    var idx = parseInt(e.key, 10) - 1;
     if (idx >= 0 && idx < links.length) {
+      e.preventDefault();
       links[idx].click();
+      return;
     }
-    if (e.key === 'c' || e.key === 'C') {
+
+    if (key === 'c') {
+      e.preventDefault();
       window.copyCmd();
+      return;
+    }
+
+    if (HOTKEY_TARGETS[key]) {
+      var target = document.querySelector(HOTKEY_TARGETS[key]);
+      if (target) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth' });
+      }
     }
   });
 
