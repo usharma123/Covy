@@ -81,7 +81,10 @@ fn test_mcp_native_read_auto_captures_regions() {
         "investigating",
         &["src/alpha.rs"],
     );
-    stop_mcp_server(server);
+    // Keep the MCP process (and therefore the daemon it started) alive while
+    // the external hooks run. The bounded process harness owns the full child
+    // process group, so stopping MCP here would intentionally terminate the
+    // daemon before the hook-captured state is inspected.
     let (status, _) = run_claude_hook(
         dir.path(),
         &json!({
@@ -103,9 +106,6 @@ fn test_mcp_native_read_auto_captures_regions() {
         }),
     );
     assert_eq!(status, 0);
-
-    let mut server = start_mcp_server(dir.path());
-    initialize_mcp_session(&mut server);
 
     write_mcp_message(
         &mut server,
