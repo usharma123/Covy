@@ -1,22 +1,32 @@
 use super::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::ops::Deref;
 
-static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+struct TestDaemonState {
+    state: Arc<Mutex<DaemonState>>,
+    _root: tempfile::TempDir,
+}
 
-fn test_state() -> Arc<Mutex<DaemonState>> {
-    let root = std::env::temp_dir().join(format!(
-        "packet28-hook-test-{}-{}",
-        now_unix_millis(),
-        TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir_all(&root).unwrap();
+impl Deref for TestDaemonState {
+    type Target = Arc<Mutex<DaemonState>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+fn test_state() -> TestDaemonState {
+    let test_root = tempfile::Builder::new()
+        .prefix("packet28-hook-test-")
+        .tempdir()
+        .unwrap();
+    let root = test_root.path().to_path_buf();
     ensure_daemon_dir(&root).unwrap();
     let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
         PersistConfig::new(root.clone()),
     ));
     let (index_tx, index_rx) = mpsc::channel();
     thread::spawn(move || while index_rx.recv().is_ok() {});
-    Arc::new(Mutex::new(DaemonState {
+    let state = Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
         runtime: DaemonRuntimeInfo::default(),
@@ -29,7 +39,23 @@ fn test_state() -> Arc<Mutex<DaemonState>> {
         interactive_index: InteractiveIndexRuntime::default(),
         index_tx,
         shutting_down: false,
-    }))
+    }));
+    TestDaemonState {
+        state,
+        _root: test_root,
+    }
+}
+
+#[test]
+fn test_state_removes_temporary_root_when_dropped() {
+    let state = test_state();
+    let root = state.lock().unwrap().root.clone();
+    let surviving_state_reference = state.clone();
+
+    assert!(root.exists());
+    drop(state);
+    assert!(!root.exists());
+    drop(surviving_state_reference);
 }
 
 fn packet(summary: &str) -> packet28_daemon_core::HookReducerPacket {
@@ -193,7 +219,7 @@ fn infra_mutation_busts_cached_infra_reads() {
     .unwrap();
 
     let after_mutation = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-infra-epoch".to_string(),
             reducer_packet: Some(read),
@@ -236,7 +262,7 @@ fn remote_state_cache_entries_expire() {
     }
 
     let after_ttl = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-remote-ttl".to_string(),
             reducer_packet: Some(read),
@@ -390,7 +416,7 @@ fn failed_edit_does_not_bust_fs_cache() {
     .unwrap();
 
     let after_failed_edit = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-failed-edit".to_string(),
             reducer_packet: Some(packet("first read")),
@@ -504,7 +530,7 @@ fn edit_invalidation_busts_git_cache() {
     .unwrap();
 
     let after_edit = hook_ingest(
-        state,
+        state.clone(),
         HookIngestRequest {
             task_id: "task-git-edit".to_string(),
             reducer_packet: Some(git_packet),

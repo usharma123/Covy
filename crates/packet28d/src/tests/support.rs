@@ -1,23 +1,32 @@
 use super::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::ops::Deref;
 
-static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+pub(super) struct TestDaemonState {
+    state: Arc<Mutex<DaemonState>>,
+    _root: tempfile::TempDir,
+}
 
-pub(super) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
-    let root = std::env::temp_dir().join(format!(
-        "packet28-broker-test-{}-{}-{}",
-        now_unix_millis(),
-        std::process::id(),
-        TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&root).unwrap();
+impl Deref for TestDaemonState {
+    type Target = Arc<Mutex<DaemonState>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+pub(super) fn daemon_test_state() -> TestDaemonState {
+    let test_root = tempfile::Builder::new()
+        .prefix("packet28-broker-test-")
+        .tempdir()
+        .unwrap();
+    let root = test_root.path().to_path_buf();
     ensure_daemon_dir(&root).unwrap();
     let kernel = Arc::new(Kernel::with_v1_reducers_and_persistence(
         PersistConfig::new(root.clone()),
     ));
     let (index_tx, index_rx) = mpsc::channel();
     thread::spawn(move || while index_rx.recv().is_ok() {});
-    Arc::new(Mutex::new(DaemonState {
+    let state = Arc::new(Mutex::new(DaemonState {
         root,
         kernel,
         runtime: DaemonRuntimeInfo::default(),
@@ -30,11 +39,27 @@ pub(super) fn daemon_test_state() -> Arc<Mutex<DaemonState>> {
         interactive_index: InteractiveIndexRuntime::default(),
         index_tx,
         shutting_down: false,
-    }))
+    }));
+    TestDaemonState {
+        state,
+        _root: test_root,
+    }
 }
 
 pub(super) fn daemon_test_root(state: &Arc<Mutex<DaemonState>>) -> PathBuf {
     state.lock().unwrap().root.clone()
+}
+
+#[test]
+fn daemon_test_state_removes_temporary_root_when_dropped() {
+    let state = daemon_test_state();
+    let root = daemon_test_root(&state);
+    let surviving_state_reference = state.clone();
+
+    assert!(root.exists());
+    drop(state);
+    assert!(!root.exists());
+    drop(surviving_state_reference);
 }
 
 pub(super) fn broker_evidence_confidence_body(

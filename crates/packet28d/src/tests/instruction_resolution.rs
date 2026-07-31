@@ -10,7 +10,7 @@ fn instruction_file_resolution_rewrites_larger_markdown() {
     let state = daemon_test_state();
     let workspace_root = state.lock().unwrap().root.display().to_string();
     let response = resolve_instruction_file(
-        state,
+        state.clone(),
         InstructionFileResolveRequest {
             workspace_root,
             path: "AGENTS.md".to_string(),
@@ -43,7 +43,7 @@ fn instruction_file_resolution_rewrites_larger_markdown() {
 fn instruction_file_resolution_fails_open_when_summary_is_not_smaller() {
     let state = daemon_test_state();
     let response = resolve_instruction_file(
-        state,
+        state.clone(),
         InstructionFileResolveRequest {
             workspace_root: ".".to_string(),
             path: "AGENTS.md".to_string(),
@@ -69,7 +69,7 @@ fn context_resolve_rewrites_instruction_file_and_preserves_metadata() {
     let state = daemon_test_state();
     let workspace_root = state.lock().unwrap().root.display().to_string();
     let response = resolve_context(
-        state,
+        state.clone(),
         ContextResolveRequest {
             workspace_root,
             source_kind: ContextSourceKind::InstructionFile,
@@ -124,7 +124,7 @@ fn instruction_file_resolution_compatibility_matches_context_resolve_decision() 
     )
     .unwrap();
     let generic = resolve_context(
-        state,
+        state.clone(),
         ContextResolveRequest {
             workspace_root,
             source_kind: ContextSourceKind::InstructionFile,

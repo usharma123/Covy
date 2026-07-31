@@ -117,7 +117,7 @@ fn prepare_handoff_only_resumes_recorded_handoff_artifacts() {
     }
 
     let response = broker_prepare_handoff(
-        state,
+        state.clone(),
         BrokerPrepareHandoffRequest {
             task_id: "task-resume-guard".to_string(),
             query: None,
@@ -165,7 +165,7 @@ fn prepare_handoff_warns_when_tool_evidence_contradicts_active_hypothesis() {
     );
 
     let response = broker_prepare_handoff(
-        state,
+        state.clone(),
         BrokerPrepareHandoffRequest {
             task_id: "task-contradiction".to_string(),
             query: None,
@@ -234,7 +234,7 @@ fn prepare_handoff_readiness_score_rises_after_verification_evidence() {
     )
     .unwrap();
     let verified = broker_prepare_handoff(
-        state,
+        state.clone(),
         BrokerPrepareHandoffRequest {
             task_id: "task-readiness-verified".to_string(),
             response_mode: Some(BrokerResponseMode::Slim),

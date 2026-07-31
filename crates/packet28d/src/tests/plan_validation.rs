@@ -40,7 +40,7 @@ fn validate_plan_requires_testmap_mapped_gate_for_uncovered_edits() {
     write_testmap_state(&root, "src/alpha.rs", &["tests/alpha_test.rs"]);
 
     let response = broker_validate_plan(
-        state,
+        state.clone(),
         BrokerValidatePlanRequest {
             task_id: "task-testmap-gate".to_string(),
             require_read_before_edit: Some(false),
@@ -101,7 +101,7 @@ fn validate_plan_accepts_testmap_mapped_or_generic_test_gate() {
         write_testmap_state(&root, "src/alpha.rs", &["tests/alpha_test.rs"]);
 
         let response = broker_validate_plan(
-            state,
+            state.clone(),
             BrokerValidatePlanRequest {
                 task_id: format!("task-testmap-gate-{name}"),
                 require_read_before_edit: Some(false),
@@ -161,7 +161,7 @@ fn validate_plan_warns_when_testmap_has_no_mapping_for_uncovered_edit() {
     write_testmap_state(&root, "src/beta.rs", &["tests/beta_test.rs"]);
 
     let response = broker_validate_plan(
-        state,
+        state.clone(),
         BrokerValidatePlanRequest {
             task_id: "task-testmap-missing-mapping".to_string(),
             require_read_before_edit: Some(false),
@@ -218,7 +218,7 @@ fn validate_plan_warns_when_cached_testmap_is_stale() {
     write_testmap_state_with_generated_at(&root, "src/alpha.rs", &["tests/alpha_test.rs"], 1);
 
     let response = broker_validate_plan(
-        state,
+        state.clone(),
         BrokerValidatePlanRequest {
             task_id: "task-stale-testmap".to_string(),
             require_read_before_edit: Some(false),
@@ -272,7 +272,7 @@ fn validate_plan_warns_when_edit_relies_on_stale_evidence_after_checkpoint() {
     );
 
     let response = broker_validate_plan(
-        state,
+        state.clone(),
         BrokerValidatePlanRequest {
             task_id: "task-stale-evidence".to_string(),
             require_read_before_edit: Some(false),
