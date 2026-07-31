@@ -73,21 +73,12 @@ pub(crate) fn run_packet28_instruction_summarize(
         .unwrap_or(DEFAULT_INSTRUCTION_SUMMARY_BUDGET_TOKENS)
         .max(96);
     let budget_bytes = (budget_tokens as usize).saturating_mul(4).max(384);
-    let snapshot = if let Some(task_id) = request
-        .task_id
-        .as_deref()
-        .filter(|task_id| !task_id.trim().is_empty())
-    {
-        Some(derive_agent_snapshot(&ctx.cache_entries()?, task_id))
-    } else {
-        None
-    };
     let rendered = render_instruction_summary(
         &request.path,
         &request.content,
         &request.content_sha256,
         &task_label,
-        snapshot.as_ref(),
+        None,
         budget_bytes,
     );
 
@@ -233,8 +224,8 @@ fn render_instruction_summary(
     path: &str,
     content: &str,
     content_sha256: &str,
-    task_label: &str,
-    snapshot: Option<&suite_packet_core::AgentSnapshotPayload>,
+    _task_label: &str,
+    _snapshot: Option<&suite_packet_core::AgentSnapshotPayload>,
     budget_bytes: usize,
 ) -> RenderedInstructionSummary {
     let content_sha256 = if content_sha256.trim().is_empty() {
@@ -242,9 +233,7 @@ fn render_instruction_summary(
     } else {
         content_sha256.trim().to_string()
     };
-    let mut matched_terms = derive_focus_terms(path, task_label, snapshot)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut matched_terms = derive_focus_terms(path).into_iter().collect::<Vec<_>>();
     matched_terms.sort();
     if matched_terms.len() > 12 {
         matched_terms.truncate(12);
@@ -311,11 +300,7 @@ fn render_instruction_summary(
         section_titles.push("Overview".to_string());
     }
 
-    let header = format!(
-        "# [p28:virtual] sha256:{} task:{}\n\n",
-        short_sha(&content_sha256),
-        task_label
-    );
+    let header = format!("# [p28:virtual] sha256:{}\n\n", short_sha(&content_sha256));
     let summary_text = truncate_markdown(&(header + body.trim_end()), budget_bytes);
 
     RenderedInstructionSummary {
@@ -326,25 +311,9 @@ fn render_instruction_summary(
     }
 }
 
-fn derive_focus_terms(
-    path: &str,
-    task_label: &str,
-    snapshot: Option<&suite_packet_core::AgentSnapshotPayload>,
-) -> BTreeSet<String> {
+fn derive_focus_terms(path: &str) -> BTreeSet<String> {
     let mut terms = BTreeSet::new();
     collect_terms(path, &mut terms);
-    collect_terms(task_label, &mut terms);
-    if let Some(snapshot) = snapshot {
-        for path in snapshot.focus_paths.iter().take(6) {
-            collect_terms(path, &mut terms);
-        }
-        for symbol in snapshot.focus_symbols.iter().take(8) {
-            collect_terms(symbol, &mut terms);
-        }
-        for question in snapshot.open_questions.iter().take(4) {
-            collect_terms(&question.text, &mut terms);
-        }
-    }
     terms
 }
 
@@ -507,4 +476,76 @@ fn truncate_markdown(text: &str, budget_bytes: usize) -> String {
 
 fn short_sha(value: &str) -> String {
     value.chars().take(8).collect::<String>()
+}
+
+#[cfg(test)]
+mod prefix_invariance_tests {
+    use super::*;
+
+    const INSTRUCTIONS: &str = "\
+# Project
+
+Use the reducer runtime for non-trivial coding tasks.
+
+## Search
+Prefer instant grep over ripgrep for repository sweeps.
+
+## Testing
+Run cargo test before every commit.
+
+## Review
+Keep handoff briefs append-only.
+";
+
+    fn snapshot(
+        focus_paths: &[&str],
+        focus_symbols: &[&str],
+    ) -> suite_packet_core::AgentSnapshotPayload {
+        suite_packet_core::AgentSnapshotPayload {
+            focus_paths: focus_paths.iter().map(|value| value.to_string()).collect(),
+            focus_symbols: focus_symbols
+                .iter()
+                .map(|value| value.to_string())
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn render(
+        task_label: &str,
+        snapshot: Option<&suite_packet_core::AgentSnapshotPayload>,
+    ) -> String {
+        render_instruction_summary("CLAUDE.md", INSTRUCTIONS, "", task_label, snapshot, 2048)
+            .summary_text
+    }
+
+    /// The shim serves this text through an intercepted `open()`, so it lands at
+    /// the head of the model's prompt prefix, ahead of the system prompt and
+    /// every tool schema. It must be a pure function of instruction content plus
+    /// stable repo config: if two tasks in one repo render different bytes, every
+    /// task switch invalidates the entire cached prefix to save ~512 tokens.
+    #[test]
+    fn rewritten_prefix_is_identical_across_tasks() {
+        assert_eq!(render("task-alpha", None), render("task-beta", None));
+    }
+
+    /// Same requirement under snapshot drift. Focus paths and symbols move while a
+    /// single task is still running, so a snapshot-sensitive rewrite re-warms the
+    /// prefix mid-task and hands every fresh worker spawned from a handoff a
+    /// different prefix than the one it resumed from.
+    #[test]
+    fn rewritten_prefix_is_identical_across_snapshot_drift() {
+        let early = snapshot(
+            &["crates/packet28d/src/broker_render.rs"],
+            &["render_brief"],
+        );
+        let later = snapshot(
+            &["crates/context-kernel-core/src/instruction_runtime.rs"],
+            &["derive_focus_terms"],
+        );
+        assert_eq!(
+            render("task-alpha", Some(&early)),
+            render("task-alpha", Some(&later)),
+        );
+    }
 }

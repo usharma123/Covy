@@ -1605,7 +1605,7 @@ fn instruction_summary_reducer_emits_virtual_header_and_reuses_cache() {
         .payload
         .summary_text
         .starts_with("# [p28:virtual] sha256:"));
-    assert!(first_envelope
+    assert!(!first_envelope
         .payload
         .summary_text
         .contains("task:task-auth"));
