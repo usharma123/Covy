@@ -1684,7 +1684,7 @@ mod tests {
 
         let drained = take_due_watch_events(&mut pending, MAX_PENDING_WATCH_KEYS);
         assert_eq!(drained.len(), MAX_PENDING_WATCH_KEYS);
-        fill_global_watch_sweep(state, &mut pending, &mut sweep).unwrap();
+        fill_global_watch_sweep(state.clone(), &mut pending, &mut sweep).unwrap();
         assert_eq!(pending.len(), 5);
         assert!(sweep.is_none());
     }

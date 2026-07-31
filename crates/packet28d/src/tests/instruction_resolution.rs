@@ -52,7 +52,7 @@ fn instruction_file_resolution_rewrites_larger_markdown() {
     let state = daemon_test_state();
     let workspace_root = state.lock().unwrap().root.display().to_string();
     let response = resolve_instruction_file(
-        state,
+        state.clone(),
         InstructionFileResolveRequest {
             workspace_root,
             path: "AGENTS.md".to_string(),
@@ -87,7 +87,7 @@ fn instruction_file_resolution_rewrites_larger_markdown() {
 fn instruction_file_resolution_fails_open_when_summary_is_not_smaller() {
     let state = daemon_test_state();
     let response = resolve_instruction_file(
-        state,
+        state.clone(),
         InstructionFileResolveRequest {
             workspace_root: ".".to_string(),
             path: "AGENTS.md".to_string(),
@@ -115,7 +115,7 @@ fn context_resolve_rewrites_instruction_file_and_preserves_metadata() {
     let state = daemon_test_state();
     let workspace_root = state.lock().unwrap().root.display().to_string();
     let response = resolve_context(
-        state,
+        state.clone(),
         ContextResolveRequest {
             workspace_root,
             source_kind: ContextSourceKind::InstructionFile,
@@ -174,7 +174,7 @@ fn instruction_file_resolution_compatibility_matches_context_resolve_decision() 
     )
     .unwrap();
     let generic = resolve_context(
-        state,
+        state.clone(),
         ContextResolveRequest {
             workspace_root,
             source_kind: ContextSourceKind::InstructionFile,
@@ -220,7 +220,8 @@ fn instruction_file_resolution_compatibility_matches_context_resolve_decision() 
 fn absent_instruction_mode_defaults_to_passthrough() {
     let state = daemon_test_state();
     let workspace_root = daemon_test_root(&state).display().to_string();
-    let response = resolve_context(state, context_request(workspace_root, None, None)).unwrap();
+    let response =
+        resolve_context(state.clone(), context_request(workspace_root, None, None)).unwrap();
 
     match response.outcome {
         ContextResolveOutcome::Passthrough {
@@ -253,7 +254,7 @@ fn repository_config_explicitly_enables_stable_mode() {
     .unwrap();
 
     let response = resolve_context(
-        state,
+        state.clone(),
         context_request(root.display().to_string(), None, None),
     )
     .unwrap();
@@ -286,7 +287,7 @@ fn explicit_passthrough_overrides_repository_experiment_mode() {
     .unwrap();
 
     let response = resolve_context(
-        state,
+        state.clone(),
         context_request(
             root.display().to_string(),
             Some(InstructionRenderMode::Passthrough),
@@ -312,7 +313,7 @@ fn malformed_and_unsupported_repository_configs_fail_open() {
     )
     .unwrap();
     let malformed = resolve_context(
-        malformed_state,
+        malformed_state.clone(),
         context_request(malformed_root.display().to_string(), None, None),
     )
     .unwrap();
@@ -330,7 +331,7 @@ fn malformed_and_unsupported_repository_configs_fail_open() {
     )
     .unwrap();
     let unsupported = resolve_context(
-        unsupported_state,
+        unsupported_state.clone(),
         context_request(unsupported_root.display().to_string(), None, None),
     )
     .unwrap();
@@ -348,7 +349,7 @@ fn malformed_and_unsupported_repository_configs_fail_open() {
     )
     .unwrap();
     let unsupported_renderer = resolve_context(
-        unsupported_renderer_state,
+        unsupported_renderer_state.clone(),
         context_request(unsupported_renderer_root.display().to_string(), None, None),
     )
     .unwrap();
@@ -366,7 +367,7 @@ fn malformed_and_unsupported_repository_configs_fail_open() {
     )
     .unwrap();
     let unknown_nested_field = resolve_context(
-        unknown_nested_field_state,
+        unknown_nested_field_state.clone(),
         context_request(unknown_nested_field_root.display().to_string(), None, None),
     )
     .unwrap();
@@ -379,7 +380,7 @@ fn malformed_and_unsupported_repository_configs_fail_open() {
     let explicit_state = daemon_test_state();
     let explicit_root = daemon_test_root(&explicit_state);
     let explicit = resolve_context(
-        explicit_state,
+        explicit_state.clone(),
         context_request(
             explicit_root.display().to_string(),
             Some(InstructionRenderMode::Stable),
@@ -400,7 +401,7 @@ fn malformed_and_unsupported_repository_configs_fail_open() {
     let unreadable_root = daemon_test_root(&unreadable_state);
     std::fs::create_dir(unreadable_root.join(INSTRUCTION_EXPERIMENT_CONFIG_FILE)).unwrap();
     let unreadable = resolve_context(
-        unreadable_state,
+        unreadable_state.clone(),
         context_request(unreadable_root.display().to_string(), None, None),
     )
     .unwrap();
@@ -438,7 +439,7 @@ fn stable_rewrite_and_cache_identity_ignore_mutable_request_metadata() {
     changed.agent_family = Some("claude".to_string());
     changed.backend_kind = ContextBackendKind::MacosSwap;
     changed.source_path = Some(root.join("AGENTS.md").display().to_string());
-    let second = resolve_context(state, changed).unwrap();
+    let second = resolve_context(state.clone(), changed).unwrap();
 
     let (
         ContextResolveOutcome::Rewrite {
@@ -474,7 +475,7 @@ fn instruction_path_outside_workspace_fails_open() {
     );
     request.source_path = Some(root.join("..").join("AGENTS.md").display().to_string());
 
-    let response = resolve_context(state, request).unwrap();
+    let response = resolve_context(state.clone(), request).unwrap();
 
     assert!(matches!(
         response.outcome,
@@ -498,7 +499,7 @@ fn instruction_path_symlink_escape_fails_open() {
     );
     request.source_path = Some("outside-link/AGENTS.md".to_string());
 
-    let response = resolve_context(state, request).unwrap();
+    let response = resolve_context(state.clone(), request).unwrap();
 
     assert!(matches!(
         response.outcome,
@@ -522,7 +523,7 @@ fn repository_config_symlink_escape_fails_open() {
     .unwrap();
 
     let response = resolve_context(
-        state,
+        state.clone(),
         context_request(root.display().to_string(), None, None),
     )
     .unwrap();
